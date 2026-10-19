@@ -80,7 +80,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console --no-sign-in                Serve this machine's Inbox on localhost
        thirdshift show <command> [--json]             Show one Command in full
        thirdshift stop <command> [--requeue]          Stop a live Command and wait for cleanup
-       thirdshift logs [--json]                       List this machine's logs
+       thirdshift logs [--command <id>] [--json]      List this machine's logs
        thirdshift logs --file <id> [--follow]         Read an exact listed log
        thirdshift logs <command> [--session <kind>] [--follow]  Read or follow a log
        thirdshift update                              Update to the latest release
@@ -163,8 +163,8 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
-        Ok(Command::LogsList { json }) => {
-            return match logs::catalog::show(json) {
+        Ok(Command::LogsList { json, owner }) => {
+            return match logs::catalog::show(json, owner.as_deref()) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };

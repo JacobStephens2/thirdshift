@@ -12,12 +12,29 @@ use super::{Command, Entry, Observation, Snapshot, directories, entries};
 use crate::config::UserConfig;
 use crate::logs::owner;
 
+#[derive(Clone, Copy, Serialize)]
+pub(crate) enum Kind {
+    #[serde(rename = "Command log")]
+    Command,
+    #[serde(rename = "Session log")]
+    Session,
+}
+
+impl std::fmt::Display for Kind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Command => "Command log",
+            Self::Session => "Session log",
+        })
+    }
+}
+
 #[derive(Serialize)]
 pub(crate) struct Log {
     pub id: String,
     pub name: String,
     pub repository: String,
-    pub kind: &'static str,
+    pub kind: Kind,
     pub live: bool,
     pub command: String,
     pub owners: Vec<String>,
@@ -33,7 +50,7 @@ pub(crate) fn id(path: &Path) -> String {
         .collect()
 }
 
-pub(crate) fn load(config: &UserConfig) -> Result<Vec<Log>> {
+pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<Vec<Log>> {
     let root = &config.logs_dir;
     let snapshot = Snapshot::load(root, Local::now())?;
     // A child Run keeps its own Sessions, while sharing its Command's log.
@@ -101,9 +118,9 @@ pub(crate) fn load(config: &UserConfig) -> Result<Vec<Log>> {
                         name: relative.to_string_lossy().into_owned(),
                         repository: repository.clone(),
                         kind: if path.extension().is_some_and(|ext| ext == "jsonl") {
-                            "Session log"
+                            Kind::Session
                         } else {
-                            "Command log"
+                            Kind::Command
                         },
                         live,
                         command,
@@ -114,19 +131,22 @@ pub(crate) fn load(config: &UserConfig) -> Result<Vec<Log>> {
             }
         }
     }
+    if let Some(selected) = selected_owner {
+        logs.retain(|log| log.owners.iter().any(|owner| owner == selected));
+    }
     logs.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(logs)
 }
 
 pub(crate) fn find(config: &UserConfig, selected: &str) -> Result<Log> {
-    load(config)?
+    load(config, None)?
         .into_iter()
         .find(|log| log.id == selected)
         .context("log is not in the current inventory")
 }
 
-pub(crate) fn show(json: bool) -> Result<()> {
-    let logs = load(&UserConfig::load()?)?;
+pub(crate) fn show(json: bool, owner: Option<&str>) -> Result<()> {
+    let logs = load(&UserConfig::load()?, owner)?;
     if json {
         println!(
             "{}",

@@ -37,6 +37,8 @@ Command row links to its Run and Session logs, including child Ticket Runs.
 Older `sessions/` folders are not linked. The same inventory is available with
 `thirdshift logs` or `thirdshift logs --json`; `thirdshift logs --file <id>`
 reads an exact listed file and accepts `--follow`.
+`thirdshift logs --command <id> --json` selects the same Command and child Run
+logs as its Console link; the inventory's `owners` field lists those exact IDs.
 
 Command logs are plain text. Claude and Codex Session logs are conversations
 with folded tool groups, collapsed thinking, Bash, Edit, Read and Grep views,
@@ -46,3 +48,10 @@ event's byte offset; incomplete live lines wait until their newline arrives.
 The Follow newest line checkbox lets you read back while the Session grows.
 The Playwright log test checks appends, retained DOM identity, folding across
 batches, incomplete lines, reconnection and following on a phone viewport.
+
+Claude Edit events include old/new text and show unified diff excerpts. Codex
+`file_change` events retain only file paths and change kinds, so the reader
+shows their plain fallback and says the patch is unavailable. The Spec-review
+reproduction, `python3 console/reproductions/codex-edit-diff.py` from the repo
+root, preserves the unmet Codex diff expectation; it currently fails. Capturing
+patch evidence for Codex requires a separate retention decision.

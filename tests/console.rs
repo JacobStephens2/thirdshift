@@ -170,6 +170,60 @@ fn logs_inventory_matches_cli_and_reads_current_layout_only() {
 }
 
 #[test]
+fn command_logs_have_the_same_exact_owner_filter_in_cli_and_http() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let folder = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    fs::create_dir_all(&folder).unwrap();
+    let names = [
+        "7-20261003T120000-0400~one.log",
+        "8-20261003T120000-0400~two.log",
+    ];
+    for name in names {
+        fs::write(folder.join(name), "output\n").unwrap();
+    }
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let inventory = Command::new(binary)
+        .args(["logs", "--json"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    let inventory: Value = serde_json::from_slice(&inventory.stdout).unwrap();
+    let owner = inventory["logs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|log| log["name"].as_str().unwrap().ends_with(names[0]))
+        .unwrap()["id"]
+        .as_str()
+        .unwrap();
+    let selected = Command::new(binary)
+        .args(["logs", "--command", owner, "--json"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(
+        selected.status.success(),
+        "{}",
+        String::from_utf8_lossy(&selected.stderr)
+    );
+    let selected: Value = serde_json::from_slice(&selected.stdout).unwrap();
+    let logs = selected["logs"].as_array().unwrap();
+    assert_eq!(logs.len(), 1);
+    assert_eq!(logs[0]["id"], owner);
+    let console = Console::start(binary, home.path());
+    let html = console
+        .get(&format!("/logs/command/{owner}"))
+        .text()
+        .unwrap();
+    assert!(html.contains(&format!("href=\"/logs/{owner}\"")));
+    assert!(!html.contains(names[1]));
+    assert!(html.contains(&format!("thirdshift logs --command {owner} --json")));
+}
+
+#[test]
 fn log_stream_starts_at_the_byte_offset_and_sends_only_appended_html() {
     use std::io::Write;
     let home = tempfile::tempdir().unwrap();
@@ -255,10 +309,10 @@ fn claude_and_codex_conversations_keep_tools_thinking_and_unknown_events() {
         assert!(html.contains("<details class=\"tool-group\"><summary>Tools</summary>"));
         assert!(html.contains("data-tool=\"Bash\""));
         assert!(html.contains("data-tool=\"Read\""));
-        assert!(html.contains("class=\"diff\""));
-        assert!(html.contains("-old widget\n+new widget"), "{html}");
         assert!(html.contains("Widgets are ready."));
         if kind == "claude" {
+            assert!(html.contains("class=\"diff\""));
+            assert!(html.contains("-old widget\n+new widget"), "{html}");
             assert_eq!(html.matches("class=\"tool-group\"").count(), 1);
             assert!(html.contains("data-tool=\"Grep\""));
             assert!(html.contains("data-tool=\"NewTool\""));
@@ -267,6 +321,9 @@ fn claude_and_codex_conversations_keep_tools_thinking_and_unknown_events() {
             assert!(html.contains("not JSON: retained diagnostic"));
         } else {
             assert!(html.contains("unknown Codex item visible"));
+            assert!(html.contains("Patch unavailable in this log."));
+            assert!(html.contains("class=\"fallback\""));
+            assert!(!html.contains("class=\"diff\""));
         }
         assert!(!html.contains("<script>bad()</script>"));
     }
@@ -477,6 +534,37 @@ fn replacing_the_binary_executes_the_replacement_with_the_original_arguments() {
     assert!(copied.success());
     let console = Console::start(&binary, home.path());
     assert_eq!(console.get("/").status(), 200);
+    // A reader must not keep graceful shutdown waiting on an infinite stream.
+    #[cfg(target_os = "linux")]
+    let _stream = {
+        let mut live = record(home.path(), 7, None, 0);
+        let stat = fs::read_to_string(format!("/proc/{}/stat", std::process::id())).unwrap();
+        let ticks = stat
+            .rsplit_once(") ")
+            .unwrap()
+            .1
+            .split_whitespace()
+            .nth(19)
+            .unwrap();
+        let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap();
+        live["process_id"] = json!(std::process::id());
+        live["process_start"] = json!(format!("{}:{ticks}", boot.trim()));
+        let log = home
+            .path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture-implement.jsonl");
+        fs::write(&log, "initial line\n").unwrap();
+        live["session_log"] = json!(log);
+        write_record(home.path(), 7, &live);
+        let inventory = console.get("/logs").text().unwrap();
+        let link = inventory
+            .split("href=\"")
+            .skip(1)
+            .filter_map(|part| part.split_once('"'))
+            .find(|(url, _)| url.starts_with("/logs/"))
+            .unwrap()
+            .0;
+        console.get(&format!("{link}/stream/0"))
+    };
     let replacement = home.path().join("replacement");
     fs::write(&replacement, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/reexec-args\"\nprintf 'replacement executed\\n'\n").unwrap();
     fs::set_permissions(&replacement, fs::Permissions::from_mode(0o755)).unwrap();

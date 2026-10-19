@@ -1,4 +1,5 @@
 //! Normalize retained Claude and Codex events into one escaped conversation.
+use crate::logs::catalog::Kind;
 use serde_json::Value;
 
 enum Part {
@@ -8,8 +9,8 @@ enum Part {
     Plain(String),
 }
 
-pub(super) fn render(lines: &str, session: bool) -> String {
-    if !session {
+pub(super) fn render(lines: &str, kind: Kind) -> String {
+    if matches!(kind, Kind::Command) {
         return format!("<pre class=\"command-output\">{}</pre>", escape(lines));
     }
     let mut html = String::new();
@@ -105,10 +106,22 @@ fn tool(name: &str, input: &Value) -> Part {
             pre("result", &pretty(input))
         ),
         "edit" | "apply_patch" => {
-            let diff = if input["old_string"].is_string() && input["new_string"].is_string() {
-                let path = text(input, "file_path");
-                let old = text(input, "old_string");
-                let new = text(input, "new_string");
+            if input["changes"].is_array() {
+                // Codex exec records paths and kinds, not before/after text.
+                // Keep the actual event visible rather than inventing a patch.
+                return Part::Tool(
+                    name.into(),
+                    format!(
+                        "<p>Patch unavailable in this log.</p>{}",
+                        pre("fallback", &pretty(input))
+                    ),
+                );
+            }
+            let diff = if arguments["old_string"].is_string() && arguments["new_string"].is_string()
+            {
+                let path = text(arguments, "file_path");
+                let old = text(arguments, "old_string");
+                let new = text(arguments, "new_string");
                 format!(
                     "--- a/{path}\n+++ b/{path}\n@@ -1,{} +1,{} @@\n{}{}",
                     old.lines().count(),
@@ -120,22 +133,8 @@ fn tool(name: &str, input: &Value) -> Part {
                         .map(|line| format!("+{line}\n"))
                         .collect::<String>()
                 )
-            } else if let Some(changes) = input["changes"].as_array() {
-                changes
-                    .iter()
-                    .map(|change| {
-                        let path = text(change, "path");
-                        let diff = text(change, "diff");
-                        if diff.is_empty() {
-                            pretty(change)
-                        } else {
-                            format!("--- a/{path}\n+++ b/{path}\n{diff}")
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n")
             } else {
-                pretty(input)
+                return Part::Tool(name.into(), pre("fallback", &pretty(input)));
             };
             pre("diff", &diff)
         }

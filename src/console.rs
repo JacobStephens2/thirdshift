@@ -38,7 +38,7 @@ const PAGES: &[PageRoute] = &[
     },
     PageRoute {
         path: "/logs/command/{id}",
-        cli: "thirdshift logs --json",
+        cli: "thirdshift logs --command id --json",
     },
     PageRoute {
         path: "/logs/{id}",
@@ -67,10 +67,13 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
         let watched = executable.clone();
-        axum::serve(listener, router())
-            .with_graceful_shutdown(async move { watched.replaced().await })
-            .await
-            .context("Console server failed")?;
+        axum::serve(
+            listener,
+            router().layer(axum::Extension(executable.clone())),
+        )
+        .with_graceful_shutdown(async move { watched.replaced().await })
+        .await
+        .context("Console server failed")?;
         Ok::<_, anyhow::Error>(())
     })?;
     // Drop the runtime (and its sockets) before replacing the process.

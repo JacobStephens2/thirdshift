@@ -44,6 +44,7 @@ pub enum Command {
     },
     LogsList {
         json: bool,
+        owner: Option<String>,
     },
     LogFile {
         id: String,
@@ -285,8 +286,32 @@ pub fn parse(args: &[String]) -> Result<Command> {
         }
         Some("logs") => {
             match &args[1..] {
-                [] => return Ok(Command::LogsList { json: false }),
-                [flag] if flag == "--json" => return Ok(Command::LogsList { json: true }),
+                [] => {
+                    return Ok(Command::LogsList {
+                        json: false,
+                        owner: None,
+                    });
+                }
+                [flag] if flag == "--json" => {
+                    return Ok(Command::LogsList {
+                        json: true,
+                        owner: None,
+                    });
+                }
+                [flag, id] if flag == "--command" && !id.starts_with('-') => {
+                    return Ok(Command::LogsList {
+                        json: false,
+                        owner: Some(id.clone()),
+                    });
+                }
+                [flag, id, json]
+                    if flag == "--command" && !id.starts_with('-') && json == "--json" =>
+                {
+                    return Ok(Command::LogsList {
+                        json: true,
+                        owner: Some(id.clone()),
+                    });
+                }
                 [flag, id] if flag == "--file" && !id.starts_with('-') => {
                     return Ok(Command::LogFile {
                         id: id.clone(),
