@@ -5,9 +5,9 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, FixedOffset};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use super::{CommandKind, Work};
 
@@ -18,17 +18,114 @@ pub(super) trait Files {
     fn create_command_log(&mut self, path: &Path) -> io::Result<Self::CommandLog>;
 }
 
-pub(super) struct Owner {
-    path: PathBuf,
+const INHERITED_OWNER: &str = "THIRDSHIFT_LOG_OWNER";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub(crate) struct Owner {
+    stamp: String,
+    token: Option<String>,
+    command_log: Option<PathBuf>,
 }
 
 impl Owner {
-    pub fn log_path(&self) -> &Path {
-        &self.path
+    pub fn log_path(&self) -> Option<&Path> {
+        self.command_log.as_deref()
     }
 
-    pub fn record_path(&self) -> PathBuf {
-        self.path.with_extension("command.json")
+    pub fn record_path(&self) -> Option<PathBuf> {
+        self.command_log
+            .as_ref()
+            .map(|path| path.with_extension("command.json"))
+    }
+
+    pub fn session_path(&self, dir: &Path, subject: &str, kind: &str) -> PathBuf {
+        let token = self
+            .token
+            .as_ref()
+            .map(|token| format!("~{token}"))
+            .unwrap_or_default();
+        dir.join(format!("{subject}-{}{token}-{kind}.jsonl", self.stamp))
+    }
+
+    pub fn models_match(&self, path: &Path) -> bool {
+        let Some(stem) = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .and_then(|name| name.strip_suffix(".models.json"))
+        else {
+            return false;
+        };
+        let session = path.with_file_name(format!("{stem}.jsonl"));
+        decode(&session).is_some_and(|decoded| {
+            decoded.session_kind.is_some()
+                && decoded.identity
+                    == Identity {
+                        stamp: &self.stamp,
+                        token: self.token.as_deref(),
+                    }
+        })
+    }
+
+    /// Only actual child Runs call this. Top-level Commands allocate locally.
+    pub fn inherited() -> Result<Self> {
+        let value =
+            std::env::var(INHERITED_OWNER).context("missing inherited Command log owner")?;
+        let owner: Self =
+            serde_json::from_str(&value).context("invalid inherited Command log owner")?;
+        ensure!(
+            parse_stamp(&owner.stamp).is_some(),
+            "invalid inherited Command start stamp"
+        );
+        ensure!(
+            owner
+                .token
+                .as_deref()
+                .is_some_and(|token| !token.is_empty()
+                    && token.bytes().all(|byte| byte.is_ascii_alphanumeric())),
+            "invalid inherited Command owner token"
+        );
+        if let Some(log) = owner.log_path() {
+            let decoded = decode(log).context("invalid inherited Command log path")?;
+            ensure!(
+                decoded.session_kind.is_none()
+                    && decoded.identity
+                        == Identity {
+                            stamp: &owner.stamp,
+                            token: owner.token.as_deref()
+                        },
+                "inherited Command log disagrees with its owner"
+            );
+        }
+        Ok(owner)
+    }
+
+    /// Missing ownership explicitly clears stale state on a reused Command.
+    pub fn inherit(owner: Option<&Self>, command: &mut std::process::Command) {
+        match owner {
+            Some(owner) => {
+                command.env(
+                    INHERITED_OWNER,
+                    serde_json::to_string(owner).expect("owner metadata is serializable"),
+                );
+            }
+            None => {
+                command.env_remove(INHERITED_OWNER);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub fn fixture(log: Option<PathBuf>, stamp: String) -> Self {
+        let token = log
+            .as_deref()
+            .and_then(decode)
+            .and_then(|decoded| decoded.identity.token)
+            .map(str::to_owned);
+        Self {
+            stamp,
+            token,
+            command_log: log,
+        }
     }
 }
 
@@ -62,9 +159,12 @@ pub(super) fn allocate<F: Files>(
         .disable_cleanup(true)
         .make_in(folder, |path| files.create_command_log(path))?;
     let (writer, path) = allocated.into_parts();
+    let decoded = decode(&path).context("allocated Command log has an invalid name")?;
     Ok(Allocation {
         owner: Owner {
-            path: path.to_path_buf(),
+            stamp: stamp.to_string(),
+            token: decoded.identity.token.map(str::to_owned),
+            command_log: Some(path.to_path_buf()),
         },
         writer,
     })

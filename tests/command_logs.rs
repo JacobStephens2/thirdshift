@@ -63,7 +63,7 @@ fn logs_in(scenario: &Scenario, folder: &str) -> Vec<String> {
 }
 
 /// The one Command log in `commands/<folder>`, which must be named
-/// `<prefix><stamp>~<owner>.log`, and its display stamp.
+/// `<prefix><stamp>~<owner>.log`, and its stamp with storage owner.
 fn the_one_command_log(scenario: &Scenario, folder: &str, prefix: &str) -> (PathBuf, String) {
     let logs: Vec<_> = logs_in(scenario, &format!("commands/{folder}"))
         .into_iter()
@@ -82,7 +82,7 @@ fn the_one_command_log(scenario: &Scenario, folder: &str, prefix: &str) -> (Path
         .join("commands")
         .join(folder)
         .join(&logs[0]);
-    (path, stamp.to_string())
+    (path, format!("{stamp}~{token}"))
 }
 
 /// Assert `stamp` is a local time with [`OFFSET`], as in
@@ -121,7 +121,11 @@ fn a_run_keeps_a_command_log_of_everything_it_printed_and_its_session_logs_share
     let scenario = Scenario::new();
     scenario.agent_does(&agent_opens_pr(7, "main"));
 
-    let result = run_in_zone(&scenario, &[&scenario.issue_url(7)], &[]);
+    let result = run_in_zone(
+        &scenario,
+        &[&scenario.issue_url(7)],
+        &[("THIRDSHIFT_LOG_OWNER", "stale inherited owner")],
+    );
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     let (path, stamp) = the_one_command_log(&scenario, "issue", "7-");
@@ -347,6 +351,13 @@ fn an_obstructed_commands_folder_warns_and_prevents_session_logging() {
     );
     assert!(scenario.claude_calls().is_empty());
     assert!(!scenario.path(LOGS).join("sessions").exists());
+    assert!(
+        result
+            .stderr
+            .contains("cannot name Session log: could not create"),
+        "{}",
+        result.stderr
+    );
 }
 
 #[test]

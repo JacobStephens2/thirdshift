@@ -833,6 +833,12 @@ fn command_creation_failure_warns_once_and_never_adopts_an_existing_path() {
         record.configured(&config(false));
         record.started(Work::Run(&issue()), &harness());
         assert_eq!(record.command_log_path(), None);
+        assert!(
+            record
+                .captured_owner()
+                .unwrap_err()
+                .contains("Command open failed")
+        );
         // File writes stay disabled even if the underlying problem clears.
         memory.0.lock().unwrap().command_open_fails = false;
         record.eprint("carried on");
@@ -921,6 +927,12 @@ fn a_failure_writing_held_lines_retains_the_partial_command_log_path() {
     record.ended("done");
     let path = record.command_log_path().unwrap();
     assert_eq!(memory.file(&path), "thi");
+    let owner = record.captured_owner().unwrap();
+    assert_eq!(owner.log_path(), Some(path.as_path()));
+    assert_ne!(
+        owner.session_path(Path::new("/logs"), "7", "implement"),
+        Path::new("/logs/7-20261003T120000-0400-implement.jsonl")
+    );
     assert_eq!(
         memory
             .terminal()

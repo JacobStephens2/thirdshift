@@ -1,6 +1,8 @@
 use super::*;
 use crate::harness::Harness;
 
+const PARENT_OWNER: &str = "THIRDSHIFT_LOG_OWNER";
+
 struct Fixture {
     root: tempfile::TempDir,
     recording: Recording,
@@ -9,12 +11,18 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
-        let recording = Recording::new(Some(root.path().join("7-stamp.log")), None, "stamp".into());
+        let recording = Recording::new(
+            Some(root.path().join("7-20261003T120000-0400.log")),
+            None,
+            "20261003T120000-0400".into(),
+        );
         Self { root, recording }
     }
 
     fn log(&self, name: &str) -> PathBuf {
-        self.root.path().join(format!("7-stamp-{name}.jsonl"))
+        self.root
+            .path()
+            .join(format!("7-20261003T120000-0400-{name}.jsonl"))
     }
 
     fn run(&self, name: &str, script: &str, choice: &Choice) -> Result<Ended> {
@@ -131,14 +139,18 @@ fn absent_completion_report_preserves_the_stream_checkpoint() {
     with_export(
         "absent_completion_report_preserves_the_stream_checkpoint",
         r#"#!/bin/sh
-cp "$THIRDSHIFT_RECORDING_EXPORT/7-stamp-implement.models.json" "$THIRDSHIFT_RECORDING_EXPORT/checkpoint.json"
+cp "$THIRDSHIFT_RECORDING_EXPORT/7-20261003T120000-0400-implement.models.json" "$THIRDSHIFT_RECORDING_EXPORT/checkpoint.json"
 kill -INT "$PPID"
 sleep 1
 "#,
         |root| {
             crate::interrupt::install().unwrap();
-            let recording = Recording::new(Some(root.join("7-stamp.log")), None, "stamp".into());
-            let log = root.join("7-stamp-implement.jsonl");
+            let recording = Recording::new(
+                Some(root.join("7-20261003T120000-0400.log")),
+                None,
+                "20261003T120000-0400".into(),
+            );
+            let log = root.join("7-20261003T120000-0400-implement.jsonl");
             let error = recording
                 .run(
                     "implement",
@@ -172,17 +184,17 @@ fn both_evidence_writes_use_the_captured_owning_command() {
     with_export(
         "both_evidence_writes_use_the_captured_owning_command",
         r#"#!/bin/sh
-cp "$THIRDSHIFT_RECORDING_EXPORT/7-stamp-implement.models.json" "$THIRDSHIFT_RECORDING_EXPORT/checkpoint.json"
+cp "$THIRDSHIFT_RECORDING_EXPORT/7-20261003T120000-0400-implement.models.json" "$THIRDSHIFT_RECORDING_EXPORT/checkpoint.json"
 echo '{"info":{"outcome":"completed"},"messages":[{"type":"assistant","model":{"providerID":"provider","id":"retained-model"},"content":[]}]}'
 "#,
         |root| {
-            let owner = root.join("7-stamp.log");
+            let owner = root.join("7-20261003T120000-0400.log");
             let recording = Recording::new(
                 Some(owner.clone()),
                 Some(root.join("other.log")),
-                "stamp".into(),
+                "20261003T120000-0400".into(),
             );
-            let log = root.join("7-stamp-implement.jsonl");
+            let log = root.join("7-20261003T120000-0400-implement.jsonl");
             recording
                 .run(
                     "implement",
@@ -264,35 +276,47 @@ fn reader_failure_keeps_models_consumed_before_the_log_failed() {
 #[test]
 fn collection_preserves_legacy_selection_order_deduplication_and_fallbacks() {
     let fixture = Fixture::new();
-    let owner = fixture.root.path().join("7-stamp.log");
+    let owner = fixture.root.path().join("7-20261003T120000-0400.log");
     for (file, command, models, requested, effort) in [
         (
-            "9-stamp-implement",
+            "9-20261003T120000-0400-implement",
             Some(owner.clone()),
             vec!["a", "b", "a"],
             None,
             None,
         ),
         (
-            "8-stamp-review",
+            "8-20261003T120000-0400-review",
             Some(owner.clone()),
             vec![],
             Some("requested"),
             Some("high"),
         ),
-        ("7-stamp-implement", Some(owner.clone()), vec![], None, None),
         (
-            "6-stamp-implement",
+            "7-20261003T120000-0400-implement",
+            Some(owner.clone()),
+            vec![],
+            None,
+            None,
+        ),
+        (
+            "6-20261003T120000-0400-implement",
             Some(fixture.root.path().join("other.log")),
             vec!["wrong-owner"],
             None,
             None,
         ),
-        ("5-stamp-implement", None, vec!["unowned"], None, None),
+        (
+            "5-20261003T120000-0400-implement",
+            None,
+            vec!["unowned"],
+            None,
+            None,
+        ),
         (
             "4-old-implement",
             Some(owner),
-            vec!["old-stamp"],
+            vec!["old-20261003T120000-0400"],
             None,
             None,
         ),
@@ -308,7 +332,10 @@ fn collection_preserves_legacy_selection_order_deduplication_and_fallbacks() {
         .unwrap();
     }
     fs::write(
-        fixture.root.path().join("0-stamp-implement.models.json"),
+        fixture
+            .root
+            .path()
+            .join("0-20261003T120000-0400-implement.models.json"),
         "{ corrupt",
     )
     .unwrap();
@@ -335,7 +362,7 @@ fn evidence_write_and_directory_read_failures_do_not_change_session_outcomes() {
     let missing = Recording::new(
         Some(fixture.root.path().join("missing/command.log")),
         None,
-        "stamp".into(),
+        "20261003T120000-0400".into(),
     );
     assert!(missing.notification_lines().is_empty());
 }
@@ -343,11 +370,11 @@ fn evidence_write_and_directory_read_failures_do_not_change_session_outcomes() {
 #[test]
 fn absent_ownership_removes_stale_child_environment_and_records_no_other_command() {
     let fixture = Fixture::new();
-    let unowned = Recording::new(None, None, "stamp".into());
+    let unowned = Recording::new(None, None, "20261003T120000-0400".into());
     let mut child = Command::new("/bin/sh");
     child
-        .args(["-c", "test -z \"${THIRDSHIFT_PARENT_COMMAND_LOG+x}\""])
-        .env(PARENT_COMMAND_LOG, "stale.log");
+        .args(["-c", "test -z \"${THIRDSHIFT_LOG_OWNER+x}\""])
+        .env(PARENT_OWNER, "stale.log");
     unowned.inherit_command(&mut child);
     assert!(child.status().unwrap().success());
     unowned
@@ -375,7 +402,10 @@ fn nested_children_keep_the_exact_owning_command() {
             .unwrap()
             .parse()
             .unwrap();
-        logs::begin(logs::Begin::ChildRun("stamp", logs::CommandKind::Issue));
+        logs::begin(logs::Begin::ChildRun(
+            "20261003T120000-0400",
+            logs::CommandKind::Issue,
+        ));
         let recording = Recording::capture();
         recording
             .run(
@@ -383,7 +413,9 @@ fn nested_children_keep_the_exact_owning_command() {
                 &Choice::default(),
                 Command::new("/bin/sh").args(["-c", &format!("echo '{MODEL}'")]),
                 None,
-                &root.join(format!("{depth}-stamp-implement.jsonl")),
+                &recording
+                    .session_path(root, &depth.to_string(), "implement")
+                    .unwrap(),
                 Harness::Claude.adapter().interpretation(root, ""),
             )
             .unwrap();
@@ -403,9 +435,14 @@ fn nested_children_keep_the_exact_owning_command() {
     let fixture = Fixture::new();
     // A local Command wins even when the supplied inherited owner differs.
     let recording = Recording::new(
-        Some(fixture.root.path().join("7-stamp.log")),
+        Some(
+            fixture
+                .root
+                .path()
+                .join("7-20261003T120000-0400~fixture.log"),
+        ),
         Some(fixture.root.path().join("wrong.log")),
-        "stamp".into(),
+        "20261003T120000-0400".into(),
     );
     let mut child = Command::new(std::env::current_exe().unwrap());
     child
@@ -415,7 +452,7 @@ fn nested_children_keep_the_exact_owning_command() {
         ])
         .env(CHILD, fixture.root.path())
         .env("THIRDSHIFT_RECORDING_DEPTH", "8")
-        .env(PARENT_COMMAND_LOG, "stale.log");
+        .env(PARENT_OWNER, "stale.log");
     recording.inherit_command(&mut child);
     let output = child.output().unwrap();
     assert!(output.status.success(), "{output:?}");
@@ -435,7 +472,11 @@ fn interrupted_stream_survives_process_owners_suppression_of_recovered_state() {
         "#!/bin/sh\nexit 99\n",
         |root| {
             crate::interrupt::install().unwrap();
-            let recording = Recording::new(Some(root.join("7-stamp.log")), None, "stamp".into());
+            let recording = Recording::new(
+                Some(root.join("7-20261003T120000-0400.log")),
+                None,
+                "20261003T120000-0400".into(),
+            );
             let error = recording
                 .run(
                     "implement",
@@ -445,7 +486,7 @@ fn interrupted_stream_survives_process_owners_suppression_of_recovered_state() {
                         &format!("echo '{MODEL}'; kill -INT \"$PPID\"; sleep 5"),
                     ]),
                     None,
-                    &root.join("7-stamp-implement.jsonl"),
+                    &root.join("7-20261003T120000-0400-implement.jsonl"),
                     Harness::Claude.adapter().interpretation(root, ""),
                 )
                 .unwrap_err();

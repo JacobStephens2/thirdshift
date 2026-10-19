@@ -118,7 +118,7 @@ fn a_review_required_notification_and_summary_name_the_refusal() {
 }
 
 #[test]
-fn a_notification_keeps_current_models_when_an_unrelated_record_is_corrupt() {
+fn a_notification_keeps_current_models_when_an_owned_record_is_corrupt() {
     let scenario = Scenario::new();
     let started = scenario.path("agent-started");
     let release = scenario.path("agent-release");
@@ -143,9 +143,6 @@ fn a_notification_keeps_current_models_when_an_unrelated_record_is_corrupt() {
         .strip_prefix("7-")
         .unwrap()
         .strip_suffix(".log")
-        .unwrap()
-        .split('~')
-        .next()
         .unwrap();
     std::fs::write(
         scenario

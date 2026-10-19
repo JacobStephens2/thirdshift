@@ -1178,6 +1178,43 @@ fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branc
         assert!(scenario.origin_file("issue-20", file).is_some(), "{file}");
     }
     assert_eq!(spec_pr(&scenario)["isDraft"], false);
+    let folder = "home/.thirdshift/logs/acme/widgets/commands/issue";
+    let commands = scenario.log_files(folder, "log");
+    assert_eq!(
+        commands.len(),
+        1,
+        "children keep no Command log: {commands:?}"
+    );
+    let owner = commands[0]
+        .strip_prefix("20-")
+        .unwrap()
+        .strip_suffix(".log")
+        .unwrap();
+    let sessions = scenario.log_files(folder, "jsonl");
+    assert_eq!(
+        sessions,
+        [
+            format!("20-{owner}-spec-review.jsonl"),
+            format!("21-{owner}-implement.jsonl"),
+            format!("22-{owner}-implement.jsonl")
+        ]
+    );
+    for session in sessions {
+        let evidence: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(
+                scenario
+                    .path(folder)
+                    .join(session)
+                    .with_extension("models.json"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            evidence["command_log"],
+            scenario.path(folder).join(&commands[0]).to_str().unwrap()
+        );
+    }
 }
 
 #[test]

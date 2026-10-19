@@ -24,6 +24,7 @@ pub(super) struct Record<O: Outside> {
     outside: O,
     stamp: Option<String>,
     owner: Option<Owner>,
+    owner_error: Option<String>,
     logs_dir: Option<PathBuf>,
     child: bool,
     command: CommandKind,
@@ -73,6 +74,7 @@ impl<O: Outside> Record<O> {
             outside,
             stamp: None,
             owner: None,
+            owner_error: None,
             logs_dir: None,
             child: false,
             command: CommandKind::Issue,
@@ -226,7 +228,10 @@ impl<O: Outside> Record<O> {
             let Some(owner) = &self.owner else {
                 return;
             };
-            owner.record_path()
+            let Some(path) = owner.record_path() else {
+                return;
+            };
+            path
         };
         self.command_record = Some((
             path,
@@ -392,6 +397,23 @@ impl<O: Outside> Record<O> {
         }
     }
 
+    pub(super) fn inherit_owner(&mut self, inherited: Result<Owner>) {
+        if self.owner.is_none() {
+            match inherited {
+                Ok(owner) => self.owner = Some(owner),
+                Err(error) => self.owner_error = Some(format!("{error:#}")),
+            }
+        }
+    }
+
+    pub(super) fn captured_owner(&self) -> Result<Owner, String> {
+        self.owner.clone().ok_or_else(|| {
+            self.owner_error
+                .clone()
+                .unwrap_or_else(|| "Command logging has not allocated an owner".into())
+        })
+    }
+
     pub(super) fn print(&mut self, line: &str) {
         self.output(Stream::Stdout, line.to_string());
     }
@@ -448,7 +470,7 @@ impl<O: Outside> Record<O> {
             let allocation = owner::allocate(&mut self.outside, root, work, stamp)?;
             self.owner = Some(allocation.owner);
             let mut writer = allocation.writer;
-            let path = self.owner.as_ref().unwrap().log_path();
+            let path = self.owner.as_ref().unwrap().log_path().unwrap();
             for (_, line) in lines {
                 writeln!(writer, "{line}")
                     .with_context(|| format!("could not write {}", path.display()))?;
@@ -458,18 +480,25 @@ impl<O: Outside> Record<O> {
         match created {
             Ok(writer) => {
                 self.command_log = Log::Kept {
-                    path: self.owner.as_ref().unwrap().log_path().to_path_buf(),
+                    path: self
+                        .owner
+                        .as_ref()
+                        .unwrap()
+                        .log_path()
+                        .unwrap()
+                        .to_path_buf(),
                     writer,
                 };
                 let path = self.command_log_path().unwrap();
                 self.step(format_args!("logging this command to {}", path.display()));
             }
             Err(error) => {
+                self.owner_error = Some(format!("{error:#}"));
                 self.command_log = Log::Failed {
                     path: self
                         .owner
                         .as_ref()
-                        .map(|owner| owner.log_path().to_path_buf()),
+                        .and_then(|owner| owner.log_path().map(Path::to_path_buf)),
                 };
                 self.step(format_args!(
                     "warning: could not keep the Command log: {error:#}"

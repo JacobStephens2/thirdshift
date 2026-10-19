@@ -10,7 +10,7 @@ fn real_files_keep_interleaved_command_output_and_records_separate() {
     let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
     let mut files = OnMachine;
     let first = allocate(&mut files, root.path(), Work::Run(&issue), STAMP).unwrap();
-    let first_path = first.owner.log_path().to_path_buf();
+    let first_path = first.owner.log_path().unwrap().to_path_buf();
     let mut first_writer = first.writer;
     first_writer.write_all(b"first before\n").unwrap();
     let second = allocate(&mut files, root.path(), Work::Run(&issue), STAMP).unwrap();
@@ -18,19 +18,25 @@ fn real_files_keep_interleaved_command_output_and_records_separate() {
     second_writer.write_all(b"second before\n").unwrap();
     first_writer.write_all(b"first after\n").unwrap();
     second_writer.write_all(b"second after\n").unwrap();
-    assert_ne!(first_path, second.owner.log_path());
-    assert_ne!(first.owner.record_path(), second.owner.record_path());
+    assert_ne!(first_path, second.owner.log_path().unwrap());
+    assert_ne!(
+        first.owner.record_path().unwrap(),
+        second.owner.record_path().unwrap()
+    );
     assert_eq!(
         fs::read(first_path).unwrap(),
         b"first before\nfirst after\n"
     );
     assert_eq!(
-        fs::read(second.owner.log_path()).unwrap(),
+        fs::read(second.owner.log_path().unwrap()).unwrap(),
         b"second before\nsecond after\n"
     );
     for owner in [&first.owner, &second.owner] {
-        assert_eq!(record_log(&owner.record_path()), owner.log_path());
-        let decoded = decode(owner.log_path()).unwrap();
+        assert_eq!(
+            record_log(&owner.record_path().unwrap()),
+            owner.log_path().unwrap()
+        );
+        let decoded = decode(owner.log_path().unwrap()).unwrap();
         assert_eq!(decoded.identity.stamp, STAMP);
         assert!(decoded.identity.token.is_some());
         assert_eq!(decoded.subject, "7");
@@ -59,10 +65,10 @@ fn a_forced_collision_preserves_the_existing_file_and_retries_with_a_fresh_token
     let mut allocated = allocate(&mut files, root.path(), Work::Run(&issue), STAMP).unwrap();
     allocated.writer.write_all(b"new output\n").unwrap();
     let occupied = files.occupied.unwrap();
-    assert_ne!(occupied, allocated.owner.log_path());
+    assert_ne!(occupied, allocated.owner.log_path().unwrap());
     assert_eq!(fs::read(occupied).unwrap(), b"another Command's output\n");
     assert_eq!(
-        fs::read(allocated.owner.log_path()).unwrap(),
+        fs::read(allocated.owner.log_path().unwrap()).unwrap(),
         b"new output\n"
     );
 }
