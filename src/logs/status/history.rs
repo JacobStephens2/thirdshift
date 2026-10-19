@@ -10,6 +10,7 @@ use serde::Serialize;
 
 use crate::logs::activity::TIME_FORMAT;
 use crate::logs::command_record::Issue;
+use crate::logs::owner;
 use crate::progress::ChildLine;
 
 #[derive(Clone, Serialize)]
@@ -196,14 +197,12 @@ pub(super) fn read(repo: &Path, covered: &HashSet<PathBuf>) -> Result<Vec<Comman
     }
     let recorded = covered;
     let mut covered = recorded.clone();
-    let mut shared_stamps = HashSet::new();
+    let mut shared_owners = Vec::new();
     for start in &starts {
         if let Some(path) = &start.command.command_log {
             covered.insert(path.clone());
-            if start.command.kind != "Run"
-                && let Some((stamp, _)) = super::command_stamp(path)
-            {
-                shared_stamps.insert((path.parent().unwrap().to_path_buf(), stamp.into()));
+            if start.command.kind != "Run" && owner::decode(path).is_some() {
+                shared_owners.push(path.clone());
             }
         }
     }
@@ -220,7 +219,7 @@ pub(super) fn read(repo: &Path, covered: &HashSet<PathBuf>) -> Result<Vec<Comman
     // Keep Activity entries unless a record covered them; all Activity starts
     // still suppress their Session logs, including starts with no end line.
     // `covered` above includes both sources for the Session-log pass.
-    commands.extend(sessions(repo, &repository, &covered, &shared_stamps)?);
+    commands.extend(sessions(repo, &repository, &covered, &shared_owners)?);
     Ok(commands)
 }
 
@@ -292,7 +291,7 @@ fn sessions(
     repo: &Path,
     repository: &str,
     covered: &HashSet<PathBuf>,
-    shared_stamps: &HashSet<(PathBuf, String)>,
+    shared_owners: &[PathBuf],
 ) -> Result<Vec<Command>> {
     let mut groups: BTreeMap<PathBuf, Command> = BTreeMap::new();
     for folder in super::directories(&repo.join("commands"))? {
@@ -300,32 +299,27 @@ fn sessions(
             if !entry.file_type()?.is_file() {
                 continue;
             }
-            let name = entry.file_name();
-            let Some(name) = name.to_str().and_then(|name| name.strip_suffix(".jsonl")) else {
+            let path = entry.path();
+            let Some(decoded) =
+                owner::decode(&path).filter(|decoded| decoded.session_kind.is_some())
+            else {
                 continue;
             };
-            let Some((prefix, rest)) = name.split_once('-') else {
-                continue;
-            };
-            let Some(stamp) = rest.get(..20).and_then(super::parse_stamp) else {
-                continue;
-            };
-            if rest
-                .get(20..)
-                .and_then(|rest| rest.strip_prefix('-'))
-                .is_none_or(str::is_empty)
-            {
-                continue;
-            }
+            let prefix = decoded.subject;
+            let stamp = decoded.time();
             let (kind, number) = match prefix.parse::<u64>() {
                 Ok(number) => ("Run", Some(number)),
                 Err(_) if prefix == "architect" => ("Architect run", None),
                 Err(_) if prefix == "secure" => ("Security run", None),
                 Err(_) => continue,
             };
-            let command_log = folder.join(format!("{prefix}-{}.log", &rest[..20]));
-            if covered.contains(&command_log)
-                || shared_stamps.contains(&(folder.clone(), rest[..20].into()))
+            let command_log =
+                owner::evidenced_log(&path).unwrap_or_else(|| decoded.command_log(&path));
+            if covered.contains(&path)
+                || covered.contains(&command_log)
+                || shared_owners.iter().any(|log| {
+                    log.parent() == Some(folder.as_path()) && owner::session_matches(&path, log)
+                })
             {
                 continue;
             }

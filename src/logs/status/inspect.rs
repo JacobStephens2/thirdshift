@@ -10,6 +10,7 @@ use serde::Serialize;
 use super::{Command, Entry};
 use crate::issue::IssueUrl;
 use crate::logs::effects::Outside;
+use crate::logs::owner;
 
 enum Name {
     Issue { repository: String, number: u64 },
@@ -144,13 +145,7 @@ impl<'a> Selected<'a> {
         let (mut paths, issue, kind) = match self {
             Self::Record(command) => {
                 let mut paths = Vec::new();
-                for path in command
-                    .record
-                    .stages
-                    .iter()
-                    .filter_map(|stage| stage.session_log.as_ref())
-                    .chain(command.record.session_log.as_ref())
-                {
+                for path in command.record.session_references() {
                     if !paths.contains(path) {
                         paths.push(path.clone());
                     }
@@ -170,22 +165,22 @@ impl<'a> Selected<'a> {
         // A stage can cover several sessions (for example Architecture review
         // and its Resume), so stage references alone are not a log inventory.
         if let Some(log) = self.command_log()
-            && let Some((stamp, _)) = super::command_stamp(log)
+            && owner::decode(log).is_some()
         {
             let prefix = issue
                 .map(|issue| issue.number.to_string())
                 .or_else(|| pass_prefix(kind).map(String::from))
                 .context("cannot name Session logs for this Command kind")?;
-            let prefix = format!("{prefix}-{stamp}-");
             for entry in super::entries(log.parent().context("Command log has no directory")?)? {
-                let name = entry.file_name();
-                let name = name.to_string_lossy();
+                let path = entry.path();
                 if entry.file_type()?.is_file()
-                    && name.starts_with(&prefix)
-                    && name.ends_with(".jsonl")
-                    && !paths.contains(&entry.path())
+                    && owner::decode(&path).is_some_and(|decoded| {
+                        decoded.session_kind.is_some() && decoded.subject == prefix
+                    })
+                    && owner::session_matches(&path, log)
+                    && !paths.contains(&path)
                 {
-                    paths.push(entry.path());
+                    paths.push(path);
                 }
             }
         }
@@ -207,13 +202,7 @@ impl<'a> Selected<'a> {
             .into_iter()
             .rev()
             .find(|path| {
-                let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-                    return false;
-                };
-                let Some((_, rest)) = name.split_once('-') else {
-                    return false;
-                };
-                let Some(session) = rest.get(21..).and_then(|rest| rest.strip_suffix(".jsonl"))
+                let Some(session) = owner::decode(path).and_then(|decoded| decoded.session_kind)
                 else {
                     return false;
                 };

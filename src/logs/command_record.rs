@@ -162,6 +162,15 @@ impl StageName {
 }
 
 impl CommandRecord {
+    /// Exact retained Session references, including earlier stages. Callers
+    /// decide whether they need a deduplicated inventory.
+    pub fn session_references(&self) -> impl Iterator<Item = &PathBuf> {
+        self.stages
+            .iter()
+            .filter_map(|stage| stage.session_log.as_ref())
+            .chain(self.session_log.as_ref())
+    }
+
     pub fn finish(&mut self, account: &crate::run_ending::Account<'_>, now: DateTime<FixedOffset>) {
         self.ended_at = Some(now.to_rfc3339());
         self.outcome = Some(account.outcome.into());

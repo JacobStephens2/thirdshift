@@ -522,10 +522,10 @@ request left behind.</p>
 ├── audits/                   each Security audit&#39;s report, with its evidence
 ├── security-reviews/         each Security review&#39;s private report of old findings
 └── commands/
-    ├── architect/            &lt;stamp&gt;.log and Session logs
-    ├── pickup/               &lt;n&gt;-&lt;stamp&gt;.log and Session logs
-    ├── secure/               &lt;stamp&gt;.log and Session logs
-    └── issue/                &lt;n&gt;-&lt;stamp&gt;.log and Session logs
+    ├── architect/            &lt;stamp&gt;~&lt;token&gt;.log and Session logs
+    ├── pickup/               &lt;n&gt;-&lt;stamp&gt;~&lt;token&gt;.log and Session logs
+    ├── secure/               &lt;stamp&gt;~&lt;token&gt;.log and Session logs
+    └── issue/                &lt;n&gt;-&lt;stamp&gt;~&lt;token&gt;.log and Session logs
 </code></pre>
 <p>The folder already names the repository, so no file name repeats it. <code>audits/</code> and <code>security-reviews/</code> hold vulnerability evidence, so keep the logs private (see <a href="#security-runs">Security runs</a>). A <strong>Session log</strong> is one session&#39;s full transcript, as the Harness&#39;s JSON output, such as Claude Code&#39;s <code>stream-json</code>:</p>
 <pre><code>~/.thirdshift/logs/&lt;owner&gt;/&lt;repo&gt;/commands/issue/&lt;n&gt;-&lt;stamp&gt;-implement.jsonl
@@ -536,9 +536,10 @@ request left behind.</p>
 <p>A Resume is logged as its session&#39;s kind plus <code>-resume</code>, e.g. <code>implement-resume.jsonl</code>.</p>
 <p>A <strong>Command log</strong> is everything one command printed, stderr and stdout in the order printed, while the terminal still shows all of it. Its folder is the command typed: <code>thirdshift &lt;Issue URL&gt;</code>, a Run or a Spec run, in <code>issue/</code>, <code>thirdshift pickup</code> in <code>pickup/</code>, named for the issue it took, and <code>thirdshift architect</code> in <code>architect/</code>. A Spec run&#39;s covers its Tickets&#39; Runs, a Run&#39;s covers its <a href="#base-fix">Base fix</a>, and a Pass&#39;s covers the Spec run or Run it dispatched: none of those keeps one of its own. So <code>ls -t ~/.thirdshift/logs/acme/widgets/commands/pickup/*.log | head</code> lists the recent passes on acme/widgets that took an issue. A command keeps its Command log once it starts work: a Pass skipped before doing any work keeps none, nor does a Run that fails before it starts work, as on the <a href="#what-a-run-does">Origin match</a>, and <code>setup</code>, <code>email-test</code>, <code>update</code>, <code>version</code> and <code>help</code> never keep one. Lines printed before the Command log&#39;s name is known, such as a Pickup run&#39;s lines on the issues it <a href="#why-an-issue-was-passed-over">passed over</a> before it took one, are written first, and once it is created a progress line says <code>logging this command to &lt;path&gt;</code>. A Command log that can&#39;t be written produces one <code>warning:</code> line on stderr. A failure confined to the Command log leaves the outcome, stdout and exit code unchanged; if the shared folder also prevents writing a Session log, the Run fails before starting that session.</p>
 <p>The stamp is the local time the command started, with its UTC offset, as in <code>20261003T120000-0400</code>, in the machine&#39;s time zone, or <code>TZ</code>&#39;s if set, so it agrees with <code>date</code> and <code>ls -l</code>. A command&#39;s Command log and all of its Session logs, its Tickets&#39; Runs&#39; and its Base fix&#39;s included, share that one stamp, so they sort together and each can be found from the other. When a Run fails, stderr ends with the path of its most recent Session log, the place to start looking, then that of its Command log.</p>
+<p>New Command logs insert <code>~&lt;token&gt;</code> immediately after the stamp. The random token gives each Command its own storage even when start times agree; its Command record uses that exact stem followed by <code>.command.json</code>. Human Command names stay the same. Session writers still use the tokenless examples above during this transition; readers also accept Session names with <code>~&lt;token&gt;</code>. A matching stamp alone does not attach a tokenless Session to a new Command: a record reference or exact Model evidence must establish that ownership. Legacy logs and records remain readable without renaming.</p>
 <p>The <strong>Activity log</strong>, <code>activity.log</code>, is a short running record of what the factory did on the repository (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0011-thirdshift-keeps-a-per-repository-activity-log.md">ADR-0011</a>). A Run, a Spec run or a Pass writes a line when it starts work, naming its Command log, and one when it ends, with its outcome; a Run you type by hand writes them too, and the run a Pass dispatched, a Spec run&#39;s Tickets and a Base fix write none of their own. A skipped Pass writes a line only when its reason differs from the last line of its own kind, so a repository that sits idle shows one line, not one per pass, and the first skip after a pass that did work always shows: that is when the repository went idle. Every line starts with the local date and time:</p>
 <pre><code>2026-10-03 02:00:01 Pickup run skipped: no Ready issue on acme/widgets
-2026-10-03 09:30:01 Pickup run #41 started: commands/pickup/41-20261003T093001-0400.log
+2026-10-03 09:30:01 Pickup run #41 started: commands/pickup/41-20261003T093001-0400~aB3cD4eF5gH6iJ7k.log
 2026-10-03 09:52:17 Pickup run #41 ended: PR https://github.com/acme/widgets/pull/42 is merged
 2026-10-03 10:00:01 Pickup run skipped: no Ready issue on acme/widgets
 </code></pre>
@@ -840,7 +841,7 @@ thirdshift: 03:00:08 no Ready issue on acme/widgets
 thirdshift: 03:00:02 #18 labelled needs-info
 thirdshift: 03:00:03 #20 blocked by #17
 thirdshift: 03:00:04 taking Ready issue #22 &quot;Sharpen the widgets&quot;, as thirdshift https://github.com/acme/widgets/issues/22 would
-thirdshift: 03:00:04 logging this command to ~/.thirdshift/logs/acme/widgets/commands/pickup/22-20261003T030001-0400.log
+thirdshift: 03:00:04 logging this command to ~/.thirdshift/logs/acme/widgets/commands/pickup/22-20261003T030001-0400~aB3cD4eF5gH6iJ7k.log
 </code></pre>
 <h3 id="one-run-notification-for-the-issue-taken">One Run notification for the issue taken</h3>
 <p>A Pickup run asked for a <a href="#run-notifications">Run notification</a>, by <code>email</code> or by <code>email.always = true</code> in the <a href="#user-config">User config</a> without <code>no-email</code>, sends exactly one when it took a Ready issue: the notification the Spec run or Run it dispatched would have sent started by hand. An address after <code>email</code> wins over <code>email.to</code>, as for a Run.</p>

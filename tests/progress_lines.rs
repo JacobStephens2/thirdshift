@@ -286,6 +286,7 @@ for log in "{logs}/commands/issue/"*.log; do
     name=${{log##*/}}
     stamp=${{name#7-}}
     stamp=${{stamp%.log}}
+    stamp=${{stamp%%~*}}
 done
 mkdir -p "{logs}/commands/issue"
 ln -s "{pipe}" "{logs}/commands/issue/7-$stamp-implement.jsonl"

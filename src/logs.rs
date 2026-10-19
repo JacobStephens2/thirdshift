@@ -12,9 +12,9 @@
 //! process-wide interface serializes its operations, including emitted output.
 
 mod activity;
-mod command_log;
 mod command_record;
 mod effects;
+mod owner;
 mod process_identity;
 mod recording;
 pub mod status;
@@ -355,27 +355,6 @@ impl Work<'_> {
             | Work::PickupRun(issue) => Some(issue.number),
             Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
         }
-    }
-
-    /// Where its Command log goes, under its repository's logs at `root`,
-    /// for the command started at `stamp`:
-    /// `<root>/commands/<folder>/<prefix><stamp>.log`, one folder per
-    /// command typed, so the repository, already in the path, is not in the
-    /// name. `thirdshift <Issue URL>`, a Run or a Spec run, is in `issue/`,
-    /// `thirdshift pickup` in `pickup/`, both named for the issue, and
-    /// `thirdshift architect` in `architect/`.
-    fn command_log(self, root: &Path, stamp: &str) -> PathBuf {
-        let (folder, prefix) = match self {
-            Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => {
-                (CommandKind::Issue, format!("{}-", issue.number))
-            }
-            Work::PickupRun(issue) => (CommandKind::Pickup, format!("{}-", issue.number)),
-            Work::ArchitectRun(_) => (CommandKind::Architect, String::new()),
-            Work::SecurityRun(_) => (CommandKind::Secure, String::new()),
-        };
-        root.join("commands")
-            .join(folder.folder())
-            .join(format!("{prefix}{stamp}.log"))
     }
 }
 

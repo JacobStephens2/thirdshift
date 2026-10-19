@@ -8,6 +8,99 @@ use support::Scenario;
 const OPENS_PR: &str = "echo work > work.txt\ngit add work.txt\ngit commit -qm 'Make widgets'\ngh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7'\n";
 
 #[test]
+fn owned_and_legacy_commands_keep_exact_paths_and_record_precedence() {
+    let scenario = Scenario::new();
+    let folder = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");
+    fs::create_dir_all(&folder).unwrap();
+    let mut activity = String::new();
+    for (stem, suffix, started, marker) in [
+        (
+            "7-20261003T120000-0400",
+            ".123-start-1-0",
+            "2026-10-03T12:00:00-04:00",
+            "legacy",
+        ),
+        (
+            "7-20261003T120000-0400~ownerA",
+            "",
+            "2026-10-03T12:00:01-04:00",
+            "first",
+        ),
+        (
+            "7-20261003T120000-0400~ownerB",
+            "",
+            "2026-10-03T12:00:02-04:00",
+            "second",
+        ),
+    ] {
+        let log = folder.join(format!("{stem}.log"));
+        let session = folder.join(format!("{stem}-implement.jsonl"));
+        fs::write(&log, format!("{marker} Command output\n")).unwrap();
+        fs::write(&session, format!("{marker} Session output\n")).unwrap();
+        let record = serde_json::json!({
+            "version": 1, "kind": "Run", "repository": "acme/widgets", "name": "acme/widgets#7",
+            "issue": {"number": 7, "url": scenario.issue_url(7), "title": marker},
+            "hostname": "factory", "process_id": 0, "process_start": "gone", "harness": "claude",
+            "model": null, "effort": null, "started_at": started, "ended_at": started,
+            "stages": [], "session_log": null, "outcome": "ready for review", "cause": null,
+            "issue_branch": null, "pull_request": null
+        });
+        fs::write(
+            folder.join(format!("{stem}{suffix}.command.json")),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        activity.push_str(&format!("2026-10-03 12:00:00 Run #7 started: commands/issue/{stem}.log, on claude\n2026-10-03 12:00:01 Run #7 ended: ready for review\n"));
+    }
+    fs::write(
+        folder
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .join("activity.log"),
+        activity,
+    )
+    .unwrap();
+    let status = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    assert_eq!(status["version"], 1);
+    let commands = status["commands"].as_array().unwrap();
+    assert_eq!(commands.len(), 3, "{status}");
+    for command in commands {
+        assert_eq!(command["source"], "command_record");
+        let output = fs::read_to_string(command["command_log"].as_str().unwrap()).unwrap();
+        assert!(output.starts_with(command["issue"]["title"].as_str().unwrap()));
+    }
+    let shown = scenario.run(&["show", "widgets#7", "--json"]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
+    assert_eq!(
+        shown["command"]["command_log"],
+        folder
+            .join("7-20261003T120000-0400~ownerB.log")
+            .to_str()
+            .unwrap()
+    );
+    assert_eq!(
+        shown["command"]["session_logs"],
+        serde_json::json!([folder.join("7-20261003T120000-0400~ownerB-implement.jsonl")])
+    );
+    for args in [
+        vec!["logs", "widgets#7"],
+        vec!["logs", "widgets#7", "--follow"],
+    ] {
+        let output = scenario.run(&args);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        assert_eq!(output.stdout, "second Command output\n");
+    }
+    let session = scenario.run(&["logs", "widgets#7", "--session", "implement"]);
+    assert_eq!(session.code, Some(0), "{}", session.stderr);
+    assert_eq!(session.stdout, "second Session output\n");
+}
+
+#[test]
 fn show_activity_history_lists_its_session_logs() {
     let scenario = Scenario::new();
     scenario.agent_does(OPENS_PR);

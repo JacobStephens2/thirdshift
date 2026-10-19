@@ -1833,7 +1833,12 @@ fn status_names_a_live_architecture_review_by_kind_and_command_stamp() {
         "home/.thirdshift/logs/acme/widgets/commands/architect",
         "log",
     );
-    let name = format!("architect-{}", log[0].strip_suffix(".log").unwrap());
+    let (stamp, _) = log[0]
+        .strip_suffix(".log")
+        .unwrap()
+        .split_once('~')
+        .expect("owned Command log");
+    let name = format!("architect-{stamp}");
     assert_eq!(command["name"], name);
     assert!(text.stdout.contains(&name), "{}", text.stdout);
     assert!(
