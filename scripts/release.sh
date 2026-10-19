@@ -20,7 +20,8 @@
 # Before it pushes anything, it refuses a release that can't be cut: a version
 # that isn't plain X.Y.Z, or isn't higher than the one on main, a v<version>
 # tag that already exists locally or on origin, or a latest CI run on main that
-# didn't succeed. If that CI run is still running, it waits for it first.
+# didn't succeed. If that CI run is still running, it waits for it to finish
+# before starting the release.
 #
 # If a run is interrupted, running it again with the same version carries on
 # from the first step not yet done: it opens the PR for a pushed branch, waits
@@ -52,7 +53,7 @@ shopt -s inherit_errexit
 summary_prompt=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-summary.md
 summary_manifest=$(dirname "$summary_prompt")/../Cargo.toml
 
-# Seconds between reads of main's CI, the PR's runs and the release run.
+# Seconds between reads of main's CI, the PR's runs and the release workflow.
 poll_seconds=${RELEASE_POLL_SECONDS:-15}
 
 main() {
