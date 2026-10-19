@@ -9,7 +9,7 @@ let server, browser, origin;
 before(async () => {
   server = createServer(async (request, response) => {
     const path = new URL(request.url, "http://localhost").pathname;
-    const file = path === "/prompts/" ? "prompts/index.html" : path.slice(1);
+    const file = path.endsWith("/") ? `${path.slice(1)}index.html` : path.slice(1);
     try {
       const content = await readFile(join(__dirname, "..", file));
       const type = file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : "text/html";
@@ -33,6 +33,78 @@ async function pageForTest(t, options) {
   const page = await context.newPage();
   await page.route("https://**", route => route.abort());
   return page;
+}
+
+test("the homepage leads to a guide that teaches the process in order", async (t) => {
+  const page = await pageForTest(t);
+  await page.goto(`${origin}/`);
+  await page.getByRole("link", { name: "How thirdshift works", exact: true }).first().click();
+  assert.equal(new URL(page.url()).pathname, "/how-it-works/");
+  assert.equal(await page.getByRole("heading", { name: "How thirdshift works", level: 1 }).isVisible(), true);
+  assert.deepEqual(await page.locator("main h2").allTextContents(), [
+    "Start with work you can describe",
+    "Give the Run its own checkout",
+    "Let the agent implement and review",
+    "Deliver against the latest Base branch",
+    "Know what comes back",
+    "Scale one Run into a Spec run",
+    "Choose how the next work starts",
+  ]);
+});
+
+test("guide navigation and Repair loop links reach visible explanations without JavaScript", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  await page.goto(`${origin}/how-it-works/`);
+  const links = page.getByRole("navigation", { name: "Guide sections" }).getByRole("link");
+  assert.equal(await links.count(), 7);
+  for (const link of await links.all()) {
+    const href = await link.getAttribute("href");
+    await link.click();
+    assert.equal(new URL(page.url()).hash, href);
+    assert.equal(await page.locator(`${href} h2`).isVisible(), true);
+    assert.ok(await page.locator(href).evaluate(node => Math.abs(node.getBoundingClientRect().top) < 40), `${href} scrolls into view`);
+  }
+  await page.getByRole("link", { name: "Then return to merging the Base branch" }).click();
+  assert.equal(new URL(page.url()).hash, "#delivery-sync");
+  assert.equal(await page.locator("#delivery-sync").isVisible(), true);
+  await page.getByRole("link", { name: "thirdshift / home" }).click();
+  assert.equal(new URL(page.url()).pathname, "/");
+});
+
+test("the guide's local links and styles resolve, including prompt deep links", async (t) => {
+  const page = await pageForTest(t);
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.goto(`${origin}/how-it-works/`);
+  const paths = await page.locator('a[href^="/"], link[href^="/"]').evaluateAll(nodes => [...new Set(nodes.map(node => node.getAttribute("href")))]);
+  for (const path of paths) {
+    const response = await page.request.get(`${origin}${path}`);
+    assert.equal(response.status(), 200, path);
+  }
+  await page.getByRole("link", { name: "the review procedure" }).click();
+  assert.equal(await page.locator("#skill-thirdshift-code-review .job-body").isVisible(), true);
+  assert.deepEqual(errors, []);
+});
+
+for (const width of [320, 390, 768, 1280]) {
+  test(`the guide's diagrams remain readable at ${width}px without JavaScript`, async (t) => {
+    const page = await pageForTest(t, {
+      javaScriptEnabled: false,
+      reducedMotion: "reduce",
+      viewport: { width, height: 900 },
+    });
+    await page.goto(`${origin}/how-it-works/`);
+    const diagrams = page.locator("main figure");
+    assert.equal(await diagrams.count(), 6);
+    for (const diagram of await diagrams.all()) {
+      assert.equal(await diagram.isVisible(), true);
+      assert.ok(await diagram.locator("figcaption").textContent());
+    }
+    const overflow = await page.locator("main, header, .guide-diagram, .guide-node, .guide-flow > li, pre").evaluateAll(nodes =>
+      nodes.filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.textContent.trim().slice(0, 80)));
+    assert.deepEqual(overflow, [], "text and diagrams fit their containers");
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "no horizontal page scrolling");
+  });
 }
 
 // A skill's own SKILL.md starts open, so it shows as soon as its skill does.
