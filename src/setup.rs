@@ -1127,6 +1127,7 @@ dir = \"/var/log/thirdshift\"
 waiting_line_minutes = 5
 
 [inbox]
+days = 7
 silent_minutes = 10
 
 [activity]

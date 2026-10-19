@@ -56,6 +56,9 @@ pub(super) struct CommandRecord {
     pub parent_dispatch: Option<String>,
     #[serde(default)]
     pub tickets: Vec<TicketRecord>,
+    /// Local knowledge at completion; status never refreshes findings from GitHub.
+    #[serde(default)]
+    pub security_findings_waiting: bool,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -180,6 +183,7 @@ impl CommandRecord {
             .err()
             .map(|cause| cause.full().into());
         self.pull_request = account.pr_url.map(String::from);
+        self.security_findings_waiting = account.security_findings_waiting;
     }
 
     pub fn live(&self, outside: &mut impl super::effects::Outside) -> bool {
@@ -235,6 +239,7 @@ impl CommandRecord {
             parent_record: None,
             parent_dispatch: None,
             tickets: Vec::new(),
+            security_findings_waiting: false,
         }
     }
 

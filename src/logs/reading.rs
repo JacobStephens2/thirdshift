@@ -3,6 +3,7 @@
 
 mod health;
 mod history;
+mod inbox;
 mod selection;
 #[cfg(test)]
 mod tests;
@@ -20,6 +21,7 @@ use super::effects::OnMachine;
 use super::{Pass, activity};
 pub(super) use health::{Health, UsualRange};
 pub(super) use history::Command as HistoricalCommand;
+pub(super) use inbox::{Group, InboxItem};
 pub(super) use selection::{Detailed, Observation};
 
 pub(super) struct Snapshot {
@@ -94,20 +96,8 @@ impl Snapshot {
         })
     }
 
-    pub(super) fn list(&self, all: bool) -> Vec<&Entry> {
-        let mut commands: Vec<_> = self
-            .commands
-            .iter()
-            .filter(|entry| match entry {
-                Entry::Record(command) => {
-                    all || command.record.outcome.is_none()
-                        || recent(command.record.ended_at.as_deref(), self.now)
-                }
-                Entry::History(command) => all || recent(command.ended_at.as_deref(), self.now),
-            })
-            .collect();
-        commands.sort_by(|a, b| a.ordering(all).cmp(&b.ordering(all)));
-        commands
+    pub(super) fn inbox(&self, all: bool, days: i64) -> Vec<InboxItem<'_>> {
+        inbox::list(&self.commands, self.now, all, days)
     }
 
     pub(super) fn resolve(&self, input: &str) -> Result<selection::Selection<'_>> {
@@ -152,35 +142,6 @@ pub(super) struct IdlePass {
 pub(super) enum Entry {
     Record(Box<Command>),
     History(Box<history::Command>),
-}
-
-impl Entry {
-    fn ordering(
-        &self,
-        all: bool,
-    ) -> (
-        bool,
-        std::cmp::Reverse<Option<DateTime<chrono::FixedOffset>>>,
-        &str,
-    ) {
-        let (state, started, repo) = match self {
-            Self::Record(command) => (
-                command.state,
-                command.record.started_at.as_str(),
-                command.record.repository.as_str(),
-            ),
-            Self::History(command) => (
-                command.state,
-                command.started_at.as_str(),
-                command.repository.as_str(),
-            ),
-        };
-        (
-            !all && state != "live",
-            std::cmp::Reverse(DateTime::parse_from_rfc3339(started).ok()),
-            repo,
-        )
-    }
 }
 
 #[derive(Serialize)]
@@ -326,12 +287,6 @@ fn children(
         .collect();
     children.sort_by_key(|child| child.record.issue.as_ref().map(|issue| issue.number));
     children
-}
-
-fn recent(ended: Option<&str>, now: DateTime<Local>) -> bool {
-    ended
-        .and_then(|time| DateTime::parse_from_rfc3339(time).ok())
-        .is_some_and(|ended| ended >= now - chrono::Duration::hours(24))
 }
 
 fn read_idle_passes(repo: &Path) -> Result<Vec<IdlePass>> {

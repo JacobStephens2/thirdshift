@@ -54,6 +54,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                     ticket_lines: &[],
                     review: None,
                     security_findings: None,
+                    security_findings_waiting: false,
                     failed_reproduction: None,
                     pre_audit_failure: None,
                     recovery: None,
@@ -81,6 +82,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                 },
                 failed_reproduction: audited.failed_reproduction,
                 security_findings: Some(&audited.findings),
+                security_findings_waiting: audited.findings_waiting,
                 advice: &audited.advice,
                 ..account
             })
@@ -132,6 +134,7 @@ pub struct Account<'a> {
     pub pre_audit_failure: Option<&'static str>,
     /// Safe metadata from a Security run's private records, even if the audit failed.
     pub security_findings: Option<&'a [crate::security::RecordedFinding]>,
+    pub security_findings_waiting: bool,
     /// The URLs on stdout, a line each: the pull request's, or that of the
     /// issue an Architect run's review ended on.
     pub urls: Vec<&'a str>,
@@ -202,6 +205,7 @@ impl<'a> Account<'a> {
                 ticket_lines: &reached.ticket_lines,
                 review: None,
                 security_findings: None,
+                security_findings_waiting: false,
                 failed_reproduction: None,
                 pre_audit_failure: None,
                 recovery: None,
@@ -229,6 +233,7 @@ impl<'a> Account<'a> {
             ticket_lines: &failed.ticket_lines,
             review: None,
             security_findings: None,
+            security_findings_waiting: false,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: failed.recovery.as_deref(),
@@ -260,6 +265,7 @@ impl<'a> Account<'a> {
                 ticket_lines: &[],
                 review: None,
                 security_findings: None,
+                security_findings_waiting: false,
                 failed_reproduction: None,
                 pre_audit_failure: None,
                 recovery: None,
@@ -552,6 +558,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            security_findings_waiting: false,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -573,6 +580,7 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            security_findings_waiting: false,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -756,6 +764,7 @@ mod tests {
                         dispatched: None,
                     }),
                     security_findings: None,
+                    security_findings_waiting: false,
                     failed_reproduction: None,
                     pre_audit_failure: None,
                     recovery: None,

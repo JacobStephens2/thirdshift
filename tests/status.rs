@@ -81,7 +81,7 @@ fn status_shows_each_idle_pass_until_its_own_kind_starts_work() {
     let dispatched = text
         .stdout
         .lines()
-        .find(|line| line.starts_with("  Run acme/widgets#7"))
+        .find(|line| line.starts_with("  ended · Run acme/widgets#7"))
         .expect(&text.stdout);
     assert!(dispatched.ends_with("ready for review"), "{dispatched}");
 }
@@ -234,6 +234,341 @@ fn write_record(scenario: &Scenario, number: u32, started: &str, ended: Option<&
     .unwrap();
 }
 
+fn change_record(scenario: &Scenario, number: u32, change: impl FnOnce(&mut Value)) {
+    let path = scenario
+        .path(LOGS)
+        .join(format!("{number}-fixture.command.json"));
+    let mut record = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    change(&mut record);
+    fs::write(path, serde_json::to_vec(&record).unwrap()).unwrap();
+}
+
+#[test]
+fn inbox_groups_ended_commands_and_adds_only_old_history_with_all() {
+    let scenario = Scenario::new();
+    let now = chrono::Local::now();
+    for (number, days, outcome) in [
+        (7, 0, "failed"),
+        (8, 0, "ready for review"),
+        (9, 0, "merged"),
+        (10, 2, "merged"),
+        (11, 9, "failed"),
+    ] {
+        let time = (now - chrono::Duration::days(days)).to_rfc3339();
+        write_record(&scenario, number, &time, Some(&time));
+        change_record(&scenario, number, |record| {
+            record["outcome"] = outcome.into();
+            if number == 8 {
+                record["pull_request"] = "https://github.com/acme/widgets/pull/8".into();
+            }
+        });
+    }
+    for (flags, expected) in [
+        (
+            vec!["status", "--json"],
+            vec![
+                (7, "needs you"),
+                (8, "ready for review"),
+                (9, "done"),
+                (10, "resolved"),
+            ],
+        ),
+        (
+            vec!["status", "--all", "--json"],
+            vec![
+                (7, "needs you"),
+                (8, "ready for review"),
+                (9, "done"),
+                (10, "resolved"),
+                (11, "history"),
+            ],
+        ),
+    ] {
+        let output = scenario.run(&flags);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        let rows: Vec<_> = status["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["issue"]["number"].as_u64().unwrap(),
+                    row["group"].as_str().unwrap_or("missing"),
+                )
+            })
+            .collect();
+        assert_eq!(rows, expected, "{status}");
+        assert_eq!(status["commands"][0]["needs_you_kind"], "failed");
+    }
+    let text = scenario.run(&["status", "--all"]);
+    let headings: Vec<_> = text
+        .stdout
+        .lines()
+        .filter(|line| line.ends_with(':'))
+        .collect();
+    assert_eq!(
+        headings,
+        [
+            "Needs you:",
+            "Ready for review:",
+            "Done:",
+            "Resolved:",
+            "History:"
+        ]
+    );
+}
+
+#[test]
+fn inbox_clears_ended_problems_on_a_later_local_start_or_the_configured_age() {
+    let scenario = Scenario::new();
+    let now = chrono::Local::now();
+    for (number, days) in [(7, 2), (8, 1), (9, 8), (10, 6), (11, 6), (12, 0)] {
+        let time = (now - chrono::Duration::days(days) - chrono::Duration::hours(1)).to_rfc3339();
+        write_record(
+            &scenario,
+            number,
+            &time,
+            (number != 9).then_some(time.as_str()),
+        );
+        change_record(&scenario, number, |record| {
+            if [7, 10, 12].contains(&number) {
+                record["outcome"] = "failed".into();
+            }
+            if number == 8 {
+                record["issue"] = serde_json::json!({"number": 7, "url": scenario.issue_url(7), "title": "Retry"});
+                record["outcome"] = "merged".into();
+            }
+        });
+    }
+    let calls = scenario.gh_calls();
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    let problems: Vec<_> = commands
+        .iter()
+        .filter(|row| row["group"] == "needs you")
+        .map(|row| row["issue"]["number"].as_u64().unwrap())
+        .collect();
+    assert_eq!(problems, [12, 10]);
+    assert!(!commands.iter().any(|row| row["issue"]["number"] == 9));
+    assert!(commands.iter().any(|row| row["issue"]["title"] == "Fixture"
+        && row["issue"]["number"] == 7
+        && row["group"] == "resolved"));
+    scenario.user_config_is("[inbox]\ndays = 1\n");
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    assert_eq!(commands.len(), 1, "{status}");
+    assert_eq!(commands[0]["issue"]["number"], 12);
+    assert_eq!(commands[0]["group"], "needs you");
+    assert_eq!(
+        scenario.gh_calls(),
+        calls,
+        "status must use only this machine's files"
+    );
+}
+
+#[test]
+fn inbox_puts_live_problems_first_and_points_to_silent_landing_without_duplicating_it() {
+    let scenario = Scenario::new();
+    scenario.issue_titled(99, "Held fixture");
+    scenario.issue_is(99, "OPEN");
+    scenario.agent_does(&format!(
+        "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\nexit 1\n",
+        scenario.path("started").display(),
+        scenario.path("release").display()
+    ));
+    let held = scenario.run_until(&[&scenario.issue_url(99)], &[], "started");
+    let live = scenario.command_record(LOGS);
+    let original = fs::read_dir(scenario.path(LOGS))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.to_string_lossy().ends_with(".command.json"))
+        .unwrap();
+    fs::remove_file(original).unwrap();
+    let now = chrono::Local::now();
+    for (number, age, stage) in [
+        (7, 3600, "CI watch"),
+        (8, 120, "implement"),
+        (9, 1, "Self-merge"),
+        (10, 1, "implement"),
+    ] {
+        let began = (now - chrono::Duration::seconds(age)).to_rfc3339();
+        write_record(&scenario, number, &began, None);
+        change_record(&scenario, number, |record| {
+            record["process_id"] = live["process_id"].clone();
+            record["process_start"] = live["process_start"].clone();
+            record["stages"] =
+                serde_json::json!([{"name": stage, "began_at": began, "session_log": null}]);
+        });
+    }
+    for number in 20..23 {
+        let ended = (now - chrono::Duration::hours(2)).to_rfc3339();
+        let began = (now - chrono::Duration::hours(2) - chrono::Duration::minutes(1)).to_rfc3339();
+        write_record(&scenario, number, &began, Some(&ended));
+        change_record(&scenario, number, |record| {
+            record["outcome"] = "merged".into();
+            record["stages"] =
+                serde_json::json!([{"name": "implement", "began_at": began, "session_log": null}]);
+        });
+    }
+    let recent = now.to_rfc3339();
+    write_record(&scenario, 11, &recent, None);
+    write_record(&scenario, 12, &recent, Some(&recent));
+    change_record(&scenario, 12, |record| record["outcome"] = "failed".into());
+    let output = scenario.run(&["status", "--json"]);
+    let text = scenario.run(&["status"]);
+    fs::write(scenario.path("release"), "").unwrap();
+    held.finish();
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    let first: Vec<_> = commands
+        .iter()
+        .take(6)
+        .map(|row| {
+            (
+                row["issue"]["number"].as_u64().unwrap(),
+                row["group"].as_str().unwrap(),
+                row["needs_you_kind"].as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        first,
+        [
+            (7, "needs you", Some("silent")),
+            (8, "needs you", Some("slow")),
+            (11, "needs you", Some("died")),
+            (12, "needs you", Some("failed")),
+            (9, "landing", None),
+            (10, "working", None),
+        ]
+    );
+    assert_eq!(commands[0]["landing"], true);
+    assert_eq!(
+        commands
+            .iter()
+            .filter(|row| row["issue"]["number"] == 7)
+            .count(),
+        1
+    );
+    assert!(
+        text.stdout
+            .contains("acme/widgets#7 · Silent · see Needs you"),
+        "{}",
+        text.stdout
+    );
+    assert_eq!(
+        text.stdout.matches("Run acme/widgets#7 Fixture").count(),
+        1,
+        "{}",
+        text.stdout
+    );
+    assert!(
+        text.stdout.contains("live · Run acme/widgets#10"),
+        "{}",
+        text.stdout
+    );
+}
+
+#[test]
+fn inbox_distinguishes_triage_stops_and_waiting_findings_from_completed_work() {
+    let scenario = Scenario::new();
+    let time = chrono::Local::now().to_rfc3339();
+    for number in 7..12 {
+        write_record(&scenario, number, &time, Some(&time));
+        change_record(&scenario, number, |record| {
+            record["outcome"] = if number < 9 {
+                "interrupted"
+            } else {
+                "findings recorded"
+            }
+            .into();
+            record["security_findings_waiting"] = (number == 9).into();
+            if number >= 9 {
+                record["kind"] = "Security run".into();
+            }
+        });
+        if number < 9 {
+            let path = scenario
+                .path(LOGS)
+                .join(format!("{number}-fixture.command.stop.json"));
+            fs::write(
+                path,
+                serde_json::to_vec(&serde_json::json!({"who": "jacob", "requeue": number == 8}))
+                    .unwrap(),
+            )
+            .unwrap();
+        }
+    }
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    for (number, group, kind) in [
+        (7, "needs you", Some("triage")),
+        (8, "done", None),
+        (9, "needs you", Some("finding")),
+        (10, "done", None),
+        (11, "done", None),
+    ] {
+        let row = commands
+            .iter()
+            .find(|row| row["issue"]["number"] == number)
+            .unwrap();
+        assert_eq!(row["group"], group, "{row}");
+        assert_eq!(row["needs_you_kind"].as_str(), kind, "{row}");
+    }
+}
+
+#[test]
+fn inbox_collapses_only_failures_with_the_same_known_cause_and_keeps_their_commands() {
+    let scenario = Scenario::new();
+    let now = chrono::Local::now();
+    for (number, cause) in [
+        (7, Some("base check failed")),
+        (8, Some("base check failed")),
+        (9, Some("agent failed")),
+        (10, None),
+        (11, None),
+    ] {
+        let time = (now - chrono::Duration::minutes(i64::from(number))).to_rfc3339();
+        write_record(&scenario, number, &time, Some(&time));
+        change_record(&scenario, number, |record| {
+            record["outcome"] = "failed".into();
+            record["cause"] = cause.into();
+        });
+    }
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    assert_eq!(commands.len(), 4, "{status}");
+    assert_eq!(commands[0]["issue"]["number"], 7);
+    assert_eq!(commands[0]["count"], 2);
+    assert_eq!(commands[0]["collapsed"][0]["issue"]["number"], 8);
+    assert_eq!(commands[0]["collapsed"][0]["group"], "needs you");
+    for row in &commands[1..] {
+        assert_eq!(row["count"], 1);
+    }
+    let text = scenario.run(&["status"]);
+    assert!(
+        text.stdout
+            .contains("2 Commands with this cause: base check failed"),
+        "{}",
+        text.stdout
+    );
+    assert!(
+        !text.stdout.contains("Run acme/widgets#8 Fixture"),
+        "{}",
+        text.stdout
+    );
+}
+
 #[test]
 fn tokenless_sessions_require_explicit_evidence_to_belong_to_an_owned_command() {
     for evidence in ["none", "record", "models"] {
@@ -290,20 +625,20 @@ fn tokenless_sessions_require_explicit_evidence_to_belong_to_an_owned_command() 
 }
 
 #[test]
-fn status_shows_recent_outcomes_and_all_history_newest_first() {
+fn status_shows_recent_outcomes_before_resolved_history() {
     let scenario = Scenario::new();
     let now = chrono::Local::now();
     let recent = (now - chrono::Duration::hours(1)).to_rfc3339();
     let old = (now - chrono::Duration::days(2)).to_rfc3339();
-    // The recent completion began before the old completion: filter by end,
-    // and order history by start, rather than by directory or end time.
+    // The recent completion began before the old one: group by completion,
+    // so Done precedes Resolved even when it started earlier.
     let earliest = (now - chrono::Duration::days(3)).to_rfc3339();
     write_record(&scenario, 7, &earliest, Some(&recent));
     write_record(&scenario, 8, &old, Some(&old));
     let result = scenario.run(&["status", "--json"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let status: Value = serde_json::from_str(&result.stdout).unwrap();
-    assert_eq!(status["commands"].as_array().unwrap().len(), 1);
+    assert_eq!(status["commands"].as_array().unwrap().len(), 2);
     assert_eq!(status["commands"][0]["issue"]["number"], 7);
     assert_eq!(status["commands"][0]["outcome"], "ready for review");
     let text = scenario.run(&["status"]);
@@ -318,7 +653,7 @@ fn status_shows_recent_outcomes_and_all_history_newest_first() {
             .iter()
             .map(|c| c["issue"]["number"].as_u64().unwrap())
             .collect();
-        assert_eq!(issues, [8, 7]);
+        assert_eq!(issues, [7, 8]);
     }
 }
 
@@ -357,7 +692,7 @@ fn status_keeps_completed_ticket_trees_with_recent_and_all_history() {
         .unwrap();
     }
     for (flags, expected) in [
-        (vec!["status", "--json"], 1),
+        (vec!["status", "--json"], 2),
         (vec!["status", "--all", "--json"], 2),
     ] {
         let result = scenario.run(&flags);
@@ -384,7 +719,7 @@ fn status_keeps_completed_ticket_trees_with_recent_and_all_history() {
         text.stdout
     );
     assert!(
-        text.stdout.contains("  Run acme/widgets#21 Ticket"),
+        text.stdout.contains("  ended · Run acme/widgets#21 Ticket"),
         "{}",
         text.stdout
     );
@@ -543,13 +878,14 @@ fn status_reads_activity_history_and_command_logs_without_stages() {
     let status: Value = serde_json::from_str(&result.stdout).unwrap();
     let commands = status["commands"].as_array().unwrap();
     assert_eq!(commands.len(), 3);
-    assert_eq!(commands[0]["kind"], "Security run");
-    assert_eq!(commands[0]["issue"], Value::Null);
-    assert_eq!(commands[0]["outcome"], "findings recorded");
-    assert_eq!(commands[1]["started_at"], "2026-10-02T12:00:00-04:00");
-    assert_eq!(commands[1]["ended_at"], "2026-10-02T13:00:00-04:00");
+    assert_eq!(commands[0]["group"], "ready for review");
+    assert_eq!(commands[1]["kind"], "Security run");
+    assert_eq!(commands[1]["issue"], Value::Null);
+    assert_eq!(commands[1]["outcome"], "findings recorded");
+    assert_eq!(commands[0]["started_at"], "2026-10-02T12:00:00-04:00");
+    assert_eq!(commands[0]["ended_at"], "2026-10-02T13:00:00-04:00");
     assert_eq!(
-        commands[1]["outcome"],
+        commands[0]["outcome"],
         "PR https://github.com/acme/widgets/pull/2 is ready for review"
     );
     assert_eq!(commands[2]["ended_at"], "2026-10-03T12:00:00-04:00");

@@ -7,7 +7,7 @@ use chrono::Local;
 use serde::Serialize;
 
 use super::command_record::CommandRecord;
-use super::reading::{Command, Entry, IdlePass, Snapshot};
+use super::reading::{Command, Entry, Group, IdlePass, InboxItem, Snapshot};
 use crate::config::UserConfig;
 use crate::issue::IssueUrl;
 
@@ -15,7 +15,7 @@ use crate::issue::IssueUrl;
 struct Status<'a> {
     version: u32,
     hostname: String,
-    commands: Vec<&'a Entry>,
+    commands: Vec<InboxItem<'a>>,
     idle_passes: &'a [IdlePass],
 }
 
@@ -32,7 +32,8 @@ fn print_command(command: &Command, indent: &str) {
         None => format!("{} on {}", facts.name, facts.repository),
     };
     println!(
-        "{indent}{} {subject} · {} · {} · {} · {stage}",
+        "{indent}{} · {} {subject} · {} · {} · {} · {stage}",
+        command.state,
         facts.kind,
         facts.harness,
         facts.model.as_deref().unwrap_or("default Model"),
@@ -77,17 +78,61 @@ pub fn show(json: bool, all: bool) -> Result<()> {
     let status = Status {
         version: 1,
         hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-        commands: snapshot.list(all),
+        commands: snapshot.inbox(all, config.inbox_days),
         idle_passes: &snapshot.idle_passes,
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
         println!("{}", status.hostname);
-        for entry in status.commands {
-            match entry {
-                Entry::Record(command) => print_command(command, ""),
-                Entry::History(command) => print_history(command),
+        for group in Group::ORDER {
+            let items: Vec<_> = status
+                .commands
+                .iter()
+                .filter(|item| item.group == group)
+                .collect();
+            let references: Vec<_> = status
+                .commands
+                .iter()
+                .filter(|item| {
+                    group == Group::Landing && item.landing && item.group == Group::NeedsYou
+                })
+                .collect();
+            if items.is_empty() && references.is_empty() {
+                continue;
+            }
+            println!("{}:", group.title());
+            for item in items {
+                match item.command {
+                    Entry::Record(command) => print_command(command, ""),
+                    Entry::History(command) => print_history(command),
+                }
+                if item.count > 1 {
+                    let cause = match item.command {
+                        Entry::Record(command) => {
+                            command.record.cause.as_deref().unwrap_or_default()
+                        }
+                        Entry::History(command) => command
+                            .outcome
+                            .as_deref()
+                            .unwrap_or_default()
+                            .trim_start_matches("failed: "),
+                    };
+                    println!("  {} Commands with this cause: {cause}", item.count);
+                }
+            }
+            for item in references {
+                if let Entry::Record(command) = item.command {
+                    let facts = &command.record;
+                    let name = facts.issue.as_ref().map_or_else(
+                        || facts.name.clone(),
+                        |issue| format!("{}#{}", facts.repository, issue.number),
+                    );
+                    println!(
+                        "{name} · {} · see Needs you",
+                        item.needs_you_kind.expect("Needs you has a kind").title()
+                    );
+                }
             }
         }
         for pass in status.idle_passes {
