@@ -39,7 +39,11 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
         );
     }
     for stage in &command.record.stages {
-        println!("{indent}  {} · {}", stage.name, stage.began_at);
+        let usual = stage
+            .usual_range
+            .map(|range| format!(" · usual {}", range.text()))
+            .unwrap_or_default();
+        println!("{indent}  {} · {}{usual}", stage.name, stage.began_at);
     }
     for path in command.sessions()? {
         println!("{indent}Session log: {}", path.display());
@@ -56,7 +60,8 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
 
 pub fn show(input: &str, json: bool) -> Result<()> {
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load(&config.logs_dir, Local::now())?;
+    let snapshot =
+        Snapshot::load_with_silence(&config.logs_dir, Local::now(), config.silent_interval)?;
     let command = snapshot.resolve(input)?.observation;
     if json {
         #[derive(Serialize)]

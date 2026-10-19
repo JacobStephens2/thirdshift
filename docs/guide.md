@@ -171,7 +171,13 @@ thirdshift logs 'widgets#7' --session implement
 thirdshift logs 'widgets#7' --session repair --follow
 ```
 
-`show` includes the Runs, stage history with start times, outcomes, and Command and Session log paths. Each live Run also gets its latest event, such as `Bash: cargo test`, from the last 64 KiB of its current Session log. It uses the Harness's stream interpretation, including Claude and Codex, and ignores malformed or unknown lines. Missing or unreadable Session logs leave the event unavailable.
+`show` includes the Runs, stage history with start times and Usual ranges, outcomes, and Command and Session log paths. Each live Run also gets its latest event, such as `Bash: cargo test`, from the last 64 KiB of its current Session log. It uses the Harness's stream interpretation, including Claude and Codex, and ignores malformed or unknown lines. Missing or unreadable Session logs leave the event unavailable.
+
+`status` and `show` describe live work as **Silent** when neither its Session log nor its Command log has grown for `inbox.silent_minutes` (10 by default). Silence starts no earlier than the current stage. At three times the threshold, the words escalate: `silent 45 min · past 30`. A fresh line in either log keeps the Run from being Silent. Missing logs use the stage's start time.
+
+A stage's **Usual range** is its 25th–75th percentile time over the repository's last 30 Command records on this machine. Completed stages supply times, with the next stage's start or the Command's end marking completion; an unfinished stage supplies none. The range appears once there are at least three stage times. Quartiles interpolate between sorted times. A live Run past the top of the range is **Slow**: `slower than usual (12–17 min), still working`. At twice the top it also shows the multiple, such as `2× usual` or `3× usual`. Silent takes precedence over Slow.
+
+Both JSON views add `health` to recorded Commands: `{"state":"ok"}`, `{"state":"slow","step":1,"usual_range":{"lower_seconds":720.0,"upper_seconds":1020.0},"multiple":1}`, or `{"state":"silent","step":2,"seconds":2700,"threshold_seconds":600}`. Step 1 is the first threshold; step 2 is the escalation. Ended or dead Commands have null health. Each stage gains `usual_range` when enough times exist, expressed as `lower_seconds` and `upper_seconds`; these observations are never written back to Command records.
 
 `show --json` is a versioned API, usable outside a repository. Version 1 wraps the selected Command in this shape:
 
@@ -416,6 +422,9 @@ from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, whi
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
 waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
 
+[inbox]
+silent_minutes = 10   # minutes without growth in either log before a Run is Silent; default 10
+
 [activity]
 quiet_skips = false   # a skipped Pass prints nothing, leaving only its Activity log line; default false
 
@@ -489,6 +498,8 @@ With `email.always = true`, every Run sends a [Run notification](#run-notificati
 `logs.dir` sets the root of the [logs](#logs), with each repository's in its `<owner>/<repo>/` folder, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
 
 `logs.waiting_line_minutes` sets how often CI watch and Self-merge repeat a waiting line even when nothing changes, in the terminal and the Command log. It defaults to 5 and must be a whole number of minutes from 1 up. CI watch still writes a line whenever the running or total check count changes; Self-merge writes waiting lines while GitHub calculates mergeability.
+
+`inbox.silent_minutes` defaults to 10 and must be a whole number of minutes from 1 up. If `logs.waiting_line_minutes` is greater than or equal to it, `status` warns on stderr and waiting stages use half the silent time instead. A one-minute silent threshold therefore uses waiting lines every 30 seconds.
 
 `[harness]` chooses the **Harness**, the agent CLI every session of a command runs on, and for each Harness the **Model** its sessions run on and their **Effort**, how hard that Model reasons. See [Harness, Model and Effort](#harness-model-and-effort).
 

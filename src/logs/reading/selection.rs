@@ -368,6 +368,7 @@ pub(in crate::logs) struct Details<'a> {
     #[serde(flatten)]
     record: &'a crate::logs::command_record::CommandRecord,
     state: &'static str,
+    health: &'a Option<super::Health>,
     stage: &'a Option<super::CurrentStage>,
     source: &'static str,
     command_log: &'a Path,
@@ -383,6 +384,7 @@ impl<'a> Details<'a> {
         Ok(Self {
             record: &command.record,
             state: command.state,
+            health: &command.health,
             stage: &command.stage,
             source: command.source,
             command_log: &command.command_log,

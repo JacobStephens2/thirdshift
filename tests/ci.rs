@@ -124,6 +124,30 @@ fn unchanged_running_checks_keep_writing_waiting_lines_to_the_command_log() {
 }
 
 #[test]
+fn ci_watch_uses_half_the_silent_time_when_the_waiting_interval_is_too_long() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[logs]\nwaiting_line_minutes = 5\n[inbox]\nsilent_minutes = 1\n");
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(r#"[{"name": "test", "conclusion": "success", "pending_polls": 10}]"#)
+    ));
+    let result = scenario.run_with_env(
+        &[&scenario.issue_url(7)],
+        &[("THIRDSHIFT_WAITING_MINUTE_MS", "400")],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .matches("1 still running out of 1 checks listed so far")
+            .count()
+            >= 3,
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
 fn red_ci_is_handed_to_a_ci_fix_repair_whose_fix_turns_it_green() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!(
