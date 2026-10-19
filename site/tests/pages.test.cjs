@@ -37,24 +37,27 @@ async function pageForTest(t, options) {
   return page;
 }
 
-test("the guide starts with a folded overview and its sections toggle independently without JavaScript", async (t) => {
-  const page = await pageForTest(t, { javaScriptEnabled: false });
-  await page.goto(`${origin}/how-it-works/`);
-  const headings = page.locator("main h2");
-  assert.equal(await headings.count(), 7);
-  assert.equal(await page.locator("main details[open]").count(), 0);
-  for (const heading of await headings.all()) {
+async function checkSectionToggles(page, contentSelector, closeKey) {
+  for (const heading of await page.locator("main h2").all()) {
     assert.equal(await heading.isVisible(), true);
     const fold = heading.locator("xpath=ancestor::details[1]");
-    const content = fold.locator(":scope > .guide-content");
+    const content = fold.locator(contentSelector);
     assert.equal(await content.isVisible(), false);
     await heading.click();
     assert.equal(await content.isVisible(), true);
     assert.equal(await page.locator("main details[open]").count(), 1);
-    await fold.locator("summary").focus();
-    await page.keyboard.press("Space");
+    await fold.locator(":scope > summary").focus();
+    await page.keyboard.press(closeKey);
     assert.equal(await content.isVisible(), false);
   }
+}
+
+test("the guide starts with a folded overview and its sections toggle independently without JavaScript", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  await page.goto(`${origin}/how-it-works/`);
+  assert.equal(await page.locator("main h2").count(), 7);
+  assert.equal(await page.locator("main details[open]").count(), 0);
+  await checkSectionToggles(page, ":scope > .guide-content", "Space");
 });
 
 test("the manual starts folded and readers can unfold nested sections without JavaScript", async (t) => {
@@ -64,18 +67,7 @@ test("the manual starts folded and readers can unfold nested sections without Ja
   assert.ok(await headings.count() > 10);
   assert.equal(await page.locator("main details[open]").count(), 0);
   assert.equal(await page.locator("main details").count(), await page.locator("main :is(h2,h3,h4)").count());
-  for (const heading of await headings.all()) {
-    assert.equal(await heading.isVisible(), true);
-    const fold = heading.locator("xpath=ancestor::details[1]");
-    const content = fold.locator(":scope > .manual-content");
-    assert.equal(await content.isVisible(), false);
-    await heading.click();
-    assert.equal(await content.isVisible(), true);
-    assert.equal(await page.locator("main details[open]").count(), 1);
-    await fold.locator(":scope > summary").focus();
-    await page.keyboard.press("Enter");
-    assert.equal(await content.isVisible(), false);
-  }
+  await checkSectionToggles(page, ":scope > .manual-content", "Enter");
   await page.getByRole("heading", { name: "What a Run does", exact: true }).click();
   const claim = page.getByRole("heading", { name: "The Claim", exact: true });
   assert.equal(await claim.isVisible(), true);
