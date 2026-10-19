@@ -10,11 +10,11 @@ Five canonical roles, each label string equal to its name: `needs-triage`, `need
 
 ### Domain docs
 
-Before exploring, look up the issue's terms via `docs/agents/domain.md` and its domain-to-code index. Single-context: `CONTEXT.md` and `docs/adr/` at the repo root.
+Before exploring, look up the issue's terms via `docs/agents/domain.md` and its domain-to-code index. Single-context: `GLOSSARY.md` and `docs/adr/` at the repo root.
 
 ### Reading and tests
 
-Use `rg -n` for terms/symbols, then bounded ranges (`sed -n '40,100p' file`), one large file per call, especially for `CONTEXT.md`, `README.md`, `tests/fakes/gh.rs` and `tests/spec_run.rs`. For the fake-test layout, see `docs/code-navigation.md`; for site browser-test setup and runner, see `site/tests/README.md`.
+Use `rg -n` for terms/symbols, then bounded ranges (`sed -n '40,100p' file`), one large file per call, especially for `GLOSSARY.md`, `README.md`, `tests/fakes/gh.rs` and `tests/spec_run.rs`. For the fake-test layout, see `docs/code-navigation.md`; for site browser-test setup and runner, see `site/tests/README.md`.
 
 ### Generated prompts
 

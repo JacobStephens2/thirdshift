@@ -1,6 +1,6 @@
 # Grilling file template
 
-The file a grill-with-docs session writes its rounds into, one file per issue in this folder, named like `428-more-harnesses.md`. The session itself (design tree, frontier, recommendations, `CONTEXT.md`, ADRs) follows the `grilling` and `domain-modeling` skills. This file covers only how the rounds are written down.
+The file a grill-with-docs session writes its rounds into, one file per issue in this folder, named like `428-more-harnesses.md`. The session itself (design tree, frontier, recommendations, `GLOSSARY.md`, ADRs) follows the `grilling` and `domain-modeling` skills. This file covers only how the rounds are written down.
 
 ## Writing a round
 

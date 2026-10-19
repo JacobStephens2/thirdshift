@@ -1,6 +1,6 @@
 # Domain-to-code navigation
 
-Start with the issue's terms in `CONTEXT.md`, then use this index to find their owners. This is a navigation aid, not a second glossary. Search symbols with `rg -n` and read bounded ranges around the matches; widen to callers and tests when needed. Keep these pointers current when ownership moves.
+Start with the issue's terms in `GLOSSARY.md`, then use this index to find their owners. This is a navigation aid, not a second glossary. Search symbols with `rg -n` and read bounded ranges around the matches; widen to callers and tests when needed. Keep these pointers current when ownership moves.
 
 | Issue term | Owning implementation / search symbol | Supporting tests |
 | --- | --- | --- |

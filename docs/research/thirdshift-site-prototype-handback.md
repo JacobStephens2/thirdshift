@@ -50,7 +50,7 @@ The example Run uses acme/widgets#7. The prototype's order of lines on a Failed 
 
 ## Loose ends
 
-- **Research docs on another machine:** the prototype session ran on the owner's Mac, which does not have `docs/research/site-design-inspiration.md`, `site-stack-for-communication.md`, `Tursack_Printing_History.md`, or the uncommitted Day shift entry in `CONTEXT.md`. They are presumably still uncommitted on the other machine. Check `git status` there and don't lose them.
+- **Research docs on another machine:** the prototype session ran on the owner's Mac, which does not have `docs/research/site-design-inspiration.md`, `site-stack-for-communication.md`, `Tursack_Printing_History.md`, or the uncommitted Day shift entry in `GLOSSARY.md`. They are presumably still uncommitted on the other machine. Check `git status` there and don't lose them.
 - **Pointer on #29:** the prototype skill wants a comment on #29 pointing to branch `prototype/site` and commit `5b559d0`. It has **not** been posted. Ask the owner before posting, or fold the pointer into the spec issue.
 - **Out of scope for the prototype:** sections 5–7 (the factory grows, proof sheets, requirements) were not prototyped, and neither were the deploy, `/install.sh`, favicon, OG cards or analytics (#54).
 - **Prototype shortcuts not to copy:**
