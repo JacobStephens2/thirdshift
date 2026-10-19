@@ -1,0 +1,203 @@
+/* PROTOTYPE variant "briefingwide": the briefing's editorial page, using the width of a big screen. */
+:root {
+  --bg: #fbfaf7; --fg: #1d1c1a; --muted: #6b675f; --rule: #e3dfd6; --soft: #f3f0ea;
+  --accent: #b4441e; --accent-soft: #fbeee7; --ok: #3d7a4a; --link: #22558a;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #141311; --fg: #ece8df; --muted: #a29d92; --rule: #2e2b27; --soft: #1d1b18;
+    --accent: #f08a5d; --accent-soft: #2a1d16; --ok: #7fbf8c; --link: #8db8e8; }
+}
+html, body { margin: 0; background: var(--bg); color: var(--fg); }
+body { font: 18px/1.6 Newsreader, Georgia, serif; -webkit-font-smoothing: antialiased; }
+code, pre, .hme, .file, .when, .cli { font-family: "JetBrains Mono", ui-monospace, monospace; }
+code { font-size: .78em; background: var(--soft); padding: 1px 4px; border-radius: 3px; overflow-wrap: anywhere; }
+a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.briefing { max-width: 1480px; margin: 0 auto; padding: 0 clamp(16px, 3vw, 40px); }
+
+.mast { padding: 28px 0 6px; border-bottom: 1px solid var(--rule); display: grid; grid-template-columns: 1fr auto; align-items: end; gap: 0 16px; }
+.kicker { grid-column: 1 / -1; margin: 0; font: 600 12px/1.4 "JetBrains Mono", monospace; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
+.mast h1 { margin: 0; font-size: 40px; font-weight: 600; letter-spacing: -.01em; line-height: 1.1; }
+.mast nav { display: flex; gap: 14px; font-size: 15px; padding-bottom: 6px; }
+button.link { all: unset; cursor: pointer; color: var(--link); text-decoration: underline; text-underline-offset: 3px; }
+
+.lede { font-size: 23px; line-height: 1.45; margin: 22px 0 8px; }
+.tally { margin: 0 0 18px; color: var(--muted); font-size: 16px; }
+.tally b { color: var(--fg); font-weight: 600; }
+
+.sec { border-top: 1px solid var(--rule); padding: 4px 0 6px; }
+.sec h2 { font-size: 21px; font-weight: 600; margin: 12px 0; display: flex; align-items: baseline; gap: 8px; }
+.count { font: 600 12px/1 "JetBrains Mono", monospace; color: var(--muted); border: 1px solid var(--rule); border-radius: 999px; padding: 3px 7px; }
+.needs h2 .count { color: var(--accent); border-color: var(--accent); }
+.sec h3 { font: 600 12px/1.4 "JetBrains Mono", monospace; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin: 18px 0 6px; }
+
+.card, .item, .done { margin: 0 0 14px; padding: 12px 14px; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg); }
+.card.urgent { border-color: var(--accent); background: var(--accent-soft); border-left-width: 4px; }
+.card.quiet, .done { border-color: transparent; background: var(--soft); }
+.done { padding: 8px 12px; }
+.what { margin: 0 0 6px; }
+.ttl { font-style: italic; }
+.facts { margin: 4px 0; font-size: 15px; color: var(--muted); line-height: 1.5; }
+.facts b { color: var(--fg); }
+.hme { font-size: 12.5px; }
+.latest { display: block; }
+.do { margin-top: 8px; }
+.do-label { margin: 0; font: 600 11.5px/1.4 "JetBrains Mono", monospace; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+.do ul { margin: 2px 0 0; padding-left: 1.1em; font-size: 16px; }
+.links { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0 0; font-size: 14.5px; }
+.links a[aria-current] { font-weight: 600; text-decoration-thickness: 2px; }
+.live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); vertical-align: 2px; animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+
+.ticks { list-style: none; margin: 6px 0; padding: 0; font-size: 16px; display: grid; gap: 4px; }
+.ticks li { padding-left: 1.4em; text-indent: -1.4em; }
+.ticks .links { text-indent: 0; margin: 0 0 2px; font-size: 13.5px; }
+.mk { display: inline-block; width: 1.4em; text-indent: 0; font-family: "JetBrains Mono", monospace; font-size: .85em; }
+.tk-merged .mk { color: var(--ok); } .tk-running .mk { color: var(--link); } .tk-failed .mk { color: var(--accent); }
+.tk-waiting .mk, .tk-not-started .mk { color: var(--muted); }
+.tk-line { color: var(--muted); }
+.sub { margin: 4px 0; padding-left: 1.1em; font-size: 16px; }
+.sev { font: 600 11px/1 "JetBrains Mono", monospace; text-transform: uppercase; padding: 2px 5px; border-radius: 3px; border: 1px solid currentColor; }
+.sev-high { color: var(--accent); } .sev-low { color: var(--muted); }
+.when { font-size: 12.5px; color: var(--muted); margin-right: 4px; }
+.marker { display: flex; align-items: center; gap: 10px; color: var(--accent); font-size: 14px; font-style: italic; margin: 18px 0 4px; }
+.marker::before, .marker::after { content: ""; flex: 1; border-top: 1px dashed var(--accent); }
+.empty, .end { color: var(--muted); font-style: italic; }
+
+button { font: 15px/1.2 Newsreader, Georgia, serif; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--rule); background: var(--bg); color: var(--fg); cursor: pointer; }
+.danger-quiet { color: var(--accent); border-color: var(--accent); background: transparent; }
+.danger { background: var(--accent); border-color: var(--accent); color: #fff; }
+.stop-row { margin: 10px 0 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.cli { font-size: 12px; color: var(--muted); }
+.cli code { font-size: 1em; }
+.confirm { margin-top: 10px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--bg); font-size: 16px; }
+.confirm p { margin: 0 0 8px; }
+.confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.log-what { font-size: 15px; color: var(--muted); margin: 0 0 8px; }
+.log-what .live { color: var(--ok); font-weight: 600; }
+.file { display: block; font-size: 11.5px; overflow-wrap: anywhere; }
+.log-box, .cmdlog { max-height: 65vh; overflow: auto; border: 1px solid var(--rule); border-radius: 8px; padding: 12px 14px; background: var(--bg); margin: 0 0 16px; }
+.cmdlog { font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Session log, read like a document: the agent's words as prose, tool calls as quiet margin notes. */
+.sl { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.sl-text { font-size: 17px; }
+.sl-sys, .sl-usage { font: 12px/1.5 "JetBrains Mono", monospace; color: var(--muted); }
+.sl-think summary { cursor: pointer; color: var(--muted); font-style: italic; font-size: 15px; }
+.sl-think p { margin: 4px 0 0; padding-left: 12px; border-left: 2px solid var(--rule); color: var(--muted); font-style: italic; font-size: 15.5px; }
+.sl-group > details { border-left: 2px solid var(--rule); padding-left: 10px; }
+.sl-group.is-running > details { border-left-color: var(--link); }
+.sl-group > details > summary { cursor: pointer; font-size: 14.5px; color: var(--muted); }
+.sl-count { font-weight: 600; color: var(--fg); }
+.sl-calls { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 2px; }
+.sl-call summary { cursor: pointer; font-size: 14px; overflow-wrap: anywhere; }
+.sl-tool { font: 600 11px/1 "JetBrains Mono", monospace; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); display: inline-block; min-width: 3.6em; }
+.sl-arg { font-size: 12px; } .sl-meta { font-size: 13px; color: var(--muted); }
+.sl-plus { color: var(--ok); } .sl-minus { color: var(--accent); }
+.sl-st { font: 11px "JetBrains Mono", monospace; margin-left: 4px; } .sl-ok { color: var(--ok); } .sl-err { color: var(--accent); font-weight: 700; } .sl-run { color: var(--link); }
+.sl-out, .sl-diff { margin: 4px 0 8px; padding: 8px 10px; background: var(--soft); border-radius: 6px; font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sl-diff span { display: block; } .sl-add { color: var(--ok); } .sl-del { color: var(--accent); text-decoration: line-through; text-decoration-thickness: 1px; }
+.sl-empty { color: var(--muted); font-style: italic; margin: 0; }
+
+.signin { min-height: 80vh; display: grid; place-items: center; }
+.signin form { display: grid; gap: 12px; width: min(340px, 100%); }
+.signin h1 { margin: 0; font-size: 40px; font-weight: 600; }
+.signin label { display: grid; gap: 4px; font-size: 15px; color: var(--muted); }
+.signin input { font: inherit; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 6px; background: var(--bg); color: var(--fg); }
+.signin button[type="submit"] { background: var(--fg); color: var(--bg); border-color: var(--fg); padding: 9px; }
+
+@media (max-width: 560px) {
+  body { font-size: 17px; }
+  .mast { grid-template-columns: 1fr; padding-top: 18px; }
+  .mast h1 { font-size: 32px; }
+  .mast nav { padding: 4px 0 8px; }
+  .lede { font-size: 20px; }
+  .card, .item { padding: 10px 12px; }
+}
+@media (prefers-reduced-motion: reduce) { .live-dot { animation: none; } }
+
+/* ---------- Drill-down folds ---------- */
+/* An item folds to its sentence; the sentence is the toggle, with the caret hanging in the margin. */
+.what[data-fold] { position: relative; padding-left: 1.15em; margin-bottom: 0; min-height: 36px; border-radius: 4px; }
+.what[data-fold] > .fold-caret { position: absolute; left: 0; top: .1em; color: var(--accent); opacity: .8; }
+.what[data-fold]:hover { background: color-mix(in srgb, var(--fg) 4%, transparent); }
+.what[data-fold]:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.more { margin-top: 8px; padding-left: 1.15em; }
+.do-label[data-fold] { display: inline-flex; align-items: center; min-height: 36px; }
+.do-label > .fold-caret { color: var(--muted); }
+.ticks li { padding-left: 0; text-indent: 0; }
+.tk-head { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0 .3em; min-height: 36px; padding-top: 6px; }
+.tk-head > .fold-caret { color: var(--muted); }
+.tk-more { margin: 0 0 4px 2.4em; font-size: 15px; }
+.tk-more .links { margin: 2px 0 0; }
+
+/* ---------- Motion: calm ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  .count.pulse { display: inline-block; animation: b-pulse 1.1s ease-out 1 .3s; }
+  @keyframes b-pulse { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent); transform: scale(1); }
+    35% { transform: scale(1.18); } 100% { box-shadow: 0 0 0 10px transparent; transform: scale(1); } }
+  .stall-age { animation: b-glow 3.2s ease-in-out infinite; border-radius: 3px; }
+  @keyframes b-glow { 50% { background: color-mix(in srgb, var(--accent) 22%, transparent); box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 35%, transparent); } }
+  [data-latest].flash { animation: b-flash 1.2s ease-out; }
+  @keyframes b-flash { 0% { background: color-mix(in srgb, var(--accent) 35%, transparent); } 100% { background: transparent; } }
+}
+
+/* ---------- Research revisions (docs/research/console-run-monitoring-ui.md) ---------- */
+/* Beside a stage age: its usual range and the heartbeat, in words. Tokens and the Run summary as plain lines. */
+.usual { font-style: italic; color: var(--muted); }
+.beat, .tokens { display: block; font: 12.5px/1.5 "JetBrains Mono", ui-monospace, monospace; color: var(--muted); }
+.beat::before { content: "♥ "; color: var(--ok); }
+.card.urgent .beat::before { color: var(--accent); }
+.facts.summary { color: var(--fg); }
+.stop-effects { margin: 4px 0 8px; padding-left: 1.2em; font-size: 15px; color: var(--muted); }
+.stop-row.stopping { color: var(--accent); font-style: italic; }
+
+/* The Session log's bar, raw view and new-entries pill, as quiet document furniture. */
+.sl-bar { gap: 8px; margin-bottom: 10px; font: 13px/1.3 "JetBrains Mono", ui-monospace, monospace; }
+.sl-bar input { border: 1px solid var(--rule); border-radius: 6px; padding: 7px 10px; background: var(--soft); opacity: 1; font: 15px Newsreader, Georgia, serif; }
+.sl-modes button { border: 1px solid var(--rule); padding: 6px 10px; font: 12.5px "JetBrains Mono", monospace; opacity: 1; color: var(--muted); }
+.sl-modes button:first-child { border-radius: 6px 0 0 6px; } .sl-modes button:last-child { border-radius: 0 6px 6px 0; border-left: 0; }
+.sl-modes button[aria-pressed="true"] { background: var(--fg); color: var(--bg); border-color: var(--fg); font-weight: 400; }
+.sl-dl { color: var(--link); }
+.sl-matches { font-style: italic; color: var(--muted); opacity: 1; }
+.sl-raw { color: var(--muted); }
+.sl-raw code { color: var(--fg); }
+.sl-raw li:target { background: var(--accent-soft); }
+.sl-quiet { opacity: .55; }
+.sl-failed > details > summary { color: var(--accent); }
+.sl-new { background: var(--accent); font-family: "JetBrains Mono", monospace; }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* The heart beats gently while a Run is still printing; a silent one does not. */
+  .card:not(.urgent) .beat::before, .item .beat::before { display: inline-block; animation: beat 1.6s ease-in-out infinite; }
+  @keyframes beat { 15% { transform: scale(1.25); } 30% { transform: scale(1); } }
+}
+
+/* ---------- Using the width ---------- */
+/* Prose keeps a readable measure inside each block; the blocks themselves spread across the page. */
+.top { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px 40px; align-items: start; }
+.top .lede { max-width: 46ch; }
+.cols { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0 40px; align-items: start; }
+.main { min-width: 0; }
+.side { min-width: 0; }
+
+/* Cards and items flow into as many columns as fit; headings and notes span the row. */
+.sec.needs, .sec.running, .sec.done-sec { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 380px), 1fr)); gap: 0 18px; align-items: start; }
+.sec.needs > :not(.card, .item, .done), .sec.running > :not(.card, .item, .done), .sec.done-sec > :not(.card, .item, .done) { grid-column: 1 / -1; }
+.sec.done-sec { grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr)); }
+.sec .card, .sec .item, .sec .done { height: auto; }
+
+@media (min-width: 900px) {
+  .top { grid-template-columns: minmax(0, 2.2fr) minmax(240px, 1fr); }
+  .top .lede { font-size: 26px; margin-top: 26px; }
+  /* The tally becomes a box score beside the lede. */
+  .top .tally { margin: 30px 0 18px; padding: 14px 16px; border: 1px solid var(--rule); border-radius: 8px; background: var(--soft); font-size: 15.5px; line-height: 1.55; }
+}
+@media (min-width: 1200px) {
+  .cols { grid-template-columns: minmax(0, 1fr) minmax(420px, 34%); }
+  /* The log keeps its own column, in view while the briefing scrolls. */
+  .side { position: sticky; top: 12px; }
+  .side .sec { border-top: 1px solid var(--rule); }
+  .side .log-box, .side .cmdlog { max-height: calc(100vh - 210px); }
+}

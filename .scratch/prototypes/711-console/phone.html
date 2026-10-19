@@ -1,0 +1,14 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>PROTOTYPE · Console at phone width</title>
+<!-- PROTOTYPE: every variant side by side at 390×844, for a quick phone-width check. ?only=<key> shows one. -->
+<style>
+  body { margin: 0; padding: 16px; background: #444; font: 13px system-ui; color: #fff; display: flex; gap: 16px; overflow-x: auto; }
+  figure { margin: 0; flex: none; } figcaption { margin-bottom: 6px; }
+  iframe { width: 390px; height: 844px; border: 0; border-radius: 18px; background: #fff; }
+</style>
+<script>
+  const only = new URLSearchParams(location.search).get("only");
+  for (const k of only ? [only] : ["console", "inboxpress", "inbox", "lanes", "lanespress", "gridpress", "pressplain", "briefingwide", "briefing", "trace", "grid", "accent", "press", "presslayout", "plain", "garden", "pixelpress", "pixel"])
+    document.write(`<figure><figcaption>${k}</figcaption><iframe src="./?variant=${k}"></iframe></figure>`);
+</script>

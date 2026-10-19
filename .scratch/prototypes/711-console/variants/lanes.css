@@ -1,0 +1,331 @@
+/* PROTOTYPE variant "lanes": a calm instrument. Time runs left to right; silence (red) and slower-than-usual
+   (amber) are what change colour, always with words beside them. */
+:root {
+  --bg: #f4f4f1; --panel: #ffffff; --fg: #1d2125; --muted: #6b7178; --line: #dfe1e3; --grid: rgba(20,30,40,.07);
+  --seg: #cdd6de; --seg2: #b7c4cf; --cur: #3d7bd9; --warm: #d99a1e; --hot: #d6453d; --ok: #2f8f5b; --dim: #9aa0a6;
+  --ppm: 3.6px; --lw: 300px;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --bg: #101316; --panel: #171b1f; --fg: #e3e6e9; --muted: #8d949b; --line: #2a3036; --grid: rgba(255,255,255,.06);
+    --seg: #34404b; --seg2: #2b353f; --cur: #5b9af0; --warm: #e0a63a; --hot: #f0625a; --ok: #49b57a; --dim: #6a7178; }
+}
+html, body { margin: 0; background: var(--bg); color: var(--fg); }
+body { font: 14px/1.45 "IBM Plex Sans Condensed", system-ui, sans-serif; }
+code, pre, time, .lanes-clock { font-family: "JetBrains Mono", ui-monospace, monospace; }
+code { font-size: 12px; }
+a { color: var(--cur); text-decoration: none; } a:hover { text-decoration: underline; }
+.muted { color: var(--muted); }
+button { font: inherit; font-size: 13px; color: var(--fg); background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 3px 9px; cursor: pointer; }
+button.link { all: unset; cursor: pointer; color: var(--cur); font-size: 13px; }
+
+.lanes-page { max-width: 1240px; margin: 0 auto; padding: 0 16px; }
+.lanes-page.drawer-open { padding-bottom: 38vh; }
+.top { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 22px; padding: 16px 0 6px; }
+.host { font-size: 20px; display: flex; align-items: center; gap: 8px; margin-right: auto; }
+.pulse { width: 9px; height: 9px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 3px color-mix(in srgb, var(--ok) 25%, transparent); align-self: center; }
+.now { color: var(--muted); font-size: 13px; } .now b { color: var(--fg); font-weight: 600; }
+.other { font-size: 13px; }
+.legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 12px; color: var(--muted); margin: 4px 0 10px; }
+.sw { display: inline-block; width: 18px; height: 8px; border-radius: 2px; margin-left: 8px; }
+.seg-sw { background: var(--seg2); margin-left: 0; } .cur-sw { background: var(--cur); } .warm-sw { background: var(--warm); } .hot-sw { background: var(--hot); }
+.wait-sw { background: repeating-linear-gradient(135deg, var(--dim) 0 1px, transparent 1px 4px); outline: 1px dashed var(--dim); }
+.died-sw { width: auto; height: auto; color: var(--hot); font-weight: 700; }
+
+/* ---------- Lanes ---------- */
+.lanes-scroll { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; max-width: 100%; overscroll-behavior-x: contain; }
+.lanes { width: max-content; min-width: 100%; }
+.lane { display: grid; grid-template-columns: var(--lw) calc((var(--span) + var(--gut)) * var(--ppm)); border-top: 1px solid var(--line); }
+.lane.axis { border-top: 0; }
+.lane.d0:not(.axis) { border-top-color: color-mix(in srgb, var(--fg) 22%, var(--line)); }
+.ll { position: sticky; left: 0; z-index: 3; background: var(--panel); border-right: 1px solid var(--line);
+  padding: 7px 10px 7px calc(10px + var(--d, 0) * 16px); min-width: 0; }
+.ll::before { content: ""; }
+.lane.d1 .ll, .lane.d2 .ll { background-image: linear-gradient(var(--line), var(--line)); background-size: 1px 100%; background-repeat: no-repeat; background-position: calc(var(--d) * 16px - 4px) 0; }
+.ll-top { display: flex; align-items: baseline; gap: 6px; min-width: 0; font-weight: 600; }
+.ll-top a, .ll-top b { white-space: nowrap; }
+.kind { font-size: 10.5px; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); white-space: nowrap; }
+.ll-title { font-size: 13px; line-height: 1.3; }
+.ll-hme { font: 11px/1.4 "JetBrains Mono", monospace; color: var(--muted); }
+.ll-latest code { font-size: 11px; color: var(--fg); background: color-mix(in srgb, var(--cur) 9%, transparent); border-radius: 3px; padding: 0 4px; overflow-wrap: anywhere; }
+.ll-links { display: flex; flex-wrap: wrap; gap: 2px 10px; font-size: 12px; }
+.ll-links a[aria-current] { font-weight: 700; text-decoration: underline; }
+.ll-stage { display: none; }
+.lm { display: none; }
+.stop { margin-left: auto; color: var(--hot); border-color: color-mix(in srgb, var(--hot) 45%, var(--line)); padding: 1px 8px; font-size: 12px; font-weight: 600; }
+.stop.solid { background: var(--hot); color: #fff; border-color: var(--hot); }
+
+.lt { position: relative; min-height: 44px; cursor: pointer;
+  background-image: linear-gradient(to right, var(--grid) 1px, transparent 1px);
+  background-size: calc(30 * var(--ppm)) 100%; background-position-x: calc(var(--g0) * var(--ppm)); }
+.lt::after { /* the now line */
+  content: ""; position: absolute; top: 0; bottom: 0; left: calc(var(--span) * var(--ppm)); width: 0; border-left: 1.5px solid color-mix(in srgb, var(--cur) 70%, transparent); }
+.lane.axis .lt { min-height: 26px; cursor: default; }
+.tick { position: absolute; left: calc(var(--x) * var(--ppm)); bottom: 4px; transform: translateX(-50%); font: 11px "JetBrains Mono", monospace; color: var(--muted); }
+.tick.now { color: var(--cur); font-weight: 700; }
+.lane.axis .ll { display: flex; align-items: flex-end; padding-block: 4px; }
+
+.seg { position: absolute; top: 50%; height: 16px; transform: translateY(-50%); left: calc(var(--x) * var(--ppm)); width: calc(var(--w) * var(--ppm));
+  background: var(--seg); border-right: 1px solid var(--panel); overflow: hidden; white-space: nowrap;
+  font: 10px/16px "JetBrains Mono", monospace; color: var(--muted); padding-left: 4px; box-sizing: border-box; }
+.seg.s-review, .seg.s-ci-watch, .seg.s-cleanup, .seg.s-spec-review, .seg.s-security-reproduction { background: var(--seg2); }
+.seg:first-child { border-radius: 3px 0 0 3px; }
+.seg.clipped { border-left: 2px dotted var(--muted); border-radius: 0; }
+.seg.thin { height: 3px; background: var(--seg2); padding: 0; }
+.seg.cur { background: var(--cur); color: #fff; border-radius: 0 3px 3px 0; }
+.seg.cur.warm { background: var(--warm); color: #1b1404; }
+.seg.cur.hot { background: var(--hot); color: #fff; }
+.lane.st-died .seg.cur { background: color-mix(in srgb, var(--hot) 45%, var(--seg)); color: var(--fg); }
+.lane.st-merged .seg, .lane.st-ready .seg { background: color-mix(in srgb, var(--ok) 32%, var(--seg)); }
+.lane.st-interrupted .seg.cur, .lane.st-failed .seg.cur { background: color-mix(in srgb, var(--warm) 45%, var(--seg)); color: var(--fg); }
+.hatch { position: absolute; top: 50%; height: 14px; transform: translateY(-50%); left: calc(var(--x) * var(--ppm)); width: calc(var(--w) * var(--ppm));
+  border: 1px dashed var(--dim); border-radius: 3px; box-sizing: border-box;
+  background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--dim) 55%, transparent) 0 1px, transparent 1px 6px); }
+.gap { position: absolute; top: 50%; left: calc(var(--x) * var(--ppm)); width: calc(var(--w) * var(--ppm)); border-top: 2px dotted color-mix(in srgb, var(--hot) 60%, transparent); }
+.cross { position: absolute; top: 50%; left: calc(var(--x) * var(--ppm)); transform: translate(-50%, -52%); color: var(--hot); font-weight: 800; font-size: 15px; background: var(--panel); line-height: 1; padding: 0 1px; }
+.tickmark { position: absolute; top: 25%; bottom: 25%; left: calc(var(--x) * var(--ppm)); border-left: 2px solid var(--dim); }
+.flag { position: absolute; top: 50%; transform: translateY(-50%); left: calc(var(--x) * var(--ppm) + 7px); z-index: 1;
+  white-space: nowrap; font: 11px/18px "JetBrains Mono", monospace; padding: 0 6px; border-radius: 3px;
+  background: var(--panel); border: 1px solid var(--line); color: var(--fg); }
+.flag time, .flag-text time { font-weight: 700; }
+.flag.warm, .flag-text.warm { background: var(--warm); border-color: var(--warm); color: #1b1404; }
+.flag.hot, .flag-text.hot { background: var(--hot); border-color: var(--hot); color: #fff; font-weight: 600; }
+.flag.died, .flag-text.died { color: var(--hot); border-color: color-mix(in srgb, var(--hot) 50%, var(--line)); }
+.flag.wait, .flag-text.wait { border-style: dashed; color: var(--muted); }
+.flag.dim, .flag-text.dim { color: var(--muted); border-color: transparent; background: transparent; }
+.flag.o-merged, .flag.o-ready, .flag-text.o-merged, .flag-text.o-ready { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--line)); }
+.flag.o-interrupted, .flag.o-failed, .flag-text.o-interrupted, .flag-text.o-failed { color: var(--warm); }
+
+/* ---------- Stop confirm ---------- */
+.confirm { border: 1px solid color-mix(in srgb, var(--hot) 55%, var(--line)); border-left-width: 4px; background: var(--panel); border-radius: 6px; padding: 10px 12px; margin-bottom: 10px; font-size: 13.5px; }
+.confirm p { margin: 0 0 8px; }
+.confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.confirm .hint { margin: 8px 0 0; color: var(--muted); display: flex; flex-wrap: wrap; gap: 4px 8px; }
+
+/* ---------- History: an Activity log ---------- */
+.history h2, .timeline h2 { font-size: 16px; margin: 26px 0 0; }
+.timeline h2 { margin: 14px 0 6px; }
+.history > .muted { margin: 2px 0 8px; font-size: 13px; }
+.h-list { list-style: none; margin: 0; padding: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.h-item + .h-item { border-top: 1px solid var(--line); }
+.act { display: grid; grid-template-columns: 112px 110px minmax(0, 1fr) auto 84px; grid-template-areas: "time kind subj chip dur" ". . cause cause cause";
+  gap: 0 12px; align-items: baseline; padding: 7px 12px; cursor: pointer; list-style: none; }
+.act::-webkit-details-marker { display: none; }
+.act::marker { content: ""; }
+details[open] > .act { background: color-mix(in srgb, var(--cur) 5%, transparent); }
+.h-time { grid-area: time; font-size: 12px; color: var(--muted); }
+.act > .kind { grid-area: kind; }
+.h-subj { grid-area: subj; min-width: 0; } .h-title { color: var(--fg); }
+.act > .chip { grid-area: chip; } .act > .h-dur { grid-area: dur; text-align: right; }
+.act > .h-cause { grid-area: cause; }
+.h-dur { font: 12px "JetBrains Mono", monospace; color: var(--muted); }
+.h-cause { font-size: 12.5px; color: var(--muted); }
+.chip { display: inline-block; font: 600 11px/17px "JetBrains Mono", monospace; padding: 0 7px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+.chip.o-merged, .chip.o-ready { color: var(--ok); } .chip.o-failed, .chip.o-died { color: var(--hot); }
+.chip.o-interrupted { color: var(--warm); } .chip.o-skipped, .chip.o-not-started { color: var(--muted); }
+.chip.sev-high { color: var(--hot); } .chip.sev-low { color: var(--muted); }
+.h-body { padding: 4px 12px 12px 136px; display: grid; gap: 6px; font-size: 13px; }
+.h-body h4 { margin: 4px 0 0; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.h-kids { margin: 0; padding: 0; list-style: none; display: grid; gap: 4px; }
+.h-kids li.nested { margin-left: 16px; }
+.h-kids li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; padding-left: 12px; border-left: 2px solid var(--line); }
+
+/* ---------- Drawer: the logs ---------- */
+.drawer { position: fixed; left: 50%; transform: translateX(-50%); bottom: 74px; z-index: 900; width: min(1208px, calc(100vw - 24px));
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 -8px 34px rgba(0,0,0,.18); }
+.dr-head { display: flex; align-items: center; gap: 8px 12px; padding: 6px 10px; min-width: 0; }
+.dr-toggle { padding: 2px 8px; }
+.dr-what { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13.5px; flex: 0 1 auto; }
+.dr-what span { color: var(--muted); }
+.dr-tabs { display: flex; gap: 4px; overflow-x: auto; margin-left: auto; }
+.dr-tabs button { border-radius: 999px; font-size: 12px; white-space: nowrap; display: inline-flex; align-items: center; gap: 5px; }
+.dr-tabs button[aria-selected="true"] { background: var(--fg); color: var(--panel); border-color: var(--fg); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ok); display: inline-block; }
+.live-tag { font: 700 10.5px/1 "JetBrains Mono", monospace; text-transform: uppercase; color: var(--ok); letter-spacing: .08em; }
+.dr-body { max-height: 30vh; overflow: auto; border-top: 1px solid var(--line); padding: 8px 14px 12px; }
+.drawer:not(.open) .dr-body { display: none; }
+.dr-file { font: 11px "JetBrains Mono", monospace; color: var(--muted); overflow-wrap: anywhere; margin-bottom: 6px; }
+.cmdlog { margin: 0; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Session log */
+.sl { list-style: none; margin: 0; padding: 0; display: grid; gap: 5px; }
+.sl-text { white-space: pre-wrap; font-size: 14px; }
+.sl-sys, .sl-usage { font: 11px "JetBrains Mono", monospace; color: var(--muted); padding-left: 10px; border-left: 2px solid var(--line); }
+.sl-think summary { cursor: pointer; color: var(--muted); font-style: italic; font-size: 13px; }
+.sl-think p { margin: 3px 0 0 14px; color: var(--muted); font-size: 13px; }
+.sl-group > details { border-left: 3px solid var(--seg2); padding-left: 8px; }
+.sl-group.is-running > details { border-left-color: var(--cur); }
+.sl-group > details > summary { cursor: pointer; font-size: 12.5px; }
+.sl-count { font-weight: 600; } .sl-names { color: var(--muted); }
+.sl-calls { list-style: none; margin: 2px 0 0; padding: 0; display: grid; gap: 1px; }
+.sl-call summary { cursor: pointer; font-size: 12.5px; overflow-wrap: anywhere; }
+.sl-tool { display: inline-block; min-width: 38px; font: 600 11px "JetBrains Mono", monospace; color: var(--cur); }
+.sl-arg { font-size: 12px; } .sl-meta { color: var(--muted); font-size: 12px; }
+.sl-plus { color: var(--ok); } .sl-minus { color: var(--hot); }
+.sl-st { font: 10.5px "JetBrains Mono", monospace; margin-left: 6px; }
+.sl-ok { color: var(--ok); } .sl-err { color: var(--hot); font-weight: 700; } .sl-run { color: var(--cur); }
+.sl-out, .sl-diff { margin: 3px 0 6px 18px; padding: 6px 8px; background: var(--bg); border-radius: 4px; font-size: 11.5px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sl-diff span { display: block; }
+.sl-add { color: var(--ok); background: color-mix(in srgb, var(--ok) 11%, transparent); }
+.sl-del { color: var(--hot); background: color-mix(in srgb, var(--hot) 11%, transparent); }
+.sl-empty { color: var(--muted); margin: 0; }
+
+/* ---------- Sign-in ---------- */
+.signin { min-height: 78vh; display: grid; place-items: center; }
+.signin form { display: grid; gap: 12px; width: min(300px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 22px; }
+.si-host { display: flex; align-items: center; gap: 8px; font-size: 20px; font-weight: 600; }
+.signin label { display: grid; gap: 4px; font-size: 13px; color: var(--muted); }
+.signin input { font: inherit; padding: 7px 9px; border-radius: 5px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); }
+.signin button { background: var(--cur); border-color: var(--cur); color: #fff; padding: 7px; }
+.signin p { margin: 0; font-size: 12px; color: var(--muted); }
+
+/* ---------- Phone ---------- */
+@media (max-width: 700px) {
+  :root { --ppm: 2.6px; --lw: 136px; }
+  /* Room past the flags, so the sticky details under each lane can slide all the way to "now". */
+  .lane { grid-template-columns: var(--lw) calc((var(--span) + var(--gut)) * var(--ppm) + 100px); }
+  .ll { padding: 6px 6px 6px calc(6px + var(--d, 0) * 9px); }
+  .lane.d1 .ll, .lane.d2 .ll { background-position: calc(var(--d) * 9px - 3px) 0; }
+  .ll-top { flex-wrap: wrap; gap: 0 4px; font-size: 13px; }
+  .ll-top .kind { flex-basis: 100%; font-size: 9.5px; }
+  .ll-x { display: none; }
+  .ll-stage { display: block; font: 10.5px/1.4 "JetBrains Mono", monospace; border-radius: 3px; padding: 0 3px; margin-top: 2px; width: fit-content; max-width: 100%; }
+  .stop { margin-left: 0; margin-top: 2px; }
+  .lt .flag { font-size: 10.5px; }
+  .lm { display: grid; gap: 1px; grid-column: 1 / -1; position: sticky; left: 0; width: calc(100vw - 34px);
+    padding: 0 8px 7px calc(8px + var(--d, 0) * 9px); box-sizing: border-box; }
+  .lane.d0 .lm { padding-left: 8px; }
+  .lane.axis .lm { display: none; }
+  .lm:not(:has(*)) { display: none; }
+  .act { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "time chip" "subj subj" "kind dur" "cause cause"; gap: 2px 8px; }
+  .h-body { padding: 4px 12px 12px; }
+  .lanes-page.drawer-open { padding-bottom: 46vh; }
+  .drawer { bottom: 66px; width: calc(100vw - 16px); }
+  .dr-head { flex-wrap: wrap; }
+  .dr-what { flex: 1 1 0; }
+  .dr-tabs { margin-left: 0; flex-basis: 100%; }
+  .dr-body { max-height: 34vh; }
+}
+
+
+/* ---------- Research revisions (docs/research/console-run-monitoring-ui.md) ---------- */
+/* Needs you: one item per problem, act before look. */
+.needs { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--hot); border-radius: 8px; padding: 8px 10px; margin: 6px 0 4px; }
+.needs.calm { border-left-color: var(--ok); }
+.needs-h { margin: 0 0 6px; font-weight: 600; font-size: 14px; display: flex; align-items: center; gap: 6px; }
+.needs.calm .needs-h { margin: 0; font-weight: 400; color: var(--muted); }
+.needs-h .n { font: 600 11px/18px "JetBrains Mono", monospace; padding: 0 7px; border-radius: 999px; background: var(--hot); color: #fff; }
+.needs ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 6px; }
+.need { all: unset; box-sizing: border-box; cursor: pointer; display: block; width: 100%; min-height: 40px; padding: 6px 9px; border-radius: 6px;
+  border: 1px solid var(--line); font-size: 13px; line-height: 1.35; }
+.need:hover, .need:focus-visible { border-color: var(--fg); }
+.need.urgent { background: color-mix(in srgb, var(--hot) 9%, var(--panel)); border-color: color-mix(in srgb, var(--hot) 35%, var(--line)); }
+.need.look { background: color-mix(in srgb, var(--warm) 9%, var(--panel)); border-color: color-mix(in srgb, var(--warm) 35%, var(--line)); }
+.need .lvl { font: 700 10px/16px "JetBrains Mono", monospace; text-transform: uppercase; letter-spacing: .06em; padding: 0 5px; border-radius: 3px; margin-right: 6px; color: #fff; }
+.need.urgent .lvl { background: var(--hot); } .need.look .lvl { background: var(--warm); color: #1b1404; }
+.need .why { display: block; color: var(--muted); font-size: 12px; }
+.is-pointed { animation: lane-point 1.6s ease-out; }
+@keyframes lane-point { from { box-shadow: inset 0 0 0 2px var(--cur); background-color: color-mix(in srgb, var(--cur) 12%, transparent); } }
+
+/* Legend swatches for the new marks. */
+.ghost-sw { background: color-mix(in srgb, var(--cur) 16%, transparent); outline: 1px dashed color-mix(in srgb, var(--cur) 45%, transparent); }
+.crit-sw { background: transparent; outline: 2px solid var(--fg); height: 6px; }
+.att-sw { width: auto; height: auto; font: 700 10px/14px "JetBrains Mono", monospace; padding: 0 3px; border: 1px solid var(--fg); background: var(--panel); color: var(--fg); }
+
+/* The usual range: a faint band, so "52 min" sits against "usually 11–16". */
+.ghost { position: absolute; top: 50%; height: 26px; transform: translateY(-50%); left: calc(var(--x) * var(--ppm)); width: calc(var(--w) * var(--ppm));
+  background: color-mix(in srgb, var(--cur) 12%, transparent); border-inline: 1px dashed color-mix(in srgb, var(--cur) 45%, transparent); border-radius: 3px; }
+/* Silence: nothing logged since here. */
+.silence { position: absolute; top: 50%; height: 22px; transform: translateY(-50%); left: calc(var(--x) * var(--ppm)); width: calc(var(--w) * var(--ppm)); z-index: 1;
+  border: 2px dotted var(--hot); border-radius: 3px; box-sizing: border-box; }
+.silence i { position: absolute; top: -15px; left: 0; font: 600 10px/1 "JetBrains Mono", monospace; font-style: normal; color: var(--hot); }
+/* Repairs and Resumes as markers on the bar. */
+.attempt { position: absolute; top: 50%; left: calc(var(--x) * var(--ppm)); transform: translate(-50%, -50%); z-index: 2;
+  font: 700 9.5px/14px "JetBrains Mono", monospace; padding: 0 3px; border-radius: 3px; background: var(--panel); border: 1px solid var(--fg); color: var(--fg); }
+/* The critical path through a live Spec run's Tickets. */
+.lane.crit .seg, .lane.crit .hatch { box-shadow: 0 0 0 2px var(--fg); }
+.lane.crit .ll-top::after { content: "critical path"; font: 600 9.5px/1 "JetBrains Mono", monospace; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--fg); border: 1px solid var(--fg); border-radius: 3px; padding: 2px 4px; margin-left: 4px; white-space: nowrap; }
+.crit-note { font: 11px/1.4 "JetBrains Mono", monospace; color: var(--fg); }
+/* Ticket chips on the Spec run's lane: state in words, so one fold reaches every Ticket. */
+.tchips { display: flex; flex-wrap: wrap; gap: 3px; margin: 3px 0; }
+.tchip { font: 600 11px/17px "JetBrains Mono", monospace; padding: 0 6px; border-radius: 4px; border: 1px solid var(--line); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.tchip span { font-weight: 400; color: var(--muted); }
+.tchip.t-merged { border-color: color-mix(in srgb, var(--ok) 45%, var(--line)); } .tchip.t-merged span { color: var(--ok); }
+.tchip.t-running { border-color: var(--cur); }
+.tchip.warm { border-color: var(--warm); background: color-mix(in srgb, var(--warm) 14%, var(--panel)); }
+.tchip.hot { border-color: var(--hot); background: color-mix(in srgb, var(--hot) 14%, var(--panel)); }
+.tchip.t-waiting { border-style: dashed; }
+.ll-hb, .ll-use { font: 11px/1.4 "JetBrains Mono", monospace; color: var(--muted); }
+.ll-hb .hb { opacity: 1; font-size: inherit; }
+.flag.stopping, .flag-text.stopping { border-style: dashed; color: var(--hot); }
+/* History: what came of each Run. */
+.h-sum { font: 12px/1.4 "JetBrains Mono", monospace; color: var(--fg); }
+.h-use { font: 11px/1.4 "JetBrains Mono", monospace; color: var(--muted); }
+/* Stop: what carries on. */
+.confirm .keeps { margin: 0; font-weight: 600; font-size: 12.5px; }
+.confirm .stop-effects { margin: 2px 0 8px; color: var(--muted); font-size: 12.5px; }
+
+/* The Session log's bar, raw view and new-entries pill, in the drawer's own terms. */
+.dr-body .sl-bar { position: sticky; top: -8px; z-index: 2; background: var(--panel); padding: 4px 0 6px; margin: 0 0 6px; border-bottom: 1px solid var(--line); }
+.dr-body .sl-bar input { border: 1px solid var(--line); border-radius: 5px; background: var(--bg); color: var(--fg); opacity: 1; font-size: 12.5px; }
+.dr-body .sl-modes button { border-color: var(--line); background: var(--panel); color: var(--fg); font-size: 12px; opacity: 1; }
+.dr-body .sl-modes button:first-child { border-radius: 5px 0 0 5px; } .dr-body .sl-modes button:last-child { border-radius: 0 5px 5px 0; border-left: 0; }
+.dr-body .sl-modes button[aria-pressed="true"] { background: var(--fg); color: var(--panel); border-color: var(--fg); }
+.dr-body .sl-dl { font-size: 12px; color: var(--cur); }
+.dr-body .sl-matches { color: var(--muted); }
+.dr-body .sl-raw li { border-bottom: 1px solid var(--line); padding: 1px 0; }
+.dr-body .sl-raw li:target { background: color-mix(in srgb, var(--cur) 14%, transparent); }
+.dr-body .sl-ln { color: var(--muted); }
+.dr-body .sl-new { background: var(--cur); font-family: "IBM Plex Sans Condensed", system-ui, sans-serif; }
+.sl-group.sl-failed > details { border-left-color: var(--hot); }
+.sl-call.sl-failed summary { color: var(--hot); }
+
+/* List view: labels without the axis (phones default to it; Buildkite drops its waterfall on mobile). */
+.view-toggle { display: none; margin: 0 0 8px; }
+.view-toggle button { font-size: 12px; padding: 4px 12px; min-height: 32px; }
+.view-toggle button:first-child { border-radius: 5px 0 0 5px; } .view-toggle button:last-child { border-radius: 0 5px 5px 0; border-left: 0; }
+.view-toggle button[aria-pressed="true"] { background: var(--fg); color: var(--panel); border-color: var(--fg); }
+.is-list .legend { display: none; }
+.is-list .lanes { width: auto; }
+.is-list .lane { grid-template-columns: minmax(0, 1fr); }
+.is-list .lane.axis, .is-list .lt { display: none; }
+.is-list .ll { position: static; border-right: 0; }
+.is-list .ll-stage { display: block; font: 11px/1.4 "JetBrains Mono", monospace; border-radius: 3px; padding: 0 4px; margin-top: 3px; width: fit-content; max-width: 100%; border: 1px solid var(--line); }
+.is-list .ll-x { display: none; }
+.is-list .lm { display: grid; gap: 1px; position: static; width: auto; padding: 0 10px 8px calc(10px + var(--d, 0) * 12px); }
+.is-list .lm:not(:has(*)) { display: none; }
+.is-list .lane.d0 .lm { padding-left: 10px; }
+@media (max-width: 600px) {
+  .view-toggle { display: inline-flex; }
+  .needs ul { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---------- Motion: time moves, so the lanes do too ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  /* A lane that was just unfolded draws its bars from left to right, in time order. */
+  .lane.proto-reveal .seg, .lane.proto-reveal .hatch, .lane.proto-reveal .gap { transform-origin: left center; animation: lane-grow .45s cubic-bezier(.2, .7, .3, 1) both; animation-delay: calc(var(--reveal-delay, 0ms) + var(--x) * 2ms); }
+  .lane.proto-reveal .flag, .lane.proto-reveal .cross { animation: lane-pop .3s ease-out both; animation-delay: calc(var(--reveal-delay, 0ms) + 380ms); }
+  @keyframes lane-grow { from { transform: translateY(-50%) scaleX(0); } to { transform: translateY(-50%) scaleX(1); } }
+  @keyframes lane-pop { from { opacity: 0; } }
+  /* The current stage is still being written: stripes slide along it. */
+  .seg.cur { background-image: repeating-linear-gradient(115deg, rgba(255,255,255,.18) 0 6px, transparent 6px 14px); background-size: 28px 100%; animation: lane-run 1.2s linear infinite; }
+  @keyframes lane-run { to { background-position: 28px 0; } }
+  /* The silence outline marches, like an ant line, from the last output to now. */
+  .silence { animation: lane-hot 2.4s ease-in-out infinite; }
+  /* A stall breathes, so it catches the eye without shouting. */
+  .seg.cur.hot, .flag.hot { animation: lane-run 1.2s linear infinite, lane-hot 2.4s ease-in-out infinite; }
+  .flag.hot { animation: lane-hot 2.4s ease-in-out infinite; }
+  @keyframes lane-hot { 50% { box-shadow: 0 0 0 4px color-mix(in srgb, var(--hot) 30%, transparent); } }
+  /* The host's live dot breathes while anything runs. */
+  .pulse { animation: lane-hot-ok 2s ease-in-out infinite; }
+  @keyframes lane-hot-ok { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--ok) 10%, transparent); } }
+  /* The now line glows like a cursor. */
+  .lt::after { animation: lane-now 2s ease-in-out infinite; }
+  @keyframes lane-now { 50% { opacity: .45; } }
+  /* The latest event flashes when a new one arrives (lanes.js marks it). */
+  .ll-latest code.is-new { animation: lane-flash 1.2s ease-out; }
+  @keyframes lane-flash { from { background: color-mix(in srgb, var(--cur) 45%, transparent); } }
+  /* Opening the drawer slides it up. */
+  .drawer.open .dr-body { animation: proto-reveal .25s ease-out; }
+}

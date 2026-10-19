@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>PROTOTYPE · Console (#711)</title>
+<!-- PROTOTYPE (#711, Q27): five Console looks on one page, switched with ?variant= and the bar at the bottom.
+     Throwaway: plain HTML, CSS and a little JS, as the htmx page served by the Rust binary would be. -->
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="switcher.css">
+<link rel="stylesheet" id="variant-css">
+<link rel="stylesheet" id="variant-fonts">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<main id="app"></main>
+<div class="proto-spacer" aria-hidden="true"></div>
+<nav class="proto-bar" aria-label="Prototype variants">
+  <button type="button" data-step="-1" aria-label="Previous variant">←</button>
+  <span class="proto-label"></span>
+  <button type="button" data-step="1" aria-label="Next variant">→</button>
+  <button type="button" class="proto-auth"></button>
+</nav>
+</body>
+</html>

@@ -1,0 +1,100 @@
+/* PROTOTYPE switcher: deliberately not part of any design being judged. */
+.proto-spacer { height: 88px; }
+.proto-bar {
+  position: fixed; left: 50%; bottom: max(14px, env(safe-area-inset-bottom)); transform: translateX(-50%); z-index: 1000;
+  display: flex; align-items: center; gap: 4px; padding: 5px; border-radius: 999px;
+  background: #ff3b30; color: #fff; box-shadow: 0 8px 24px rgba(0,0,0,.35), 0 0 0 2px #fff;
+  font: 600 13px/1 system-ui, -apple-system, sans-serif; max-width: calc(100vw - 20px);
+}
+.proto-bar button { all: unset; cursor: pointer; padding: 8px 11px; border-radius: 999px; white-space: nowrap; }
+.proto-bar button:hover, .proto-bar button:focus-visible { background: rgba(255,255,255,.22); }
+.proto-label { padding: 0 6px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.proto-auth { font-weight: 500 !important; opacity: .9; border-left: 1px solid rgba(255,255,255,.4) !important; border-radius: 0 999px 999px 0 !important; }
+
+/* The one reset every variant shares. */
+*, *::before, *::after { box-sizing: border-box; }
+
+/* Collapsible sections (app.js): every section starts closed. */
+.proto-shut { display: none !important; }
+.proto-toggle { cursor: pointer; }
+.proto-toggle h2::before, h2.proto-toggle::before { content: "▸"; display: inline-block; width: 1em; font-size: .8em; opacity: .7; transition: transform .15s; }
+.proto-toggle.is-open h2::before, h2.proto-toggle.is-open::before { transform: rotate(90deg); }
+
+/* Drill-down folds (app.js): a caret on each toggle; folded content is hidden. Variants may restyle the caret. */
+.proto-folded { display: none !important; }
+[data-fold] { cursor: pointer; }
+.fold-caret { display: inline-block; width: 1em; flex: none; font-size: .75em; opacity: .65; }
+.fold-caret::before { content: "▸"; display: inline-block; transition: transform .15s; }
+.is-unfolded > .fold-caret::before, .is-unfolded .fold-caret:first-child::before { transform: rotate(90deg); }
+
+@media (prefers-reduced-motion: no-preference) {
+  .proto-reveal { animation: proto-reveal .26s cubic-bezier(.2, .7, .3, 1) both; animation-delay: var(--reveal-delay, 0ms); }
+  @keyframes proto-reveal { from { opacity: 0; transform: translateY(-6px); } }
+}
+
+/* Defaults for the shared Session log bar, raw view, new-entries pill, quiet calls and Stop effects (shared.js).
+   :where() keeps them at zero specificity, so any variant's own rules win. */
+:where(.sl-bar) { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 8px; font-size: 12.5px; }
+:where(.sl-bar input) { flex: 1 1 160px; min-width: 0; font: inherit; padding: 5px 8px; border: 1px solid currentColor; border-radius: 4px; background: transparent; color: inherit; opacity: .85; }
+:where(.sl-modes) { display: inline-flex; }
+:where(.sl-modes button) { font: inherit; padding: 4px 8px; border: 1px solid currentColor; background: transparent; color: inherit; cursor: pointer; opacity: .7; }
+:where(.sl-modes button[aria-pressed="true"]) { opacity: 1; font-weight: 700; }
+:where(.sl-dl) { color: inherit; }
+:where(.sl-matches) { margin: 0 0 6px; font-size: 12px; opacity: .7; }
+:where(.sl-raw) { list-style: none; margin: 0; padding: 0; font: 11.5px/1.5 "JetBrains Mono", ui-monospace, monospace; }
+:where(.sl-raw li) { display: grid; grid-template-columns: 3.2em minmax(0, 1fr); gap: 8px; }
+:where(.sl-raw li:target) { background: color-mix(in srgb, #ffd54a 30%, transparent); }
+:where(.sl-raw code) { overflow-wrap: anywhere; white-space: pre-wrap; }
+:where(.sl-ln) { text-align: right; opacity: .55; color: inherit; text-decoration: none; }
+:where(.sl-quiet) { opacity: .62; }
+:where(.sl-quiet:hover, .sl-quiet:focus-within) { opacity: 1; }
+:where(.sl-new) { position: sticky; bottom: 8px; display: block; margin: 8px auto 0; padding: 6px 12px; border-radius: 999px; border: 0;
+  font: 600 12px/1 system-ui, sans-serif; background: #1f6feb; color: #fff; cursor: pointer; box-shadow: 0 4px 12px rgba(0,0,0,.25); }
+:where(.stop-effects) { margin: 6px 0; padding-left: 1.2em; font-size: .92em; }
+:where(.hb) { opacity: .75; font-size: .92em; }
+
+/* Section visibility (app.js sectionsMenu): hidden sections; a neutral default for the control, which variants restyle. */
+.proto-hidden { display: none !important; }
+:where(.sections-menu) { position: relative; display: inline-block; font-size: 12px; }
+:where(.sections-menu > summary) { cursor: pointer; list-style: none; padding: 4px 8px; border: 1px solid currentColor; border-radius: 4px; user-select: none; }
+:where(.sections-menu > summary)::-webkit-details-marker { display: none; }
+:where(.sm-panel) { position: absolute; right: 0; top: calc(100% + 4px); z-index: 60; display: grid; gap: 4px; min-width: 200px; padding: 10px 12px;
+  background: Canvas; color: CanvasText; border: 1px solid currentColor; border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.3); }
+:where(.sm-panel label) { display: flex; gap: 8px; align-items: center; cursor: pointer; white-space: nowrap; }
+:where(.sm-all) { margin-top: 6px; justify-self: start; font: inherit; cursor: pointer; }
+
+/* The j/k cursor on a section heading (the inbox variants): a ring in the theme's working ink. */
+.proto-toggle.is-cursor { outline: 2px solid var(--working, var(--c, var(--live, currentColor))); outline-offset: 3px; border-radius: 3px; }
+
+/* The ? shortcut list (app.js keysHelp), in the variant's own colours where it has them. */
+.proto-keys { position: fixed; inset: 0; z-index: 990; display: grid; place-items: center; padding: 16px 16px 84px; background: rgba(0,0,0,.45); }
+.pk-box { width: min(620px, 100%); max-height: 100%; overflow: auto; padding: 16px 18px; border-radius: 8px;
+  background: var(--panel, var(--k2, Canvas)); color: var(--text, var(--paper, CanvasText)); border: 1px solid var(--rule, currentColor);
+  box-shadow: 0 16px 48px rgba(0,0,0,.4); font: 14px/1.45 var(--font-body, system-ui, sans-serif); }
+.pk-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; font-size: 15px; }
+.pk-x { all: unset; cursor: pointer; font-size: 22px; line-height: 1; padding: 0 6px; }
+.proto-keys table { width: 100%; border-collapse: collapse; }
+.proto-keys th { text-align: left; white-space: nowrap; padding: 6px 14px 6px 0; vertical-align: top; font-weight: 400; }
+.proto-keys td { padding: 6px 0; border-top: 1px solid var(--rule, rgba(128,128,128,.25)); }
+.proto-keys tr:first-child td { border-top: 0; }
+.proto-keys kbd { display: inline-block; min-width: 1.6em; text-align: center; padding: 1px 6px; border: 1px solid var(--rule, currentColor);
+  border-bottom-width: 2px; border-radius: 4px; font: 600 12px/1.4 var(--font-mono, ui-monospace, monospace); }
+.pk-then { opacity: .6; font-size: 12px; margin: 0 2px; }
+.pk-note { margin: 10px 0 0; font-size: 12px; opacity: .7; }
+@media (max-width: 560px) { .proto-keys th { white-space: normal; } }
+
+/* The "g+letter jump" legend's tooltip: which letter goes to which section (on hover or keyboard focus). */
+.jk { position: relative; cursor: help; text-decoration: underline dotted; text-underline-offset: 3px; }
+.jk-tip { display: none; position: absolute; top: calc(100% + 8px); right: 0; z-index: 70; min-width: 200px; padding: 8px 10px;
+  text-align: left; white-space: nowrap; text-transform: none; letter-spacing: normal; font-size: 12px; line-height: 1.5;
+  background: var(--panel, var(--k2, Canvas)); color: var(--text, var(--paper, CanvasText)); border: 1px solid var(--rule, currentColor);
+  border-radius: 6px; box-shadow: 0 8px 24px rgba(0,0,0,.3); }
+.jk-tip b { display: block; margin-bottom: 4px; font-weight: 600; }
+.jk-tip span { display: block; }
+.jk-tip kbd { margin-right: 6px; }
+.jk:hover .jk-tip, .jk:focus .jk-tip, .jk:focus-within .jk-tip { display: block; }
+
+/* esc with nothing left to close hides the selection mark (the inbox variants); j or k brings it back. */
+.mark-hidden .proto-toggle.is-cursor { outline: none; }
+.mark-hidden .selbar { opacity: 0 !important; }
+.mark-hidden .row.is-sel, .mark-hidden .pl.is-sel { background: none !important; box-shadow: none !important; }

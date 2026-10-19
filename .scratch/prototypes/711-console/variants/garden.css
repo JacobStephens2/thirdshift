@@ -1,0 +1,313 @@
+/* PROTOTYPE variant "garden": beds, plants, a field notebook and a harvest log. */
+:root {
+  --paper: #f6f0e1; --paper2: #efe6cf; --ink: #2e2a1f; --muted: #6f6650; --line: #d9ccaa;
+  --soil: #6b4a2f; --soil2: #4a3220; --wood: #a0773f; --wood2: #7d5a2b;
+  --leaf: #4f8a3c; --leaf2: #2f6b2a; --stem: #3f7a33; --bloom: #e07a5f; --heart: #f2c14e;
+  --blight: #8a5a2b; --frost: #5b8fb9; --fallow: #a89a78; --link: #2f6b2a; --stop: #a23b2a;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root { /* the night garden */
+    --paper: #161a14; --paper2: #1e241b; --ink: #e8e2cf; --muted: #a59d84; --line: #36402f;
+    --soil: #3b2a1b; --soil2: #2a1d12; --wood: #8a6a3a; --wood2: #5e4524;
+    --leaf: #6fae58; --leaf2: #8bc970; --stem: #6fae58; --bloom: #f0937a; --heart: #f2c14e;
+    --blight: #c08a52; --frost: #8ec1e6; --fallow: #7d7560; --link: #9bd480; --stop: #ec7a66;
+  }
+}
+html, body { margin: 0; background: var(--paper); color: var(--ink); }
+body { font: 15px/1.5 Fraunces, Georgia, serif; }
+code, pre, .ref, .hme, .nb-file, .bed-meta code { font-family: "JetBrains Mono", ui-monospace, monospace; }
+code { font-size: 12.5px; }
+a { color: var(--link); text-underline-offset: 3px; }
+h1, h2, h3 { font-family: Fraunces, Georgia, serif; font-weight: 700; margin: 0; }
+p { margin: 0; }
+.garden { max-width: 1200px; margin: 0 auto; padding: 0 16px;
+  background-image: radial-gradient(color-mix(in srgb, var(--soil) 9%, transparent) 1px, transparent 1.5px); background-size: 14px 14px; }
+.empty { color: var(--muted); font-style: italic; margin: 10px 0; }
+.count { font: 600 13px/1 "JetBrains Mono", monospace; background: var(--leaf); color: var(--paper); border-radius: 999px; padding: 3px 9px; vertical-align: middle; }
+button { font: 600 13px/1 Fraunces, Georgia, serif; padding: 8px 12px; border-radius: 6px; border: 1.5px solid var(--wood2); background: var(--paper); color: var(--ink); cursor: pointer; }
+button.link { all: unset; cursor: pointer; color: var(--link); text-decoration: underline; text-underline-offset: 3px; }
+button.pull { background: var(--stop); border-color: var(--stop); color: #fff; }
+
+/* The sign */
+.sign { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 12px; padding: 22px 0 14px; }
+.sign-board { background: linear-gradient(var(--wood), var(--wood2)); color: #fff8e6; padding: 12px 20px 14px; border-radius: 4px;
+  box-shadow: 0 4px 0 var(--soil2), inset 0 0 0 2px rgba(0,0,0,.12); position: relative; }
+.sign-board::after { content: ""; position: absolute; left: 50%; bottom: -26px; width: 10px; height: 22px; background: var(--wood2); transform: translateX(-50%); z-index: -1; }
+.sign h1 { font-size: clamp(30px, 6vw, 44px); line-height: 1; letter-spacing: -.01em; }
+.season { font-size: 12px; letter-spacing: .12em; text-transform: uppercase; opacity: .85; }
+.sign-sub { font-style: italic; font-size: 14px; opacity: .9; }
+.sign nav { display: flex; gap: 16px; flex-wrap: wrap; font-size: 14px; }
+
+/* Layout: beds beside the notebook */
+.plot-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 24px; align-items: start; margin-top: 18px; }
+.beds h2, .harvest h2, .notebook h2 { font-size: 24px; margin: 6px 0 12px; display: flex; gap: 10px; align-items: center; }
+.beds h2:not(:first-child) { margin-top: 26px; }
+
+/* Raised beds */
+.bed { background: color-mix(in srgb, var(--paper2) 80%, transparent); border: 2px solid var(--wood2); border-radius: 8px; margin-bottom: 18px; overflow: hidden;
+  box-shadow: 0 6px 0 -2px var(--wood2); }
+.bed-sign { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 10px; padding: 12px 14px 8px; border-bottom: 1px dashed var(--line); }
+.bed-sign h3 { font-size: 19px; line-height: 1.25; }
+.bed-kind { font: 600 11px/1.4 "JetBrains Mono", monospace; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.bed-meta { font-size: 13px; color: var(--muted); }
+.bed-body { padding: 12px 14px; display: grid; gap: 12px; }
+.soil-strip { height: 14px; background: repeating-linear-gradient(100deg, var(--soil) 0 9px, var(--soil2) 9px 12px); }
+.spec { display: grid; gap: 4px; }
+.spec-head b { font-weight: 700; }
+.row-of-plants { list-style: none; padding: 0; margin: 8px 0 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; }
+.plot { min-width: 0; display: grid; grid-template-rows: auto 1fr; justify-items: center; text-align: center; }
+.plot .plant { width: 76px; height: 88px; }
+.plot-card { box-sizing: border-box; min-width: 0; background: var(--paper); border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; width: 100%; display: grid; gap: 3px; align-content: start; }
+.t-running .plot-card { border-color: var(--leaf); box-shadow: 0 0 0 2px color-mix(in srgb, var(--leaf) 25%, transparent); }
+.t-failed .plot-card { border-color: var(--blight); }
+.ref { font-size: 13px; font-weight: 700; }
+.plot-title { font-size: 14px; line-height: 1.3; }
+.plot-state { font-size: 13.5px; }
+.tag { display: inline-block; background: var(--paper2); border: 1px dashed var(--wood); padding: 1px 7px; border-radius: 3px; transform: rotate(-2deg); font-size: 12.5px; }
+.hme { font-size: 11.5px; color: var(--muted); }
+.latest { font-size: 12.5px; overflow-wrap: anywhere; }
+.latest code { background: color-mix(in srgb, var(--leaf) 12%, transparent); padding: 1px 5px; border-radius: 3px; }
+.single { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 12px; align-items: center; }
+.single .plant { width: 76px; height: 88px; }
+.growth { list-style: none; padding: 0; margin: 6px 0; display: flex; flex-wrap: wrap; gap: 4px; font: 11.5px/1 "JetBrains Mono", monospace; }
+.growth li { padding: 4px 7px 4px 18px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); position: relative; }
+.growth li::before { content: ""; position: absolute; left: 6px; top: 50%; width: 7px; height: 7px; border-radius: 50% 0; transform: translateY(-50%) rotate(-45deg); background: var(--line); }
+.growth li.done { color: var(--ink); border-color: var(--leaf); } .growth li.done::before { background: var(--leaf); }
+.growth li.now { background: var(--leaf); color: #fff; border-color: var(--leaf); font-weight: 700; } .growth li.now::before { background: #fff; }
+.notes-links { font-size: 13px; display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: center; }
+.bed-body > .notes-links { justify-content: flex-start; border-top: 1px dashed var(--line); padding-top: 8px; }
+.notes-links > span { color: var(--muted); font-style: italic; }
+.notes-links a[aria-current] { font-weight: 700; background: color-mix(in srgb, var(--heart) 35%, transparent); border-radius: 3px; padding: 0 3px; }
+.growing-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--leaf); vertical-align: 1px; animation: pulse 1.6s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+
+.withered { border-style: dashed; border-color: var(--blight); filter: saturate(.55); box-shadow: none; }
+.withered .soil-strip { opacity: .6; }
+.stake { background: var(--wood); color: #fff8e6; padding: 6px 12px; border-radius: 3px; align-self: start; display: grid; text-align: center; transform: rotate(2deg);
+  box-shadow: 0 3px 0 var(--wood2); }
+.stake span { font-weight: 700; } .stake small { font-size: 12px; opacity: .9; }
+
+/* Stop */
+.confirm { flex-basis: 100%; background: color-mix(in srgb, var(--stop) 9%, var(--paper)); border: 1.5px solid var(--stop); border-radius: 6px; padding: 10px 12px; display: grid; gap: 8px; font-size: 14px; }
+.confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.cli { font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+
+/* Plants */
+.plant { display: block; overflow: visible; }
+.p-soil { fill: var(--soil); }
+.p-stem { fill: none; stroke: var(--stem); stroke-width: 2.5; stroke-linecap: round; }
+.p-leaf { fill: var(--leaf); }
+.p-bud { fill: var(--leaf2); }
+.p-petal { fill: var(--bloom); } .p-heart { fill: var(--heart); }
+.p-dead { stroke: var(--blight); } .p-leaf.p-dead, .p-bud.p-dead { fill: var(--blight); stroke: none; }
+.p-spot { fill: var(--soil2); }
+.p-cut { stroke: var(--stop); stroke-width: 2; stroke-linecap: round; }
+.p-packet { fill: var(--paper); stroke: var(--wood2); stroke-width: 1.5; } .p-packet-fold { stroke: var(--wood2); }
+.p-seed { fill: var(--wood2); }
+.p-stake { stroke: var(--wood); stroke-width: 3; stroke-linecap: round; }
+.p-twine { fill: none; stroke: var(--wood); stroke-width: 1; stroke-dasharray: 2 1.5; }
+.p-tag { fill: var(--paper2); stroke: var(--wood2); stroke-width: 1; }
+.p-sway { transform-origin: 30px 60px; animation: sway 4s ease-in-out infinite; }
+@keyframes sway { 50% { transform: rotate(3deg); } }
+
+/* The field notebook */
+.notebook { position: sticky; top: 12px; background: #fffdf5; color: #2e2a1f; border-radius: 4px 10px 10px 4px; padding: 14px 16px 16px 30px;
+  box-shadow: 0 10px 24px -12px rgba(0,0,0,.45), inset 4px 0 0 #c94f3d; border: 1px solid #e3d8bc; min-width: 0; }
+@media (prefers-color-scheme: dark) { .notebook { background: #f1ead6; } }
+.notebook h2 { color: #2e2a1f; }
+.notebook a { color: #2f6b2a; }
+.nb-title { font-weight: 700; font-size: 15px; }
+.nb-file { font-size: 11.5px; color: #6f6650; overflow-wrap: anywhere; margin-bottom: 8px; }
+.growing { font: 600 11px/1 "JetBrains Mono", monospace; background: #4f8a3c; color: #fff; padding: 2px 6px; border-radius: 999px; vertical-align: 2px; }
+.nb-scroll { max-height: 70vh; overflow: auto; background-image: repeating-linear-gradient(transparent 0 23px, #cfe0ea 23px 24px); background-attachment: local;
+  border-top: 1px solid #e0a9a0; padding-top: 6px; }
+.nb-cmdlog { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 24px; }
+.notebook .empty { color: #6f6650; }
+
+/* Session log, in the notebook */
+.sl { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; line-height: 24px; }
+.sl-text { font-size: 15px; white-space: pre-wrap; font-style: italic; }
+.sl-sys, .sl-usage { font: 11.5px/24px "JetBrains Mono", monospace; color: #7a7158; }
+.sl-sys::before { content: "✿ "; color: #4f8a3c; }
+.sl-think summary { cursor: pointer; color: #7a7158; font-size: 14px; }
+.sl-think summary::after { content: " (folded)"; font-size: 12px; } .sl-think details[open] summary::after { content: ""; }
+.sl-think p { color: #6f6650; font-size: 14px; margin-left: 14px; }
+.sl-group > details { border-left: 3px solid #4f8a3c; padding-left: 8px; }
+.sl-group.is-running > details { border-left-style: dashed; }
+.sl-group > details > summary { cursor: pointer; font-size: 13.5px; }
+.sl-count { font-weight: 700; } .sl-names { color: #7a7158; font-family: "JetBrains Mono", monospace; font-size: 12px; }
+.sl-calls { list-style: none; margin: 0; padding: 0; }
+.sl-call summary { cursor: pointer; font-size: 13px; overflow-wrap: anywhere; }
+.sl-tool { font: 700 11px/1 "JetBrains Mono", monospace; text-transform: uppercase; letter-spacing: .06em; background: #e9e1c8; padding: 3px 6px; border-radius: 3px; }
+.sl-bash .sl-tool { background: #dbe9d2; } .sl-edit .sl-tool { background: #f6d9cf; } .sl-read .sl-tool { background: #dde7ef; } .sl-grep .sl-tool { background: #efe3b8; }
+.sl-arg { font-size: 12px; } .sl-meta { color: #7a7158; font-size: 12px; }
+.sl-plus { color: #2f6b2a; } .sl-minus { color: #a23b2a; }
+.sl-st { font: 600 11px/1 "JetBrains Mono", monospace; margin-left: 4px; }
+.sl-ok { color: #2f6b2a; } .sl-err { color: #a23b2a; } .sl-run { color: #b37a12; }
+.sl-out, .sl-diff { margin: 2px 0 6px; padding: 4px 8px; background: rgba(255,255,255,.75); border: 1px solid #e3d8bc; border-radius: 3px;
+  font-size: 11.5px; line-height: 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sl-diff span { display: block; }
+.sl-add { background: #e3f0d9; color: #24521f; } .sl-del { background: #f7dcd5; color: #7e2a1e; }
+.sl-empty { color: #6f6650; font-style: italic; }
+
+/* The harvest log */
+.harvest { margin-top: 34px; border-top: 2px solid var(--wood2); padding-top: 12px; }
+.harvest h3 { font-size: 17px; font-style: italic; color: var(--muted); margin: 16px 0 6px; font-weight: 400; }
+.journal { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; }
+.entry { display: grid; grid-template-columns: 30px minmax(0, 1fr); gap: 10px; padding: 12px 0; border-bottom: 1px dotted var(--line); }
+.entry-body { display: grid; gap: 3px; min-width: 0; }
+.entry-head time { font: 700 13px/1 "JetBrains Mono", monospace; margin-right: 6px; }
+.glyph { width: 26px; height: 26px; fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+.g-bloom { fill: var(--bloom); stroke: none; } .g-stem { stroke: var(--stem); } .g-basket { fill: var(--wood); stroke: var(--wood2); }
+.g-blight { fill: var(--blight); stroke: none; } .g-spot { fill: var(--paper); }
+.g-frost { stroke: var(--frost); } .g-fallow { stroke: var(--fallow); } .g-dead { stroke: var(--blight); }
+.o { font-weight: 700; } .o-merged, .o-ready { color: var(--leaf2); } .o-failed { color: var(--blight); } .o-interrupted { color: var(--frost); }
+.o-skipped, .o-not-started { color: var(--fallow); }
+.cause { color: var(--muted); }
+.vine { list-style: none; margin: 4px 0 2px 4px; padding: 0 0 0 14px; border-left: 2px solid var(--leaf); display: grid; gap: 4px; font-size: 14px; }
+.vine .glyph { width: 18px; height: 18px; vertical-align: -4px; }
+.vine .notes-links { justify-content: flex-start; }
+.vine .mini { display: flex; gap: 6px; align-items: center; }
+.vine .mini .plant { width: 26px; height: 30px; flex: none; }
+.entry-body > .notes-links { justify-content: flex-start; }
+.pests { background: color-mix(in srgb, var(--blight) 8%, transparent); border-radius: 6px; padding: 6px 10px; }
+.pests ul { list-style: none; margin: 2px 0 0; padding: 0; display: grid; gap: 3px; font-size: 14px; }
+.sev { font: 700 11px/1 "JetBrains Mono", monospace; text-transform: uppercase; padding: 3px 6px; border-radius: 3px; color: #fff; }
+.sev-high { background: var(--stop); } .sev-low { background: var(--fallow); }
+
+/* The gate */
+.gate-page { min-height: 85vh; display: grid; place-items: center; }
+.gate { display: grid; gap: 10px; justify-items: center; text-align: center; width: min(340px, 100%); }
+.gate-art { width: 220px; max-width: 100%; }
+.g-arch, .g-bar, .g-rail { fill: none; stroke: var(--wood2); stroke-width: 4; stroke-linecap: round; }
+.g-bar { stroke-width: 2.5; }
+.gate h1 { font-size: 36px; }
+.gate label { display: grid; gap: 4px; width: 100%; text-align: left; font-size: 14px; }
+.gate input { font: 15px "JetBrains Mono", monospace; padding: 9px 10px; border: 1.5px solid var(--wood2); border-radius: 6px; background: var(--paper2); color: var(--ink); }
+.gate button { width: 100%; padding: 11px; background: var(--leaf); border-color: var(--leaf); color: #fff; }
+
+@media (max-width: 860px) {
+  .plot-layout { grid-template-columns: minmax(0, 1fr); }
+  .notebook { position: static; padding-left: 22px; }
+}
+@media (max-width: 460px) {
+  .row-of-plants { grid-template-columns: minmax(0, 1fr); }
+  .plot { grid-template-columns: 64px minmax(0, 1fr); grid-template-rows: none; gap: 8px; text-align: left; align-items: start; }
+  .plot .plant { width: 64px; height: 74px; }
+  .plot .notes-links { justify-content: flex-start; }
+  .single { grid-template-columns: 56px minmax(0, 1fr); }
+  .single .plant { width: 56px; height: 66px; }
+  .bed-sign > button { width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) { .p-sway, .growing-dot { animation: none; } }
+
+/* ---------- Drill-down folds ---------- */
+/* A bed folds to its sign and soil; a plant card to its sprite, issue and state; a harvest entry to one line. */
+.bed-sign[data-fold] { align-items: flex-start; min-height: 44px; }
+.bed-sign .fold-caret, .entry-head .fold-caret { width: 18px; height: 18px; margin-top: 3px; font-size: 13px; opacity: 1; color: var(--leaf2);
+  display: grid; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--leaf) 18%, transparent); }
+.bed-sign > div { flex: 1 1 0; min-width: 0; }
+.bed-summary { font-size: 14px; margin-top: 4px; }
+.bed-summary b { color: var(--leaf2); }
+.bed > .confirm { margin: 8px 14px 4px; }
+.bed-sign:focus-visible, .plot-card:focus-visible, .entry-head:focus-visible { outline: 2px solid var(--leaf); outline-offset: 2px; }
+.plot-card { position: relative; min-height: 44px; }
+.plot-card > .fold-caret { position: absolute; top: 8px; left: 8px; color: var(--leaf2); opacity: .8; }
+.entry-head[data-fold] { display: flex; gap: 6px; align-items: flex-start; min-height: 36px; margin: 0; }
+.entry-more { display: grid; gap: 3px; }
+.entry-more > p { margin: 0; }
+
+/* ---------- Motion ---------- */
+.sign { position: relative; }
+.drift { position: absolute; inset: 0; overflow: hidden; pointer-events: none; z-index: 1; }
+.drift-leaf, .pollen { display: none; }
+@media (prefers-reduced-motion: no-preference) {
+  /* A growing plant's leaves breathe while the plant sways. */
+  .p-sway .p-leaf { transform-box: fill-box; transform-origin: 0 100%; animation: breathe 3.2s ease-in-out infinite; }
+  .p-sway .p-leaf:nth-of-type(2n) { animation-delay: -1.6s; }
+  @keyframes breathe { 50% { transform: scale(1.12); } }
+  /* A bloom opens when it comes into view, including when its bed unfolds. */
+  .p-flower { transform-box: fill-box; transform-origin: 50% 70%; animation: bloom-open .7s cubic-bezier(.2, .9, .3, 1.2) both; }
+  @keyframes bloom-open { from { transform: scale(.15) rotate(-40deg); opacity: 0; } }
+  /* A withered plant droops, and keeps drooping. */
+  .p-droop { transform-origin: 30px 60px; animation: droop 5s ease-in-out infinite alternate; }
+  @keyframes droop { to { transform: rotate(7deg) translateY(1px); } }
+  /* Leaves and pollen drift across the sign. */
+  .drift-leaf { display: block; position: absolute; top: 18%; left: -20px; width: 14px; height: 14px; fill: var(--leaf); opacity: .75;
+    animation: leaf-drift 17s linear infinite; }
+  @keyframes leaf-drift {
+    0% { transform: translate(0, 0) rotate(0); opacity: 0; }
+    8% { opacity: .75; }
+    50% { transform: translate(50vw, 28px) rotate(220deg); }
+    92% { opacity: .75; }
+    100% { transform: translate(min(100vw, 1180px), 6px) rotate(420deg); opacity: 0; }
+  }
+  .pollen { display: block; position: absolute; width: 4px; height: 4px; border-radius: 50%; background: var(--heart); opacity: 0; animation: pollen 9s ease-in-out infinite; }
+  .pollen.p1 { left: 30%; top: 70%; } .pollen.p2 { left: 58%; top: 40%; animation-delay: -3s; } .pollen.p3 { left: 82%; top: 62%; animation-delay: -6s; }
+  @keyframes pollen { 0% { transform: translate(0, 0); opacity: 0; } 20% { opacity: .9; } 100% { transform: translate(24px, -40px); opacity: 0; } }
+}
+
+/* ---------- Research revisions: what needs tending, vigour, chips, summaries ---------- */
+/* Needs tending: above everything, one line per problem, urgent first. Words, never colour alone. */
+.tending { border: 2px solid var(--wood2); border-radius: 8px; background: var(--paper2); padding: 10px 12px; margin-top: 6px; }
+.tending-title { font-weight: 700; font-size: 17px; display: flex; gap: 8px; align-items: center; margin-bottom: 6px; }
+.tending ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.tend { all: unset; box-sizing: border-box; cursor: pointer; width: 100%; display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px;
+  padding: 8px 10px; border-radius: 6px; border: 1.5px solid var(--line); background: var(--paper); min-height: 44px; }
+.tend:hover, .tend:focus-visible { border-color: var(--leaf); }
+.tend .t-level { grid-row: span 2; align-self: start; font: 700 11px/1 "JetBrains Mono", monospace; text-transform: uppercase; letter-spacing: .06em;
+  padding: 5px 7px; border-radius: 3px; background: var(--paper2); border: 1px solid var(--line); }
+.tend.t-urgent { border-color: color-mix(in srgb, var(--stop) 55%, var(--line)); }
+.tend.t-urgent .t-level { background: var(--stop); border-color: var(--stop); color: #fff; }
+.tend.t-look .t-level { background: var(--heart); border-color: var(--heart); color: #3a2a06; }
+.t-what { font-weight: 600; font-size: 14.5px; overflow-wrap: anywhere; } .t-what .ref { font-size: 12.5px; }
+.t-why { font-size: 13px; color: var(--muted); }
+
+/* Ticket chips on the sign, so a folded bed already says where each Ticket is. */
+.chips { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { font-size: 12.5px; padding: 3px 8px; border-radius: 999px; border: 1px solid var(--line); background: var(--paper); overflow-wrap: anywhere; }
+.chip .ref { font-size: 11.5px; } .chip b { margin: 0 2px; }
+.chip.c-merged b { color: var(--leaf2); } .chip.c-running b { color: var(--leaf); } .chip.c-waiting { border-style: dashed; }
+.chip.c-failed b { color: var(--blight); } .chip.h-slow { border-color: var(--heart); } .chip.h-silent { border-color: var(--stop); }
+.word { font: 600 11px/1 "JetBrains Mono", monospace; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+
+/* Vigour: silence is the stall; slow is only slow. */
+.usual { color: var(--muted); font-size: 12.5px; }
+.vigour { font-size: 13px; font-weight: 600; display: inline-flex; gap: 6px; align-items: center; }
+.v-mark { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; font: 700 12px/1 "JetBrains Mono", monospace; }
+.v-silent { color: var(--stop); } .v-silent .v-mark { background: var(--stop); color: #fff; }
+.v-slow { color: color-mix(in srgb, var(--heart) 55%, var(--ink)); } .v-slow .v-mark { background: var(--heart); color: #3a2a06; }
+.v-ok { color: var(--leaf2); font-weight: 400; }
+.hb-line { font-size: 12px; color: var(--muted); }
+.spent { font-size: 12px; color: var(--muted); } .spent span { font-style: italic; }
+.plot.h-silent .plot-card, .single.h-silent { box-shadow: 0 0 0 2px var(--stop); border-radius: 6px; }
+.plot.h-slow .plot-card { box-shadow: 0 0 0 2px var(--heart); }
+.stopping { font: 600 13px/1 Fraunces, Georgia, serif; font-style: italic; color: var(--stop); align-self: start; padding: 8px 0; }
+.confirm .stop-effects { margin: 0; padding-left: 1.2em; font-size: 13.5px; }
+
+/* Harvest entries as Run summary cards: readable folded. */
+.entry-card { font-size: 13.5px; display: grid; gap: 2px; }
+.entry-card .cause { color: var(--blight); }
+.e-failed > .glyph { filter: drop-shadow(0 0 0 var(--blight)); }
+
+/* The notebook's log bar: search, structured or raw, download; sticky above the ruled lines. */
+.notebook .sl-bar { position: sticky; top: 0; z-index: 2; background: #f1ead6; padding: 6px 0; margin: 0 0 4px; font: 13px Fraunces, Georgia, serif; color: #3d382a; }
+.notebook .sl-bar input { border: 1.5px solid #c9b98f; border-radius: 4px; background: #fffaf0; opacity: 1; font: 13px Fraunces, Georgia, serif; }
+.notebook .sl-modes button { border-color: #c9b98f; background: #fffaf0; opacity: .8; font: 600 12px Fraunces, Georgia, serif; }
+.notebook .sl-modes button:first-child { border-radius: 4px 0 0 4px; } .notebook .sl-modes button:last-child { border-radius: 0 4px 4px 0; border-left: 0; }
+.notebook .sl-modes button[aria-pressed="true"] { background: #4f8a3c; border-color: #4f8a3c; color: #fff; opacity: 1; }
+.notebook .sl-dl { color: #2f6b2a; }
+.notebook .sl-raw { font-size: 11.5px; line-height: 24px; }
+.notebook .sl-ln { color: #8a7f60; }
+.notebook .sl-new { background: #4f8a3c; font-family: Fraunces, Georgia, serif; }
+.notebook .sl-quiet { opacity: .6; }
+.notebook .sl-failed > details { border-left-color: #a23b2a; }
+.notebook .sl-call.sl-failed .sl-tool { background: #f2c9bf; }
+.notebook .sl-matches { color: #6f6650; font-style: italic; }
+@media (prefers-reduced-motion: no-preference) {
+  .v-silent .v-mark { animation: tend-pulse 2s ease-in-out infinite; }
+  @keyframes tend-pulse { 50% { box-shadow: 0 0 0 5px color-mix(in srgb, var(--stop) 25%, transparent); } }
+  .tend.t-urgent { animation: tend-in .5s ease-out both; }
+  @keyframes tend-in { from { transform: translateX(-6px); opacity: 0; } }
+}

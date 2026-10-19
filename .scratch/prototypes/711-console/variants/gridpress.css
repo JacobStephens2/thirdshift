@@ -1,0 +1,321 @@
+/* PROTOTYPE variant "gridpress": grid layout, thirdshift press-floor look. The stage grid set in thirdshift.app's
+   press style (site/styles.css): process inks for state, every colour with its word; each stage row a press unit. */
+:root {
+  color-scheme: dark;
+  --k: #0A0A0A; --k2: #141414; --k3: #1E1E1E;
+  --paper: #E8E6E1; --dim: #9A978F; --rule: #2A2A2A;
+  /* Process magenta (--m) is for fills and large text; small magenta text uses --m-text. */
+  --c: #00AEEF; --m: #EC008C; --m-text: #FF5CB8; --y: #FFF200;
+  --nc: #00FFFF; --nm: #FF00FF; --ny: #FFFF00; /* glows only */
+  --grid: rgba(0,174,239,.07);
+  /* Ink, as printed on paper: dark enough for small text on --paper. */
+  --c-on-paper: #0070a8; --m-on-paper: #b0006a; --y-on-paper: #6b6500;
+  --f-head: "Big Shoulders Display", "Big Shoulders", Impact, sans-serif;
+  --f-mono: "JetBrains Mono", ui-monospace, monospace;
+  /* Effects at site strength: halftone 35%, misregistration 1px, scanlines 12%. */
+  --ht: .35; --mr: 1px; --sl: .12;
+}
+html { background: var(--k); }
+html, body { margin: 0; }
+body { color: var(--paper); background: var(--k); font: 400 14px/1.55 var(--f-mono); -webkit-font-smoothing: antialiased; }
+body::after { /* scanlines */
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 50;
+  background: repeating-linear-gradient(to bottom, rgba(0,0,0,var(--sl)) 0 1px, transparent 1px 3px);
+}
+a { color: var(--c); text-underline-offset: 3px; } a:hover { color: var(--nc); }
+:focus-visible { outline: 2px solid var(--y); outline-offset: 2px; }
+button { font: inherit; color: inherit; }
+code, pre { font-family: var(--f-mono); }
+.muted { color: var(--dim); }
+.grid-page { max-width: 1320px; margin: 0 auto; padding: 0 16px; }
+h1, h2, h3 { font-family: var(--f-head); font-weight: 800; line-height: .95; letter-spacing: .01em; margin: 0; text-wrap: balance; }
+.misreg, h2 { text-shadow:
+  calc(var(--mr) * -1) 0 0 color-mix(in srgb, var(--c) 75%, transparent),
+  var(--mr) calc(var(--mr) * .6) 0 color-mix(in srgb, var(--m) 70%, transparent); }
+
+/* ---------- Header: the slug line, the host in display type, a colorbar ---------- */
+.top { padding: 18px 0 6px; display: grid; gap: 8px; }
+.slugline { display: flex; justify-content: space-between; align-items: baseline; gap: 10px 16px; flex-wrap: wrap; }
+.slug, .needs-label, .kind, .corner, .gh-eyebrow, .hist-sub, .sec-note { font: 700 11px/1.3 var(--f-mono); letter-spacing: .16em; text-transform: uppercase; color: var(--dim); }
+.top nav { display: flex; gap: 16px; font-size: 12px; text-transform: uppercase; letter-spacing: .1em; }
+.link { all: unset; cursor: pointer; color: var(--c); text-decoration: underline; text-underline-offset: 3px; }
+.host { font-size: clamp(56px, 10vw, 120px); color: var(--paper); }
+.colorbar { display: flex; gap: 2px; height: 12px; }
+.colorbar i { flex: 1; }
+.cb-c { background: var(--c); } .cb-m { background: var(--m); } .cb-y { background: var(--y); }
+.cb-k { background: #000; outline: 1px solid var(--dim); outline-offset: -1px; }
+
+/* Section headings: display type with misregistration. app.js adds the fold caret. */
+h2 { font-size: clamp(30px, 4.4vw, 46px); margin: 34px 0 14px; color: var(--paper); }
+h3 { font-size: clamp(24px, 3vw, 32px); }
+.sec-note { margin: -6px 0 12px; letter-spacing: .1em; }
+
+/* ---------- Needs you: paper job tickets ---------- */
+.needs { margin-top: 18px; padding: 12px; border: 1px solid var(--rule); background: var(--k2); }
+.needs.none { color: var(--dim); font-size: 13px; }
+.needs-label { margin: 0 0 10px; }
+.needs ul { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr)); gap: 12px; }
+.ticket { --ink: var(--y); }
+.ticket.n-urgent { --ink: var(--m); }
+.ticket:nth-child(odd) { transform: rotate(-.4deg); } .ticket:nth-child(even) { transform: rotate(.35deg); }
+.ticket button { all: unset; box-sizing: border-box; cursor: pointer; display: grid; gap: 3px; width: 100%; height: 100%; padding: 10px 12px 11px;
+  background: var(--paper); color: #111; border-top: 7px solid var(--ink); font: 400 12.5px/1.45 var(--f-mono);
+  box-shadow: 4px 4px 0 -1px var(--k3), 4px 4px 0 0 var(--dim); transition: transform .12s, box-shadow .12s; }
+.ticket button:hover { transform: translate(-1px, -1px); box-shadow: 5px 5px 0 -1px var(--k3), 5px 5px 0 0 var(--dim); }
+.ticket button:focus-visible { outline: 2px solid var(--y); outline-offset: 3px; }
+.n-word { font: 800 17px/1 var(--f-head); text-transform: uppercase; letter-spacing: .04em; color: var(--y-on-paper); }
+.n-urgent .n-word { color: var(--m-on-paper); }
+.n-ref { font-weight: 700; } .n-what { font-weight: 700; }
+.n-why { color: #444; font-size: 11.5px; }
+
+/* ---------- Chips and stamps: words first, ink second ---------- */
+.chip { display: inline-block; font: 700 10.5px/17px var(--f-mono); letter-spacing: .1em; text-transform: uppercase; padding: 0 6px; border: 1.5px solid currentColor; white-space: nowrap; }
+.o-merged, .o-ready, .o-live { color: var(--c); }
+.o-failed, .o-died { color: var(--m-text); }
+.o-interrupted, .o-stopping { color: var(--y); }
+.o-skipped { color: var(--dim); }
+.sev-high { color: var(--m-text); } .sev-low { color: var(--dim); }
+/* An outcome on a column head is a rubber stamp: inked border, a slight tilt. */
+.stamp { justify-self: start; transform: rotate(-3deg); border-width: 2px; padding: 1px 6px; font-size: 10px; letter-spacing: .14em; }
+
+/* ---------- The grid on the blueprint, framed by registration marks ---------- */
+.grid-frame { position: relative; padding: 22px; border: 1px solid var(--rule);
+  background-color: var(--k);
+  background-image: linear-gradient(var(--grid) 1px, transparent 1px), linear-gradient(90deg, var(--grid) 1px, transparent 1px);
+  background-size: 24px 24px; }
+.reg { position: absolute; width: 22px; height: 22px; color: var(--dim); }
+.reg.tl { top: -11px; left: -11px; } .reg.tr { top: -11px; right: -11px; }
+.reg.bl { bottom: -11px; left: -11px; } .reg.br { bottom: -11px; right: -11px; }
+.grid-scroll { overflow-x: auto; border: 1px solid var(--rule); background: var(--k); }
+.grid-table { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; font-size: 12.5px; }
+.grid-table caption { caption-side: bottom; text-align: left; padding: 10px 12px; color: var(--dim); font-size: 11.5px; }
+.grid-table th, .grid-table td { border-bottom: 1px solid var(--rule); border-right: 1px solid var(--rule); }
+
+/* Row heads are press units: an ink tag, an ink rule, the stage in display type. Inks cycle C·M·Y·K. */
+tr.ink-c { --ink: var(--c); } tr.ink-m { --ink: var(--m); } tr.ink-y { --ink: var(--y); } tr.ink-k { --ink: var(--paper); }
+.corner, .rh { position: sticky; left: 0; z-index: 2; background: var(--k2); text-align: left; }
+.corner { padding: 10px 12px; vertical-align: bottom; }
+.rh { padding: 8px 12px 8px 14px; min-width: 168px; font-weight: 400; box-shadow: inset 4px 0 0 var(--ink); }
+.rh-stage { display: flex; align-items: center; gap: 8px; font: 800 21px/1 var(--f-head); text-transform: uppercase; letter-spacing: .02em; color: var(--paper); }
+.rh-tag { width: 12px; height: 12px; flex: none; background: var(--ink); }
+tr.ink-k .rh-tag { background: transparent; border: 2px solid var(--paper); }
+.rh-usual { display: inline-block; margin-top: 5px; padding: 1px 6px; font-size: 10.5px; letter-spacing: .04em; color: var(--y); border: 1px solid color-mix(in srgb, var(--y) 45%, transparent); background: #000; }
+
+/* Column heads: the issue in display type, the outcome stamped. Pinned columns carry a top ink rule. */
+.gh { background: var(--k2); padding: 0; vertical-align: bottom; border-top: 4px solid transparent; }
+.gh-btn { all: unset; box-sizing: border-box; cursor: pointer; display: grid; gap: 5px; padding: 8px 9px 9px; width: 100%; min-width: 100px; }
+.gh-btn:focus-visible { outline: 2px solid var(--y); outline-offset: -2px; }
+.gh-issue { font: 800 19px/1 var(--f-head); letter-spacing: .01em; color: var(--paper); }
+.gh-when { font-size: 10.5px; color: var(--dim); letter-spacing: .04em; }
+.gh-eyebrow { color: var(--c); letter-spacing: .2em; }
+.gh.pin { border-top-color: var(--c); background: color-mix(in srgb, var(--c) 8%, var(--k2)); }
+.gh.pin.ghs-died { border-top-color: var(--m); background: color-mix(in srgb, var(--m) 10%, var(--k2)); }
+.gh.pin.ghs-died .gh-eyebrow { color: var(--m-text); }
+.gh.sel, .gc.sel { box-shadow: inset 0 0 0 2px var(--y); }
+
+/* ---------- Cells: every one a state and its words ---------- */
+.gc { padding: 6px 8px; vertical-align: top; min-width: 100px; cursor: pointer; position: relative; isolation: isolate; }
+.gc:focus-visible { outline: 2px solid var(--y); outline-offset: -2px; }
+.gc-time { display: block; font: 700 13px/1.2 var(--f-mono); }
+.gc-word { display: block; font: 700 10.5px/1.35 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; }
+.gc-flag { display: inline-block; margin-top: 3px; padding: 0 5px; font: 700 10px/16px var(--f-mono); letter-spacing: .08em; text-transform: uppercase; background: var(--y); color: #000; }
+.gc-dot { display: block; font-size: 10.5px; color: var(--y); }
+.gc.empty { cursor: default; text-align: center; color: var(--rule); background: var(--k); }
+
+/* A finished stage is a printed proof: paper, dark ink. Shade deepens as it runs past the usual range. */
+.gc.done { background: var(--paper); color: #111; }
+.gc.done.l1 { background: #F1EFEA; } .gc.done.l3 { background: #DCD9D2; }
+.gc.done .gc-dot { color: var(--y-on-paper); }
+/* Past the usual range: yellow ink on black. */
+.gc.done.l4, .gc.done.l5 { background: #000; color: var(--y); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--y) 55%, transparent); }
+.gc.done.l5 { box-shadow: inset 0 0 0 2px var(--y); }
+.gc.done.l4 .gc-dot, .gc.done.l5 .gc-dot { color: var(--y); }
+
+/* Halftone screen over an ink fill (site .ht). */
+.gc.live::after, .gc.silent::after, .gc.died::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; opacity: var(--ht);
+  background: radial-gradient(circle at center, rgba(0,0,0,.85) 0 1.1px, transparent 1.6px) 0 0 / 5px 5px;
+}
+/* The lit unit: the stage a live Run is in now, solid cyan with halftone and a soft glow. */
+.gc.live { background: var(--c); color: #000; box-shadow: 0 0 16px -2px color-mix(in srgb, var(--nc) 55%, transparent); z-index: 1; }
+.gc.live .gc-time, .gc.silent .gc-time, .gc.died .gc-time { font: 800 26px/1 var(--f-head); letter-spacing: .01em; }
+/* Slow but moving: yellow ink on black, lit with a yellow glow. */
+.gc.live.slow { background: #000; color: var(--y); box-shadow: inset 0 0 0 2px var(--y), 0 0 16px -2px color-mix(in srgb, var(--ny) 45%, transparent); }
+.gc.live.slow::after { background: radial-gradient(circle at center, color-mix(in srgb, var(--y) 70%, transparent) 0 1px, transparent 1.5px) 0 0 / 5px 5px; opacity: .22; }
+/* Silent (may be stuck) and died: magenta. Black ink on magenta keeps small text readable. */
+.gc.silent { background: var(--m); color: #000; box-shadow: 0 0 16px -2px color-mix(in srgb, var(--nm) 55%, transparent); z-index: 1; }
+.gc.died { background: var(--m); color: #000; }
+/* The current stage of an ended Run that failed: a magenta-ruled misprint on black. */
+.gc.failed { background: #000; color: var(--m-text); box-shadow: inset 0 0 0 2px var(--m); }
+.gc.interrupted { background: #000; color: var(--y); box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--y) 60%, transparent); }
+.gc.failed .gc-flag { background: var(--m); color: #000; }
+/* Pinned columns keep a cyan rule down their height. */
+td.pin { border-left: 1px solid color-mix(in srgb, var(--c) 45%, var(--rule)); border-right: 1px solid color-mix(in srgb, var(--c) 45%, var(--rule)); }
+.grid-table .hl:not(.live):not(.silent):not(.died) { background-image: linear-gradient(rgba(0,174,239,.10), rgba(0,174,239,.10)); }
+.rh.hl { background: color-mix(in srgb, var(--ink) 16%, var(--k2)); }
+
+/* ---------- Phone: one card per Run ---------- */
+.gcards { display: none; gap: 14px; }
+.gcard { border: 1px solid var(--rule); border-top: 4px solid var(--dim); background: var(--k2); overflow: hidden; }
+.gcard.pin { border-top-color: var(--c); }
+.gcard.sel { outline: 2px solid var(--y); outline-offset: 2px; }
+.gcard-head { all: unset; box-sizing: border-box; cursor: pointer; display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; width: 100%; padding: 10px 12px; min-height: 44px; }
+.gcard-head .gh-when { margin-left: auto; }
+.gcard-title { margin: 0 12px 6px; font-size: 12.5px; color: var(--dim); }
+.gcard ul { list-style: none; margin: 0; padding: 0; }
+.gcard li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 10px; padding: 7px 12px; border-top: 1px solid var(--rule); min-width: 0; cursor: default; }
+.gcard li .gcard-stage { font: 800 17px/1.1 var(--f-head); text-transform: uppercase; }
+.gcard li .gc-time { grid-column: 2; grid-row: 1; text-align: right; }
+.gcard li .gc-word, .gcard li .gc-flag, .gcard li .gc-dot { grid-column: 2; justify-self: end; }
+.gcard li.live .gc-time, .gcard li.silent .gc-time, .gcard li.died .gc-time { font-size: 20px; }
+.gcard-usual { grid-column: 1; font-size: 10.5px; opacity: .8; }
+
+/* ---------- The Run: a paper proof over a press terminal ---------- */
+.sec-run { margin-top: 10px; }
+.proof { position: relative; background: var(--paper); color: #111; padding: 22px 24px 18px; transform: rotate(-.25deg);
+  border-top: 10px solid var(--c); box-shadow: 0 24px 48px -20px rgba(0,0,0,.9), 0 0 0 1px rgba(255,255,255,.05); }
+.proof a { color: var(--c-on-paper); }
+.proof .muted, .proof .kind { color: #555; }
+.proof h3 { color: #0b0b0b; }
+.proof code { background: rgba(0,0,0,.07); padding: 0 4px; overflow-wrap: anywhere; }
+.proof .chip.o-merged, .proof .chip.o-ready, .proof .chip.o-live { color: var(--c-on-paper); }
+.proof .chip.o-failed, .proof .chip.o-died { color: var(--m-on-paper); }
+.proof .chip.o-interrupted, .proof .chip.o-stopping { color: var(--y-on-paper); }
+.proof .chip.o-skipped { color: #555; }
+.crop { position: absolute; width: 18px; height: 18px; border-color: #777; border-style: solid; border-width: 0; }
+.crop.tl { top: 6px; left: 6px; border-right-width: 1px; border-bottom-width: 1px; }
+.crop.tr { top: 6px; right: 6px; border-left-width: 1px; border-bottom-width: 1px; }
+.crop.bl { bottom: 6px; left: 6px; border-right-width: 1px; border-top-width: 1px; }
+.crop.br { bottom: 6px; right: 6px; border-left-width: 1px; border-top-width: 1px; }
+.run-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
+.kind { margin: 0 0 6px; }
+.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 5px 16px; margin: 14px 0; font-size: 12.5px; }
+.facts dt { color: #555; text-transform: uppercase; letter-spacing: .08em; font-size: 10.5px; padding-top: 2px; }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.proof .h-silent { color: var(--m-on-paper); font-weight: 700; }
+.proof .h-slow { color: var(--y-on-paper); font-weight: 700; }
+.proof .h-ok { color: var(--c-on-paper); }
+.proof .hb { opacity: 1; color: #444; }
+.links { display: flex; flex-wrap: wrap; gap: 8px; }
+.lk { cursor: pointer; padding: 6px 10px; border: 1.5px solid #111; background: transparent; color: #111; font: 700 11px/1.2 var(--f-mono); letter-spacing: .08em; text-transform: uppercase; min-height: 34px; }
+.lk:hover { background: rgba(0,0,0,.06); }
+.lk[aria-pressed="true"] { background: #111; color: var(--paper); }
+
+/* Stop: outlined magenta. The confirm is an install block on the proof, with a yellow primary button. */
+.btn-stop { cursor: pointer; padding: 7px 14px; border: 2px solid var(--m); color: var(--m-on-paper); background: transparent; font: 700 12px/1 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; min-height: 38px; }
+.btn-stop:hover { background: color-mix(in srgb, var(--m) 12%, transparent); }
+.confirm { margin: 14px 0 4px; padding: 12px 14px; border: 1.5px solid #000; background: #F4F2EE; font-size: 12.5px; }
+.confirm p { margin: 0 0 6px; }
+.confirm .stop-effects { color: #333; }
+.confirm-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 8px; }
+.confirm-actions button { cursor: pointer; padding: 0 14px; min-height: 38px; border: 1.5px solid #000; background: transparent; color: #111; font: 700 11.5px/1 var(--f-mono); letter-spacing: .1em; text-transform: uppercase; }
+.confirm-actions .btn-stop.solid { background: var(--y); color: #000; border-color: #000; }
+.confirm-actions .btn-stop.solid:hover { background: var(--ny); }
+.hint { margin: 0; font-size: 11.5px; color: #444; overflow-wrap: anywhere; }
+
+/* The log: a black press terminal under the proof. */
+.log-box { margin-top: 22px; }
+.log-box > .muted { margin: 0; }
+.press-term { display: grid; border: 1px solid var(--rule); background: #000; }
+.term-bar { display: flex; justify-content: space-between; gap: 12px; padding: 7px 12px; border-bottom: 1px solid var(--rule); font-size: 11px; letter-spacing: .06em; color: var(--dim); }
+.term-bar .file { overflow-wrap: anywhere; letter-spacing: 0; }
+.on-air { color: var(--m-text); font-weight: 700; white-space: nowrap; }
+.log-body, .cmdlog { max-height: 55vh; overflow: auto; padding: 12px; margin: 0; }
+.cmdlog { font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--paper); }
+
+/* Session log entries as terminal lines. */
+.press-term .sl-bar { margin: 0; padding: 8px 12px; border-bottom: 1px solid var(--rule); gap: 8px; font-size: 11.5px; }
+.press-term .sl-bar input { border: 1px solid var(--rule); border-radius: 0; background: var(--k2); color: var(--paper); padding: 6px 8px; opacity: 1; }
+.press-term .sl-bar input::placeholder { color: var(--dim); }
+.press-term .sl-modes button { border: 1px solid var(--rule); color: var(--dim); opacity: 1; text-transform: uppercase; letter-spacing: .08em; font-size: 10.5px; padding: 5px 8px; }
+.press-term .sl-modes button[aria-pressed="true"] { background: var(--paper); color: #000; border-color: var(--paper); }
+.press-term .sl-dl { color: var(--c); text-transform: uppercase; letter-spacing: .08em; font-size: 10.5px; }
+.press-term .sl-matches { color: var(--dim); }
+.press-term .sl-raw { font-size: 11.5px; color: var(--dim); }
+.press-term .sl-raw code { color: var(--paper); }
+.press-term .sl-ln { color: var(--dim); }
+.press-term .sl-raw li:target { background: color-mix(in srgb, var(--m) 30%, transparent); }
+.press-term .sl-new { border-radius: 0; background: var(--y); color: #000; font: 700 11px/1 var(--f-mono); letter-spacing: .1em; text-transform: uppercase; }
+.sl { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; font-size: 12.5px; color: var(--paper); }
+.sl-text { white-space: pre-wrap; }
+.sl-sys, .sl-usage { font-size: 11.5px; color: var(--dim); }
+.sl-sys::before { content: "thirdshift: "; color: color-mix(in srgb, var(--dim) 70%, transparent); }
+.sl-think summary { cursor: pointer; color: var(--dim); font-style: italic; }
+.sl-think p { margin: 4px 0 0 14px; color: var(--dim); }
+.sl-group > details { border: 1px solid var(--rule); }
+.sl-group > details > summary { cursor: pointer; padding: 4px 8px; font-size: 11.5px; background: var(--k2); }
+.sl-group.sl-failed > details { border-color: var(--m); }
+.sl-count { font-weight: 700; } .sl-names { color: var(--dim); }
+.sl-calls { list-style: none; margin: 0; padding: 4px 8px 6px; display: grid; gap: 2px; }
+.sl-call summary { cursor: pointer; font-size: 11.5px; overflow-wrap: anywhere; }
+.sl-tool { font-weight: 700; display: inline-block; min-width: 40px; color: var(--c); text-transform: uppercase; font-size: 10.5px; letter-spacing: .08em; }
+.sl-arg { font-size: 11.5px; } .sl-meta { color: var(--dim); font-size: 11px; }
+.sl-plus { color: var(--c); } .sl-minus { color: var(--m-text); }
+.sl-st { font-size: 10.5px; margin-left: 6px; text-transform: uppercase; letter-spacing: .06em; }
+.sl-ok { color: var(--c); } .sl-err { color: var(--m-text); font-weight: 700; } .sl-run { color: var(--y); }
+.sl-out, .sl-diff { margin: 4px 0 6px 18px; padding: 6px 8px; background: var(--k2); border-left: 2px solid var(--rule); font-size: 11.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.sl-diff span { display: block; } .sl-add { color: var(--c); } .sl-del { color: var(--m-text); }
+.sl-empty { color: var(--dim); margin: 0; }
+
+/* ---------- History: stderr lines ---------- */
+.hist { list-style: none; margin: 0; padding: 0; border: 1px solid var(--rule); background: #000; font-size: 12.5px; }
+.hist-item + .hist-item { border-top: 1px solid var(--rule); }
+.hist-head { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: baseline; padding: 9px 12px; min-height: 40px; }
+.hist-when { font-size: 11px; color: var(--dim); min-width: 96px; }
+.hist-when::before { content: "thirdshift: "; color: color-mix(in srgb, var(--dim) 65%, transparent); }
+.hist-head .kind { margin: 0; }
+.hist-subj { min-width: 0; overflow-wrap: anywhere; }
+.hist-body { padding: 0 12px 12px 34px; color: var(--dim); }
+.hist-body p { margin: 0 0 4px; }
+.hist-body .lk { border-color: var(--dim); color: var(--paper); margin-top: 6px; }
+.hist-body .lk[aria-pressed="true"] { background: var(--paper); color: #000; }
+.hist-kids { margin: 4px 0 6px; padding-left: 1.1em; display: grid; gap: 3px; color: var(--paper); }
+.hist-sub { margin-top: 8px !important; }
+.hist-item.o-failed .hist-head { box-shadow: inset 3px 0 0 var(--m); }
+.hist-item.o-ready .hist-head, .hist-item.o-merged .hist-head { box-shadow: inset 3px 0 0 var(--c); }
+.hist-item.o-interrupted .hist-head { box-shadow: inset 3px 0 0 var(--y); }
+/* A history row is a plain line, not inked text: only its chip and rule carry the ink. */
+.hist-item { color: var(--paper); }
+
+/* ---------- Sign-in: a paper sheet ---------- */
+.signin { min-height: 80vh; display: grid; place-items: center; }
+.signin form { display: grid; gap: 12px; width: min(340px, 100%); padding: 26px; background: var(--paper); color: #111; transform: rotate(-.4deg);
+  box-shadow: 0 24px 48px -20px rgba(0,0,0,.9); border-top: 10px solid var(--c); }
+.signin .slug { color: #555; }
+.si-host { margin: 0; font: 800 46px/.95 var(--f-head); color: #0b0b0b; }
+.signin label { display: grid; gap: 5px; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: #555; }
+.signin input { font: 14px var(--f-mono); padding: 10px 12px; border: 1.5px solid #000; background: #fff; color: #111; text-transform: none; letter-spacing: 0; }
+.signin button { cursor: pointer; padding: 12px; border: 1.5px solid #000; background: var(--y); color: #000; font: 700 12px/1 var(--f-mono); letter-spacing: .14em; text-transform: uppercase; }
+.signin button:hover { background: var(--ny); }
+
+/* ---------- Phone ---------- */
+@media (max-width: 640px) {
+  .grid-frame { display: none; }
+  .gcards { display: grid; }
+  .proof { padding: 18px 16px 14px; transform: none; }
+  .facts { grid-template-columns: minmax(0, 1fr); gap: 0; }
+  .facts dd { margin-bottom: 7px; }
+  .run-head { flex-wrap: wrap; }
+  .hist-body { padding-left: 12px; }
+  .host { font-size: 64px; }
+}
+
+/* ---------- Motion ---------- */
+@media (prefers-reduced-motion: no-preference) {
+  /* Opening the grid prints it column by column, live columns first. */
+  .proto-reveal .gc, .proto-reveal .gh { animation: gp-in .32s ease-out both; animation-delay: calc(var(--c, 0) * 28ms); }
+  .proto-reveal .gcard { animation: gp-in .32s ease-out both; }
+  @keyframes gp-in { from { opacity: 0; transform: translateY(4px); } }
+  /* The lit cell's halftone drifts: time is still being added to it. */
+  .gc.live::after { animation: gp-screen 3s linear infinite; }
+  @keyframes gp-screen { to { background-position: 10px 5px; } }
+  /* The silent cell pulses a magenta glow: nothing has been logged, so it may be stuck. */
+  .gc.silent { animation: gp-pulse 2s ease-in-out infinite; }
+  @keyframes gp-pulse { 50% { box-shadow: 0 0 28px 2px color-mix(in srgb, var(--nm) 70%, transparent); } }
+  /* A live log blinks a block cursor after its newest entry. */
+  .press-term.is-live .sl > li:last-child::after { content: ""; display: inline-block; width: .6em; height: 1.05em; margin-left: .35em; vertical-align: -.2em; background: var(--paper); animation: gp-blink 1s steps(1) infinite; }
+  @keyframes gp-blink { 50% { opacity: 0; } }
+  .ticket.n-urgent button { animation: gp-ticket .5s cubic-bezier(.2, .7, .3, 1) both; }
+  @keyframes gp-ticket { from { transform: translateY(-8px); opacity: 0; } }
+  .gh-btn, .gc, .lk { transition: background-color .15s; }
+}
