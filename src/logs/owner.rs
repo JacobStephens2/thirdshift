@@ -46,12 +46,7 @@ impl Owner {
     }
 
     pub fn session_path(&self, dir: &Path, subject: &str, kind: &str) -> PathBuf {
-        let token = self
-            .token
-            .as_ref()
-            .map(|token| format!("~{token}"))
-            .unwrap_or_default();
-        dir.join(format!("{subject}-{}{token}-{kind}.jsonl", self.stamp))
+        dir.join(format!("{subject}-{}-{kind}.jsonl", self.identity()))
     }
 
     pub fn models_match(&self, path: &Path) -> bool {
@@ -195,6 +190,16 @@ pub(super) struct Identity<'a> {
     pub token: Option<&'a str>,
 }
 
+impl std::fmt::Display for Identity<'_> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.stamp)?;
+        if let Some(token) = self.token {
+            write!(formatter, "~{token}")?;
+        }
+        Ok(())
+    }
+}
+
 pub(super) struct Decoded<'a> {
     pub subject: &'a str,
     pub identity: Identity<'a>,
@@ -211,12 +216,7 @@ impl Decoded<'_> {
             "" | "architect" | "secure" => String::new(),
             subject => format!("{subject}-"),
         };
-        let token = self
-            .identity
-            .token
-            .map(|token| format!("~{token}"))
-            .unwrap_or_default();
-        path.with_file_name(format!("{subject}{}{token}.log", self.identity.stamp))
+        path.with_file_name(format!("{subject}{}.log", self.identity))
     }
 }
 
