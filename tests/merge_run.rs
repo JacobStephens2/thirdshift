@@ -124,6 +124,32 @@ fn a_merged_pr_with_local_work_left_out_still_fails_and_retains_that_work() {
     }
 }
 
+#[test]
+fn externally_merged_pr_retains_tracked_changes_hidden_by_index_flags() {
+    for flag in ["assume-unchanged", "skip-worktree"] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}\
+             git push -q origin HEAD\n\
+             gh pr merge 1 --merge --match-head-commit \"$(git rev-parse HEAD)\"\n\
+             git push -q origin --delete issue-7\n\
+             git update-index --{flag} feature.txt\n\
+             echo leftover >> feature.txt\n"
+        ));
+
+        let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "{flag}: {}", result.stderr);
+        let worktree = scenario.launch_dir().with_file_name("widgets-issue-7");
+        assert!(
+            std::fs::read_to_string(worktree.join("feature.txt"))
+                .unwrap()
+                .contains("leftover")
+        );
+        assert_eq!(scenario.origin_log("issue-7"), None);
+    }
+}
+
 /// Launch from `develop`, a branch other than the default, and have the agent
 /// open its PR into it, then run `then`.
 fn merge_into_develop(scenario: &Scenario, then: &str) {
