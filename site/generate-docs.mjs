@@ -31,7 +31,7 @@ const page = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Documentation · thirdshift</title>
+<title>thirdshift documentation · Install, configure and run coding agents</title>
 <meta name="description" content="The thirdshift user manual: installation, commands, configuration, workflows, logs and scheduling.">
 <link rel="canonical" href="https://thirdshift.app/docs/">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">

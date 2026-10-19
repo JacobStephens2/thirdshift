@@ -35,6 +35,76 @@ async function pageForTest(t, options) {
   return page;
 }
 
+test("every public page identifies its canonical URL and purpose without JavaScript", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  const titles = new Set();
+  const descriptions = new Set();
+  for (const path of ["/", "/docs/", "/how-it-works/", "/prompts/"]) {
+    assert.equal((await page.goto(`${origin}${path}`)).status(), 200);
+    assert.equal(await page.locator('link[rel="canonical"]').count(), 1, path);
+    assert.equal(await page.locator('link[rel="canonical"]').getAttribute("href"), `https://thirdshift.app${path}`);
+    const title = await page.title();
+    const description = await page.locator('meta[name="description"]').getAttribute("content");
+    assert.match(title, /thirdshift/);
+    assert.ok(description.length > 50, path);
+    titles.add(title);
+    descriptions.add(description);
+    assert.equal(await page.locator("h1").count(), 1, path);
+    assert.ok((await page.locator("body").textContent()).includes("GitHub"), path);
+  }
+  assert.equal(titles.size, 4, "page titles distinguish the four search results");
+  assert.equal(descriptions.size, 4, "each page has its own search description");
+  await page.goto(`${origin}/`);
+  assert.match(await page.title(), /GitHub issues.*pull requests/);
+});
+
+test("robots advertises a valid sitemap of reachable canonical pages", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  const robots = await page.request.get(`${origin}/robots.txt`);
+  assert.equal(robots.status(), 200);
+  assert.match(await robots.text(), /^Allow: \/$/m);
+  assert.match(await robots.text(), /^Sitemap: https:\/\/thirdshift\.app\/sitemap\.xml$/m);
+  const sitemap = await page.request.get(`${origin}/sitemap.xml`);
+  assert.equal(sitemap.status(), 200);
+  const urls = await page.evaluate(xml => {
+    const document = new DOMParser().parseFromString(xml, "application/xml");
+    if (document.querySelector("parsererror")) throw new Error("Invalid sitemap XML");
+    if (document.documentElement.namespaceURI !== "http://www.sitemaps.org/schemas/sitemap/0.9") {
+      throw new Error("Missing sitemap namespace");
+    }
+    return [...document.querySelectorAll("urlset > url > loc")].map(node => node.textContent);
+  }, await sitemap.text());
+  assert.deepEqual(urls.sort(), [
+    "https://thirdshift.app/",
+    "https://thirdshift.app/docs/",
+    "https://thirdshift.app/how-it-works/",
+    "https://thirdshift.app/prompts/",
+  ]);
+  for (const url of urls) {
+    assert.equal((await page.goto(`${origin}${new URL(url).pathname}`)).status(), 200, url);
+    assert.equal(await page.locator('link[rel="canonical"]').getAttribute("href"), url);
+  }
+});
+
+test("the homepage declares the site name as static structured data", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  await page.goto(`${origin}/`);
+  assert.equal(await page.locator('script[type="application/ld+json"]').count(), 1);
+  const site = JSON.parse(await page.locator('script[type="application/ld+json"]').textContent());
+  assert.equal(site["@context"], "https://schema.org");
+  assert.equal(site["@type"], "WebSite");
+  assert.equal(site.name, "thirdshift");
+  assert.equal(site.url, "https://thirdshift.app/");
+  assert.equal(site.url, await page.locator('link[rel="canonical"]').getAttribute("href"));
+  assert.equal(site.name, await page.locator('meta[property="og:site_name"]').getAttribute("content"));
+  assert.equal(await page.locator('meta[property="og:title"]').getAttribute("content"), await page.title());
+  assert.equal(await page.locator('meta[name="twitter:title"]').getAttribute("content"), await page.title());
+  for (const selector of ['meta[property="og:description"]', 'meta[name="twitter:description"]']) {
+    assert.equal(await page.locator(selector).getAttribute("content"),
+      await page.locator('meta[name="description"]').getAttribute("content"));
+  }
+});
+
 test("the homepage links to the shared Markdown manual without JavaScript", async (t) => {
   const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width: 320, height: 900 } });
   await page.goto(`${origin}/`);
