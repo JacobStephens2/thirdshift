@@ -90,6 +90,12 @@ pub(in crate::logs) struct InboxItem<'a> {
     pub collapsed: Vec<InboxItem<'a>>,
 }
 
+impl InboxItem<'_> {
+    pub(in crate::logs) fn cause(&self) -> Option<&str> {
+        self.command.facts().cause
+    }
+}
+
 struct Facts<'a> {
     state: &'a str,
     started_at: &'a str,
@@ -134,7 +140,9 @@ pub(super) fn list(
     all: bool,
     days: i64,
 ) -> Vec<InboxItem<'_>> {
-    let cutoff = now - chrono::Duration::days(days);
+    // An accepted duration can exceed chrono's calendar. In that case every
+    // representable timestamp is inside the requested retention period.
+    let cutoff = now.checked_sub_signed(chrono::Duration::days(days));
     let starts: Vec<_> = entries.iter().map(issue_starts).collect();
     let mut latest = BTreeMap::new();
     for starts in &starts {
@@ -174,7 +182,7 @@ pub(super) fn list(
             problem.filter(|_| {
                 ended
                     .or_else(|| time(Some(facts.started_at)))
-                    .is_some_and(|time| time >= cutoff)
+                    .is_some_and(|time| cutoff.is_none_or(|cutoff| time >= cutoff))
                     && !starts.iter().any(|(issue, start)| {
                         latest.get(issue).is_some_and(|latest| latest > start)
                     })
@@ -190,7 +198,7 @@ pub(super) fn list(
             Group::Working
         } else if ended.is_some_and(|time| time >= now - chrono::Duration::days(1)) {
             Group::Done
-        } else if ended.is_some_and(|time| time >= cutoff) {
+        } else if ended.is_some_and(|time| cutoff.is_none_or(|cutoff| time >= cutoff)) {
             Group::Resolved
         } else {
             Group::History

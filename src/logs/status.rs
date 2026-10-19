@@ -22,7 +22,7 @@ struct Status<'a> {
 fn print_command(command: &Command, indent: &str) {
     let facts = &command.record;
     let stage = stage_text(command);
-    let subject = match &facts.issue {
+    let mut subject = match &facts.issue {
         Some(issue) => format!(
             "{}#{} {}",
             facts.repository,
@@ -31,6 +31,9 @@ fn print_command(command: &Command, indent: &str) {
         ),
         None => format!("{} on {}", facts.name, facts.repository),
     };
+    if let Some(pull_request) = &facts.pull_request {
+        subject.push_str(&format!(" · {pull_request}"));
+    }
     println!(
         "{indent}{} · {} {subject} · {} · {} · {} · {stage}",
         command.state,
@@ -108,16 +111,7 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                     Entry::History(command) => print_history(command),
                 }
                 if item.count > 1 {
-                    let cause = match item.command {
-                        Entry::Record(command) => {
-                            command.record.cause.as_deref().unwrap_or_default()
-                        }
-                        Entry::History(command) => command
-                            .outcome
-                            .as_deref()
-                            .unwrap_or_default()
-                            .trim_start_matches("failed: "),
-                    };
+                    let cause = item.cause().unwrap_or_default();
                     println!("  {} Commands with this cause: {cause}", item.count);
                 }
             }

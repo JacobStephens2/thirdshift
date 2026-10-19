@@ -302,6 +302,12 @@ fn inbox_groups_ended_commands_and_adds_only_old_history_with_all() {
         assert_eq!(status["commands"][0]["needs_you_kind"], "failed");
     }
     let text = scenario.run(&["status", "--all"]);
+    assert!(
+        text.stdout
+            .contains("https://github.com/acme/widgets/pull/8"),
+        "{}",
+        text.stdout
+    );
     let headings: Vec<_> = text
         .stdout
         .lines()
@@ -567,6 +573,16 @@ fn inbox_collapses_only_failures_with_the_same_known_cause_and_keeps_their_comma
         "{}",
         text.stdout
     );
+}
+
+#[test]
+fn inbox_accepts_a_retention_period_beyond_the_representable_calendar() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[inbox]\ndays = 1000000000\n");
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(status["commands"], serde_json::json!([]));
 }
 
 #[test]
