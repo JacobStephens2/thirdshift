@@ -59,6 +59,9 @@ test("a live Session appends without redraw, folds across batches, resumes offse
   await page.goto(`${origin}/logs`);
   assert.equal(await page.locator(".log-list strong").count(), 2);
   await page.getByRole("link", { name: /Session log/ }).click();
+  await page.getByRole('link', { name: 'Command details', exact: true }).click();
+  await page.getByRole('button', { name: 'Stop', exact: true }).waitFor();
+  await page.getByRole('button', { name: 'Close details (Esc)', exact: true }).click();
   const initial = await page.locator("#log-content .message").first().elementHandle();
   await page.locator(".tool-group").evaluate(node => { node.open = true; });
   await appendFile(log, tool("second tool"));

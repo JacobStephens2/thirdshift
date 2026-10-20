@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="en" data-theme="{{ theme }}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Stop · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/stop.js" type="module"></script></head>
+<body><header><p class="brand">thirdshift / Console</p></header>{% include "console/nav.html" %}
+<main id="stop-state" aria-live="polite">
+  <h1>{{ details.command }}</h1>
+  {% if details.can_stop %}
+  <h2>Stop this Command?</h2>
+  <p>Its issue will be labelled <code>needs-triage</code> for the Day shift. Requeue instead puts it back in line with <code>ready-for-agent</code>.</p>
+  <form method="post" action="/stop">
+    <input type="hidden" name="command" value="{{ details.command }}">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
+    <input type="hidden" name="confirmed" value="yes">
+    <button name="ending" value="triage">Confirm Stop</button> <code>{{ details.stop_cli }}</code>
+    <button name="ending" value="requeue">Requeue instead</button> <code>{{ details.stop_cli }} --requeue</code>
+    <a href="/">Cancel</a>
+  </form>
+  {% endif %}
+  {{ details|safe }}
+</main></body></html>

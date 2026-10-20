@@ -45,6 +45,7 @@ pub enum Command {
     Stop {
         command: String,
         requeue: bool,
+        json: bool,
     },
     Logs {
         command: String,
@@ -300,19 +301,26 @@ pub fn parse(args: &[String]) -> Result<Command> {
             };
         }
         Some("stop") => {
-            return match &args[1..] {
-                [command] if !command.starts_with('-') => Ok(Command::Stop {
-                    command: command.clone(),
-                    requeue: false,
-                }),
-                [command, flag] if flag == "--requeue" && !command.starts_with('-') => {
-                    Ok(Command::Stop {
-                        command: command.clone(),
-                        requeue: true,
-                    })
-                }
-                _ => bail!("usage: thirdshift stop <command> [--requeue]"),
+            let usage = "usage: thirdshift stop <command> [--requeue] [--json]";
+            let Some((command, options)) = args[1..].split_first() else {
+                bail!(usage)
             };
+            if command.starts_with('-') {
+                bail!(usage);
+            }
+            let (mut requeue, mut json) = (false, false);
+            for option in options {
+                match option.as_str() {
+                    "--requeue" if !requeue => requeue = true,
+                    "--json" if !json => json = true,
+                    _ => bail!(usage),
+                }
+            }
+            return Ok(Command::Stop {
+                command: command.clone(),
+                requeue,
+                json,
+            });
         }
         Some("show") => {
             return match &args[1..] {

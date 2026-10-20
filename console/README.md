@@ -147,6 +147,23 @@ The Follow newest line checkbox lets you read back while the Session grows.
 The Playwright log test checks appends, retained DOM identity, folding across
 batches, incomplete lines, reconnection and following on a phone viewport.
 
+A live Command's Details offers Stop beside its equivalent CLI command.
+The confirmation page explains `needs-triage`, offers Requeue instead
+(`thirdshift stop --requeue`), and requires the current account's CSRF token.
+Both actions use the CLI's Stop, including its process identity checks and
+refusal to stop a single Ticket's Run. The Activity log names the Console
+and the signed-in email; localhost mode records `localhost (no sign-in)`.
+The page shows “still ending” and a stopping bar until cleanup records the
+outcome, then lists the branches and pull requests left on `origin`.
+It updates through `/events`, with polling if the stream disconnects.
+The stopping bar respects reduced motion. HTTP tests use real Commands
+with a waiting fake Harness and fake GitHub; Playwright checks confirmation,
+cancellation, live controls and pushed completion on a phone.
+`thirdshift stop <command> [--requeue] --json` waits quietly and returns the
+outcome, `issue_branches` and `pull_requests` as one JSON object.
+On Linux after a build, `python3 console/reproductions/session-stop.py` checks that
+a live Session reader's Details link reaches its exact Command's Stop.
+
 Claude Edit events include old/new text and show unified diff excerpts. Codex
 `file_change` events retain only file paths and change kinds, so the reader
 shows their plain fallback and says the patch is unavailable. The Spec-review

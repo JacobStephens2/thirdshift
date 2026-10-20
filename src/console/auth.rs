@@ -38,7 +38,7 @@ impl Access {
 pub(super) struct Viewer {
     pub email: String,
     token: Option<String>,
-    csrf: String,
+    pub(super) csrf: String,
 }
 
 impl Viewer {

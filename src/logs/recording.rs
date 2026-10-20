@@ -271,7 +271,11 @@ impl<O: Outside> Record<O> {
             if let Some(request) = self.stop_request() {
                 self.activity_write(
                     &root,
-                    &format!("{subject} stopped from the CLI by {}", request.who),
+                    &format!(
+                        "{subject} stopped from the {} by {}",
+                        request.source(),
+                        request.who
+                    ),
                     None,
                 );
             }

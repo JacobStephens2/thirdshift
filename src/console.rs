@@ -10,6 +10,7 @@ mod live;
 mod logs;
 mod peek;
 mod restart;
+mod stop;
 mod time;
 mod waterfall;
 
@@ -54,12 +55,36 @@ enum View {
     SignOut,
     SignInPage,
     SignIn,
+    StopPage,
+    Stop,
     SetPasswordPage,
     SendCode,
     SetPassword,
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/stop",
+        cli: &[
+            "thirdshift stop widgets#7",
+            "thirdshift stop widgets#7 --requeue",
+            "thirdshift stop widgets#7 --json",
+            "thirdshift stop widgets#7 --requeue --json",
+        ],
+        method: Method::GET,
+        view: View::StopPage,
+    },
+    PageRoute {
+        path: "/stop",
+        cli: &[
+            "thirdshift stop widgets#7",
+            "thirdshift stop widgets#7 --requeue",
+            "thirdshift stop widgets#7 --json",
+            "thirdshift stop widgets#7 --requeue --json",
+        ],
+        method: Method::POST,
+        view: View::Stop,
+    },
     PageRoute {
         path: "/set-password",
         cli: &["thirdshift console password"],
@@ -269,6 +294,8 @@ fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Route
             (View::SignOut, Method::POST) => post(auth::sign_out),
             (View::SignInPage, Method::GET) => get(auth::sign_in_page),
             (View::SignIn, Method::POST) => post(auth::sign_in),
+            (View::StopPage, Method::GET) => get(stop::show),
+            (View::Stop, Method::POST) => post(stop::submit),
             (View::SetPasswordPage, Method::GET) => get(auth::set_password_page),
             (View::SendCode, Method::POST) => post(auth::code),
             (View::SetPassword, Method::POST) => post(auth::set_password),
@@ -404,7 +431,7 @@ async fn inspect(RawQuery(query): RawQuery) -> Response {
     let command = query_value(&query, "command");
     match tokio::task::spawn_blocking(move || -> Result<String> {
         let config = UserConfig::load()?;
-        let details = status::inspect::details(&config, &command)?;
+        let details = crate::logs::stop::inspect(&config, &command)?;
         Ok(peek::Peek::new(command, details).render()?)
     })
     .await
@@ -527,9 +554,13 @@ mod tests {
                 .route("/known", post(|| async {}))
                 .with_state(changes),
         );
-        // Each unique path has one fallback; merging GET and POST at sign-in
-        // and set-password adds only the POST services, not more fallbacks.
-        let fallback = 1;
+        // Each unique path has one fallback; merged methods share it.
+        let unique_paths = super::PAGES
+            .iter()
+            .map(|page| page.path)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        let shared_fallbacks = super::PAGES.len() - unique_paths;
         let expected = super::PAGES
             .iter()
             .map(|page| {
@@ -541,7 +572,7 @@ mod tests {
             })
             .sum::<usize>()
             + get_methods
-            - 2 * fallback;
+            - shared_fallbacks;
         assert_eq!(
             registered_methods(router),
             expected,

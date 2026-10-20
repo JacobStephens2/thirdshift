@@ -11,6 +11,9 @@ const PASSWORD: &str = "correct horse battery staple";
 #[path = "password_codes.rs"]
 mod password_codes;
 
+#[path = "stop.rs"]
+mod stop;
+
 fn configured() -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
