@@ -41,29 +41,26 @@ impl Kind {
         }
     }
 
-    /// The kind `token` names, if any.
+    /// The kind `token` names, if any. A numbered kind's number is read as
+    /// `--session repair` has always read a Repair's.
     fn read(token: &str) -> Option<Self> {
+        const UNNUMBERED: [Kind; 6] = [
+            Kind::Implementation,
+            Kind::SpecReview,
+            Kind::SecurityReview,
+            Kind::ArchitectureReview,
+            Kind::SecurityAudit,
+            Kind::SecurityFixPublishing,
+        ];
         let numbered = |prefix: &str| {
-            token
-                .strip_prefix(prefix)
-                .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
-                .and_then(|n| n.parse().ok())
+            let n = token.strip_prefix(prefix)?.parse::<u32>().ok()?;
+            Some(n as usize)
         };
-        Some(match token {
-            "implement" => Self::Implementation,
-            "spec-review" => Self::SpecReview,
-            "security-review" => Self::SecurityReview,
-            "architecture-review" => Self::ArchitectureReview,
-            "security-audit" => Self::SecurityAudit,
-            "security-fix-publishing" => Self::SecurityFixPublishing,
-            _ => {
-                if let Some(n) = numbered("repair-") {
-                    Self::Repair(n)
-                } else {
-                    Self::SecurityReproduction(numbered("security-reproduction-")?)
-                }
-            }
-        })
+        UNNUMBERED
+            .into_iter()
+            .find(|kind| kind.token() == token)
+            .or_else(|| numbered("repair-").map(Kind::Repair))
+            .or_else(|| numbered("security-reproduction-").map(Kind::SecurityReproduction))
     }
 }
 
@@ -129,14 +126,22 @@ impl Logged {
 }
 
 /// Whether `thirdshift logs --session <word>` selects the Session log whose
-/// token is `token`: one whose token is `word`, whose kind is `word`, Resume
-/// or not, or, for `repair`, any numbered Repair or its Resume.
+/// token is `token`: one whose token is `word`, or `word` with `-resume`,
+/// or, for `repair`, any numbered Repair or its Resume. A token no kind
+/// reads, as older thirdshift versions may have written, is still selected
+/// by the first two rules.
 pub fn selects(word: &str, token: &str) -> bool {
+    let resumed = token.strip_suffix("-resume").unwrap_or(token);
     token == word
-        || Logged::read(token).is_some_and(|logged| {
-            logged.kind.token() == word
-                || (word == "repair" && matches!(logged.kind, Kind::Repair(_)))
-        })
+        || resumed == word
+        || (word == "repair"
+            && matches!(
+                Logged::read(token),
+                Some(Logged {
+                    kind: Kind::Repair(_),
+                    ..
+                })
+            ))
 }
 
 #[cfg(test)]
@@ -171,7 +176,7 @@ mod tests {
         for token in [
             "repair-",
             "repair-x",
-            "repair-+1",
+            "repair-4294967296",
             "repair--resume",
             "security-reproduction-",
             "security-reproduction-x",
@@ -236,11 +241,20 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_token_is_selected_only_by_itself() {
+    fn repair_selects_the_numbers_it_has_always_read_and_no_others() {
+        assert!(selects("repair", "repair-+1"));
+        assert!(selects("repair", "repair-01-resume"));
+        assert!(!selects("repair", "repair-4294967296"));
+        assert!(!selects("repair-1", "repair-01"));
+    }
+
+    #[test]
+    fn an_unreadable_token_is_selected_by_itself_or_without_its_resume() {
         assert!(selects("review", "review"));
         assert!(selects("repair-x", "repair-x"));
         assert!(!selects("repair", "repair-x"));
         assert!(selects("legacy-resume", "legacy-resume"));
-        assert!(!selects("legacy", "legacy-resume"));
+        assert!(selects("legacy", "legacy-resume"));
+        assert!(!selects("legacy", "legacy-other"));
     }
 }

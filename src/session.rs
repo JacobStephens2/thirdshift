@@ -294,7 +294,7 @@ impl<'a> Sessions<'a> {
         (self.before_each)()?;
         let log = self.logs.path(session)?;
         logs::session(session, &log);
-        let kind = &session.token();
+        let label = &session.token();
         self.step(format!("logging the session to {}", log.display()));
         *self.last_log.borrow_mut() = Some(log.clone());
         let prompt = reports.map_or_else(
@@ -304,10 +304,10 @@ impl<'a> Sessions<'a> {
         let ended = self
             .outside
             .borrow_mut()
-            .run_session(purpose, kind, resume, &prompt, &log);
+            .run_session(purpose, label, resume, &prompt, &log);
         if let Some(reports) = reports {
             for line in reports.keep(&log) {
-                self.step(format!("{kind}: {line}"));
+                self.step(format!("{label}: {line}"));
             }
         }
         ended
@@ -321,13 +321,14 @@ impl<'a> Sessions<'a> {
 
 /// How the Resume rules run a session, and where their progress lines go.
 trait Outside {
-    /// Run a session given `prompt`, labelled as `kind`, continuing the
-    /// session with id `resume`, if any, its stream logged to `log`. Returns
-    /// what it ended with once it has exited cleanly, its turn not failed.
+    /// Run a session given `prompt`, labelled by its kind's token `label`,
+    /// continuing the session with id `resume`, if any, its stream logged to
+    /// `log`. Returns what it ended with once it has exited cleanly, its turn
+    /// not failed.
     fn run_session(
         &mut self,
         purpose: Purpose,
-        kind: &str,
+        label: &str,
         resume: Option<&str>,
         prompt: &str,
         log: &Path,
@@ -349,7 +350,7 @@ impl Outside for OnMachine {
     fn run_session(
         &mut self,
         purpose: Purpose,
-        kind: &str,
+        label: &str,
         resume: Option<&str>,
         prompt: &str,
         log: &Path,
@@ -400,7 +401,7 @@ impl Outside for OnMachine {
             None
         };
         let ended = self.recording.run(
-            kind,
+            label,
             &self.harness,
             &mut command,
             invocation.stdin.as_deref(),
@@ -552,7 +553,7 @@ mod tests {
                 dir: root.path().into(),
                 recording: recording.clone().into(),
             };
-            let log = logs.path(Logged::read("implement").unwrap()).unwrap();
+            let log = logs.path(Logged::of(Kind::Implementation)).unwrap();
             recording.run(
                 "implement", &Choice::default(),
                 Command::new("/bin/sh").args(["-c", &format!(
@@ -617,22 +618,24 @@ mod tests {
         (taken, log, calls)
     }
 
+    /// Where the session whose token is `token` is logged.
+    fn log_of(token: &str) -> PathBuf {
+        logs().path(Logged::read(token).unwrap()).unwrap()
+    }
+
     /// The call that runs a session as `kind`, logged under its own path.
     fn session(kind: &str, resume: Option<&str>, prompt: &str) -> Call {
         Call::Session {
             kind: kind.to_string(),
             resume: resume.map(String::from),
             prompt: prompt.to_string(),
-            log: logs().path(Logged::read(kind).unwrap()).unwrap(),
+            log: log_of(kind),
         }
     }
 
     /// The progress line saying where a session as `kind` is logged.
     fn logging(kind: &str) -> Call {
-        Call::Step(format!(
-            "logging the session to {}",
-            logs().path(Logged::read(kind).unwrap()).unwrap().display()
-        ))
+        Call::Step(format!("logging the session to {}", log_of(kind).display()))
     }
 
     /// The sessions among `calls`.
@@ -658,10 +661,7 @@ mod tests {
             calls,
             [logging("implement"), session("implement", None, "do it")]
         );
-        assert_eq!(
-            log,
-            Some(logs().path(Logged::read("implement").unwrap()).unwrap())
-        );
+        assert_eq!(log, Some(log_of("implement")));
     }
 
     #[test]
@@ -694,14 +694,7 @@ mod tests {
                 ),
             ]
         );
-        assert_eq!(
-            log,
-            Some(
-                logs()
-                    .path(Logged::read("implement-resume").unwrap())
-                    .unwrap()
-            )
-        );
+        assert_eq!(log, Some(log_of("implement-resume")));
     }
 
     #[test]
@@ -758,14 +751,7 @@ mod tests {
             format!("{:#}", taken.unwrap_err()),
             format!("implement session {TESTS_KILLED}, and a later step failed: no PR found")
         );
-        assert_eq!(
-            log,
-            Some(
-                logs()
-                    .path(Logged::read("implement-resume").unwrap())
-                    .unwrap()
-            )
-        );
+        assert_eq!(log, Some(log_of("implement-resume")));
     }
 
     #[test]
@@ -789,10 +775,7 @@ mod tests {
                 ),
             ]
         );
-        assert_eq!(
-            log,
-            Some(logs().path(Logged::read("implement").unwrap()).unwrap())
-        );
+        assert_eq!(log, Some(log_of("implement")));
     }
 
     #[test]
@@ -810,10 +793,7 @@ mod tests {
             [logging("implement"), session("implement", None, "do it")]
         );
         // The failing session's log is still the last log.
-        assert_eq!(
-            log,
-            Some(logs().path(Logged::read("implement").unwrap()).unwrap())
-        );
+        assert_eq!(log, Some(log_of("implement")));
     }
 
     #[test]

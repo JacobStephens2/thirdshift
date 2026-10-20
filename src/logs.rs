@@ -28,6 +28,7 @@ use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use crate::config::UserConfig;
 use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
+use crate::session::Logged;
 
 use activity::Kind;
 pub use command_record::StageName as Stage;
@@ -205,7 +206,7 @@ pub fn stage(stage: Stage) {
 
 /// Keep the current Session log, including a Resume's own log, as
 /// `session` enters its stage.
-pub fn session(session: crate::session::Logged, path: &Path) {
+pub fn session(session: Logged, path: &Path) {
     record().stage(session.stage(), Some(path));
 }
 
