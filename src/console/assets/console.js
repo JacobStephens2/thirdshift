@@ -1,4 +1,6 @@
 import { activity, loadLook, motionAllowed } from './look.js';
+import { watchCommands } from './changes.js';
+
 // Browser preferences are conveniences; malformed or unavailable storage hides nothing.
 function stored(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
@@ -96,7 +98,6 @@ function morph(html) {
   }
 }
 
-// Coalesce notices, but fetch again if a change arrives during the request.
 const timePage = document.querySelector('main[data-time-page]');
 function morphTimePage(html) {
   const next = new DOMParser().parseFromString(html, 'text/html');
@@ -116,39 +117,28 @@ function morphTimePage(html) {
   loadLook();
 }
 
-let refreshing = false, pending = false;
 async function refresh() {
-  pending = true;
-  if (refreshing) return;
-  refreshing = true;
-  try {
-    while (pending) {
-      pending = false;
-      const response = await fetch(timePage ? location.href : '/', { cache: "no-store" });
-      if (!response.ok) throw new Error("Inbox unavailable");
-      const html = await response.text();
-      if (timePage) morphTimePage(html);
-      else morph(html);
-    }
-  } catch {
-    startPolling();
-  } finally { refreshing = false; }
+  if (observesCommands) {
+    const response = await fetch(timePage ? location.href : '/', { cache: "no-store" });
+    if (!response.ok) throw new Error("Inbox unavailable");
+    const html = await response.text();
+    if (timePage) morphTimePage(html);
+    else morph(html);
+  }
+  await refreshPeek();
 }
-let polling;
-function startPolling() {
-  polling ??= setInterval(refresh, 5000);
+let stopWatching;
+function startUpdates() {
+  stopWatching ??= watchCommands(refresh);
 }
 const observesCommands = document.getElementById('inbox') || timePage;
-if (observesCommands && typeof EventSource === "function") {
-  const stream = new EventSource("/events");
-  stream.addEventListener("commands", refresh);
-  stream.addEventListener("error", startPolling);
-  stream.addEventListener("open", () => {
-    clearInterval(polling);
-    polling = undefined;
-    refresh();
-  });
-} else if (observesCommands) { startPolling(); }
+if (observesCommands) startUpdates();
+
+function stopPeekUpdates() {
+  if (observesCommands) return;
+  stopWatching?.();
+  stopWatching = undefined;
+}
 
 const peek = document.querySelector('#peek');
 const content = document.querySelector('#peek-content');
@@ -168,6 +158,7 @@ function select(element, { scroll = true } = {}) {
 }
 
 function closePeek() {
+  stopPeekUpdates();
   pendingPeek?.abort();
   pendingPeek = null;
   peekCommand = null;
@@ -178,22 +169,36 @@ function closePeek() {
 async function togglePeek(row) {
   if (!row.dataset.command) return;
   if (peekCommand === row.dataset.command) { closePeek(); return; }
-  pendingPeek?.abort();
-  const request = new AbortController();
-  pendingPeek = request;
   peekCommand = row.dataset.command;
   content.textContent = 'Loading details…';
   peek.hidden = false;
   document.body.classList.add('peek-open');
+  await loadPeek(row.dataset.peek);
+}
+
+async function refreshPeek() {
+  if (peekCommand && !pendingPeek) {
+    await loadPeek(`/peek?${new URLSearchParams({ command: peekCommand })}`);
+  }
+}
+
+async function loadPeek(url) {
+  pendingPeek?.abort();
+  const request = new AbortController();
+  pendingPeek = request;
   try {
-    const response = await fetch(row.dataset.peek, { signal: request.signal });
+    const response = await fetch(url, { signal: request.signal, cache: 'no-store' });
     if (!response.ok) throw new Error('Details unavailable');
     const html = await response.text();
     if (request.signal.aborted) return;
     // Only the server's escaped show template is inserted, never a log.
     content.replaceChildren(document.createRange().createContextualFragment(html));
+    if (content.querySelector('[data-live="true"]')) startUpdates();
+    else stopPeekUpdates();
   } catch (error) {
     if (!request.signal.aborted && error.name !== 'AbortError') content.textContent = 'Details unavailable. Reload to try again.';
+  } finally {
+    if (pendingPeek === request) pendingPeek = null;
   }
 }
 

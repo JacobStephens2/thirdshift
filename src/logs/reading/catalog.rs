@@ -40,6 +40,16 @@ pub(crate) struct Log {
     pub owners: Vec<String>,
     #[serde(skip)]
     pub path: PathBuf,
+    #[serde(skip)]
+    pub selector: String,
+}
+
+#[derive(Default)]
+struct Observed {
+    live: bool,
+    command: String,
+    owners: Vec<String>,
+    selector: String,
 }
 
 pub(crate) fn id(path: &Path) -> String {
@@ -59,7 +69,7 @@ pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<
         command: &Command,
         root: &Path,
         ancestors: &[String],
-        observed: &mut BTreeMap<PathBuf, (bool, String, Vec<String>)>,
+        observed: &mut BTreeMap<PathBuf, Observed>,
     ) -> Result<()> {
         let mut owners = ancestors.to_vec();
         owners.push(id(command.record_path.strip_prefix(root)?));
@@ -69,15 +79,28 @@ pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<
             .as_ref()
             .map(|issue| format!("{}#{}", command.record.repository, issue.number))
             .unwrap_or_else(|| command.record.name.clone());
-        observed.entry(command.command_log.clone()).or_insert((
-            command.state == "live",
-            subject.clone(),
-            owners.clone(),
-        ));
+        let observation = Observation::Record(command);
+        let selector = observation.selector().context("Command has no selector")?;
+        observed
+            .entry(command.command_log.clone())
+            .or_insert(Observed {
+                live: command.state == "live",
+                command: subject.clone(),
+                owners: owners.clone(),
+                selector: selector.clone(),
+            });
         for session in Observation::Record(command).sessions()? {
             let live =
                 command.state == "live" && command.record.session_log.as_ref() == Some(&session);
-            observed.insert(session, (live, subject.clone(), owners.clone()));
+            observed.insert(
+                session,
+                Observed {
+                    live,
+                    command: subject.clone(),
+                    owners: owners.clone(),
+                    selector: selector.clone(),
+                },
+            );
         }
         for child in command.dispatched.iter().chain(&command.children) {
             collect(child, root, &owners, observed)?;
@@ -109,7 +132,12 @@ pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<
                         continue;
                     }
                     let relative = path.strip_prefix(root)?;
-                    let (live, command, mut owners) = observed.remove(&path).unwrap_or_default();
+                    let Observed {
+                        live,
+                        command,
+                        mut owners,
+                        selector,
+                    } = observed.remove(&path).unwrap_or_default();
                     if let Some(decoded) = owner::decode(&path) {
                         owners.push(id(decoded.command_log(&path).strip_prefix(root)?));
                     }
@@ -125,6 +153,11 @@ pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<
                         live,
                         command,
                         owners,
+                        selector: if selector.is_empty() {
+                            path.to_string_lossy().into_owned()
+                        } else {
+                            selector
+                        },
                         path,
                     });
                 }

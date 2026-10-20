@@ -266,7 +266,8 @@ test("keyboard selection and the open peek survive an Inbox push", async t => {
     const fixture = JSON.parse(original);
     fixture.issue.title = 'Keyboard-selected Command after push';
     await writeFile(path, JSON.stringify(fixture));
-    await page.getByText(fixture.issue.title, { exact: true }).waitFor();
+    await row.locator('.issue-title').filter({ hasText: fixture.issue.title }).waitFor();
+    await page.locator('#peek').getByText(fixture.issue.title, { exact: true }).waitFor();
     assert.equal(await row.getAttribute('id'), id);
     assert.equal(await row.getAttribute('aria-current'), 'true');
     assert.equal(await page.locator('#peek').isVisible(), true);
