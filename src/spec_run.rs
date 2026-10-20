@@ -87,7 +87,7 @@ fn run_through(
 ) -> Result<Reached, FailedRun> {
     let Landing {
         lines: ticket_lines,
-        mut progress,
+        progress,
         pushed,
         landed,
         local_work,
@@ -130,10 +130,8 @@ fn run_through(
             let recovery = failed.recovery.get_or_insert_with(|| {
                 Box::new(Recovery::new(Stage::SpecReview, Preservation::Remote))
             });
-            progress.reviewed = !matches!(recovery.stage, Stage::Tickets | Stage::SpecReview)
-                && all_tickets_accounted;
-            recovery.tickets = Some(progress);
-            recovery.local_child_work = local_work;
+            recovery.add_tickets(progress, all_tickets_accounted);
+            recovery.add_child_work(local_work);
             failed.ticket_lines = ticket_lines;
             Err(failed)
         }

@@ -186,11 +186,7 @@ impl Delivery<'_> {
                     worktree,
                     pull_request,
                 };
-                let mut failed = fail(&mut outside, stopped_at, log, error);
-                if let Some(recovery) = &mut failed.recovery {
-                    recovery.worktree = Some(path);
-                }
-                Err(failed)
+                Err(fail(&mut outside, stopped_at, path, log, error))
             }
         }
     }
@@ -354,10 +350,11 @@ fn retry_if_interrupted<O: Outside>(
 /// raised, so the error is what the Run fails with. Worktree owns preservation
 /// and retains work that may not have reached origin. `log` is the most recent
 /// Session log, if a session created one; `stopped_at`, the stage its
-/// recovery lines report.
+/// recovery lines report; `worktree`, where work preserved only locally is.
 fn fail(
     outside: &mut impl FailedOutside,
     stopped_at: recovery::Stage,
+    worktree: PathBuf,
     log: Option<PathBuf>,
     error: anyhow::Error,
 ) -> FailedRun {
@@ -389,8 +386,10 @@ fn fail(
             None
         }
     };
+    let mut recovery = Recovery::new(stopped_at, preservation);
+    recovery.record_worktree(worktree);
     FailedRun {
-        recovery: Some(Box::new(Recovery::new(stopped_at, preservation))),
+        recovery: Some(Box::new(recovery)),
         error,
         pr_url,
         log,
@@ -942,13 +941,19 @@ mod tests {
                     tracker.enter(*stage);
                 }
                 let stopped_at = stopped_at(&tracker, &error);
-                fail(outside, stopped_at, outside.log.clone(), error)
+                fail(
+                    outside,
+                    stopped_at,
+                    PathBuf::from("/worktree"),
+                    outside.log.clone(),
+                    error,
+                )
             })
     }
 
     /// The stage `failed` stopped at.
     fn stopped(failed: &FailedRun) -> recovery::Stage {
-        failed.recovery.as_ref().expect("no recovery").stage
+        failed.recovery.as_ref().expect("no recovery").stage()
     }
 
     #[test]
@@ -1096,6 +1101,7 @@ mod tests {
             let failed = fail(
                 &mut outside,
                 recovery::Stage::Implementation,
+                PathBuf::from("/worktree"),
                 Some(PathBuf::from("/logs/implement.jsonl")),
                 anyhow!("original\nextra context"),
             );
