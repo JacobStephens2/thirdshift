@@ -224,8 +224,14 @@ mod tests {
 
     fn assert_cli_parity(router: Router) {
         // Measure the GET registration footprint through axum's public layer
-        // interface, so this does not depend on its implicit HEAD/fallback count.
-        let get_methods = registered_methods(Router::new().route("/known", get(|| async {})));
+        // interface after attaching state, as the production router does, so
+        // this does not depend on its implicit HEAD/fallback count.
+        let (_, changes) = tokio::sync::watch::channel(0_u64);
+        let get_methods = registered_methods(
+            Router::<tokio::sync::watch::Receiver<u64>>::new()
+                .route("/known", get(|| async {}))
+                .with_state(changes),
+        );
         let expected = (super::PAGES.len() + 1) * get_methods; // one static-resource route
         assert_eq!(
             registered_methods(router),
