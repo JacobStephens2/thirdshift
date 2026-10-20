@@ -748,11 +748,7 @@ mod tests {
             stamp: STAMPED.to_string(),
             command: logs::CommandKind::Issue,
             base_fix: BaseFixAsk::Forbid,
-            asks: ChildAsks {
-                harness: Choice::default(),
-                security_fix: false,
-                security_review: false,
-            },
+            asks: ChildAsks::default(),
         };
         let Err(error) = start_from(executable, &issue, &given) else {
             panic!("started from {}", executable.display());

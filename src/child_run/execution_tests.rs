@@ -168,11 +168,7 @@ impl Fixture {
                 stamp: "20261003T120000-0400".to_string(),
                 command: logs::CommandKind::Issue,
                 base_fix: BaseFixAsk::Forbid,
-                asks: super::ChildAsks {
-                    harness: Choice::default(),
-                    security_fix: false,
-                    security_review: false,
-                },
+                asks: super::ChildAsks::default(),
             },
             startup,
         )

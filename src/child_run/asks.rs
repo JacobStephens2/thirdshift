@@ -7,7 +7,7 @@ use crate::harness::Choice;
 
 /// The Command's checked Harness, Model and Effort, its Security fix ask and
 /// its Security review ask, as every child Run is given them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ChildAsks {
     /// The Harness, Model and Effort a child Run's sessions run on, as the
     /// Command's checks settled them.
@@ -47,9 +47,8 @@ mod tests {
 
     fn asked(security_review: bool) -> ChildAsks {
         ChildAsks {
-            harness: Choice::default(),
-            security_fix: false,
             security_review,
+            ..ChildAsks::default()
         }
     }
 

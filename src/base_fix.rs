@@ -89,14 +89,6 @@ impl fmt::Display for Advice {
     }
 }
 
-/// Where a Run starts a Base fix from: the Launch directory's git `launch`,
-/// as the Run on `issue`, handing it `asks`, as the Run does every child Run.
-pub struct StartedFrom<'a> {
-    pub launch: &'a Git,
-    pub issue: &'a IssueUrl,
-    pub asks: &'a ChildAsks,
-}
-
 /// What a Run does when its only red checks are Inherited failures.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum OnInheritedFailures {
@@ -186,15 +178,15 @@ impl BaseFix {
     }
 
     /// Fix the Inherited failures in `failed`, the only red checks on the PR
-    /// `pr_url` of the Run on `issue`, started from `launch`, as `from` says,
+    /// `pr_url` of the Run on `outside.issue`, started from `outside.launch`,
     /// which also fail on `base` at `base_commit`, where `failed` holds that
     /// commit's checks of their names, with a Base fix: write its issue,
-    /// start it as a child `thirdshift` handed the `asks` in `from`, and wait
-    /// for it to merge, after which the Run is to merge `base` in and watch
-    /// CI again. If an open Base fix issue other than
-    /// `issue` already names `base` and those checks, no issue is written:
+    /// start it as a child `thirdshift` handed `outside.asks`, and wait for
+    /// it to merge, after which the Run is to merge `base` in and watch CI
+    /// again. If an open Base fix issue other than the Run's issue already
+    /// names `base` and those checks, no issue is written:
     /// the Run waits for that one to close instead, as its one Base fix (see
-    /// [`BaseFix::wait_on`]), or, if a Run from `launch` started that Base fix
+    /// [`BaseFix::wait_on`]), or, if a Run from its Launch directory started that Base fix
     /// and it ended with the issue still open, starts it again on the same
     /// issue. Fails, with the Run's cause, if the Run was not asked to start
     /// one, if the Base fix fails, in which case the cause names its issue,
@@ -203,22 +195,13 @@ impl BaseFix {
     /// [`BaseFix::into_advice`] to give after its cause.
     pub fn fix(
         &mut self,
-        from: StartedFrom,
+        mut outside: LaunchAndGitHub,
         pr_url: &str,
         base: &str,
         base_commit: &str,
         failed: &FailedChecks,
     ) -> Result<()> {
-        let StartedFrom {
-            launch,
-            issue,
-            asks,
-        } = from;
-        let mut outside = LaunchAndGitHub {
-            launch,
-            issue,
-            asks,
-        };
+        let issue = outside.issue;
         self.fix_through(&mut outside, issue, pr_url, base, base_commit, failed)
     }
 
@@ -481,13 +464,14 @@ impl<W> Mark<W> {
     }
 }
 
-/// The outside world of a Run on `issue` started from `launch`: its git
-/// directory's locks and marks, GitHub, the child Run, handed `asks`, and
-/// the poll interval.
-struct LaunchAndGitHub<'a> {
-    launch: &'a Git,
-    issue: &'a IssueUrl,
-    asks: &'a ChildAsks,
+/// The outside world of a Run on `issue` started from `launch`, as it
+/// starts a Base fix: its git directory's locks and marks, GitHub, the child
+/// Run, handed `asks`, as the Run hands every child Run, and the poll
+/// interval.
+pub struct LaunchAndGitHub<'a> {
+    pub launch: &'a Git,
+    pub issue: &'a IssueUrl,
+    pub asks: &'a ChildAsks,
 }
 
 impl Outside for LaunchAndGitHub<'_> {

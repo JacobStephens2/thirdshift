@@ -429,8 +429,7 @@ mod tests {
             base_fix,
             asks: crate::child_run::ChildAsks {
                 harness: sonnet(None),
-                security_fix: false,
-                security_review: false,
+                ..crate::child_run::ChildAsks::default()
             },
         }
     }

@@ -22,7 +22,7 @@ mod stage;
 
 use crate::pull_request::{AlreadyMerged, Identified, MergeAttempt, PullRequest};
 
-use crate::base_fix::{BaseFix, StartedFrom};
+use crate::base_fix::{self, BaseFix};
 use crate::child_run::ChildAsks;
 use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::{FailedRun, PolicyRefusal, interrupted_or};
@@ -734,13 +734,13 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn base_fix(&mut self, base_commit: &str, failed: &FailedChecks) -> Result<()> {
-        let from = StartedFrom {
+        let outside = base_fix::LaunchAndGitHub {
             launch: self.worktree.launch(),
             issue: self.issue,
             asks: self.child_asks,
         };
         self.base_fix
-            .fix(from, self.pr_url, self.base, base_commit, failed)
+            .fix(outside, self.pr_url, self.base, base_commit, failed)
     }
 
     fn ensure_pr_ready_and_mergeable(&mut self) -> Result<()> {
