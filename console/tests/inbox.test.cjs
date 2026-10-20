@@ -200,20 +200,20 @@ test("every keyboard action preserves list nodes and Escape closes one layer at 
 test("page keys, jump letters and URLs survive reload and the peek is a phone bottom sheet", async t => {
   const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
   await page.goto(origin);
-  for (const [key, name] of [['5', 'history'], ['7', 'security'], ['1', 'inbox']]) {
+  for (const [key, name] of [['5', 'history'], ['6', 'logs'], ['7', 'security'], ['1', 'inbox']]) {
     await page.keyboard.press(key);
     await page.waitForURL(`**/?page=${name}`);
     await page.reload();
-    assert.equal(await page.locator('h2').first().textContent(), name[0].toUpperCase() + name.slice(1));
+    assert.equal(await page.locator('main h1, main h2').first().textContent(), name[0].toUpperCase() + name.slice(1));
     assert.equal(await page.locator('#peek').isVisible(), false);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   }
-  for (const key of ['2', '3', '4', '6']) {
+  for (const key of ['2', '3', '4']) {
     await page.keyboard.press(key);
     assert.equal(new URL(page.url()).searchParams.get('page'), 'inbox');
     assert.equal(await page.locator(`[data-key="${key}"]`).count(), 0);
   }
-  for (const [letter, name] of [['h', 'history'], ['s', 'security'], ['i', 'inbox']]) {
+  for (const [letter, name] of [['h', 'history'], ['o', 'logs'], ['s', 'security'], ['i', 'inbox']]) {
     await page.keyboard.press('g');
     await page.keyboard.press(letter);
     await page.waitForURL(`**/?page=${name}`);
@@ -279,4 +279,19 @@ test('Enter and Space activate focused peek buttons', async t => {
     assert.equal(await page.locator('#peek').isVisible(), false);
     assert.equal(new URL(page.url()).searchParams.get('page'), 'security');
   }
+});
+
+test('Logs rows open the shared reader and page keys work from the reader', async t => {
+  const page = await pageFor(t);
+  await page.goto(`${origin}/?page=logs`);
+  await page.keyboard.press('j');
+  assert.equal(await page.locator('.is-selected.log-row').count(), 1);
+  await page.keyboard.press('z');
+  await page.keyboard.press('Enter');
+  await page.waitForURL(/\/logs\/[a-f0-9]+$/);
+  await page.keyboard.press('5');
+  await page.waitForURL('**/?page=history');
+  await page.keyboard.press('g');
+  await page.keyboard.press('o');
+  await page.waitForURL('**/?page=logs');
 });

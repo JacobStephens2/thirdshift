@@ -23,6 +23,7 @@ pub(crate) struct Section {
 
 pub(crate) struct Row {
     pub selector: String,
+    pub logs_url: String,
     pub subject: String,
     pub title: String,
     pub state: String,
@@ -121,7 +122,7 @@ pub(crate) fn archive(
             (repository.is_empty() || repository == repo)
                 && (outcome.is_empty() || outcome == result)
         })
-        .map(|entry| entry_row(entry, now))
+        .map(|entry| entry_row(entry, now, &config.logs_dir))
         .collect::<Result<_>>()?;
     Ok(Archive {
         rows,
@@ -130,14 +131,19 @@ pub(crate) fn archive(
     })
 }
 
-fn entry_row(entry: &Entry, now: DateTime<Local>) -> Result<Row> {
+fn entry_row(entry: &Entry, now: DateTime<Local>, root: &std::path::Path) -> Result<Row> {
     match entry {
-        Entry::Record(command) => row(command, now),
+        Entry::Record(command) => row(command, now, root),
         Entry::History(command) => {
             let (subject, title) =
                 subject(&command.repository, &command.kind, command.issue.as_ref());
             Ok(Row {
                 selector: Observation::History(command).selector().unwrap_or_default(),
+                logs_url: command
+                    .command_log
+                    .as_ref()
+                    .map(|path| logs_url(path, root))
+                    .unwrap_or_else(|| "/?page=logs".into()),
                 subject,
                 title,
                 state: command.state.into(),
@@ -174,7 +180,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                 .iter()
                 .filter(|item| item.group == group)
                 .map(|item| {
-                    let mut row = entry_row(item.command, now)?;
+                    let mut row = entry_row(item.command, now, &config.logs_dir)?;
                     if let Some(kind) = item.needs_you_kind {
                         row.state = kind.title().into();
                     }
@@ -241,11 +247,12 @@ fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, Stri
     }
 }
 
-fn row(command: &Command, now: DateTime<Local>) -> Result<Row> {
+fn row(command: &Command, now: DateTime<Local>, root: &std::path::Path) -> Result<Row> {
     let facts = &command.record;
     let (subject, title) = subject(&facts.repository, &facts.name, facts.issue.as_ref());
     Ok(Row {
         selector: Observation::Record(command).selector().unwrap_or_default(),
+        logs_url: logs_url(&command.record_path, root),
         subject,
         title,
         state: command.state.into(),
@@ -269,11 +276,17 @@ fn row(command: &Command, now: DateTime<Local>) -> Result<Row> {
             .dispatched
             .iter()
             .chain(&command.children)
-            .map(|child| row(child, now))
+            .map(|child| row(child, now, root))
             .collect::<Result<_>>()?,
         findings: facts.security_findings.clone(),
         sessions: command.sessions()?,
     })
+}
+
+fn logs_url(path: &std::path::Path, root: &std::path::Path) -> String {
+    path.strip_prefix(root)
+        .map(|path| format!("/logs/command/{}", crate::logs::catalog::id(path)))
+        .unwrap_or_else(|_| "/?page=logs".into())
 }
 
 fn elapsed(time: &str, now: DateTime<Local>) -> String {

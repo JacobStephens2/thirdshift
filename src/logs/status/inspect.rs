@@ -18,11 +18,14 @@ pub(crate) fn details(config: &UserConfig, input: &str) -> Result<serde_json::Va
     )?)
 }
 
-pub(crate) fn read_log(config: &UserConfig, input: &str, session: Option<&str>) -> Result<Vec<u8>> {
+pub(crate) fn log_path(
+    config: &UserConfig,
+    input: &str,
+    session: Option<&str>,
+) -> Result<std::path::PathBuf> {
     let snapshot = Snapshot::load(&config.logs_dir, Local::now())?;
     let command = snapshot.resolve(input)?.observation;
-    let path = selected_log(command, session)?;
-    Ok(std::fs::read(path)?)
+    selected_log(command, session)
 }
 
 fn selected_log(command: Observation<'_>, session: Option<&str>) -> Result<std::path::PathBuf> {

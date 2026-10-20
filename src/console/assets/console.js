@@ -57,7 +57,7 @@ async function togglePeek(row) {
 }
 
 function items() {
-  return [...document.querySelectorAll('main .group > summary, main .command')]
+  return [...document.querySelectorAll('main .group > summary, main .command, main .log-row')]
     .filter(element => {
       for (let parent = element.parentElement; parent; parent = parent.parentElement) {
         if (parent.tagName === 'DETAILS' && !parent.open && element !== parent.firstElementChild) return false;
@@ -91,7 +91,7 @@ document.querySelector('[data-close-keys]').addEventListener('click', () => help
 document.querySelector('[data-open-keys]').addEventListener('click', () => help.showModal());
 document.addEventListener('click', event => {
   const link = event.target.closest('.peek-link');
-  const row = event.target.closest('main .command');
+  const row = event.target.closest('main .command, main .log-row');
   if (link) { event.preventDefault(); select(row); togglePeek(row); }
   else if (row && !event.target.closest('a, button, input, select, textarea')) select(row);
   else if (event.target.closest('main .group > summary')) select(event.target.closest('summary'));
@@ -134,11 +134,12 @@ document.addEventListener('keydown', event => {
   } else if (event.key === 'z' && selected) {
     event.preventDefault();
     const section = selected.closest('.group');
+    if (!section) return;
     section.open = false;
     select(section.querySelector('summary'));
   } else if (event.key === 'Enter' && selected) {
     event.preventDefault();
-    const row = selected.matches('.command') ? selected : selected.parentElement.querySelector('.command');
-    if (row?.dataset.command) location.assign(row.dataset.log);
+    const row = selected.matches('.command, .log-row') ? selected : selected.parentElement.querySelector('.command');
+    if (row?.dataset.log) location.assign(row.dataset.log);
   }
 });

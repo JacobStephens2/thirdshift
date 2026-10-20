@@ -16,7 +16,7 @@
   <header><p class="brand">thirdshift / Console</p><h1>{{ hostname }}</h1>
     {% if !consoles.is_empty() %}<nav aria-label="Other Consoles">{% for address in consoles %}<a href="{{ address }}">{{ address }}</a>{% endfor %}</nav>{% endif %}
   </header>
-  <nav aria-label="Pages"><a href="/?page=inbox" data-key="1" data-jump="i">1 Inbox</a><a href="/?page=history" data-key="5" data-jump="h">5 History</a><a href="/?page=security" data-key="7" data-jump="s">7 Security</a></nav>
+  {% include "console/nav.html" %}
   <main>
     <div class="page-title"><h2>{{ title }}</h2><code>{{ cli }}</code></div>
     {% match archive %}{% when Some with (archive) %}
@@ -46,20 +46,6 @@
     {% if !inbox.idle_passes.is_empty() %}<aside aria-label="Idle Passes">{% for pass in inbox.idle_passes %}<p>{{ pass }}</p>{% endfor %}</aside>{% endif %}
     {% endmatch %}
   </main>
-  <aside id="peek" hidden aria-label="Peek"><button type="button" data-close-peek>Close details (Esc)</button><div id="peek-content" aria-live="polite"></div></aside>
-  <footer><button type="button" data-open-keys>Keyboard help (?)</button></footer>
-  <aside id="jumps" hidden role="tooltip" aria-label="Jump to"><p>Jump to… (Esc to cancel)</p></aside>
-  <dialog id="keys" aria-labelledby="keys-title">
-    <h2 id="keys-title">Keyboard</h2>
-    <dl><dt>j / k</dt><dd>Next / previous row or heading, wrapping</dd>
-    <dt>Space</dt><dd>Fold a heading or toggle a row's peek</dd>
-    <dt>Enter</dt><dd>Open the full Command log</dd>
-    <dt>Esc</dt><dd>Close one layer, then clear selection</dd>
-    <dt>1–7</dt><dd>Switch to an available page</dd>
-    <dt>g, then a letter</dt><dd>Jump to a section or page; g lists the letters</dd>
-    <dt>z</dt><dd>Fold the current section</dd>
-    <dt>?</dt><dd>Show this help</dd></dl>
-    <button type="button" data-close-keys>Close (Esc)</button>
-  </dialog>
+  {% include "console/chrome.html" %}
 </body>
 </html>

@@ -1,0 +1,15 @@
+  <aside id="peek" hidden aria-label="Peek"><button type="button" data-close-peek>Close details (Esc)</button><div id="peek-content" aria-live="polite"></div></aside>
+  <footer><button type="button" data-open-keys>Keyboard help (?)</button></footer>
+  <aside id="jumps" hidden role="tooltip" aria-label="Jump to"><p>Jump to… (Esc to cancel)</p></aside>
+  <dialog id="keys" aria-labelledby="keys-title">
+    <h2 id="keys-title">Keyboard</h2>
+    <dl><dt>j / k</dt><dd>Next / previous row or heading, wrapping</dd>
+    <dt>Space</dt><dd>Fold a heading or toggle a row's peek</dd>
+    <dt>Enter</dt><dd>Open the full Command log</dd>
+    <dt>Esc</dt><dd>Close one layer, then clear selection</dd>
+    <dt>1–7</dt><dd>Switch to an available page</dd>
+    <dt>g, then a letter</dt><dd>Jump to a section or page; g lists the letters</dd>
+    <dt>z</dt><dd>Fold the current section</dd>
+    <dt>?</dt><dd>Show this help</dd></dl>
+    <button type="button" data-close-keys>Close (Esc)</button>
+  </dialog>

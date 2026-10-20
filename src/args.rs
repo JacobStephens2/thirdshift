@@ -42,6 +42,14 @@ pub enum Command {
         session: Option<String>,
         follow: bool,
     },
+    LogsList {
+        json: bool,
+        owner: Option<String>,
+    },
+    LogFile {
+        id: String,
+        follow: bool,
+    },
     /// Internal interface for scripts/release.sh: prompt on stdin.
     ReleaseSummary,
     /// `email-test`, with the address it was given, if any.
@@ -277,6 +285,49 @@ pub fn parse(args: &[String]) -> Result<Command> {
             };
         }
         Some("logs") => {
+            match &args[1..] {
+                [] => {
+                    return Ok(Command::LogsList {
+                        json: false,
+                        owner: None,
+                    });
+                }
+                [flag] if flag == "--json" => {
+                    return Ok(Command::LogsList {
+                        json: true,
+                        owner: None,
+                    });
+                }
+                [flag, id] if flag == "--command" && !id.starts_with('-') => {
+                    return Ok(Command::LogsList {
+                        json: false,
+                        owner: Some(id.clone()),
+                    });
+                }
+                [flag, id, json]
+                    if flag == "--command" && !id.starts_with('-') && json == "--json" =>
+                {
+                    return Ok(Command::LogsList {
+                        json: true,
+                        owner: Some(id.clone()),
+                    });
+                }
+                [flag, id] if flag == "--file" && !id.starts_with('-') => {
+                    return Ok(Command::LogFile {
+                        id: id.clone(),
+                        follow: false,
+                    });
+                }
+                [flag, id, follow]
+                    if flag == "--file" && !id.starts_with('-') && follow == "--follow" =>
+                {
+                    return Ok(Command::LogFile {
+                        id: id.clone(),
+                        follow: true,
+                    });
+                }
+                _ => {}
+            }
             let usage = "usage: thirdshift logs <command> [--session <kind>] [--follow]";
             let command = args
                 .get(1)

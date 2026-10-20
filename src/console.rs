@@ -1,4 +1,6 @@
 //! The machine's Console. Async execution is confined to this module.
+mod conversation;
+mod logs;
 mod peek;
 mod restart;
 
@@ -47,6 +49,22 @@ const PAGES: &[PageRoute] = &[
         path: "/log",
         cli: "thirdshift logs widgets#7",
     },
+    PageRoute {
+        path: "/logs",
+        cli: "thirdshift logs --json",
+    },
+    PageRoute {
+        path: "/logs/command/{id}",
+        cli: "thirdshift logs --command id --json",
+    },
+    PageRoute {
+        path: "/logs/{id}",
+        cli: "thirdshift logs --file id",
+    },
+    PageRoute {
+        path: "/logs/{id}/stream/{offset}",
+        cli: "thirdshift logs --file id --follow",
+    },
 ];
 
 pub fn serve(no_sign_in: bool) -> Result<()> {
@@ -66,10 +84,13 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
         let watched = executable.clone();
-        axum::serve(listener, router())
-            .with_graceful_shutdown(async move { watched.replaced().await })
-            .await
-            .context("Console server failed")?;
+        axum::serve(
+            listener,
+            router().layer(axum::Extension(executable.clone())),
+        )
+        .with_graceful_shutdown(async move { watched.replaced().await })
+        .await
+        .context("Console server failed")?;
         Ok::<_, anyhow::Error>(())
     })?;
     // Drop the runtime (and its sockets) before replacing the process.
@@ -84,6 +105,10 @@ fn router() -> Router {
         router = match page.path {
             "/peek" => router.route(page.path, get(inspect)),
             "/log" => router.route(page.path, get(log)),
+            "/logs" => router.route(page.path, get(logs::index)),
+            "/logs/command/{id}" => router.route(page.path, get(logs::command)),
+            "/logs/{id}" => router.route(page.path, get(logs::reader)),
+            "/logs/{id}/stream/{offset}" => router.route(page.path, get(logs::stream)),
             path => router.route(path, get(move |query| inbox(cli, path, query))),
         };
     }
@@ -139,6 +164,9 @@ async fn inbox(cli: &'static str, path: &'static str, RawQuery(query): RawQuery)
     let mut page = query_value(&query, "page");
     if page.is_empty() {
         page = path.trim_start_matches('/').into();
+    }
+    if matches!(page.as_str(), "logs" | "6") {
+        return logs::index().await;
     }
     let archive_page = match page.as_str() {
         "history" | "5" => Some(status::ArchivePage::History),
@@ -206,23 +234,21 @@ async fn log(RawQuery(query): RawQuery) -> Response {
     let command = query_value(&query, "command");
     let session = query_value(&query, "session");
     match tokio::task::spawn_blocking(move || {
-        status::inspect::read_log(
-            &UserConfig::load()?,
+        let config = UserConfig::load()?;
+        let path = status::inspect::log_path(
+            &config,
             &command,
             (!session.is_empty()).then_some(session.as_str()),
-        )
+        )?;
+        crate::logs::catalog::load(&config, None)?
+            .into_iter()
+            .find(|log| log.path == path)
+            .map(|log| log.id)
+            .context("log is unavailable")
     })
     .await
     {
-        Ok(Ok(bytes)) => (
-            [
-                (header::CONTENT_TYPE, "text/plain; charset=utf-8"),
-                (header::CACHE_CONTROL, "no-store"),
-                (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
-            ],
-            bytes,
-        )
-            .into_response(),
+        Ok(Ok(id)) => logs::reader(Path(id)).await,
         _ => (StatusCode::NOT_FOUND, "Log is unavailable.").into_response(),
     }
 }
@@ -233,6 +259,20 @@ fn html_response(html: String) -> Response {
          (header::CACHE_CONTROL, "no-store"),
          (header::X_CONTENT_TYPE_OPTIONS, "nosniff")], Html(html)
     ).into_response()
+}
+
+fn page(result: std::result::Result<Result<String>, tokio::task::JoinError>) -> Response {
+    match result {
+        Ok(Ok(html)) => html_response(html),
+        error => {
+            eprintln!("thirdshift Console: can't read page: {error:?}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Can't read this page; check the Console's stderr.",
+            )
+                .into_response()
+        }
+    }
 }
 
 async fn asset(Path(path): Path<String>) -> Response {
