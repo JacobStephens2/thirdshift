@@ -38,6 +38,13 @@ pub fn validate_sections(sections: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// The Console settings Setup asks about; other Console settings stay put.
+#[derive(Clone)]
+pub struct ConsoleAccess {
+    pub address: String,
+    pub allowed_emails: Vec<String>,
+}
+
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ConsoleSettings {
@@ -87,7 +94,7 @@ impl ConsoleSettings {
         Ok(host)
     }
 
-    pub(super) fn validate(&self) -> Result<()> {
+    pub(crate) fn validate(&self) -> Result<()> {
         if !self.address.is_empty() {
             self.hostname()?;
         }
