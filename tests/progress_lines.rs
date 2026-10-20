@@ -8,7 +8,7 @@ use serde_json::json;
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader};
 use std::process::Command;
-use support::Scenario;
+use support::{Scenario, assert_elapsed_before};
 
 /// The agent commits its work and opens a PR, but leaves the pushing to
 /// thirdshift.
@@ -144,14 +144,73 @@ fn ends_a_successful_run_by_naming_the_pr() {
     let scenario = Scenario::new();
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
 
-    let result = scenario.run(&[&scenario.issue_url(7)]);
+    let result = scenario.run(&["no-email", &scenario.issue_url(7)]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_elapsed_before(
+        &result.stderr,
+        "thirdshift: PR https://github.com/acme/widgets/pull/1 is ready for review",
+    );
     assert_eq!(
         stderr_lines(&result.stderr).last(),
         Some(&"thirdshift: PR https://github.com/acme/widgets/pull/1 is ready for review")
     );
     assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+}
+
+#[test]
+fn a_failed_run_reports_elapsed_time_before_its_original_cause() {
+    let scenario = Scenario::new();
+    scenario.agent_does("exit 3");
+
+    let result = scenario.run(&["no-email", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert_elapsed_before(&result.stderr, "thirdshift: claude exited 3");
+}
+
+#[test]
+fn a_gracefully_interrupted_run_reports_elapsed_time_before_its_cause() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "touch '{}'\nsleep 30\n",
+        scenario.path("agent-started").display()
+    ));
+
+    let result = scenario.run_and_signal(
+        &["no-email", &scenario.issue_url(7)],
+        "agent-started",
+        "INT",
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert_elapsed_before(&result.stderr, "thirdshift: interrupted");
+}
+
+#[test]
+fn passes_without_a_run_do_not_report_run_elapsed_time() {
+    for args in [
+        &["architect", "--plan-only", "no-email"][..],
+        &["secure", "no-email"][..],
+    ] {
+        let scenario = Scenario::new();
+        scenario.launch_git(&["remote", "remove", "origin"]);
+
+        let result = scenario.run(args);
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert_eq!(result.stdout, "");
+        assert!(
+            result
+                .stderr
+                .contains("git config remote.origin.url failed"),
+            "{}",
+            result.stderr
+        );
+        assert!(!result.stderr.contains("Took: "), "{}", result.stderr);
+    }
 }
 
 #[test]
@@ -217,7 +276,7 @@ fn a_log_failure_still_recovers_and_reports_warnings_and_usage() {
     );
     let logs = scenario.path("home/.thirdshift/logs/acme/widgets");
     // Install the failing log before the session opens it. The Command log
-    // supplies the actual start stamp, so this never predicts the clock.
+    // supplies the captured stamp and owner, so this never predicts the clock.
     scenario.repo_has_hook(
         &scenario.launch_dir(),
         "post-checkout",
@@ -225,11 +284,11 @@ fn a_log_failure_still_recovers_and_reports_warnings_and_usage() {
             r#"#!/bin/sh
 for log in "{logs}/commands/issue/"*.log; do
     name=${{log##*/}}
-    stamp=${{name#7-}}
-    stamp=${{stamp%.log}}
+    identity_fragment=${{name#7-}}
+    identity_fragment=${{identity_fragment%.log}}
 done
 mkdir -p "{logs}/commands/issue"
-ln -s "{pipe}" "{logs}/commands/issue/7-$stamp-implement.jsonl"
+ln -s "{pipe}" "{logs}/commands/issue/7-$identity_fragment-implement.jsonl"
 touch "{ready}"
 "#,
             logs = logs.display(),

@@ -9,7 +9,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 
 use super::activity::{self, Kind};
+use super::command_record::{CommandRecord, CommandTree, Stage, StageName, TicketRecord};
 use super::effects::{Outside, Stream};
+use super::owner::{self, Owner};
 use super::{Begin, CommandKind, Pass, Work, root_under};
 use crate::config::UserConfig;
 use crate::harness::Choice;
@@ -21,6 +23,8 @@ const STAMP_FORMAT: &str = "%Y%m%dT%H%M%S%z";
 pub(super) struct Record<O: Outside> {
     outside: O,
     stamp: Option<String>,
+    owner: Option<Owner>,
+    owner_error: Option<String>,
     logs_dir: Option<PathBuf>,
     child: bool,
     command: CommandKind,
@@ -28,6 +32,10 @@ pub(super) struct Record<O: Outside> {
     command_log: Log<O::CommandLog>,
     activity_started: Option<Started>,
     activity_warned: bool,
+    command_record: Option<(PathBuf, CommandTree)>,
+    parent_record: Option<PathBuf>,
+    parent_dispatch: Option<String>,
+    record_warned: bool,
 }
 
 enum Log<W> {
@@ -65,6 +73,8 @@ impl<O: Outside> Record<O> {
         Self {
             outside,
             stamp: None,
+            owner: None,
+            owner_error: None,
             logs_dir: None,
             child: false,
             command: CommandKind::Issue,
@@ -72,6 +82,10 @@ impl<O: Outside> Record<O> {
             command_log: Log::NotKept,
             activity_started: None,
             activity_warned: false,
+            command_record: None,
+            parent_record: None,
+            parent_dispatch: None,
+            record_warned: false,
         }
     }
 
@@ -114,12 +128,33 @@ impl<O: Outside> Record<O> {
     pub(super) fn started(&mut self, work: Work, harness: &Choice) {
         let first = !self.started;
         self.started = true;
+        if self.child && first {
+            if self.parent_record.is_some() {
+                self.start_record(work, harness);
+            }
+            return;
+        }
         if !first || self.child {
+            if !self.child
+                && self.command != CommandKind::Issue
+                && matches!(work, Work::Run(_) | Work::SpecRun(_))
+                && let Some((_, tree)) = &mut self.command_record
+                && let Some(dispatched) = tree.dispatched.last_mut()
+            {
+                // The launch checks have now established whether the issue is
+                // a Spec. The dispatch itself was kept before those checks.
+                dispatched.kind = work.kind().to_string();
+                self.stage(work.initial_stage().unwrap(), None);
+            }
             return;
         }
         let root = self.root(&work.repo());
         let stamp = self.stamp();
-        self.keep(work.command_log(&root, &stamp));
+        let began = matches!(self.command_log, Log::Held { .. });
+        self.keep(&root, work, &stamp);
+        if began {
+            self.start_record(work, harness);
+        }
         self.step(format_args!("sessions run on {harness}"));
         let command_log = match self.command_log_path() {
             Some(path) => path
@@ -141,6 +176,84 @@ impl<O: Outside> Record<O> {
         }
     }
 
+    pub(super) fn child_of(&mut self, parent: Option<PathBuf>) {
+        self.parent_record = parent;
+    }
+
+    pub(super) fn child_dispatch(&mut self, issue: Option<String>) {
+        self.parent_dispatch = issue;
+    }
+
+    pub(super) fn dispatch_issue(&self) -> Option<String> {
+        self.command_record
+            .as_ref()?
+            .1
+            .dispatched
+            .last()
+            .filter(|record| record.outcome.is_none())?
+            .issue
+            .as_ref()
+            .map(|issue| issue.url.clone())
+    }
+
+    pub(super) fn record_path(&self) -> Option<PathBuf> {
+        self.command_record.as_ref().map(|(path, _)| path.clone())
+    }
+
+    pub(super) fn stop_request(&mut self) -> Option<super::stop::Request> {
+        let path = self
+            .parent_record
+            .as_ref()
+            .or_else(|| self.command_record.as_ref().map(|(path, _)| path))?;
+        self.outside.stop_request(path)
+    }
+
+    fn start_record(&mut self, work: Work, harness: &Choice) {
+        let stamp = self.stamp();
+        let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
+        facts.hostname = self.outside.hostname();
+        facts.process_start = self
+            .outside
+            .process_start(facts.process_id)
+            .unwrap_or_default();
+        facts.parent_record = self.parent_record.clone();
+        facts.parent_dispatch = self.parent_dispatch.clone();
+        let path = if let Some(parent) = &self.parent_record {
+            owner::child_record(
+                parent,
+                self.parent_dispatch.as_deref(),
+                work.issue().unwrap(),
+            )
+        } else {
+            let Some(owner) = &self.owner else {
+                return;
+            };
+            let Some(path) = owner.record_path() else {
+                return;
+            };
+            path
+        };
+        self.command_record = Some((
+            path,
+            CommandTree {
+                command: facts,
+                dispatched: Vec::new(),
+            },
+        ));
+        if let Some(stage) = work.initial_stage() {
+            self.stage(stage, None);
+        } else {
+            self.write_record();
+        }
+    }
+
+    pub(super) fn tickets(&mut self, tickets: Vec<TicketRecord>) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().tickets = tickets;
+            self.write_record();
+        }
+    }
+
     pub(super) fn skipped(&mut self, pass: Pass, repo: &Repo, reason: impl Display) {
         let kind = Kind::Pass(pass);
         self.activity_write(
@@ -154,8 +267,101 @@ impl<O: Outside> Record<O> {
         self.show_held();
         if let Some(started) = &self.activity_started {
             let root = started.root.clone();
-            let line = format!("{} ended: {outcome}", started.subject());
+            let subject = started.subject();
+            if let Some(request) = self.stop_request() {
+                self.activity_write(
+                    &root,
+                    &format!(
+                        "{subject} stopped from the {} by {}",
+                        request.source(),
+                        request.who
+                    ),
+                    None,
+                );
+            }
+            let line = format!("{subject} ended: {outcome}");
             self.activity_write(&root, &line, None);
+        }
+    }
+
+    pub(super) fn issue_title(&mut self, title: Option<String>) {
+        if let Some((_, tree)) = &mut self.command_record
+            && let Some(issue) = &mut tree.active().issue
+        {
+            issue.title = title;
+            self.write_record();
+        }
+    }
+
+    pub(super) fn issue_branch(&mut self, branch: Option<&str>) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.active().issue_branch = branch.map(String::from);
+            self.write_record();
+        }
+    }
+
+    pub(super) fn stage(&mut self, stage: StageName, log: Option<&Path>) {
+        let name = stage.name();
+        let Some((_, tree)) = &mut self.command_record else {
+            return;
+        };
+        let facts = tree.active();
+        if let Some(log) = log {
+            facts.session_log = Some(log.into());
+        }
+        if facts.stages.last().is_none_or(|stage| stage.name != name) {
+            facts.stages.push(Stage {
+                name: name.into(),
+                began_at: self.outside.now().to_rfc3339(),
+                session_log: facts.session_log.clone(),
+            });
+        } else if let Some(stage) = facts.stages.last_mut() {
+            stage.session_log = facts.session_log.clone();
+        }
+        self.write_record();
+    }
+
+    pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.finish(account, self.outside.now());
+            self.write_record();
+        }
+    }
+
+    pub(super) fn dispatch_ended(&mut self, account: &crate::run_ending::Account<'_>) {
+        if let Some((_, tree)) = &mut self.command_record
+            && let Some(dispatched) = tree.dispatched.last_mut()
+        {
+            dispatched.finish(account, self.outside.now());
+            self.write_record();
+        }
+    }
+
+    pub(super) fn dispatching(&mut self, work: Work, harness: &Choice) {
+        let stamp = self.stamp();
+        let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
+        if let Some((_, tree)) = &mut self.command_record {
+            facts.hostname = tree.command.hostname.clone();
+            facts.process_start = tree.command.process_start.clone();
+            tree.dispatched.push(facts);
+            self.write_record();
+        }
+    }
+
+    fn write_record(&mut self) {
+        let Some((path, facts)) = &self.command_record else {
+            return;
+        };
+        let written = serde_json::to_vec_pretty(facts)
+            .map_err(anyhow::Error::from)
+            .and_then(|bytes| self.outside.replace_record(path, &bytes));
+        if let Err(error) = written
+            && !self.record_warned
+        {
+            self.record_warned = true;
+            self.step(format_args!(
+                "warning: could not keep the Command record: {error:#}"
+            ));
         }
     }
 
@@ -193,6 +399,23 @@ impl<O: Outside> Record<O> {
             Log::Failed { path } => path.clone(),
             Log::NotKept | Log::Held { .. } => None,
         }
+    }
+
+    pub(super) fn inherit_owner(&mut self, inherited: Result<Owner>) {
+        if self.owner.is_none() {
+            match inherited {
+                Ok(owner) => self.owner = Some(owner),
+                Err(error) => self.owner_error = Some(format!("{error:#}")),
+            }
+        }
+    }
+
+    pub(super) fn captured_owner(&self) -> Result<Owner, String> {
+        self.owner.clone().ok_or_else(|| {
+            self.owner_error
+                .clone()
+                .unwrap_or_else(|| "Command logging has not allocated an owner".into())
+        })
     }
 
     pub(super) fn print(&mut self, line: &str) {
@@ -239,7 +462,7 @@ impl<O: Outside> Record<O> {
         }
     }
 
-    fn keep(&mut self, path: PathBuf) {
+    fn keep(&mut self, root: &Path, work: Work<'_>, stamp: &str) {
         self.show_held();
         if !matches!(self.command_log, Log::Held { .. }) {
             return;
@@ -248,7 +471,10 @@ impl<O: Outside> Record<O> {
             unreachable!()
         };
         let created: Result<O::CommandLog> = (|| {
-            let mut writer = self.outside.open_command_log(&path)?;
+            let allocation = owner::allocate(&mut self.outside, root, work, stamp)?;
+            self.owner = Some(allocation.owner);
+            let mut writer = allocation.writer;
+            let path = self.owner.as_ref().unwrap().log_path().unwrap();
             for (_, line) in lines {
                 writeln!(writer, "{line}")
                     .with_context(|| format!("could not write {}", path.display()))?;
@@ -258,14 +484,25 @@ impl<O: Outside> Record<O> {
         match created {
             Ok(writer) => {
                 self.command_log = Log::Kept {
-                    path: path.clone(),
+                    path: self
+                        .owner
+                        .as_ref()
+                        .unwrap()
+                        .log_path()
+                        .unwrap()
+                        .to_path_buf(),
                     writer,
                 };
+                let path = self.command_log_path().unwrap();
                 self.step(format_args!("logging this command to {}", path.display()));
             }
             Err(error) => {
+                self.owner_error = Some(format!("{error:#}"));
                 self.command_log = Log::Failed {
-                    path: self.outside.command_log_exists(&path).then_some(path),
+                    path: self
+                        .owner
+                        .as_ref()
+                        .and_then(|owner| owner.log_path().map(Path::to_path_buf)),
                 };
                 self.step(format_args!(
                     "warning: could not keep the Command log: {error:#}"

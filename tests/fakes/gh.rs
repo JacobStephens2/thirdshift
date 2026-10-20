@@ -10,7 +10,13 @@
 //!  "titles"?: {"<number>": "<title>"},
 //!  "created"?: {"<number>": "<ISO 8601 time>"},
 //!  "bodies"?: {"<number>": "<body>"},
-//!  "comments"?: {"<number>": ["<body>", ...]},
+//!  "comments"?: {"<number>": ["<body>" | {"body", "by", "association"}, ...]},
+//!  "author_associations"?: {"<number>": "OWNER" | "MEMBER" | "COLLABORATOR" | "NONE"},
+//!  "trust_events"?: {"<number>": [<REST issue event with created_at>, ...]},
+//!  "edits"?: {"<number>": [{"kind": "body" | "title", "by": "<login>" | null, "at"}, ...]},
+//!  "collaborators"?: ["<login>", ...],
+//!  "org_members"?: ["<login>", ...],
+//!  "owner_type"?: "User" | "Organization",
 //!  "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body",
 //!           "mergeable"?, "unknown_polls"?, "reviewDecision"?}],
 //!  "checks": {"<sha>": [{"id", "name", "conclusion", "url", "pending_polls"?,
@@ -26,6 +32,8 @@
 //!  "refuse_merges"?: {"times", "error"},
 //!  "after_merge"?: "<script>",
 //!  "failing"?: ["<command> <subcommand>", ...],
+//!  "failing_stderr"?: "<stderr for failing commands>",
+//!  "fail_next"?: {"call": "<command prefix>", "times": <count>, "error": "<stderr>"},
 //!  "advisory_create_fails_after"?: <number of records>,
 //!  "user_email"?: "<address>" | null,
 //!  "sub_issues"?: {"<number>": [<number>, ...]},
@@ -48,6 +56,11 @@
 //!
 //! An issue's title is its entry in `titles`, else `Issue <number>`, and its
 //! `createdAt` its entry in `created`, else the first second of 2020.
+//! Trust defaults to an OWNER author and a ready-for-agent event by the
+//! repository owner at the first second of 2020. `trust_events` overrides
+//! that history, including an empty array for an issue never labelled
+//! ready-for-agent. The REST events endpoint streams every supplied event
+//! with --paginate --jq '.[]'.
 //!
 //! `gh api --method PUT repos/<repo>/issues/<number>/labels -f
 //! labels[]=<label> ...` sets an issue's labels to exactly those given.
@@ -96,13 +109,22 @@
 //! candidate with: issue `$number`'s parent, the issue whose `sub_issues` it is
 //! one of, the state of each of its sub-issues, the issues it is `blocked_by`
 //! with their states, and from its `timeline`, oldest first, every `labeled`
-//! event as `labelled` and the newest of its `sub_issue_added`,
+//! or `unlabeled` event as `labelled` in pages of 100, using the `$after`
+//! cursor and returning `pageInfo`, and the newest of its `sub_issue_added`,
 //! `sub_issue_removed`, `blocked_by_added` and `blocked_by_removed` events as
-//! `linked`. Any other query exits 2.
+//! `linked`. A query that asks for `userContentEdits`, or for
+//! `RENAMED_TITLE_EVENT`s, answers with issue `$number`'s `body` or `title`
+//! `edits`, oldest first, as `edits` in pages of 100 using the `$after`
+//! cursor, each with its `at` time and its `by` account as `actor`. A query
+//! that asks for `comments` with their `authorAssociation` answers with issue
+//! `$number`'s title, body and `comments`, oldest first, in pages of 100 using
+//! the `$after` cursor: a plain body is by the repository owner, as `OWNER`,
+//! and an object names its `by` account, null for a deleted one, and its
+//! `association`. Any other query exits 2.
 //!
 //! `gh api --method PATCH repos/<repo>/pulls/<number> -f body=<body>` sets the
 //! PR's body. `gh pr view`, `gh pr ready` and `gh pr merge` name the PR by
-//! its head branch or its number; numeric merge reads that PR's actual head.
+//! its head branch, number or URL; a number or URL selects that PR's actual head.
 //!
 //! `gh issue close` closes the issue, recording its `--comment`; on an issue
 //! already closed it only warns, as gh does.
@@ -177,6 +199,8 @@
 //! gh fake repo-labels '<JSON list>'       set the repository's labels
 //! gh fake timeline <number> '<JSON list>' set issue <number>'s timeline
 //!                                         events, oldest first
+//! gh fake edits <number> '<JSON list>'    set issue <number>'s body and
+//!                                         title edits, oldest first
 //! ```
 //!
 //! Every call's argv is appended to the JSON list in $FAKE_GH_RECORD.
@@ -221,7 +245,9 @@ fn save(state: &Json) {
     fs::write(state_path(), state.dump()).unwrap();
 }
 
-const BOOLEAN_FLAGS: [&str; 6] = ["draft", "undo", "paginate", "merge", "silent", "failed"];
+const BOOLEAN_FLAGS: [&str; 7] = [
+    "draft", "undo", "paginate", "merge", "silent", "failed", "include",
+];
 
 /// `--flag` values by name; a boolean flag's is `None`.
 type Flags = BTreeMap<String, Option<String>>;
@@ -266,9 +292,11 @@ fn check_repo(state: &Json, flags: &Flags) {
 
 /// Fail unless `repo`, if any, is the fake's. `{owner}/{repo}` is gh's
 /// placeholder for the current directory's repo, which is always the fake's.
+/// The local origin path stands in for that repository's remote URL.
 fn check_repo_is(state: &Json, repo: Option<&str>) {
     if let Some(repo) = repo
         && repo != "{owner}/{repo}"
+        && Path::new(repo) != origin_repo()
         && repo.to_lowercase() != state.at("repo").str().to_lowercase()
     {
         die(&format!("fake gh: unknown repo {repo}"), 1);
@@ -287,9 +315,14 @@ fn newest_pr_from(state: &Json, head: &str) -> usize {
         .unwrap_or_else(|| no_pr_for(head))
 }
 
-/// Resolve a numeric identity or, for fake agents, a head branch.
+/// Resolve a number or URL, or, for fake agents, a head branch.
 fn selected_pr(state: &Json, name: &str) -> usize {
-    if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
+    if name.starts_with("https://") {
+        prs(state)
+            .iter()
+            .rposition(|pr| pr.at("url").str() == name)
+            .unwrap_or_else(|| no_pr_for(name))
+    } else if !name.is_empty() && name.bytes().all(|b| b.is_ascii_digit()) {
         prs(state)
             .iter()
             .rposition(|pr| pr.at("number").as_i64() == name.parse().ok())
@@ -326,6 +359,18 @@ fn pr_create(state: &mut Json, flags: &Flags) {
         ("head", string(flag(flags, "head").expect("no --head"))),
         ("base", string(flag(flags, "base").expect("no --base"))),
         ("state", string("OPEN")),
+        // A PR retains its head even before the scripted session's first
+        // push or after GitHub deletes its branch on merge.
+        (
+            "createdHead",
+            string(
+                String::from_utf8(
+                    git(&std::env::current_dir().unwrap(), &["rev-parse", "HEAD"]).stdout,
+                )
+                .unwrap()
+                .trim(),
+            ),
+        ),
         ("isDraft", Bool(flags.contains_key("draft"))),
         ("title", string(flag(flags, "title").unwrap_or(""))),
         ("body", string(flag(flags, "body").unwrap_or(""))),
@@ -438,7 +483,10 @@ fn pr_fields(pr: &Json, wanted: &[String]) -> Json {
     if wanted.iter().any(|w| w == "headRefOid") {
         let head = match pr.get("headRefOid") {
             Some(head) if head.truthy() => head.clone(),
-            _ => string(branch_tip(pr.at("head").str())),
+            _ => string(
+                origin_tip(pr.at("head").str())
+                    .unwrap_or_else(|| pr.at("createdHead").str().to_owned()),
+            ),
         };
         fields.set("headRefOid", head);
     }
@@ -447,6 +495,8 @@ fn pr_fields(pr: &Json, wanted: &[String]) -> Json {
 
 const PR_LINE_OF_NEWEST: &str =
     r#".[0] // empty | "\(.state) \(.url) \(.headRefOid) \(.mergeCommit.oid // "")""#;
+
+const PR_LINE_OF_NEWEST_WITH_OWNERSHIP: &str = r#".[0] // empty | "\(.isCrossRepository) \(.state) \(.url) \(.headRefOid) \(.mergeCommit.oid // "")""#;
 
 const WORKFLOW_RUN_LINES: &str = r#".workflow_runs[] | "\(.status) \(.conclusion) \(.name)""#;
 
@@ -460,7 +510,7 @@ const FAILED_JOB_NAMES: &str = r#"[.jobs[] | select(.conclusion != "success" and
 
 /// Newest first. `--search head:<prefix>` matches head branches starting with
 /// <prefix>, as GitHub's search does; `--head <branch>` matches that branch
-/// exactly. `--jq` is supported only as `PR_LINE_OF_NEWEST`.
+/// exactly. `--jq` supports the newest-PR line with or without its ownership.
 fn pr_list(state: &Json, flags: &Flags) {
     let wanted_state = flag(flags, "state").unwrap_or("open").to_uppercase();
     let search = flag(flags, "search").unwrap_or("");
@@ -484,7 +534,7 @@ fn pr_list(state: &Json, flags: &Flags) {
         .collect();
     match flag(flags, "jq") {
         None => println!("{}", Array(listed)),
-        Some(PR_LINE_OF_NEWEST) => {
+        Some(jq @ (PR_LINE_OF_NEWEST | PR_LINE_OF_NEWEST_WITH_OWNERSHIP)) => {
             if let Some(pr) = listed.first() {
                 let merge = match pr.at("mergeCommit") {
                     commit if commit.truthy() => {
@@ -492,8 +542,12 @@ fn pr_list(state: &Json, flags: &Flags) {
                     }
                     _ => String::new(),
                 };
+                let ownership = match jq {
+                    PR_LINE_OF_NEWEST_WITH_OWNERSHIP => format!("{} ", pr.at("isCrossRepository")),
+                    _ => String::new(),
+                };
                 let line = format!(
-                    "{} {} {} {merge}",
+                    "{ownership}{} {} {} {merge}",
                     pr.at("state").python(),
                     pr.at("url").python(),
                     pr.at("headRefOid").python()
@@ -659,6 +713,14 @@ fn issue_fields(state: &Json, n: &str, issue_state: &Json) -> Json {
         None => string("2020-01-01T00:00:00Z"),
     };
     object([
+        (
+            "author_association",
+            state
+                .get("author_associations")
+                .and_then(|authors| authors.get(n))
+                .cloned()
+                .unwrap_or_else(|| string("OWNER")),
+        ),
         ("number", number(n.parse::<i64>().unwrap())),
         // The fake's database ids are the issue numbers.
         ("id", number(n.parse::<i64>().unwrap())),
@@ -718,6 +780,47 @@ fn issue_labels_put(state: &mut Json, args: &[&str]) {
     check_repo_is(state, Some(repo));
     if !state.at("issues").has(n) {
         die("gh: Not Found (HTTP 404)", 1);
+    }
+    // Model the real Claim and Ready transitions consumed by Pickup, including
+    // consecutive applications/removals within the same second. Other label
+    // histories are supplied explicitly by fixtures that need them.
+    let before = issue_labels(state, n).to_vec();
+    let contains = |labels: &[Json], name: &Json| {
+        labels
+            .iter()
+            .any(|label| label.str().eq_ignore_ascii_case(name.str()))
+    };
+    let at = string(now());
+    let events = before
+        .iter()
+        .filter(|label| !contains(&labels, label))
+        .map(|label| ("unlabeled", label))
+        .chain(
+            labels
+                .iter()
+                .filter(|label| !contains(&before, label))
+                .map(|label| ("labeled", label)),
+        )
+        .filter(|(_, label)| {
+            matches!(
+                label.str().to_ascii_lowercase().as_str(),
+                "in-progress" | "ready-for-agent"
+            )
+        })
+        .map(|(event, label)| {
+            object([
+                ("event", string(event)),
+                ("label", label.clone()),
+                ("at", at.clone()),
+            ])
+        })
+        .collect::<Vec<_>>();
+    if !events.is_empty() {
+        state
+            .entry("timeline", object([]))
+            .entry(n, Array(Vec::new()))
+            .items_mut()
+            .extend(events);
     }
     state.entry("labels", object([])).set(n, Array(labels));
     save(state);
@@ -1163,8 +1266,71 @@ fn finding_issue_patch(state: &mut Json, rest: &[&str]) {
     println!("{}", issue_fields(state, n, &issue_state));
 }
 
+/// Answer either membership endpoint from its list of account logins.
+fn membership_response(state: &Json, key: &str, login: &str) {
+    let member = state.get(key).is_some_and(|users| {
+        users
+            .items()
+            .iter()
+            .any(|user| user.str().eq_ignore_ascii_case(login))
+    });
+    println!(
+        "HTTP/2.0 {}\r\n",
+        if member {
+            "204 No Content"
+        } else {
+            "404 Not Found"
+        }
+    );
+    if !member {
+        std::process::exit(1);
+    }
+}
+
 fn api(state: &mut Json, positional: &[String], flags: &Flags) {
     let path = &positional[0];
+    if let Some((repo, rest)) = repo_prefix(path) {
+        if let Some(n) = rest
+            .strip_prefix("issues/")
+            .and_then(|s| s.strip_suffix("/events?per_page=100"))
+        {
+            check_repo_is(state, Some(repo));
+            assert!(flags.contains_key("paginate"));
+            assert_eq!(flag(flags, "jq"), Some(".[]"));
+            let defaults = vec![object([
+                ("event", string("labeled")),
+                ("label", object([("name", string("ready-for-agent"))])),
+                (
+                    "actor",
+                    object([("login", string(repo.split('/').next().unwrap()))]),
+                ),
+                ("created_at", string("2020-01-01T00:00:00Z")),
+            ])];
+            let events = state
+                .get("trust_events")
+                .and_then(|events| events.get(n))
+                .map(Json::items)
+                .unwrap_or(&defaults);
+            for event in events {
+                println!("{event}");
+            }
+            return;
+        }
+        if let Some(login) = rest.strip_prefix("collaborators/") {
+            check_repo_is(state, Some(repo));
+            assert!(flags.contains_key("include"));
+            membership_response(state, "collaborators", login);
+            return;
+        }
+    }
+    if let Some(login) = path
+        .strip_prefix("orgs/")
+        .and_then(|s| s.split_once("/members/").map(|(_, login)| login))
+    {
+        assert!(flags.contains_key("include"));
+        membership_response(state, "org_members", login);
+        return;
+    }
     if let Some((repo, rest)) = repo_prefix(path)
         && let Some(n) = rest.strip_prefix("issues/")
         && n.parse::<u64>().is_ok()
@@ -1180,10 +1346,22 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
     if path == &format!("repos/{}", state.at("repo").str()) {
         println!(
             "{}",
-            object([(
-                "private",
-                Bool(state.get("private").is_some_and(Json::truthy))
-            )])
+            object([
+                (
+                    "owner",
+                    object([(
+                        "type",
+                        state
+                            .get("owner_type")
+                            .cloned()
+                            .unwrap_or_else(|| string("User"))
+                    )])
+                ),
+                (
+                    "private",
+                    Bool(state.get("private").is_some_and(Json::truthy))
+                )
+            ])
         );
         return;
     }
@@ -1700,7 +1878,19 @@ fn graphql(state: &Json, args: &[&str]) {
     let query = variables.remove("query").unwrap_or_default();
     let asks_for = |fields: &[&str]| fields.iter().all(|field| query.contains(field));
     let is_candidate = asks_for(&["parent", "subIssues", "blockedBy", "timelineItems"]);
-    if !is_candidate && !asks_for(&["subIssues", "blockedBy", "labels", "totalCount"]) {
+    let is_comments = asks_for(&["comments(", "authorAssociation"]);
+    let edits = if asks_for(&["userContentEdits"]) {
+        Some(("body", "editedAt"))
+    } else if asks_for(&["RENAMED_TITLE_EVENT"]) {
+        Some(("title", "createdAt"))
+    } else {
+        None
+    };
+    if !is_candidate
+        && !is_comments
+        && edits.is_none()
+        && !asks_for(&["subIssues", "blockedBy", "labels", "totalCount"])
+    {
         die(&format!("fake gh: unsupported graphql query {query}"), 2);
     }
     check_repo_is(
@@ -1716,8 +1906,13 @@ fn graphql(state: &Json, args: &[&str]) {
             1,
         );
     }
-    let issue = if is_candidate {
-        candidate(state, n)
+    let after = variables.get("after").map(String::as_str);
+    let issue = if let Some((kind, field)) = edits {
+        edit_history(state, n, kind, field, after)
+    } else if is_comments {
+        issue_comments(state, n, after)
+    } else if is_candidate {
+        candidate(state, n, after)
     } else {
         let nodes = listed(state, "sub_issues", n)
             .iter()
@@ -1787,8 +1982,90 @@ fn blockers(state: &Json, key: &str) -> Json {
     object([("nodes", Array(blockers))])
 }
 
+/// Issue `n`'s `kind` edits, oldest first, each at its `field` time, as the
+/// edit queries read them: the page after the `after` cursor.
+fn edit_history(state: &Json, n: &str, kind: &str, field: &str, after: Option<&str>) -> Json {
+    let edits: Vec<Json> = listed(state, "edits", n)
+        .into_iter()
+        .filter(|edit| edit.at("kind").str() == kind)
+        .map(|edit| {
+            let actor = match edit.at("by") {
+                Null => Null,
+                login => object([("login", login.clone())]),
+            };
+            object([(field, edit.at("at").clone()), ("actor", actor)])
+        })
+        .collect();
+    let start = after
+        .map(|cursor| cursor.parse::<usize>().expect("edit cursor"))
+        .unwrap_or(0);
+    let end = (start + 100).min(edits.len());
+    let page_info = object([
+        ("hasNextPage", Bool(end < edits.len())),
+        ("endCursor", string(end.to_string())),
+    ]);
+    object([(
+        "edits",
+        object([
+            ("nodes", Array(edits[start..end].to_vec())),
+            ("pageInfo", page_info),
+        ]),
+    )])
+}
+
+/// Issue `n`'s title, body and comments, as the session issue query reads
+/// them, the comments in pages of 100 from the `after` cursor.
+fn issue_comments(state: &Json, n: &str, after: Option<&str>) -> Json {
+    let owner = state.at("repo").str().split('/').next().unwrap().to_owned();
+    let comments: Vec<Json> = listed(state, "comments", n)
+        .into_iter()
+        .map(|comment| {
+            let (body, by, association) = match &comment {
+                Json::Object(_) => (
+                    comment.at("body").clone(),
+                    comment.at("by").clone(),
+                    comment.at("association").clone(),
+                ),
+                _ => (comment.clone(), string(owner.clone()), string("OWNER")),
+            };
+            let author = match by {
+                Null => Null,
+                login => object([("login", login)]),
+            };
+            object([
+                ("author", author),
+                ("authorAssociation", association),
+                ("createdAt", string("2020-01-01T00:00:00Z")),
+                ("body", body),
+            ])
+        })
+        .collect();
+    let start = after
+        .map(|cursor| cursor.parse::<usize>().expect("comment cursor"))
+        .unwrap_or(0);
+    let end = (start + 100).min(comments.len());
+    let fields = issue_fields(state, n, state.at("issues").at(n));
+    object([
+        ("title", fields.at("title").clone()),
+        ("body", fields.at("body").clone()),
+        (
+            "comments",
+            object([
+                ("nodes", Array(comments[start..end].to_vec())),
+                (
+                    "pageInfo",
+                    object([
+                        ("hasNextPage", Bool(end < comments.len())),
+                        ("endCursor", string(end.to_string())),
+                    ]),
+                ),
+            ]),
+        ),
+    ])
+}
+
 /// Issue `n` as the candidate query reads it.
-fn candidate(state: &Json, n: &str) -> Json {
+fn candidate(state: &Json, n: &str, after: Option<&str>) -> Json {
     let parent = match state.get("sub_issues") {
         Some(Json::Object(specs)) => specs
             .iter()
@@ -1810,9 +2087,18 @@ fn candidate(state: &Json, n: &str) -> Json {
     for event in listed(state, "timeline", n) {
         let at = event.at("at").clone();
         let link = match event.at("event").str() {
-            "labeled" => {
+            "labeled" | "unlabeled" => {
                 let label = object([("name", event.at("label").clone())]);
-                labelled.push(object([("createdAt", at), ("label", label)]));
+                let kind = if event.at("event").str() == "labeled" {
+                    "LabeledEvent"
+                } else {
+                    "UnlabeledEvent"
+                };
+                labelled.push(object([
+                    ("__typename", string(kind)),
+                    ("createdAt", at),
+                    ("label", label),
+                ]));
                 continue;
             }
             "sub_issue_added" => "SubIssueAddedEvent",
@@ -1823,6 +2109,15 @@ fn candidate(state: &Json, n: &str) -> Json {
         };
         linked = Some(object([("__typename", string(link)), ("createdAt", at)]));
     }
+    let start = after
+        .map(|cursor| cursor.parse::<usize>().expect("label cursor"))
+        .unwrap_or(0);
+    let end = (start + 100).min(labelled.len());
+    let page_info = object([
+        ("hasNextPage", Bool(end < labelled.len())),
+        ("endCursor", string(end.to_string())),
+    ]);
+    let labelled = labelled[start..end].to_vec();
     let sub_issues = listed(state, "sub_issues", n)
         .iter()
         .map(|ticket| object([("state", numbered_issue(state, ticket).at("state").clone())]))
@@ -1831,7 +2126,10 @@ fn candidate(state: &Json, n: &str) -> Json {
         ("parent", parent),
         ("subIssues", object([("nodes", Array(sub_issues))])),
         ("blockedBy", blockers(state, n)),
-        ("labelled", object([("nodes", Array(labelled))])),
+        (
+            "labelled",
+            object([("nodes", Array(labelled)), ("pageInfo", page_info)]),
+        ),
         (
             "linked",
             object([("nodes", Array(linked.into_iter().collect()))]),
@@ -1954,6 +2252,7 @@ fn fake_command(state: &mut Json, args: &[&str]) {
         ["timeline", n, events] => state
             .entry("timeline", object([]))
             .set(n, parse_json(events)),
+        ["edits", n, edits] => state.entry("edits", object([])).set(n, parse_json(edits)),
         ["user-email", email] => state.set("user_email", parse_json(email)),
         ["fails", call] => state
             .entry("failing", Array(Vec::new()))
@@ -2000,11 +2299,27 @@ pub fn main(args: Vec<String>) {
         let words: Vec<&str> = call.split(' ').collect();
         args.iter().map(String::as_str).take(words.len()).eq(words)
     };
+    if let Some(failure) = state.get("fail_next")
+        && starts_with(failure.at("call").str())
+        && failure.at("times").as_i64().unwrap() > 0
+    {
+        let left = failure.at("times").as_i64().unwrap() - 1;
+        let error = failure.at("error").str().to_owned();
+        state.at_mut("fail_next").set("times", number(left));
+        save(&state);
+        die(&error, 1);
+    }
     if failing
         .iter()
         .any(|failing| failing.as_str().is_some_and(starts_with))
     {
-        die("HTTP 502: Bad Gateway (https://api.github.com/graphql)", 1);
+        die(
+            state
+                .get("failing_stderr")
+                .and_then(Json::as_str)
+                .unwrap_or("HTTP 502: Bad Gateway (https://api.github.com/graphql)"),
+            1,
+        );
     }
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let parsed = |rest: &[&str]| {

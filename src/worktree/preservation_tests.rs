@@ -109,7 +109,7 @@ fn assert_preservation_refuses_retry(name: &str, mutation: &str) {
     fs::write(marker.with_extension("switch"), "switch ownership").unwrap();
 
     let error = worktree
-        .preserve_failed_run("main", "session failed")
+        .preserve_failed_run("main", "session failed", &mut || Ok(()))
         .unwrap_err();
 
     assert!(marker.exists(), "{mutation} lock failure was not exercised");
@@ -243,7 +243,7 @@ fn retryable_preservation_failures_with_valid_ownership_finish_and_restore_clean
         fs::write(marker.with_extension("mutation"), mutation).unwrap();
 
         worktree
-            .preserve_failed_run("main", "session failed")
+            .preserve_failed_run("main", "session failed", &mut || Ok(()))
             .unwrap();
 
         assert!(marker.exists(), "{mutation} lock failure was not exercised");
@@ -294,7 +294,7 @@ fn switched_and_detached_checkouts_refuse_preservation_without_touching_unrelate
         let status = git.run(&["status", "--porcelain"]).unwrap();
 
         let error = worktree
-            .preserve_failed_run("main", "session failed")
+            .preserve_failed_run("main", "session failed", &mut || Ok(()))
             .unwrap_err();
         assert_ownership_error(&error, &path, "identity changed");
         drop(worktree);
@@ -325,7 +325,7 @@ fn changed_ownership_refuses_preservation_even_with_unchanged_work() {
         let refs = launch.run(&["show-ref"]).unwrap();
 
         let error = worktree
-            .preserve_failed_run("main", "session failed")
+            .preserve_failed_run("main", "session failed", &mut || Ok(()))
             .unwrap_err();
         assert_ownership_error(&error, &path, "identity changed");
         // Restore readable ownership before Drop: retention must come from
@@ -364,7 +364,7 @@ fn recreated_checkout_on_the_same_branch_and_head_refuses_preservation() {
     let status = git.run(&["status", "--porcelain"]).unwrap();
 
     let error = worktree
-        .preserve_failed_run("main", "session failed")
+        .preserve_failed_run("main", "session failed", &mut || Ok(()))
         .unwrap_err();
     assert_ownership_error(&error, &path, "replaced");
     drop(worktree);
@@ -425,7 +425,7 @@ fn locked_or_damaged_ownership_refuses_preservation_and_retains_work_after_evide
         }
 
         let error = worktree
-            .preserve_failed_run("main", "session failed")
+            .preserve_failed_run("main", "session failed", &mut || Ok(()))
             .unwrap_err();
         assert_ownership_error(&error, &path, "cannot preserve acquired checkout");
         match damage {
@@ -475,7 +475,7 @@ fn replaced_pinned_directories_refuse_preservation_and_do_not_lock_a_replacement
         fs::create_dir(&pinned).unwrap();
 
         let error = worktree
-            .preserve_failed_run("main", "session failed")
+            .preserve_failed_run("main", "session failed", &mut || Ok(()))
             .unwrap_err();
         assert_ownership_error(&error, &path, "replaced");
         assert_eq!(
@@ -506,13 +506,13 @@ fn a_successful_retry_on_the_original_checkout_restores_cleanup_eligibility() {
     git.run(&["checkout", "-q", "--detach"]).unwrap();
     assert!(
         worktree
-            .preserve_failed_run("main", "session failed")
+            .preserve_failed_run("main", "session failed", &mut || Ok(()))
             .is_err()
     );
     git.run(&["checkout", "-q", BRANCH]).unwrap();
 
     worktree
-        .preserve_failed_run("main", "session failed")
+        .preserve_failed_run("main", "session failed", &mut || Ok(()))
         .unwrap();
     drop(worktree);
 
@@ -534,7 +534,7 @@ fn preservation_lock_errors_retain_work_even_after_the_locks_are_repaired() {
         fs::create_dir(&lock).unwrap();
 
         let error = worktree
-            .preserve_failed_run("main", "session failed")
+            .preserve_failed_run("main", "session failed", &mut || Ok(()))
             .unwrap_err();
         assert_ownership_error(&error, &path, "can't open");
         fs::remove_dir(&lock).unwrap();
@@ -563,7 +563,7 @@ fn preservation_waits_for_both_repository_locks_before_changing_work() {
         let held = launch.lock(name).unwrap();
         let (finished, received) = mpsc::channel();
         let worker = std::thread::spawn(move || {
-            let result = worktree.preserve_failed_run("main", "session failed");
+            let result = worktree.preserve_failed_run("main", "session failed", &mut || Ok(()));
             let _ = finished.send(());
             (result, worktree)
         });
@@ -626,7 +626,7 @@ fi
         fs::write(marker.with_extension("gate"), gate).unwrap();
 
         let error = worktree
-            .preserve_failed_run("main", "session failed")
+            .preserve_failed_run("main", "session failed", &mut || Ok(()))
             .unwrap_err();
         let error = format!("{error:#}");
         assert!(error.contains(path.to_str().unwrap()), "{gate}: {error}");
@@ -713,7 +713,7 @@ fi
     fs::write(marker.with_extension("armed"), "armed").unwrap();
     let (finished, received) = mpsc::channel();
     let worker = std::thread::spawn(move || {
-        let result = worktree.preserve_failed_run("main", "session failed");
+        let result = worktree.preserve_failed_run("main", "session failed", &mut || Ok(()));
         let _ = finished.send(());
         (result, worktree)
     });
@@ -817,7 +817,7 @@ fn preservation_pushes_committed_and_uncommitted_work_with_failure_metadata_then
     fs::write(path.join("wip.txt"), "half done\n").unwrap();
 
     worktree
-        .preserve_failed_run("main", "session failed")
+        .preserve_failed_run("main", "session failed", &mut || Ok(()))
         .unwrap();
     drop(worktree);
 
@@ -856,7 +856,7 @@ fn a_staging_error_retains_uncommitted_work_and_the_local_branch_after_drop() {
     fs::write(path.join("wip.txt"), "unstaged work\n").unwrap();
 
     let error = worktree
-        .preserve_failed_run("main", "session failed")
+        .preserve_failed_run("main", "session failed", &mut || Ok(()))
         .unwrap_err();
     assert!(
         error.to_string().starts_with("git add -A failed"),
@@ -881,9 +881,12 @@ fn unchanged_work_makes_no_failure_commit_or_remote_branch_and_allows_cleanup() 
     let path = worktree.path().to_path_buf();
     let head = worktree.head().unwrap();
 
-    worktree
-        .preserve_failed_run("main", "session failed")
-        .unwrap();
+    assert_eq!(
+        worktree
+            .preserve_failed_run("main", "session failed", &mut || Ok(()))
+            .unwrap(),
+        super::Preserved::NoChanges
+    );
 
     assert_eq!(worktree.head().unwrap(), head);
     assert!(!launch.on_origin(BRANCH).unwrap());
@@ -905,7 +908,7 @@ fn committed_work_gets_an_empty_failure_marker_despite_rejecting_local_hooks() {
     }
 
     worktree
-        .preserve_failed_run("main", "session failed")
+        .preserve_failed_run("main", "session failed", &mut || Ok(()))
         .unwrap();
     drop(worktree);
 
@@ -936,7 +939,7 @@ fn an_unfinished_merge_is_aborted_before_preserving_the_issue_branch() {
     fs::write(path.join("wip.txt"), "half done\n").unwrap();
 
     worktree
-        .preserve_failed_run("main", "session failed")
+        .preserve_failed_run("main", "session failed", &mut || Ok(()))
         .unwrap();
 
     assert!(!git.merge_in_progress().unwrap());
@@ -968,7 +971,7 @@ fn a_merge_abort_error_retains_the_conflict_and_edits_after_drop() {
     fs::write(path.join("merged.txt"), "edited after conflict\n").unwrap();
 
     let error = worktree
-        .preserve_failed_run("main", "session failed")
+        .preserve_failed_run("main", "session failed", &mut || Ok(()))
         .unwrap_err();
     assert!(
         error.to_string().starts_with("git merge --abort failed"),
@@ -1001,7 +1004,7 @@ fn a_commit_error_retains_staged_work_and_the_local_branch_after_drop() {
     fs::write(path.join("wip.txt"), "half done\n").unwrap();
 
     let error = worktree
-        .preserve_failed_run("main", "session failed")
+        .preserve_failed_run("main", "session failed", &mut || Ok(()))
         .unwrap_err();
     assert!(error.to_string().starts_with("git commit"), "{error:#}");
     drop(worktree);
@@ -1038,9 +1041,14 @@ fn rejected_or_unreachable_origin_retains_the_failure_commit_and_work_after_drop
         }
 
         let error = worktree
-            .preserve_failed_run("main", "session failed")
+            .preserve_failed_run("main", "session failed", &mut || Ok(()))
             .unwrap_err();
-        assert!(error.to_string().starts_with("git push"), "{error:#}");
+        let failed_command = if rejecting_origin {
+            "git push"
+        } else {
+            "git ls-remote"
+        };
+        assert!(error.to_string().starts_with(failed_command), "{error:#}");
         drop(worktree);
 
         assert_retained(&launch, &path);
@@ -1073,7 +1081,9 @@ fn recorded_interruption_allows_preservation_and_cleanup_but_still_blocks_ordina
             fs::write(path.join("wip.txt"), "half done\n").unwrap();
             signal_hook::low_level::raise(signal).unwrap();
 
-            worktree.preserve_failed_run("main", "interrupted").unwrap();
+            worktree
+                .preserve_failed_run("main", "interrupted", &mut || Ok(()))
+                .unwrap();
 
             assert!(interrupt::requested());
             assert_eq!(worktree.head().unwrap_err().to_string(), "interrupted");
@@ -1126,7 +1136,8 @@ fn recorded_interruption_still_waits_for_both_preservation_locks_and_finishes() 
                 let held = launch.lock(name).unwrap();
                 let (finished, received) = mpsc::channel();
                 let worker = std::thread::spawn(move || {
-                    let result = worktree.preserve_failed_run("main", "interrupted");
+                    let result =
+                        worktree.preserve_failed_run("main", "interrupted", &mut || Ok(()));
                     let _ = finished.send(());
                     (result, worktree)
                 });
@@ -1168,14 +1179,14 @@ fn successful_preservation_after_an_error_restores_cleanup_even_with_unchanged_w
     fs::create_dir(&index).unwrap();
     assert!(
         worktree
-            .preserve_failed_run("main", "session failed")
+            .preserve_failed_run("main", "session failed", &mut || Ok(()))
             .is_err()
     );
     fs::remove_dir(&index).unwrap();
     fs::write(index, original_index).unwrap();
 
     worktree
-        .preserve_failed_run("main", "session failed")
+        .preserve_failed_run("main", "session failed", &mut || Ok(()))
         .unwrap();
     drop(worktree);
 
@@ -1205,7 +1216,7 @@ fn preservation_compares_with_the_last_fetched_settled_base_without_fetching_aga
         .unwrap();
 
     worktree
-        .preserve_failed_run("develop", "session failed")
+        .preserve_failed_run("develop", "session failed", &mut || Ok(()))
         .unwrap();
 
     assert_eq!(worktree.head().unwrap(), head);
@@ -1229,7 +1240,7 @@ fn a_completed_nonzero_cached_diff_probe_still_makes_and_pushes_the_failure_mark
         .unwrap();
 
     worktree
-        .preserve_failed_run("main", "session failed")
+        .preserve_failed_run("main", "session failed", &mut || Ok(()))
         .unwrap();
     drop(worktree);
 
@@ -1267,7 +1278,7 @@ fi
     fs::write(marker.with_extension("armed"), "armed").unwrap();
 
     worktree
-        .preserve_failed_run("main", "session failed")
+        .preserve_failed_run("main", "session failed", &mut || Ok(()))
         .unwrap();
 
     assert!(marker.exists(), "completed nonzero probe was not exercised");
@@ -1298,7 +1309,7 @@ fn unwinding_while_handling_a_preservation_error_keeps_the_local_work() {
     let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
         let mut worktree = worktree;
         worktree
-            .preserve_failed_run("main", "session failed")
+            .preserve_failed_run("main", "session failed", &mut || Ok(()))
             .unwrap();
     }));
 

@@ -1,4 +1,4 @@
-// Fragment links on the Prompts and skills page reveal their folded target.
+// Fragment links reveal folded content on the guide, manual and prompts pages.
 function revealFoldedTarget() {
   let id;
   try {
@@ -40,6 +40,35 @@ for (const button of document.querySelectorAll(".install button.copy")) {
     }
     setTimeout(() => { button.textContent = "Copy"; }, 1600);
   });
+}
+
+// The videos page: each thumbnail links to the video on YouTube, so it works without JavaScript.
+// Playing one swaps in YouTube's no-cookie player, so nothing is requested from YouTube or Google
+// until the reader asks for a video. A modified click still opens the link as usual.
+for (const link of document.querySelectorAll("a.video-play")) {
+  link.addEventListener("click", event => {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    event.preventDefault();
+    playVideo(link);
+  });
+  // Space activates buttons, not links; a reader can't tell this link from a play button.
+  link.addEventListener("keydown", event => {
+    if (event.key !== " ") return;
+    event.preventDefault();
+    playVideo(link);
+  });
+}
+
+function playVideo(link) {
+  const id = new URL(link.href).pathname.slice(1);
+  const player = Object.assign(document.createElement("iframe"), {
+    src: `https://www.youtube-nocookie.com/embed/${encodeURIComponent(id)}?autoplay=1`,
+    title: link.closest(".video").querySelector("h2").textContent,
+    allow: "autoplay; encrypted-media; picture-in-picture; fullscreen",
+    allowFullscreen: true,
+  });
+  link.replaceWith(player);
+  player.focus();
 }
 
 // The Prompts and skills page's commit label: the commit of main the deploy

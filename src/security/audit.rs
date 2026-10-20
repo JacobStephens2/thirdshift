@@ -16,9 +16,17 @@ use crate::logs;
 use crate::process::{self, Control, Interruption};
 use crate::progress;
 use crate::prompt;
-use crate::session::{Logs, Purpose, Sessions};
+use crate::session::{Kind, Logs, Purpose, Sessions};
 use crate::skills;
 use crate::worktree::ReviewWorktree;
+
+/// Audit startup and its result stay together: preparation can fail before
+/// any audit session is requested.
+pub struct Attempt {
+    pub started: bool,
+    pub outcome: Result<Audited>,
+    pub log: Option<PathBuf>,
+}
 
 pub struct Audited {
     pub findings: Vec<DraftAdvisory>,
@@ -67,12 +75,7 @@ pub fn check_node() -> Result<()> {
     Ok(())
 }
 
-pub fn run(
-    launch: &Git,
-    repo: &Repo,
-    base: &str,
-    harness: &Choice,
-) -> (Result<Audited>, Option<PathBuf>) {
+pub fn run(launch: &Git, repo: &Repo, base: &str, harness: &Choice) -> Attempt {
     let prepared = (|| -> Result<_> {
         let worktree = ReviewWorktree::create(launch, &repo.name, base)?;
         let commit = Git::new(worktree.path()).run(&["rev-parse", "HEAD"])?;
@@ -104,13 +107,21 @@ pub fn run(
     })();
     let (worktree, output, prompt, commit) = match prepared {
         Ok(prepared) => prepared,
-        Err(error) => return (Err(error), None),
+        Err(error) => {
+            return Attempt {
+                started: false,
+                outcome: Err(error),
+                log: None,
+            };
+        }
     };
     let logs = Logs::of_security_run(repo);
+    let mut started = false;
     let (audited, log) = Sessions::within(&logs, worktree.path(), harness, |sessions| {
         progress::step(format!("starting the Security audit of {base}"));
+        started = true;
         let message =
-            sessions.run_to_final_message(Purpose::Security, "security-audit", &prompt)?;
+            sessions.run_to_final_message(Purpose::Security, Kind::SecurityAudit, &prompt)?;
         let line = message.as_deref().and_then(|message| {
             message
                 .lines()
@@ -185,7 +196,11 @@ pub fn run(
         (Ok(audited), Ok(())) => Ok(audited),
         (Err(error), _) | (_, Err(error)) => Err(error),
     };
-    (audited, log)
+    Attempt {
+        started,
+        outcome: audited,
+        log,
+    }
 }
 
 fn finish_record(output: &Path, commit: &str, base: &str, complete: bool) -> Result<()> {

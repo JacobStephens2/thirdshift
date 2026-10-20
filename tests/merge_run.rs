@@ -19,6 +19,137 @@ gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
 
 const PR_URL: &str = "https://github.com/acme/widgets/pull/1";
 
+#[test]
+fn a_pr_merged_while_the_opening_session_runs_is_reported_as_merged() {
+    for merge in [false, true] {
+        let scenario = Scenario::new();
+        // Simulate a human merging the published work while the session is
+        // still running, then GitHub deleting the Issue branch.
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}\
+             git push -q origin HEAD\n\
+             gh pr merge 1 --merge --match-head-commit \"$(git rev-parse HEAD)\"\n\
+             git push -q origin --delete issue-7\n"
+        ));
+        let issue = scenario.issue_url(7);
+        let args = if merge {
+            vec!["merge", &issue]
+        } else {
+            vec![&*issue]
+        };
+
+        let result = scenario.run(&args);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(result.stdout, format!("{PR_URL}\n"));
+        assert_eq!(
+            result.stderr.lines().last(),
+            Some(format!("thirdshift: PR {PR_URL} is merged").as_str())
+        );
+        assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
+        assert!(scenario.gh_calls_of("pr", "edit").is_empty());
+        assert!(scenario.gh_calls_of("pr", "ready").is_empty());
+        assert_eq!(scenario.origin_log("issue-7"), None);
+        scenario.assert_cleaned_up("issue-7");
+    }
+}
+
+#[test]
+fn a_pr_merged_during_ci_is_reported_as_merged_without_recreating_its_branch() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        on_ci_read(
+            1,
+            r#"gh pr merge 1 --merge --match-head-commit "$(git ls-remote origin refs/heads/issue-7 | cut -f1)"
+git push -q origin --delete issue-7"#
+        )
+    ));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    assert_eq!(
+        result.stderr.lines().last(),
+        Some(format!("thirdshift: PR {PR_URL} is merged").as_str())
+    );
+    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
+    assert_eq!(scenario.origin_log("issue-7"), None);
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn a_merged_pr_with_local_work_left_out_still_fails_and_retains_that_work() {
+    for leftover in [
+        "echo leftover >> feature.txt",
+        "echo leftover > untracked.txt",
+        "echo leftover >> feature.txt; git add feature.txt",
+        "echo leftover >> feature.txt; git add feature.txt; git commit -qm Leftover",
+    ] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}\
+             git push -q origin HEAD\n\
+             gh pr merge 1 --merge --match-head-commit \"$(git rev-parse HEAD)\"\n\
+             git push -q origin --delete issue-7\n\
+             {leftover}\n"
+        ));
+
+        let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("is merged, not open"),
+            "{}",
+            result.stderr
+        );
+        assert!(
+            result.stderr.contains("keeping the worktree"),
+            "{}",
+            result.stderr
+        );
+        let worktree = scenario.launch_dir().with_file_name("widgets-issue-7");
+        let file = if leftover.contains("untracked.txt") {
+            "untracked.txt"
+        } else {
+            "feature.txt"
+        };
+        assert!(
+            std::fs::read_to_string(worktree.join(file))
+                .unwrap()
+                .contains("leftover")
+        );
+        assert_eq!(scenario.origin_log("issue-7"), None);
+    }
+}
+
+#[test]
+fn externally_merged_pr_retains_tracked_changes_hidden_by_index_flags() {
+    for flag in ["assume-unchanged", "skip-worktree"] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}\
+             git push -q origin HEAD\n\
+             gh pr merge 1 --merge --match-head-commit \"$(git rev-parse HEAD)\"\n\
+             git push -q origin --delete issue-7\n\
+             git update-index --{flag} feature.txt\n\
+             echo leftover >> feature.txt\n"
+        ));
+
+        let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "{flag}: {}", result.stderr);
+        let worktree = scenario.launch_dir().with_file_name("widgets-issue-7");
+        assert!(
+            std::fs::read_to_string(worktree.join("feature.txt"))
+                .unwrap()
+                .contains("leftover")
+        );
+        assert_eq!(scenario.origin_log("issue-7"), None);
+    }
+}
+
 /// Launch from `develop`, a branch other than the default, and have the agent
 /// open its PR into it, then run `then`.
 fn merge_into_develop(scenario: &Scenario, then: &str) {
@@ -262,6 +393,55 @@ fn a_merge_into_a_branch_other_than_the_default_closes_the_issue_with_a_comment(
 }
 
 #[test]
+fn an_issue_close_failure_links_the_issue_and_keeps_the_manual_close_command() {
+    let scenario = Scenario::new();
+    merge_into_develop(&scenario, "");
+    scenario.gh_fails("issue close");
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains(
+            "could not close issue #7 (https://github.com/acme/widgets/issues/7), \
+             so if it is still open, close it by hand: \
+             gh issue close 7 --repo acme/widgets --comment \
+             'Closed by #1, merged into develop by a thirdshift Merge run.'"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+    assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
+    assert_eq!(
+        result.stderr.lines().last(),
+        Some(format!("thirdshift: PR {PR_URL} is merged").as_str())
+    );
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn an_already_closed_issue_has_no_close_failure_warning() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}gh fake after-merge 'gh fake issue 7 CLOSED'\n"
+    ));
+    scenario.gh_fails("issue close");
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(scenario.gh_calls_of("issue", "close").is_empty());
+    assert!(
+        !result.stderr.contains("could not close issue"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.gh_state()["issues"]["7"], "CLOSED");
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+}
+
+#[test]
 fn an_issue_branch_already_deleted_by_github_is_no_warning() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!(
@@ -493,7 +673,10 @@ fn sha_of(scenario: &Scenario, branch: &str, subject: &str) -> String {
 
 /// The full sha of `commit`'s first parent in origin.
 fn parent_of(scenario: &Scenario, commit: &str) -> String {
-    scenario.origin_git(&["rev-parse", &format!("{commit}^")])
+    scenario
+        .origin_git(&["rev-parse", &format!("{commit}^")])
+        .trim()
+        .to_string()
 }
 
 /// Assert that `prompt` is a review Repair's, reviewing from `fixed_point`.
@@ -511,6 +694,33 @@ fn assert_review_repair_from(prompt: &serde_json::Value, fixed_point: &str) {
         "prompt: {prompt}"
     );
     assert!(prompt.contains("Unaddressed findings"), "prompt: {prompt}");
+}
+
+#[test]
+fn a_tree_identical_foreign_commit_is_merged_without_a_review_repair() {
+    let scenario = Scenario::new();
+    let empty_commit = someone_pushes_to_issue_7("feature.txt", "feature", "Empty review")
+        .replace("commit -q -m", "commit -q --allow-empty -m");
+    scenario.agent_does_in_session(
+        1,
+        &format!("{AGENT_OPENS_PR}{}", on_ci_read(1, &empty_commit)),
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        scenario.claude_calls().len(),
+        1,
+        "only the implement session"
+    );
+    let foreign = sha_of(&scenario, "main", "Empty review");
+    assert_eq!(assert_issue_7_merged_into(&scenario, "main"), foreign);
+    assert_eq!(
+        scenario.origin_file("main", "feature.txt").unwrap(),
+        "feature\n"
+    );
+    scenario.assert_cleaned_up("issue-7");
 }
 
 #[test]
@@ -554,6 +764,167 @@ fn a_foreign_commit_pushed_during_ci_is_merged_in_reviewed_then_merged() {
     let head = assert_issue_7_merged_into(&scenario, "main");
     assert_eq!(head, late);
     assert_eq!(scenario.origin_file("main", "late.txt").unwrap(), "late\n");
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn an_empty_foreign_review_does_not_bounce_but_a_later_changed_batch_is_reviewed() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}",
+            on_ci_read(
+                1,
+                &someone_pushes_to_issue_7("late.txt", "late", "First changed tree")
+            )
+        ),
+    );
+    // The other writer records an empty review while this Run's review makes
+    // no changes. Later CI brings a genuinely changed tree from that writer.
+    let empty_review =
+        someone_pushes_to_issue_7("feature.txt", "feature", "Other writer empty review")
+            .replace("commit -q -m", "commit -q --allow-empty -m");
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            "{empty_review}{}",
+            on_ci_read(
+                1,
+                &someone_pushes_to_issue_7("later.txt", "later", "Second changed tree")
+            )
+        ),
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 3, "implement and two reviews of changed trees");
+    let first = sha_of(&scenario, "main", "First changed tree");
+    let empty = sha_of(&scenario, "main", "Other writer empty review");
+    let second = sha_of(&scenario, "main", "Second changed tree");
+    assert_review_repair_from(&calls[1]["prompt"], &parent_of(&scenario, &first));
+    assert_review_repair_from(&calls[2]["prompt"], &empty);
+    assert_eq!(parent_of(&scenario, &empty), first);
+    assert_eq!(parent_of(&scenario, &second), empty);
+    assert_eq!(assert_issue_7_merged_into(&scenario, "main"), second);
+    assert_eq!(
+        scenario.origin_file("main", "later.txt").unwrap(),
+        "later\n"
+    );
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["body"],
+        "Closes #7\n\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\n"
+    );
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn tree_identical_commits_from_another_writer_terminate_without_review_repairs() {
+    let scenario = Scenario::new();
+    let empty_commits = r#"
+other="$(mktemp -d)"
+git clone -q -b issue-7 https://github.com/acme/widgets.git "$other"
+git -C "$other" commit -q --allow-empty -m "Other writer empty review"
+git -C "$other" push -q origin issue-7
+rm -rf "$other"
+"#;
+    scenario.agent_does_in_session(
+        1,
+        &format!("{AGENT_OPENS_PR}{}", on_ci_read(2, empty_commits)),
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(
+        scenario.claude_calls().len(),
+        1,
+        "no Review Repairs for either empty commit"
+    );
+    assert_eq!(
+        scenario
+            .origin_log("main")
+            .unwrap()
+            .iter()
+            .filter(|subject| *subject == "Other writer empty review")
+            .count(),
+        2
+    );
+    assert_issue_7_merged_into(&scenario, "main");
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["body"],
+        "Closes #7\n\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\n"
+    );
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn a_no_change_review_reconciles_an_empty_batch_and_still_reviews_later_changes() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}",
+            on_ci_read(
+                1,
+                &someone_pushes_to_issue_7("first.txt", "first", "First changed tree")
+            )
+        ),
+    );
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            "{}{}",
+            // An unrelated writer has independently reviewed the same tree.
+            someone_pushes_to_issue_7("temporary.txt", "temporary", "Temporary tree")
+                + r#"
+other="$(mktemp -d)"
+git clone -q -b issue-7 https://github.com/acme/widgets.git "$other"
+git -C "$other" rm -q temporary.txt
+git -C "$other" commit -q -m "Restore reviewed tree"
+git -C "$other" push -q origin issue-7
+rm -rf "$other"
+"#,
+            on_ci_read(
+                1,
+                &someone_pushes_to_issue_7("later.txt", "later", "Later changed tree")
+            )
+        ),
+    );
+    // Review sessions deliberately make no file change and no commit.
+    scenario.agent_does_in_session(3, "true\n");
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let calls = scenario.claude_calls();
+    assert_eq!(
+        calls.len(),
+        3,
+        "implement and two changed-tree reviews only"
+    );
+    let first = sha_of(&scenario, "main", "First changed tree");
+    assert_review_repair_from(&calls[1]["prompt"], &parent_of(&scenario, &first));
+    let restored = sha_of(&scenario, "main", "Restore reviewed tree");
+    assert_review_repair_from(&calls[2]["prompt"], &restored);
+    assert_eq!(
+        scenario.gh_state()["prs"][0]["body"],
+        "Closes #7\n\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\n"
+    );
+    assert_eq!(
+        scenario.origin_file("main", "first.txt").unwrap(),
+        "first\n"
+    );
+    assert_eq!(
+        scenario.origin_file("main", "later.txt").unwrap(),
+        "later\n"
+    );
+    assert_eq!(
+        assert_issue_7_merged_into(&scenario, "main"),
+        sha_of(&scenario, "main", "Later changed tree")
+    );
     scenario.assert_cleaned_up("issue-7");
 }
 
@@ -646,6 +1017,85 @@ fn a_review_repair_whose_background_work_was_killed_gets_a_resume() {
             .any(|log| log.ends_with("-repair-1-resume.jsonl")),
         "logs: {logs:?}"
     );
+}
+
+/// Bash that records `by`'s edit to issue 7's `kind`, its body or title, dated
+/// after any Run's start.
+fn edits_issue_7(kind: &str, by: &str) -> String {
+    format!(
+        "gh fake edits 7 '[{{\"kind\": \"{kind}\", \"by\": \"{by}\", \"at\": \"2999-01-01T00:00:00Z\"}}]'\n"
+    )
+}
+
+#[test]
+fn an_untrusted_edit_while_the_run_is_under_way_starts_no_repair() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}{}",
+            checks_on_head(RED),
+            edits_issue_7("body", "outsider")
+        ),
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains(
+            "#7 body edited since the Run started by an account that is not a Trusted account; starting no further session"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1, "no Repair session");
+}
+
+#[test]
+fn an_untrusted_edit_while_the_run_is_under_way_starts_no_resume() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}{}",
+            edits_issue_7("body", "outsider"),
+            leaves_running("cargo test")
+        ),
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains("starting no further session"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1, "no Resume session");
+}
+
+#[test]
+fn an_untrusted_edit_dated_just_before_the_runs_local_start_still_stops_repairs() {
+    let scenario = Scenario::new();
+    // GitHub dates the edit before this machine's clock says the Run
+    // started: the gap since the trust check, or clock lag.
+    let at = (chrono::Utc::now() - chrono::TimeDelta::seconds(30)).format("%Y-%m-%dT%H:%M:%SZ");
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}gh fake edits 7 '[{{\"kind\": \"body\", \"by\": \"outsider\", \"at\": \"{at}\"}}]'\n",
+            checks_on_head(RED),
+        ),
+    );
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains("starting no further session"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1, "no Repair session");
 }
 
 /// Bash that has the next `times` merge attempts fail with `error`.

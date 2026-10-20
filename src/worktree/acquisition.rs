@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use super::local_head;
 use super::ownership::{Checkout, Directory, remove_local_ref};
+use super::{index_hides_tracked_work, local_head};
 use crate::git::Git;
 
 pub(super) fn add(
@@ -55,11 +55,12 @@ pub(super) fn add(
         Err(cause) => {
             let retained = owner.recover();
             owner.armed = false;
-            if retained.is_empty() {
-                Err(cause)
+            let error = if retained.is_empty() {
+                cause
             } else {
-                Err(AcquisitionFailure { cause, retained }.into())
-            }
+                AcquisitionFailure { cause, retained }.into()
+            };
+            Err(super::advice::occupied_advice(launch, branch, path, error))
         }
     }
 }
@@ -104,7 +105,8 @@ impl<'a> Acquisition<'a> {
             .flatten();
         common.verify_repository(launch)?;
         if let Some(branch) = branch {
-            super::check_local_branch(branch, branch_before.as_deref(), Some(start))?;
+            super::check_local_branch(branch, branch_before.as_deref(), Some(start))
+                .map_err(|error| super::local_branch_advice(launch, error))?;
         }
         Ok(Self {
             launch,
@@ -295,15 +297,8 @@ impl Recovery<'_, '_> {
         }
         let git = Git::new(owner.path).completion();
         // Hidden index entries cannot establish absence of tracked work.
-        if git
-            .run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?
-            .split('\0')
-            .any(|file| {
-                file.as_bytes()
-                    .first()
-                    .is_some_and(|flag| flag.is_ascii_lowercase() || *flag == b'S')
-            })
-        {
+        let entries = git.run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?;
+        if index_hides_tracked_work(&entries) {
             bail!("checkout has uncertain index flags that can hide tracked work");
         }
         if !git

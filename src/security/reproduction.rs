@@ -14,7 +14,7 @@ use crate::harness::Choice;
 use crate::issue::Repo;
 use crate::logs;
 use crate::prompt;
-use crate::session::{Logs, Purpose, Sessions};
+use crate::session::{Kind, Logs, Purpose, Sessions};
 use crate::worktree::ReviewWorktree;
 
 // Declaration order is severity order, most severe first.
@@ -124,7 +124,7 @@ pub fn run(
     Sessions::within(&logs, worktree.path(), harness, |sessions| {
         let message = sessions.run_to_final_message(
             Purpose::Security,
-            &format!("security-reproduction-{number}"),
+            Kind::SecurityReproduction(number),
             &prompt,
         )?;
         let message = message.as_deref().unwrap_or_default().trim_end();

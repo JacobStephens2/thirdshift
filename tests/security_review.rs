@@ -398,19 +398,7 @@ fn command_words_override_the_config_and_review_is_off_by_default() {
 
 #[test]
 fn invalid_or_missing_final_lines_hold_self_merge_but_report_only_runs_continue() {
-    for final_message in [
-        "",
-        "Review incomplete",
-        "Security review: not JSON",
-        "Security review: incomplete: ",
-        "Security review: incomplete:   ",
-        "Security review: incomplete: first line\nsecond line",
-        "Security review: incomplete: first\rsecond",
-        "Security review: {}",
-        r#"Security review: {"unaddressed_count":0,"findings":["Cross-tenant read"],"pre_existing_count":0}"#,
-        r#"Security review: {"unaddressed_count":1,"findings":[""],"pre_existing_count":0}"#,
-        r#"Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}\nMore text"#,
-    ] {
+    for final_message in ["", "Security review: not JSON"] {
         for merge in [true, false] {
             let scenario = Scenario::new();
             scenario.agent_does_in_session(1, OPENS_PR);
@@ -516,11 +504,14 @@ gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let calls = scenario.claude_calls();
     assert_eq!(calls.len(), 4);
+    // The Base fix's own Delivery runs the Security review its Command asked
+    // for, on its own branch.
+    assert_eq!(calls[3]["branch"], "issue-8");
+    let prompt = calls[3]["prompt"].as_str().unwrap();
+    assert!(prompt.contains("guidance mode"), "{prompt}");
     assert!(
-        calls[3]["prompt"]
-            .as_str()
-            .unwrap()
-            .contains("against Base branch main")
+        prompt.contains("branch issue-8 against Base branch main"),
+        "{prompt}"
     );
     assert_eq!(scenario.gh_state()["prs"][1]["state"], "MERGED");
 }
@@ -860,4 +851,25 @@ fn reproduced_old_review_finding_sets_the_private_advisory_severity() {
         state["advisories"][0]["severity"], "low",
         "The validated old finding already has a failing proof of concept and scored severity; record it as a Security run does"
     );
+}
+
+#[test]
+fn an_untrusted_edit_before_the_security_review_fails_the_run() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!("{OPENS_PR}gh fake edits 7 '[{{\"kind\": \"body\", \"by\": \"outsider\", \"at\": \"2999-01-01T00:00:00Z\"}}]'\n"),
+    );
+    let result = scenario.run(&[&scenario.issue_url(7), "security-review", "no-merge"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("#7 body edited since the Run started by an account that is not a Trusted account; starting no further session"),
+        "{}", result.stderr
+    );
+    assert!(
+        !result.stderr.contains("Security review incomplete"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
 }

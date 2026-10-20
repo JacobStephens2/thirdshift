@@ -1,0 +1,92 @@
+const assert = require('node:assert/strict');
+const { spawn, execFileSync } = require('node:child_process');
+const { once } = require('node:events');
+const { mkdtemp, mkdir, readFile, writeFile, copyFile, rm } = require('node:fs/promises');
+const { join, resolve } = require('node:path');
+const { tmpdir } = require('node:os');
+const { createInterface } = require('node:readline');
+const { chromium } = require('playwright');
+const { test } = require('node:test');
+
+test('editor saves, chooses and round-trips Themes without uploading files', async () => {
+  const home = await mkdtemp(join(tmpdir(), 'thirdshift-custom-themes-'));
+  let server, exited, browser;
+  try {
+    const root = join(home, '.thirdshift');
+    const fonts = join(root, 'console/themes/fonts');
+    await mkdir(fonts, { recursive: true });
+    await writeFile(join(root, 'config.toml'), '[console]\nport = 0\n');
+    await copyFile(resolve(__dirname, '../../src/console/assets/fonts/inter-100-900-latin.woff2'), join(fonts, 'mine.woff2'));
+    server = spawn(process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift'), ['console', '--no-sign-in'], { env: { ...process.env, HOME: home }, stdio: ['ignore', 'pipe', 'inherit'] });
+    exited = once(server, 'exit');
+    const lines = createInterface({ input: server.stdout });
+    const [origin] = await once(lines, 'line', { signal: AbortSignal.timeout(10000) });
+    lines.close();
+    browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage({ viewport: { width: 390, height: 844 } });
+    const violations = [];
+    await page.exposeFunction('cspViolation', value => violations.push(value));
+    await page.addInitScript(() => document.addEventListener('securitypolicyviolation', event => window.cspViolation(event.violatedDirective)));
+    await page.goto(origin);
+    await page.locator('[data-open-themes]').click();
+    await page.locator('#theme-name').selectOption('garden-dark');
+    await page.locator('#edit-theme').click();
+    await page.waitForFunction(() => document.querySelector('#theme-document').value.length > 0);
+    const document = JSON.parse(await page.locator('#theme-document').inputValue());
+    assert.equal(document.base, 'garden-dark');
+    document.name = 'my-garden';
+    document.tokens.bg = '#123456';
+    document.tokens['font-body'] = 'mine.woff2, serif';
+    await page.locator('#theme-document').fill(JSON.stringify(document));
+    await page.locator('#save-theme').click();
+    await page.waitForFunction(() => document.querySelector('#theme-editor-status').textContent.includes('saved'));
+    assert.deepEqual(JSON.parse(await readFile(join(root, 'console/themes/my-garden.json'), 'utf8')), document);
+    await page.locator('#theme-name').selectOption('my-garden');
+    await page.locator('#theme-form button').click();
+    await page.waitForFunction(() => getComputedStyle(document.body).backgroundColor === 'rgb(18, 52, 86)');
+    await page.evaluate(() => document.fonts.ready);
+    assert.equal(await page.evaluate(() => document.fonts.check('14px "user-mine.woff2"')), true);
+    assert.match(await page.locator('body').evaluate(el => getComputedStyle(el).fontFamily), /user-mine.woff2/);
+    await page.locator('#export-theme').click();
+    await page.waitForFunction(() => document.querySelector('#theme-editor-status').textContent.includes('Exported JSON'));
+    const exported = await page.locator('#theme-document').inputValue();
+    assert.deepEqual(JSON.parse(exported), document);
+    await page.locator('#save-theme').click();
+    await page.waitForFunction(() => document.querySelector('#theme-editor-status').textContent.includes('saved'));
+    assert.deepEqual(JSON.parse(await readFile(join(root, 'console/themes/my-garden.json'), 'utf8')), document);
+    assert.equal(await page.locator('input[type=file]').count(), 0);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await page.reload();
+    await page.waitForFunction(() => getComputedStyle(document.body).backgroundColor === 'rgb(18, 52, 86)');
+    // Import changed contents under the selected name from another client.
+    document.tokens.bg = '#654321';
+    const imported = join(home, 'updated.json');
+    await writeFile(imported, JSON.stringify(document));
+    execFileSync(process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift'), ['console', 'theme', 'import', imported], { env: { ...process.env, HOME: home } });
+    await page.locator('[data-open-themes]').click();
+    await page.locator('#theme-name').selectOption('my-garden');
+    await page.locator('#theme-form button').click();
+    await page.waitForFunction(() => getComputedStyle(document.body).backgroundColor === 'rgb(101, 67, 33)');
+    // Logs has no Inbox refresh. Choosing a previously unselected Theme must
+    // also fetch current contents when its name has not changed.
+    const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift');
+    execFileSync(binary, ['console', 'theme', 'focus-auto'], { env: { ...process.env, HOME: home } });
+    const logs = await browser.newPage();
+    await logs.goto(`${origin}/logs`);
+    await logs.locator('[data-open-themes]').click();
+    await logs.locator('[data-close-themes]').click();
+    document.tokens.bg = '#abcdef';
+    await writeFile(imported, JSON.stringify(document));
+    execFileSync(binary, ['console', 'theme', 'import', imported], { env: { ...process.env, HOME: home } });
+    await logs.locator('[data-open-themes]').click();
+    await logs.locator('#theme-name').selectOption('my-garden');
+    await logs.locator('#theme-form button').click();
+    await logs.waitForFunction(() => getComputedStyle(document.body).backgroundColor === 'rgb(171, 205, 239)');
+    assert.deepEqual(violations, []);
+  } finally {
+    await browser?.close();
+    if (server && server.exitCode === null) server.kill();
+    if (exited) await exited;
+    await rm(home, { recursive: true, force: true });
+  }
+});

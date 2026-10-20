@@ -14,6 +14,8 @@ use crate::git::Git;
 use crate::progress;
 
 mod acquisition;
+mod advice;
+pub(crate) use advice::local_branch_advice;
 #[cfg(test)]
 mod acquisition_tests;
 #[cfg(test)]
@@ -25,6 +27,13 @@ mod preservation_tests;
 mod review_recovery_tests;
 #[cfg(test)]
 mod synchronization_tests;
+
+/// A successful preservation either published work or found no changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Preserved {
+    Pushed,
+    NoChanges,
+}
 
 /// How merging the Base branch, or new commits on origin, into the Issue
 /// branch went.
@@ -115,7 +124,8 @@ impl Worktree {
         let _lock = lock_launch(launch)?;
         launch.fetch(&[base])?;
         let origin = fetched_origin(base, |args| launch.run(args))?;
-        check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)?;
+        check_local_branch(branch, local_head(launch, branch)?.as_deref(), None)
+            .map_err(|error| local_branch_advice(launch, error))?;
         Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
 
@@ -130,7 +140,8 @@ impl Worktree {
         launch.fetch(&[base, branch])?;
         let origin = fetched_origin(branch, |args| launch.run(args))?;
         let local = local_head(launch, branch)?;
-        check_local_branch(branch, local.as_deref(), Some(&origin.commit))?;
+        check_local_branch(branch, local.as_deref(), Some(&origin.commit))
+            .map_err(|error| local_branch_advice(launch, error))?;
         Self::add(launch, repo, branch, &origin.commit, &origin.upstream)
     }
 
@@ -168,8 +179,15 @@ impl Worktree {
     /// gates the PR, so a local hook doesn't decide whether work reaches
     /// origin.
     pub fn push(&self) -> Result<()> {
-        self.checkout
-            .ordinary(&self.launch, |operation| operation.push(&self.branch))
+        self.push_if_actionable(&mut || Ok(()))
+    }
+
+    /// Publish only while the caller's lifecycle gate permits it. Publication
+    /// also guards the sampled origin head against deletion or replacement.
+    pub fn push_if_actionable(&self, actionable: &mut dyn FnMut() -> Result<()>) -> Result<()> {
+        self.checkout.ordinary(&self.launch, |operation| {
+            operation.push_if_needed(&self.branch, actionable)
+        })
     }
 
     /// Preserve all work from a Failed run against the last-fetched Base
@@ -179,13 +197,26 @@ impl Worktree {
     /// Only the acquired checkout instance on its Issue branch may be changed.
     /// Retention is armed before salvage: any error or unwinding leaves the
     /// worktree and local Issue branch in place. Final verified ownership
-    /// allows normal cleanup.
-    pub fn preserve_failed_run(&mut self, base: &str, reason: &str) -> Result<()> {
+    /// allows normal cleanup. The lifecycle gate is rechecked around each
+    /// publication attempt, with the same expected-ref protection as ordinary pushes.
+    pub fn preserve_failed_run(
+        &mut self,
+        base: &str,
+        reason: &str,
+        actionable: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<Preserved> {
         self.kept = true;
-        self.checkout
-            .preserve_failed_run(&self.launch, base, reason)?;
+        let pushed = self
+            .checkout
+            .preserve_failed_run(&self.launch, base, reason, actionable)?;
         self.kept = false;
-        Ok(())
+        Ok(pushed)
+    }
+
+    /// Keep the acquired checkout and local branch without publishing obsolete
+    /// work after the PR became terminal or its lifecycle could not be read.
+    pub fn retain_local(&mut self) {
+        self.kept = true;
     }
 
     /// Delete the Issue branch on origin, or do nothing if it is already gone
@@ -202,6 +233,41 @@ impl Worktree {
     pub fn head(&self) -> Result<String> {
         self.checkout
             .ordinary(&self.launch, |operation| operation.head())
+    }
+
+    /// Whether a merged PR includes all local work. Observe the acquired
+    /// checkout under the synchronization lock, without staging or committing.
+    pub fn fully_landed_at(&self, head: &str) -> Result<bool> {
+        self.checkout.ordinary(&self.launch, |operation| {
+            let entries = operation.run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?;
+            Ok(!index_hides_tracked_work(&entries)
+                && operation.head()? == head
+                && operation
+                    .run(&[
+                        "-c",
+                        "core.fsmonitor=false",
+                        "status",
+                        "--porcelain",
+                        "--untracked-files=all",
+                        "--ignore-submodules=none",
+                    ])?
+                    .is_empty())
+        })
+    }
+
+    /// Whether the committed tree at the Issue branch's head equals `commit`'s.
+    /// Comparison errors are propagated, never treated as identical trees.
+    pub fn same_tree_as(&self, commit: &str) -> Result<bool> {
+        self.checkout.ordinary(&self.launch, |operation| {
+            let before = operation.run(&[
+                "rev-parse",
+                "--verify",
+                "--end-of-options",
+                &format!("{commit}^{{tree}}"),
+            ])?;
+            let after = operation.run(&["rev-parse", "--verify", "HEAD^{tree}"])?;
+            Ok(before == after)
+        })
     }
 
     /// Observe the merge base against the published Base branch only while
@@ -305,6 +371,16 @@ impl Worktree {
     }
 }
 
+/// Lowercase tags mark assume-unchanged entries; S marks skip-worktree.
+/// Neither permits a clean status to establish absence of tracked work.
+fn index_hides_tracked_work(entries: &str) -> bool {
+    entries.split('\0').any(|file| {
+        file.as_bytes()
+            .first()
+            .is_some_and(|flag| flag.is_ascii_lowercase() || *flag == b'S')
+    })
+}
+
 /// The local Issue branch head sampled for acquisition or advisory preflight.
 pub(crate) fn local_head(launch: &Git, branch: &str) -> Result<Option<String>> {
     let reference = format!("refs/heads/{branch}");
@@ -339,17 +415,14 @@ pub(crate) fn check_local_branch(
     };
     match origin_head {
         Some(origin_head) if origin_head == local_head => Ok(()),
-        Some(_) => bail!(
-            "the local branch {branch} differs from origin/{branch}; push, reset or delete it first"
-        ),
-        None => {
-            bail!("the local branch {branch} is not on origin; push, rename or delete it first")
-        }
+        Some(_) => Err(advice::branch_conflict(branch, true)),
+        None => Err(advice::branch_conflict(branch, false)),
     }
 }
 
 impl Drop for Worktree {
     fn drop(&mut self) {
+        crate::logs::stage(crate::logs::Stage::Cleanup);
         self.checkout.cleanup(&self.launch, self.kept);
     }
 }

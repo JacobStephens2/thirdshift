@@ -17,6 +17,22 @@ pub(crate) struct Identified {
     pub url: String,
 }
 
+/// A terminal observation stops all Delivery mutations. Delivery may report
+/// this as completion only after checking that no local work is left out.
+#[derive(Debug)]
+pub(crate) struct AlreadyMerged {
+    pub pr: Identified,
+    pub head: String,
+}
+
+impl std::fmt::Display for AlreadyMerged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PR {} is merged, not open", self.pr.url)
+    }
+}
+
+impl std::error::Error for AlreadyMerged {}
+
 /// A gate error is terminal (`Err`); only a refused request can return to
 /// the Repair loop. A successful guarded command needs no additional read.
 pub(crate) enum MergeAttempt {
@@ -161,12 +177,37 @@ impl<A: Adapter> PullRequest<A> {
         Ok(())
     }
 
+    /// Gate further Delivery work on this identity. Before the opening
+    /// session has produced a PR, absence is allowed; a captured PR may not
+    /// disappear. Drafts are allowed only before initial readiness.
+    pub fn ensure_actionable(&mut self, ready: bool) -> Result<()> {
+        let captured = self.identified.is_some();
+        match self.observe(false)? {
+            Some(snapshot) => self.validate(&snapshot, ready),
+            None if !captured => Ok(()),
+            None => bail!("no PR found"),
+        }
+    }
+
+    /// Failed run preservation must never resurrect a terminal PR's branch.
+    /// Completion reads still finish after interruption. A failed observation
+    /// leaves publication uncertain, so the caller retains local work.
+    pub fn ensure_preservable(&mut self) -> Result<()> {
+        if let Some(snapshot) = self.observe(true)?
+            && !snapshot.pr.is_open()
+        {
+            bail!("PR {} is {}, not open", snapshot.pr.url, snapshot.pr.state);
+        }
+        Ok(())
+    }
+
     /// Missing PRs are a no-op; the caller warns on errors, then readiness
     /// supplies the decisive gate. Body reads and edits always use the number.
     pub fn write_built_with(&mut self, choice: &Choice) -> Result<()> {
         let Some(snapshot) = self.observe(false)? else {
             return Ok(());
         };
+        self.validate(&snapshot, false)?;
         let body = self.adapter.body(&self.issue, snapshot.pr.number, false)?;
         let written = with_built_with(&body, choice);
         if written != body {
@@ -243,6 +284,7 @@ impl<A: Adapter> PullRequest<A> {
     pub fn ensure_ready_and_mergeable(&mut self) -> Result<()> {
         progress::step("checking the PR is open, ready and mergeable");
         let deadline = std::time::Instant::now() + self.adapter.grace_period();
+        let mut waiting_line = poll::WaitingLine::new();
         loop {
             let snapshot = self.observe(false)?.context("no PR found")?;
             self.validate(&snapshot, true)?;
@@ -255,7 +297,15 @@ impl<A: Adapter> PullRequest<A> {
                         snapshot.pr.url
                     );
                 }
-                Mergeable::Unknown => self.adapter.pause()?,
+                Mergeable::Unknown => {
+                    if waiting_line.should_report(()) {
+                        progress::step(format!(
+                            "waiting for GitHub to calculate mergeability of PR {}",
+                            snapshot.pr.url
+                        ));
+                    }
+                    self.adapter.pause()?;
+                }
             }
         }
     }
@@ -385,6 +435,17 @@ impl<A: Adapter> PullRequest<A> {
 
     fn validate(&self, snapshot: &PrSnapshot, ready: bool) -> Result<()> {
         let pr = &snapshot.pr;
+        if pr.state == PrState::Merged && pr.base == self.base {
+            return Err(AlreadyMerged {
+                pr: self
+                    .identified
+                    .as_ref()
+                    .expect("observation captured identity")
+                    .clone(),
+                head: snapshot.head_commit.clone(),
+            }
+            .into());
+        }
         if !pr.is_open() {
             bail!("PR {} is {}, not open", pr.url, pr.state);
         }

@@ -51,6 +51,17 @@ impl ResendStandIn {
     }
 }
 
+/// An issue-based notification identifies its original issue exactly once.
+pub fn assert_one_issue_line(text: &str) {
+    assert_eq!(
+        text.lines()
+            .filter(|line| line.starts_with("Issue:"))
+            .count(),
+        1,
+        "expected exactly one Issue line in: {text}"
+    );
+}
+
 /// Read one HTTP/1.1 request from `stream`, record it in `recorded`, reply,
 /// and close the connection. Recording comes first, so the request is there
 /// by the time thirdshift has its reply.

@@ -6,13 +6,13 @@ use std::iter::Peekable;
 use std::mem::discriminant;
 use std::num::NonZeroUsize;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::asks::Flags;
 use crate::base_fix::BaseFixAsk;
 use crate::child_run::{self, Given};
 use crate::harness::{self, Harness};
-use crate::issue::IssueUrl;
+use crate::issue::{IssueInput, IssueUrl};
 use crate::notification::NotificationAsk;
 use crate::run::Goal;
 
@@ -22,6 +22,55 @@ pub enum Command {
     Version,
     Update,
     Setup,
+    Console {
+        no_sign_in: bool,
+    },
+    ConsoleInstall,
+    ConsolePassword(Option<String>),
+    ConsoleSignOut {
+        email: Option<String>,
+        json: bool,
+    },
+    ConsoleLog {
+        json: bool,
+    },
+    ConsoleTheme {
+        name: Option<String>,
+        json: bool,
+    },
+    ConsoleThemeImport(String),
+    ConsoleThemeExport(String),
+    ConsoleSections {
+        hide: Vec<String>,
+        show: Vec<String>,
+        json: bool,
+    },
+    Status {
+        json: bool,
+        all: bool,
+    },
+    Show {
+        command: String,
+        json: bool,
+    },
+    Stop {
+        command: String,
+        requeue: bool,
+        json: bool,
+    },
+    Logs {
+        command: String,
+        session: Option<String>,
+        follow: bool,
+    },
+    LogsList {
+        json: bool,
+        owner: Option<String>,
+    },
+    LogFile {
+        id: String,
+        follow: bool,
+    },
     /// Internal interface for scripts/release.sh: prompt on stdin.
     ReleaseSummary,
     /// `email-test`, with the address it was given, if any.
@@ -71,7 +120,7 @@ const BASE_FIX: &str = "base-fix";
 
 /// A Run's arguments.
 pub struct RunArgs {
-    pub issue: IssueUrl,
+    pub issue: IssueInput,
     /// Its flags, as given: for each one the command left out, the User
     /// config decides.
     pub flags: Flags,
@@ -88,6 +137,37 @@ pub fn retry_with_base_fix(issue: &IssueUrl, flags: &Flags) -> String {
         ..flags.clone()
     };
     let mut words = vec!["thirdshift".to_string(), issue.url.clone()];
+    public_flag_words(&flags, &mut words);
+    shell_command(words)
+}
+
+/// Re-run the original issue with the effective public choices. Spec parallelism
+/// is valid only on a Spec; Launch directory/Base branch are stated separately.
+pub fn continuation(issue: &IssueUrl, asks: &crate::asks::Asks, is_spec: bool) -> String {
+    let flags = Flags {
+        goal: Some(asks.goal),
+        parallel: is_spec.then_some(asks.tickets_at_once),
+        base_fix: Some(asks.base_fix.clone()),
+        harness: harness::Asked {
+            harness: Some(asks.harness.harness),
+            model_and_effort: crate::harness::ModelAndEffort {
+                model: asks.harness.model.clone(),
+                effort: asks.harness.effort.clone(),
+            },
+        },
+        security_fix: Some(if asks.security_fix {
+            crate::security::FixAsk::Allow
+        } else {
+            crate::security::FixAsk::Forbid
+        }),
+        security_review: Some(if asks.security_review {
+            crate::security::review::Ask::Allow
+        } else {
+            crate::security::review::Ask::Forbid
+        }),
+        ..Flags::default()
+    };
+    let mut words = vec!["thirdshift".into(), issue.url.clone()];
     public_flag_words(&flags, &mut words);
     shell_command(words)
 }
@@ -155,7 +235,7 @@ fn public_flag_words(flags: &Flags, words: &mut Vec<String>) {
 }
 
 /// Render literal POSIX shell words; readable safe words need no quoting.
-fn shell_command(words: Vec<String>) -> String {
+pub(crate) fn shell_command(words: Vec<String>) -> String {
     words
         .into_iter()
         .map(|word| {
@@ -175,8 +255,8 @@ fn shell_command(words: Vec<String>) -> String {
 
 /// Parse the arguments after the program name. `help`, `version`, `update`,
 /// `setup`, `email-test`, `architect`, `pickup` and `secure` are commands only as the
-/// first argument. Otherwise it is a Run: one Issue URL, with each Run flag at
-/// most once, before or after it.
+/// first argument. Otherwise it is a Run: one Issue URL or bare issue number,
+/// with each Run flag at most once, before or after it.
 /// `email` may be followed by the address to send the Run notification to,
 /// and `parallel` must be followed by a whole number from 1 up.
 /// `merge` and `no-merge` contradict each other, as do `email` and `no-email`,
@@ -188,6 +268,227 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
+        Some("console") => {
+            if args.get(1).is_some_and(|action| action == "theme") {
+                let json = args.last().is_some_and(|arg| arg == "--json");
+                let end = args.len() - usize::from(json);
+                if let [action, value] = &args[2..end] {
+                    match action.as_str() {
+                        "import" => return Ok(Command::ConsoleThemeImport(value.clone())),
+                        "export" => return Ok(Command::ConsoleThemeExport(value.clone())),
+                        _ => {}
+                    }
+                }
+                let [name] = &args[2..end] else {
+                    bail!(
+                        "usage: thirdshift console theme <name|list> [--json] | import <file> | export <name>"
+                    );
+                };
+                return Ok(Command::ConsoleTheme {
+                    name: (name != "list").then(|| name.clone()),
+                    json,
+                });
+            }
+            if args.get(1).is_some_and(|action| action == "sections") {
+                let (mut hide, mut show, mut json) = (Vec::new(), Vec::new(), false);
+                let mut arguments = args[2..].iter();
+                while let Some(flag) = arguments.next() {
+                    match flag.as_str() {
+                        "--json" if !json => json = true,
+                        "--hide" | "--show" => {
+                            let section = arguments
+                                .next()
+                                .filter(|s| !s.starts_with('-'))
+                                .context("--hide and --show need a section name")?;
+                            let target = if flag == "--hide" {
+                                &mut hide
+                            } else {
+                                &mut show
+                            };
+                            target.extend(section.split(',').map(str::to_owned));
+                        }
+                        _ => bail!(
+                            "usage: thirdshift console sections [--hide <section>] [--show <section>] [--json]"
+                        ),
+                    }
+                }
+                return Ok(Command::ConsoleSections { hide, show, json });
+            }
+            if args.get(1).is_some_and(|action| action == "sign-out") {
+                let mut email = None;
+                let mut json = false;
+                let mut arguments = args[2..].iter();
+                while let Some(flag) = arguments.next() {
+                    match flag.as_str() {
+                        "--email" if email.is_none() => {
+                            email = Some(
+                                arguments
+                                    .next()
+                                    .filter(|email| !email.starts_with('-'))
+                                    .ok_or_else(|| anyhow::anyhow!("--email needs an address"))?
+                                    .clone(),
+                            );
+                        }
+                        "--json" if !json => json = true,
+                        _ => {
+                            bail!("usage: thirdshift console sign-out [--email <address>] [--json]")
+                        }
+                    }
+                }
+                return Ok(Command::ConsoleSignOut { email, json });
+            }
+            return match &args[1..] {
+                [] => Ok(Command::Console { no_sign_in: false }),
+                [flag] if flag == "--no-sign-in" => Ok(Command::Console { no_sign_in: true }),
+                [action] if action == "install" => Ok(Command::ConsoleInstall),
+                [action] if action == "password" => Ok(Command::ConsolePassword(None)),
+                [action, flag, email]
+                    if action == "password" && flag == "--email" && !email.starts_with('-') =>
+                {
+                    Ok(Command::ConsolePassword(Some(email.clone())))
+                }
+                [action] if action == "log" => Ok(Command::ConsoleLog { json: false }),
+                [action, flag] if action == "log" && flag == "--json" => {
+                    Ok(Command::ConsoleLog { json: true })
+                }
+                _ => bail!(
+                    "usage: thirdshift console [--no-sign-in] | install | password [--email <address>] | sign-out [--email <address>] [--json] | log [--json]"
+                ),
+            };
+        }
+        Some("stop") => {
+            let usage = "usage: thirdshift stop <command> [--requeue] [--json]";
+            let Some((command, options)) = args[1..].split_first() else {
+                bail!(usage)
+            };
+            if command.starts_with('-') {
+                bail!(usage);
+            }
+            let (mut requeue, mut json) = (false, false);
+            for option in options {
+                match option.as_str() {
+                    "--requeue" if !requeue => requeue = true,
+                    "--json" if !json => json = true,
+                    _ => bail!(usage),
+                }
+            }
+            return Ok(Command::Stop {
+                command: command.clone(),
+                requeue,
+                json,
+            });
+        }
+        Some("show") => {
+            return match &args[1..] {
+                [command] if !command.starts_with('-') => Ok(Command::Show {
+                    command: command.clone(),
+                    json: false,
+                }),
+                [command, flag] if flag == "--json" && !command.starts_with('-') => {
+                    Ok(Command::Show {
+                        command: command.clone(),
+                        json: true,
+                    })
+                }
+                _ => bail!("usage: thirdshift show <command> [--json]"),
+            };
+        }
+        Some("logs") => {
+            match &args[1..] {
+                [] => {
+                    return Ok(Command::LogsList {
+                        json: false,
+                        owner: None,
+                    });
+                }
+                [flag] if flag == "--json" => {
+                    return Ok(Command::LogsList {
+                        json: true,
+                        owner: None,
+                    });
+                }
+                [flag, id] if flag == "--command" && !id.starts_with('-') => {
+                    return Ok(Command::LogsList {
+                        json: false,
+                        owner: Some(id.clone()),
+                    });
+                }
+                [flag, id, json]
+                    if flag == "--command" && !id.starts_with('-') && json == "--json" =>
+                {
+                    return Ok(Command::LogsList {
+                        json: true,
+                        owner: Some(id.clone()),
+                    });
+                }
+                [flag, id] if flag == "--file" && !id.starts_with('-') => {
+                    return Ok(Command::LogFile {
+                        id: id.clone(),
+                        follow: false,
+                    });
+                }
+                [flag, id, follow]
+                    if flag == "--file" && !id.starts_with('-') && follow == "--follow" =>
+                {
+                    return Ok(Command::LogFile {
+                        id: id.clone(),
+                        follow: true,
+                    });
+                }
+                _ => {}
+            }
+            let usage = "usage: thirdshift logs <command> [--session <kind>] [--follow]";
+            let command = args
+                .get(1)
+                .filter(|name| !name.starts_with('-'))
+                .ok_or_else(|| anyhow::anyhow!(usage))?;
+            let mut session = None;
+            let mut follow = false;
+            let mut flags = args[2..].iter();
+            while let Some(flag) = flags.next() {
+                match flag.as_str() {
+                    "--follow" if !follow => follow = true,
+                    "--session" if session.is_none() => {
+                        session = Some(
+                            flags
+                                .next()
+                                .filter(|kind| !kind.starts_with('-'))
+                                .ok_or_else(|| anyhow::anyhow!(usage))?
+                                .clone(),
+                        );
+                    }
+                    _ => bail!(usage),
+                }
+            }
+            return Ok(Command::Logs {
+                command: command.clone(),
+                session,
+                follow,
+            });
+        }
+        Some("status") => {
+            return match &args[1..] {
+                [] => Ok(Command::Status {
+                    json: false,
+                    all: false,
+                }),
+                [flag] if flag == "--json" => Ok(Command::Status {
+                    json: true,
+                    all: false,
+                }),
+                [flag] if flag == "--all" => Ok(Command::Status {
+                    json: false,
+                    all: true,
+                }),
+                [a, b] if (a == "--all" && b == "--json") || (a == "--json" && b == "--all") => {
+                    Ok(Command::Status {
+                        json: true,
+                        all: true,
+                    })
+                }
+                _ => bail!("usage: thirdshift status [--all] [--json]"),
+            };
+        }
         Some("--release-summary") => {
             return match &args[1..] {
                 [] => Ok(Command::ReleaseSummary),
@@ -223,7 +524,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
         if issue.is_some() {
             bail!("unexpected argument after the Issue URL: {arg}");
         }
-        issue = Some(IssueUrl::parse(arg)?);
+        issue = Some(IssueInput::parse(arg)?);
     }
     let given = hidden.finish()?;
     let Some(issue) = issue else {
@@ -473,6 +774,71 @@ mod tests {
     use crate::test_support::guidance::words as shell_words;
 
     #[test]
+    fn continuation_roundtrips_effective_choices_and_literal_shell_values() {
+        use crate::asks::Asks;
+        use crate::harness::{Choice, ChosenBy};
+        for is_spec in [false, true] {
+            for goal in [Goal::Merged, Goal::ReadyForReview] {
+                for base_fix in [
+                    BaseFixAsk::Allow,
+                    BaseFixAsk::Forbid,
+                    BaseFixAsk::Undecided {
+                        retry: "do not serialize this".into(),
+                    },
+                ] {
+                    let asks = Asks {
+                        goal,
+                        base_fix: base_fix.clone(),
+                        tickets_at_once: NonZeroUsize::new(5).unwrap(),
+                        parallel_asked: false,
+                        security_fix: true,
+                        security_review: true,
+                        launch_pull: false,
+                        notification: NotificationAsk::Skip,
+                        harness: Choice {
+                            harness: Harness::Codex,
+                            model: Some("vendor/model's $(touch never); `literal`".into()),
+                            effort: Some("max".into()),
+                            chosen_by: ChosenBy::UserConfig,
+                        },
+                    };
+                    let command = continuation(&IssueUrl::parse(URL).unwrap(), &asks, is_spec);
+                    let Command::Run(run) = parse(&shell_words(&command)).unwrap() else {
+                        panic!("not a Run: {command}")
+                    };
+                    assert_eq!(run.issue, IssueInput::Url(IssueUrl::parse(URL).unwrap()));
+                    assert_eq!(run.flags.goal, Some(goal));
+                    assert_eq!(
+                        run.flags.parallel,
+                        is_spec.then_some(NonZeroUsize::new(5).unwrap())
+                    );
+                    assert_eq!(run.flags.harness.harness, Some(Harness::Codex));
+                    assert_eq!(run.flags.harness.model_and_effort.model, asks.harness.model);
+                    assert_eq!(
+                        run.flags.harness.model_and_effort.effort,
+                        asks.harness.effort
+                    );
+                    assert_eq!(
+                        run.flags.base_fix,
+                        if matches!(base_fix, BaseFixAsk::Undecided { .. }) {
+                            None
+                        } else {
+                            Some(base_fix)
+                        }
+                    );
+                    assert_eq!(run.flags.security_fix, Some(crate::security::FixAsk::Allow));
+                    assert_eq!(
+                        run.flags.security_review,
+                        Some(crate::security::review::Ask::Allow)
+                    );
+                    assert!(run.given.is_none());
+                    assert!(!command.contains("do not serialize"));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn base_fix_guidance_preserves_a_model_label_with_spaces() {
         let flags = Flags {
             harness: harness::Asked {
@@ -495,7 +861,7 @@ mod tests {
                 ..flags
             }
         );
-        assert_eq!(run.issue.url, URL);
+        assert_eq!(run.issue, IssueInput::Url(IssueUrl::parse(URL).unwrap()));
         assert!(run.given.is_none());
     }
 
@@ -547,7 +913,7 @@ mod tests {
             let Command::Run(run) = parse(&words).unwrap() else {
                 panic!("{command}")
             };
-            assert_eq!(run.issue, issue);
+            assert_eq!(run.issue, IssueInput::Url(issue.clone()));
             assert!(run.given.is_none());
             assert_eq!(
                 run.flags,
@@ -702,6 +1068,51 @@ mod tests {
             Ok(_) => panic!("{args:?}: not a Run"),
             Err(error) => panic!("{args:?}: {error:#}"),
         }
+    }
+
+    #[test]
+    fn issue_numbers_leave_numeric_option_values_with_their_flags() {
+        for input in ["106", "000106"] {
+            for args in [
+                vec![
+                    "parallel", "2", "model", "123", "effort", "456", "email", "merge", input,
+                ],
+                vec![
+                    input,
+                    "--parallel",
+                    "2",
+                    "--model",
+                    "123",
+                    "--effort",
+                    "456",
+                    "--email",
+                    "--merge",
+                ],
+            ] {
+                let run = run_args(&args);
+                assert_eq!(run.issue, IssueInput::Number(106.try_into().unwrap()));
+                assert_eq!(run.flags.parallel, NonZeroUsize::new(2));
+                assert_eq!(
+                    run.flags.harness.model_and_effort.model.as_deref(),
+                    Some("123")
+                );
+                assert_eq!(
+                    run.flags.harness.model_and_effort.effort.as_deref(),
+                    Some("456")
+                );
+                assert_eq!(run.flags.email, Some(NotificationAsk::Send(None)));
+                assert_eq!(run.flags.goal, Some(Goal::Merged));
+            }
+        }
+        for args in [
+            vec!["model", "106"],
+            vec!["effort", "106"],
+            vec!["parallel", "106"],
+        ] {
+            assert_eq!(rejection(&args), "missing Issue URL");
+        }
+        let run = run_args(&["18446744073709551615"]);
+        assert_eq!(run.issue, IssueInput::Number(u64::MAX.try_into().unwrap()));
     }
 
     /// The Architect run `args` parse to.
@@ -1258,7 +1669,11 @@ mod tests {
         ] {
             let run_args = run_args(&args);
             assert_eq!(run_args.flags.email, Some(asked), "{args:?}");
-            assert_eq!(run_args.issue.url, URL, "{args:?}");
+            assert_eq!(
+                run_args.issue,
+                IssueInput::Url(IssueUrl::parse(URL).unwrap()),
+                "{args:?}"
+            );
         }
     }
 
@@ -1279,7 +1694,11 @@ mod tests {
             (vec![URL, "--email", "merge"], bare(), Some(Goal::Merged)),
         ] {
             let run_args = run_args(&args);
-            assert_eq!(run_args.issue.url, URL, "{args:?}");
+            assert_eq!(
+                run_args.issue,
+                IssueInput::Url(IssueUrl::parse(URL).unwrap()),
+                "{args:?}"
+            );
             assert_eq!(run_args.flags.email, Some(asked), "{args:?}");
             assert_eq!(run_args.flags.goal, goal, "{args:?}");
         }

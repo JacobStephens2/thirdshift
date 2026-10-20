@@ -1,6 +1,6 @@
 //! Headless agent sessions on the chosen Harness, and their logs.
 
-use std::cell::RefCell;
+use std::cell::{OnceCell, RefCell};
 #[cfg(test)]
 use std::fs::{self, File};
 #[cfg(test)]
@@ -24,9 +24,12 @@ use crate::progress;
 use crate::prompt;
 use crate::skills;
 
+pub mod kind;
 pub mod recording;
 mod review_reports;
 use review_reports::ReviewReports;
+
+pub use kind::{Kind, Logged};
 
 #[cfg(test)]
 mod execution_tests;
@@ -55,6 +58,7 @@ pub struct Logs {
     /// `architect` for an Architect run.
     name: String,
     dir: PathBuf,
+    recording: OnceCell<recording::Recording>,
 }
 
 impl Logs {
@@ -63,6 +67,7 @@ impl Logs {
         Logs {
             name: issue.number.to_string(),
             dir: logs::session_dir(&issue.repo()),
+            recording: OnceCell::new(),
         }
     }
 
@@ -71,6 +76,7 @@ impl Logs {
         Logs {
             name: "architect".to_string(),
             dir: logs::session_dir(repo),
+            recording: OnceCell::new(),
         }
     }
 
@@ -79,14 +85,21 @@ impl Logs {
         Logs {
             name: "secure".to_string(),
             dir: logs::session_dir(repo),
+            recording: OnceCell::new(),
         }
     }
 
     /// Where a session's stream is logged:
-    /// `<root>/commands/<command>/<name>-<stamp>-<kind>.jsonl`.
-    pub fn path(&self, kind: &str) -> PathBuf {
-        self.dir
-            .join(format!("{}-{}-{kind}.jsonl", self.name, logs::stamp()))
+    /// `<root>/commands/<command>/<name>-<stamp>~<token>-<kind>.jsonl`.
+    pub fn path(&self, session: Logged) -> Result<PathBuf> {
+        self.recording()
+            .session_path(&self.dir, &self.name, &session.token())
+    }
+
+    /// Runs construct Logs before work starts. Capture once the first Session
+    /// needs it, after the Command has allocated its immutable owner.
+    fn recording(&self) -> &recording::Recording {
+        self.recording.get_or_init(recording::Recording::capture)
     }
 }
 
@@ -100,6 +113,9 @@ pub struct Sessions<'a> {
     /// passed to each call as the other seams' are, since the steps reach
     /// it through the `&Sessions` they are given.
     outside: RefCell<Box<dyn Outside>>,
+    /// What must still hold before each session starts, a Resume included:
+    /// a session it fails is not started, and the step fails with it.
+    before_each: &'a dyn Fn() -> Result<()>,
     /// The log of the session started last, a Resume included.
     last_log: RefCell<Option<PathBuf>>,
     /// How each session ended whose last ending, its Resume's if it got one,
@@ -123,6 +139,18 @@ impl<'a> Sessions<'a> {
         harness: &'a Choice,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
+        Self::checked_within(logs, worktree, harness, &|| Ok(()), steps)
+    }
+
+    /// [`Sessions::within`], checking `before_each` before each session
+    /// starts, a Resume included: a session it fails is not started.
+    pub fn checked_within<T>(
+        logs: &'a Logs,
+        worktree: &'a Path,
+        harness: &'a Choice,
+        before_each: &'a dyn Fn() -> Result<()>,
+        steps: impl FnOnce(&Self) -> Result<T>,
+    ) -> (Result<T>, Option<PathBuf>) {
         let adapter = harness.harness.adapter();
         if let Err(error) = skills::link_into(worktree, adapter)
             .and_then(|()| adapter.link_instruction_fallback(worktree))
@@ -133,8 +161,10 @@ impl<'a> Sessions<'a> {
             worktree: worktree.to_path_buf(),
             harness: harness.clone(),
             adapter,
+            recording: logs.recording().clone(),
         };
-        let (taken, log) = Sessions::taking(logs, worktree, Box::new(on_machine), steps);
+        let (taken, log) =
+            Sessions::taking(logs, worktree, Box::new(on_machine), before_each, steps);
         (taken, log.filter(|log| log.exists()))
     }
 
@@ -145,12 +175,14 @@ impl<'a> Sessions<'a> {
         logs: &'a Logs,
         worktree: &'a Path,
         outside: Box<dyn Outside>,
+        before_each: &'a dyn Fn() -> Result<()>,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
         let sessions = Sessions {
             logs,
             worktree,
             outside: RefCell::new(outside),
+            before_each,
             last_log: RefCell::default(),
             endings_with_killed_work: RefCell::default(),
         };
@@ -166,13 +198,13 @@ impl<'a> Sessions<'a> {
         (taken, log)
     }
 
-    /// Run a session given `prompt`, logged and labelled as `kind`. A
-    /// session that ends with background work still running, which is killed
-    /// with it, gets one Resume, as `<kind>-resume`. If the Resume ends the
+    /// Run a session of `kind` given `prompt`, logged and labelled by its
+    /// token. A session that ends with background work still running, which
+    /// is killed with it, gets one Resume, as `<token>-resume`. If the Resume ends the
     /// same way, or the session has no id to resume, the work may have been
     /// abandoned rather than awaited: a progress line names it and this
     /// succeeds, leaving the steps that follow to decide the outcome.
-    pub fn run(&self, kind: &str, prompt: &str) -> Result<()> {
+    pub fn run(&self, kind: Kind, prompt: &str) -> Result<()> {
         // The shared review-report contract identifies code review sessions
         // before expansion. Retain that policy even if report setup fails.
         let purpose = if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
@@ -186,19 +218,22 @@ impl<'a> Sessions<'a> {
     /// Run a session as [`Sessions::run`] does, and return its final message:
     /// what the agent said as it ended its last turn, its Resume's if it got
     /// one, if anything. `purpose` selects the launch policy for both the
-    /// session and its Resume; `kind` only labels their logs and progress.
+    /// session and its Resume; `kind` names their logs, labels their
+    /// progress and gives their Command record stage.
     pub fn run_to_final_message(
         &self,
         purpose: Purpose,
-        kind: &str,
+        kind: Kind,
         prompt: &str,
     ) -> Result<Option<String>> {
+        // Progress lines name the session by its kind's token.
+        let label = kind.token();
         let reports = if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
             match ReviewReports::new(self.worktree) {
                 Ok(reports) => Some(reports),
                 Err(error) => {
                     self.step(format!(
-                        "{kind}: could not prepare review reports: {error:#}; carrying on"
+                        "{label}: could not prepare review reports: {error:#}; carrying on"
                     ));
                     None
                 }
@@ -206,7 +241,7 @@ impl<'a> Sessions<'a> {
         } else {
             None
         };
-        let mut ended = self.start(purpose, kind, None, prompt, reports.as_ref())?;
+        let mut ended = self.start(purpose, Logged::of(kind), None, prompt, reports.as_ref())?;
         // What ended last, as the progress line on its killed work calls it.
         let mut ended_last = "session";
         if let (false, Some(session_id)) = (ended.killed.is_empty(), &ended.session_id) {
@@ -215,11 +250,11 @@ impl<'a> Sessions<'a> {
                 resume_prompt.push_str(prompt::REVIEW_REPORTS);
             }
             self.step(format!(
-                "{kind}: background work was killed as the session ended; resuming it once"
+                "{label}: background work was killed as the session ended; resuming it once"
             ));
             ended = self.start(
                 purpose,
-                &format!("{kind}-resume"),
+                Logged::resume_of(kind),
                 Some(session_id),
                 &resume_prompt,
                 reports.as_ref(),
@@ -233,30 +268,33 @@ impl<'a> Sessions<'a> {
                 Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview
             ) {
                 return Err(anyhow!(
-                    "{kind}: the {ended_last} {ending}; Security session incomplete"
+                    "{label}: the {ended_last} {ending}; Security session incomplete"
                 ));
             }
             self.step(format!(
-                "{kind}: the {ended_last} {ending}; carrying on, as it may have been abandoned"
+                "{label}: the {ended_last} {ending}; carrying on, as it may have been abandoned"
             ));
             self.endings_with_killed_work
                 .borrow_mut()
-                .push(format!("{kind} session {ending}"));
+                .push(format!("{label} session {ending}"));
         }
         Ok(ended.final_message)
     }
 
-    /// Run one session as `kind`, logged under its own path, which becomes
-    /// the last log.
+    /// Run `session`, logged under its own path, which becomes the last log,
+    /// once `before_each` holds. Below here its token is only a label.
     fn start(
         &self,
         purpose: Purpose,
-        kind: &str,
+        session: Logged,
         resume: Option<&str>,
         prompt: &str,
         reports: Option<&ReviewReports>,
     ) -> Result<Ended> {
-        let log = self.logs.path(kind);
+        (self.before_each)()?;
+        let log = self.logs.path(session)?;
+        logs::session(session, &log);
+        let label = &session.token();
         self.step(format!("logging the session to {}", log.display()));
         *self.last_log.borrow_mut() = Some(log.clone());
         let prompt = reports.map_or_else(
@@ -266,10 +304,10 @@ impl<'a> Sessions<'a> {
         let ended = self
             .outside
             .borrow_mut()
-            .run_session(purpose, kind, resume, &prompt, &log);
+            .run_session(purpose, label, resume, &prompt, &log);
         if let Some(reports) = reports {
             for line in reports.keep(&log) {
-                self.step(format!("{kind}: {line}"));
+                self.step(format!("{label}: {line}"));
             }
         }
         ended
@@ -283,13 +321,14 @@ impl<'a> Sessions<'a> {
 
 /// How the Resume rules run a session, and where their progress lines go.
 trait Outside {
-    /// Run a session given `prompt`, labelled as `kind`, continuing the
-    /// session with id `resume`, if any, its stream logged to `log`. Returns
-    /// what it ended with once it has exited cleanly, its turn not failed.
+    /// Run a session given `prompt`, labelled by its kind's token `label`,
+    /// continuing the session with id `resume`, if any, its stream logged to
+    /// `log`. Returns what it ended with once it has exited cleanly, its turn
+    /// not failed.
     fn run_session(
         &mut self,
         purpose: Purpose,
-        kind: &str,
+        label: &str,
         resume: Option<&str>,
         prompt: &str,
         log: &Path,
@@ -304,13 +343,14 @@ struct OnMachine {
     worktree: PathBuf,
     harness: Choice,
     adapter: &'static dyn Adapter,
+    recording: recording::Recording,
 }
 
 impl Outside for OnMachine {
     fn run_session(
         &mut self,
         purpose: Purpose,
-        kind: &str,
+        label: &str,
         resume: Option<&str>,
         prompt: &str,
         log: &Path,
@@ -360,8 +400,8 @@ impl Outside for OnMachine {
         } else {
             None
         };
-        let ended = recording::Recording::capture().run(
-            kind,
+        let ended = self.recording.run(
+            label,
             &self.harness,
             &mut command,
             invocation.stdin.as_deref(),
@@ -409,6 +449,7 @@ mod tests {
             let logs = Logs {
                 name: "670".into(),
                 dir: worktree.path().join("session-logs"),
+                recording: OnceCell::new(),
             };
             let choice = Choice {
                 harness,
@@ -487,6 +528,70 @@ mod tests {
         Logs {
             name: "7".to_string(),
             dir: PathBuf::from("/logs/sessions"),
+            recording: recording::Recording::new(
+                Some(PathBuf::from("/logs/7-20261003T120000-0400~fixture.log")),
+                None,
+                "20261003T120000-0400".into(),
+            )
+            .into(),
+        }
+    }
+
+    #[test]
+    fn same_second_commands_keep_session_model_and_review_contents_separate() {
+        let root = crate::test_support::scratch_worktree();
+        let stamp = "20261003T120000-0400";
+        let mut captured = Vec::new();
+        for marker in ["first", "second"] {
+            let recording = recording::Recording::new(
+                Some(root.path().join(format!("7-{stamp}~{marker}.log"))),
+                None,
+                stamp.into(),
+            );
+            let logs = Logs {
+                name: "7".into(),
+                dir: root.path().into(),
+                recording: recording.clone().into(),
+            };
+            let log = logs.path(Logged::of(Kind::Implementation)).unwrap();
+            recording.run(
+                "implement", &Choice::default(),
+                Command::new("/bin/sh").args(["-c", &format!(
+                    "echo '{{\"type\":\"assistant\",\"message\":{{\"model\":\"{marker}-model\",\"content\":[]}}}}'"
+                )]), None, &log,
+                crate::harness::Harness::Claude.adapter().interpretation(root.path(), ""),
+            ).unwrap();
+            let reports = ReviewReports::new(root.path()).unwrap();
+            for axis in ["standards", "spec"] {
+                fs::write(
+                    Path::new(&reports.prompt(prompt::REVIEW_REPORTS_DIRECTORY))
+                        .join(format!("{axis}.md")),
+                    format!("{marker} {axis}"),
+                )
+                .unwrap();
+            }
+            assert!(reports.keep(&log).is_empty());
+            captured.push((marker, log, recording));
+        }
+        for (marker, log, recording) in captured {
+            assert!(
+                fs::read_to_string(&log)
+                    .unwrap()
+                    .contains(&format!("{marker}-model")),
+                "lost {marker} Session"
+            );
+            for axis in ["standards", "spec"] {
+                assert_eq!(
+                    fs::read_to_string(log.with_extension(axis)).unwrap(),
+                    format!("{marker} {axis}")
+                );
+            }
+            assert_eq!(
+                recording.notification_lines(),
+                [format!(
+                    "- implement: claude · {marker}-model (reported) · session effort: default effort"
+                )]
+            );
         }
     }
 
@@ -502,9 +607,20 @@ mod tests {
             calls: Rc::clone(&calls),
         };
         let logs = logs();
-        let (taken, log) = Sessions::taking(&logs, Path::new("/unused"), Box::new(scripted), steps);
+        let (taken, log) = Sessions::taking(
+            &logs,
+            Path::new("/unused"),
+            Box::new(scripted),
+            &|| Ok(()),
+            steps,
+        );
         let calls = calls.take();
         (taken, log, calls)
+    }
+
+    /// Where the session whose token is `token` is logged.
+    fn log_of(token: &str) -> PathBuf {
+        logs().path(Logged::read(token).unwrap()).unwrap()
     }
 
     /// The call that runs a session as `kind`, logged under its own path.
@@ -513,16 +629,13 @@ mod tests {
             kind: kind.to_string(),
             resume: resume.map(String::from),
             prompt: prompt.to_string(),
-            log: logs().path(kind),
+            log: log_of(kind),
         }
     }
 
     /// The progress line saying where a session as `kind` is logged.
     fn logging(kind: &str) -> Call {
-        Call::Step(format!(
-            "logging the session to {}",
-            logs().path(kind).display()
-        ))
+        Call::Step(format!("logging the session to {}", log_of(kind).display()))
     }
 
     /// The sessions among `calls`.
@@ -540,7 +653,7 @@ mod tests {
     #[test]
     fn a_clean_session_runs_once_and_returns_its_final_message() {
         let (taken, log, calls) = take(vec![ended(Some("s1"), &[], "done")], |sessions| {
-            sessions.run_to_final_message(Purpose::Ordinary, "implement", "do it")
+            sessions.run_to_final_message(Purpose::Ordinary, Kind::Implementation, "do it")
         });
 
         assert_eq!(taken.unwrap(), Some("done".to_string()));
@@ -548,7 +661,7 @@ mod tests {
             calls,
             [logging("implement"), session("implement", None, "do it")]
         );
-        assert_eq!(log, Some(logs().path("implement")));
+        assert_eq!(log, Some(log_of("implement")));
     }
 
     #[test]
@@ -558,7 +671,9 @@ mod tests {
                 ended(Some("s1"), &["cargo test"], "waiting"),
                 ended(Some("s1"), &[], "done"),
             ],
-            |sessions| sessions.run_to_final_message(Purpose::Ordinary, "implement", "do it"),
+            |sessions| {
+                sessions.run_to_final_message(Purpose::Ordinary, Kind::Implementation, "do it")
+            },
         );
 
         assert_eq!(taken.unwrap(), Some("done".to_string()));
@@ -579,7 +694,7 @@ mod tests {
                 ),
             ]
         );
-        assert_eq!(log, Some(logs().path("implement-resume")));
+        assert_eq!(log, Some(log_of("implement-resume")));
     }
 
     #[test]
@@ -598,7 +713,7 @@ mod tests {
                 ));
             }
             let (taken, _, _) = take(endings, |sessions| {
-                sessions.run_to_final_message(Purpose::Security, "security-review", "review")
+                sessions.run_to_final_message(Purpose::Security, Kind::SecurityReview, "review")
             });
             assert!(
                 taken.is_err(),
@@ -617,7 +732,7 @@ mod tests {
             |sessions| -> Result<()> {
                 assert_eq!(
                     sessions
-                        .run_to_final_message(Purpose::Ordinary, "implement", "do it")
+                        .run_to_final_message(Purpose::Ordinary, Kind::Implementation, "do it")
                         .unwrap(),
                     Some("still waiting".to_string())
                 );
@@ -636,14 +751,14 @@ mod tests {
             format!("{:#}", taken.unwrap_err()),
             format!("implement session {TESTS_KILLED}, and a later step failed: no PR found")
         );
-        assert_eq!(log, Some(logs().path("implement-resume")));
+        assert_eq!(log, Some(log_of("implement-resume")));
     }
 
     #[test]
     fn a_session_with_no_id_to_resume_is_not_resumed_and_carries_on() {
         let (taken, log, calls) = take(
             vec![ended(None, &["cargo test", "npm test"], "waiting")],
-            |sessions| sessions.run("implement", "do it"),
+            |sessions| sessions.run(Kind::Implementation, "do it"),
         );
 
         taken.unwrap();
@@ -660,13 +775,13 @@ mod tests {
                 ),
             ]
         );
-        assert_eq!(log, Some(logs().path("implement")));
+        assert_eq!(log, Some(log_of("implement")));
     }
 
     #[test]
     fn a_failing_session_fails_unchanged_without_a_resume_or_an_ending() {
         let (taken, log, calls) = take(vec![Err(anyhow!("claude exited 3"))], |sessions| {
-            let failed = sessions.run("implement", "do it").unwrap_err();
+            let failed = sessions.run(Kind::Implementation, "do it").unwrap_err();
             assert_eq!(format!("{failed:#}"), "claude exited 3");
             Err::<(), _>(failed)
         });
@@ -678,13 +793,13 @@ mod tests {
             [logging("implement"), session("implement", None, "do it")]
         );
         // The failing session's log is still the last log.
-        assert_eq!(log, Some(logs().path("implement")));
+        assert_eq!(log, Some(log_of("implement")));
     }
 
     #[test]
     fn steps_that_succeed_after_killed_work_come_to_what_they_came_to() {
         let (taken, _, _) = take(vec![ended(None, &["cargo test"], "waiting")], |sessions| {
-            sessions.run("implement", "do it")?;
+            sessions.run(Kind::Implementation, "do it")?;
             Ok(42)
         });
 
@@ -699,8 +814,8 @@ mod tests {
                 ended(None, &["npm test"], "waiting"),
             ],
             |sessions| -> Result<()> {
-                sessions.run("implement", "do it")?;
-                sessions.run("repair-1", "fix it")?;
+                sessions.run(Kind::Implementation, "do it")?;
+                sessions.run(Kind::Repair(1), "fix it")?;
                 bail!("CI failed")
             },
         );

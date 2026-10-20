@@ -16,23 +16,21 @@ use std::num::NonZeroUsize;
 use anyhow::{Result, bail};
 
 use crate::base_fix::BaseFixAsk;
-use crate::child_run::{Ended, Kind, Runs};
-use crate::delivery::{Delivery, Opening};
+use crate::child_run::{ChildAsks, Ended, Kind, Runs};
+use crate::delivery::{Delivery, Opening, OpeningSession};
 use crate::failed_run::{FailedRun, interrupted_or};
 use crate::github::{GitHub, Ticket};
-use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::progress;
 use crate::prompt;
 use crate::pull_request::PullRequest;
+use crate::recovery::{Preservation, Recovery, Stage, TicketProgress};
 use crate::run::Reached;
+use crate::trust;
 use crate::worktree::Worktree;
 
 use ticket_board::TicketBoard;
-
-/// The Spec review session's kind, in its progress lines and log name.
-const SPEC_REVIEW: &str = "spec-review";
 
 /// Whether an issue has Tickets, as a Spec has, and every one is closed:
 /// `open` says of each of its sub-issues whether it is open.
@@ -86,12 +84,19 @@ fn run_through(
     tickets: Vec<Ticket>,
     parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
-    let (ticket_lines, landed) = land_tickets(outside, spec, tickets, parallel);
+    let Landing {
+        lines: ticket_lines,
+        progress,
+        pushed,
+        landed,
+        local_work,
+    } = land_tickets(outside, spec, tickets, parallel);
     // Every Ticket landed only once the Spec PR is told so.
     let landed = landed.and_then(|checklist| {
         let spec_pr_url = outside.landed(&checklist)?;
         Ok((checklist, spec_pr_url))
     });
+    let all_tickets_accounted = landed.is_ok();
     let ended = match landed {
         Ok((checklist, spec_pr_url)) => {
             review_and_deliver(outside, spec, base, branch, &checklist, &spec_pr_url)
@@ -104,6 +109,14 @@ fn run_through(
                 log: None,
                 interrupted,
                 ticket_lines: Vec::new(),
+                recovery: Some(Box::new(Recovery::new(
+                    if pushed { Stage::Tickets } else { Stage::Push },
+                    if pushed {
+                        Preservation::Remote
+                    } else {
+                        Preservation::None
+                    },
+                ))),
             })
         }
     };
@@ -112,10 +125,15 @@ fn run_through(
             ticket_lines,
             ..reached
         }),
-        Err(failed) => Err(FailedRun {
-            ticket_lines,
-            ..failed
-        }),
+        Err(mut failed) => {
+            let recovery = failed.recovery.get_or_insert_with(|| {
+                Box::new(Recovery::new(Stage::SpecReview, Preservation::Remote))
+            });
+            recovery.add_tickets(progress, all_tickets_accounted);
+            recovery.add_child_work(local_work);
+            failed.ticket_lines = ticket_lines;
+            Err(failed)
+        }
     }
 }
 
@@ -138,9 +156,8 @@ fn review_and_deliver(
         });
     }
     let opening = Opening {
-        kind: SPEC_REVIEW,
+        session: OpeningSession::SpecReview,
         prompt: prompt::spec_review(spec, base, branch, spec_pr_url),
-        catch_up_from_origin: true,
     };
     // The Spec review may have rewritten the body without the checklist.
     let delivered = outside.deliver(opening, checklist);
@@ -154,6 +171,8 @@ fn review_and_deliver(
 /// branch, the Tickets' child Runs, the graph read again, the Spec PR, the
 /// Delivery, the interrupt and its progress lines.
 trait Outside {
+    /// Record the board independently of the children's owned records.
+    fn record_tickets(&mut self, _board: &TicketBoard) {}
     /// Push the Spec branch to origin.
     fn push(&mut self) -> Result<()>;
     /// Start `ticket`'s Run, a Merge run into the Spec branch.
@@ -181,8 +200,8 @@ trait Outside {
 
 /// The outside world of a Spec run on `delivery`'s Spec, from its Spec
 /// branch checked out in `worktree`: child `thirdshift` Runs, each of which
-/// may start a Base fix if `base_fix` allows one, and runs its sessions on
-/// `harness`, owned together in `children`, GitHub, the Spec PR
+/// may start a Base fix if `base_fix` allows one, and is handed
+/// `child_asks`, owned together in `children`, GitHub, the Spec PR
 /// `spec_pr`, and `delivery`, which takes the
 /// worktree when it starts.
 struct ChildRunsAndGitHub<'a> {
@@ -197,9 +216,7 @@ struct ChildRunsAndGitHub<'a> {
     /// Held until it starts.
     delivery: Option<Delivery<'a>>,
     base_fix: BaseFixAsk,
-    security_fix: bool,
-    security_review: bool,
-    harness: &'a Choice,
+    child_asks: &'a ChildAsks,
     spec_pr: PullRequest,
 }
 
@@ -207,16 +224,13 @@ impl<'a> ChildRunsAndGitHub<'a> {
     /// The outside world of a Spec run, as the struct says, with no Ticket's
     /// Run started yet.
     fn new(worktree: Worktree, delivery: Delivery<'a>, spec_pr: PullRequest) -> Self {
-        let security_review = delivery.security_review;
         Self {
             spec: delivery.issue,
             children: Runs::default(),
             active: std::collections::BTreeMap::new(),
             worktree: Some(worktree),
             base_fix: delivery.base_fix.ask_of_tickets(),
-            security_fix: delivery.security_fix,
-            security_review,
-            harness: delivery.harness,
+            child_asks: delivery.child_asks,
             delivery: Some(delivery),
             spec_pr,
         }
@@ -231,6 +245,9 @@ impl<'a> ChildRunsAndGitHub<'a> {
 }
 
 impl Outside for ChildRunsAndGitHub<'_> {
+    fn record_tickets(&mut self, board: &TicketBoard) {
+        crate::logs::tickets(board.records());
+    }
     fn push(&mut self) -> Result<()> {
         self.worktree().push()
     }
@@ -242,16 +259,11 @@ impl Outside for ChildRunsAndGitHub<'_> {
         let kind = Kind::Ticket {
             spec_branch: self.worktree().branch().to_string(),
         };
-        self.children.start(
-            ticket,
-            kind,
-            self.base_fix.clone(),
-            crate::security::Options {
-                fix: self.security_fix,
-                review: self.security_review,
-            },
-            self.harness,
-        )?;
+        if let Some(check) = trust::ticket_trust(&GitHub::new(), ticket, self.spec)? {
+            bail!("Ticket #{}: {check}", ticket.number);
+        }
+        self.children
+            .start(ticket, kind, self.base_fix.clone(), self.child_asks)?;
         self.active.insert(ticket.number, ticket.clone());
         Ok(())
     }
@@ -264,7 +276,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
         if let Ok(ended) = &ending {
             progress::step(match ended {
                 Ended::Reached { .. } => format!("#{number} landed"),
-                Ended::Interrupted => format!("#{number} interrupted"),
+                Ended::Interrupted { .. } => format!("#{number} interrupted"),
                 Ended::Failed { .. } => format!("#{number} failed"),
             });
         }
@@ -315,16 +327,31 @@ impl Outside for ChildRunsAndGitHub<'_> {
 /// be pushed, and the last Tickets checklist if every Ticket is done: if
 /// not, it fails, after putting those lines on stderr unless an interrupt or
 /// another error ended it first.
+struct Landing {
+    lines: Vec<String>,
+    progress: TicketProgress,
+    pushed: bool,
+    landed: Result<String>,
+    local_work: Vec<String>,
+}
+
 fn land_tickets(
     outside: &mut impl Outside,
     spec: &IssueUrl,
     tickets: Vec<Ticket>,
     parallel: NonZeroUsize,
-) -> (Vec<String>, Result<String>) {
-    if let Err(error) = outside.push() {
-        return (Vec::new(), Err(error));
-    }
+) -> Landing {
     let mut board = TicketBoard::new(spec, tickets, parallel);
+    outside.record_tickets(&board);
+    if let Err(error) = outside.push() {
+        return Landing {
+            lines: Vec::new(),
+            progress: board.progress(),
+            pushed: false,
+            landed: Err(error),
+            local_work: Vec::new(),
+        };
+    }
     let landing = run_ready_tickets(outside, &mut board);
     let lines = board.lines();
     let landed = landing.and_then(|()| {
@@ -337,7 +364,13 @@ fn land_tickets(
         }
         bail!("Tickets not done: {}", not_done.join(", "));
     });
-    (lines, landed)
+    Landing {
+        lines,
+        progress: board.progress(),
+        local_work: board.local_work(),
+        pushed: true,
+        landed,
+    }
 }
 
 /// Keep the Tickets on `board` running as it offers them, until it offers
@@ -361,6 +394,7 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
             match outside.start_ticket(&ticket) {
                 Ok(()) => {
                     board.started(&ticket);
+                    outside.record_tickets(board);
                     started = true;
                 }
                 Err(start_error) => error = Some(start_error),
@@ -378,7 +412,11 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
         let ending = result.unwrap_or_else(|finish_error| {
             let cause = format!("{finish_error:#}");
             error.get_or_insert(finish_error);
-            Ended::Failed { cause, log: None }
+            Ended::Failed {
+                cause,
+                log: None,
+                local_work: Vec::new(),
+            }
         });
         let landed = matches!(ending, Ended::Reached { .. });
         board.ended(&ticket, ending);
@@ -389,6 +427,7 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
             }
         }
         let list = board.checklist();
+        outside.record_tickets(board);
         if landed {
             if let Err(open_error) = outside.landed(&list) {
                 error.get_or_insert(open_error);
@@ -442,7 +481,7 @@ mod tests {
         /// Started the Delivery, opening with the session of this kind and
         /// prompt, caught up from origin first if `catch_up`.
         Deliver {
-            kind: String,
+            kind: crate::session::Kind,
             prompt: String,
             catch_up: bool,
         },
@@ -648,9 +687,9 @@ mod tests {
 
         fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun> {
             self.did.push(Did::Deliver {
-                kind: opening.kind.to_string(),
+                kind: opening.session.kind(),
+                catch_up: opening.session.catches_up_from_origin(),
                 prompt: opening.prompt,
-                catch_up: opening.catch_up_from_origin,
             });
             let delivered = if self.script.review_fails {
                 Err(anyhow!("the spec-review session failed"))
@@ -681,6 +720,7 @@ mod tests {
                     pr_url: Some(SPEC_PR.to_string()),
                     log: Some(PathBuf::from(DELIVERY_LOG)),
                     interrupted: false,
+                    recovery: None,
                     ticket_lines: Vec::new(),
                 }),
             }
@@ -744,6 +784,7 @@ mod tests {
         Ended::Failed {
             cause: cause.to_string(),
             log: Some("/logs/session.jsonl".to_string()),
+            local_work: Vec::new(),
         }
     }
 
@@ -751,12 +792,13 @@ mod tests {
     /// once.
     fn land(outside: &mut Scripted, parallel: usize) -> (Vec<String>, Result<String>) {
         let tickets = outside.graph();
-        land_tickets(
+        let landing = land_tickets(
             outside,
             &IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap(),
             tickets,
             NonZeroUsize::new(parallel).unwrap(),
-        )
+        );
+        (landing.lines, landing.landed)
     }
 
     /// Take Spec #20, its Tickets as `outside` has them, up to `parallel`
@@ -788,7 +830,7 @@ mod tests {
     fn spec_review_opening() -> Did {
         let spec = IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap();
         Did::Deliver {
-            kind: SPEC_REVIEW.to_string(),
+            kind: crate::session::Kind::SpecReview,
             prompt: prompt::spec_review(&spec, "main", "issue-20", SPEC_PR),
             catch_up: true,
         }
@@ -1264,7 +1306,12 @@ mod tests {
             tickets: vec![open(21, &[]), open(22, &[])],
             endings: VecDeque::from([
                 (21, Ok(failed("claude exited 1"))),
-                (22, Ok(Ended::Interrupted)),
+                (
+                    22,
+                    Ok(Ended::Interrupted {
+                        local_work: Vec::new(),
+                    }),
+                ),
             ]),
             ..Script::default()
         });

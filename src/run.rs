@@ -2,19 +2,19 @@
 //! with sub-issues is a Spec instead, handed to a Spec run.
 
 use std::num::NonZeroUsize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
+use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::asks::Asks;
 use crate::base_fix::{Advice, BaseFix};
 use crate::branch::{self, Selection};
-use crate::child_run::Kind;
+use crate::child_run::{ChildAsks, Kind};
 use crate::claim::{self, Claim};
-use crate::delivery::{Delivery, Opening};
+use crate::delivery::{Delivery, Opening, OpeningSession};
 use crate::failed_run::FailedRun;
 use crate::github::{GitHub, Ticket};
-use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::launch::LaunchDirectory;
@@ -23,10 +23,8 @@ use crate::progress;
 use crate::prompt;
 use crate::session::Logs;
 use crate::spec_run;
+use crate::trust;
 use crate::worktree::Worktree;
-
-/// The implement session's kind, in its progress lines and log name.
-const IMPLEMENT: &str = "implement";
 
 /// Where a Run takes its PR: ready for review, or, in a Merge run, merged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +54,11 @@ pub struct Reached {
     /// In a Spec run, a line on each Ticket it landed; empty in a Run.
     pub ticket_lines: Vec<String>,
 }
+
+/// How much earlier than its start a Run counts untrusted edits from. It
+/// covers the gap since the trust check that let it start, and GitHub's
+/// clock running behind this machine's: an edit in either is still caught.
+const STARTED_MARGIN: TimeDelta = TimeDelta::minutes(5);
 
 /// How a Run, or a Spec run, ended.
 pub struct Ended {
@@ -114,16 +117,13 @@ impl<'a> StartedBy<'a> {
 /// Harness's names for them once checked. Its Run notification, if `asks`
 /// has it send one, is for what started the Run to send, once it has ended.
 pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> Ended {
-    let mut base_fix = BaseFix::new(
-        started_by.child(),
-        asks.base_fix.clone(),
-        asks.harness.clone(),
-        crate::security::Options {
-            fix: asks.security_fix,
-            review: asks.security_review,
-        },
-    );
-    let outcome = run(issue, asks, started_by, &mut base_fix);
+    let mut base_fix = BaseFix::new(started_by.child(), asks.base_fix.clone());
+    let mut outcome = run(issue, asks, started_by, &mut base_fix);
+    if let Err(failed) = &mut outcome
+        && let Some(recovery) = &mut failed.recovery
+    {
+        recovery.add_child_work(base_fix.local_work().iter().cloned());
+    }
     Ended {
         outcome,
         base_fix: base_fix.report(),
@@ -143,10 +143,11 @@ pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> E
 /// The Launch directory is opened first, with its Origin match, the check
 /// that `issue` is open and the git identity check. A Run started by its
 /// command then checks the Harness, Model and Effort its sessions run on, as
-/// `asks` say, settling the Model and Effort in them, and in `base_fix`, on
-/// the Harness's names: one started by another thirdshift, or dispatched by
-/// a pass, runs on what that command checked. The rest is [`start`], through the
-/// Launch directory, GitHub and the logs.
+/// `asks` say, settling the Model and Effort in them on the Harness's names:
+/// one started by another thirdshift, or dispatched by a pass, runs on what
+/// that command checked. Only then is what it hands on to every child Run
+/// built from `asks`. The rest is [`start`], through the Launch directory,
+/// GitHub and the logs.
 ///
 /// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
 /// start, or wait on, when its only red checks are Inherited failures: what
@@ -159,29 +160,40 @@ fn run(
 ) -> Result<Reached, FailedRun> {
     let directory = LaunchDirectory::open_for_run(issue)?;
     if let StartedBy::Command = started_by {
+        match trust::issue_trust(&GitHub::new(), issue) {
+            Ok(Some(check)) => progress::step(format!("warning: #{} {check}", issue.number)),
+            Ok(None) => {}
+            Err(error) => progress::step(format!(
+                "warning: could not check trust for #{}: {error:#}",
+                issue.number
+            )),
+        }
         asks.harness.check()?;
-        base_fix.runs_on(asks.harness.clone());
     }
     let asks = &*asks;
+    let child_asks = ChildAsks::of(asks);
     let mut outside = LaunchAndGitHub {
         directory: &directory,
         issue,
         goal: asks.goal,
-        security_fix: asks.security_fix,
-        security_review: asks.security_review
-            && !matches!(started_by, StartedBy::Child(Kind::Ticket { .. })),
+        security_review: child_asks.runs_security_review(started_by.child()),
+        child_asks: &child_asks,
         base_fix,
         logs: Logs::of_run(issue),
-        harness: &asks.harness,
         claim: None,
+        issue_branch: None,
+        child: started_by.child().is_some(),
+        started: Utc::now() - STARTED_MARGIN,
     };
-    start(
+    let outcome = start(
         &mut outside,
         issue,
         asks,
         started_by,
         directory.checked_out(),
-    )
+    );
+    outside.record_branch_left();
+    outcome
 }
 
 /// [`run`], once the Launch directory is open, with `checked_out` the branch
@@ -216,9 +228,10 @@ fn start<O: Outside>(
         Some(_) => Vec::new(),
         None => outside.tickets()?,
     };
-    outside.started(match tickets.is_empty() {
-        true => Work::Run(issue),
-        false => Work::SpecRun(issue),
+    outside.started(match (started_by.child(), tickets.is_empty()) {
+        (Some(Kind::BaseFix { .. }), _) => Work::BaseFix(issue),
+        (_, true) => Work::Run(issue),
+        (_, false) => Work::SpecRun(issue),
     });
     if asks.parallel_asked && tickets.is_empty() {
         return Err(anyhow!(
@@ -252,7 +265,8 @@ fn start<O: Outside>(
     if claims {
         outside.make_claim()?;
     }
-    let outcome = start_in_worktree(
+    let is_spec = !tickets.is_empty();
+    let mut outcome = start_in_worktree(
         outside,
         issue,
         tickets,
@@ -260,6 +274,19 @@ fn start<O: Outside>(
         &base,
         asks.tickets_at_once,
     );
+    if let Err(failed) = &mut outcome
+        && let Some(recovery) = &mut failed.recovery
+    {
+        recovery.add_command_context(
+            crate::recovery::Continuation {
+                command: crate::args::continuation(issue, asks, is_spec),
+                launch: outside.launch_path().to_path_buf(),
+                base: base.clone(),
+                branch: selection.branch().to_string(),
+            },
+            matches!(selection, Selection::Continuation { .. }),
+        );
+    }
     if claims {
         outside.end_claim(outcome.as_ref().ok().map(|reached| reached.goal));
     }
@@ -290,9 +317,8 @@ fn start_in_worktree<O: Outside>(
         return outside.spec_run(tickets, worktree, base, parallel);
     }
     let opening = Opening {
-        kind: IMPLEMENT,
+        session: OpeningSession::Implementation,
         prompt,
-        catch_up_from_origin: false,
     };
     outside.deliver(worktree, base, opening)
 }
@@ -312,6 +338,8 @@ enum Checkout {
 trait Outside {
     /// The worktree the Run's work is done in.
     type Worktree;
+
+    fn launch_path(&self) -> &Path;
 
     /// The issue's Tickets, its sub-issues, if it is a Spec.
     fn tickets(&mut self) -> Result<Vec<Ticket>>;
@@ -357,31 +385,66 @@ trait Outside {
 /// The outside world of a Run on `issue` from the opened Launch directory
 /// `directory`: GitHub, its git, the logs, the Claim it made, the worktree,
 /// the Spec run and the Delivery to `goal`, with `base_fix` and the Run's
-/// Session `logs`, its sessions on `harness`.
+/// Session `logs`, its sessions on the Harness in `child_asks`, which it
+/// hands on to every child Run.
 struct LaunchAndGitHub<'a> {
     directory: &'a LaunchDirectory,
     issue: &'a IssueUrl,
     goal: Goal,
-    security_fix: bool,
+    /// Whether the Run runs its own Security review.
     security_review: bool,
+    child_asks: &'a ChildAsks,
     base_fix: &'a mut BaseFix,
     logs: Logs,
-    harness: &'a Choice,
     claim: Option<Claim<'a>>,
+    issue_branch: Option<String>,
+    child: bool,
+    /// When the Run began, less [`STARTED_MARGIN`], for its sessions' check
+    /// for untrusted edits.
+    started: DateTime<Utc>,
 }
 
 impl LaunchAndGitHub<'_> {
+    /// Observe retained resources after acquisition, preservation and cleanup
+    /// have finished. Neither success nor failure implies branch absence.
+    fn record_branch_left(&self) {
+        let Some(branch) = self.issue_branch.as_deref() else {
+            return;
+        };
+        let git = self.directory.git().completion();
+        let observed = (|| -> Result<bool> {
+            let reference = format!("refs/heads/{branch}");
+            if git
+                .run(&["for-each-ref", "--format=%(refname)", &reference])?
+                .lines()
+                .any(|name| name == reference)
+            {
+                return Ok(true);
+            }
+            git.on_origin(branch)
+        })();
+        match observed {
+            Ok(left) => logs::issue_branch(left.then_some(branch)),
+            Err(error) => {
+                logs::issue_branch(Some(branch));
+                progress::step(format_args!(
+                    "warning: could not check whether Issue branch {branch} remains: {error:#}"
+                ));
+            }
+        }
+    }
+
     /// The Delivery of the issue into the Base branch `base`.
     fn delivery<'d>(&'d mut self, base: &'d str) -> Delivery<'d> {
         Delivery {
-            security_fix: self.security_fix,
             security_review: self.security_review,
+            child_asks: self.child_asks,
             issue: self.issue,
             base,
             goal: self.goal,
             base_fix: self.base_fix,
             logs: &self.logs,
-            harness: self.harness,
+            started: self.started,
         }
     }
 }
@@ -389,16 +452,26 @@ impl LaunchAndGitHub<'_> {
 impl<'a> Outside for LaunchAndGitHub<'a> {
     type Worktree = Worktree;
 
+    fn launch_path(&self) -> &Path {
+        self.directory.git().dir()
+    }
+
     fn tickets(&mut self) -> Result<Vec<Ticket>> {
         GitHub::new().tickets(self.issue)
     }
 
     fn started(&mut self, work: Work) {
-        logs::started(work, self.harness);
+        logs::started(work, &self.child_asks.harness);
+        if self.child {
+            logs::issue_title(GitHub::new().issue_title(self.issue).ok());
+        }
     }
 
     fn select(&mut self) -> Result<Selection> {
-        branch::select(self.directory.git(), &GitHub::new(), self.issue)
+        let selection = branch::select(self.directory.git(), &GitHub::new(), self.issue)?;
+        self.issue_branch = Some(selection.branch().into());
+        logs::issue_branch(Some(selection.branch()));
+        Ok(selection)
     }
 
     fn prepare_base_branch(&mut self, named: Option<&str>, pull: bool) -> Result<String> {
@@ -414,7 +487,14 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
     }
 
     fn make_claim(&mut self) -> Result<()> {
-        self.claim = Some(claim::make(self.issue, self.directory.git())?);
+        self.claim = Some(claim::make(
+            self.issue,
+            self.directory.git(),
+            self.issue_branch
+                .as_deref()
+                .expect("branch selected before Claim"),
+        )?);
+        logs::issue_title(GitHub::new().issue_title(self.issue).ok());
         Ok(())
     }
 
@@ -470,6 +550,7 @@ mod tests {
     use super::*;
     use crate::base_fix::BaseFixAsk;
     use crate::github::{PrState, PullRequest};
+    use crate::harness::Choice;
     use crate::labels::Labels;
     use crate::notification::NotificationAsk;
 
@@ -556,6 +637,10 @@ mod tests {
         /// How it was created.
         type Worktree = Checkout;
 
+        fn launch_path(&self) -> &Path {
+            Path::new("/launch")
+        }
+
         fn tickets(&mut self) -> Result<Vec<Ticket>> {
             self.calls.push(Call::Tickets);
             Ok(self
@@ -569,7 +654,7 @@ mod tests {
 
         fn started(&mut self, work: Work) {
             let spec_run = match work {
-                Work::Run(_) => false,
+                Work::Run(_) | Work::BaseFix(_) => false,
                 Work::SpecRun(_) => true,
                 Work::PickupRun(_) | Work::ArchitectRun(_) | Work::SecurityRun(_) => {
                     panic!("not a Run's work")
@@ -589,7 +674,10 @@ mod tests {
                 pull,
             });
             if self.script.base_fails {
-                bail!("base branch gone does not exist on origin; push it first");
+                bail!(
+                    "base branch gone does not exist on origin or locally; \
+                     create or obtain that branch first, or select a valid Base branch"
+                );
             }
             Ok(named.unwrap_or(CHECKED_OUT).to_string())
         }
@@ -645,8 +733,7 @@ mod tests {
             base: &str,
             opening: Opening,
         ) -> Result<Reached, FailedRun> {
-            assert_eq!(opening.kind, IMPLEMENT);
-            assert!(!opening.catch_up_from_origin);
+            assert_eq!(opening.session, OpeningSession::Implementation);
             self.calls
                 .push(Call::Deliver(worktree, base.to_string(), opening.prompt));
             self.work_ends()
@@ -1025,7 +1112,8 @@ mod tests {
 
         assert_eq!(
             cause(ended),
-            "base branch gone does not exist on origin; push it first"
+            "base branch gone does not exist on origin or locally; \
+             create or obtain that branch first, or select a valid Base branch"
         );
         assert_eq!(calls.last(), Some(&base_branch(None)));
     }

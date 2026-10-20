@@ -3,8 +3,10 @@
 //! (ADR-0008). [`Runs`] owns concurrent children and their collective cleanup;
 //! standalone [`start`] and [`Handle::wait`] serve Base fix.
 
+mod asks;
 mod runs;
 
+pub use asks::ChildAsks;
 pub use runs::Runs;
 
 use std::ffi::OsString;
@@ -24,7 +26,6 @@ use crate::issue::IssueUrl;
 use crate::logs;
 use crate::progress;
 use crate::run_ending;
-use crate::security::Options;
 
 #[cfg(test)]
 use execution_tests::Fault;
@@ -74,10 +75,8 @@ pub struct Given {
     pub command: logs::CommandKind,
     /// What it is asked about a Base fix.
     pub base_fix: BaseFixAsk,
-    pub security: Options,
-    /// The Harness, Model and Effort its sessions run on: the command's
-    /// that started it.
-    pub harness: Choice,
+    /// What the Run that started it hands on to every child Run.
+    pub asks: ChildAsks,
 }
 
 /// The hidden argument that makes a child Run a [`Kind::Ticket`], followed by
@@ -98,6 +97,9 @@ const LOGS_COMMAND: &str = "--logs-command";
 
 /// The hidden argument that asks a child Run [`BaseFixAsk::Allow`].
 const ALLOW_BASE_FIX: &str = "--allow-base-fix";
+
+/// The hidden arguments that give a child Run [`ChildAsks::security_review`]
+/// and [`ChildAsks::security_fix`].
 const SECURITY_REVIEW: &str = "--run-security-review";
 const ALLOW_SECURITY_FIX: &str = "--allow-security-fix";
 
@@ -136,17 +138,18 @@ impl Given {
             BaseFixAsk::Forbid => {}
             BaseFixAsk::Undecided { retry } => args.extend([OFFER_BASE_FIX, retry]),
         }
-        if self.security.fix {
+        if self.asks.security_fix {
             args.push(ALLOW_SECURITY_FIX);
         }
-        if self.security.review {
+        if self.asks.security_review {
             args.push(SECURITY_REVIEW);
         }
-        args.extend([SESSIONS_HARNESS, self.harness.harness.name()]);
-        if let Some(model) = &self.harness.model {
+        let harness = &self.asks.harness;
+        args.extend([SESSIONS_HARNESS, harness.harness.name()]);
+        if let Some(model) = &harness.model {
             args.extend([SESSIONS_MODEL, model]);
         }
-        if let Some(effort) = &self.harness.effort {
+        if let Some(effort) = &harness.effort {
             args.extend([SESSIONS_EFFORT, effort]);
         }
         args
@@ -162,7 +165,8 @@ pub struct Reader {
     stamp: Option<String>,
     command: Option<logs::CommandKind>,
     base_fix: Option<BaseFixAsk>,
-    security: Options,
+    security_review: bool,
+    security_fix: bool,
     harness: Option<Harness>,
     model: Option<String>,
     effort: Option<String>,
@@ -183,16 +187,16 @@ impl Reader {
         };
         match arg {
             SECURITY_REVIEW => {
-                if self.security.review {
+                if self.security_review {
                     bail!("repeated argument: {arg}");
                 }
-                self.security.review = true;
+                self.security_review = true;
             }
             ALLOW_SECURITY_FIX => {
-                if self.security.fix {
+                if self.security_fix {
                     bail!("repeated argument: {arg}");
                 }
-                self.security.fix = true;
+                self.security_fix = true;
             }
             SPEC_BRANCH | BASE_FIX_INTO => {
                 not_yet_given(&self.kind, arg)?;
@@ -257,8 +261,8 @@ impl Reader {
             if self.command.is_some()
                 || self.stamp.is_some()
                 || self.base_fix.is_some()
-                || self.security.review
-                || self.security.fix
+                || self.security_review
+                || self.security_fix
                 || self.harness.is_some()
                 || self.model.is_some()
                 || self.effort.is_some()
@@ -281,14 +285,17 @@ impl Reader {
                 .command
                 .with_context(|| format!("missing {LOGS_COMMAND}"))?,
             base_fix: self.base_fix.unwrap_or(BaseFixAsk::Forbid),
-            security: self.security,
-            harness: Choice {
-                harness,
-                model: self.model,
-                effort: self.effort,
-                // Chosen by the command that started it, whose checks it
-                // passed.
-                chosen_by: ChosenBy::Command,
+            asks: ChildAsks {
+                harness: Choice {
+                    harness,
+                    model: self.model,
+                    effort: self.effort,
+                    // Chosen by the command that started it, whose checks it
+                    // passed.
+                    chosen_by: ChosenBy::Command,
+                },
+                security_fix: self.security_fix,
+                security_review: self.security_review,
             },
         }))
     }
@@ -312,9 +319,13 @@ pub enum Ended {
         base_fix: Option<String>,
     },
     /// Why, and its session log, as it reported them.
-    Failed { cause: String, log: Option<String> },
+    Failed {
+        cause: String,
+        log: Option<String>,
+        local_work: Vec<String>,
+    },
     /// Ended by an interrupt passed on to it.
-    Interrupted,
+    Interrupted { local_work: Vec<String> },
 }
 
 /// Own a child Run and both readers from spawn through reaping and joining.
@@ -338,21 +349,19 @@ pub struct Handle {
 
 /// Start a Run of `kind` on `issue` in a child `thirdshift`, from the same
 /// Launch directory, given this command's start stamp for its Session logs,
-/// asked `base_fix` about a Base fix, and running its sessions on `harness`.
+/// asked `base_fix` about a Base fix, and handed `asks`.
 pub fn start(
     issue: &IssueUrl,
     kind: Kind,
     base_fix: BaseFixAsk,
-    security: Options,
-    harness: &Choice,
+    asks: &ChildAsks,
 ) -> Result<Handle> {
     let given = Given {
         kind,
         stamp: logs::stamp(),
         command: logs::command_kind(),
         base_fix,
-        security,
-        harness: harness.clone(),
+        asks: asks.clone(),
     };
     start_from(&own_executable()?, issue, &given)
 }
@@ -387,6 +396,7 @@ fn start_using(
     startup: impl FnOnce(&mut Handle) -> Result<()>,
 ) -> Result<Handle> {
     let mut command = Command::new(executable);
+    logs::inherit_record(&mut command);
     crate::session::recording::Recording::capture().inherit_command(&mut command);
     // On Linux `executable` is a link, and the child goes by this process's
     // command instead.
@@ -638,8 +648,14 @@ impl Handle {
     }
 
     fn ending(&mut self) -> Result<Ended> {
+        let local_work = self
+            .stderr
+            .as_ref()
+            .and_then(|worker| worker.value.as_ref())
+            .map(|reader| reader.local_work().to_vec())
+            .unwrap_or_default();
         if self.interrupted || (self.error.is_some() && interrupt::requested()) {
-            return Ok(Ended::Interrupted);
+            return Ok(Ended::Interrupted { local_work });
         }
         if let Some(error) = self.error.take() {
             return Err(error);
@@ -655,10 +671,11 @@ impl Handle {
                 pr_url,
                 base_fix: ending.base_fix,
             },
-            Err(_) if interrupt::requested() => Ended::Interrupted,
+            Err(_) if interrupt::requested() => Ended::Interrupted { local_work },
             Err(failure) => Ended::Failed {
                 cause: failure.cause.unwrap_or_else(|| format!("the Run {status}")),
                 log: failure.log,
+                local_work,
             },
         })
     }
@@ -731,8 +748,7 @@ mod tests {
             stamp: STAMPED.to_string(),
             command: logs::CommandKind::Issue,
             base_fix: BaseFixAsk::Forbid,
-            security: Options::default(),
-            harness: Choice::default(),
+            asks: ChildAsks::default(),
         };
         let Err(error) = start_from(executable, &issue, &given) else {
             panic!("started from {}", executable.display());
@@ -780,18 +796,26 @@ mod tests {
             ..on_claude.clone()
         };
         let harnesses = [on_claude, on_opus];
+        let securities = [(false, false), (true, false), (false, true), (true, true)];
         for (kind, harness) in [ticket(), base_fix()]
             .into_iter()
             .zip(harnesses.iter().cycle())
         {
-            for base_fix in [BaseFixAsk::Allow, BaseFixAsk::Forbid, offer.clone()] {
+            for (base_fix, (security_fix, security_review)) in
+                [BaseFixAsk::Allow, BaseFixAsk::Forbid, offer.clone()]
+                    .into_iter()
+                    .flat_map(|base_fix| securities.map(|security| (base_fix.clone(), security)))
+            {
                 let given = Given {
                     kind: kind.clone(),
                     stamp: STAMPED.to_string(),
                     command: logs::CommandKind::Issue,
                     base_fix,
-                    security: Options::default(),
-                    harness: harness.clone(),
+                    asks: ChildAsks {
+                        harness: harness.clone(),
+                        security_fix,
+                        security_review,
+                    },
                 };
                 let written = given.to_args();
                 // Before, between and after the hidden arguments, each of

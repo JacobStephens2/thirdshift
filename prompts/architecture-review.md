@@ -17,12 +17,14 @@ If it is Strong, settle its design yourself and publish it as the plan with the 
 
 If it is not Strong, file it as one issue labelled `needs-triage`, unless an open issue already covers it.
 
-Do not commit or push anything. You may edit files here to check an idea: the worktree is thrown away when you finish. A change the plan needs to CONTEXT.md or an ADR is a Ticket's work, not yours.
+Do not commit or push anything. You may edit files here to check an idea: the worktree is thrown away when you finish. A change the plan needs to GLOSSARY.md or an ADR is a Ticket's work, not yours.
 
 End your final message with one of these lines, as its last line, with the issue's full URL and nothing else on the line:
 Architecture review plan: <URL of the Spec or the single Ticket you published>
 Architecture review idea: <URL of the issue you filed>
 Architecture review already filed: <URL of the open issue that already covers it>
+
+For source edits, prefer an available structured patch/edit tool that makes the intended context and changed regions explicit (for example, `apply_patch` on Codex). Use the Harness's equivalent when available. Normal language-specific code generation and narrowly justified scripts remain appropriate; scope scripted replacements to the intended region and check the diff for unrelated changes.
 
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
 ```

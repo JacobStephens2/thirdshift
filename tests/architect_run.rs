@@ -1229,15 +1229,33 @@ fn merge_merges_the_dispatched_runs_pull_request_into_the_named_branch() {
 fn a_named_branch_that_is_not_on_origin_is_rejected_before_any_work() {
     let scenario = scenario();
     scenario.launch_git(&["branch", "local-only"]);
+    let refs = scenario.launch_git(&["show-ref"]);
+    let remote_refs = scenario.origin_git(&["show-ref"]);
 
-    for branch in ["nowhere", "local-only"] {
+    for (branch, guidance) in [
+        (
+            "nowhere",
+            "base branch nowhere does not exist on origin or locally; \
+             create or obtain that branch first, or select a valid Base branch",
+        ),
+        (
+            "local-only",
+            "base branch local-only does not exist on origin; push it first with: \
+             git push --set-upstream origin 'refs/heads/local-only:refs/heads/local-only'",
+        ),
+    ] {
         let result = scenario.run(&["architect", "base", branch]);
 
-        scenario.assert_rejected_before_any_work(
-            &result,
-            &format!("base branch {branch} does not exist on origin; push it first"),
-        );
+        scenario.assert_rejected_before_any_work(&result, guidance);
         assert_eq!(result.code, Some(1), "{branch}");
+        assert_eq!(scenario.launch_git(&["show-ref"]), refs);
+        assert_eq!(scenario.origin_git(&["show-ref"]), remote_refs);
+        assert_eq!(
+            scenario
+                .launch_git(&["symbolic-ref", "--short", "HEAD"])
+                .trim(),
+            "main"
+        );
     }
 }
 
@@ -1360,6 +1378,50 @@ fn the_one_notification(resend: &ResendStandIn) -> (String, String) {
 }
 
 #[test]
+fn a_transient_github_read_recovers_without_a_failure_notification() {
+    let scenario = scenario();
+    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+    let mut github = scenario.gh_state();
+    github["fail_next"] = serde_json::json!({
+        "call": "issue list",
+        "times": 1,
+        "error": "HTTP 504: Gateway Timeout (https://api.github.com/graphql)",
+    });
+    scenario.write_gh_state(&github);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(
+        &scenario,
+        &resend,
+        &["architect", "--plan-only", "--email", "me@example.com"],
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
+    let retry = "gh issue list failed (attempt 1/3)";
+    assert_eq!(result.stderr.matches(retry).count(), 1, "{}", result.stderr);
+    assert!(result.stderr.contains("HTTP 504"));
+    let calls = scenario.gh_calls_of("issue", "list");
+    assert_eq!(
+        calls[0], calls[1],
+        "the failed observation was not repeated"
+    );
+    let (subject, _) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Architect run: plan published"
+    );
+    let command_logs =
+        fs::read_dir(scenario.path("home/.thirdshift/logs/acme/widgets/commands/architect"))
+            .unwrap();
+    let log = command_logs
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.extension().is_some_and(|ext| ext == "log"))
+        .unwrap();
+    assert!(fs::read_to_string(log).unwrap().contains(retry));
+}
+
+#[test]
 fn plan_only_sends_one_notification_naming_the_plan() {
     let scenario = scenario();
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
@@ -1381,7 +1443,7 @@ fn plan_only_sends_one_notification_naming_the_plan() {
     );
     assert!(
         text.starts_with(&format!(
-            "Result:       plan published\nReview:       plan published: {PLAN_URL}\nDescription:  Deepen the session module\n"
+            "Result:       plan published\nCommand:      Architect run\nRepository:   acme/widgets\nReview:       plan published: {PLAN_URL}\nDescription:  Deepen the session module\n"
         )),
         "{text}"
     );
@@ -1414,7 +1476,7 @@ printf 'Architecture review idea: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
     );
     assert!(
         text.starts_with(&format!(
-            "Result:       idea filed\nReview:       idea filed: {PLAN_URL}\nDescription:  Deepen the session module\n"
+            "Result:       idea filed\nCommand:      Architect run\nRepository:   acme/widgets\nReview:       idea filed: {PLAN_URL}\nDescription:  Deepen the session module\n"
         )),
         "{text}"
     );
@@ -1444,7 +1506,7 @@ fn a_review_whose_idea_is_already_filed_sends_one_notification_naming_that_issue
     );
     assert!(
         text.starts_with(&format!(
-            "Result:       idea already filed\nReview:       idea already filed: {url}\nDescription:  Issue 7\n"
+            "Result:       idea already filed\nCommand:      Architect run\nRepository:   acme/widgets\nReview:       idea already filed: {url}\nDescription:  Issue 7\n"
         )),
         "{text}"
     );
@@ -1474,6 +1536,8 @@ fn a_failed_review_sends_one_notification_with_the_cause_and_the_session_log() {
     assert!(
         text.starts_with(&format!(
             "Result:       review failed\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       failed\n\
              Cause:        {FAILED_REVIEW_CAUSE}\n\
              Session log:  {log}\n\
@@ -1506,6 +1570,8 @@ fn email_always_sends_one_notification_for_the_review_and_the_run_it_dispatched(
     assert!(
         text.starts_with(&format!(
             "Result:       ready for review\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       plan published: {PLAN_URL}\n\
              Description:  Deepen the session module\n\
              Dispatched:   ready for review\n\
@@ -1532,6 +1598,8 @@ fn the_one_notification_says_what_became_of_the_dispatched_runs_base_fix() {
     assert!(
         text.starts_with(&format!(
             "Result:       ready for review\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       plan published: {PLAN_URL}\n\
              Description:  Deepen the session module\n\
              Dispatched:   ready for review\n\
@@ -1557,6 +1625,8 @@ fn a_dispatched_spec_run_sends_no_notification_of_its_own_and_its_tickets_are_in
     assert!(
         text.starts_with(&format!(
             "Result:       merged\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       plan published: {PLAN_URL}\n\
              Description:  Deepen the session module\n\
              Dispatched:   merged\n\
@@ -1591,6 +1661,8 @@ fn a_dispatched_run_that_fails_sends_one_notification_with_its_outcome_and_cause
     assert!(
         text.starts_with(&format!(
             "Result:       failed\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       plan published: {PLAN_URL}\n\
              Description:  Deepen the session module\n\
              Dispatched:   failed\n\
@@ -1658,7 +1730,7 @@ sleep 60"#,
         "[thirdshift] acme/widgets Architect run: interrupted"
     );
     assert!(
-        text.starts_with("Result:       interrupted\nReview:       interrupted\n"),
+        text.starts_with("Result:       interrupted\nCommand:      Architect run\nRepository:   acme/widgets\nReview:       interrupted\n"),
         "{text}"
     );
     assert!(!text.contains("Cause:"), "{text}");
@@ -1685,6 +1757,8 @@ fn a_plan_that_fails_its_checks_sends_one_notification_naming_it_in_the_cause() 
     assert!(
         text.starts_with(&format!(
             "Result:       review failed\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       failed\n\
              Cause:        the plan {PLAN_URL} is closed\n"
         )),
@@ -1709,6 +1783,8 @@ fn a_dispatched_spec_run_that_fails_sends_one_notification_with_each_tickets_out
     assert!(
         text.starts_with(&format!(
             "Result:       failed\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       plan published: {PLAN_URL}\n\
              Description:  Deepen the session module\n\
              Dispatched:   failed\n"
@@ -1746,6 +1822,127 @@ while [ -d "$root" ] && [ ! -e "$root/release" ]; do sleep 0.05; done
 /// Let an agent held by [`AGENT_WAITS_FOR_RELEASE`] go on.
 fn release(scenario: &Scenario) {
     fs::write(scenario.path("release"), "").unwrap();
+}
+
+#[test]
+fn status_names_a_live_architecture_review_by_kind_and_command_stamp() {
+    let scenario = scenario();
+    scenario.agent_does(&format!(
+        "{AGENT_WAITS_FOR_RELEASE}{AGENT_PUBLISHES_A_TICKET}"
+    ));
+    let held = scenario.run_until(&["architect", "--plan-only"], &[], "started");
+    let result = scenario.run(&["status", "--json"]);
+    let text = scenario.run(&["status"]);
+    release(&scenario);
+    let ended = held.finish();
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let status: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+    let command = &status["commands"][0];
+    assert_eq!(command["kind"], "Architect run", "{status}");
+    assert_eq!(command["issue"], serde_json::Value::Null);
+    assert_eq!(command["state"], "live");
+    assert_eq!(command["stage"]["name"], "Architecture review");
+    assert!(command["stage"]["age_seconds"].is_number());
+    let log = scenario.log_files(
+        "home/.thirdshift/logs/acme/widgets/commands/architect",
+        "log",
+    );
+    let (stamp, _) = log[0]
+        .strip_suffix(".log")
+        .unwrap()
+        .split_once('~')
+        .expect("owned Command log");
+    let name = format!("architect-{stamp}");
+    assert_eq!(command["name"], name);
+    assert!(text.stdout.contains(&name), "{}", text.stdout);
+    assert!(
+        text.stdout.contains("Architecture review ·"),
+        "{}",
+        text.stdout
+    );
+}
+
+#[test]
+fn status_nests_the_architect_plans_run_or_spec_run_under_its_pass() {
+    for (plan, held_issue, base, kind, stage) in [
+        (
+            single_ticket_plan as fn() -> Scenario,
+            8,
+            "main",
+            "Run",
+            "implement",
+        ),
+        (|| spec_plan(""), 9, "issue-8", "Spec run", "Tickets"),
+    ] {
+        let scenario = plan();
+        scenario.agent_does_for(
+            held_issue,
+            &format!(
+                "{AGENT_WAITS_FOR_RELEASE}{}",
+                agent_opens_pr(held_issue, base)
+            ),
+        );
+        let held = scenario.run_until(&["architect"], &[], "started");
+        let result = scenario.run(&["status", "--json"]);
+        let text = scenario.run(&["status"]);
+        release(&scenario);
+        let ended = held.finish();
+        assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+        let status: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+        assert_eq!(status["commands"].as_array().unwrap().len(), 1, "{status}");
+        let pass = &status["commands"][0];
+        assert_eq!(pass["kind"], "Architect run");
+        assert_eq!(pass["issue"], serde_json::Value::Null);
+        let dispatched = &pass["dispatched"][0];
+        assert_eq!(dispatched["kind"], kind, "{status}");
+        assert_eq!(dispatched["issue"]["number"], 8);
+        assert_eq!(dispatched["stage"]["name"], stage);
+        assert!(dispatched["stage"]["age_seconds"].is_number());
+        if kind == "Spec run" {
+            assert_eq!(dispatched["children"][0]["issue"]["number"], held_issue);
+            assert_eq!(dispatched["children"][0]["stage"]["name"], "implement");
+            assert_eq!(dispatched["children"][0]["state"], "live");
+        }
+        assert!(
+            text.stdout.contains(&format!("\n  {kind} acme/widgets#8")),
+            "{}",
+            text.stdout
+        );
+        let folder = "home/.thirdshift/logs/acme/widgets/commands/architect";
+        let record = scenario.command_record(folder);
+        assert_eq!(record["outcome"], "ready for review");
+        assert_eq!(record["dispatched"][0]["outcome"], "ready for review");
+        assert_eq!(record["dispatched"][0]["issue_branch"], "issue-8");
+        assert_eq!(
+            record["dispatched"][0]["pull_request"],
+            pr_from(&scenario, "issue-8")["url"]
+        );
+    }
+}
+
+#[test]
+fn a_dispatch_that_fails_its_launch_checks_still_has_a_record() {
+    let scenario = scenario();
+    scenario.agent_does_in_session(
+        1,
+        &format!("{AGENT_PUBLISHES_A_TICKET}\ngit config user.name ''\n"),
+    );
+    let ended = scenario.run(&["architect"]);
+    assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+    assert!(
+        ended.stderr.contains("git user.name is not set"),
+        "{}",
+        ended.stderr
+    );
+    let folder = "home/.thirdshift/logs/acme/widgets/commands/architect";
+    let record = scenario.command_record(folder);
+    assert_eq!(
+        record["dispatched"].as_array().unwrap().len(),
+        1,
+        "{record}"
+    );
+    assert_eq!(record["dispatched"][0]["issue"]["number"], 8);
+    assert_eq!(record["dispatched"][0]["outcome"], "failed");
 }
 
 #[test]
@@ -2256,6 +2453,8 @@ fn an_idea_that_cannot_be_labelled_sends_one_notification_with_the_cause() {
     assert!(
         text.starts_with(
             "Result:       review failed\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       failed\n\
              Cause:        could not label the Architect idea #7: gh api --method PUT"
         ),
@@ -2308,6 +2507,29 @@ fn a_ready_issue_skips_the_architect_run_before_any_review() {
         assert_eq!(scenario.gh_state(), github);
         assert_nothing_left_behind(&scenario);
     }
+}
+
+#[test]
+fn an_untrusted_ready_issue_does_not_skip_the_architecture_review() {
+    let scenario = scenario();
+    ready_issue(&scenario, 7, "Untrusted work", &[]);
+    let mut state = scenario.gh_state();
+    state["author_associations"] = serde_json::json!({"7": "NONE"});
+    scenario.write_gh_state(&state);
+    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+
+    let result = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
+    assert!(
+        result
+            .stderr
+            .contains("#7 issue author is not a Trusted account"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
 }
 
 #[test]

@@ -1,7 +1,8 @@
 //! Pickup runs: `thirdshift pickup` takes the lowest-numbered Ready issue in
 //! the repository, an open issue labelled `ready-for-agent` with no label
 //! that makes an Unready Ticket, no Claim and no `base-fix` label, that is
-//! not a sub-issue, has no open blocker and nothing started on it, is not a
+//! not a sub-issue, has no open blocker and was never started or was handed
+//! back after its last Claim ended, is not a
 //! Spec whose Tickets are all closed, and has settled, and
 //! dispatches it as `thirdshift <Issue URL>` would, a Spec run or a Run,
 //! ending as that does. Each `ready-for-agent` issue it passes over on the
@@ -15,8 +16,9 @@
 mod support;
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 
-use support::resend::ResendStandIn;
+use support::resend::{ResendStandIn, assert_one_issue_line};
 use support::{HeldRun, REPO, RunResult, Scenario, TimelineEvent, before_command_log};
 
 /// The label of an issue a Pickup run may take.
@@ -44,6 +46,18 @@ git commit -q -m "Work on {issue}"
 gh pr create --base {base} --head issue-{issue} --title "Work on {issue}" --body "Closes #{issue}"
 "#
     )
+}
+
+/// Keep fault scripts at their call sites while sharing wrapper installation.
+fn install_git_wrapper(scenario: &Scenario, script: impl FnOnce(&str) -> String) {
+    let git = std::process::Command::new("which")
+        .arg("git")
+        .output()
+        .unwrap();
+    assert!(git.status.success());
+    let git = String::from_utf8(git.stdout).unwrap();
+    fs::write(scenario.path("bin/git"), script(git.trim())).unwrap();
+    fs::set_permissions(scenario.path("bin/git"), fs::Permissions::from_mode(0o755)).unwrap();
 }
 
 /// The newest pull request from `head` on the fake GitHub.
@@ -106,6 +120,374 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
         "{prompt}"
     );
     scenario.assert_cleaned_up("issue-7");
+    assert_eq!(
+        scenario.origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup"]),
+        ""
+    );
+}
+
+#[test]
+fn two_machines_racing_for_a_ready_issue_start_exactly_one_run() {
+    for race in [
+        PickupRace::Issue,
+        PickupRace::Spec,
+        PickupRace::SuccessfulWinner,
+    ] {
+        pickup_race(race);
+    }
+}
+
+#[test]
+fn delayed_selector_after_failed_winner_still_starts_only_one_run() {
+    pickup_race(PickupRace::FailedWinner);
+}
+
+#[test]
+fn stale_listing_must_not_adopt_an_active_claim_generation() {
+    pickup_race(PickupRace::ActiveClaimHistory);
+}
+
+enum PickupRace {
+    Issue,
+    Spec,
+    SuccessfulWinner,
+    FailedWinner,
+    ActiveClaimHistory,
+}
+
+fn pickup_race(race: PickupRace) {
+    let (is_spec, winner_finishes_first, winner_fails, active_history) = match race {
+        PickupRace::Issue => (false, false, false, false),
+        PickupRace::Spec => (true, false, false, false),
+        PickupRace::SuccessfulWinner => (false, true, false, false),
+        PickupRace::FailedWinner => (false, true, true, false),
+        PickupRace::ActiveClaimHistory => (false, true, true, true),
+    };
+    let scenario = Scenario::new();
+    // The generation check must protect even a repository that disables
+    // settling, regardless of timestamp precision or either host's clock.
+    scenario.user_config_is("[pickup]\nwait_minutes = 0\n");
+    ready_issue(&scenario, 7, &[]);
+    if is_spec {
+        scenario.spec_has_tickets(7, &[(8, &[])]);
+    }
+    fs::create_dir_all(scenario.path("machine-2")).unwrap();
+    scenario.launch_git(&[
+        "clone",
+        "-q",
+        &scenario.github_url(),
+        scenario.path("machine-2/widgets").to_str().unwrap(),
+    ]);
+    fs::create_dir_all(scenario.path("other-home")).unwrap();
+    fs::copy(
+        scenario.path("home/.gitconfig"),
+        scenario.path("other-home/.gitconfig"),
+    )
+    .unwrap();
+    fs::create_dir_all(scenario.path("other-home/.thirdshift")).unwrap();
+    fs::write(
+        scenario.path("other-home/.thirdshift/config.toml"),
+        "[pickup]\nwait_minutes = 0\n",
+    )
+    .unwrap();
+
+    // Both hosts read Ready before either makes its Claim. Keep the first
+    // host's empty origin listing even after the second has started work.
+    install_git_wrapper(&scenario, |git| {
+        format!(
+            r#"#!/bin/sh
+if [ "$HOLD_READY_READ" = 1 ] && [ "$*" = 'ls-remote --heads origin refs/heads/issue-7 refs/heads/issue-7-branch-*' ] && [ ! -f "$TMPDIR/ready-read" ]; then
+    "{git}" "$@" > "$TMPDIR/ready-answer" || exit $?
+    touch "$TMPDIR/ready-read"
+    while [ -d "$TMPDIR" ] && [ ! -f "$TMPDIR/release-ready" ]; do sleep 0.02; done
+    cat "$TMPDIR/ready-answer"
+    exit 0
+fi
+exec "{git}" "$@"
+"#,
+        )
+    });
+    let ending = if winner_finishes_first && !winner_fails {
+        agent_opens_pr(7, "main")
+    } else {
+        "exit 1\n".to_string()
+    };
+    scenario.agent_does(&format!("if [ \"$HOLD_READY_READ\" = 1 ]; then exit 1; fi\ntouch \"$TMPDIR/winner-started\"\nwhile [ -d \"$TMPDIR\" ] && [ ! -f \"$TMPDIR/finish-winner\" ]; do sleep 0.02; done\n{ending}"));
+
+    if active_history {
+        // Preserve the old listing, then preserve the candidate response
+        // sampled while the winner's Claim is active. This barrier lets a
+        // correct search reject that history before any Issue branch read.
+        fs::create_dir_all(scenario.path("bin/real")).unwrap();
+        fs::rename(scenario.path("bin/gh"), scenario.path("bin/real/gh")).unwrap();
+        fs::write(
+            scenario.path("bin/gh"),
+            r#"#!/bin/sh
+if [ "$HOLD_READY_READ" = 1 ]; then
+    case "$1 $2 $*" in
+    'issue list '*ready-for-agent*)
+        if [ ! -f "$TMPDIR/listing-read" ]; then
+            "$(dirname "$0")/real/gh" "$@" > "$TMPDIR/listing-answer" || exit $?
+            touch "$TMPDIR/listing-read"
+            while [ -d "$TMPDIR" ] && [ ! -f "$TMPDIR/release-listing" ]; do sleep 0.02; done
+            cat "$TMPDIR/listing-answer"
+            exit 0
+        fi
+        ;;
+    'api graphql '*timelineItems*)
+        if [ ! -f "$TMPDIR/candidate-read" ]; then
+            "$(dirname "$0")/real/gh" "$@" > "$TMPDIR/candidate-answer" || exit $?
+            touch "$TMPDIR/candidate-read"
+            while [ -d "$TMPDIR" ] && [ ! -f "$TMPDIR/release-candidate" ]; do sleep 0.02; done
+            cat "$TMPDIR/candidate-answer"
+            exit 0
+        fi
+        ;;
+    esac
+fi
+exec "$(dirname "$0")/real/gh" "$@"
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(scenario.path("bin/gh"), fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let started = if active_history {
+        "tmp/listing-read"
+    } else {
+        "tmp/ready-read"
+    };
+    let stale = scenario.run_until(&["pickup"], &[("HOLD_READY_READ", "1")], started);
+    let other_home = scenario.path("other-home");
+    let winner = std::panic::catch_unwind(|| {
+        scenario.run_from_until(
+            &scenario.path("machine-2/widgets"),
+            &["pickup"],
+            &[("HOME", other_home.to_str().unwrap())],
+            "tmp/winner-started",
+        )
+    });
+    let winner = match winner {
+        Ok(winner) => winner,
+        Err(panic) => {
+            fs::write(scenario.path("tmp/release-ready"), "").unwrap();
+            fs::write(scenario.path("tmp/release-listing"), "").unwrap();
+            fs::write(scenario.path("tmp/release-candidate"), "").unwrap();
+            fs::write(scenario.path("tmp/finish-winner"), "").unwrap();
+            stale.finish();
+            std::panic::resume_unwind(panic);
+        }
+    };
+    let candidate_seen = if active_history {
+        fs::write(scenario.path("tmp/release-listing"), "").unwrap();
+        let deadline = std::time::Instant::now() + support::WAIT_BOUND;
+        while !scenario.path("tmp/candidate-read").exists() && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        scenario.path("tmp/candidate-read").exists()
+    } else {
+        true
+    };
+    let mut winner = Some(winner);
+    let winner_result = if winner_finishes_first {
+        fs::write(scenario.path("tmp/finish-winner"), "").unwrap();
+        Some(winner.take().unwrap().finish())
+    } else {
+        None
+    };
+    let labels = scenario.issue_labels(7);
+    let branches = scenario.origin_git(&["show-ref"]);
+    let prs = scenario.gh_state()["prs"].clone();
+    fs::write(scenario.path("tmp/release-ready"), "").unwrap();
+    fs::write(scenario.path("tmp/release-candidate"), "").unwrap();
+    let stale = stale.finish();
+    let labels_after = scenario.issue_labels(7);
+    let branches_after = scenario.origin_git(&["show-ref"]);
+    let prs_after = scenario.gh_state()["prs"].clone();
+    fs::write(scenario.path("tmp/finish-winner"), "").unwrap();
+    if let Some(winner) = winner {
+        winner.finish();
+    }
+
+    assert!(
+        candidate_seen,
+        "stale selector never sampled active Claim history"
+    );
+    assert_eq!(stale.code, Some(0), "{}", stale.stderr);
+    if let Some(winner) = winner_result {
+        assert_eq!(
+            winner.code,
+            Some(if winner_fails { 1 } else { 0 }),
+            "{}",
+            winner.stderr
+        );
+    }
+    assert!(stale.stdout.is_empty(), "{}", stale.stdout);
+    assert_eq!(scenario.claude_calls().len(), 1, "{}", stale.stderr);
+    assert_eq!(labels_after, labels);
+    assert_eq!(branches_after, branches);
+    assert_eq!(prs_after, prs);
+}
+
+#[test]
+fn pickup_reservation_does_not_publish_unrelated_local_head() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.launch_git(&["checkout", "-qb", "private-local-work"]);
+    scenario.commit_locally(
+        "private-local.txt",
+        "local-only-content",
+        "Unpublished local work",
+    );
+    scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
+    let held = scenario.run_until(&["pickup", "base", "main"], &[], "started");
+    let published = scenario.origin_git(&["ls-tree", "-r", "refs/heads/thirdshift/pickup/7"]);
+    release(&scenario);
+    held.finish();
+    assert!(
+        !published.contains("private-local.txt"),
+        "reservation published local file: {published}"
+    );
+}
+
+#[test]
+fn a_reservation_left_by_a_crashed_host_is_not_stolen() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.origin_has_branch("thirdshift/pickup/7", "main", &[]);
+    let before = scenario.origin_git(&["show-ref"]);
+    let github = scenario.gh_state();
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("reserved by another Pickup run"),
+        "{}",
+        result.stderr
+    );
+    assert!(result.stdout.is_empty());
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.origin_git(&["show-ref"]), before);
+    assert_eq!(scenario.gh_state(), github);
+}
+
+#[test]
+fn ending_a_pickup_does_not_delete_a_replaced_reservation() {
+    let scenario = Scenario::new();
+    let held = pickup_run_held_on_issue_7(&scenario);
+    let replacement = scenario.origin_git(&["rev-parse", "main"]);
+    scenario.origin_git(&[
+        "update-ref",
+        "refs/heads/thirdshift/pickup/7",
+        replacement.trim(),
+    ]);
+
+    release(&scenario);
+    let result = held.finish();
+
+    assert!(
+        result
+            .stderr
+            .contains("could not release Pickup reservation"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.origin_git(&["rev-parse", "refs/heads/thirdshift/pickup/7"]),
+        replacement
+    );
+}
+
+#[test]
+fn a_reservation_push_rejection_fails_before_any_claim_or_session() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let hook = scenario.origin_dir().join("hooks/pre-receive");
+    fs::write(
+        &hook,
+        "#!/bin/sh\necho 'reservations forbidden' >&2\nexit 1\n",
+    )
+    .unwrap();
+    fs::set_permissions(hook, fs::Permissions::from_mode(0o755)).unwrap();
+    let before = scenario.origin_git(&["show-ref"]);
+    let github = scenario.gh_state();
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("could not reserve refs/heads/thirdshift/pickup/7"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.origin_git(&["show-ref"]), before);
+    assert_eq!(scenario.gh_state(), github);
+}
+
+#[test]
+fn an_uncertain_successful_push_retains_the_reservation_without_dispatching() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    install_git_wrapper(&scenario, |git| {
+        format!(
+            r#"#!/bin/sh
+if [ "$1" = push ]; then
+    "{git}" "$@" || exit $?
+    echo 'lost push acknowledgement' >&2
+    exit 1
+fi
+exec "{git}" "$@"
+"#,
+        )
+    });
+
+    let failed = scenario.run(&["pickup"]);
+    let reservation = scenario.origin_git(&["rev-parse", "refs/heads/thirdshift/pickup/7"]);
+    let retried = scenario.run(&["pickup"]);
+
+    assert_eq!(failed.code, Some(1), "{}", failed.stderr);
+    assert!(
+        failed.stderr.contains("check origin by hand"),
+        "{}",
+        failed.stderr
+    );
+    assert_eq!(retried.code, Some(0), "{}", retried.stderr);
+    assert!(retried.stderr.contains("reserved by another Pickup run"));
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+    assert_eq!(
+        scenario.origin_git(&["rev-parse", "refs/heads/thirdshift/pickup/7"]),
+        reservation
+    );
+    assert!(scenario.origin_log("issue-7").is_none());
+}
+
+#[test]
+fn an_interrupted_pickup_releases_its_reservation_after_ending_its_claim() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
+    let mut held = scenario.run_until(&["pickup"], &[], "started");
+    assert!(
+        !scenario
+            .origin_git(&["show-ref", "--heads", "thirdshift/pickup/7"])
+            .is_empty()
+    );
+
+    held.signal("INT");
+    release(&scenario);
+    let result = held.finish();
+
+    assert_ne!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        scenario.origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup"]),
+        ""
+    );
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
 }
 
 /// What a skipped Pickup run says when the scenario's repository has no
@@ -178,7 +560,9 @@ fn an_issue_with_an_issue_branch_on_origin_is_not_taken() {
 
         let result = scenario.run(&["pickup"]);
 
-        let line = format!("#7 already started: {branch} is on origin");
+        let line = format!(
+            "#7 started: {branch} is on origin; no ready-for-agent hand-back after the last Claim ended"
+        );
         assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
         assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT], "{branch}");
     }
@@ -193,7 +577,8 @@ fn an_issue_with_a_pull_request_from_an_issue_branch_in_any_state_is_not_taken()
 
         let result = scenario.run(&["pickup"]);
 
-        let line = format!("#7 already started: PR {pr}");
+        let line =
+            format!("#7 started: PR {pr}; no ready-for-agent hand-back after the last Claim ended");
         assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
         assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT], "{state}");
     }
@@ -217,7 +602,7 @@ fn when_a_later_issue_is_ready_the_earlier_ones_lines_are_printed_and_it_is_take
     assert_ended_with_pr(&result, &pr_from(&scenario, "issue-70"), "ready for review");
     let url = scenario.issue_url(70);
     let lines = format!(
-        "thirdshift: #7 already started: PR {pr}\n\
+        "thirdshift: #7 started: PR {pr}; no ready-for-agent hand-back after the last Claim ended\n\
          thirdshift: #8 labelled wontfix\n\
          thirdshift: #9 labelled in-progress\n\
          thirdshift: taking Ready issue #70 \"Issue 70\", as thirdshift {url} would\n"
@@ -758,7 +1143,8 @@ fn a_named_branch_that_is_not_on_origin_stops_the_pass_before_any_label_changes(
     assert_stopped_by_preflight(
         &scenario,
         &result,
-        "base branch nowhere does not exist on origin; push it first",
+        "base branch nowhere does not exist on origin or locally; \
+         create or obtain that branch first, or select a valid Base branch",
     );
 }
 
@@ -906,7 +1292,9 @@ fn the_one_notification(resend: &ResendStandIn) -> (String, String) {
     assert_eq!(requests.len(), 1, "{requests:?}");
     let body = &requests[0].body;
     let part = |name: &str| body[name].as_str().unwrap().to_string();
-    (part("subject"), part("text"))
+    let text = part("text");
+    assert_one_issue_line(&text);
+    (part("subject"), text)
 }
 
 /// A Ready issue, #7, titled, with no sub-issues, whose session opens its PR
@@ -966,10 +1354,13 @@ fn the_notification_of_a_run_left_ready_for_review_is_that_runs() {
     assert!(
         text.starts_with(&format!(
             "Result:       ready for review\n\
+             Issue:        https://github.com/acme/widgets/issues/7\n\
+             Title:        Sharpen the widgets\n\
              Pull request: {}\n\
              Session log:  {}\n\
              Command log:  {}\n\
              Built with claude · default model · default effort (configured)\n\
+             Sent by:      thirdshift\n\
              Host:         ",
             pr["url"].as_str().unwrap(),
             log.display(),
@@ -996,7 +1387,7 @@ fn the_notification_of_a_merge_run_says_it_merged() {
         "[thirdshift] acme/widgets#7 Sharpen the widgets: merged"
     );
     let pull_request = format!(
-        "Result:       merged\nPull request: {}\n",
+        "Result:       merged\nIssue:        https://github.com/acme/widgets/issues/7\nTitle:        Sharpen the widgets\nPull request: {}\n",
         pr["url"].as_str().unwrap()
     );
     assert!(text.starts_with(&pull_request), "{text}");
@@ -1019,6 +1410,8 @@ fn the_notification_of_a_failed_run_has_its_pull_request_and_its_cause() {
     assert!(
         text.starts_with(&format!(
             "Result:       failed\n\
+             Issue:        https://github.com/acme/widgets/issues/7\n\
+             Title:        Sharpen the widgets\n\
              Pull request: {}\n\
              Cause:        claude exited 3\n\
              Session log:  ",
@@ -1051,7 +1444,12 @@ sleep 60"#,
         subject,
         "[thirdshift] acme/widgets#7 Sharpen the widgets: interrupted"
     );
-    assert!(text.starts_with("Result:       interrupted\n"), "{text}");
+    assert!(
+        text.starts_with(
+            "Result:       interrupted\nIssue:        https://github.com/acme/widgets/issues/7\n"
+        ),
+        "{text}"
+    );
     assert!(!text.contains("Cause:"), "{text}");
 }
 
@@ -1073,7 +1471,7 @@ fn the_notification_of_a_spec_run_is_that_spec_runs_with_a_line_per_ticket() {
         "[thirdshift] acme/widgets#7 Sharpen every widget: ready for review"
     );
     let pull_request = format!(
-        "Result:       ready for review\nPull request: {}\n",
+        "Result:       ready for review\nIssue:        https://github.com/acme/widgets/issues/7\nTitle:        Sharpen every widget\nPull request: {}\n",
         spec_pr["url"].as_str().unwrap()
     );
     assert!(text.starts_with(&pull_request), "{text}");
@@ -1095,7 +1493,12 @@ fn the_notification_of_a_failed_spec_run_has_each_tickets_outcome() {
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     let (subject, text) = the_one_notification(&resend);
     assert!(subject.ends_with(": failed"), "{subject}");
-    assert!(text.starts_with("Result:       failed\n"), "{text}");
+    assert!(
+        text.starts_with(
+            "Result:       failed\nIssue:        https://github.com/acme/widgets/issues/7\n"
+        ),
+        "{text}"
+    );
     let (_, tickets) = text.split_once("\nTickets:\n").expect(&text);
     let landed = pr_from(&scenario, "issue-8");
     let landed = format!("#8 landed with {}\n", landed["url"].as_str().unwrap());
@@ -1500,4 +1903,333 @@ fn a_model_claude_refuses_fails_the_pass_once_it_has_taken_an_issue_before_any_w
             .exists(),
         "a Command log was kept"
     );
+}
+
+#[test]
+fn an_issue_written_by_an_untrusted_account_is_passed_over() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["author_associations"] = serde_json::json!({"7": "NONE"});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&["#7 issue author is not a Trusted account"]),
+    );
+    assert!(scenario.claude_calls().is_empty());
+}
+
+#[test]
+fn ready_labels_are_read_from_label_events_and_their_actors_trusted_by_membership() {
+    for (association, actor, owner_type, collaborators, members) in [
+        ("COLLABORATOR", "reader", "User", vec!["reader"], vec![]),
+        ("MEMBER", "member", "Organization", vec![], vec!["member"]),
+    ] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+        let mut state = scenario.gh_state();
+        state["author_associations"] = serde_json::json!({"7": association});
+        state["owner_type"] = serde_json::json!(owner_type);
+        state["collaborators"] = serde_json::json!(collaborators);
+        state["org_members"] = serde_json::json!(members);
+        state["trust_events"] = serde_json::json!({"7": [
+            {"created_at": "2020-01-01T00:00:00Z", "event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "outsider"}},
+            {"created_at": "2020-01-01T00:00:00Z", "event": "unlabeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "acme"}},
+            {"created_at": "2020-01-01T00:00:00Z", "event": "labeled", "label": {"name": "READY-for-AGENT"}, "actor": {"login": actor}},
+            {"created_at": "2020-01-01T00:00:00Z", "event": "labeled", "label": {"name": "bug"}, "actor": {"login": "outsider"}}
+        ]});
+        scenario.write_gh_state(&state);
+
+        let result = scenario.run(&["pickup"]);
+
+        assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+        assert!(!result.stderr.contains("warning:"), "{}", result.stderr);
+    }
+}
+
+#[test]
+fn an_edit_whose_account_github_no_longer_knows_is_untrusted() {
+    for kind in ["body", "title"] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        let mut state = scenario.gh_state();
+        state["edits"] = serde_json::json!({"7": [
+            {"kind": kind, "by": null, "at": "2020-01-03T00:00:00Z"}
+        ]});
+        scenario.write_gh_state(&state);
+
+        let result = scenario.run(&["pickup"]);
+
+        assert_skipped(
+            &scenario,
+            &result,
+            &no_ready_issue_after(&[&format!(
+                "#7 {kind} edited after it was marked ready by an account that is not a Trusted account"
+            )]),
+        );
+    }
+}
+
+#[test]
+fn an_untrusted_edit_is_found_before_a_later_edit_with_no_time() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["edits"] = serde_json::json!({"7": [
+        {"kind": "body", "by": "outsider", "at": "2020-01-03T00:00:00Z"},
+        {"kind": "body", "by": "acme", "at": null}
+    ]});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&[
+            "#7 body edited after it was marked ready by an account that is not a Trusted account",
+        ]),
+    );
+}
+
+#[test]
+fn a_ready_labelling_whose_account_github_no_longer_knows_is_untrusted() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["trust_events"] = serde_json::json!({"7": [
+        {"created_at": "2020-01-01T00:00:00Z", "event": "labeled", "label": {"name": "ready-for-agent"}, "actor": null}
+    ]});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&[
+            "#7 most recent ready-for-agent label actor is not a Trusted account",
+        ]),
+    );
+}
+
+#[test]
+fn an_untrusted_edit_past_the_first_page_of_edit_history_is_found() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    let mut edits: Vec<_> = (0..100)
+        .map(|_| serde_json::json!({"kind": "body", "by": "acme", "at": "2020-01-02T00:00:00Z"}))
+        .collect();
+    edits.push(serde_json::json!(
+        {"kind": "body", "by": "outsider", "at": "2020-01-03T00:00:00Z"}
+    ));
+    state["edits"] = serde_json::json!({ "7": edits });
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&[
+            "#7 body edited after it was marked ready by an account that is not a Trusted account",
+        ]),
+    );
+}
+
+#[test]
+fn a_failed_label_actor_membership_lookup_starts_no_work() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["trust_events"] = serde_json::json!({"7": [
+        {"created_at": "2020-01-01T00:00:00Z", "event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "reader"}}
+    ]});
+    state["failing"] = serde_json::json!(["api --include repos/acme/widgets/collaborators/reader"]);
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("could not check Trusted account membership"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+}
+
+#[test]
+fn a_handed_back_branch_is_continued_without_losing_interrupted_work() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.origin_has_branch("issue-7", "main", &["Interrupted work"]);
+    scenario.issue_timeline(
+        7,
+        &[
+            (TimelineEvent::Labelled(IN_PROGRESS), 90),
+            (TimelineEvent::Unlabelled(IN_PROGRESS), 61),
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 60),
+        ],
+    );
+    scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(scenario.claude_calls()[0]["branch"], "issue-7");
+    assert!(scenario.first_prompt().contains("You are continuing work"));
+    assert_eq!(
+        scenario.origin_log("issue-7"),
+        Some(vec![
+            "Work on 7".to_string(),
+            "Interrupted work".to_string(),
+            "Initial commit".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn a_handed_back_open_pr_is_continued_using_its_base() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.origin_has_branch("develop", "main", &["Develop work"]);
+    scenario.launch_checks_out("develop");
+    scenario.origin_has_branch("issue-7", "main", &["Interrupted work"]);
+    let pr = scenario.github_has_pr("issue-7", "main", "OPEN");
+    // These operations can all occur in the same second. Timeline order
+    // still establishes the Claim ending before the hand-back.
+    scenario.issue_timeline(
+        7,
+        &[
+            (TimelineEvent::Labelled("In-Progress"), 60),
+            (TimelineEvent::Unlabelled("IN-PROGRESS"), 60),
+            (TimelineEvent::Labelled("Ready-For-Agent"), 60),
+        ],
+    );
+    scenario.agent_does_for(
+        7,
+        "echo more > more.txt\ngit add more.txt\ngit commit -q -m Continued",
+    );
+
+    let result = scenario.run(&["pickup", "base", "develop"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(result.stdout, format!("{pr}\n"));
+    assert_eq!(scenario.gh_state()["prs"].as_array().unwrap().len(), 1);
+    assert!(scenario.first_prompt().contains("You are continuing work"));
+    assert!(scenario.first_prompt().contains("The base branch is main."));
+    assert_eq!(
+        scenario.origin_log("issue-7"),
+        Some(vec![
+            "Continued".to_string(),
+            "Interrupted work".to_string(),
+            "Initial commit".to_string(),
+        ])
+    );
+}
+
+#[test]
+fn a_recent_hand_back_on_a_later_history_page_waits_for_settling() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.origin_has_branch("issue-7", "main", &["Interrupted work"]);
+    let mut events = vec![(TimelineEvent::Labelled(IN_PROGRESS), 90)];
+    events.extend((0..101).map(|_| (TimelineEvent::Labelled("bug"), 65)));
+    events.extend([
+        (TimelineEvent::Unlabelled(IN_PROGRESS), 2),
+        (TimelineEvent::Labelled(READY_FOR_AGENT), 1),
+    ]);
+    scenario.issue_timeline(7, &events);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&[LABELLED_TOO_RECENTLY]),
+    );
+}
+
+#[test]
+fn label_history_is_read_past_one_page_before_accepting_or_rejecting_a_hand_back() {
+    for handed_back in [true, false] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        scenario.origin_has_branch("issue-7", "main", &["Interrupted work"]);
+        let mut events = vec![
+            (TimelineEvent::Labelled(IN_PROGRESS), 90),
+            (TimelineEvent::Unlabelled(IN_PROGRESS), 80),
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 70),
+        ];
+        events.extend((0..205).map(|_| (TimelineEvent::Labelled("bug"), 65)));
+        events.extend([
+            (TimelineEvent::Labelled(IN_PROGRESS), 62),
+            (TimelineEvent::Unlabelled(IN_PROGRESS), 61),
+        ]);
+        if handed_back {
+            events.push((TimelineEvent::Labelled(READY_FOR_AGENT), 60));
+            scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+        }
+        scenario.issue_timeline(7, &events);
+
+        let result = scenario.run(&["pickup"]);
+
+        if handed_back {
+            assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+        } else {
+            assert_skipped(
+                &scenario,
+                &result,
+                &no_ready_issue_after(&[
+                    "#7 started: issue-7 is on origin; no ready-for-agent hand-back after the last Claim ended",
+                ]),
+            );
+        }
+    }
+}
+
+#[test]
+fn started_work_requires_a_hand_back_after_the_last_claim_ended() {
+    use TimelineEvent::{Labelled as On, Unlabelled as Off};
+    let claim = On(IN_PROGRESS);
+    let end = Off(IN_PROGRESS);
+    let ready = On(READY_FOR_AGENT);
+    let histories = [
+        vec![],
+        vec![ready],
+        vec![end, ready],
+        vec![claim, ready],
+        vec![claim, ready, end],
+        vec![claim, end],
+        vec![claim, end, ready, claim, end],
+        vec![claim, end, ready, claim, ready, end],
+        vec![claim, end, ready, Off(READY_FOR_AGENT)],
+    ];
+    for history in histories {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 7, &[]);
+        scenario.origin_has_branch("issue-7", "main", &["Human or interrupted work"]);
+        let events: Vec<_> = history.into_iter().map(|event| (event, 60)).collect();
+        scenario.issue_timeline(7, &events);
+
+        let result = scenario.run(&["pickup"]);
+
+        assert_skipped(
+            &scenario,
+            &result,
+            &no_ready_issue_after(&[
+                "#7 started: issue-7 is on origin; no ready-for-agent hand-back after the last Claim ended",
+            ]),
+        );
+    }
 }

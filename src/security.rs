@@ -21,13 +21,6 @@ pub(crate) mod fixing;
 pub mod reproduction;
 pub(crate) mod review;
 
-/// Resolved security choices passed together to child Runs and Base fixes.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct Options {
-    pub fix: bool,
-    pub review: bool,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FixAsk {
     Allow,
@@ -46,9 +39,12 @@ pub enum Outcome {
 /// The Security run's outcome and the private records it reached, including before a failure.
 pub struct Ended {
     pub outcome: Result<Recorded, FailedRun>,
+    /// Whether an audit session was requested after preparation succeeded.
+    pub audit_started: bool,
     /// A failed reproduction's number; its audit and private recording completed.
     pub failed_reproduction: Option<usize>,
     pub findings: Vec<RecordedFinding>,
+    pub findings_waiting: bool,
     pub advice: Vec<Advice>,
 }
 
@@ -56,8 +52,10 @@ impl From<anyhow::Error> for Ended {
     fn from(error: anyhow::Error) -> Self {
         Self {
             outcome: Err(error.into()),
+            audit_started: false,
             failed_reproduction: None,
             findings: Vec::new(),
+            findings_waiting: false,
             advice: Vec::new(),
         }
     }
@@ -288,15 +286,18 @@ fn audit_and_record(
 ) -> Ended {
     let mut advice = Vec::new();
     let mut findings = Vec::new();
+    let mut findings_waiting = false;
     let mut log = None;
     let mut reproduction = None;
+    let mut audit_started = false;
     let recorded = (|| -> Result<Recorded> {
         outside.check_harness()?;
         outside.check_node()?;
         outside.started(Work::SecurityRun(repo));
-        let (audited, session_log) = outside.audit(base);
-        log = session_log;
-        let audited = audited?;
+        let attempt = outside.audit(base);
+        audit_started = attempt.started;
+        log = attempt.log;
+        let audited = attempt.outcome?;
         let mut recorded = Recorded {
             created: 0,
             existing: 0,
@@ -318,6 +319,7 @@ fn audit_and_record(
                 recorded.existing += 1;
             }
             let record = resolved.record;
+            findings_waiting |= record.untriaged();
             let metadata = record.metadata().clone();
             let url = metadata.url.clone();
             findings.push(metadata);
@@ -380,8 +382,10 @@ fn audit_and_record(
             log,
             ..error.into()
         }),
+        audit_started,
         failed_reproduction,
         findings,
+        findings_waiting,
         advice,
     }
 }

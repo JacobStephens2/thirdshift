@@ -20,7 +20,8 @@
 # Before it pushes anything, it refuses a release that can't be cut: a version
 # that isn't plain X.Y.Z, or isn't higher than the one on main, a v<version>
 # tag that already exists locally or on origin, or a latest CI run on main that
-# didn't succeed.
+# didn't succeed. If that CI run is still running, it waits for it to finish
+# before starting the release.
 #
 # If a run is interrupted, running it again with the same version carries on
 # from the first step not yet done: it opens the PR for a pushed branch, waits
@@ -30,6 +31,10 @@
 # instead; a v<version> tag anywhere else on origin is refused. A bump PR
 # closed without merging is refused while release-<version> is on origin;
 # once that branch is deleted, the next run starts over.
+# A resumed PR must belong to origin and match its branch tip while open, or
+# it is refused, even once tagged. Its tree (or a pushed branch with no PR)
+# must also be exactly the version bump in Cargo.toml and Cargo.lock from
+# its merge base, or it is refused before merging or tagging.
 #
 # Prints a progress line on stderr for each step, with the release workflow
 # run's URL once it waits for that run, and the GitHub Release's URL last.
@@ -48,7 +53,7 @@ shopt -s inherit_errexit
 summary_prompt=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/release-summary.md
 summary_manifest=$(dirname "$summary_prompt")/../Cargo.toml
 
-# Seconds between reads of the PR's workflow runs and the release workflow run.
+# Seconds between reads of main's CI, the PR's runs and the release workflow.
 poll_seconds=${RELEASE_POLL_SECONDS:-15}
 
 main() {
@@ -67,6 +72,9 @@ main() {
 
 	fetch_main
 	find_earlier_run
+	case $pr_state in
+	OPEN | MERGED) validate_bump_pr ;;
+	esac
 	finish_if_tagged
 
 	case $pr_state in
@@ -77,6 +85,7 @@ main() {
 			git push --quiet origin "$head:refs/heads/$branch"
 		else
 			progress "resuming: $branch is on origin at ${head:0:7} with no PR"
+			validate_bump_pr
 			write_summary "no PR was opened"
 		fi
 		open_pr
@@ -104,24 +113,67 @@ main() {
 # CLOSED, or empty with no PR), url, head and merge from the newest PR from
 # $branch, or with no PR, head from $branch on origin if it was pushed. A PR
 # closed without merging whose branch is gone from origin counts as no PR.
+# Refuses a PR from another repository, or an open PR whose head is not
+# $branch on origin.
 find_earlier_run() {
-	local pr
-	pr=$(gh pr list --head "$branch" --base main --state all --limit 1 \
-		--json state,url,headRefOid,mergeCommit \
-		--jq '.[0] // empty | "\(.state) \(.url) \(.headRefOid) \(.mergeCommit.oid // "")"')
-	read -r pr_state url head merge <<<"$pr"
+	local pr cross_repository origin_head
+	pr=$(gh pr list --repo "$(git remote get-url origin)" --head "$branch" --base main --state all --limit 1 \
+		--json state,url,headRefOid,mergeCommit,isCrossRepository \
+		--jq '.[0] // empty | "\(.isCrossRepository) \(.state) \(.url) \(.headRefOid) \(.mergeCommit.oid // "")"')
+	read -r cross_repository pr_state url head merge <<<"$pr"
+	origin_head=$(git ls-remote origin "refs/heads/$branch" | cut -f 1)
 	# A PR closed without merging whose branch was then deleted leaves
-	# nothing to resume: start over.
-	if [ "$pr_state" = CLOSED ] && [ -z "$(git ls-remote origin "refs/heads/$branch")" ]; then
+	# nothing to resume, whichever repository it came from: start over.
+	if [ "$pr_state" = CLOSED ] && [ -z "$origin_head" ]; then
 		pr_state='' url='' head='' merge=''
 	fi
+	if [ -n "$pr_state" ] && [ "$cross_repository" != false ]; then
+		refuse "$url has its head in another repository, not origin"
+	fi
+	if [ "$pr_state" = OPEN ] && { [ -z "$origin_head" ] || [ "$head" != "$origin_head" ]; }; then
+		refuse "$url head does not match refs/heads/$branch on origin"
+	fi
 	if [ -z "$pr_state" ]; then
-		head=$(git ls-remote origin "refs/heads/$branch" | cut -f 1)
+		head=$origin_head
 		if [ -n "$head" ]; then
 			git fetch --quiet origin "refs/heads/$branch"
 		fi
 	fi
 }
+
+# validate_bump_pr
+# Refuses unless the selected PR's (or pushed branch's) entire tree is the
+# bump_version result from its merge base. A merged PR uses main just before
+# its merge, since its head is already an ancestor of main now.
+validate_bump_pr() {
+	local base target expected candidate=${url:-$branch on origin}
+	if ! git fetch --quiet origin "$head"; then
+		refuse "$candidate head could not be fetched from origin"
+	fi
+	target=origin/main
+	if [ "$pr_state" = MERGED ]; then
+		target=$merge^1
+	fi
+	base=$(git merge-base "$head" "$target")
+	expected=$(bump_tree "$base")
+	if [ "$expected" != "$(git rev-parse "$head^{tree}")" ]; then
+		refuse "$candidate changes more than the version bump to $version in Cargo.toml and Cargo.lock"
+	fi
+}
+
+# bump_tree <base>
+# The tree commit_bump would make, without committing or touching the caller's
+# checkout. The subshell owns the temporary worktree and its cleanup trap.
+bump_tree() (
+	local repo=$PWD work
+	work=$(mktemp -d)
+	trap 'git -C "$repo" worktree remove --force "$work" 2>/dev/null || rm -rf "$work"' EXIT
+	git worktree add --quiet --detach "$work" "$1"
+	cd "$work"
+	bump_version "$version"
+	git add Cargo.toml Cargo.lock
+	git write-tree
+)
 
 # finish_if_tagged
 # After an earlier run, if $tag is on origin at the merge of the bump PR,
@@ -202,7 +254,7 @@ wait_and_merge() {
 		exit 1
 	fi
 
-	gh pr merge "$branch" --merge --match-head-commit "$head" >/dev/null
+	gh pr merge "$url" --merge --match-head-commit "$head" >/dev/null
 	fetch_main
 	merge=$(merge_commit_of "$head")
 	progress "merged $url as ${merge:0:7}"
@@ -262,9 +314,9 @@ refuse() {
 # check_can_release <version> <tag> <base>
 # Refuses unless <version> is plain X.Y.Z and higher than the version in the
 # manifest at <base>, main's tip, no <tag> exists on origin or locally, and
-# the latest CI run on main is on <base> and succeeded.
+# the latest CI run on main is on <base> and succeeded, waiting if unfinished.
 check_can_release() {
-	local current short=${3:0:7} latest sha status conclusion
+	local current short=${3:0:7} latest sha status conclusion waiting=
 	if ! is_plain_version "$1"; then
 		refuse "it is not a plain X.Y.Z version, such as 0.4.0"
 	fi
@@ -282,14 +334,23 @@ check_can_release() {
 		refuse "$2 already exists locally"
 	fi
 
-	latest=$(gh run list --branch main --workflow ci.yml --event push --limit 1 \
-		--json headSha,status,conclusion --jq '.[] | "\(.headSha) \(.status) \(.conclusion)"')
-	read -r sha status conclusion <<<"$latest"
-	if [ "$sha" != "$3" ]; then
-		refuse "CI has not run on main at $short yet"
-	elif [ "$status" != completed ]; then
-		refuse "CI on main at $short is $status, not finished"
-	elif [ "$conclusion" != success ]; then
+	while :; do
+		latest=$(gh run list --branch main --workflow ci.yml --event push --limit 1 \
+			--json headSha,status,conclusion --jq '.[] | "\(.headSha) \(.status) \(.conclusion)"')
+		read -r sha status conclusion <<<"$latest"
+		if [ "$sha" != "$3" ]; then
+			refuse "CI has not run on main at $short yet"
+		fi
+		if [ "$status" = completed ]; then
+			break
+		fi
+		if [ -z "$waiting" ]; then
+			progress "waiting for CI on main at $short"
+			waiting=1
+		fi
+		sleep "$poll_seconds"
+	done
+	if [ "$conclusion" != success ]; then
 		refuse "CI on main at $short ended in $conclusion"
 	fi
 }

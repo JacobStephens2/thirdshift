@@ -1,0 +1,222 @@
+{
+  "started_utc": "2026-10-17T09:40:52.176597+00:00",
+  "ended_utc": "2026-10-17T09:41:12.180993+00:00",
+  "limits": {
+    "top_level": 20000,
+    "per_root": 4096,
+    "total_nodes": 300000,
+    "depth": 16,
+    "seconds": 20
+  },
+  "top_level_entries": 6608,
+  "measured_nodes": 150815,
+  "groups": {
+    "unknown_unmeasured": {
+      "roots": 3822,
+      "directories": 0,
+      "regular_files": 0,
+      "symlinks": 0,
+      "other": 0,
+      "file_bytes": 0,
+      "allocated_bytes": 0,
+      "truncated_roots": 0
+    },
+    "generic_fixture_candidates": {
+      "roots": 111,
+      "directories": 4904,
+      "regular_files": 7954,
+      "symlinks": 561,
+      "other": 0,
+      "file_bytes": 299625675,
+      "allocated_bytes": 347463680,
+      "truncated_roots": 0
+    },
+    "tooling_candidates": {
+      "roots": 2,
+      "directories": 733,
+      "regular_files": 3583,
+      "symlinks": 5,
+      "other": 0,
+      "file_bytes": 243120626,
+      "allocated_bytes": 254504960,
+      "truncated_roots": 1
+    },
+    "named_scratch_candidates": {
+      "roots": 559,
+      "directories": 3008,
+      "regular_files": 30514,
+      "symlinks": 299,
+      "other": 0,
+      "file_bytes": 2113451323,
+      "allocated_bytes": 2217656320,
+      "truncated_roots": 15
+    },
+    "factory_prefix": {
+      "roots": 2114,
+      "directories": 32598,
+      "regular_files": 66656,
+      "symlinks": 0,
+      "other": 0,
+      "file_bytes": 463452980,
+      "allocated_bytes": 775307264,
+      "truncated_roots": 459
+    }
+  },
+  "errors": {},
+  "fixture_marker_samples": {
+    ".tmp2DaPAb": {
+      "first_100_children": [
+        "bin",
+        "claude-calls.json",
+        "claude-calls.json.final-message.2",
+        "claude-calls.json.lock",
+        "claude-script.sh",
+        "claude-script.sh.1",
+        "claude-script.sh.2",
+        "gh-calls.json",
+        "gh-state.json",
+        "gh-state.json.lock",
+        "home",
+        "origin.git",
+        "tmp",
+        "work"
+      ],
+      "capped": false
+    },
+    ".tmp2Z9JWc": {
+      "first_100_children": [
+        "bin",
+        "claude-calls.json",
+        "claude-calls.json.lock",
+        "claude-script.sh",
+        "claude-script.sh.issue-21",
+        "claude-script.sh.issue-22",
+        "claude-script.sh.issue-23",
+        "gh-calls.json",
+        "gh-state.json",
+        "gh-state.json.lock",
+        "home",
+        "origin.git",
+        "started-21",
+        "started-22",
+        "tmp",
+        "work"
+      ],
+      "capped": false
+    },
+    ".tmp3bf7Qy": {
+      "first_100_children": [
+        "bin",
+        "claude-calls.json",
+        "claude-calls.json.lock",
+        "claude-script.sh",
+        "gh-calls.json",
+        "gh-state.json",
+        "gh-state.json.lock",
+        "home",
+        "origin.git",
+        "status.txt",
+        "tmp",
+        "work"
+      ],
+      "capped": false
+    },
+    ".tmp3tDpdV": {
+      "first_100_children": [
+        "bin",
+        "contributor",
+        "gh-calls.json",
+        "gh-state.json",
+        "maintainer",
+        "origin.git"
+      ],
+      "capped": false
+    },
+    ".tmp46Dsgl": {
+      "first_100_children": [
+        "bin",
+        "claude-script.sh",
+        "gh-state.json",
+        "home",
+        "origin.git",
+        "seed",
+        "tmp",
+        "work"
+      ],
+      "capped": false
+    },
+    ".tmp4tjzeC": {
+      "first_100_children": [
+        "bin",
+        "claude-calls.json",
+        "claude-calls.json.final-message.2",
+        "claude-calls.json.lock",
+        "claude-script.sh",
+        "claude-script.sh.1",
+        "claude-script.sh.2",
+        "gh-calls.json",
+        "gh-state.json",
+        "gh-state.json.lock",
+        "home",
+        "origin.git",
+        "tmp",
+        "work"
+      ],
+      "capped": false
+    },
+    ".tmp6CcLMM": {
+      "first_100_children": [
+        "bin",
+        "claude-calls.json",
+        "claude-calls.json.lock",
+        "claude-script.sh",
+        "gh-calls.json",
+        "gh-state.json",
+        "gh-state.json.lock",
+        "home",
+        "origin.git",
+        "tmp",
+        "work"
+      ],
+      "capped": false
+    },
+    ".tmp6EhuDs": {
+      "first_100_children": [
+        "bin",
+        "claude-calls.json",
+        "claude-calls.json.lock",
+        "claude-script.sh",
+        "gh-calls.json",
+        "gh-state.json",
+        "gh-state.json.lock",
+        "home",
+        "origin.git",
+        "tmp",
+        "work"
+      ],
+      "capped": false
+    }
+  },
+  "followup_top_level": {
+    "observed_utc": "2026-10-17T09:41:29.151189+00:00",
+    "prefixes": {
+      "thirdshift-skills-": {
+        "directories": 2114,
+        "other": 0
+      },
+      "thirdshift- (excluding skills)": {
+        "directories": 86,
+        "other": 473
+      },
+      ".tmp": {
+        "directories": 85,
+        "other": 0
+      },
+      "fakes-": {
+        "directories": 0,
+        "other": 26
+      }
+    },
+    "method": "One os.scandir('/tmp') pass; DirEntry.stat(follow_symlinks=False); ordered prefix classification (skills before other thirdshift)."
+  }
+}

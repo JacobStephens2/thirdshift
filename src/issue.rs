@@ -1,6 +1,33 @@
 //! The Issue URL, the repository `origin` names, and the Origin match.
 
-use anyhow::{Result, bail};
+use std::num::NonZeroU64;
+
+use anyhow::{Context, Result, bail};
+
+/// A Run's issue argument, before a number is resolved against `origin`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IssueInput {
+    Url(IssueUrl),
+    Number(NonZeroU64),
+}
+
+impl IssueInput {
+    /// Parse without consulting Git. Only positive ASCII decimal numbers
+    /// are shorthand; full URLs keep their existing parsing and spelling.
+    pub fn parse(input: &str) -> Result<Self> {
+        if !input.is_empty() && input.bytes().all(|byte| byte.is_ascii_digit()) {
+            let number = input.parse().with_context(|| {
+                format!(
+                    "issue number must be a positive decimal integer from 1 to {}: {input}",
+                    u64::MAX
+                )
+            })?;
+            Ok(Self::Number(number))
+        } else {
+            IssueUrl::parse(input).map(Self::Url)
+        }
+    }
+}
 
 /// A parsed `https://github.com/<owner>/<repo>/issues/<n>`.
 #[derive(Debug, Clone, PartialEq, Eq)]

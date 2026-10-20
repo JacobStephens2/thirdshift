@@ -132,6 +132,39 @@ impl Git {
         Ok(self.dir.join(self.run(&["rev-parse", "--git-common-dir"])?))
     }
 
+    /// The checkout's top level, administrative and common directories and
+    /// verified HEAD, read by one process because spawning git is the cost
+    /// of observing them. Each is trimmed as [`Git::run`] trims. Output that
+    /// is not four lines, as from a path with a newline in it, is observed
+    /// again one value per process, so no path is guessed at.
+    pub fn checkout_location(&self) -> Result<CheckoutLocation> {
+        let observed = self.run(&[
+            "rev-parse",
+            "--show-toplevel",
+            "--absolute-git-dir",
+            "--git-common-dir",
+            "--verify",
+            "HEAD",
+        ])?;
+        let [root, admin, common, head] = match observed.lines().collect::<Vec<_>>()[..] {
+            [root, admin, common, head] => {
+                [root, admin, common, head].map(|line| line.trim().to_string())
+            }
+            _ => [
+                self.run(&["rev-parse", "--show-toplevel"])?,
+                self.run(&["rev-parse", "--absolute-git-dir"])?,
+                self.run(&["rev-parse", "--git-common-dir"])?,
+                self.run(&["rev-parse", "--verify", "HEAD"])?,
+            ],
+        };
+        Ok(CheckoutLocation {
+            root: PathBuf::from(root),
+            admin: PathBuf::from(admin),
+            common: self.dir.join(common),
+            head,
+        })
+    }
+
     /// Wait for, then hold until the file returned is dropped, a lock on the
     /// file `name` in the repository's common git directory, which every Run
     /// from one Launch directory shares. Ordinary acquisition stops for a
@@ -211,9 +244,22 @@ impl Git {
 
     /// Push `branch` to origin without local hooks: sessions and CI check
     /// the work, and a rejecting hook must not strand Failed run salvage.
-    pub(crate) fn push_checked(&self, branch: &str, check: impl Fn() -> Result<()>) -> Result<()> {
+    /// The caller proves `expected_head` is an ancestor of the pinned `head`.
+    /// The lease guards deletion/replacement; it never authorizes discarding history.
+    pub(crate) fn push_checked(
+        &self,
+        branch: &str,
+        head: &str,
+        expected_head: Option<&str>,
+        check: impl Fn() -> Result<()>,
+    ) -> Result<()> {
+        let lease = format!(
+            "--force-with-lease=refs/heads/{branch}:{}",
+            expected_head.unwrap_or("")
+        );
+        let refspec = format!("{head}:refs/heads/{branch}");
         progress::step(format_args!("pushing {branch}"));
-        self.run_checked(&["push", "--no-verify", "origin", branch], check)?;
+        self.run_checked(&["push", "--no-verify", &lease, "origin", &refspec], check)?;
         Ok(())
     }
 
@@ -252,6 +298,14 @@ fn command_result(args: &[&str], output: &Output) -> Result<String> {
         bail!(message);
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Where a checkout is, as [`Git::checkout_location`] reads it.
+pub struct CheckoutLocation {
+    pub root: PathBuf,
+    pub admin: PathBuf,
+    pub common: PathBuf,
+    pub head: String,
 }
 
 /// How long [`Git::run`] keeps trying a command that fails on a lock file

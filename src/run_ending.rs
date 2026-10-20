@@ -9,6 +9,7 @@
 
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::Duration;
 
 use crate::architect::Reviewed;
 use crate::base_fix::Advice;
@@ -53,12 +54,17 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                     ticket_lines: &[],
                     review: None,
                     security_findings: None,
+                    security_findings_waiting: false,
                     failed_reproduction: None,
+                    pre_audit_failure: None,
+                    recovery: None,
                     urls: Vec::new(),
                 },
                 Err(failed) => Account::of_failure(
                     failed,
-                    if audited.failed_reproduction.is_some() {
+                    if !audited.audit_started {
+                        "pre-audit failed"
+                    } else if audited.failed_reproduction.is_some() {
                         "reproduction failed"
                     } else {
                         "audit failed"
@@ -66,8 +72,17 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                 ),
             };
             Ok(Account {
+                pre_audit_failure: if !audited.audit_started {
+                    audited.outcome.as_ref().err().map(|failed| {
+                        crate::github::operational_cause(&failed.error)
+                            .unwrap_or("pre-audit checks failed")
+                    })
+                } else {
+                    None
+                },
                 failed_reproduction: audited.failed_reproduction,
                 security_findings: Some(&audited.findings),
+                security_findings_waiting: audited.findings_waiting,
                 advice: &audited.advice,
                 ..account
             })
@@ -87,6 +102,8 @@ pub fn show_skip(skip: &Skip) -> ExitCode {
 /// if it dispatched it, else as its Architecture review did.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Account<'a> {
+    /// Shared lifecycle and continuation facts for a Failed run.
+    pub recovery: Option<&'a crate::recovery::Recovery>,
     /// In a word or a few, as a Run notification's subject gives it: its
     /// pull request's outcome, `review required`, `failed` or `interrupted`;
     /// or, for an Architect run that dispatched nothing, how its review ended, or
@@ -113,8 +130,11 @@ pub struct Account<'a> {
     pub review: Option<Review<'a>>,
     /// The failed reproduction, after a completed Security audit and private recording.
     pub failed_reproduction: Option<usize>,
+    /// A fixed operational cause when a Security audit never started.
+    pub pre_audit_failure: Option<&'static str>,
     /// Safe metadata from a Security run's private records, even if the audit failed.
     pub security_findings: Option<&'a [crate::security::RecordedFinding]>,
+    pub security_findings_waiting: bool,
     /// The URLs on stdout, a line each: the pull request's, or that of the
     /// issue an Architect run's review ended on.
     pub urls: Vec<&'a str>,
@@ -167,7 +187,7 @@ impl Cause {
 
 impl<'a> Account<'a> {
     /// A Run or a Spec run that `ended`.
-    fn of_run(ended: &'a Ended) -> Self {
+    pub(crate) fn of_run(ended: &'a Ended) -> Self {
         let base_fix = ended.base_fix.as_deref();
         match &ended.outcome {
             Ok(reached) => Account {
@@ -185,7 +205,10 @@ impl<'a> Account<'a> {
                 ticket_lines: &reached.ticket_lines,
                 review: None,
                 security_findings: None,
+                security_findings_waiting: false,
                 failed_reproduction: None,
+                pre_audit_failure: None,
+                recovery: None,
                 urls: vec![&reached.pr_url],
             },
             Err(failed) => Account {
@@ -210,7 +233,10 @@ impl<'a> Account<'a> {
             ticket_lines: &failed.ticket_lines,
             review: None,
             security_findings: None,
+            security_findings_waiting: false,
             failed_reproduction: None,
+            pre_audit_failure: None,
+            recovery: failed.recovery.as_deref(),
             urls: failed.pr_url.as_deref().into_iter().collect(),
         }
     }
@@ -239,7 +265,10 @@ impl<'a> Account<'a> {
                 ticket_lines: &[],
                 review: None,
                 security_findings: None,
+                security_findings_waiting: false,
                 failed_reproduction: None,
+                pre_audit_failure: None,
+                recovery: None,
                 urls: vec![reviewed.url()],
             },
             (Err(failed), None) => Account::of_failure(failed, "review failed"),
@@ -260,13 +289,22 @@ impl<'a> Account<'a> {
         self.ended.is_ok()
     }
 
-    /// Show how the command ended: on stderr, what became of its Base fix,
+    /// Show stopping/recovery facts first, then on stderr its `elapsed` wall
+    /// time if this is the top-level command, then what became of its Base fix,
     /// if it took one, then the line that says how it ended once it
     /// succeeded; or its cause, its advice, if it has any, then its session
     /// log and the command's Command log; its URLs on stdout. Returns its
     /// exit code.
-    pub fn show(&self) -> ExitCode {
-        Shown::of(self).print()
+    pub fn show(&self, elapsed: Option<Duration>) -> ExitCode {
+        let mut shown = Shown::of(self);
+        if let Some(elapsed) = elapsed {
+            let after_recovery = self.recovery.map_or(0, |recovery| recovery.lines().len());
+            shown.steps.insert(
+                after_recovery,
+                format!("Took: {}", progress::duration(elapsed)),
+            );
+        }
+        shown.print()
     }
 
     /// How the command ended, in short, as its Activity log end line gives
@@ -280,6 +318,11 @@ impl<'a> Account<'a> {
                 format!("review required: {}", cause.first_line())
             }
             Err(cause) => format!("failed: {}", cause.first_line()),
+        };
+        let ended = if let Some(recovery) = self.recovery {
+            format!("{ended}; {}", recovery.lines().join("; "))
+        } else {
+            ended
         };
         match self.review.as_ref().and_then(|review| review.dispatched) {
             Some(plan) => format!("plan {plan} dispatched: {ended}"),
@@ -315,7 +358,10 @@ struct Shown {
 impl Shown {
     /// How a command that ended as `account` shows: see [`Account::show`].
     fn of(account: &Account) -> Self {
-        let mut steps = Vec::new();
+        let mut steps = account
+            .recovery
+            .map(|recovery| recovery.lines())
+            .unwrap_or_default();
         if let Some(report) = account.base_fix {
             steps.push(format!("{BASE_FIX}{report}"));
         }
@@ -397,6 +443,7 @@ pub struct Reader {
     /// The session log named since that line.
     log: Option<String>,
     base_fix: Option<String>,
+    local_work: Vec<String>,
 }
 
 impl Reader {
@@ -405,14 +452,20 @@ impl Reader {
         let ChildLine::Own(message) = line else {
             return;
         };
-        if let Some(report) = message.strip_prefix(BASE_FIX) {
+        if let Some(work) = crate::recovery::Recovery::local_work(message) {
+            self.local_work.push(work.to_string());
+        } else if let Some(report) = message.strip_prefix(BASE_FIX) {
             self.base_fix = Some(report.to_string());
         } else if let Some(log) = message.strip_prefix(SESSION_LOG) {
             self.log = Some(log.to_string());
-        } else if !Advice::is_line(message) {
+        } else if !Advice::is_line(message) && !crate::recovery::Recovery::is_line(message) {
             self.cause = Some(message.to_string());
             self.log = None;
         }
+    }
+
+    pub fn local_work(&self) -> &[String] {
+        &self.local_work
     }
 
     /// How the child ended, given its `stdout` and whether it `exited_zero`.
@@ -458,6 +511,7 @@ mod tests {
             log: Some(PathBuf::from(LOG)),
             interrupted: false,
             ticket_lines: Vec::new(),
+            recovery: None,
         }
     }
 
@@ -504,7 +558,10 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            security_findings_waiting: false,
             failed_reproduction: None,
+            pre_audit_failure: None,
+            recovery: None,
             urls: vec![PR],
         }
     }
@@ -523,7 +580,10 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            security_findings_waiting: false,
             failed_reproduction: None,
+            pre_audit_failure: None,
+            recovery: None,
             urls: Vec::new(),
         }
     }
@@ -571,6 +631,7 @@ mod tests {
                 pr_url: Some(PR),
                 advice: &advice,
                 base_fix: Some(&base_fix),
+                recovery: None,
                 urls: vec![PR],
                 ..failed_account("claude exited 1\nno such model")
             }
@@ -703,7 +764,10 @@ mod tests {
                         dispatched: None,
                     }),
                     security_findings: None,
+                    security_findings_waiting: false,
                     failed_reproduction: None,
+                    pre_audit_failure: None,
+                    recovery: None,
                     urls: vec![PLAN],
                 }
             );
@@ -803,6 +867,7 @@ mod tests {
         let account = Account {
             pr_url: Some(PR),
             advice: &advice,
+            recovery: None,
             urls: vec![PR],
             ..failed_account("claude exited 1\nno such model")
         };
@@ -871,6 +936,7 @@ mod tests {
             pr_url: None,
             log: None,
             review: review(None),
+            recovery: None,
             urls: vec![PLAN],
             ..reached_account(Goal::ReadyForReview)
         };
@@ -912,11 +978,65 @@ mod tests {
                 pr_url: pr_url.map(String::from),
                 log: log.map(PathBuf::from),
                 interrupted: false,
+                recovery: None,
                 ticket_lines: Vec::new(),
             }),
             base_fix: None,
             advice: Vec::new(),
         }
+    }
+
+    #[test]
+    fn recovery_rows_do_not_replace_a_childs_cause_or_log() {
+        use crate::recovery::{Continuation, Preservation, Recovery, Stage, TicketProgress};
+        let mut ended = failed("claude exited 3", Some(LOG), Some(PR));
+        let failure = ended.outcome.as_mut().err().unwrap();
+        let mut recovery = Recovery::new(Stage::SpecReview, Preservation::Remote);
+        recovery.add_tickets(
+            TicketProgress {
+                landed: 17,
+                total: 17,
+            },
+            true,
+        );
+        recovery.add_command_context(
+            Continuation {
+                command:
+                    "thirdshift https://github.com/acme/widgets/issues/21 --no-merge harness claude"
+                        .into(),
+                launch: "/launch".into(),
+                branch: "issue-21".into(),
+                base: "main".into(),
+            },
+            false,
+        );
+        failure.recovery = Some(Box::new(recovery));
+        let account = Account::of_run(&ended);
+        let shown = Shown::of(&account);
+        for line in account.recovery.unwrap().lines() {
+            assert!(shown.steps.contains(&line), "{line}");
+        }
+        assert_eq!(
+            read_back(&ended).outcome,
+            Err(ChildFailure {
+                cause: Some("claude exited 3".into()),
+                log: Some(LOG.into())
+            })
+        );
+        // Rows can also follow a cause when a child is relayed by another consumer.
+        let mut reader = Reader::default();
+        reader.read(ChildLine::Own("claude exited 3"));
+        for line in account.recovery.unwrap().lines() {
+            reader.read(ChildLine::Own(&line));
+        }
+        reader.read(ChildLine::Own(&format!("session log: {LOG}")));
+        assert_eq!(
+            reader.finish("", false).outcome,
+            Err(ChildFailure {
+                cause: Some("claude exited 3".into()),
+                log: Some(LOG.into())
+            })
+        );
     }
 
     fn with_base_fix(ended: Ended, became: &str) -> Ended {

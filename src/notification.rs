@@ -34,6 +34,7 @@ pub enum NotificationAsk {
 struct Checked {
     resend: Resend,
     started: Instant,
+    started_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl Checked {
@@ -42,8 +43,13 @@ impl Checked {
     /// address is known and a Resend API key is found.
     fn new(to: Option<String>, settings: &EmailSettings) -> Result<Self> {
         let started = Instant::now();
+        let started_at = chrono::Utc::now();
         let resend = Resend::new(to, settings)?;
-        Ok(Checked { resend, started })
+        Ok(Checked {
+            resend,
+            started,
+            started_at,
+        })
     }
 }
 
@@ -77,12 +83,24 @@ enum Subject {
     Pending,
 }
 
+impl Subject {
+    /// The Command a notification about an Architect or Security run is
+    /// about, by name, with its repository if known.
+    fn command(&self) -> Option<(&'static str, Option<&Repo>)> {
+        match self {
+            Subject::ArchitectRun(repo) => Some(("Architect run", repo.as_ref())),
+            Subject::SecurityRun(repo) => Some(("Security run", repo.as_ref())),
+            Subject::Issue { .. } | Subject::Pending => None,
+        }
+    }
+}
+
 /// A Run notification, checked and waiting for its command to end.
 pub struct RunNotification {
     checked: Checked,
     subject: Subject,
     /// The command's configured Harness, Model and Effort, once known.
-    built_with: Option<String>,
+    configured: Option<String>,
 }
 
 impl RunNotification {
@@ -111,7 +129,7 @@ impl RunNotification {
         Ok(RunNotification {
             checked,
             subject,
-            built_with: None,
+            configured: None,
         })
     }
 
@@ -129,7 +147,7 @@ impl RunNotification {
     /// Name the configured Harness, Model and Effort without claiming
     /// that the Harness confirmed which Model executed.
     pub fn built_with(&mut self, harness: &Choice) {
-        self.built_with = Some(format!("{} (configured)", harness.built_with()));
+        self.configured = Some(format!("{harness} (configured)"));
     }
 
     /// Send the one notification for the command that ended as `account`
@@ -144,12 +162,20 @@ impl RunNotification {
         let host = host::name();
         let command_log = logs::command_log_path();
         let mut text = body(
+            &self.subject,
             account,
-            self.built_with.as_deref(),
+            self.configured.as_deref(),
             command_log.as_deref(),
             host.as_deref().unwrap_or("unknown host"),
             self.checked.started.elapsed(),
         );
+        if account.pre_audit_failure.is_some() {
+            text += &format!(
+                "Started (UTC): {}\nDiagnostics:  Check this command's stderr on {} at that time (or the scheduler's captured stderr, if scheduled).\n",
+                self.checked.started_at.format("%Y-%m-%d %H:%M:%S UTC"),
+                host.as_deref().unwrap_or("unknown host"),
+            );
+        }
         let lines = crate::session::recording::Recording::capture().notification_lines();
         if !lines.is_empty() {
             text += "\nSession models:\n";
@@ -169,18 +195,12 @@ impl RunNotification {
 /// The subject of a notification about `subject` for a command whose
 /// outcome is `outcome`: none about a Pickup run that took no issue.
 fn subject_line(subject: &Subject, outcome: &str) -> Option<String> {
-    match subject {
-        Subject::Issue { issue, title } => Some(issue_subject(issue, title.as_deref(), outcome)),
-        Subject::ArchitectRun(repo) => Some(architect_subject(repo.as_ref(), outcome)),
-        Subject::SecurityRun(repo) => {
-            let repo = repo
-                .as_ref()
-                .map(|repo| format!(" {}", repo.slug()))
-                .unwrap_or_default();
-            Some(format!("[thirdshift]{repo} Security run: {outcome}"))
-        }
-        Subject::Pending => None,
+    if let Subject::Issue { issue, title } = subject {
+        return Some(issue_subject(issue, title.as_deref(), outcome));
     }
+    subject
+        .command()
+        .map(|(command, repo)| command_subject(command, repo, outcome))
 }
 
 /// `[thirdshift] <owner>/<repo>#<n> <title>: <outcome>`, without the title
@@ -194,32 +214,46 @@ fn issue_subject(issue: &IssueUrl, title: Option<&str>, outcome: &str) -> String
     )
 }
 
-/// `[thirdshift] <owner>/<repo> Architect run: <outcome>`, without the
+/// `[thirdshift] <owner>/<repo> <command>: <outcome>`, without the
 /// repository if it isn't known.
-fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
+fn command_subject(command: &str, repo: Option<&Repo>, outcome: &str) -> String {
     let repo = repo
         .map(|repo| format!(" {}", repo.slug()))
         .unwrap_or_default();
-    format!("[thirdshift]{repo} Architect run: {outcome}")
+    format!("[thirdshift]{repo} {command}: {outcome}")
 }
 
 /// The plain-text body of the notification for a command that ended as
-/// `account` tells, with its configured `built_with` line, if known,
+/// `account` tells, about `subject`, with its `configured` Harness, Model and Effort, if known,
 /// naming `command_log`, if the command keeps one,
 /// and `host`, for a command that `took` so long. It starts with the command's
-/// outcome, as the subject gives it. An Architect run's then tells how its
+/// outcome, as the subject gives it, then the rest of what the subject
+/// tells, so the body alone carries it: the original Issue URL and the
+/// issue's title, if known, when the subject names an issue, else the
+/// command and its repository, if known. An Architect run's then tells how its
 /// review ended, and the outcome of the run it dispatched, if any. The cause
 /// is left out of an interrupted command's, whose outcome says so.
 fn body(
+    subject: &Subject,
     account: &Account,
-    built_with: Option<&str>,
+    configured: Option<&str>,
     command_log: Option<&Path>,
     host: &str,
     took: Duration,
 ) -> String {
     let mut text = format!("Result:       {}\n", account.outcome);
+    if let Subject::Issue { issue, title } = subject {
+        text += &format!("Issue:        {}\n", issue.url);
+        if let Some(title) = title {
+            text += &format!("Title:        {title}\n");
+        }
+    }
+    if let Some((command, repo)) = subject.command() {
+        text += &command_lines(command, repo);
+    }
     if let Some(findings) = account.security_findings {
         let audit = match &account.ended {
+            Err(_) if account.pre_audit_failure.is_some() => "not started",
             Err(_) if account.failed_reproduction.is_some() => "audit complete",
             Ok(line) => line.as_str(),
             Err(_) => account.outcome,
@@ -267,12 +301,14 @@ fn body(
         text += &format!("Pull request: {pr_url}\n");
     }
     // Security failure causes can quote private verifier work or Harness
-    // diagnostics. Only the fixed safeguard category is safe to send.
+    // diagnostics. Only fixed operational and safeguard categories are safe to send.
     if let Err(cause) = &account.ended
         && !account.interrupted
     {
         let cause = if account.security_findings.is_some() {
-            cause.safeguard_refusal()
+            account
+                .pre_audit_failure
+                .or_else(|| cause.safeguard_refusal())
         } else {
             Some(cause.full())
         };
@@ -292,31 +328,38 @@ fn body(
     if let Some(log) = command_log {
         text += &format!("Command log:  {}\n", log.display());
     }
-    if let Some(built_with) = built_with {
-        text += &format!("{built_with}\n");
+    if let Some(configured) = configured {
+        if account.pre_audit_failure.is_some() {
+            text += &format!("Configured:   {configured}\n");
+        } else {
+            text += &format!("Built with {configured}\n");
+        }
     }
+    text += "Sent by:      thirdshift\n";
     text += &format!("Host:         {host}\n");
-    text += &format!("Took:         {}\n", self::took(took));
+    text += &format!("Took:         {}\n", progress::duration(took));
     if !account.ticket_lines.is_empty() {
         text += "\nTickets:\n";
         for line in account.ticket_lines {
             text += &format!("{line}\n");
         }
     }
+    if let Some(recovery) = account.recovery {
+        for line in recovery.lines() {
+            text += &format!("{line}\n");
+        }
+    }
     text
 }
 
-/// `duration` to the second, as in `1h 2m 3s`, `2m 3s` or `3s`.
-fn took(duration: Duration) -> String {
-    let seconds = duration.as_secs();
-    let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
-    if hours > 0 {
-        format!("{hours}h {minutes}m {seconds}s")
-    } else if minutes > 0 {
-        format!("{minutes}m {seconds}s")
-    } else {
-        format!("{seconds}s")
+/// The body lines naming the `command` a notification is about, and its
+/// `repo`, if known, as its subject does.
+fn command_lines(command: &str, repo: Option<&Repo>) -> String {
+    let mut text = format!("Command:      {command}\n");
+    if let Some(repo) = repo {
+        text += &format!("Repository:   {}\n", repo.slug());
     }
+    text
 }
 
 #[cfg(test)]
@@ -359,7 +402,10 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            security_findings_waiting: false,
             failed_reproduction: None,
+            pre_audit_failure: None,
+            recovery: None,
             urls: vec![PR],
         }
     }
@@ -378,7 +424,10 @@ mod tests {
             ticket_lines: &[],
             review: None,
             security_findings: None,
+            security_findings_waiting: false,
             failed_reproduction: None,
+            pre_audit_failure: None,
+            recovery: None,
             urls: Vec::new(),
         }
     }
@@ -386,13 +435,20 @@ mod tests {
     /// The subject and body of the notification about `subject` for a
     /// command that ended as `account` tells, if it sends one.
     fn told(subject: &Subject, account: &Account) -> Option<(String, String)> {
-        subject_line(subject, account.outcome).map(|subject| (subject, body_of(account)))
+        subject_line(subject, account.outcome).map(|line| (line, body_of(subject, account)))
     }
 
     /// The body for a command that ended as `account` tells, run on
     /// `droplet-1` for 4s with no Command log.
-    fn body_of(account: &Account) -> String {
-        body(account, None, None, "droplet-1", Duration::from_secs(4))
+    fn body_of(subject: &Subject, account: &Account) -> String {
+        body(
+            subject,
+            account,
+            None,
+            None,
+            "droplet-1",
+            Duration::from_secs(4),
+        )
     }
 
     #[test]
@@ -403,8 +459,11 @@ mod tests {
                 "[thirdshift] acme/widgets#123 Add export button: merged".to_string(),
                 format!(
                     "Result:       merged\n\
+                     Issue:        https://github.com/acme/widgets/issues/123\n\
+                     Title:        Add export button\n\
                      Pull request: {PR}\n\
                      Session log:  {LOG}\n\
+                     Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
                 )
@@ -422,9 +481,12 @@ mod tests {
                 "[thirdshift] acme/widgets#123 Add export button: failed".to_string(),
                 format!(
                     "Result:       failed\n\
+                     Issue:        https://github.com/acme/widgets/issues/123\n\
+                     Title:        Add export button\n\
                      Cause:        claude exited 1\n\
                      Base fix:     {PLAN} not merged\n\
                      Session log:  {LOG}\n\
+                     Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
                 )
@@ -444,6 +506,9 @@ mod tests {
             Some((
                 "[thirdshift] acme/widgets#123 Add export button: interrupted".to_string(),
                 "Result:       interrupted\n\
+                 Issue:        https://github.com/acme/widgets/issues/123\n\
+                 Title:        Add export button\n\
+                 Sent by:      thirdshift\n\
                  Host:         droplet-1\n\
                  Took:         4s\n"
                     .to_string()
@@ -467,10 +532,13 @@ mod tests {
                 "[thirdshift] acme/widgets Architect run: merged".to_string(),
                 format!(
                     "Result:       merged\n\
+                     Command:      Architect run\n\
+                     Repository:   acme/widgets\n\
                      Review:       plan published: {PLAN}\n\
                      Dispatched:   merged\n\
                      Pull request: {PR}\n\
                      Session log:  {LOG}\n\
+                     Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
                 )
@@ -492,6 +560,7 @@ mod tests {
                 line: format!("idea filed: {PLAN}"),
                 dispatched: None,
             }),
+            recovery: None,
             urls: vec![PLAN],
             ..merged()
         };
@@ -501,7 +570,10 @@ mod tests {
                 "[thirdshift] acme/widgets Architect run: idea filed".to_string(),
                 format!(
                     "Result:       idea filed\n\
+                     Command:      Architect run\n\
+                     Repository:   acme/widgets\n\
                      Review:       idea filed: {PLAN}\n\
+                     Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
                 )
@@ -527,13 +599,77 @@ mod tests {
                 "[thirdshift] Architect run: review failed".to_string(),
                 format!(
                     "Result:       review failed\n\
+                     Command:      Architect run\n\
                      Review:       failed\n\
                      Cause:        claude exited 1\n\
                      Session log:  {LOG}\n\
+                     Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
                 )
             ))
+        );
+    }
+
+    #[test]
+    fn the_body_tells_everything_the_subject_does() {
+        let repo = || Repo::of_origin("https://github.com/acme/widgets.git");
+        let subjects = [
+            about_issue(),
+            Subject::Issue {
+                issue: issue(),
+                title: None,
+            },
+            about_architect_run(),
+            Subject::ArchitectRun(None),
+            Subject::SecurityRun(repo()),
+            Subject::SecurityRun(None),
+        ];
+        for subject in &subjects {
+            let (line, body) = told(subject, &merged()).unwrap();
+            // Past the tag, the subject is `<about>: <outcome>`; each word of
+            // what it is about is in the body.
+            let about = line
+                .strip_prefix("[thirdshift]")
+                .and_then(|rest| rest.strip_suffix(": merged"))
+                .unwrap();
+            for word in about.split([' ', '#']).filter(|word| !word.is_empty()) {
+                assert!(body.contains(word), "{word:?} of {line:?} not in:\n{body}");
+            }
+            assert!(body.starts_with("Result:       merged\n"), "{body}");
+        }
+    }
+
+    #[test]
+    fn the_body_names_thirdshift_as_the_subject_does() {
+        for subject in [
+            about_issue(),
+            about_architect_run(),
+            Subject::SecurityRun(None),
+        ] {
+            let (line, body) = told(&subject, &merged()).unwrap();
+            assert!(line.starts_with("[thirdshift]"));
+            assert!(body.contains("thirdshift"), "{body}");
+        }
+    }
+
+    #[test]
+    fn a_security_runs_body_names_the_command_and_repository() {
+        let account = Account {
+            security_findings: Some(&[]),
+            ..merged()
+        };
+        assert!(
+            body_of(
+                &Subject::SecurityRun(Repo::of_origin("https://github.com/acme/widgets.git")),
+                &account
+            )
+            .starts_with(
+                "Result:       merged\n\
+                     Command:      Security run\n\
+                     Repository:   acme/widgets\n\
+                     Audit:"
+            )
         );
     }
 
@@ -557,9 +693,10 @@ mod tests {
     #[test]
     fn the_body_leaves_out_what_the_run_does_not_have() {
         assert_eq!(
-            body_of(&failed("origin mismatch")),
+            body_of(&Subject::Pending, &failed("origin mismatch")),
             "Result:       failed\n\
              Cause:        origin mismatch\n\
+             Sent by:      thirdshift\n\
              Host:         droplet-1\n\
              Took:         4s\n"
         );
@@ -569,8 +706,9 @@ mod tests {
         };
         assert_eq!(
             body(
+                &Subject::Pending,
                 &account,
-                Some("Built with claude · opus · high"),
+                Some("claude · opus · high"),
                 Some(Path::new("/home/me/.thirdshift/logs/commands/issue/x.log")),
                 "droplet-1",
                 Duration::from_secs(4)
@@ -580,6 +718,7 @@ mod tests {
              Session log:  /home/me/.thirdshift/logs/sessions/x.jsonl\n\
              Command log:  /home/me/.thirdshift/logs/commands/issue/x.log\n\
              Built with claude · opus · high\n\
+             Sent by:      thirdshift\n\
              Host:         droplet-1\n\
              Took:         4s\n"
         );
@@ -593,11 +732,12 @@ mod tests {
             ..failed("claude exited 1")
         };
         assert_eq!(
-            body_of(&account),
+            body_of(&Subject::Pending, &account),
             "Result:       failed\n\
              Pull request: https://github.com/acme/widgets/pull/1\n\
              Cause:        claude exited 1\n\
              Base fix:     https://github.com/acme/widgets/issues/8 merged\n\
+             Sent by:      thirdshift\n\
              Host:         droplet-1\n\
              Took:         4s\n"
         );
@@ -622,13 +762,14 @@ mod tests {
             ..failed("CI red on test, which also fails on main at 362b9ca; fix main first")
         };
         assert_eq!(
-            body_of(&account),
+            body_of(&Subject::Pending, &account),
             "Result:       failed\n\
              Pull request: https://github.com/acme/widgets/pull/1\n\
              Cause:        CI red on test, which also fails on main at 362b9ca; fix main first\n\
              Base check:   test: https://ci.example/main/test\n\
              Or set:       base.fix = true\n\
              Session log:  /home/me/.thirdshift/logs/x.jsonl\n\
+             Sent by:      thirdshift\n\
              Host:         droplet-1\n\
              Took:         4s\n"
         );
@@ -645,9 +786,10 @@ mod tests {
             ..failed("Tickets not done: #21, #22")
         };
         assert_eq!(
-            body_of(&account),
+            body_of(&Subject::Pending, &account),
             "Result:       failed\n\
              Cause:        Tickets not done: #21, #22\n\
+             Sent by:      thirdshift\n\
              Host:         droplet-1\n\
              Took:         4s\n\
              \n\
@@ -661,25 +803,12 @@ mod tests {
     fn an_architect_runs_subject_names_the_repository_if_known_and_the_outcome() {
         let repo = Repo::of_origin("https://github.com/acme/widgets.git").unwrap();
         assert_eq!(
-            architect_subject(Some(&repo), "plan published"),
+            command_subject("Architect run", Some(&repo), "plan published"),
             "[thirdshift] acme/widgets Architect run: plan published"
         );
         assert_eq!(
-            architect_subject(None, "review failed"),
+            command_subject("Architect run", None, "review failed"),
             "[thirdshift] Architect run: review failed"
         );
-    }
-
-    #[test]
-    fn took_is_to_the_second() {
-        for (seconds, text) in [
-            (0, "0s"),
-            (59, "59s"),
-            (60, "1m 0s"),
-            (3599, "59m 59s"),
-            (3723, "1h 2m 3s"),
-        ] {
-            assert_eq!(took(Duration::from_secs(seconds)), text);
-        }
     }
 }

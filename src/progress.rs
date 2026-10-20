@@ -5,6 +5,7 @@
 //! Command log too, if the command keeps one.
 
 use std::fmt::Display;
+use std::time::Duration;
 
 use chrono::Local;
 
@@ -22,6 +23,19 @@ const STAMP: &str = "%H:%M:%S";
 /// Print one of thirdshift's own steps, stamped with the time now.
 pub fn step(message: impl Display) {
     logs::eprint(&stamped(message));
+}
+
+/// `duration` to the second, as in `1h 2m 3s`, `2m 3s` or `3s`.
+pub fn duration(duration: Duration) -> String {
+    let seconds = duration.as_secs();
+    let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
+    if hours > 0 {
+        format!("{hours}h {minutes}m {seconds}s")
+    } else if minutes > 0 {
+        format!("{minutes}m {seconds}s")
+    } else {
+        format!("{seconds}s")
+    }
 }
 
 /// Report `error`, then a warning saying what to do about it by hand.
@@ -137,6 +151,24 @@ pub(crate) fn shorten(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn durations_use_whole_seconds_across_minute_and_hour_boundaries() {
+        for (millis, text) in [
+            (0, "0s"),
+            (999, "0s"),
+            (1_000, "1s"),
+            (59_999, "59s"),
+            (60_000, "1m 0s"),
+            (61_000, "1m 1s"),
+            (3_599_999, "59m 59s"),
+            (3_600_000, "1h 0m 0s"),
+            (3_723_000, "1h 2m 3s"),
+            (90_061_000, "25h 1m 1s"),
+        ] {
+            assert_eq!(duration(Duration::from_millis(millis)), text);
+        }
+    }
 
     #[test]
     fn a_stamped_line_splits_into_its_time_and_message() {

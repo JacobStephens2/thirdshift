@@ -7,7 +7,7 @@ mod support;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
-use support::resend::{Request, ResendStandIn};
+use support::resend::{Request, ResendStandIn, assert_one_issue_line};
 use support::{RunResult, Scenario, leaves_running};
 
 const KEY: &str = "re_test_123";
@@ -98,7 +98,7 @@ fn a_review_required_notification_and_summary_name_the_refusal() {
         subject(&request)
     );
     assert!(
-        text(&request).starts_with("Result:       review required\n"),
+        text(&request).starts_with("Result:       review required\nIssue:        https://github.com/acme/widgets/issues/7\n"),
         "{}",
         text(&request)
     );
@@ -118,7 +118,7 @@ fn a_review_required_notification_and_summary_name_the_refusal() {
 }
 
 #[test]
-fn a_notification_keeps_current_models_when_an_unrelated_record_is_corrupt() {
+fn a_notification_keeps_current_models_when_an_owned_record_is_corrupt() {
     let scenario = Scenario::new();
     let started = scenario.path("agent-started");
     let release = scenario.path("agent-release");
@@ -139,7 +139,7 @@ fn a_notification_keeps_current_models_when_an_unrelated_record_is_corrupt() {
     let folder = "home/.thirdshift/logs/acme/widgets/commands/issue";
     let command_logs = scenario.log_files(folder, "log");
     assert_eq!(command_logs.len(), 1, "{command_logs:?}");
-    let stamp = command_logs[0]
+    let identity_fragment = command_logs[0]
         .strip_prefix("7-")
         .unwrap()
         .strip_suffix(".log")
@@ -147,7 +147,7 @@ fn a_notification_keeps_current_models_when_an_unrelated_record_is_corrupt() {
     std::fs::write(
         scenario
             .path(folder)
-            .join(format!("8-{stamp}-implement.models.json")),
+            .join(format!("8-{identity_fragment}-implement.models.json")),
         "{ truncated",
     )
     .unwrap();
@@ -191,6 +191,9 @@ fn a_notification_excludes_an_unrelated_commands_models_with_the_same_stamp() {
         .strip_prefix("7-")
         .unwrap()
         .strip_suffix(".log")
+        .unwrap()
+        .split('~')
+        .next()
         .unwrap();
     let directory = scenario.path(folder);
 
@@ -461,9 +464,10 @@ fn a_run_ready_for_review_sends_one_notification_to_the_address_given() {
     );
     let text = text(&request);
     assert!(
-        text.starts_with("Result:       ready for review\n"),
+        text.starts_with("Result:       ready for review\nIssue:        https://github.com/acme/widgets/issues/7\n"),
         "{text}"
     );
+    assert_one_issue_line(text);
     assert_contains(text, PR_URL);
     assert_contains(text, &the_one_log(&scenario));
     assert_contains(text, &hostname());
@@ -494,7 +498,9 @@ fn a_merge_run_sends_one_notification_that_it_merged() {
         "[thirdshift] acme/widgets#7 I cancelled my subscription but the account still shows as part of the monthly revenue total on the site: merged"
     );
     assert!(
-        text(&request).starts_with("Result:       merged\n"),
+        text(&request).starts_with(
+            "Result:       merged\nIssue:        https://github.com/acme/widgets/issues/7\n"
+        ),
         "{}",
         text(&request)
     );
@@ -523,9 +529,15 @@ fn a_failed_run_sends_one_notification_with_the_cause() {
         "[thirdshift] acme/widgets#7 Add export button: failed"
     );
     let text = text(&request);
-    assert!(text.starts_with("Result:       failed\n"), "{text}");
+    assert!(
+        text.starts_with(
+            "Result:       failed\nIssue:        https://github.com/acme/widgets/issues/7\n"
+        ),
+        "{text}"
+    );
     assert_contains(text, "claude exited 3");
     assert_contains(text, &the_one_log(&scenario));
+    assert!(!text.contains("Pull request:"), "{text}");
 }
 
 #[test]
@@ -624,7 +636,9 @@ fn an_interrupted_run_sends_one_notification_that_it_was_interrupted() {
         subject(&request)
     );
     assert!(
-        text(&request).starts_with("Result:       interrupted\n"),
+        text(&request).starts_with(
+            "Result:       interrupted\nIssue:        https://github.com/acme/widgets/issues/7\n"
+        ),
         "{}",
         text(&request)
     );
@@ -634,7 +648,7 @@ fn an_interrupted_run_sends_one_notification_that_it_was_interrupted() {
 fn a_run_whose_issue_title_cant_be_read_sends_a_notification_without_it() {
     let scenario = Scenario::new();
     let resend = ResendStandIn::replying(200, ACCEPTED);
-    let url = "https://github.com/other/widgets/issues/7";
+    let url = "https://github.com/Other/Widgets/issues/007/";
 
     let result = run(
         &scenario,
@@ -645,7 +659,12 @@ fn a_run_whose_issue_title_cant_be_read_sends_a_notification_without_it() {
 
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     let request = the_one_request(&resend);
-    assert_eq!(subject(&request), "[thirdshift] other/widgets#7: failed");
+    assert_eq!(subject(&request), "[thirdshift] Other/Widgets#7: failed");
+    assert!(
+        text(&request).starts_with(&format!("Result:       failed\nIssue:        {url}\n")),
+        "{}",
+        text(&request)
+    );
     assert_contains(text(&request), "origin mismatch");
 }
 
@@ -1009,4 +1028,94 @@ RETAINED
         text(&the_one_request(&resend)),
         "- implement: opencode · provider/retained-model (reported) · session effort: default effort",
     );
+}
+
+#[test]
+fn failure_reports_distinguish_remote_local_and_absent_work() {
+    for preservation in ["remote", "local", "none"] {
+        let scenario = Scenario::new();
+        if preservation == "local" {
+            scenario.repo_has_hook(&scenario.origin_dir(), "pre-receive", "#!/bin/sh\nexit 1\n");
+        }
+        scenario.agent_does(if preservation == "none" {
+            "exit 3\n"
+        } else {
+            "echo unfinished > wip.txt\nexit 3\n"
+        });
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+        let result = run(
+            &scenario,
+            &resend,
+            &[&scenario.issue_url(7), "email", "me@example.com"],
+            Some(KEY),
+        );
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        let request = the_one_request(&resend);
+        let notification = text(&request);
+        let expected = match preservation {
+            "remote" => "Preserved: remotely on issue-7",
+            "local" => "Preserved: work may exist only locally on issue-7",
+            _ => "Preserved: no work preserved",
+        };
+        for output in [&*result.stderr, notification] {
+            assert_contains(output, expected);
+            assert_contains(output, "Stopped at: Implementation");
+            assert_contains(output, "claude exited 3");
+            assert_contains(
+                output,
+                "Recovery: thirdshift https://github.com/acme/widgets/issues/7 --no-merge",
+            );
+            if preservation == "local" {
+                assert_contains(
+                    output,
+                    scenario.path("work/widgets-issue-7").to_str().unwrap(),
+                );
+                assert_contains(
+                    output,
+                    "Before retrying: inspect and publish the retained work",
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn delivery_failures_name_the_stopped_stage_in_terminal_and_notification() {
+    for stage in ["Repair", "CI watching", "Self-merge", "Security review"] {
+        let scenario = Scenario::new();
+        let setup = match stage {
+            "Repair" => {
+                "gh fake checks \"$(git rev-parse HEAD)\" '[{\"name\":\"test\",\"conclusion\":\"failure\"}]'\n"
+            }
+            "CI watching" => "gh fake fails 'api --paginate --jq .check_runs[]'\n",
+            "Security review" => "",
+            _ => "gh fake refuse-merges 1 'Merge commits are not allowed'\n",
+        };
+        scenario.agent_does(&format!("{AGENT_OPENS_PR}{setup}"));
+        scenario.agent_does_in_session(2, "exit 3\n");
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+        let result = run(
+            &scenario,
+            &resend,
+            &[
+                &scenario.issue_url(7),
+                "merge",
+                "email",
+                "me@example.com",
+                if stage == "Security review" {
+                    "security-review"
+                } else {
+                    "no-security-review"
+                },
+            ],
+            Some(KEY),
+        );
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        let request = the_one_request(&resend);
+        let expected = format!("Stopped at: {stage}");
+        assert_contains(&result.stderr, &expected);
+        assert_contains(text(&request), &expected);
+        assert_contains(text(&request), "Pull request:");
+        assert_contains(text(&request), "Command log:");
+    }
 }

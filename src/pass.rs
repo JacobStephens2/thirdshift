@@ -30,12 +30,8 @@ use crate::logs::{self, Pass, Work};
 use crate::progress;
 use crate::ready::{self, ReadyIssue};
 use crate::run::{self, Ended, StartedBy};
-use crate::session::{Logs, Purpose, Sessions};
+use crate::session::{Kind, Logs, Purpose, Sessions};
 use crate::worktree::ReviewWorktree;
-
-/// The Architecture review session's kind, in its progress lines and log
-/// name.
-const REVIEW: &str = "architecture-review";
 
 /// What a pass dispatches, as `thirdshift <Issue URL>` would run it, but on
 /// the pass's Base branch `base`, whatever the Launch directory has checked
@@ -104,7 +100,7 @@ pub trait Outside {
     /// Check Node.js before a Security audit needs its validators.
     fn check_node(&mut self) -> Result<()>;
     /// Audit the Base branch in a disposable checkout and validate its artifacts.
-    fn audit(&mut self, base: &str) -> (Result<crate::security::audit::Audited>, Option<PathBuf>);
+    fn audit(&mut self, base: &str) -> crate::security::audit::Attempt;
     /// Private advisory or issue records in every state.
     fn security_records(&mut self) -> Result<SecurityRecords>;
     /// Whether origin's prepared Base branch is the last completed audit's commit.
@@ -222,7 +218,11 @@ impl Outside for LaunchAndGitHub<'_> {
         let harness = self.harness.clone();
         let concluded = Sessions::within(&logs, worktree.path(), &harness, |sessions| {
             progress::step(starting);
-            let final_message = sessions.run_to_final_message(Purpose::Ordinary, REVIEW, prompt)?;
+            let final_message = sessions.run_to_final_message(
+                Purpose::Ordinary,
+                Kind::ArchitectureReview,
+                prompt,
+            )?;
             conclude(self, final_message.as_deref())
         });
         // Removed once the review is concluded.
@@ -234,7 +234,8 @@ impl Outside for LaunchAndGitHub<'_> {
         crate::security::audit::check_node()
     }
 
-    fn audit(&mut self, base: &str) -> (Result<crate::security::audit::Audited>, Option<PathBuf>) {
+    fn audit(&mut self, base: &str) -> crate::security::audit::Attempt {
+        logs::stage(logs::Stage::SecurityAudit);
         crate::security::audit::run(self.launch.git(), self.repo, base, self.harness)
     }
 
@@ -262,6 +263,7 @@ impl Outside for LaunchAndGitHub<'_> {
         record: &SecurityRecord,
         number: usize,
     ) -> (Result<Reproduction>, Option<PathBuf>) {
+        logs::stage(logs::Stage::SecurityReproduction);
         crate::security::reproduction::run(
             self.launch.git(),
             self.repo,
@@ -282,7 +284,7 @@ impl Outside for LaunchAndGitHub<'_> {
     /// The run's asks are the Architect plan's or the Ready issue's, from
     /// the command's flags and the User config, on the checked Harness.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended {
-        let (issue, asks, base) = match dispatch {
+        let (issue, asks, base, is_spec) = match dispatch {
             Dispatch::SecurityFix {
                 issue,
                 is_spec,
@@ -296,18 +298,30 @@ impl Outside for LaunchAndGitHub<'_> {
                 issue,
                 Asks::of_ready_issue(issue, is_spec, self.flags, self.config),
                 base,
+                is_spec,
             ),
             Dispatch::ArchitectPlan { plan, base } => (
                 plan,
                 Asks::of_architect_plan(plan, self.flags, self.config),
                 base,
+                false, // The Run's launch checks discover an Architect plan's Tickets.
             ),
         };
         let mut asks = Asks {
             harness: self.harness.clone(),
             ..asks
         };
-        run::run_to_end(issue, &mut asks, StartedBy::Dispatch { base })
+        logs::dispatching(
+            if is_spec {
+                Work::SpecRun(issue)
+            } else {
+                Work::Run(issue)
+            },
+            self.harness,
+        );
+        let ended = run::run_to_end(issue, &mut asks, StartedBy::Dispatch { base });
+        logs::dispatch_ended(&ended);
+        ended
     }
 
     fn publish_security_fix(
@@ -316,6 +330,7 @@ impl Outside for LaunchAndGitHub<'_> {
         record: &SecurityRecord,
         url: &str,
     ) -> (Result<IssueUrl>, Option<PathBuf>) {
+        logs::stage(logs::Stage::SecurityFixPublishing);
         crate::security::fixing::publish(
             self.launch.git(),
             self.repo,
@@ -686,10 +701,11 @@ mod in_memory {
 
         fn ready_issue(&mut self) -> Result<Option<ReadyIssue>> {
             self.calls.push(Call::ReadySearch);
-            Ok(self
-                .ready
-                .clone()
-                .map(|(listed, is_spec)| ReadyIssue { listed, is_spec }))
+            Ok(self.ready.clone().map(|(listed, is_spec)| ReadyIssue {
+                listed,
+                is_spec,
+                claim_generation: 0,
+            }))
         }
 
         fn step(&mut self, line: String) {
@@ -710,9 +726,10 @@ mod in_memory {
 
         fn started(&mut self, work: Work) {
             let issue = match work {
-                Work::Run(issue) | Work::SpecRun(issue) | Work::PickupRun(issue) => {
-                    Some(issue.number)
-                }
+                Work::Run(issue)
+                | Work::BaseFix(issue)
+                | Work::SpecRun(issue)
+                | Work::PickupRun(issue) => Some(issue.number),
                 Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
             };
             self.calls.push(Call::Started(issue));
@@ -749,10 +766,7 @@ mod in_memory {
             Ok(())
         }
 
-        fn audit(
-            &mut self,
-            base: &str,
-        ) -> (Result<crate::security::audit::Audited>, Option<PathBuf>) {
+        fn audit(&mut self, base: &str) -> crate::security::audit::Attempt {
             self.calls.push(Call::SecurityAudit(base.to_string()));
             let audited = match self.audit_error.take() {
                 Some(cause) => Err(anyhow!(cause)),
@@ -760,7 +774,11 @@ mod in_memory {
                     findings: std::mem::take(&mut self.audit_findings),
                 }),
             };
-            (audited, self.session_log.clone())
+            crate::security::audit::Attempt {
+                started: true,
+                outcome: audited,
+                log: self.session_log.clone(),
+            }
         }
 
         fn security_records(&mut self) -> Result<SecurityRecords> {

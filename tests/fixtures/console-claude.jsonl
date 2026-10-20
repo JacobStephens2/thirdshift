@@ -1,0 +1,9 @@
+{"type":"system","subtype":"init","session_id":"made-up-session"}
+{"type":"user","message":{"role":"user","content":"Make the widgets <safe>."}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"Consider the widget shape."},{"type":"text","text":"I will inspect the widgets."}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"read_1","name":"Read","input":{"file_path":"/project/widgets.rs"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"read_1","content":"old widget"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"grep_1","name":"Grep","input":{"pattern":"widget","path":"/project"}},{"type":"tool_use","id":"edit_1","name":"Edit","input":{"file_path":"widgets.rs","old_string":"old widget","new_string":"new widget"}},{"type":"tool_use","id":"bash_1","name":"Bash","input":{"command":"cargo test widgets"}},{"type":"tool_use","id":"other_1","name":"NewTool","input":{"future":"visible"}}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Widgets are ready."},{"type":"future_block","detail":"unknown block stays visible"}]}}
+{"type":"future_event","detail":"unknown event stays visible <script>bad()</script>"}
+not JSON: retained diagnostic

@@ -1,6 +1,6 @@
 [package]
 name = "thirdshift"
-version = "0.11.2"
+version = "0.13.0"
 edition = "2024"
 description = "Turn a GitHub issue into a ready-for-review pull request, unattended"
 license = "MIT"
@@ -8,10 +8,13 @@ repository = "https://github.com/JacobStephens2/thirdshift"
 homepage = "https://thirdshift.app"
 # The crate carries the sources and the Factory skills the binary embeds;
 # the repository's agent tooling, docs and tests stay out of it.
-include = ["/src", "/skills", "/README.md", "/LICENSE"]
+include = ["/src", "/skills", "/askama.toml", "/README.md", "/LICENSE"]
 
 [dependencies]
 anyhow = "1.0.104"
+argon2 = "0.5.3"
+askama = "0.16.1"
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "form", "json"] }
 # axoupdater needs axoasset's `remote` feature, which always pulls in `image`
 # (with moxcms and pxfm) and turns on reqwest's `default-tls`, which is rustls
 # with aws-lc. No flag turns either off, and features unify, so switching
@@ -20,15 +23,25 @@ anyhow = "1.0.104"
 # needs an axoasset change or another updater (#174).
 axoupdater = { version = "0.10.2", default-features = false, features = ["github_releases", "blocking"] }
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 include_dir = "0.7.4"
 libc = "0.2.189"
-reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "blocking", "json"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "blocking", "json", "form"] }
+rand_core = { version = "0.6.4", features = ["getrandom"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+serde_urlencoded = "0.7.1"
+sha2 = "0.10.9"
+subtle = "2.6.1"
 signal-hook = "0.4.4"
 tempfile = "3.27.0"
 toml = "1.1.6"
 toml_edit = "0.25.15"
+tokio = { version = "1.53.1", features = ["rt", "net", "time", "sync"] }
+tokio-stream = { version = "0.1.18", features = ["sync"] }
+
+[dev-dependencies]
+tower-layer = "0.3.3"
 
 # Line tables keep file and line in the crate's backtraces, and dependencies
 # get no debuginfo, so their frames show no file or line. Full debuginfo made

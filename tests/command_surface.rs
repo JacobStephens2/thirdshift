@@ -10,6 +10,8 @@ use support::{RunResult, Scenario};
 fn assert_help_text(text: &str) {
     for form in [
         "thirdshift <Issue URL>",
+        "thirdshift <number>",
+        "thirdshift merge <number>",
         "thirdshift merge <Issue URL>",
         "thirdshift --email <Issue URL>",
         "thirdshift architect [<focus>]",

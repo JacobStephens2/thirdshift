@@ -765,7 +765,7 @@ Yes
 /to-tickets
 
 ## 8
-Either commit to main and push or PR the CONTEXT.md change.
+Either commit to main and push or PR the GLOSSARY.md change.
 
 
 # Sep 30 2026, shorten test suite time, spec 174

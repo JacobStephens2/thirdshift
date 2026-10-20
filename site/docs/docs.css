@@ -1,0 +1,20 @@
+.manual { font-size: 15px; }
+.manual .wrap { max-width: 86ch; }
+.manual header { padding-block: 28px; border-bottom: 1px solid var(--rule); }
+.manual nav ul { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px 24px; padding-left: 20px; }
+.manual nav[aria-label="Site"] { display: flex; flex-wrap: wrap; gap: 12px 24px; }
+.manual main { padding-block: 32px 80px; overflow-wrap: anywhere; }
+.manual h1 { font-size: clamp(44px, 9vw, 80px); }
+.manual h2 { font-size: clamp(30px, 5vw, 48px); }
+.manual h3 { font-size: 28px; }
+.manual h4 { font-size: 18px; }
+.manual .fold { margin-top: 28px; }
+.manual main > .fold { border-top: 1px solid var(--rule); padding-top: 16px; }
+.manual .fold > summary :is(h2, h3, h4) { margin: 0; }
+.manual [id] { scroll-margin-top: 24px; }
+.manual pre { padding: 16px; background: var(--k2); border: 1px solid var(--rule); white-space: pre-wrap; overflow-wrap: anywhere; }
+.manual li { margin-block: 8px; }
+.manual table { display: block; overflow-x: auto; border-collapse: collapse; }
+.manual th, .manual td { border: 1px solid var(--rule); padding: 8px; text-align: left; }
+.skip-manual { position: absolute; top: -100px; padding: 12px; background: var(--paper); color: #000; }
+.skip-manual:focus { top: 12px; }

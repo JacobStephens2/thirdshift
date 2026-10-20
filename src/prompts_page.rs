@@ -12,7 +12,7 @@ use std::fmt::Write;
 use include_dir::{Dir, File};
 
 use crate::ci::FailedChecks;
-use crate::github::{Check, CheckState};
+use crate::github::{Check, Conclusion};
 use crate::harness::{Choice, Harness};
 use crate::issue::IssueUrl;
 use crate::prompt;
@@ -116,7 +116,7 @@ fn prompts() -> Vec<Prompt> {
     };
     let check = |name: &str| Check {
         name: name.to_string(),
-        state: CheckState::Failed,
+        conclusion: Conclusion::Failure,
         url: Some(CHECK_URL.to_string()),
         job: None,
     };
@@ -221,7 +221,7 @@ fn prompts() -> Vec<Prompt> {
         Prompt {
             id: "prompt-review-repair",
             title: "Review Repair",
-            when: "In a Merge run, starts a Repair session once Foreign commits are merged into the Issue branch, to review them from the head the Run last knew as its own before they can be merged.",
+            when: "In a Merge run, starts a Repair session when Foreign commits merged into the Issue branch change the tree, to review it from the head the Run last knew as its own before they can be merged.",
             sender: Units(&[FINISH]),
             text: prompt::review_repair(&issue, BRANCH, PR_URL, OWN_HEAD),
         },
@@ -674,6 +674,39 @@ mod tests {
             page_path.display(),
             diff(checked_in, &rendered, before.lines().count() + 2),
         );
+    }
+
+    #[test]
+    fn source_editing_sessions_prefer_available_structured_tools() {
+        for prompt in prompts() {
+            let edits_source = matches!(
+                prompt.id,
+                "prompt-fresh"
+                    | "prompt-continuation"
+                    | "prompt-continuation-pr"
+                    | "prompt-spec-review"
+                    | "prompt-architecture-review"
+                    | "prompt-security-review"
+                    | "prompt-conflict-repair"
+                    | "prompt-foreign-conflict-repair"
+                    | "prompt-review-repair"
+                    | "prompt-ci-fix-repair"
+                    | "prompt-ci-fix-repair-inherited"
+            );
+            for instruction in [
+                "For source edits, prefer an available structured patch/edit tool",
+                "(for example, `apply_patch` on Codex)",
+                "intended context and changed regions explicit",
+                "Normal language-specific code generation and narrowly justified scripts remain appropriate;",
+            ] {
+                assert_eq!(
+                    prompt.text.contains(instruction),
+                    edits_source,
+                    "{}: {instruction}",
+                    prompt.id,
+                );
+            }
+        }
     }
 
     #[test]

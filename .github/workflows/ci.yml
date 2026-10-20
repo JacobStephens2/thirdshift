@@ -5,8 +5,34 @@ on:
     branches: [main]
   pull_request:
 
+# PR numbers distinguish fork branches. Unique non-PR groups also preserve
+# pending main runs, which GitHub would otherwise replace.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}-${{ github.event_name != 'pull_request' && github.run_id || '' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 # The runner images are pinned to the platforms thirdshift supports.
 jobs:
+  console-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: npm ci
+        working-directory: console
+      - run: npx playwright install --with-deps chromium
+        working-directory: console
+      - run: npm test
+        working-directory: console
+
   site-test:
     runs-on: ubuntu-24.04
     defaults:
@@ -32,6 +58,11 @@ jobs:
           rustup toolchain install
           rustc --version
       - uses: Swatinem/rust-cache@v2
+      - name: Check the Release workflow generator
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_*.py'
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/axodotdev/cargo-dist/releases/download/v0.33.0/cargo-dist-installer.sh | sh
+          python3 scripts/generate-release.py --check
       - run: cargo fmt --check
       - run: cargo clippy --all-targets -- -D warnings
       # The tests run the binary against real git and fake gh and claude,

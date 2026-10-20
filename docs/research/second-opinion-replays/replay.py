@@ -283,6 +283,7 @@ Give both reviewers the timing checklist below, pasted in full into their prompt
 {checklist}
 """
 
+# Plan replays check out pre-rename commits, whose glossary is still CONTEXT.md.
 PLAN = """This is a read-only check of a plan an Architecture review published, for an experiment. The repository is checked out at the commit the plan was made on. The plan, as published, is in `{ctx}/plan.md`.
 
 The Architecture review rated this plan Strong. A candidate is Strong only when all of these hold:

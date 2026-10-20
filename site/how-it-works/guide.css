@@ -1,0 +1,59 @@
+/* The guide's diagrams stay in document order and reflow into a single column. */
+.guide .page-head { padding-block: 28px 48px; }
+.guide .paper-sheet { padding: clamp(20px, 5vw, 54px); transform: none; }
+.guide .paper-sheet h1 { font-size: clamp(44px, 7vw, 92px); }
+.guide-nav { display: flex; flex-wrap: wrap; gap: 12px 24px; font-size: 13px; }
+.guide-nav a:first-child { margin-right: auto; font-weight: 700; }
+.guide .paper-sheet .eyebrow { color: #444; }
+.skip-guide { position: absolute; left: 20px; top: -100px; z-index: 60; padding: 12px; background: var(--paper); color: #000; }
+.skip-guide:focus { top: 12px; }
+.guide-map { padding-block: 16px 40px; }
+.guide-map > .eyebrow { margin-bottom: 20px; }
+.guide-next { margin: 20px 0 0; font-size: 13px; color: var(--dim); }
+.guide-section { max-width: 1000px; }
+.guide-content > p { max-width: 76ch; margin-block: 22px; }
+.guide-section .sec-head h2 { font-size: clamp(36px, 5.5vw, 64px); }
+.guide-section code { overflow-wrap: anywhere; }
+.guide [id] { scroll-margin-top: 24px; }
+.guide-diagram { margin: 30px 0; padding: clamp(16px, 3vw, 30px); border: 1px solid var(--rule); }
+.guide-diagram figcaption { margin-bottom: 20px; color: var(--c); font-size: 13px; }
+.guide-flow { display: flex; gap: 28px; list-style: none; margin: 0; padding: 0; }
+.guide-flow > li, .guide-node { min-width: 0; border: 1px solid var(--dim); background: var(--k2); padding: 18px; }
+.guide-flow > li { flex: 1; position: relative; }
+.guide-flow > li + li::before { content: "→"; position: absolute; left: -23px; top: 18px; color: var(--y); }
+.guide-flow strong, .guide-node > strong { display: block; font-size: 15px; }
+.guide-flow span, .guide-node > span { display: block; margin-top: 8px; color: var(--dim); font-size: 13px; }
+.guide-map .guide-flow { gap: 24px; }
+.guide-map .guide-flow > li { padding: 0; border-top: 3px solid var(--c); }
+.guide-map .guide-flow a { display: block; height: 100%; padding: 14px; font-size: 14px; }
+.guide-map .guide-flow span { margin: 0 0 10px; font-size: 11px; }
+.guide-pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.guide-node > code { display: block; margin-block: 12px; color: var(--y); font-size: 14px; }
+.guide-connector { text-align: center; color: var(--y); font-size: 13px; margin: 24px 0 0; }
+.guide-callout { border-left: 3px solid var(--m); background: var(--k2); padding: 20px 24px; margin-top: 30px; font-size: 14px; }
+.guide-command { border: 1px solid var(--rule); background: #000; color: var(--y); padding: 20px; font-size: 13px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.guide-flow-vertical { flex-direction: column; gap: 32px; }
+.guide-flow-vertical > li + li::before { content: "↓"; left: 24px; top: -29px; }
+.guide-loop-branches { margin-top: 24px; }
+.guide-loop-branches .guide-node { border-color: var(--m); }
+.guide-loop-branches a { display: block; margin-top: 14px; font-size: 13px; }
+.guide-outcomes { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+.guide-outcomes h3 { font-size: 30px; }
+.guide-outcomes p { font-size: 13px; margin-bottom: 0; }
+.guide-outcomes article:nth-child(1) { border-top: 3px solid var(--c); }
+.guide-outcomes article:nth-child(2) { border-top: 3px solid var(--y); }
+.guide-outcomes article:nth-child(3) { border-top: 3px solid var(--m); }
+#specs .guide-pair { margin-bottom: 32px; }
+.guide-entrypoints { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 20px; }
+@media (max-width: 850px) {
+  .guide-map .guide-flow { flex-direction: column; gap: 32px; }
+  .guide-map .guide-flow > li + li::before { content: "↓"; left: 24px; top: -30px; }
+  .guide-outcomes, .guide-entrypoints { grid-template-columns: 1fr; }
+}
+@media (max-width: 600px) {
+  .guide .page-head { padding-block: 16px 32px; }
+  .guide-flow { flex-direction: column; gap: 32px; }
+  .guide-flow > li + li::before { content: "↓"; left: 24px; top: -29px; }
+  .guide-pair { grid-template-columns: 1fr; }
+  .guide-command { padding: 14px; font-size: 12px; }
+}

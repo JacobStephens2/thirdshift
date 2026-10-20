@@ -11,6 +11,7 @@ use std::num::NonZeroUsize;
 use crate::child_run::Ended;
 use crate::github::Ticket;
 use crate::issue::{IssueIdentity, IssueUrl};
+use crate::logs::{TicketRecord, TicketState};
 
 /// Where a Ticket this Spec run started stands.
 enum Standing {
@@ -94,6 +95,47 @@ impl TicketBoard {
     /// Whether any Ticket's Run is running.
     pub(super) fn any_running(&self) -> bool {
         self.running() > 0
+    }
+
+    pub(super) fn progress(&self) -> crate::recovery::TicketProgress {
+        crate::recovery::TicketProgress {
+            landed: self.tickets.iter().filter(|ticket| !ticket.is_open).count(),
+            total: self.tickets.len(),
+        }
+    }
+
+    /// Durable Ticket accounting; a child Run owns its stage and liveness.
+    pub(super) fn records(&self) -> Vec<TicketRecord> {
+        self.by_number()
+            .into_iter()
+            .map(|ticket| {
+                let state = match self.standings.get(&ticket.issue.identity()) {
+                    Some(Standing::Running) => TicketState::Running,
+                    _ if !ticket.is_open => TicketState::Merged,
+                    Some(Standing::Ended(_)) => TicketState::Failed,
+                    _ if !ticket.open_blockers.is_empty() => TicketState::Waiting,
+                    _ => TicketState::NotStarted,
+                };
+                TicketRecord {
+                    issue: (&ticket.issue).into(),
+                    state,
+                    blockers: ticket.open_blockers.iter().map(Into::into).collect(),
+                }
+            })
+            .collect()
+    }
+
+    pub(super) fn local_work(&self) -> Vec<String> {
+        self.standings
+            .values()
+            .flat_map(|standing| match standing {
+                Standing::Ended(
+                    Ended::Failed { local_work, .. } | Ended::Interrupted { local_work },
+                ) => local_work.as_slice(),
+                _ => &[],
+            })
+            .cloned()
+            .collect()
     }
 
     /// The Tickets not done, the open ones, in the order they were read.
@@ -195,7 +237,7 @@ impl TicketBoard {
         }
         match self.standings.get(&identity) {
             Some(Standing::Running) => return "running".to_string(),
-            Some(Standing::Ended(Ended::Interrupted)) => return "interrupted".to_string(),
+            Some(Standing::Ended(Ended::Interrupted { .. })) => return "interrupted".to_string(),
             Some(Standing::Ended(Ended::Failed { cause, .. })) => {
                 return format!("failed: {cause}");
             }
@@ -305,6 +347,7 @@ mod tests {
         Ended::Failed {
             cause: cause.to_string(),
             log: log.map(str::to_string),
+            local_work: Vec::new(),
         }
     }
 
@@ -391,7 +434,12 @@ mod tests {
 
         assert_eq!(board.next_to_start(), None);
         assert!(board.any_running());
-        board.ended(&issue(21), Ended::Interrupted);
+        board.ended(
+            &issue(21),
+            Ended::Interrupted {
+                local_work: Vec::new(),
+            },
+        );
         assert!(!board.any_running());
         assert_eq!(board.next_to_start(), None);
     }

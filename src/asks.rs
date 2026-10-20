@@ -109,10 +109,10 @@ impl Asks {
             tickets_at_once: config.spec_parallel,
             parallel_asked: false,
             base_fix: given.base_fix.clone(),
-            security_fix: given.security.fix,
-            security_review: given.security.review,
+            security_fix: given.asks.security_fix,
+            security_review: given.asks.security_review,
             launch_pull: false,
-            harness: given.harness.clone(),
+            harness: given.asks.harness.clone(),
         }
     }
 
@@ -131,7 +131,8 @@ impl Asks {
     /// not a Spec, as `is_spec` says, since the command can't know which
     /// the Pickup run will take. It is left out of the command a Base fix is
     /// offered with too, which retries the issue as a Run of its own:
-    /// another Pickup run never takes an issue that was started.
+    /// another Pickup run needs a deliberate hand-back after the last
+    /// Claim ended before it can take started work again.
     pub fn of_ready_issue(
         issue: &IssueUrl,
         is_spec: bool,
@@ -239,10 +240,14 @@ mod tests {
     /// default.
     fn no_settings() -> UserConfig {
         UserConfig {
+            console: crate::config::ConsoleSettings::default(),
             merge_always: false,
             base_fix: false,
             launch_pull: false,
             logs_dir: PathBuf::from("/home/me/.thirdshift/logs"),
+            waiting_line_interval: std::time::Duration::from_secs(5 * 60),
+            silent_interval: std::time::Duration::from_secs(10 * 60),
+            inbox_days: 7,
             quiet_skips: false,
             email: EmailSettings::default(),
             spec_parallel: n(3),
@@ -423,11 +428,13 @@ mod tests {
     fn given(kind: Kind, base_fix: BaseFixAsk) -> Given {
         Given {
             command: crate::logs::CommandKind::Issue,
-            security: crate::security::Options::default(),
             kind,
             stamp: "20261003T120000-0400".to_string(),
             base_fix,
-            harness: sonnet(None),
+            asks: crate::child_run::ChildAsks {
+                harness: sonnet(None),
+                ..crate::child_run::ChildAsks::default()
+            },
         }
     }
 

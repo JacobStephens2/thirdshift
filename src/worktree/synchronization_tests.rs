@@ -232,6 +232,7 @@ fn every_ordinary_operation_refuses_changed_or_uncertain_ownership_even_without_
         for result in [
             worktree.push(),
             worktree.head().map(|_| ()),
+            worktree.same_tree_as("HEAD").map(|_| ()),
             worktree.merge_base_branch("main").map(|_| ()),
             worktree.new_commits_on_origin().map(|_| ()),
             worktree.merge_new_commits(observed).map(|_| ()),
@@ -928,6 +929,55 @@ fn a_base_merge_keeps_its_selected_commit_when_the_shared_ref_rewinds() {
 }
 
 #[test]
+fn committed_tree_comparison_ignores_empty_history_but_detects_file_changes() {
+    let (_temp, _launch, worktree, _foreign) = foreign_origin();
+    let own_head = worktree.head().unwrap();
+    worktree
+        .merge_new_commits(worktree.new_commits_on_origin().unwrap())
+        .unwrap();
+    assert!(worktree.same_tree_as(&own_head).unwrap());
+
+    let git = Git::new(worktree.path());
+    fs::write(worktree.path().join("changed.txt"), "changed\n").unwrap();
+    git.run(&["add", "changed.txt"]).unwrap();
+    commit(&git, "Changed tree");
+    assert!(!worktree.same_tree_as(&own_head).unwrap());
+    assert!(worktree.same_tree_as("missing-commit").is_err());
+}
+
+#[test]
+fn tree_comparison_tracks_committed_files_instead_of_commit_history() {
+    let (_temp, launch, worktree, foreign) = foreign_origin();
+    let own_head = worktree.head().unwrap();
+    worktree
+        .merge_new_commits(worktree.new_commits_on_origin().unwrap())
+        .unwrap();
+    assert_eq!(worktree.head().unwrap(), foreign);
+    assert!(worktree.same_tree_as(&own_head).unwrap());
+
+    fs::write(launch.dir().join("new.txt"), "new file\n").unwrap();
+    launch.run(&["add", "new.txt"]).unwrap();
+    commit(&launch, "Changed tree");
+    launch
+        .run(&["push", "-q", "origin", "HEAD:issue-7"])
+        .unwrap();
+    worktree
+        .merge_new_commits(worktree.new_commits_on_origin().unwrap())
+        .unwrap();
+    assert!(!worktree.same_tree_as(&own_head).unwrap());
+
+    launch.run(&["rm", "new.txt"]).unwrap();
+    commit(&launch, "Restore reviewed tree");
+    launch
+        .run(&["push", "-q", "origin", "HEAD:issue-7"])
+        .unwrap();
+    worktree
+        .merge_new_commits(worktree.new_commits_on_origin().unwrap())
+        .unwrap();
+    assert!(worktree.same_tree_as(&own_head).unwrap());
+}
+
+#[test]
 fn a_foreign_commit_merge_consumes_only_the_batch_observed_before_the_ref_advanced() {
     let (_temp, launch) = super::tests::launch_directory();
     let worktree = Worktree::create_fresh(&launch, "work", "issue-7", "main").unwrap();
@@ -1234,4 +1284,34 @@ fn ordinary_merge_errors_are_reported_without_a_pending_conflict() {
     assert_eq!(worktree.head().unwrap(), before);
     assert!(!contains(&worktree, &base));
     assert!(!Git::new(worktree.path()).merge_in_progress().unwrap());
+}
+
+/// Each git process is the cost of an ownership inspection, which runs at
+/// least twice around every ordinary operation; on macOS CI, spawning git
+/// dominates the suite. One observation reads the checkout's paths and HEAD.
+#[test]
+fn an_ordinary_operation_inspects_ownership_in_few_git_processes() {
+    if git_fault(
+        "worktree::synchronization_tests::an_ordinary_operation_inspects_ownership_in_few_git_processes",
+        r#"
+if test -e "$THIRDSHIFT_FAULT_MARKER.armed"; then
+  printf '%s\n' "$*" >> "$THIRDSHIFT_FAULT_MARKER"
+fi
+"#,
+    )
+    .is_some()
+    {
+        return;
+    }
+    let (_temp, _launch, worktree) = fixture();
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    fs::write(marker.with_extension("armed"), "armed").unwrap();
+    worktree.head().unwrap();
+    fs::remove_file(marker.with_extension("armed")).unwrap();
+
+    let commands = fs::read_to_string(&marker).unwrap();
+    let commands: Vec<_> = commands.lines().collect();
+    // Two launch observations take the lock, then three inspections run
+    // seven git processes each. Four separate observations made it 32.
+    assert!(commands.len() <= 23, "{commands:#?}");
 }

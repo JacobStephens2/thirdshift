@@ -40,6 +40,40 @@ const ACCEPTED: &str = r#"{"id":"49a3999c-0ce1-4ea6-ab68-afcd6dc2e794"}"#;
 
 const BASE_FIX_URL: &str = "https://github.com/acme/widgets/issues/8";
 
+#[test]
+fn status_shows_a_base_fix_under_the_run_that_started_it() {
+    let scenario = Scenario::new();
+    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+    scenario.agent_does_for(8, &format!(
+        "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\n{BASE_FIX_OPENS_PR}{GREEN_ON_HEAD}",
+        scenario.path("started").display(), scenario.path("release").display()
+    ));
+    let held = scenario.run_until(&[&scenario.issue_url(7), "base-fix"], &[], "started");
+    let json = scenario.run(&["status", "--json"]);
+    let text = scenario.run(&["status"]);
+    std::fs::write(scenario.path("release"), "").unwrap();
+    let ended = held.finish();
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let status: serde_json::Value = serde_json::from_str(&json.stdout).unwrap();
+    assert_eq!(
+        status["commands"].as_array().unwrap().len(),
+        1,
+        "{status:#}"
+    );
+    let run = &status["commands"][0];
+    assert_eq!(run["issue"]["number"], 7);
+    let fix = &run["children"][0];
+    assert_eq!(fix["issue"]["number"], 8);
+    assert_eq!(fix["kind"], "Base fix");
+    assert_eq!(fix["state"], "live");
+    assert_eq!(fix["stage"]["name"], "implement");
+    assert!(
+        text.stdout.contains("  Base fix acme/widgets#8"),
+        "{}",
+        text.stdout
+    );
+}
+
 /// The prompt of each session, in order.
 fn prompts(scenario: &Scenario) -> Vec<String> {
     scenario
@@ -549,4 +583,109 @@ fn a_base_fix_runs_its_sessions_on_the_runs_model_and_effort() {
         );
     }
     assert!(prompts(&scenario)[2].contains(BASE_FIX_URL));
+}
+
+#[test]
+fn issue_588_base_fix_local_retention_reaches_parent_notification() {
+    let scenario = Scenario::new();
+    scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
+    scenario.agent_does_for(8, "echo partial > partial-base-fix.txt\nexit 3\n");
+    scenario.repo_has_hook(
+        &scenario.origin_dir(), "pre-receive",
+        "#!/bin/sh\nwhile read old new ref; do\ncase \"$ref\" in refs/heads/issue-8) echo 'reject Base fix salvage' >&2; exit 1;; esac\ndone\nexit 0\n",
+    );
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let result = scenario.run_with_env(
+        &[
+            &scenario.issue_url(7),
+            "base-fix",
+            "email",
+            "me@example.com",
+        ],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test_123"),
+        ],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("Base fix https://github.com/acme/widgets/issues/8 failed:"),
+        "{}",
+        result.stderr
+    );
+    let retained = scenario.path("work/widgets-issue-8");
+    assert!(
+        retained.join("partial-base-fix.txt").exists(),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.origin_file("issue-8", "partial-base-fix.txt"),
+        None
+    );
+    assert!(
+        result.stderr.contains("only locally on issue-8"),
+        "{}",
+        result.stderr
+    );
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1);
+    let notification = requests[0].body["text"].as_str().unwrap();
+    assert!(notification.contains("only locally"), "{notification}");
+    assert!(
+        notification.contains(retained.to_str().unwrap()),
+        "{notification}"
+    );
+    assert!(
+        notification.contains("Before retrying: inspect and publish the retained work"),
+        "{notification}"
+    );
+}
+
+#[test]
+fn run_notification_reports_a_base_fixes_locally_retained_work() {
+    let scenario = Scenario::new();
+    scenario.agent_does(r#"
+echo feature > feature.txt
+git add feature.txt
+git commit -q -m 'Add feature'
+gh pr create --base main --head issue-7 --title 'Add feature' --body 'Closes #7'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"failure","url":"https://ci.example/test"}]'
+gh fake checks "$(git rev-parse origin/main)" '[{"name":"test","conclusion":"failure","url":"https://ci.example/main/test"}]'
+"#);
+    scenario.agent_does_for(8, "echo 'half done' > wip.txt\nexit 1\n");
+    scenario.repo_has_hook(
+        &scenario.origin_dir(),
+        "pre-receive",
+        "#!/bin/sh\nwhile read old new name; do\n  case \"$name\" in refs/heads/issue-8) echo 'Base fix push rejected'; exit 1;; esac\ndone\n",
+    );
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(
+        &[
+            "email",
+            "me@example.com",
+            &scenario.issue_url(7),
+            "base-fix",
+        ],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test_123"),
+        ],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let retained = scenario.path("work/widgets-issue-8");
+    assert_eq!(
+        std::fs::read_to_string(retained.join("wip.txt")).unwrap(),
+        "half done\n"
+    );
+    assert_eq!(scenario.origin_file("issue-8", "wip.txt"), None);
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1);
+    let text = requests[0].body["text"].as_str().unwrap();
+    assert!(
+        text.contains(retained.to_str().unwrap()),
+        "Run notification omits the locally retained Base fix worktree:\n{text}"
+    );
 }

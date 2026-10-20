@@ -1,5 +1,6 @@
 //! Own checked synchronization, preservation and disposal of the acquired instance.
 
+use std::cell::RefCell;
 use std::fs::{self, File, OpenOptions};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -99,7 +100,13 @@ impl Checkout {
         }
     }
 
-    pub(super) fn preserve_failed_run(&self, launch: &Git, base: &str, reason: &str) -> Result<()> {
+    pub(super) fn preserve_failed_run(
+        &self,
+        launch: &Git,
+        base: &str,
+        reason: &str,
+        actionable: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<super::Preserved> {
         let operation = Operation::new(self, launch, Purpose::Preservation);
         let branch = self
             .branch
@@ -117,7 +124,8 @@ impl Checkout {
         }
         operation.run(&["add", "-A"])?;
         let base = format!("origin/{base}");
-        if !operation.succeeds(&["diff", "--cached", "--quiet", &base])? {
+        let has_work = !operation.succeeds(&["diff", "--cached", "--quiet", &base])?;
+        if has_work {
             let message = format!(
                 "thirdshift: failed run ({reason})\n\n\
                  {timestamp}, host {host}. Uncommitted work at the time of failure is included in this commit.",
@@ -133,10 +141,14 @@ impl Checkout {
                 "-m",
                 &message,
             ])?;
-            operation.push(branch)?;
+            operation.push_if_needed(branch, actionable)?;
         }
         operation.inspect()?;
-        Ok(())
+        Ok(if has_work {
+            super::Preserved::Pushed
+        } else {
+            super::Preserved::NoChanges
+        })
     }
 
     /// Drop is best effort, including while another panic is unwinding.
@@ -262,11 +274,12 @@ impl Checkout {
             bail!("administrative common repository link became a symlink");
         }
         let git = Git::new(self.path()).completion();
-        let head = git.run(&["rev-parse", "--verify", "HEAD"])?;
+        let location = git.checkout_location()?;
+        let head = location.head;
         let backlink = fs::read_to_string(self.admin.path.join("gitdir"))?;
-        if Path::new(&git.run(&["rev-parse", "--show-toplevel"])?) != self.root.path
-            || Path::new(&git.run(&["rev-parse", "--absolute-git-dir"])?) != self.admin.path
-            || git.common_dir()?.canonicalize()? != self.common.path
+        if location.root != self.root.path
+            || location.admin != self.admin.path
+            || location.common.canonicalize()? != self.common.path
             || Path::new(backlink.trim_end()).canonicalize()? != self.path().join(".git")
             || git.run(&["rev-parse", "--symbolic-full-name", "HEAD"])?
                 != reference.as_deref().unwrap_or("HEAD")
@@ -554,8 +567,33 @@ impl<'a> Operation<'a> {
         self.inspect()
     }
 
-    pub(super) fn push(&self, branch: &str) -> Result<()> {
-        self.git.push_checked(branch, || self.inspect().map(|_| ()))
+    /// Avoid a publication command when origin already has this exact head.
+    /// Compare commits, not trees: reconciled history still needs publishing.
+    pub(super) fn push_if_needed(
+        &self,
+        branch: &str,
+        actionable: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        let head = self.head()?;
+        let reference = format!("refs/heads/{branch}");
+        let remote = self.run(&["ls-remote", "--heads", "origin", &reference])?;
+        let remote_head = remote.split_whitespace().next();
+        actionable()?;
+        if remote_head == Some(head.as_str()) {
+            return Ok(());
+        }
+        // The lease supplies an atomic expected-ref check, not authority to
+        // overwrite history. Require fast-forward ancestry independently.
+        if let Some(remote_head) = remote_head
+            && !self.succeeds(&["merge-base", "--is-ancestor", remote_head, &head])?
+        {
+            bail!("cannot push {branch}: non-fast-forward; reconcile origin/{branch} first");
+        }
+        let actionable = RefCell::new(actionable);
+        self.git.push_checked(branch, &head, remote_head, || {
+            self.inspect()?;
+            (actionable.borrow_mut())()
+        })
     }
 
     pub(super) fn sample_origin(&self, branch: &str) -> Result<OriginCommit> {
