@@ -10,12 +10,11 @@ use chrono::{DateTime, TimeDelta, Utc};
 use crate::asks::Asks;
 use crate::base_fix::{Advice, BaseFix};
 use crate::branch::{self, Selection};
-use crate::child_run::Kind;
+use crate::child_run::{ChildAsks, Kind};
 use crate::claim::{self, Claim};
 use crate::delivery::{Delivery, Opening, OpeningSession};
 use crate::failed_run::FailedRun;
 use crate::github::{GitHub, Ticket};
-use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::launch::LaunchDirectory;
@@ -118,15 +117,7 @@ impl<'a> StartedBy<'a> {
 /// Harness's names for them once checked. Its Run notification, if `asks`
 /// has it send one, is for what started the Run to send, once it has ended.
 pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> Ended {
-    let mut base_fix = BaseFix::new(
-        started_by.child(),
-        asks.base_fix.clone(),
-        asks.harness.clone(),
-        crate::security::Options {
-            fix: asks.security_fix,
-            review: asks.security_review,
-        },
-    );
+    let mut base_fix = BaseFix::new(started_by.child(), asks.base_fix.clone());
     let mut outcome = run(issue, asks, started_by, &mut base_fix);
     if let Err(failed) = &mut outcome
         && let Some(recovery) = &mut failed.recovery
@@ -152,10 +143,11 @@ pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> E
 /// The Launch directory is opened first, with its Origin match, the check
 /// that `issue` is open and the git identity check. A Run started by its
 /// command then checks the Harness, Model and Effort its sessions run on, as
-/// `asks` say, settling the Model and Effort in them, and in `base_fix`, on
-/// the Harness's names: one started by another thirdshift, or dispatched by
-/// a pass, runs on what that command checked. The rest is [`start`], through the
-/// Launch directory, GitHub and the logs.
+/// `asks` say, settling the Model and Effort in them on the Harness's names:
+/// one started by another thirdshift, or dispatched by a pass, runs on what
+/// that command checked. Only then is what it hands on to every child Run
+/// built from `asks`. The rest is [`start`], through the Launch directory,
+/// GitHub and the logs.
 ///
 /// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
 /// start, or wait on, when its only red checks are Inherited failures: what
@@ -177,19 +169,17 @@ fn run(
             )),
         }
         asks.harness.check()?;
-        base_fix.runs_on(asks.harness.clone());
     }
     let asks = &*asks;
+    let child_asks = ChildAsks::of(asks);
     let mut outside = LaunchAndGitHub {
         directory: &directory,
         issue,
         goal: asks.goal,
-        security_fix: asks.security_fix,
-        security_review: asks.security_review
-            && !matches!(started_by, StartedBy::Child(Kind::Ticket { .. })),
+        security_review: child_asks.runs_security_review(started_by.child()),
+        child_asks: &child_asks,
         base_fix,
         logs: Logs::of_run(issue),
-        harness: &asks.harness,
         claim: None,
         issue_branch: None,
         child: started_by.child().is_some(),
@@ -395,16 +385,17 @@ trait Outside {
 /// The outside world of a Run on `issue` from the opened Launch directory
 /// `directory`: GitHub, its git, the logs, the Claim it made, the worktree,
 /// the Spec run and the Delivery to `goal`, with `base_fix` and the Run's
-/// Session `logs`, its sessions on `harness`.
+/// Session `logs`, its sessions on the Harness in `child_asks`, which it
+/// hands on to every child Run.
 struct LaunchAndGitHub<'a> {
     directory: &'a LaunchDirectory,
     issue: &'a IssueUrl,
     goal: Goal,
-    security_fix: bool,
+    /// Whether the Run runs its own Security review.
     security_review: bool,
+    child_asks: &'a ChildAsks,
     base_fix: &'a mut BaseFix,
     logs: Logs,
-    harness: &'a Choice,
     claim: Option<Claim<'a>>,
     issue_branch: Option<String>,
     child: bool,
@@ -446,14 +437,13 @@ impl LaunchAndGitHub<'_> {
     /// The Delivery of the issue into the Base branch `base`.
     fn delivery<'d>(&'d mut self, base: &'d str) -> Delivery<'d> {
         Delivery {
-            security_fix: self.security_fix,
             security_review: self.security_review,
+            child_asks: self.child_asks,
             issue: self.issue,
             base,
             goal: self.goal,
             base_fix: self.base_fix,
             logs: &self.logs,
-            harness: self.harness,
             started: self.started,
         }
     }
@@ -471,7 +461,7 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
     }
 
     fn started(&mut self, work: Work) {
-        logs::started(work, self.harness);
+        logs::started(work, &self.child_asks.harness);
         if self.child {
             logs::issue_title(GitHub::new().issue_title(self.issue).ok());
         }
@@ -560,6 +550,7 @@ mod tests {
     use super::*;
     use crate::base_fix::BaseFixAsk;
     use crate::github::{PrState, PullRequest};
+    use crate::harness::Choice;
     use crate::labels::Labels;
     use crate::notification::NotificationAsk;
 
