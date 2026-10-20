@@ -88,6 +88,36 @@ fn sign_in(console: &Console, email: &str, password: &str) -> reqwest::blocking:
 }
 
 #[test]
+fn account_pages_and_sign_in_follow_the_configured_theme() {
+    let home = configured();
+    assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+    let console = Console::start_mode(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        home.path(),
+        false,
+    );
+    for theme in ["focus-dark", "focus-light"] {
+        fs::write(
+            home.path().join(".thirdshift/config.toml"),
+            format!("[console]\nport = 0\nallowed_emails = [\"{EMAIL}\"]\ntheme = \"{theme}\"\n"),
+        )
+        .unwrap();
+        let attribute = format!("data-theme=\"{theme}\"");
+        assert!(
+            get(&console, "/sign-in", "")
+                .text()
+                .unwrap()
+                .contains(&attribute)
+        );
+        let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
+        for path in ["/", "/account", "/console-log"] {
+            let page = get(&console, path, &session).text().unwrap();
+            assert!(page.contains(&attribute), "{path} ignores {theme}");
+        }
+    }
+}
+
+#[test]
 fn sign_in_guards_pages_streams_and_actions_and_pairs_the_console_log_with_cli() {
     let home = configured();
     let (status, _) = password(home.path(), None, PASSWORD, PASSWORD);

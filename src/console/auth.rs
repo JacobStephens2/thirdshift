@@ -11,6 +11,7 @@ use serde::Deserialize;
 use subtle::ConstantTimeEq;
 
 use super::accounts::{self, Accounts, SignIn};
+use crate::config::UserConfig;
 
 const SESSION: &str = "__Host-thirdshift-session";
 const SIGN_IN: &str = "__Host-thirdshift-sign-in";
@@ -164,6 +165,7 @@ pub(super) async fn headers(request: Request, next: Next) -> Response {
 #[template(path = "console/sign_in.html")]
 struct SignInPage {
     csrf: String,
+    theme: String,
 }
 
 pub(super) async fn sign_in_page(
@@ -174,11 +176,20 @@ pub(super) async fn sign_in_page(
         return StatusCode::NOT_FOUND.into_response();
     }
     let token = cookie(&headers, SIGN_IN).unwrap_or_else(accounts::random_token);
-    let mut response = match (SignInPage { csrf: csrf(&token) }).render() {
-        Ok(html) => super::page(Ok(Ok(html))),
-        Err(error) => return failed(error),
-    };
-    set_cookie(&mut response, SIGN_IN, &token, 15 * 60);
+    let form_token = csrf(&token);
+    let mut response = super::page(
+        tokio::task::spawn_blocking(move || -> Result<String> {
+            Ok(SignInPage {
+                csrf: form_token,
+                theme: UserConfig::load()?.console.theme,
+            }
+            .render()?)
+        })
+        .await,
+    );
+    if response.status().is_success() {
+        set_cookie(&mut response, SIGN_IN, &token, 15 * 60);
+    }
     response
 }
 
@@ -237,19 +248,22 @@ struct AccountPage {
     email: String,
     csrf: String,
     signed_in: bool,
+    theme: String,
 }
 
 pub(super) async fn account(Extension(viewer): Extension<Viewer>) -> Response {
-    match (AccountPage {
-        email: viewer.email,
-        csrf: viewer.csrf,
-        signed_in: viewer.token.is_some(),
-    })
-    .render()
-    {
-        Ok(html) => super::page(Ok(Ok(html))),
-        Err(error) => failed(error),
-    }
+    super::page(
+        tokio::task::spawn_blocking(move || -> Result<String> {
+            Ok(AccountPage {
+                email: viewer.email,
+                csrf: viewer.csrf,
+                signed_in: viewer.token.is_some(),
+                theme: UserConfig::load()?.console.theme,
+            }
+            .render()?)
+        })
+        .await,
+    )
 }
 
 pub(super) async fn sign_out(Extension(viewer): Extension<Viewer>) -> Response {
@@ -274,6 +288,7 @@ pub(super) async fn sign_out(Extension(viewer): Extension<Viewer>) -> Response {
 #[template(path = "console/account_log.html")]
 struct LogPage {
     events: Vec<accounts::Event>,
+    theme: String,
 }
 
 pub(super) async fn log() -> Response {
@@ -281,6 +296,7 @@ pub(super) async fn log() -> Response {
         tokio::task::spawn_blocking(move || -> Result<String> {
             Ok(LogPage {
                 events: Accounts::load()?.events()?,
+                theme: UserConfig::load()?.console.theme,
             }
             .render()?)
         })

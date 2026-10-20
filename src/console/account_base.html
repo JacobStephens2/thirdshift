@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="{{ theme }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -9,7 +9,7 @@
 </head>
 <body>
   <header><p class="brand">thirdshift / Console</p>
-    {% block navigation %}<nav aria-label="Pages"><a href="/">Inbox</a><a href="/console-log">Console log</a><a href="/account">Account</a></nav>{% endblock %}
+    {% block navigation %}{% include "console/nav.html" %}{% endblock %}
   </header>
   <main>{% block content %}{% endblock %}</main>
 </body>

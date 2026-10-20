@@ -13,7 +13,7 @@ before(async () => {
   home = await mkdtemp(join(tmpdir(), "thirdshift-console-accounts-"));
   const root = join(home, ".thirdshift");
   await mkdir(root);
-  await writeFile(join(root, "config.toml"), '[console]\nport = 0\nallowed_emails = ["owner@example.test"]\n');
+  await writeFile(join(root, "config.toml"), '[console]\nport = 0\nallowed_emails = ["owner@example.test"]\ntheme = "focus-dark"\n');
   // A fixture created with `console password` for "browser test password".
   // The Rust HTTP tests exercise account creation through the real terminal.
   await writeFile(join(root, "console-accounts.json"), JSON.stringify({
@@ -39,11 +39,12 @@ after(async () => {
 });
 
 test("sign-in and sign-out work on a phone without JavaScript using secure cookies", async t => {
-  const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+  const context = await browser.newContext({ javaScriptEnabled: false, viewport: { width: 390, height: 844 }, colorScheme: "light" });
   t.after(() => context.close());
   const page = await context.newPage();
   await page.goto(origin);
   assert.equal(new URL(page.url()).pathname, "/sign-in");
+  assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(18, 18, 20)");
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.getByLabel("Email").fill("owner@example.test");
   await page.getByLabel("Password", { exact: true }).fill("browser test password");
@@ -58,7 +59,9 @@ test("sign-in and sign-out work on a phone without JavaScript using secure cooki
   assert.equal((await context.request.post(`${origin}/sign-out`)).status(), 403);
   await page.getByRole("link", { name: "Console log", exact: true }).click();
   await page.getByText(/owner@example.test · sign-in/).waitFor();
+  assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(18, 18, 20)");
   await page.getByRole("link", { name: "Account", exact: true }).click();
+  assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(18, 18, 20)");
   await Promise.all([page.waitForURL(`${origin}/sign-in`), page.getByRole("button", { name: "Sign out this browser" }).click()]);
   await page.goto(origin);
   assert.equal(new URL(page.url()).pathname, "/sign-in");
