@@ -149,6 +149,7 @@ fn sign_in_guards_pages_streams_and_actions_and_pairs_the_console_log_with_cli()
         "/logs/command/id",
         "/logs/id",
         "/logs/id/stream/0",
+        "/events",
         "/console-log",
         "/account",
     ] {
@@ -425,6 +426,45 @@ fn an_open_log_stream_closes_when_cli_sign_out_revokes_its_session() {
         get(&console, &format!("{link}/stream/0"), &session).status(),
         303
     );
+}
+
+#[test]
+fn an_open_inbox_stream_closes_when_its_session_is_revoked() {
+    for revoke in ["sign-out", "password", "allowlist"] {
+        let home = configured();
+        assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+        let console = Console::start_mode(
+            Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+            home.path(),
+            false,
+        );
+        let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
+        let response = get(&console, "/events", &session);
+        assert_eq!(response.status(), 200);
+        assert_eq!(response.headers()["content-type"], "text/event-stream");
+        let mut stream = BufReader::new(response);
+        let mut first = String::new();
+        loop {
+            let mut line = String::new();
+            assert!(stream.read_line(&mut line).unwrap() > 0);
+            if line.trim().is_empty() {
+                break;
+            }
+            first.push_str(&line);
+        }
+        assert!(first.contains("event: commands"));
+        match revoke {
+            "sign-out" => assert!(cli(home.path(), &["console", "sign-out"]).status.success()),
+            "password" => {
+                assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+            }
+            "allowlist" => allow(home.path(), false),
+            _ => unreachable!(),
+        }
+        let mut rest = String::new();
+        stream.read_to_string(&mut rest).unwrap();
+        assert_eq!(get(&console, "/events", &session).status(), 303, "{revoke}");
+    }
 }
 
 // Exercise the real terminal interface, including controlling-TTY input and echo.

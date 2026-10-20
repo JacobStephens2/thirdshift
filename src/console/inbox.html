@@ -4,8 +4,13 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false}'>
+  {% if title == "Inbox" %}
+  <title>{{ self.needs_you() }} need you · thirdshift Console</title>
+  <link rel="icon" href="/assets/favicon{% if self.urgent() %}-urgent{% endif %}.svg">
+  {% else %}
   <title>{{ title }} · {{ hostname }} · thirdshift</title>
   <link rel="icon" href="data:,">
+  {% endif %}
   <link rel="stylesheet" href="/assets/console.css">
   <script src="/assets/vendor/htmx-2.0.7.min.js" defer></script>
   <script src="/assets/vendor/htmx-ext-sse-2.2.3.js" defer></script>
@@ -17,7 +22,7 @@
     {% if !consoles.is_empty() %}<nav aria-label="Other Consoles">{% for address in consoles %}<a href="{{ address }}">{{ address }}</a>{% endfor %}</nav>{% endif %}
   </header>
   {% include "console/nav.html" %}
-  <main>
+  <main {% if title == "Inbox" %}id="inbox"{% endif %}>
     <div class="page-title"><h2>{{ title }}</h2><code>{{ cli }}</code></div>
     {% match archive %}{% when Some with (archive) %}
     {% if title == "History" %}
@@ -35,7 +40,7 @@
     {% when None %}
     {% match inbox.warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning }}</p>{% when None %}{% endmatch %}
     {% for section in inbox.sections %}
-    <details class="group" data-group="{{ section.group }}" {% if section.open %}open{% endif %}>
+    <details id="group-{{ loop.index }}" class="group" data-group="{{ section.group }}" {% if section.open %}open{% endif %}>
       <summary><span>{{ section.title }}</span><span class="count">{{ section.rows.len() }}</span></summary>
       {% if section.rows.is_empty() && section.references.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
       {# Only the rendered, auto-escaped RowTemplate is trusted as HTML. #}
