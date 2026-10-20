@@ -152,6 +152,7 @@ fn sign_in_guards_pages_streams_and_actions_and_pairs_the_console_log_with_cli()
         "/events",
         "/console-log",
         "/account",
+        "/look",
     ] {
         assert_eq!(
             get(&console, path, "").status(),
@@ -260,6 +261,65 @@ fn sign_in_guards_pages_streams_and_actions_and_pairs_the_console_log_with_cli()
             .contains("Max-Age=0")
     );
     assert_eq!(get(&console, "/", &session).status(), 303);
+}
+
+#[test]
+fn signed_in_look_writes_name_the_account_and_keep_access_settings() {
+    let home = configured();
+    assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+    let console = Console::start_mode(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        home.path(),
+        false,
+    );
+    let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
+    let look: Value = get(&console, "/look", &session).json().unwrap();
+    for (path, fields) in [
+        ("/theme", vec![("theme", "signal-light")]),
+        ("/sections", vec![("hide", "done")]),
+    ] {
+        assert_eq!(
+            client()
+                .post(format!("{}{path}", console.address))
+                .header("cookie", &session)
+                .form(&fields)
+                .send()
+                .unwrap()
+                .status(),
+            403
+        );
+        assert_eq!(
+            client()
+                .post(format!("{}{path}", console.address))
+                .header("cookie", &session)
+                .header("x-csrf-token", look["csrf"].as_str().unwrap())
+                .form(&fields)
+                .send()
+                .unwrap()
+                .status(),
+            200
+        );
+    }
+    let output = cli(home.path(), &["console", "log", "--json"]);
+    let events: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+    for kind in ["theme-changed", "sections-changed"] {
+        let changed: Vec<_> = events
+            .iter()
+            .filter(|event| event["event"] == kind)
+            .collect();
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0]["email"], EMAIL);
+    }
+    assert_eq!(get(&console, "/", &session).status(), 200);
+    let config: Value = serde_json::to_value(
+        toml::from_str::<toml::Table>(
+            &fs::read_to_string(home.path().join(".thirdshift/config.toml")).unwrap(),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(config["console"]["allowed_emails"], json!([EMAIL]));
+    assert_eq!(config["console"]["port"], 0);
 }
 
 #[test]

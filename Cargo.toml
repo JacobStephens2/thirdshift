@@ -14,7 +14,7 @@ include = ["/src", "/skills", "/askama.toml", "/README.md", "/LICENSE"]
 anyhow = "1.0.104"
 argon2 = "0.5.3"
 askama = "0.16.1"
-axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "form"] }
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "form", "json"] }
 # axoupdater needs axoasset's `remote` feature, which always pulls in `image`
 # (with moxcms and pxfm) and turns on reqwest's `default-tls`, which is rustls
 # with aws-lc. No flag turns either off, and features unify, so switching

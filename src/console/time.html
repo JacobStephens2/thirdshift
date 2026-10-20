@@ -26,13 +26,13 @@
     {% for lane in views.lanes %}
     <section class="lane" aria-label="Command lane">
       {% for run in lane %}
-      <article class="command time-run" data-command="{{ run.selector }}" data-peek="{{ run.peek_url }}" data-log="{{ run.log_url }}">
+      <article class="command time-run" data-live="{{ run.state == "live" }}" data-command="{{ run.selector }}" data-peek="{{ run.peek_url }}" data-log="{{ run.log_url }}">
         <h3><a class="peek-link" href="{{ run.peek_url }}">{{ run.subject }}</a> · {{ run.state }}</h3><p>{{ run.title }}</p>
         <svg class="timeline" width="100%" height="28" aria-hidden="true">
           {% for stage in run.stages %}<svg x="{{ stage.left }}%" width="{{ stage.width }}%" height="28"><rect width="100%" height="28"/><text x="4" y="19">{{ stage.name }}</text></svg>{% endfor %}
         </svg>
         {% if run.stages.is_empty() %}<p>No stage times retained.</p>{% endif %}
-        <ol class="stage-times">{% for stage in run.stages %}<li data-seconds="{{ stage.seconds }}">{{ stage.name }}: {{ stage.text }}</li>{% endfor %}</ol>
+        <ol class="stage-times">{% for stage in run.stages %}<li {% if stage.text.starts_with("Running") %}class="running-stage"{% endif %} data-seconds="{{ stage.seconds }}">{{ stage.name }}: {{ stage.text }}</li>{% endfor %}</ol>
       </article>
       {% endfor %}
     </section>
@@ -43,8 +43,8 @@
     {% for grid in views.grids %}
     <table class="stage-grid">
       <caption>{{ grid.repository }}</caption>
-      <thead><tr><th scope="col">Stage<br>Usual range</th>{% for run in grid.runs %}<th scope="col" class="command" data-command="{{ run.selector }}" data-peek="{{ run.peek_url }}" data-log="{{ run.log_url }}"><a class="peek-link" href="{{ run.peek_url }}">{{ run.subject }}</a><br>{{ run.state }}<br>{{ run.title }}</th>{% endfor %}</tr></thead>
-      <tbody>{% for row in grid.rows %}<tr><th scope="row">{{ row.name }}<br><span class="usual">Usual range: {{ row.usual }}</span></th>{% for cell in row.cells %}<td><span class="cell-run">{{ grid.runs[loop.index0].subject }}: </span>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+      <thead><tr><th scope="col">Stage<br>Usual range</th>{% for run in grid.runs %}<th scope="col" class="command" data-live="{{ run.state == "live" }}" data-command="{{ run.selector }}" data-peek="{{ run.peek_url }}" data-log="{{ run.log_url }}"><a class="peek-link" href="{{ run.peek_url }}">{{ run.subject }}</a><br>{{ run.state }}<br>{{ run.title }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in grid.rows %}<tr><th scope="row">{{ row.name }}<br><span class="usual">Usual range: {{ row.usual }}</span></th>{% for cell in row.cells %}<td {% if cell.contains("Running") %}class="running-stage"{% endif %}><span class="cell-run">{{ grid.runs[loop.index0].subject }}: </span>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
     </table>
     {% if grid.rows.is_empty() %}<p>No stage times retained.</p>{% endif %}
     {% endfor %}

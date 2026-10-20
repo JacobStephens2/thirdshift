@@ -6,7 +6,7 @@ use std::iter::Peekable;
 use std::mem::discriminant;
 use std::num::NonZeroUsize;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::asks::Flags;
 use crate::base_fix::BaseFixAsk;
@@ -31,6 +31,15 @@ pub enum Command {
         json: bool,
     },
     ConsoleLog {
+        json: bool,
+    },
+    ConsoleTheme {
+        name: Option<String>,
+        json: bool,
+    },
+    ConsoleSections {
+        hide: Vec<String>,
+        show: Vec<String>,
         json: bool,
     },
     Status {
@@ -256,6 +265,42 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
         Some("console") => {
+            if args.get(1).is_some_and(|action| action == "theme") {
+                let json = args.last().is_some_and(|arg| arg == "--json");
+                let end = args.len() - usize::from(json);
+                let [name] = &args[2..end] else {
+                    bail!("usage: thirdshift console theme <name|list> [--json]");
+                };
+                return Ok(Command::ConsoleTheme {
+                    name: (name != "list").then(|| name.clone()),
+                    json,
+                });
+            }
+            if args.get(1).is_some_and(|action| action == "sections") {
+                let (mut hide, mut show, mut json) = (Vec::new(), Vec::new(), false);
+                let mut arguments = args[2..].iter();
+                while let Some(flag) = arguments.next() {
+                    match flag.as_str() {
+                        "--json" if !json => json = true,
+                        "--hide" | "--show" => {
+                            let section = arguments
+                                .next()
+                                .filter(|s| !s.starts_with('-'))
+                                .context("--hide and --show need a section name")?;
+                            let target = if flag == "--hide" {
+                                &mut hide
+                            } else {
+                                &mut show
+                            };
+                            target.extend(section.split(',').map(str::to_owned));
+                        }
+                        _ => bail!(
+                            "usage: thirdshift console sections [--hide <section>] [--show <section>] [--json]"
+                        ),
+                    }
+                }
+                return Ok(Command::ConsoleSections { hide, show, json });
+            }
             if args.get(1).is_some_and(|action| action == "sign-out") {
                 let mut email = None;
                 let mut json = false;

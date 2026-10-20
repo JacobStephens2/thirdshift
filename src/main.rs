@@ -82,6 +82,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console password [--email <address>]  Set a Console password privately
        thirdshift console sign-out [--email <address>] [--json]  End an account's sessions
        thirdshift console log [--json]                Read this machine's Console log
+       thirdshift console theme <name|list> [--json]  Choose or list Console Themes
+       thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift show <command> [--json]             Show one Command in full
        thirdshift stop <command> [--requeue]          Stop a live Command and wait for cleanup
        thirdshift logs [--command <id>] [--json]      List this machine's logs
@@ -140,6 +142,12 @@ fn main() -> ExitCode {
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
         Ok(Command::ConsolePassword(email)) => return outcome(console::password(email.as_deref())),
+        Ok(Command::ConsoleTheme { name, json }) => {
+            return printed(console::theme(name.as_deref(), json));
+        }
+        Ok(Command::ConsoleSections { hide, show, json }) => {
+            return printed(console::sections(&hide, &show, json));
+        }
         Ok(Command::ConsoleSignOut { email, json }) => {
             return match console::sign_out(email.as_deref(), json) {
                 Ok(()) => ExitCode::SUCCESS,
@@ -356,6 +364,17 @@ fn release_summary() -> ExitCode {
     match summary {
         Ok(summary) => {
             println!("{summary}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => failure(&error),
+    }
+}
+
+/// A Console settings view or action, with machine-readable output on stdout.
+fn printed(result: anyhow::Result<String>) -> ExitCode {
+    match result {
+        Ok(text) => {
+            println!("{text}");
             ExitCode::SUCCESS
         }
         Err(error) => failure(&error),

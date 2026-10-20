@@ -1,0 +1,260 @@
+@font-face { font-family: "Big Shoulders Display"; src: url("/assets/fonts/bigshouldersdisplay-100-900-latin.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("/assets/fonts/jetbrainsmono-100-800-latin.woff2") format("woff2"); font-weight: 100 800; font-display: swap; }
+@font-face { font-family: "Inter"; src: url("/assets/fonts/inter-100-900-latin.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "Caprasimo"; src: url("/assets/fonts/caprasimo-400-latin.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Nunito"; src: url("/assets/fonts/nunito-200-1000-latin.woff2") format("woff2"); font-weight: 200 1000; font-display: swap; }
+@font-face { font-family: "Barlow Condensed"; src: url("/assets/fonts/barlowcondensed-400-latin.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Barlow Condensed"; src: url("/assets/fonts/barlowcondensed-600-latin.woff2") format("woff2"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "Barlow Condensed"; src: url("/assets/fonts/barlowcondensed-700-latin.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "Titillium Web"; src: url("/assets/fonts/titilliumweb-400-latin.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Titillium Web"; src: url("/assets/fonts/titilliumweb-600-latin.woff2") format("woff2"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "Titillium Web"; src: url("/assets/fonts/titilliumweb-700-latin.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+@font-face { font-family: "Atkinson Hyperlegible"; src: url("/assets/fonts/atkinsonhyperlegible-400-latin.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Atkinson Hyperlegible"; src: url("/assets/fonts/atkinsonhyperlegible-700-latin.woff2") format("woff2"); font-weight: 700; font-display: swap; }
+
+/* Adapted from the approved #711 prototype (05b1b0a). Tokens only; layout lives in console.css. */
+:root { color-scheme: light dark; --activity-motion: none; }
+:root[data-theme$="-light"] { color-scheme: light; }
+:root[data-theme$="-dark"] { color-scheme: dark; }
+:root[data-theme^="focus-"] {
+  --bg: light-dark(#F7F7F5, #121214);
+  --panel: light-dark(#FFFFFF, #19191C);
+  --panel-2: light-dark(#F0F0EE, #212125);
+  --sel-bg: light-dark(#EEEEEB, #2A2A2F);
+  --text: light-dark(#18181A, #E8E8EA);
+  --head: light-dark(#18181A, #E8E8EA);
+  --dim: light-dark(#6B6B70, #A0A0A8);
+  --rule: light-dark(#E3E3E0, #2C2C31);
+  --link: light-dark(#18181A, #E8E8EA);
+  --urgent: light-dark(#D7263D, #FF6B78);
+  --urgent-text: light-dark(#9A1424, #FFB0B5);
+  --look: light-dark(#B06800, #FFB020);
+  --look-text: light-dark(#7E4C00, #FFB52E);
+  --working: light-dark(#5E5E63, #A8A8B0);
+  --working-text: light-dark(#4A4A4F, #B4B4BC);
+  --landing: light-dark(#6B6B70, #9A9AA2);
+  --ready: light-dark(#3F3F44, #C4C4CA);
+  --ready-text: light-dark(#3F3F44, #C4C4CA);
+  --done: light-dark(#6B6B70, #9A9AA2);
+  --on-urgent: light-dark(#FFFFFF, #000000);
+  --on-look: light-dark(#000000, #000000);
+  --on-working: light-dark(#FFFFFF, #000000);
+  --on-landing: light-dark(#FFFFFF, #000000);
+  --on-ready: light-dark(#FFFFFF, #000000);
+  --on-done: light-dark(#FFFFFF, #000000);
+  --font-head: "IBM Plex Sans", sans-serif;
+  --font-body: "IBM Plex Sans", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+  --body-size: 14px;
+  --head-weight: 600;
+  --head-case: none;
+  --radius: 4px;
+  --tag-bg: transparent;
+  --tag-text: var(--text);
+  --activity-decoration: none;
+  --activity-speed: 2s;
+  --panel-shadow: none;
+  --title-shadow: none;
+}
+:root[data-theme^="plain-"] {
+  --bg: light-dark(#FCFCFB, #111214);
+  --panel: light-dark(#FFFFFF, #15171A);
+  --panel-2: light-dark(#F3F4F6, #1C1F23);
+  --sel-bg: light-dark(#EEF3FD, #17223A);
+  --text: light-dark(#1C1D1F, #E6E7E9);
+  --head: light-dark(#62676E, #9096A0);
+  --dim: light-dark(#62676E, #9096A0);
+  --rule: light-dark(#E4E6E9, #26292E);
+  --link: light-dark(#1C1D1F, #E6E7E9);
+  --urgent: light-dark(#C4262E, #FF6B6B);
+  --urgent-text: light-dark(#C4262E, #FF6B6B);
+  --look: light-dark(#9A5B00, #F0B45A);
+  --look-text: light-dark(#9A5B00, #F0B45A);
+  --working: light-dark(#1F6FEB, #6AA8FF);
+  --working-text: light-dark(#1A5FCC, #6AA8FF);
+  --landing: light-dark(#7B4FD4, #B39CFF);
+  --ready: light-dark(#1A7F37, #57C97A);
+  --ready-text: light-dark(#1A7F37, #57C97A);
+  --done: light-dark(#62676E, #9096A0);
+  --on-urgent: light-dark(#FFFFFF, #000000);
+  --on-look: light-dark(#FFFFFF, #000000);
+  --on-working: light-dark(#FFFFFF, #000000);
+  --on-landing: light-dark(#FFFFFF, #000000);
+  --on-ready: light-dark(#FFFFFF, #000000);
+  --on-done: light-dark(#FFFFFF, #000000);
+  --font-head: "Inter", sans-serif;
+  --font-body: "Inter", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  --body-size: 13.5px;
+  --head-weight: 600;
+  --head-case: uppercase;
+  --radius: 6px;
+  --tag-bg: transparent;
+  --tag-text: var(--text);
+  --activity-decoration: none;
+  --activity-speed: 2s;
+  --panel-shadow: none;
+  --title-shadow: none;
+}
+:root[data-theme^="press-"] {
+  --bg: light-dark(#E8E6E1, #0A0A0A);
+  --panel: light-dark(#F4F2EE, #141414);
+  --panel-2: light-dark(#DCD9D2, #1E1E1E);
+  --sel-bg: light-dark(#DCD9D2, #1E1E1E);
+  --text: light-dark(#111111, #E8E6E1);
+  --head: light-dark(#111111, #E8E6E1);
+  --dim: light-dark(#55514A, #9A978F);
+  --rule: light-dark(#C6C1B6, #2A2A2A);
+  --link: light-dark(#005F86, #00AEEF);
+  --urgent: light-dark(#EC008C, #EC008C);
+  --urgent-text: light-dark(#A80064, #FF5CB8);
+  --look: light-dark(#FFF200, #FFF200);
+  --look-text: light-dark(#615500, #FFF200);
+  --working: light-dark(#00AEEF, #00AEEF);
+  --working-text: light-dark(#005A80, #00AEEF);
+  --landing: light-dark(#00AEEF, #00AEEF);
+  --ready: light-dark(#111111, #E8E6E1);
+  --ready-text: light-dark(#111111, #E8E6E1);
+  --done: light-dark(#68645C, #9A978F);
+  --on-urgent: light-dark(#000000, #000000);
+  --on-look: light-dark(#000000, #000000);
+  --on-working: light-dark(#000000, #000000);
+  --on-landing: light-dark(#000000, #000000);
+  --on-ready: light-dark(#FFFFFF, #000000);
+  --on-done: light-dark(#FFFFFF, #000000);
+  --font-head: "Big Shoulders Display", sans-serif;
+  --font-body: "JetBrains Mono", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  --body-size: 13px;
+  --head-weight: 600;
+  --head-case: none;
+  --radius: 0px;
+  --tag-bg: var(--state-ink);
+  --tag-text: var(--state-on);
+  --activity-decoration: none;
+  --activity-speed: 2s;
+  --panel-shadow: none;
+  --title-shadow: 1px 0 var(--urgent);
+}
+:root[data-theme^="signal-"] {
+  --bg: light-dark(#FAFAFA, #111315);
+  --panel: light-dark(#FFFFFF, #181B1E);
+  --panel-2: light-dark(#F1F2F4, #20242A);
+  --sel-bg: light-dark(#ECEDEF, #262B31);
+  --text: light-dark(#111316, #ECEEF0);
+  --head: light-dark(#111316, #ECEEF0);
+  --dim: light-dark(#4F555C, #A4AAB1);
+  --rule: light-dark(#DDE0E3, #2C3137);
+  --link: light-dark(#111316, #ECEEF0);
+  --urgent: light-dark(#D55E00, #FF7A33);
+  --urgent-text: light-dark(#B3470A, #FF8A4C);
+  --look: light-dark(#E69F00, #F0B429);
+  --look-text: light-dark(#7A4E00, #F2B53A);
+  --working: light-dark(#0072B2, #3FA2E0);
+  --working-text: light-dark(#00609A, #62B8F0);
+  --landing: light-dark(#9B3F76, #D97DB6);
+  --ready: light-dark(#009E73, #2CC79A);
+  --ready-text: light-dark(#00694A, #3CCB9E);
+  --done: light-dark(#5A6067, #9AA0A6);
+  --on-urgent: light-dark(#000000, #000000);
+  --on-look: light-dark(#000000, #000000);
+  --on-working: light-dark(#FFFFFF, #000000);
+  --on-landing: light-dark(#FFFFFF, #000000);
+  --on-ready: light-dark(#000000, #000000);
+  --on-done: light-dark(#FFFFFF, #000000);
+  --font-head: "Atkinson Hyperlegible", sans-serif;
+  --font-body: "Atkinson Hyperlegible", sans-serif;
+  --font-mono: "IBM Plex Mono", monospace;
+  --body-size: 14.5px;
+  --head-weight: 700;
+  --head-case: none;
+  --radius: 4px;
+  --tag-bg: var(--state-ink);
+  --tag-text: var(--state-on);
+  --activity-decoration: none;
+  --activity-speed: 2s;
+  --panel-shadow: none;
+  --title-shadow: none;
+}
+:root[data-theme^="garden-"] {
+  --bg: light-dark(#F6F0E1, #161A14);
+  --panel: light-dark(#FBF7EC, #1B2018);
+  --panel-2: light-dark(#EFE6CF, #1E241B);
+  --sel-bg: light-dark(#E6EEDA, #233020);
+  --text: light-dark(#2E2A1F, #E8E2CF);
+  --head: light-dark(#2E2A1F, #E8E2CF);
+  --dim: light-dark(#6B6250, #A59D84);
+  --rule: light-dark(#D9CCAA, #36402F);
+  --link: light-dark(#2F6B2A, #9BD480);
+  --urgent: light-dark(#A23B2A, #EC7A66);
+  --urgent-text: light-dark(#A23B2A, #EC7A66);
+  --look: light-dark(#F2C14E, #F2C14E);
+  --look-text: light-dark(#7A5200, #F2C14E);
+  --working: light-dark(#4F8A3C, #6FAE58);
+  --working-text: light-dark(#2F6B2A, #8BC970);
+  --landing: light-dark(#A0773F, #C39A5A);
+  --ready: light-dark(#5B8FB9, #8EC1E6);
+  --ready-text: light-dark(#2F5F86, #8EC1E6);
+  --done: light-dark(#6B6250, #A59D84);
+  --on-urgent: light-dark(#FFFFFF, #000000);
+  --on-look: light-dark(#000000, #000000);
+  --on-working: light-dark(#000000, #000000);
+  --on-landing: light-dark(#000000, #000000);
+  --on-ready: light-dark(#000000, #000000);
+  --on-done: light-dark(#FFFFFF, #000000);
+  --font-head: "Caprasimo", sans-serif;
+  --font-body: "Nunito", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  --body-size: 14px;
+  --head-weight: 400;
+  --head-case: none;
+  --radius: 8px;
+  --tag-bg: var(--state-ink);
+  --tag-text: var(--state-on);
+  --activity-decoration: repeating-linear-gradient(90deg, var(--working) 0 6px, transparent 6px 12px);
+  --activity-speed: 5s;
+  --activity-motion: activity-drift var(--activity-speed) linear infinite;
+  --panel-shadow: none;
+  --title-shadow: none;
+}
+:root[data-theme^="factory-"] {
+  --bg: light-dark(#E3E6E8, #1C1D1F);
+  --panel: light-dark(#EFF1F3, #2F3033);
+  --panel-2: light-dark(#E6E9EB, #3D3F42);
+  --sel-bg: light-dark(#F6F7F8, #3B3E43);
+  --text: light-dark(#1B1D1F, #E3E3E3);
+  --head: light-dark(#1B1D1F, #FFE6C0);
+  --dim: light-dark(#3E4246, #B0B3B8);
+  --rule: light-dark(#8E9397, #55575B);
+  --link: light-dark(#6A3A00, #FFA200);
+  --urgent: light-dark(#A8261C, #E03434);
+  --urgent-text: light-dark(#7E1912, #FF9288);
+  --look: light-dark(#E8B33A, #E8B33A);
+  --look-text: light-dark(#4F3B00, #F2C14E);
+  --working: light-dark(#2E7D32, #5EB663);
+  --working-text: light-dark(#164A1A, #7FD07F);
+  --landing: light-dark(#E08A00, #FFA200);
+  --ready: light-dark(#1F6FA8, #4AA8E5);
+  --ready-text: light-dark(#0E4A74, #5FB4EA);
+  --done: light-dark(#3C4044, #8F9195);
+  --on-urgent: light-dark(#FFFFFF, #000000);
+  --on-look: light-dark(#000000, #000000);
+  --on-working: light-dark(#FFFFFF, #000000);
+  --on-landing: light-dark(#000000, #000000);
+  --on-ready: light-dark(#FFFFFF, #000000);
+  --on-done: light-dark(#FFFFFF, #000000);
+  --font-head: "Barlow Condensed", sans-serif;
+  --font-body: "Titillium Web", sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  --body-size: 14px;
+  --head-weight: 700;
+  --head-case: uppercase;
+  --radius: 2px;
+  --tag-bg: var(--state-ink);
+  --tag-text: var(--state-on);
+  --activity-decoration: repeating-linear-gradient(90deg, var(--working) 0 6px, transparent 6px 12px);
+  --activity-speed: 2s;
+  --panel-shadow: inset 0 1px #ffffff33, inset 0 -1px #00000033;
+  --activity-motion: activity-drift var(--activity-speed) linear infinite;
+  --title-shadow: none;
+}

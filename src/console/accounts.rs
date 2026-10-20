@@ -32,6 +32,8 @@ pub(super) enum EventKind {
     PasswordSet,
     SignOut,
     BlockedAddress,
+    ThemeChanged,
+    SectionsChanged,
 }
 
 impl std::fmt::Display for EventKind {
@@ -42,6 +44,8 @@ impl std::fmt::Display for EventKind {
             Self::PasswordSet => "password-set",
             Self::SignOut => "sign-out",
             Self::BlockedAddress => "blocked-address",
+            Self::ThemeChanged => "theme-changed",
+            Self::SectionsChanged => "sections-changed",
         })
     }
 }
@@ -234,7 +238,7 @@ impl Accounts {
         Ok(())
     }
 
-    fn record(&self, email: &str, event: EventKind) -> Result<()> {
+    pub(super) fn record(&self, email: &str, event: EventKind) -> Result<()> {
         let mut file = private_file(&self.root.join("console.log"))?;
         serde_json::to_writer(
             &mut file,

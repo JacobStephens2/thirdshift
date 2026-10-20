@@ -1,3 +1,4 @@
+import { activity, loadLook, motionAllowed } from './look.js';
 // Browser preferences are conveniences; malformed or unavailable storage hides nothing.
 function stored(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
@@ -77,14 +78,19 @@ function morph(html) {
   document.title = next.title;
   document.querySelector('link[rel="icon"]').href = next.querySelector('link[rel="icon"]').getAttribute("href");
   markNew();
+  activity();
+  loadLook();
   for (const row of document.querySelectorAll('.command[data-logging="true"]')) {
     const previous = previousGrowth.get(row.id) ?? [0, 0];
     const increased = logLengths(row).some((size, index) => size > previous[index]);
-    if (increased && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (increased && row.dataset.live === 'true' && motionAllowed()) {
       row.querySelector(":scope > .row-head > .heartbeat")?.animate([
         { transform: "scale(1)", opacity: 0.4 },
         { transform: "scale(1.8)", opacity: 1, offset: 0.3 },
         { transform: "scale(1)", opacity: 0.4 }
+      ], { duration: 900 });
+      row.querySelector(':scope > .now')?.animate([
+        { outline: '2px solid var(--working)' }, { outline: '2px solid transparent' }
       ], { duration: 900 });
     }
   }
@@ -173,7 +179,7 @@ function items() {
   return [...document.querySelectorAll('main .group > summary, main .command, main .log-row')]
     .filter(element => {
       for (let parent = element.parentElement; parent; parent = parent.parentElement) {
-        if (parent.tagName === 'DETAILS' && !parent.open && element !== parent.firstElementChild) return false;
+        if (parent.hidden || (parent.tagName === 'DETAILS' && !parent.open && element !== parent.firstElementChild)) return false;
       }
       return true;
     });
@@ -221,6 +227,8 @@ document.addEventListener('keydown', event => {
   if (event.ctrlKey || event.metaKey || event.altKey || event.target.closest('input, select, textarea, [contenteditable="true"]')) return;
   if (event.key === 'Enter' && event.target.closest('a, button')) return;
   if (event.key === ' ' && event.target.closest('button')) return;
+  if (document.querySelector('#themes[open], #sections-chooser[open]')) return;
+  if (event.key === 'T' && event.shiftKey) { event.preventDefault(); document.querySelector('[data-open-themes]').click(); return; }
   if (event.key === 'Escape') {
     event.preventDefault();
     if (help.open) help.close();
