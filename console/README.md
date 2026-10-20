@@ -21,11 +21,15 @@ stdout. To require sign-in, set the allowlist in `~/.thirdshift/config.toml`:
 
 ```toml
 [console]
+address = "https://console.example.com" # used by console install
 port = 8711
 allowed_emails = ["you@example.com"]
 other_consoles = ["https://console.example.test"]
 theme = "focus-auto" # also focus-light or focus-dark
 ```
+
+For a persistent service behind Caddy, Apache or nginx, see the root README's
+[server installation instructions](../README.md#console-on-a-server).
 
 Run `thirdshift console password --email you@example.com` in a terminal to set
 the password, then `thirdshift console`. Password entry is hidden and asks

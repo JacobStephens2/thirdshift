@@ -1050,6 +1050,7 @@ days = 7
 silent_minutes = 10
 
 [console]
+address = \"\"
 port = 8711
 allowed_emails = []
 other_consoles = []
