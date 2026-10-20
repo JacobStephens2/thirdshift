@@ -34,6 +34,23 @@ use crate::logs::status::{self, Inbox, Row};
 
 static ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/console/assets");
 
+/// The machine identity and look shared by the Console's reader pages.
+struct PageContext {
+    hostname: String,
+    consoles: Vec<String>,
+    theme: String,
+}
+
+impl PageContext {
+    fn new(config: &UserConfig) -> Self {
+        Self {
+            hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
+            consoles: config.console.other_consoles.clone(),
+            theme: config.console.theme.clone(),
+        }
+    }
+}
+
 // All page/action routes are registered here, beside their CLI equivalent.
 // Static resources carry no view or action and have their own fallback route.
 struct PageRoute {
@@ -361,9 +378,7 @@ fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Route
 #[derive(Template)]
 #[template(path = "console/inbox.html")]
 struct InboxPage {
-    hostname: String,
-    consoles: Vec<String>,
-    theme: String,
+    page: PageContext,
     hidden_sections: Vec<String>,
     cli: &'static str,
     inbox: Inbox,
@@ -461,9 +476,7 @@ async fn render_page(
             None => ("Inbox", cli),
         };
         Ok(InboxPage {
-            hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-            consoles: config.console.other_consoles.clone(),
-            theme: config.console.theme.clone(),
+            page: PageContext::new(&config),
             hidden_sections: config.console.hidden_sections.clone(),
             cli,
             inbox: status::inbox(&config)?,

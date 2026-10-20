@@ -4,13 +4,13 @@ use std::io::{BufRead, BufReader, Seek, SeekFrom};
 
 use anyhow::{Result, ensure};
 use askama::Template;
-use axum::Extension;
 use axum::extract::Path;
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{
     IntoResponse, Response, Sse,
     sse::{Event, KeepAlive},
 };
+use axum::{Extension, Json};
 use serde::Serialize;
 
 use super::conversation;
@@ -20,7 +20,7 @@ use crate::logs::catalog::{self, Log};
 #[derive(Template)]
 #[template(path = "console/logs.html")]
 struct LogsPage {
-    theme: String,
+    page: super::PageContext,
     logs: Vec<Log>,
     owner: String,
 }
@@ -28,7 +28,7 @@ struct LogsPage {
 #[derive(Template)]
 #[template(path = "console/reader.html")]
 struct ReaderPage {
-    theme: String,
+    page: super::PageContext,
     log: Log,
     html: String,
     offset: u64,
@@ -47,7 +47,7 @@ async fn inventory(owner: Option<String>) -> Response {
             let config = UserConfig::load()?;
             let logs = catalog::load(&config, owner.as_deref())?;
             Ok(LogsPage {
-                theme: config.console.theme,
+                page: super::PageContext::new(&config),
                 logs,
                 owner: owner.unwrap_or_default(),
             }
@@ -70,7 +70,7 @@ pub(super) async fn reader(Path(id): Path<String>) -> Response {
         let html = conversation::render(&String::from_utf8_lossy(&lines.bytes), log.kind);
         Ok(Some(
             ReaderPage {
-                theme: config.console.theme,
+                page: super::PageContext::new(&config),
                 log,
                 html,
                 offset: lines.offset,
@@ -144,6 +144,22 @@ pub(super) async fn stream(
     Extension(viewer): Extension<super::auth::Viewer>,
     headers: HeaderMap,
 ) -> Response {
+    // A finite request uses the same reader and offset as SSE when a proxy
+    // cannot keep streams open. It still crosses the normal account guard.
+    if headers
+        .get("accept")
+        .is_some_and(|value| value == "application/json")
+    {
+        return match tokio::task::spawn_blocking(move || {
+            appended(&UserConfig::load()?, &id, offset)
+        })
+        .await
+        {
+            Ok(Ok(batch)) => Json(batch).into_response(),
+            Ok(Err(error)) => super::page(Ok(Err(error))),
+            Err(error) => super::page(Err(error)),
+        };
+    }
     let offset = headers
         .get("last-event-id")
         .and_then(|value| value.to_str().ok())

@@ -128,7 +128,16 @@ pub(crate) fn archive(
             (repository.is_empty() || repository == repo)
                 && (outcome.is_empty() || outcome == result)
         })
-        .map(|entry| entry_row(entry, now, &config.logs_dir))
+        .map(|entry| {
+            entry_row(
+                match entry {
+                    Entry::Record(command) => Observation::Record(command),
+                    Entry::History(command) => Observation::History(command),
+                },
+                now,
+                &config.logs_dir,
+            )
+        })
         .collect::<Result<_>>()?;
     Ok(Archive {
         rows,
@@ -137,10 +146,10 @@ pub(crate) fn archive(
     })
 }
 
-fn entry_row(entry: &Entry, now: DateTime<Local>, root: &std::path::Path) -> Result<Row> {
+fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Path) -> Result<Row> {
     match entry {
-        Entry::Record(command) => row(command, now, None, root),
-        Entry::History(command) => {
+        Observation::Record(command) => row(command, now, None, root),
+        Observation::History(command) => {
             let (subject, title) =
                 subject(&command.repository, &command.kind, command.issue.as_ref());
             Ok(Row {
@@ -186,6 +195,11 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
     let now = Local::now();
     let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
     let items = snapshot.inbox(false, config.inbox_days);
+    let ready_selectors: std::collections::BTreeSet<_> = items
+        .iter()
+        .filter(|item| item.group == Group::ReadyForReview)
+        .filter_map(|item| item.command.selector())
+        .collect();
     let sections = Group::ORDER
         .into_iter()
         .filter(|group| *group != Group::History)
@@ -195,6 +209,10 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                 .filter(|item| item.group == group)
                 .map(|item| {
                     let mut row = entry_row(item.command, now, &config.logs_dir)?;
+                    // Ready dispatched Runs have their own Inbox row. Preserve
+                    // the full tree in history/show without duplicating DOM IDs.
+                    row.children
+                        .retain(|child| !ready_selectors.contains(&child.selector));
                     if let Some(kind) = item.needs_you_kind {
                         row.state = kind.title().into();
                     }
@@ -209,7 +227,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     group == Group::Landing && item.landing && item.group == Group::NeedsYou
                 })
                 .filter_map(|item| {
-                    let Entry::Record(command) = item.command else {
+                    let Observation::Record(command) = item.command else {
                         return None;
                     };
                     let (subject, _) = subject(

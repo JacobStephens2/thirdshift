@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en" data-theme="{{ theme }}">
+<html lang="en" data-theme="{{ page.theme }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -8,7 +8,7 @@
   <title>{{ self.needs_you() }} need you · thirdshift Console</title>
   <link rel="icon" href="/assets/favicon{% if self.urgent() %}-urgent{% endif %}.svg">
   {% else %}
-  <title>{{ title }} · {{ hostname }} · thirdshift</title>
+  <title>{{ title }} · {{ page.hostname }} · thirdshift</title>
   <link rel="icon" href="data:,">
   {% endif %}
   <link rel="stylesheet" href="/assets/console.css">
@@ -18,9 +18,7 @@
   <script src="/assets/console.js" type="module"></script>
 </head>
 <body>
-  <header><p class="brand">thirdshift / Console</p><h1>{{ hostname }}</h1>
-    {% if !consoles.is_empty() %}<nav aria-label="Other Consoles">{% for address in consoles %}<a href="{{ address }}">{{ address }}</a>{% endfor %}</nav>{% endif %}
-  </header>
+  {% include "console/header.html" %}
   {% include "console/nav.html" %}
   <main {% if title == "Inbox" %}id="inbox"{% endif %}>
     <div class="page-title"><h2>{{ title }}</h2><code>{{ cli }}</code></div>

@@ -9,9 +9,7 @@ use crate::logs::status::waterfall::{self, View};
 #[derive(Template)]
 #[template(path = "console/waterfall.html")]
 struct WaterfallPage {
-    hostname: String,
-    consoles: Vec<String>,
-    theme: String,
+    page: super::PageContext,
     view: View,
 }
 
@@ -20,9 +18,7 @@ pub(super) async fn show(query: Option<String>) -> Response {
         tokio::task::spawn_blocking(move || -> Result<String> {
             let config = UserConfig::load()?;
             Ok(WaterfallPage {
-                hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-                consoles: config.console.other_consoles.clone(),
-                theme: config.console.theme.clone(),
+                page: super::PageContext::new(&config),
                 view: waterfall::load(&config, &super::query_value(&query, "command"))?,
             }
             .render()?)

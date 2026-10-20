@@ -4,9 +4,16 @@ const follow = document.querySelector("#follow-log");
 const status = document.querySelector("#log-status");
 const scroll = () => { if (follow.checked) window.scrollTo(0, document.documentElement.scrollHeight); };
 follow.addEventListener("change", scroll);
-const stream = new EventSource(content.dataset.stream);
-stream.addEventListener("lines", event => {
-  const batch = JSON.parse(event.data);
+let stream, polling, pollingRequest;
+let stopped = false;
+function stop() {
+  stopped = true;
+  stream?.close();
+  clearInterval(polling);
+  pollingRequest?.abort();
+}
+function append(batch) {
+  if (stopped) return;
   if (batch.offset > Number(content.dataset.offset)) {
     const fragment = document.createElement("template");
     fragment.innerHTML = batch.html;
@@ -25,9 +32,54 @@ stream.addEventListener("lines", event => {
   status.textContent = batch.done ? "Complete" : "Live";
   content.dataset.live = String(!batch.done);
   activity();
-  if (batch.done) stream.close();
-});
-stream.addEventListener("log-error", event => { status.textContent = event.data; stream.close(); });
-stream.onerror = () => { status.textContent = "Connection lost; reconnecting…"; };
-window.addEventListener("pagehide", () => stream.close());
+  if (batch.done) stop();
+}
+async function poll() {
+  if (stopped || pollingRequest) return;
+  pollingRequest = new AbortController();
+  try {
+    const offset = content.dataset.offset;
+    const path = content.dataset.stream.replace(/\d+$/, offset);
+    const response = await fetch(path, { headers: { accept: 'application/json' }, cache: 'no-store', signal: pollingRequest.signal });
+    if (!response.ok || response.redirected) throw new Error('Log unavailable');
+    const batch = await response.json();
+    // A recovered stream may already have appended part of this batch.
+    if (offset === content.dataset.offset) append(batch);
+  } catch (error) {
+    if (!stopped && error.name !== 'AbortError') status.textContent = 'Connection lost; retrying…';
+  } finally { pollingRequest = undefined; }
+}
+function startPolling() {
+  if (stopped) return;
+  status.textContent = 'Connection lost; checking for new lines…';
+  polling ??= setInterval(poll, 5000);
+  poll();
+}
+function connect() {
+  const offset = content.dataset.offset;
+  const source = new EventSource(content.dataset.stream.replace(/\d+$/, offset));
+  stream = source;
+  source.addEventListener('lines', event => {
+    if (source === stream) append(JSON.parse(event.data));
+  });
+  source.addEventListener('open', () => {
+    if (stopped || source !== stream) return;
+    clearInterval(polling);
+    polling = undefined;
+    pollingRequest?.abort();
+    // Polling may have advanced beyond this connection's starting offset.
+    // Resume with a fresh stream so replayed batches cannot overlap the DOM.
+    if (offset !== content.dataset.offset) {
+      source.close();
+      connect();
+    }
+  });
+  source.addEventListener('log-error', event => {
+    if (source === stream) { status.textContent = event.data; stop(); }
+  });
+  source.onerror = () => { if (source === stream) startPolling(); };
+}
+if (typeof EventSource === 'function') connect();
+else startPolling();
+window.addEventListener('pagehide', stop);
 scroll();

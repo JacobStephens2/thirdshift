@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use chrono::{DateTime, FixedOffset, Local};
 use serde::Serialize;
 
-use super::{Command, Entry, Health};
+use super::{Command, Entry, Health, Observation};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -81,7 +81,7 @@ impl NeedsYouKind {
 #[derive(Serialize)]
 pub(in crate::logs) struct InboxItem<'a> {
     #[serde(flatten)]
-    pub command: &'a Entry,
+    pub command: Observation<'a>,
     pub group: Group,
     pub needs_you_kind: Option<NeedsYouKind>,
     pub landing: bool,
@@ -105,10 +105,10 @@ struct Facts<'a> {
     ready: bool,
 }
 
-impl Entry {
-    fn facts(&self) -> Facts<'_> {
+impl<'a> Observation<'a> {
+    fn facts(self) -> Facts<'a> {
         match self {
-            Entry::Record(command) => Facts {
+            Self::Record(command) => Facts {
                 state: command.state,
                 started_at: &command.record.started_at,
                 ended_at: command.record.ended_at.as_deref(),
@@ -117,7 +117,7 @@ impl Entry {
                 ready: command.record.outcome.as_deref() == Some("ready for review")
                     && command.record.pull_request.is_some(),
             },
-            Entry::History(command) => Facts {
+            Self::History(command) => Facts {
                 state: command.state,
                 started_at: &command.started_at,
                 ended_at: command.ended_at.as_deref(),
@@ -143,7 +143,25 @@ pub(super) fn list(
     // An accepted duration can exceed chrono's calendar. In that case every
     // representable timestamp is inside the requested retention period.
     let cutoff = now.checked_sub_signed(chrono::Duration::days(days));
-    let starts: Vec<_> = entries.iter().map(issue_starts).collect();
+    let observations: Vec<_> = entries
+        .iter()
+        .flat_map(|entry| {
+            let (outer, ready): (_, Vec<_>) = match entry {
+                Entry::Record(command) => (
+                    Observation::Record(command),
+                    command
+                        .dispatched
+                        .iter()
+                        .filter(|run| Observation::Record(run).facts().ready)
+                        .map(Observation::Record)
+                        .collect(),
+                ),
+                Entry::History(command) => (Observation::History(command), Vec::new()),
+            };
+            std::iter::once(outer).chain(ready)
+        })
+        .collect();
+    let starts: Vec<_> = observations.iter().copied().map(issue_starts).collect();
     let mut latest = BTreeMap::new();
     for starts in &starts {
         for (issue, start) in starts {
@@ -154,12 +172,12 @@ pub(super) fn list(
         }
     }
     let mut items = Vec::new();
-    for (command, starts) in entries.iter().zip(&starts) {
+    for (command, starts) in observations.into_iter().zip(&starts) {
         let facts = command.facts();
         let ended = time(facts.ended_at);
         let problem = if facts.state == "died" {
             Some(NeedsYouKind::Died)
-        } else if matches!(command, Entry::Record(command) if facts.state == "ended" && super::super::stop::requested(&command.record_path).is_some_and(|request| !request.requeue))
+        } else if matches!(command, Observation::Record(command) if facts.state == "ended" && !facts.ready && super::super::stop::requested(&command.record_path).is_some_and(|request| !request.requeue))
         {
             Some(NeedsYouKind::Triage)
         } else if facts
@@ -167,17 +185,17 @@ pub(super) fn list(
             .is_some_and(|outcome| outcome.contains("failed") || outcome == "review required")
         {
             Some(NeedsYouKind::Failed)
-        } else if matches!(command, Entry::Record(command) if command.record.security_findings_waiting)
+        } else if matches!(command, Observation::Record(command) if command.record.security_findings_waiting)
         {
             Some(NeedsYouKind::Finding)
         } else {
             None
         };
         let live_problem = match command {
-            Entry::Record(command) if facts.state == "live" => live_problem(command),
+            Observation::Record(command) if facts.state == "live" => live_problem(command),
             _ => None,
         };
-        let landing = matches!(command, Entry::Record(command) if is_landing(command));
+        let landing = matches!(command, Observation::Record(command) if is_landing(command));
         let needs_you_kind = live_problem.or_else(|| {
             problem.filter(|_| {
                 ended
@@ -272,7 +290,7 @@ fn is_landing(command: &Command) -> bool {
             .any(is_landing)
 }
 
-fn issue_starts(entry: &Entry) -> BTreeMap<(String, u64), DateTime<FixedOffset>> {
+fn issue_starts(entry: Observation<'_>) -> BTreeMap<(String, u64), DateTime<FixedOffset>> {
     let mut starts = BTreeMap::new();
     fn collect(command: &Command, starts: &mut BTreeMap<(String, u64), DateTime<FixedOffset>>) {
         let record = &command.record;
@@ -289,8 +307,8 @@ fn issue_starts(entry: &Entry) -> BTreeMap<(String, u64), DateTime<FixedOffset>>
         }
     }
     match entry {
-        Entry::Record(command) => collect(command, &mut starts),
-        Entry::History(command) => {
+        Observation::Record(command) => collect(command, &mut starts),
+        Observation::History(command) => {
             if let Some(issue) = &command.issue
                 && let Some(start) = time(Some(&command.started_at))
             {

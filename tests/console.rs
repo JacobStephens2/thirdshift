@@ -1018,6 +1018,32 @@ fn inbox_over_http_matches_status_and_embeds_only_local_resources() {
     assert!(html.contains("thirdshift status"));
     assert!(html.contains(status["hostname"].as_str().unwrap()));
     assert!(html.contains("https://other.example.test"));
+    for page in [
+        "inbox",
+        "lanes",
+        "stages",
+        "waterfall",
+        "history",
+        "logs",
+        "security",
+    ] {
+        let html = console.get(&format!("/?page={page}")).text().unwrap();
+        let header = html
+            .split("<header>")
+            .nth(1)
+            .unwrap()
+            .split("</header>")
+            .next()
+            .unwrap();
+        assert!(
+            header.contains(status["hostname"].as_str().unwrap()),
+            "{page}: {header}"
+        );
+        assert!(
+            header.contains("href=\"https://other.example.test\""),
+            "{page}: {header}"
+        );
+    }
     assert!(html.contains("Ticket #99 · waiting on #98"));
     assert!(!html.contains("<script>alert(1)</script>"));
     assert!(html.contains("Died"));

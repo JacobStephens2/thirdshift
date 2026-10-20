@@ -11,7 +11,7 @@ use crate::{config::UserConfig, logs::stop};
 #[derive(Template)]
 #[template(path = "console/stop.html")]
 struct StopPage {
-    theme: String,
+    page: super::PageContext,
     csrf: String,
     details: Peek,
 }
@@ -25,7 +25,7 @@ pub(super) async fn show(
         let config = UserConfig::load()?;
         let inspection = stop::inspect(&config, &command)?;
         Ok(StopPage {
-            theme: config.console.theme,
+            page: super::PageContext::new(&config),
             csrf: viewer.csrf,
             details: Peek::new(command, inspection),
         }

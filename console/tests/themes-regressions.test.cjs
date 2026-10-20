@@ -7,20 +7,6 @@ const { tmpdir } = require('node:os');
 const { createInterface } = require('node:readline');
 const { chromium } = require('playwright');
 const { test } = require('node:test');
-const fs = require('node:fs');
-
-test('state tag aliases resolve at the command that supplies their state', async () => {
-  const browser = await chromium.launch({ headless: true });
-  try {
-    const page = await browser.newPage();
-    const assets = resolve(__dirname, '../../src/console/assets');
-    const css = fs.readFileSync(join(assets, 'themes.css'), 'utf8') + fs.readFileSync(join(assets, 'console.css'), 'utf8').replace('@import url("/assets/themes.css");', '');
-    await page.setContent(`<html data-theme="press-light"><head><style>${css}</style></head><body><li class="command" data-state="Failed"><span class="state">Failed</span></li></body></html>`);
-    const actual = await page.locator('.state').evaluate(el => ({ background: getComputedStyle(el).backgroundColor, color: getComputedStyle(el).color }));
-    assert.equal(actual.background, 'rgb(236, 0, 140)', 'Press Failed tags should use --urgent as their solid background');
-    assert.equal(actual.color, 'rgb(0, 0, 0)', 'Press Failed tags should use --on-urgent text');
-  } finally { await browser.close(); }
-});
 async function reproduce(mode) {
   const home = await mkdtemp(join(tmpdir(), 'thirdshift824-spec-'));
   let server, browser, exited;

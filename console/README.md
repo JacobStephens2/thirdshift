@@ -157,9 +157,9 @@ boundary. These include waiting; they are not measured tool execution times.
 Unmatched calls stay visible with “Time unknown” and no bar. Session links open
 their retained evidence. The Waterfall browser test checks selection, scale,
 unknown times, escaping and phone layout; Rust checks matching and CLI parity.
-The retained Spec-review checks are `python3 console/reproductions/waterfall-fractional.py`,
-`python3 console/reproductions/waterfall-stage.py` and
-`python3 console/reproductions/waterfall-parity.py` from the repo root after a build.
+The retained Spec-review checks are `python3 console/reproductions/waterfall-fractional.py`
+and `python3 console/reproductions/waterfall-stage.py` from the repo root after a build.
+The Rust router test walks the registered routes and checks their CLI pairs.
 The fractional Run/stage boundaries also run in the Rust integration tests.
 
 `j` / `k` select headings and visible rows, wrapping at either end. `Space`
@@ -193,6 +193,13 @@ event's byte offset; incomplete live lines wait until their newline arrives.
 The Follow newest line checkbox lets you read back while the Session grows.
 The Playwright log test checks appends, retained DOM identity, folding across
 batches, incomplete lines, reconnection and following on a phone viewport.
+When streaming is unavailable, the reader polls finite appended-line batches
+from its last byte offset without replacing the rendered conversation.
+
+Ready Runs dispatched by a Pass have their own Ready for review row in both
+`status` and the Console. The complete Pass tree remains available in History
+and `show`. Run `python3 console/reproductions/ready-dispatch.py` after a build
+to check both Inbox views.
 
 A live Command's Details offers Stop beside its equivalent CLI command.
 The confirmation page explains `needs-triage`, offers Requeue instead

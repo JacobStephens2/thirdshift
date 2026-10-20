@@ -62,12 +62,23 @@ fn status_shows_each_idle_pass_until_its_own_kind_starts_work() {
         let result = scenario.run(flags);
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         let status: Value = serde_json::from_str(&result.stdout).unwrap();
-        assert_eq!(status["commands"].as_array().unwrap().len(), 1, "{status}");
-        let pass = &status["commands"][0];
+        let commands = status["commands"].as_array().unwrap();
+        assert_eq!(commands.len(), 2, "{status}");
+        let pass = commands
+            .iter()
+            .find(|command| command["kind"] == "Pickup run")
+            .unwrap();
         assert_eq!(pass["kind"], "Pickup run");
         let dispatched = &pass["dispatched"][0];
         assert_eq!(dispatched["issue"]["number"], 7);
         assert_eq!(dispatched["command_log"], pass["command_log"]);
+        let ready = commands
+            .iter()
+            .find(|command| command["kind"] == "Run")
+            .unwrap();
+        assert_eq!(ready["group"], "ready for review");
+        assert_eq!(ready["issue"]["number"], 7);
+        assert_eq!(ready["command_log"], dispatched["command_log"]);
         for command in [pass, dispatched] {
             assert_eq!(command["source"], "command_record");
             assert_eq!(command["state"], "ended");
@@ -1252,7 +1263,15 @@ fn status_keeps_children_under_their_own_security_dispatch() {
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let status: Value = serde_json::from_str(&result.stdout).unwrap();
     let commands = status["commands"].as_array().unwrap();
-    assert_eq!(commands.len(), 2);
+    assert_eq!(commands.len(), 3);
+    let ready = commands
+        .iter()
+        .find(|command| command["kind"] == "Run" && command["issue"]["number"] == 20)
+        .unwrap();
+    assert_eq!(ready["group"], "ready for review");
+    assert_eq!(ready["children"].as_array().unwrap().len(), 1);
+    assert_eq!(ready["children"][0]["issue"]["number"], 42);
+    assert_eq!(ready["children"][0]["state"], "ended");
     let pass = commands
         .iter()
         .find(|command| command["kind"] == "Security run")

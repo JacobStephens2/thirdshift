@@ -1,7 +1,7 @@
 <!doctype html>
-<html lang="en" data-theme="{{ theme }}">
+<html lang="en" data-theme="{{ page.theme }}">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Logs · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/console.js" type="module"></script></head>
-<body><header><p class="brand">thirdshift / Console</p></header>{% include "console/nav.html" %}
+<body>{% include "console/header.html" %}{% include "console/nav.html" %}
 <main><div class="page-title"><h1>Logs</h1><code>thirdshift logs {% if !owner.is_empty() %}--command {{ owner }} {% endif %}--json</code></div>
 <ul class="log-list">{% for log in logs %}<li class="log-row" data-log="/logs/{{ log.id }}" data-command="{{ log.selector }}" data-peek="{{ crate::logs::status::inspect::url("/peek", log.selector, None) }}"><a href="/logs/{{ log.id }}">{{ log.kind }} · {{ log.name }}</a> {% if log.live %}<strong>live</strong>{% endif %}<span>{{ log.command }}</span><a class="peek-link" href="{{ crate::logs::status::inspect::url("/peek", log.selector, None) }}">Details</a></li>{% endfor %}</ul>
 {% if logs.is_empty() %}<p>No logs found.</p>{% endif %}

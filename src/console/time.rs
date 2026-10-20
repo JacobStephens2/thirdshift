@@ -9,9 +9,7 @@ use crate::logs::status::time::{self, Views};
 #[derive(Template)]
 #[template(path = "console/time.html")]
 struct TimePage {
-    hostname: String,
-    consoles: Vec<String>,
-    theme: String,
+    page: super::PageContext,
     title: &'static str,
     hours: String,
     views: Views,
@@ -27,9 +25,7 @@ pub(super) async fn show(stages: bool, query: Option<String>) -> Response {
                 _ => 3.5,
             };
             Ok(TimePage {
-                hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-                consoles: config.console.other_consoles.clone(),
-                theme: config.console.theme.clone(),
+                page: super::PageContext::new(&config),
                 title: if stages { "Stages" } else { "Lanes" },
                 hours: hours.to_string(),
                 views: time::load(&config, hours)?,

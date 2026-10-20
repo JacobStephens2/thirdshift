@@ -12,7 +12,7 @@ use chrono::Local;
 use serde::Serialize;
 
 use super::command_record::CommandRecord;
-use super::reading::{Command, Entry, Group, IdlePass, InboxItem, Snapshot};
+use super::reading::{Command, Group, IdlePass, InboxItem, Observation, Snapshot};
 use crate::config::UserConfig;
 use crate::issue::IssueUrl;
 
@@ -112,8 +112,8 @@ pub fn show(json: bool, all: bool) -> Result<()> {
             println!("{}:", group.title());
             for item in items {
                 match item.command {
-                    Entry::Record(command) => print_command(command, ""),
-                    Entry::History(command) => print_history(command),
+                    Observation::Record(command) => print_command(command, ""),
+                    Observation::History(command) => print_history(command),
                 }
                 if item.count > 1 {
                     let cause = item.cause().unwrap_or_default();
@@ -121,7 +121,7 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                 }
             }
             for item in references {
-                if let Entry::Record(command) = item.command {
+                if let Observation::Record(command) = item.command {
                     let facts = &command.record;
                     let name = facts.issue.as_ref().map_or_else(
                         || facts.name.clone(),
