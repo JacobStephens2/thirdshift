@@ -274,11 +274,12 @@ impl Checkout {
             bail!("administrative common repository link became a symlink");
         }
         let git = Git::new(self.path()).completion();
-        let head = git.run(&["rev-parse", "--verify", "HEAD"])?;
+        let location = git.checkout_location()?;
+        let head = location.head;
         let backlink = fs::read_to_string(self.admin.path.join("gitdir"))?;
-        if Path::new(&git.run(&["rev-parse", "--show-toplevel"])?) != self.root.path
-            || Path::new(&git.run(&["rev-parse", "--absolute-git-dir"])?) != self.admin.path
-            || git.common_dir()?.canonicalize()? != self.common.path
+        if location.root != self.root.path
+            || location.admin != self.admin.path
+            || location.common.canonicalize()? != self.common.path
             || Path::new(backlink.trim_end()).canonicalize()? != self.path().join(".git")
             || git.run(&["rev-parse", "--symbolic-full-name", "HEAD"])?
                 != reference.as_deref().unwrap_or("HEAD")
