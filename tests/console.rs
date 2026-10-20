@@ -267,7 +267,155 @@ fn history_keeps_every_ended_command_in_time_order_and_filters() {
             .unwrap()
             .contains("acme/widgets#1")
     );
-    assert_eq!(console.get("/?page=waterfall").status(), 404);
+    assert_eq!(console.get("/?page=waterfall").status(), 200);
+}
+
+#[test]
+fn waterfall_matches_claude_calls_to_command_times_and_keeps_unmatched_calls() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut value = record(home.path(), 7, Some("merged"), 0);
+    let dir = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    let session = dir.join("7-20261001T235950+0000-implement.jsonl");
+    fs::write(&session, concat!(
+        "{\"type\":\"system\",\"subtype\":\"init\",\"cwd\":\"/work\"}\n",
+        "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"id\":\"a\",\"name\":\"Bash\",\"input\":{\"command\":\"rg widgets\"}},{\"type\":\"tool_use\",\"id\":\"b\",\"name\":\"Read\",\"input\":{\"file_path\":\"/work/missing.rs\"}},{\"type\":\"tool_use\",\"id\":\"c\",\"name\":\"Bash\",\"input\":{\"command\":\"rg widgets\"}}]}}\n"
+    )).unwrap();
+    fs::write(dir.join("7-fixture.log"), "thirdshift: 23:59:50 starting\nthirdshift: 23:59:55 implement: $ rg widgets\nthirdshift: 00:00:05 implement: $ rg widgets\nthirdshift: 00:00:10 finished\n").unwrap();
+    value["harness"] = json!("claude");
+    // Records retain fractions; Command logs quantize calls to whole seconds.
+    value["started_at"] = json!("2026-10-01T23:59:55.100+00:00");
+    value["ended_at"] = json!("2026-10-02T00:00:10+00:00");
+    value["stages"] =
+        json!([{ "name": "implement", "began_at": value["started_at"], "session_log": session }]);
+    value["session_log"] = json!(session);
+    write_record(home.path(), 7, &value);
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let html = console
+        .get("/waterfall?command=widgets%237")
+        .text()
+        .unwrap();
+    assert!(html.contains("<h2>Waterfall</h2>"), "{html}");
+    assert_eq!(
+        html.matches("class=\"waterfall-tool\"").count(),
+        3,
+        "{html}"
+    );
+    assert!(
+        html.contains("data-start=\"2026-10-01T23:59:55+00:00\" data-seconds=\"10\""),
+        "{html}"
+    );
+    assert!(html.contains("data-start=\"2026-10-02T00:00:05+00:00\" data-seconds=\"5\""));
+    assert!(html.contains("Read missing.rs"));
+    assert!(html.contains("Time unknown"));
+    let show = Command::new(binary)
+        .args(["show", "widgets#7", "--json"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(show.status.success());
+    let detail: Value = serde_json::from_slice(&show.stdout).unwrap();
+    assert!(html.contains(detail["command"]["stages"][0]["began_at"].as_str().unwrap()));
+    let logs = Command::new(binary)
+        .args(["logs", "widgets#7"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(logs.status.success());
+    assert!(
+        String::from_utf8(logs.stdout)
+            .unwrap()
+            .contains("23:59:55 implement: $ rg widgets")
+    );
+}
+
+#[test]
+fn waterfall_nests_ticket_runs_and_matches_codex_items_once_in_their_scope() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut parent = record(home.path(), 7, Some("merged"), 0);
+    let dir = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    let session = dir.join("99-20261001T120000+0000-implement.jsonl");
+    fs::write(&session, concat!(
+        "{\"type\":\"thread.started\",\"thread_id\":\"fixture\"}\n",
+        "{\"type\":\"item.started\",\"item\":{\"id\":\"a\",\"type\":\"command_execution\",\"command\":\"/bin/bash -lc 'rg widgets'\",\"status\":\"in_progress\"}}\n",
+        "{\"type\":\"item.completed\",\"item\":{\"id\":\"b\",\"type\":\"file_change\",\"changes\":[{\"path\":\"/work/src/widgets.rs\",\"kind\":\"update\"}]}}\n",
+        "{\"type\":\"item.completed\",\"item\":{\"id\":\"a\",\"type\":\"command_execution\",\"command\":\"/bin/bash -lc 'rg widgets'\",\"status\":\"completed\",\"exit_code\":0}}\n",
+        "{\"type\":\"item.started\",\"item\":{\"id\":\"c\",\"type\":\"mcp_tool_call\",\"server\":\"github\",\"tool\":\"get_issue\",\"status\":\"in_progress\"}}\n",
+        "{\"type\":\"item.completed\",\"item\":{\"id\":\"c\",\"type\":\"mcp_tool_call\",\"server\":\"github\",\"tool\":\"get_issue\",\"status\":\"completed\"}}\n"
+    )).unwrap();
+    parent["started_at"] = json!("2026-10-01T12:00:00+00:00");
+    parent["ended_at"] = json!("2026-10-01T12:01:00+00:00");
+    parent["stages"] =
+        json!([{ "name": "Tickets", "began_at": parent["started_at"], "session_log": null }]);
+    write_record(home.path(), 7, &parent);
+    let mut child = parent.clone();
+    child["kind"] = json!("Run");
+    child["name"] = json!("acme/widgets#99");
+    child["issue"]["number"] = json!(99);
+    child["parent_record"] = json!(dir.join("7-fixture.command.json"));
+    child["started_at"] = json!("2026-10-01T12:00:10+00:00");
+    child["ended_at"] = json!("2026-10-01T12:00:40+00:00");
+    child["stages"] = json!([
+        { "name": "Setup", "began_at": child["started_at"], "session_log": null },
+        { "name": "implement", "began_at": "2026-10-01T12:00:15.100+00:00", "session_log": session }
+    ]);
+    child["session_log"] = json!(session);
+    fs::write(
+        dir.join("7-fixture.issue-99.child.json"),
+        serde_json::to_vec(&child).unwrap(),
+    )
+    .unwrap();
+    fs::write(dir.join("7-fixture.log"), "thirdshift: 12:00:00 starting\nthirdshift: 12:00:11 #98: implement: $ rg widgets\nthirdshift: 12:00:15 #99: implement: $ rg widgets\nthirdshift: 12:00:20 #99: implement: Edit src/widgets.rs\nthirdshift: 12:00:30 #99: implement: github get_issue\nthirdshift: 12:01:00 finished\n").unwrap();
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let html = console
+        .get("/waterfall?command=widgets%237")
+        .text()
+        .unwrap();
+    assert!(html.contains("data-depth=\"1\""), "{html}");
+    assert!(html.contains("acme/widgets#99"));
+    assert_eq!(
+        html.matches("class=\"waterfall-tool\"").count(),
+        3,
+        "{html}"
+    );
+    let tool_stage = html
+        .split("<li class=\"waterfall-stage\">")
+        .find(|stage| stage.contains("data-start=\"2026-10-01T12:00:15+00:00\""))
+        .unwrap();
+    assert!(tool_stage.contains("<h4>implement</h4>"), "{tool_stage}");
+    for (start, seconds) in [("15", 5), ("20", 10), ("30", 10)] {
+        assert!(
+            html.contains(&format!(
+                "data-start=\"2026-10-01T12:00:{start}+00:00\" data-seconds=\"{seconds}\""
+            )),
+            "{html}"
+        );
+    }
+    let output = Command::new(binary)
+        .args(["show", "widgets#7", "--json"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let show: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(show["command"]["children"][0]["issue"]["number"], 99);
+    assert_eq!(console.get("/?page=4").status(), 200);
+    let single = console
+        .get("/waterfall?command=widgets%2399")
+        .text()
+        .unwrap();
+    assert_eq!(single.matches("class=\"waterfall-tool\"").count(), 3);
+    assert!(
+        single.contains("data-start=\"2026-10-01T12:00:15+00:00\" data-seconds=\"5\""),
+        "{single}"
+    );
 }
 
 #[test]

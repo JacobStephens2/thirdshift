@@ -92,6 +92,15 @@ footer { margin-top: 16px; }
 .timeline rect { fill: var(--panel); stroke: var(--working); }
 .timeline text { fill: var(--text); font: 12px var(--font-mono); }
 .stage-times { padding-left: 24px; }
+.command-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.command-chips a { border: 1px solid var(--rule); border-radius: var(--radius); padding: 6px; overflow-wrap: anywhere; }
+.command-chips [aria-current] { outline: 2px solid var(--head); }
+.waterfall-run { border-left: 2px solid var(--rule); padding-left: 8px; margin: 16px 0; overflow-wrap: anywhere; }
+.waterfall-run[data-depth="1"] > .command { padding-left: 12px; }
+.waterfall-run[data-depth="2"] > .command { padding-left: 24px; }
+.waterfall-stages, .waterfall-stages ol { list-style: none; padding-left: 0; }
+.waterfall-stage > h4, .waterfall-stage > p { margin-left: 12px; }
+.waterfall-tool > a, .waterfall-tool > p { margin-left: 24px; }
 .stage-grid { width: 100%; table-layout: fixed; border-collapse: collapse; margin: 20px 0; }
 .stage-grid caption { text-align: left; font-weight: var(--head-weight); }
 .stage-grid th, .stage-grid td { border: 1px solid var(--rule); padding: 8px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }

@@ -5,6 +5,7 @@ mod logs;
 mod peek;
 mod restart;
 mod time;
+mod waterfall;
 
 use std::io::Write;
 use std::net::Ipv4Addr;
@@ -27,7 +28,7 @@ static ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/console/assets");
 // Static resources carry no view or action and have their own fallback route.
 struct PageRoute {
     path: &'static str,
-    cli: &'static str,
+    cli: &'static [&'static str],
     view: View,
 }
 
@@ -44,63 +45,71 @@ enum View {
 
 const PAGES: &[PageRoute] = &[
     PageRoute {
+        path: "/waterfall",
+        cli: &[
+            "thirdshift show widgets#7 --json",
+            "thirdshift logs widgets#7",
+        ],
+        view: View::Inbox,
+    },
+    PageRoute {
         path: "/lanes",
-        cli: "thirdshift status --all --json",
+        cli: &["thirdshift status --all --json"],
         view: View::Inbox,
     },
     PageRoute {
         path: "/stages",
-        cli: "thirdshift status --all --json",
+        cli: &["thirdshift status --all --json"],
         view: View::Inbox,
     },
     PageRoute {
         path: "/",
-        cli: "thirdshift status",
+        cli: &["thirdshift status"],
         view: View::Inbox,
     },
     PageRoute {
         path: "/events",
-        cli: "thirdshift status",
+        cli: &["thirdshift status"],
         view: View::Changes,
     },
     PageRoute {
         path: "/history",
-        cli: "thirdshift status --all --json",
+        cli: &["thirdshift status --all --json"],
         view: View::Inbox,
     },
     PageRoute {
         path: "/security",
-        cli: "thirdshift status --all --json",
+        cli: &["thirdshift status --all --json"],
         view: View::Inbox,
     },
     PageRoute {
         path: "/peek",
-        cli: "thirdshift show widgets#7 --json",
+        cli: &["thirdshift show widgets#7 --json"],
         view: View::Inspect,
     },
     PageRoute {
         path: "/log",
-        cli: "thirdshift logs widgets#7",
+        cli: &["thirdshift logs widgets#7"],
         view: View::Log,
     },
     PageRoute {
         path: "/logs",
-        cli: "thirdshift logs --json",
+        cli: &["thirdshift logs --json"],
         view: View::Logs,
     },
     PageRoute {
         path: "/logs/command/{id}",
-        cli: "thirdshift logs --command id --json",
+        cli: &["thirdshift logs --command id --json"],
         view: View::CommandLogs,
     },
     PageRoute {
         path: "/logs/{id}",
-        cli: "thirdshift logs --file id",
+        cli: &["thirdshift logs --file id"],
         view: View::Reader,
     },
     PageRoute {
         path: "/logs/{id}/stream/{offset}",
-        cli: "thirdshift logs --file id --follow",
+        cli: &["thirdshift logs --file id --follow"],
         view: View::LogStream,
     },
 ];
@@ -146,7 +155,7 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
 fn router(changes: tokio::sync::watch::Receiver<u64>) -> Router {
     let mut router = Router::new();
     for page in PAGES {
-        let cli = page.cli;
+        let cli = page.cli[0];
         let path = page.path;
         router = router.route(
             page.path,
@@ -228,6 +237,9 @@ async fn inbox(cli: &'static str, path: &'static str, RawQuery(query): RawQuery)
     }
     if matches!(requested_page.as_str(), "logs" | "6") {
         return logs::index().await;
+    }
+    if matches!(requested_page.as_str(), "waterfall" | "4") {
+        return waterfall::show(query).await;
     }
     if matches!(requested_page.as_str(), "lanes" | "2" | "stages" | "3") {
         return time::show(matches!(requested_page.as_str(), "stages" | "3"), query).await;
@@ -415,22 +427,23 @@ mod tests {
         );
         for route in super::PAGES {
             assert!(
-                !route.cli.trim().is_empty(),
+                !route.cli.is_empty(),
                 "{} has no paired CLI command",
                 route.path
             );
-            assert!(route.cli.starts_with("thirdshift "), "{}", route.cli);
-            let arguments = route
-                .cli
-                .split_whitespace()
-                .skip(1)
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
-            assert!(
-                crate::args::parse(&arguments).is_ok(),
-                "{} is not a CLI command",
-                route.cli
-            );
+            for cli in route.cli {
+                assert!(cli.starts_with("thirdshift "), "{cli}");
+                let arguments = cli
+                    .split_whitespace()
+                    .skip(1)
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>();
+                assert!(
+                    crate::args::parse(&arguments).is_ok(),
+                    "{} is not a CLI command",
+                    cli
+                );
+            }
         }
     }
 
