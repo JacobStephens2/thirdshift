@@ -1051,6 +1051,7 @@ silent_minutes = 10
 
 [console]
 port = 8711
+allowed_emails = []
 other_consoles = []
 theme = \"focus-auto\"
 
