@@ -80,4 +80,3 @@ async function reproduce(mode) {
 
 test('time-page motion stops after the last Command ends', { skip: process.platform !== 'linux' }, () => reproduce('motion'));
 test('served solid tags use their Theme fill and black or white text', { skip: process.platform !== 'linux' }, () => reproduce('tags'));
-
