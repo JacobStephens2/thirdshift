@@ -1,6 +1,6 @@
 /* The videos page: each video's text beside its player, stacking on narrow screens. */
 .video-list { list-style: none; margin: 0; padding: 0 0 72px; display: grid; gap: 64px; }
-.video { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 20px 40px; align-items: center; scroll-margin-top: 24px; }
+.video { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 20px 40px; align-items: center; }
 .video h2 { font-size: clamp(34px, 4.5vw, 54px); margin-block: 14px; }
 .video-text > p:last-child { margin: 0; max-width: 62ch; color: var(--dim); }
 .video-text .eyebrow { color: var(--c); }

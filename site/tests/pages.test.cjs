@@ -38,6 +38,14 @@ async function pageForTest(t, options) {
   return page;
 }
 
+// Nothing in the selected containers, or the page, scrolls sideways.
+async function assertFits(page, selector, message) {
+  const overflow = await page.locator(selector).evaluateAll(nodes =>
+    nodes.filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.textContent.trim().slice(0, 80)));
+  assert.deepEqual(overflow, [], message);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "no horizontal page scrolling");
+}
+
 async function checkSectionToggles(page, contentSelector, closeKey) {
   for (const heading of await page.locator("main h2").all()) {
     assert.equal(await heading.isVisible(), true);
@@ -251,10 +259,7 @@ for (const width of [320, 390, 768, 1280]) {
       assert.equal(await diagram.isVisible(), true);
       assert.ok(await diagram.locator("figcaption").textContent());
     }
-    const overflow = await page.locator("main, header, .guide-diagram, .guide-node, .guide-flow > li, pre").evaluateAll(nodes =>
-      nodes.filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.textContent.trim().slice(0, 80)));
-    assert.deepEqual(overflow, [], "text and diagrams fit their containers");
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "no horizontal page scrolling");
+    await assertFits(page, "main, header, .guide-diagram, .guide-node, .guide-flow > li, pre", "text and diagrams fit their containers");
   });
 }
 
@@ -283,13 +288,13 @@ for (const javaScriptEnabled of [false, true]) {
   });
 }
 
-// The videos page's entries, in order: title, audience, length and YouTube id.
+// The videos page's entries, in order.
 const videos = [
-  ["thirdshift in 31 seconds", "Anyone", "0:32", "eRB6gGOQdJA"],
-  ["thirdshift, briefly", "Engineering leaders", "2:02", "yynbSGpHXGc"],
-  ["How thirdshift works", "Engineers", "2:38", "oL-5pi1AFC4"],
-  ["How thirdshift works, step by step", "Engineers, first look", "3:22", "gehONSA0viQ"],
-  ["How to use thirdshift", "New users", "3:21", "pNhNyW9JgqA"],
+  { title: "thirdshift in 31 seconds", audience: "Anyone", length: "0:32", id: "eRB6gGOQdJA" },
+  { title: "thirdshift, briefly", audience: "Engineering leaders", length: "2:02", id: "yynbSGpHXGc" },
+  { title: "How thirdshift works", audience: "Engineers", length: "2:38", id: "oL-5pi1AFC4" },
+  { title: "How thirdshift works, step by step", audience: "Engineers, first look", length: "3:22", id: "gehONSA0viQ" },
+  { title: "How to use thirdshift", audience: "New users", length: "3:21", id: "pNhNyW9JgqA" },
 ];
 const playerUrl = id => `https://www.youtube-nocookie.com/embed/${id}?autoplay=1`;
 
@@ -316,8 +321,11 @@ test("the videos page lists every video in order, each a thumbnail linking to Yo
     node.querySelector(".video-audience").textContent,
     node.querySelector(".video-length").textContent,
     node.querySelector("a.video-play").getAttribute("href"),
-  ])), videos.map(([title, audience, length, id]) => [title, audience, length, `https://youtu.be/${id}`]));
-  for (const [index, [title, , , id]] of videos.entries()) {
+  ])), videos.map(({ title, audience, length, id }) => [title, audience, length, `https://youtu.be/${id}`]));
+  for (const summary of await page.locator("main .video-text > p:last-child").allTextContents()) {
+    assert.equal(summary.match(/[.!?](\s|$)/g)?.length, 1, `one sentence on what the video covers: ${summary}`);
+  }
+  for (const [index, { title, id }] of videos.entries()) {
     const thumbnail = page.locator("main .video").nth(index).locator("a.video-play img");
     assert.equal(await thumbnail.getAttribute("src"), `/videos/${id}.jpg`);
     assert.equal(await thumbnail.getAttribute("width"), "1280");
@@ -329,7 +337,7 @@ test("the videos page lists every video in order, each a thumbnail linking to Yo
   }
   await page.route("https://youtu.be/**", route => route.fulfill({ contentType: "text/html", body: "YouTube" }));
   await page.locator("a.video-play").first().click();
-  assert.equal(page.url(), `https://youtu.be/${videos[0][3]}`);
+  assert.equal(page.url(), `https://youtu.be/${videos[0].id}`);
 });
 
 test("the videos page requests nothing from YouTube or Google until a video plays, then embeds only that video", async (t) => {
@@ -348,7 +356,7 @@ test("the videos page requests nothing from YouTube or Google until a video play
   assert.deepEqual(failed, []);
   assert.equal(await page.locator("iframe").count(), 0);
 
-  const [title, , , id] = videos[2];
+  const { title, id } = videos[2];
   const video = page.locator("main .video").nth(2);
   await video.locator("a.video-play").click();
   const player = video.locator("iframe");
@@ -379,8 +387,8 @@ test("each video plays from the keyboard, with a visible focus style", async (t)
   assert.equal(await page.evaluate(() => scrollY), scrollY);
   const players = page.locator("main .video iframe");
   assert.deepEqual(await players.evaluateAll(nodes => nodes.map(node => [node.title, node.src])),
-    videos.slice(0, 2).map(([title, , , id]) => [title, playerUrl(id)]));
-  assert.equal(await page.evaluate(() => document.activeElement.title), videos[1][0], "focus moves to the player");
+    videos.slice(0, 2).map(({ title, id }) => [title, playerUrl(id)]));
+  assert.equal(await page.evaluate(() => document.activeElement.title), videos[1].title, "focus moves to the player");
 });
 
 for (const width of [320, 390, 1280]) {
@@ -390,10 +398,7 @@ for (const width of [320, 390, 1280]) {
       await stubPlayer(page);
       await page.goto(`${origin}/videos/`);
       if (javaScriptEnabled) await page.locator("a.video-play").first().click();
-      const overflow = await page.locator("main, header, .video, .video-frame").evaluateAll(nodes =>
-        nodes.filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.textContent.trim().slice(0, 80)));
-      assert.deepEqual(overflow, [], "text and videos fit their containers");
-      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "no horizontal page scrolling");
+      await assertFits(page, "main, header, .video, .video-frame", "text and videos fit their containers");
     });
   }
 }
