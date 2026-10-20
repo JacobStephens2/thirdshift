@@ -240,10 +240,14 @@ mod tests {
     /// default.
     fn no_settings() -> UserConfig {
         UserConfig {
+            console: crate::config::ConsoleSettings::default(),
             merge_always: false,
             base_fix: false,
             launch_pull: false,
             logs_dir: PathBuf::from("/home/me/.thirdshift/logs"),
+            waiting_line_interval: std::time::Duration::from_secs(5 * 60),
+            silent_interval: std::time::Duration::from_secs(10 * 60),
+            inbox_days: 7,
             quiet_skips: false,
             email: EmailSettings::default(),
             spec_parallel: n(3),

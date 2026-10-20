@@ -56,6 +56,11 @@ pub(super) struct CommandRecord {
     pub parent_dispatch: Option<String>,
     #[serde(default)]
     pub tickets: Vec<TicketRecord>,
+    /// Local knowledge at completion; status never refreshes findings from GitHub.
+    #[serde(default)]
+    pub security_findings_waiting: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security_findings: Vec<crate::security::RecordedFinding>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -100,6 +105,21 @@ pub(super) struct Stage {
     pub session_log: Option<PathBuf>,
 }
 
+/// A retained stage interval, optionally extended to an observation of live work.
+pub(super) struct StageTime<'a> {
+    pub stage: &'a Stage,
+    pub began: Option<DateTime<FixedOffset>>,
+    pub ended: Option<DateTime<FixedOffset>>,
+}
+
+impl StageTime<'_> {
+    pub fn seconds(&self) -> Option<f64> {
+        let (began, ended) = self.began.zip(self.ended)?;
+        let milliseconds = ended.signed_duration_since(began).num_milliseconds();
+        (milliseconds >= 0).then_some(milliseconds as f64 / 1000.0)
+    }
+}
+
 /// Internal transitions are typed; persisted names stay tolerant of new stages.
 #[derive(Clone, Copy)]
 pub enum StageName {
@@ -139,7 +159,7 @@ impl StageName {
         }
     }
 
-    fn known(name: &str) -> bool {
+    pub(super) fn known(name: &str) -> bool {
         [
             Self::Implement,
             Self::Resume,
@@ -162,6 +182,30 @@ impl StageName {
 }
 
 impl CommandRecord {
+    /// The next transition closes a stage; only a recorded outcome closes the
+    /// final stage. A live caller can supply its single sampled observation time.
+    pub fn stage_times(
+        &self,
+        live_until: Option<DateTime<FixedOffset>>,
+    ) -> impl Iterator<Item = StageTime<'_>> {
+        self.stages.iter().enumerate().map(move |(index, stage)| {
+            let ended = if let Some(next) = self.stages.get(index + 1) {
+                DateTime::parse_from_rfc3339(&next.began_at).ok()
+            } else if self.outcome.is_some() {
+                self.ended_at
+                    .as_deref()
+                    .and_then(|end| DateTime::parse_from_rfc3339(end).ok())
+            } else {
+                live_until
+            };
+            StageTime {
+                stage,
+                began: DateTime::parse_from_rfc3339(&stage.began_at).ok(),
+                ended,
+            }
+        })
+    }
+
     /// Exact retained Session references, including earlier stages. Callers
     /// decide whether they need a deduplicated inventory.
     pub fn session_references(&self) -> impl Iterator<Item = &PathBuf> {
@@ -180,6 +224,8 @@ impl CommandRecord {
             .err()
             .map(|cause| cause.full().into());
         self.pull_request = account.pr_url.map(String::from);
+        self.security_findings_waiting = account.security_findings_waiting;
+        self.security_findings = account.security_findings.unwrap_or_default().to_vec();
     }
 
     pub fn live(&self, outside: &mut impl super::effects::Outside) -> bool {
@@ -235,6 +281,8 @@ impl CommandRecord {
             parent_record: None,
             parent_dispatch: None,
             tickets: Vec::new(),
+            security_findings_waiting: false,
+            security_findings: Vec::new(),
         }
     }
 

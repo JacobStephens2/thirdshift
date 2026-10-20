@@ -13,12 +13,16 @@ use crate::logs::effects::Outside;
 use crate::logs::owner;
 
 enum Name {
+    Path(PathBuf),
     Issue { repository: String, number: u64 },
     Pass(String),
 }
 
 impl Name {
     fn parse(name: &str) -> Result<Self> {
+        if Path::new(name).is_absolute() {
+            return Ok(Self::Path(name.into()));
+        }
         if name.starts_with("https://") {
             let issue = IssueUrl::parse(name)?;
             return Ok(Self::Issue {
@@ -57,7 +61,7 @@ impl Name {
                             .next()
                             .is_some_and(|name| name.eq_ignore_ascii_case(repository)))
             }
-            Self::Pass(_) => true,
+            Self::Pass(_) | Self::Path(_) => true,
         }
     }
 }
@@ -82,6 +86,16 @@ impl<'a> Observation<'a> {
             return false;
         }
         match name {
+            Name::Path(path) if self.selector().as_deref() == path.to_str() => true,
+            Name::Path(path) => match self {
+                Self::Record(command) => {
+                    command.record_path == *path || command.command_log == *path
+                }
+                Self::History(command) => {
+                    command.command_log.as_ref() == Some(path)
+                        || command.session_logs.contains(path)
+                }
+            },
             Name::Issue { number, .. } => {
                 let issue = match self {
                     Self::Record(command) => command.record.issue.as_ref(),
@@ -122,6 +136,25 @@ impl<'a> Observation<'a> {
         match self {
             Self::Record(command) => Some(&command.command_log),
             Self::History(command) => command.command_log.as_deref(),
+        }
+    }
+
+    /// A durable selection, including dispatched Runs sharing an outer record.
+    pub(in crate::logs) fn selector(self) -> Option<String> {
+        match self {
+            Self::Record(command) => {
+                let path = command.record_path.to_string_lossy();
+                Some(if command.record.name.is_empty() {
+                    path.into_owned()
+                } else {
+                    format!("{path}::{}", command.record.name)
+                })
+            }
+            Self::History(command) => command
+                .command_log
+                .as_ref()
+                .or_else(|| command.session_logs.first())
+                .map(|path| path.to_string_lossy().into_owned()),
         }
     }
 
@@ -186,6 +219,9 @@ impl<'a> Observation<'a> {
             .into_iter()
             .rev()
             .find(|path| {
+                if Path::new(kind).is_absolute() {
+                    return *path == Path::new(kind);
+                }
                 let Some(session) = owner::decode(path).and_then(|decoded| decoded.session_kind)
                 else {
                     return false;
@@ -316,7 +352,11 @@ pub(super) fn resolve<'a>(entries: &'a [Entry], input: &str) -> Result<Selection
             );
         }
     }
-    candidates.sort_by_key(|command| command.observation.ordering());
+    // A bare record/log path names its outer Command before any dispatched Run.
+    // Named selectors still prefer live/latest; suffixed paths are already exact.
+    if !matches!(name, Name::Path(_)) {
+        candidates.sort_by_key(|command| command.observation.ordering());
+    }
     candidates
         .into_iter()
         .next()
@@ -362,6 +402,8 @@ pub(in crate::logs) struct Details<'a> {
     #[serde(flatten)]
     record: &'a crate::logs::command_record::CommandRecord,
     state: &'static str,
+    health: &'a Option<super::Health>,
+    usual_ranges: &'a std::collections::BTreeMap<String, super::UsualRange>,
     stage: &'a Option<super::CurrentStage>,
     source: &'static str,
     command_log: &'a Path,
@@ -377,6 +419,8 @@ impl<'a> Details<'a> {
         Ok(Self {
             record: &command.record,
             state: command.state,
+            health: &command.health,
+            usual_ranges: &command.usual_ranges,
             stage: &command.stage,
             source: command.source,
             command_log: &command.command_log,

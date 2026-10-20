@@ -327,7 +327,7 @@ fn watch_to_end(
     rerun_checks: Option<&RerunChecks<'_>>,
 ) -> Result<Ci> {
     let short = short(sha);
-    let mut reported_counts = None;
+    let mut waiting_line = poll::WaitingLine::new();
     let checks = until(outside, |outside| {
         let checks = read_checks(outside, sha)?;
         ensure!(
@@ -339,12 +339,11 @@ fn watch_to_end(
             return Ok(Some(checks));
         }
         let counts = (pending, checks.len());
-        if reported_counts != Some(counts) {
+        if waiting_line.should_report(counts) {
             outside.step(format!(
                 "CI on {short}: {pending} still running out of {} checks listed so far",
                 checks.len()
             ));
-            reported_counts = Some(counts);
         }
         Ok(None)
     })?;

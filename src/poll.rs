@@ -1,10 +1,56 @@
 //! Shared grace periods and interruptible pauses for GitHub observations.
 
+use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
 use anyhow::{Result, bail};
 
 use crate::interrupt;
+
+// Each process runs one Command; child Runs load their own User config.
+static WAITING_LINE_INTERVAL: OnceLock<Duration> = OnceLock::new();
+
+/// Capture the Command's waiting interval before any work starts.
+/// `THIRDSHIFT_WAITING_MINUTE_MS` shortens a minute for binary tests,
+/// preserving the User config's choice of how many minutes to wait.
+pub fn configure_waiting_lines(interval: Duration) {
+    let interval = millis_from_env("THIRDSHIFT_WAITING_MINUTE_MS")
+        .and_then(|minute| minute.checked_mul(u32::try_from(interval.as_secs()).ok()?))
+        .map(|interval| interval / 60)
+        .unwrap_or(interval);
+    let _ = WAITING_LINE_INTERVAL.set(interval);
+}
+
+/// Report a waiting state immediately, whenever it changes, and again
+/// after the configured interval. Each emitted line starts a fresh interval.
+pub struct WaitingLine<T> {
+    reported: Option<T>,
+    last_line: Instant,
+    interval: Duration,
+}
+
+impl<T: PartialEq> WaitingLine<T> {
+    pub fn new() -> Self {
+        Self {
+            reported: None,
+            last_line: Instant::now(),
+            interval: WAITING_LINE_INTERVAL
+                .get()
+                .copied()
+                .unwrap_or(Duration::from_secs(5 * 60)),
+        }
+    }
+
+    pub fn should_report(&mut self, state: T) -> bool {
+        if self.reported.as_ref() != Some(&state) || self.last_line.elapsed() >= self.interval {
+            self.reported = Some(state);
+            self.last_line = Instant::now();
+            true
+        } else {
+            false
+        }
+    }
+}
 
 /// How long to wait for something GitHub should soon report: CI appearing
 /// after a push, or whether a PR is mergeable. `THIRDSHIFT_CI_GRACE_MS`

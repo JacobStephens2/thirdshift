@@ -17,6 +17,7 @@ mod effects;
 pub(crate) mod owner;
 mod process_identity;
 mod reading;
+pub(crate) use reading::catalog;
 mod recording;
 pub mod status;
 pub mod stop;

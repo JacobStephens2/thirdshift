@@ -42,7 +42,7 @@ fn direct_run_selection_captures_its_owner_and_reloads_retained_work() {
         &record(7),
     );
     let snapshot = Snapshot::load(dir.path(), now()).unwrap();
-    assert_eq!(snapshot.list(true).len(), 1);
+    assert_eq!(snapshot.inbox(true, 7).len(), 1);
     let selected = snapshot.resolve("WIDGETS#7").unwrap();
     assert_eq!(selected.owner.unwrap().record_path, path);
     assert!(selected.child_owner.is_none());
@@ -244,8 +244,8 @@ fn historical_selection_keeps_unknown_facts_and_has_no_process_or_stop_authority
     let session = folder.join("7-20261019T110000-0400~history-implement.jsonl");
     fs::write(&session, "not interpreted as a live event").unwrap();
     let snapshot = Snapshot::load(dir.path(), now()).unwrap();
-    assert!(snapshot.list(false).is_empty());
-    assert_eq!(snapshot.list(true).len(), 1);
+    assert!(snapshot.inbox(false, 7).is_empty());
+    assert_eq!(snapshot.inbox(true, 7).len(), 1);
     let selected = snapshot.resolve("widgets#7").unwrap();
     assert!(selected.owner.is_none());
     assert!(selected.child_owner.is_none());

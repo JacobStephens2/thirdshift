@@ -15,6 +15,41 @@ fn stop_and_finish(scenario: &Scenario, mut held: HeldRun, args: &[&str]) -> Run
 }
 
 #[test]
+fn json_stop_reports_the_outcome_and_retained_work_for_both_endings() {
+    for requeue in [false, true] {
+        let scenario = Scenario::new();
+        scenario.issue_labelled(7, &["ready-for-agent"]);
+        scenario.agent_does(&format!(
+            "echo unfinished > work.txt\ntouch '{}'\nwhile true; do sleep 0.05; done\n",
+            scenario.path("started").display()
+        ));
+        let held = scenario.run_until(&[&scenario.issue_url(7)], &[], "started");
+        let args = if requeue {
+            vec!["stop", "widgets#7", "--requeue", "--json"]
+        } else {
+            vec!["stop", "widgets#7", "--json"]
+        };
+        let stopped = stop_and_finish(&scenario, held, &args);
+        let output: serde_json::Value = serde_json::from_str(&stopped.stdout).unwrap();
+        assert_eq!(
+            output,
+            serde_json::json!({
+                "version": 1, "name": "acme/widgets#7", "outcome": "interrupted",
+                "issue_branches": ["issue-7"], "pull_requests": []
+            })
+        );
+        assert_eq!(
+            scenario.issue_labels(7),
+            if requeue {
+                vec!["ready-for-agent"]
+            } else {
+                vec!["in-progress", "needs-triage"]
+            }
+        );
+    }
+}
+
+#[test]
 fn stopping_a_pass_with_no_issue_ends_it_without_changing_labels() {
     for kind in ["architect", "secure"] {
         for requeue in [false, true] {

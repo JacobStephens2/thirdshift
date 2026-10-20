@@ -6,7 +6,7 @@ use std::iter::Peekable;
 use std::mem::discriminant;
 use std::num::NonZeroUsize;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 use crate::asks::Flags;
 use crate::base_fix::BaseFixAsk;
@@ -22,6 +22,29 @@ pub enum Command {
     Version,
     Update,
     Setup,
+    Console {
+        no_sign_in: bool,
+    },
+    ConsoleInstall,
+    ConsolePassword(Option<String>),
+    ConsoleSignOut {
+        email: Option<String>,
+        json: bool,
+    },
+    ConsoleLog {
+        json: bool,
+    },
+    ConsoleTheme {
+        name: Option<String>,
+        json: bool,
+    },
+    ConsoleThemeImport(String),
+    ConsoleThemeExport(String),
+    ConsoleSections {
+        hide: Vec<String>,
+        show: Vec<String>,
+        json: bool,
+    },
     Status {
         json: bool,
         all: bool,
@@ -33,10 +56,19 @@ pub enum Command {
     Stop {
         command: String,
         requeue: bool,
+        json: bool,
     },
     Logs {
         command: String,
         session: Option<String>,
+        follow: bool,
+    },
+    LogsList {
+        json: bool,
+        owner: Option<String>,
+    },
+    LogFile {
+        id: String,
         follow: bool,
     },
     /// Internal interface for scripts/release.sh: prompt on stdin.
@@ -236,20 +268,115 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
-        Some("stop") => {
-            return match &args[1..] {
-                [command] if !command.starts_with('-') => Ok(Command::Stop {
-                    command: command.clone(),
-                    requeue: false,
-                }),
-                [command, flag] if flag == "--requeue" && !command.starts_with('-') => {
-                    Ok(Command::Stop {
-                        command: command.clone(),
-                        requeue: true,
-                    })
+        Some("console") => {
+            if args.get(1).is_some_and(|action| action == "theme") {
+                let json = args.last().is_some_and(|arg| arg == "--json");
+                let end = args.len() - usize::from(json);
+                if let [action, value] = &args[2..end] {
+                    match action.as_str() {
+                        "import" => return Ok(Command::ConsoleThemeImport(value.clone())),
+                        "export" => return Ok(Command::ConsoleThemeExport(value.clone())),
+                        _ => {}
+                    }
                 }
-                _ => bail!("usage: thirdshift stop <command> [--requeue]"),
+                let [name] = &args[2..end] else {
+                    bail!(
+                        "usage: thirdshift console theme <name|list> [--json] | import <file> | export <name>"
+                    );
+                };
+                return Ok(Command::ConsoleTheme {
+                    name: (name != "list").then(|| name.clone()),
+                    json,
+                });
+            }
+            if args.get(1).is_some_and(|action| action == "sections") {
+                let (mut hide, mut show, mut json) = (Vec::new(), Vec::new(), false);
+                let mut arguments = args[2..].iter();
+                while let Some(flag) = arguments.next() {
+                    match flag.as_str() {
+                        "--json" if !json => json = true,
+                        "--hide" | "--show" => {
+                            let section = arguments
+                                .next()
+                                .filter(|s| !s.starts_with('-'))
+                                .context("--hide and --show need a section name")?;
+                            let target = if flag == "--hide" {
+                                &mut hide
+                            } else {
+                                &mut show
+                            };
+                            target.extend(section.split(',').map(str::to_owned));
+                        }
+                        _ => bail!(
+                            "usage: thirdshift console sections [--hide <section>] [--show <section>] [--json]"
+                        ),
+                    }
+                }
+                return Ok(Command::ConsoleSections { hide, show, json });
+            }
+            if args.get(1).is_some_and(|action| action == "sign-out") {
+                let mut email = None;
+                let mut json = false;
+                let mut arguments = args[2..].iter();
+                while let Some(flag) = arguments.next() {
+                    match flag.as_str() {
+                        "--email" if email.is_none() => {
+                            email = Some(
+                                arguments
+                                    .next()
+                                    .filter(|email| !email.starts_with('-'))
+                                    .ok_or_else(|| anyhow::anyhow!("--email needs an address"))?
+                                    .clone(),
+                            );
+                        }
+                        "--json" if !json => json = true,
+                        _ => {
+                            bail!("usage: thirdshift console sign-out [--email <address>] [--json]")
+                        }
+                    }
+                }
+                return Ok(Command::ConsoleSignOut { email, json });
+            }
+            return match &args[1..] {
+                [] => Ok(Command::Console { no_sign_in: false }),
+                [flag] if flag == "--no-sign-in" => Ok(Command::Console { no_sign_in: true }),
+                [action] if action == "install" => Ok(Command::ConsoleInstall),
+                [action] if action == "password" => Ok(Command::ConsolePassword(None)),
+                [action, flag, email]
+                    if action == "password" && flag == "--email" && !email.starts_with('-') =>
+                {
+                    Ok(Command::ConsolePassword(Some(email.clone())))
+                }
+                [action] if action == "log" => Ok(Command::ConsoleLog { json: false }),
+                [action, flag] if action == "log" && flag == "--json" => {
+                    Ok(Command::ConsoleLog { json: true })
+                }
+                _ => bail!(
+                    "usage: thirdshift console [--no-sign-in] | install | password [--email <address>] | sign-out [--email <address>] [--json] | log [--json]"
+                ),
             };
+        }
+        Some("stop") => {
+            let usage = "usage: thirdshift stop <command> [--requeue] [--json]";
+            let Some((command, options)) = args[1..].split_first() else {
+                bail!(usage)
+            };
+            if command.starts_with('-') {
+                bail!(usage);
+            }
+            let (mut requeue, mut json) = (false, false);
+            for option in options {
+                match option.as_str() {
+                    "--requeue" if !requeue => requeue = true,
+                    "--json" if !json => json = true,
+                    _ => bail!(usage),
+                }
+            }
+            return Ok(Command::Stop {
+                command: command.clone(),
+                requeue,
+                json,
+            });
         }
         Some("show") => {
             return match &args[1..] {
@@ -267,6 +394,49 @@ pub fn parse(args: &[String]) -> Result<Command> {
             };
         }
         Some("logs") => {
+            match &args[1..] {
+                [] => {
+                    return Ok(Command::LogsList {
+                        json: false,
+                        owner: None,
+                    });
+                }
+                [flag] if flag == "--json" => {
+                    return Ok(Command::LogsList {
+                        json: true,
+                        owner: None,
+                    });
+                }
+                [flag, id] if flag == "--command" && !id.starts_with('-') => {
+                    return Ok(Command::LogsList {
+                        json: false,
+                        owner: Some(id.clone()),
+                    });
+                }
+                [flag, id, json]
+                    if flag == "--command" && !id.starts_with('-') && json == "--json" =>
+                {
+                    return Ok(Command::LogsList {
+                        json: true,
+                        owner: Some(id.clone()),
+                    });
+                }
+                [flag, id] if flag == "--file" && !id.starts_with('-') => {
+                    return Ok(Command::LogFile {
+                        id: id.clone(),
+                        follow: false,
+                    });
+                }
+                [flag, id, follow]
+                    if flag == "--file" && !id.starts_with('-') && follow == "--follow" =>
+                {
+                    return Ok(Command::LogFile {
+                        id: id.clone(),
+                        follow: true,
+                    });
+                }
+                _ => {}
+            }
             let usage = "usage: thirdshift logs <command> [--session <kind>] [--follow]";
             let command = args
                 .get(1)

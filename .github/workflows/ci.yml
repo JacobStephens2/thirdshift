@@ -13,6 +13,26 @@ concurrency:
 
 # The runner images are pinned to the platforms thirdshift supports.
 jobs:
+  console-test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the pinned Rust toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: npm ci
+        working-directory: console
+      - run: npx playwright install --with-deps chromium
+        working-directory: console
+      - run: npm test
+        working-directory: console
+
   site-test:
     runs-on: ubuntu-24.04
     defaults:

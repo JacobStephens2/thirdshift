@@ -8,6 +8,7 @@ mod ci;
 mod claim;
 mod command;
 mod config;
+mod console;
 mod delivery;
 mod email;
 mod failed_run;
@@ -40,6 +41,7 @@ mod session;
 mod setup;
 mod skills;
 mod spec_run;
+mod terminal;
 #[cfg(test)]
 mod test_support;
 mod trust;
@@ -77,8 +79,19 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
        thirdshift status [--all] [--json]             List this machine's Commands
+       thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
+       thirdshift console install                     Print a service and proxy install script for sudo
+       thirdshift console password [--email <address>]  Set a Console password privately
+       thirdshift console sign-out [--email <address>] [--json]  End an account's sessions
+       thirdshift console log [--json]                Read this machine's Console log
+       thirdshift console theme <name|list> [--json]  Choose or list Console Themes
+       thirdshift console theme import <file>        Import a Theme JSON document
+       thirdshift console theme export <name>        Export a Theme as JSON
+       thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift show <command> [--json]             Show one Command in full
-       thirdshift stop <command> [--requeue]          Stop a live Command and wait for cleanup
+       thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
+       thirdshift logs [--command <id>] [--json]      List this machine's logs
+       thirdshift logs --file <id> [--follow]         Read an exact listed log
        thirdshift logs <command> [--session <kind>] [--follow]  Read or follow a log
        thirdshift update                              Update to the latest release
        thirdshift version                             Print the version
@@ -132,8 +145,48 @@ fn main() -> ExitCode {
         }
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
-        Ok(Command::Stop { command, requeue }) => {
-            return match logs::stop::stop(&command, requeue) {
+        Ok(Command::ConsoleInstall) => {
+            return match console::install() {
+                Ok(script) => {
+                    print!("{script}");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::ConsolePassword(email)) => return outcome(console::password(email.as_deref())),
+        Ok(Command::ConsoleTheme { name, json }) => {
+            return printed(console::theme(name.as_deref(), json));
+        }
+        Ok(Command::ConsoleThemeImport(path)) => return printed(console::import_theme(&path)),
+        Ok(Command::ConsoleThemeExport(name)) => return printed(console::export_theme(&name)),
+        Ok(Command::ConsoleSections { hide, show, json }) => {
+            return printed(console::sections(&hide, &show, json));
+        }
+        Ok(Command::ConsoleSignOut { email, json }) => {
+            return match console::sign_out(email.as_deref(), json) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::ConsoleLog { json }) => {
+            return match console::print_log(json) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::Console { no_sign_in }) => {
+            return match console::serve(no_sign_in) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::Stop {
+            command,
+            requeue,
+            json,
+        }) => {
+            return match logs::stop::stop(&command, requeue, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
@@ -150,6 +203,18 @@ fn main() -> ExitCode {
             follow,
         }) => {
             return match logs::status::inspect::logs(&command, session.as_deref(), follow) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::LogsList { json, owner }) => {
+            return match logs::catalog::show(json, owner.as_deref()) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::LogFile { id, follow }) => {
+            return match logs::catalog::print_file(&id, follow) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
@@ -318,6 +383,17 @@ fn release_summary() -> ExitCode {
     match summary {
         Ok(summary) => {
             println!("{summary}");
+            ExitCode::SUCCESS
+        }
+        Err(error) => failure(&error),
+    }
+}
+
+/// A Console settings view or action, with machine-readable output on stdout.
+fn printed(result: anyhow::Result<String>) -> ExitCode {
+    match result {
+        Ok(text) => {
+            println!("{text}");
             ExitCode::SUCCESS
         }
         Err(error) => failure(&error),

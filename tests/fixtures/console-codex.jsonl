@@ -1,0 +1,9 @@
+{"type":"thread.started","thread_id":"made-up-thread"}
+{"type":"item.completed","item":{"id":"r1","type":"reasoning","text":"Consider a safe edit."}}
+{"type":"item.completed","item":{"id":"a1","type":"agent_message","text":"I will inspect the widgets."}}
+{"type":"item.started","item":{"id":"c1","type":"command_execution","command":"cat widgets.rs","aggregated_output":"","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"c1","type":"command_execution","command":"cat widgets.rs","aggregated_output":"widget output <safe>","exit_code":0,"status":"completed"}}
+{"type":"item.completed","item":{"id":"f1","type":"file_change","changes":[{"path":"widgets.rs","kind":"update"}],"status":"completed"}}
+{"type":"item.completed","item":{"id":"m1","type":"mcp_tool_call","server":"files","tool":"Read","arguments":{"file_path":"widgets.rs"},"result":{"content":[{"type":"text","text":"new widget"}]},"status":"completed"}}
+{"type":"item.completed","item":{"id":"z1","type":"future_item","detail":"unknown Codex item visible"}}
+{"type":"item.completed","item":{"id":"a2","type":"agent_message","text":"Widgets are ready."}}

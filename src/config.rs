@@ -7,6 +7,7 @@
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use chrono::TimeDelta;
@@ -15,10 +16,14 @@ use toml_edit::{DocumentMut, Item};
 
 use crate::harness::{self, Harness, ModelAndEffort};
 
+pub mod console;
+pub use console::{ConsoleAccess, ConsoleSettings};
+
 /// The settings a User config can hold. Each is what a Run does when its
 /// command says nothing about it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct UserConfig {
+    pub console: ConsoleSettings,
     /// `merge.always`: every Run is a Merge run unless told `no-merge`.
     pub merge_always: bool,
     /// `base.fix`: every Run may start a Base fix unless told `no-base-fix`.
@@ -30,6 +35,13 @@ pub struct UserConfig {
     /// each repository's in `<owner>/<repo>/`, by default
     /// `~/.thirdshift/logs`.
     pub logs_dir: PathBuf,
+    /// `logs.waiting_line_minutes`: time between unchanged waiting lines,
+    /// by default five minutes.
+    pub waiting_line_interval: Duration,
+    /// `inbox.silent_minutes`: how long both logs may be quiet, default ten minutes.
+    pub silent_interval: Duration,
+    /// `inbox.days`: retention of ended problems and Resolved, default seven days.
+    pub inbox_days: i64,
     /// `activity.quiet_skips`: a skipped Pass prints
     /// nothing, its Activity log line its only trace.
     pub quiet_skips: bool,
@@ -71,6 +83,15 @@ pub struct EmailSettings {
 }
 
 impl UserConfig {
+    /// Waiting stages must write before they could be observed as Silent.
+    pub fn effective_waiting_line_interval(&self) -> Duration {
+        if self.waiting_line_interval >= self.silent_interval {
+            self.silent_interval / 2
+        } else {
+            self.waiting_line_interval
+        }
+    }
+
     /// The User config under `$HOME`, or the defaults if there is none.
     pub fn load() -> Result<Self> {
         let (home, path) = home_and_path()?;
@@ -86,10 +107,14 @@ impl UserConfig {
     /// What a Run does with no User config under `home`.
     fn defaults(home: &Path) -> Self {
         UserConfig {
+            console: ConsoleSettings::default(),
             merge_always: false,
             base_fix: false,
             launch_pull: false,
             logs_dir: home.join(".thirdshift/logs"),
+            waiting_line_interval: Duration::from_secs(5 * 60),
+            silent_interval: Duration::from_secs(10 * 60),
+            inbox_days: 7,
             quiet_skips: false,
             email: EmailSettings::default(),
             spec_parallel: NonZeroUsize::new(3).unwrap(),
@@ -113,12 +138,24 @@ impl UserConfig {
             .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::defaults(home);
         for (section, value) in &table {
+            if section == "console" {
+                config.console = value
+                    .clone()
+                    .try_into()
+                    .with_context(|| format!("invalid [console] in {file}"))?;
+                config
+                    .console
+                    .validate()
+                    .with_context(|| format!("invalid [console] in {file}"))?;
+                continue;
+            }
             let known = matches!(
                 section.as_str(),
                 "merge"
                     | "base"
                     | "launch"
                     | "logs"
+                    | "inbox"
                     | "activity"
                     | "email"
                     | "spec"
@@ -147,6 +184,21 @@ impl UserConfig {
                         ),
                     },
                     ("logs", "dir", _) => bail!("logs.dir must be a string in {file}"),
+                    ("logs", "waiting_line_minutes", value) => {
+                        config.waiting_line_interval =
+                            minutes(value, "logs.waiting_line_minutes", &file)?;
+                    }
+                    ("inbox", "silent_minutes", value) => {
+                        config.silent_interval = minutes(value, "inbox.silent_minutes", &file)?;
+                    }
+                    ("inbox", "days", value) => {
+                        config.inbox_days = value
+                            .as_integer()
+                            .filter(|days| *days >= 1 && TimeDelta::try_days(*days).is_some())
+                            .context(format!(
+                                "inbox.days must be a positive whole number of days in {file}"
+                            ))?;
+                    }
                     ("activity", "quiet_skips", Value::Boolean(quiet)) => {
                         config.quiet_skips = *quiet
                     }
@@ -237,6 +289,8 @@ pub struct UserConfigDocument {
 /// The Setup settings to change. Other settings keep their current values.
 /// Credentials and the decision to send a test email stay with Setup.
 pub struct UserConfigChanges {
+    /// None retains all Console settings.
+    pub console: Option<ConsoleAccess>,
     pub merge_always: bool,
     pub base_fix: bool,
     pub launch_pull: bool,
@@ -288,6 +342,18 @@ impl UserConfigDocument {
     pub fn render(self, changes: Option<UserConfigChanges>) -> String {
         let mut document = self.document;
         if let Some(changes) = changes {
+            if let Some(console) = changes.console {
+                set(
+                    &mut document,
+                    "console",
+                    "address",
+                    console.address.as_str(),
+                );
+                if console.allowed_emails != self.settings.console.allowed_emails {
+                    let emails: toml_edit::Array = console.allowed_emails.iter().collect();
+                    set(&mut document, "console", "allowed_emails", emails);
+                }
+            }
             set(&mut document, "merge", "always", changes.merge_always);
             set(&mut document, "base", "fix", changes.base_fix);
             set(&mut document, "launch", "pull", changes.launch_pull);
@@ -412,6 +478,10 @@ fn set(document: &mut DocumentMut, section: &str, key: &str, value: impl Into<to
         .and_then(|settings| settings.get_mut(key))
         .and_then(Item::as_value_mut)
         .unwrap_or_else(|| panic!("a completed User config has {section}.{key}"));
+    if let (Some(existing), Some(replacement)) = (old.as_array_mut(), value.as_array()) {
+        edit_array(existing, replacement);
+        return;
+    }
     let same = match (old.as_bool(), old.as_str()) {
         (Some(old), _) => value.as_bool() == Some(old),
         (_, Some(old)) => value.as_str() == Some(old),
@@ -434,6 +504,45 @@ fn set(document: &mut DocumentMut, section: &str, key: &str, value: impl Into<to
     }
     *old = value;
     *old.decor_mut() = decor;
+}
+
+/// Retain element decoration and trailing comments when an allowlist changes.
+/// Comments on removed entries stay before the closing bracket.
+fn edit_array(existing: &mut toml_edit::Array, replacement: &toml_edit::Array) {
+    for (index, value) in replacement.iter().enumerate() {
+        if let Some(old) = existing.get(index) {
+            if old.as_str() != value.as_str() {
+                existing.replace(index, value.clone());
+            }
+        } else {
+            let mut value = value.clone();
+            let trailing = existing.trailing().as_str().unwrap_or("").to_string();
+            if trailing.contains('\n') || trailing.contains('#') {
+                // The old last entry's comment must precede the new entry.
+                let closing_indent = trailing.rsplit('\n').next().unwrap_or("");
+                let indent = existing
+                    .iter()
+                    .last()
+                    .map(|last| decor_prefix(last.decor()))
+                    .unwrap_or_default();
+                let indent = indent.rsplit('\n').next().unwrap_or("");
+                value.decor_mut().set_prefix(format!("{trailing}{indent}"));
+                existing.set_trailing(format!("\n{closing_indent}"));
+            }
+            existing.push_formatted(value);
+        }
+    }
+    let mut removed_decor = String::new();
+    while existing.len() > replacement.len() {
+        let removed = existing.remove(replacement.len());
+        removed_decor.push_str(&decor_prefix(removed.decor()));
+        removed_decor.push_str(&decor_suffix(removed.decor()));
+    }
+    if removed_decor.contains('#') {
+        removed_decor.push_str(existing.trailing().as_str().unwrap_or(""));
+        existing.set_trailing(removed_decor);
+        existing.set_trailing_comma(!existing.is_empty());
+    }
 }
 
 /// Set `email.to` in `document` to `to`. With no `email.to` there yet, it
@@ -731,6 +840,19 @@ from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, whi
 
 [logs]
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
+waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
+
+[inbox]
+days = 7             # days to keep ended problems and Resolved; default 7
+silent_minutes = 10   # minutes without growth in either log before a Run is Silent; default 10
+
+[console]
+address = ""        # HTTPS address for console install, e.g. https://console.example.com; default blank
+port = 8711          # localhost port for the Console; 0 chooses a free port; default 8711
+allowed_emails = []  # addresses that may sign in; empty requires --no-sign-in; default []
+other_consoles = []   # http or https addresses linked in the header, never fetched; default []
+theme = "focus-auto" # focus/plain/press/signal/garden/factory, with -auto/-light/-dark; default focus-auto
+hidden_sections = [] # needs-you/ready-for-review/landing/working/done/resolved; default []
 
 [activity]
 quiet_skips = false   # a skipped Pass prints nothing, leaving only its Activity log line; default false
@@ -790,6 +912,14 @@ fn with_email_to(to: Option<String>) -> String {
 
 /// `value`, which `file` gives the setting `key`, as a whole number from 1
 /// up, or an error naming both if it is anything else.
+fn minutes(value: &Value, key: &str, file: &str) -> Result<Duration> {
+    value.as_integer()
+        .filter(|minutes| *minutes > 0)
+        .and_then(|minutes| u64::try_from(minutes).ok()?.checked_mul(60))
+        .map(Duration::from_secs)
+        .with_context(|| format!("{key} must be a whole number of minutes from 1 up within the supported range in {file}"))
+}
+
 fn whole_number_from_1(value: &Value, key: &str, file: &str) -> Result<NonZeroUsize> {
     value
         .as_integer()
@@ -899,6 +1029,15 @@ mod tests {
                 "email.to",
                 "email.from",
                 "logs.dir",
+                "logs.waiting_line_minutes",
+                "inbox.days",
+                "inbox.silent_minutes",
+                "console.address",
+                "console.port",
+                "console.allowed_emails",
+                "console.other_consoles",
+                "console.theme",
+                "console.hidden_sections",
                 "activity.quiet_skips",
                 "spec.parallel",
                 "pickup.limit",
@@ -1097,6 +1236,37 @@ mod tests {
     }
 
     #[test]
+    fn waiting_line_interval_defaults_to_five_minutes_and_reads_whole_minutes() {
+        for text in ["", "[logs]\n"] {
+            assert_eq!(
+                parse(text).unwrap().waiting_line_interval,
+                Duration::from_secs(300)
+            );
+        }
+        let text = "[logs]\nwaiting_line_minutes = 2\n";
+        assert_eq!(
+            parse(text).unwrap().waiting_line_interval,
+            Duration::from_secs(120)
+        );
+        let path = Path::new("/home/me/.thirdshift/config.toml");
+        let document = UserConfigDocument::existing(text, path, Path::new("/home/me")).unwrap();
+        let rendered = document.render(None);
+        assert_eq!(
+            parse(&rendered).unwrap().waiting_line_interval,
+            Duration::from_secs(120)
+        );
+        for value in ["0", "-1", "1.5", "true", "'5'", "9223372036854775807"] {
+            let error = parse(&format!("[logs]\nwaiting_line_minutes = {value}\n")).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains("logs.waiting_line_minutes must be a whole number"),
+                "{error:#}"
+            );
+        }
+    }
+
+    #[test]
     fn logs_dir_is_read_with_a_leading_tilde_expanded_and_defaults_under_home() {
         for (dir, expanded) in [
             ("~/elsewhere/logs", "/home/me/elsewhere/logs"),
@@ -1254,6 +1424,7 @@ mod tests {
         assert_eq!(current.logs_dir, home.join(".thirdshift/logs"));
 
         let text = document.render(Some(UserConfigChanges {
+            console: None,
             merge_always: true,
             base_fix: true,
             launch_pull: true,
@@ -1408,6 +1579,7 @@ mod tests {
 
     fn notifications_to(to: &str) -> UserConfigChanges {
         UserConfigChanges {
+            console: None,
             harness: None,
             merge_always: false,
             base_fix: false,
@@ -1503,6 +1675,7 @@ mod tests {
         let text = "# top\n[merge]\n# before\nalways = false   # merge\n# after\n\n\
                     [harness.codex]\nmodel = 'old'       # model\neffort = 'high'      # effort\n";
         let changes = UserConfigChanges {
+            console: None,
             merge_always: true,
             base_fix: false,
             launch_pull: false,
@@ -1548,6 +1721,7 @@ mod tests {
         ] {
             let before = parse(text).unwrap();
             let changes = UserConfigChanges {
+                console: None,
                 merge_always: true,
                 base_fix: true,
                 launch_pull: true,
@@ -1634,6 +1808,7 @@ mod tests {
         }
         let before = parse(&text).unwrap();
         let changes = UserConfigChanges {
+            console: None,
             merge_always: true,
             base_fix: false,
             launch_pull: true,

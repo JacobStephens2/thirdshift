@@ -300,6 +300,7 @@ fn setup_checks_muses_proposed_model_with_the_same_flags_and_environment() {
             ("Security runs may fix reproduced findings?", ""),
             ("Runs review their change for Security findings?", ""),
             ("Run notifications", ""),
+            ("Run the Console?", ""),
         ],
     );
     assert_eq!(result.code, Some(0), "{}", result.stderr);

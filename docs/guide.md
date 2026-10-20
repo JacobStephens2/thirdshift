@@ -73,7 +73,16 @@ The designed behaviour described in this manual is implemented. Known gaps and p
 
 ## Machine status
 
-`thirdshift status` names this host and lists live Commands across every repository in `logs.dir`, with their issue and title when present, Harness, Model, Effort, current stage and its age. Architect runs, Pickup runs and Security runs nest the Runs or Spec runs they dispatch beneath themselves, each Spec's Tickets and their Runs, and each Run's Base fix. Every Ticket is listed: running, merged into the Spec branch, failed, waiting on named blockers, or not started. A Pass with no issue is named by its kind and Command log stamp, such as `architect-20261018T120000-0400` or `secure-20261018T120000-0400`. After the live Commands it lists those that ended in the last 24 hours, with their outcomes. `thirdshift status --all` lists every Command this machine has logs for, newest start first. A Command or child Run with no outcome whose process has gone shows as `died at <stage>` in either view. Process start identifiers distinguish a reused process id on Linux and macOS. Records remain beside their Command logs, as `*.command.json`, with child records named for their issue as `*.issue-<n>.child.json`. Each process writes only its own files, replacing them atomically. A record write failure warns once per recording process and does not change its outcome.
+`thirdshift status` names this host and shows its **Inbox** across every repository in `logs.dir`, in this order:
+
+- **Needs you:** live Silent Runs, then Slow Runs, then ended problems newest first: Died, Failed, Triage (a Stop without requeue), or a Security finding waiting on a decision. An ended problem leaves when a later Command on the same issue starts on this machine, or after `inbox.days` (7 by default). Nothing is read from GitHub. Failures with the same nonempty cause collapse into one item with a count; unknown causes stay separate.
+- **Ready for review:** Commands that ended ready, with a pull request.
+- **Landing:** live Runs at CI watch or Self-merge. A Command already in Needs you has a reference here instead of a second row.
+- **Working:** every other live Command.
+- **Done:** Commands that ended in the last day with nothing waiting.
+- **Resolved:** older completions with nothing waiting, back to `inbox.days`.
+
+`--all` adds **History** for everything older or without a known ending. Each row has a state word, its issue and title when present, Harness, Model, Effort, current stage and its age. Architect runs, Pickup runs and Security runs nest the Runs or Spec runs they dispatch beneath themselves, each Spec's Tickets and their Runs, and each Run's Base fix. Every Ticket is listed: running, merged into the Spec branch, failed, waiting on named blockers, or not started. A Pass with no issue is named by its kind and Command log stamp, such as `architect-20261018T120000-0400` or `secure-20261018T120000-0400`. A Command or child Run with no outcome whose process has gone shows as `died at <stage>`; its start time bounds how long it stays in Needs you when no ending is known. Process start identifiers distinguish a reused process id on Linux and macOS. Records remain beside their Command logs, as `*.command.json`, with child records named for their issue as `*.issue-<n>.child.json`. Each process writes only its own files, replacing them atomically. A record write failure warns once per recording process and does not change its outcome.
 
 History uses each source only for Commands missing from the preceding sources: Command records, then Activity log start/end lines with their Command logs, then Session logs in the current `<logs.dir>/<owner>/<repo>/commands/<kind>/` layout. Activity entries have start and end times and outcomes, with no stages. Session entries group logs by issue and exact Command owner; they have no known end or outcome and appear only with `--all`. A Spec run or Pass's Sessions share that Command's stamp and owner token. Legacy tokenless logs retain their existing grouping. The flat layout from before [ADR 0011](adr/0011-thirdshift-keeps-a-per-repository-activity-log.md) is ignored.
 
@@ -113,6 +122,10 @@ Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: ht
     "command_log": "/logs/acme/widgets/commands/issue/7-20261018T120000-0400~ownerA.log",
     "dispatched": [],
     "state": "live",
+    "group": "working",
+    "needs_you_kind": null,
+    "landing": false,
+    "count": 1,
     "stage": {"name": "implement", "began_at": "2026-10-18T12:00:01-04:00", "age_seconds": 52},
     "parent_record": null,
     "parent_dispatch": null,
@@ -128,6 +141,8 @@ Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: ht
 ```
 
 Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `issue` is null for a Pass with no issue; `session_log`, `issue_branch`, `pull_request`, `outcome`, `cause`, `ended_at`, `parent_record` and `parent_dispatch` are nullable. Command kinds are `Run`, `Spec run`, `Architect run`, `Pickup run`, `Security run` and `Base fix`. `name` identifies an issue or a Pass's kind and stamp. `dispatched` is an array of the Runs or Spec runs a Pass dispatched, with the same fields as its parent (and an empty `dispatched` array); it shares the Pass's process identity and Command log. It retains its own outcome, end time, cause, Issue branch and pull request. The retained Command record has the same fields, including dispatched work, without the computed `state`, `stage`, `source`, `command_log` and `children` or empty leaf `dispatched` arrays. Older records without an end time use their last modification time. `idle_passes` contains one entry per repository and kind whose latest Activity log line is a skip; it is independent of `commands`, and never creates a Command record or log for a skipped Pass.
+
+Each top-level `commands` entry adds the computed `group` (`needs you`, `ready for review`, `landing`, `working`, `done`, `resolved` or `history`), nullable `needs_you_kind` (`silent`, `slow`, `died`, `failed`, `triage`, `finding`), `landing` (also true for a Needs you item referenced from Landing), and `count`. A collapsed failure has a `collapsed` array containing the other Commands, each with its own group and kind. These fields are observations, absent from durable records and `show`; child Runs remain within their Command. The durable `security_findings_waiting` flag defaults to false for older records.
 
 `state` is `live`, `died`, `ended`, or `unknown` when historical evidence has no ending. `stage` is null before the first known stage. Readers skip unknown stage names. Known stages are `implement`, `Resume`, `Security review`, `pull request`, `CI watch`, `Repair`, `Self-merge`, `cleanup`, `Tickets`, `Spec review`, `Architecture review`, `Security audit`, `Security reproduction` and `Security fix publishing`. A Pass retains its own stages while its dispatched work records its stages separately.
 
@@ -171,7 +186,13 @@ thirdshift logs 'widgets#7' --session implement
 thirdshift logs 'widgets#7' --session repair --follow
 ```
 
-`show` includes the Runs, stage history with start times, outcomes, and Command and Session log paths. Each live Run also gets its latest event, such as `Bash: cargo test`, from the last 64 KiB of its current Session log. It uses the Harness's stream interpretation, including Claude and Codex, and ignores malformed or unknown lines. Missing or unreadable Session logs leave the event unavailable.
+`show` includes the Runs, stage history with start times and Usual ranges, outcomes, and Command and Session log paths. Each live Run also gets its latest event, such as `Bash: cargo test`, from the last 64 KiB of its current Session log. It uses the Harness's stream interpretation, including Claude and Codex, and ignores malformed or unknown lines. Missing or unreadable Session logs leave the event unavailable.
+
+`status` and `show` describe live work as **Silent** when neither its Session log nor its Command log has grown for `inbox.silent_minutes` (10 by default). Silence starts no earlier than the current stage. At three times the threshold, the words escalate: `silent 45 min · past 30`. A fresh line in either log keeps the Run from being Silent. Missing logs use the stage's start time.
+
+A stage's **Usual range** is its 25th–75th percentile time over the repository's last 30 Command records on this machine. Completed stages supply times, with the next stage's start or the Command's end marking completion; an unfinished stage supplies none. The range appears once there are at least three stage times. Quartiles interpolate between sorted times. A live Run past the top of the range is **Slow**: `slower than usual (12–17 min), still working`. At twice the top it also shows the multiple, such as `2× usual` or `3× usual`. Silent takes precedence over Slow.
+
+Both JSON views add `health` to recorded Commands: `{"state":"ok"}`, `{"state":"slow","step":1,"usual_range":{"lower_seconds":720.0,"upper_seconds":1020.0},"multiple":1}`, or `{"state":"silent","step":2,"seconds":2700,"threshold_seconds":600}`. Step 1 is the first threshold; step 2 is the escalation. Ended or dead Commands have null health. The `usual_ranges` map gives each stage's range by name, for example `{"implement":{"lower_seconds":720.0,"upper_seconds":1020.0}}`; a stage is omitted until enough times exist. Health and ranges are reader observations, never written back to Command records.
 
 `show --json` is a versioned API, usable outside a repository. Version 1 wraps the selected Command in this shape:
 
@@ -363,6 +384,7 @@ from = "thirdshift@your-verified-domain.com"  # the sender; onboarding@resend.de
 
 [logs]
 dir = "~/elsewhere/logs"   # the root of the logs, instead of ~/.thirdshift/logs
+waiting_line_minutes = 5  # repeat unchanged CI watch and Self-merge waiting lines
 
 [activity]
 quiet_skips = true   # a skipped Pass prints nothing
@@ -413,6 +435,11 @@ from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, whi
 
 [logs]
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
+waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
+
+[inbox]
+days = 7             # days to keep ended problems and Resolved; default 7
+silent_minutes = 10   # minutes without growth in either log before a Run is Silent; default 10
 
 [activity]
 quiet_skips = false   # a skipped Pass prints nothing, leaving only its Activity log line; default false
@@ -485,6 +512,12 @@ With `email.always = true`, every Run sends a [Run notification](#run-notificati
 `pickup.limit` sets the [Claim limit](#the-claim-limit): how many open issues labelled `in-progress` stop a [Pickup run](#pickup-runs) from taking another, by default 3. It must be a whole number from 1 up. There is no command-line flag for it.
 
 `logs.dir` sets the root of the [logs](#logs), with each repository's in its `<owner>/<repo>/` folder, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
+
+`logs.waiting_line_minutes` sets how often CI watch and Self-merge repeat a waiting line even when nothing changes, in the terminal and the Command log. It defaults to 5 and must be a whole number of minutes from 1 up. CI watch still writes a line whenever the running or total check count changes; Self-merge writes waiting lines while GitHub calculates mergeability.
+
+`inbox.days` defaults to 7 and must be a positive whole number of days. It bounds both ended problems in Needs you and older completions in Resolved. Done always covers one day. Ready for review stays visible while the locally recorded outcome is ready; status never checks whether its PR has since changed. Security runs retain whether findings were waiting at completion, without their private write-ups; older records lacking this fact do not infer it from the audit's outcome.
+
+`inbox.silent_minutes` defaults to 10 and must be a whole number of minutes from 1 up. If `logs.waiting_line_minutes` is greater than or equal to it, `status` warns on stderr and waiting stages use half the silent time instead. A one-minute silent threshold therefore uses waiting lines every 30 seconds.
 
 `[harness]` chooses the **Harness**, the agent CLI every session of a command runs on, and for each Harness the **Model** its sessions run on and their **Effort**, how hard that Model reasons. See [Harness, Model and Effort](#harness-model-and-effort).
 

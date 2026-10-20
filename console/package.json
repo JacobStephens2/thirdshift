@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.cjs"
+  },
+  "devDependencies": {
+    "apca-w3": "0.1.9",
+    "playwright": "1.64.0"
+  }
+}

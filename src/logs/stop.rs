@@ -22,9 +22,15 @@ pub enum Ending {
 pub struct Request {
     pub who: String,
     pub requeue: bool,
+    #[serde(default)]
+    pub from_console: bool,
 }
 
 impl Request {
+    pub(super) fn source(&self) -> &'static str {
+        if self.from_console { "Console" } else { "CLI" }
+    }
+
     pub fn ending(&self) -> Ending {
         if self.requeue {
             Ending::Requeue
@@ -60,12 +66,7 @@ fn require_live(record: &CommandRecord) -> Result<()> {
     Ok(())
 }
 
-pub fn stop(input: &str, requeue: bool) -> Result<()> {
-    let config = UserConfig::load()?;
-    let snapshot = Snapshot::load(&config.logs_dir, chrono::Local::now())?;
-    let path = snapshot.resolve(input)?.stop_target(input)?;
-    let tree = read(&path)?;
-    require_live(&tree.command)?;
+pub fn stop(input: &str, requeue: bool, json: bool) -> Result<()> {
     let user = std::process::Command::new("id")
         .arg("-un")
         .output()
@@ -76,7 +77,25 @@ pub fn stop(input: &str, requeue: bool) -> Result<()> {
     let request = Request {
         who: String::from_utf8(user.stdout)?.trim().to_owned(),
         requeue,
+        from_console: false,
     };
+    let path = request_stop(input, request)?;
+    wait(
+        &path,
+        &mut WallClock(Instant::now()),
+        &mut std::io::stdout(),
+        json,
+    )
+}
+
+/// Both callers publish and signal the same captured Command. Only the CLI
+/// blocks waiting; the Console observes cleanup through its existing stream.
+pub(crate) fn request_stop(input: &str, request: Request) -> Result<PathBuf> {
+    let config = UserConfig::load()?;
+    let snapshot = Snapshot::load(&config.logs_dir, chrono::Local::now())?;
+    let path = snapshot.resolve(input)?.stop_target(input)?;
+    let tree = read(&path)?;
+    require_live(&tree.command)?;
     let mut file =
         tempfile::NamedTempFile::new_in(path.parent().context("Command record has no directory")?)?;
     file.write_all(&serde_json::to_vec(&request)?)?;
@@ -92,11 +111,46 @@ pub fn stop(input: &str, requeue: bool) -> Result<()> {
         let _ = std::fs::remove_file(request_path(&path));
         return Err(error);
     }
-    wait(
-        &path,
-        &mut WallClock(Instant::now()),
-        &mut std::io::stdout(),
-    )
+    Ok(path)
+}
+
+pub(crate) struct Inspection {
+    pub details: serde_json::Value,
+    pub can_stop: bool,
+    pub stopping: bool,
+    pub branches: Vec<String>,
+    pub pull_requests: Vec<String>,
+}
+
+/// Availability follows the CLI's child refusal and captured process identity.
+pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
+    let snapshot = Snapshot::load_with_silence(
+        &config.logs_dir,
+        chrono::Local::now(),
+        config.silent_interval,
+    )?;
+    let selected = snapshot.resolve(input)?;
+    let pending = selected
+        .owner
+        .is_some_and(|owner| requested(&owner.record_path).is_some());
+    let details = serde_json::to_value(selected.observation.details()?)?;
+    let stopping = pending && !selected.process_exited() && details["outcome"].is_null();
+    let work = if selected.process_exited() || !details["outcome"].is_null() {
+        selected
+            .owner
+            .map(|owner| reading::retained_work(&owner.record_path, chrono::Local::now()))
+            .transpose()?
+            .unwrap_or_default()
+    } else {
+        reading::RetainedWork::default()
+    };
+    Ok(Inspection {
+        details,
+        can_stop: selected.stop_target(input).is_ok() && !pending,
+        stopping,
+        branches: work.branches.into_iter().collect(),
+        pull_requests: work.pull_requests.into_iter().collect(),
+    })
 }
 
 trait Clock {
@@ -115,15 +169,15 @@ impl Clock for WallClock {
     }
 }
 
-fn wait(path: &Path, clock: &mut impl Clock, output: &mut impl Write) -> Result<()> {
+fn wait(path: &Path, clock: &mut impl Clock, output: &mut impl Write, json: bool) -> Result<()> {
     let mut reminder = clock.elapsed();
     loop {
         let tree = read(path)?;
         if tree.command.outcome.is_some() || !tree.command.live(&mut OnMachine) {
-            print_ending(path, &tree, output)?;
+            print_ending(path, &tree, output, json)?;
             return Ok(());
         }
-        if clock.elapsed().saturating_sub(reminder) >= Duration::from_secs(60) {
+        if !json && clock.elapsed().saturating_sub(reminder) >= Duration::from_secs(60) {
             writeln!(output, "{} still ending", tree.command.name)?;
             output.flush()?;
             reminder = clock.elapsed();
@@ -132,7 +186,27 @@ fn wait(path: &Path, clock: &mut impl Clock, output: &mut impl Write) -> Result<
     }
 }
 
-fn print_ending(path: &Path, tree: &CommandTree, output: &mut impl Write) -> Result<()> {
+fn print_ending(
+    path: &Path,
+    tree: &CommandTree,
+    output: &mut impl Write,
+    json: bool,
+) -> Result<()> {
+    let work = reading::retained_work(path, chrono::Local::now())?;
+    if json {
+        writeln!(
+            output,
+            "{}",
+            serde_json::json!({
+                "version": 1,
+                "name": tree.command.name,
+                "outcome": tree.command.outcome.as_deref().unwrap_or("died before recording an outcome"),
+                "issue_branches": work.branches,
+                "pull_requests": work.pull_requests,
+            })
+        )?;
+        return Ok(());
+    }
     writeln!(
         output,
         "{}: {}",
@@ -142,7 +216,6 @@ fn print_ending(path: &Path, tree: &CommandTree, output: &mut impl Write) -> Res
             .as_deref()
             .unwrap_or("died before recording an outcome")
     )?;
-    let work = reading::retained_work(path, chrono::Local::now())?;
     for branch in work.branches {
         writeln!(output, "Issue branch left: {branch}")?;
     }
@@ -209,6 +282,7 @@ mod tests {
                 path: path.clone(),
             },
             &mut output,
+            false,
         )
         .unwrap();
         assert_eq!(

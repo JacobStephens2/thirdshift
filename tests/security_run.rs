@@ -1957,6 +1957,27 @@ fn records_a_finding_privately_as_a_draft_without_severity_or_versions() {
     scenario.agent_does(&audit_script(&json!([finding("input-size")]).to_string()));
     let result = scenario.run(&["secure"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let status = scenario.run(&["status", "--json"]);
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    assert_eq!(status["commands"][0]["group"], "needs you");
+    assert_eq!(status["commands"][0]["needs_you_kind"], "finding");
+    let retained = &status["commands"][0]["security_findings"];
+    assert_eq!(retained[0]["title"], "Unchecked input size");
+    assert!(
+        retained[0]["url"]
+            .as_str()
+            .unwrap()
+            .contains("/security/advisories/")
+    );
+    let shown = scenario.run(&[
+        "show",
+        status["commands"][0]["name"].as_str().unwrap(),
+        "--json",
+    ]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
+    assert_eq!(&shown["command"]["security_findings"], retained);
     let state = scenario.gh_state();
     let advisory = &state["advisories"][0];
     assert_eq!(advisory["state"], "draft");
@@ -3022,6 +3043,11 @@ fn a_completed_security_audit_sends_one_notification_when_asked() {
     let result =
         scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
     assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let status = scenario.run(&["status", "--json"]);
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    assert_eq!(status["commands"][0]["group"], "done");
+    assert_eq!(status["commands"][0]["needs_you_kind"], Value::Null);
     let (subject, text) = the_one_notification(&resend);
     assert_eq!(
         subject,

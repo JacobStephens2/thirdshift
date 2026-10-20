@@ -1,7 +1,10 @@
 //! Filesystem observations of Commands, their Runs and exact ownership.
 //! Loading uses one sampled time; reading never prints or performs Stop effects.
 
+pub(crate) mod catalog;
+mod health;
 mod history;
+mod inbox;
 mod selection;
 #[cfg(test)]
 mod tests;
@@ -17,7 +20,9 @@ use serde::Serialize;
 use super::command_record::{CommandRecord, CommandTree};
 use super::effects::OnMachine;
 use super::{Pass, activity};
+pub(super) use health::{Health, UsualRange};
 pub(super) use history::Command as HistoricalCommand;
+pub(super) use inbox::{Group, InboxItem};
 pub(super) use selection::{Detailed, Observation};
 
 pub(super) struct Snapshot {
@@ -27,7 +32,19 @@ pub(super) struct Snapshot {
 }
 
 impl Snapshot {
+    pub(super) fn entries(&self) -> &[Entry] {
+        &self.commands
+    }
+
     pub(super) fn load(root: &Path, now: DateTime<Local>) -> Result<Self> {
+        Self::load_with_silence(root, now, std::time::Duration::from_secs(10 * 60))
+    }
+
+    pub(super) fn load_with_silence(
+        root: &Path,
+        now: DateTime<Local>,
+        silent: std::time::Duration,
+    ) -> Result<Self> {
         let mut records = BTreeMap::new();
         let mut commands = Vec::new();
         let mut idle_passes = Vec::new();
@@ -57,6 +74,7 @@ impl Snapshot {
                 );
             }
         }
+        let ranges = health::UsualRanges::from_records(&records);
         let roots: Vec<_> = records
             .iter()
             .filter(|(_, tree)| {
@@ -70,6 +88,11 @@ impl Snapshot {
                 .into_iter()
                 .map(|path| Entry::Record(Box::new(tree(&path, &mut records, &now)))),
         );
+        for entry in &mut commands {
+            if let Entry::Record(command) = entry {
+                health::observe(command, &now, silent, None, &ranges);
+            }
+        }
         idle_passes.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
         Ok(Self {
             commands,
@@ -78,20 +101,8 @@ impl Snapshot {
         })
     }
 
-    pub(super) fn list(&self, all: bool) -> Vec<&Entry> {
-        let mut commands: Vec<_> = self
-            .commands
-            .iter()
-            .filter(|entry| match entry {
-                Entry::Record(command) => {
-                    all || command.record.outcome.is_none()
-                        || recent(command.record.ended_at.as_deref(), self.now)
-                }
-                Entry::History(command) => all || recent(command.ended_at.as_deref(), self.now),
-            })
-            .collect();
-        commands.sort_by(|a, b| a.ordering(all).cmp(&b.ordering(all)));
-        commands
+    pub(super) fn inbox(&self, all: bool, days: i64) -> Vec<InboxItem<'_>> {
+        inbox::list(&self.commands, self.now, all, days)
     }
 
     pub(super) fn resolve(&self, input: &str) -> Result<selection::Selection<'_>> {
@@ -138,35 +149,6 @@ pub(super) enum Entry {
     History(Box<history::Command>),
 }
 
-impl Entry {
-    fn ordering(
-        &self,
-        all: bool,
-    ) -> (
-        bool,
-        std::cmp::Reverse<Option<DateTime<chrono::FixedOffset>>>,
-        &str,
-    ) {
-        let (state, started, repo) = match self {
-            Self::Record(command) => (
-                command.state,
-                command.record.started_at.as_str(),
-                command.record.repository.as_str(),
-            ),
-            Self::History(command) => (
-                command.state,
-                command.started_at.as_str(),
-                command.repository.as_str(),
-            ),
-        };
-        (
-            !all && state != "live",
-            std::cmp::Reverse(DateTime::parse_from_rfc3339(started).ok()),
-            repo,
-        )
-    }
-}
-
 #[derive(Serialize)]
 pub(super) struct Command {
     #[serde(skip)]
@@ -179,6 +161,8 @@ pub(super) struct Command {
     pub(super) source: &'static str,
     pub(super) command_log: PathBuf,
     pub(super) dispatched: Vec<Command>,
+    pub(super) health: Option<Health>,
+    pub(super) usual_ranges: BTreeMap<String, UsualRange>,
 }
 
 #[derive(Serialize)]
@@ -213,6 +197,8 @@ impl Command {
             children: Vec::new(),
             source: "command_record",
             dispatched: Vec::new(),
+            health: None,
+            usual_ranges: BTreeMap::new(),
         }
     }
 }
@@ -306,12 +292,6 @@ fn children(
         .collect();
     children.sort_by_key(|child| child.record.issue.as_ref().map(|issue| issue.number));
     children
-}
-
-fn recent(ended: Option<&str>, now: DateTime<Local>) -> bool {
-    ended
-        .and_then(|time| DateTime::parse_from_rfc3339(time).ok())
-        .is_some_and(|ended| ended >= now - chrono::Duration::hours(24))
 }
 
 fn read_idle_passes(repo: &Path) -> Result<Vec<IdlePass>> {
