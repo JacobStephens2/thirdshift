@@ -83,6 +83,26 @@ footer { margin-top: 16px; }
 #log-content article, #log-content > pre, .thinking, .tool-group { padding: 8px 12px; border: 1px solid var(--rule); margin: 8px 0; border-radius: var(--radius); }
 #log-content h3 { font-size: 14px; }
 .diff { border-left: 3px solid var(--look); padding-left: 10px; }
+.lane { border-bottom: 1px solid var(--rule); padding: 10px 0; }
+.time-run h3 { font-size: 14px; margin: 4px 0; color: var(--text); }
+.lane .time-run + .time-run { margin-left: 12px; border-left: 1px solid var(--rule); }
+.timeline { display: block; background: var(--panel-2); margin: 8px 0; }
+.timeline rect { fill: var(--panel); stroke: var(--working); }
+.timeline text { fill: var(--text); font: 12px var(--font-mono); }
+.stage-times { padding-left: 24px; }
+.stage-grid { width: 100%; table-layout: fixed; border-collapse: collapse; margin: 20px 0; }
+.stage-grid caption { text-align: left; font-weight: var(--head-weight); }
+.stage-grid th, .stage-grid td { border: 1px solid var(--rule); padding: 8px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.stage-grid th { font-weight: var(--head-weight); }
+.usual { font-size: 12px; font-weight: normal; color: var(--dim); }
+.cell-run { display: none; }
+@media (max-width: 760px) {
+  .stage-grid, .stage-grid thead, .stage-grid tbody, .stage-grid tr, .stage-grid th, .stage-grid td { display: block; }
+  .stage-grid thead tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .stage-grid thead th:first-child { grid-column: 1 / -1; }
+  .stage-grid tbody th { background: var(--panel-2); }
+  .cell-run { display: inline; font-weight: var(--head-weight); }
+}
 @media (max-width: 500px) {
   body { padding: 14px 12px; }
   .issue-title { flex-basis: 100%; order: 1; }
