@@ -18,6 +18,12 @@ remember(visitKey, Date.now());
 window.addEventListener("pagehide", () => remember(visitKey, Date.now()));
 const foldKey = "thirdshift:console:folded";
 let folded = stored(foldKey, {});
+let selectedRowId;
+function selectRow(row) {
+  document.querySelector('.command[aria-current="true"]')?.removeAttribute("aria-current");
+  selectedRowId = row?.id;
+  row?.setAttribute("aria-current", "true");
+}
 if (typeof folded !== "object" || Array.isArray(folded)) folded = {};
 for (const section of document.querySelectorAll("details[data-group]")) {
   if (typeof folded[section.dataset.group] === "boolean") section.open = folded[section.dataset.group];
@@ -27,13 +33,22 @@ document.addEventListener("toggle", event => {
   if (!section.matches("details[data-group]")) return;
   folded[section.dataset.group] = section.open;
   remember(foldKey, folded);
+  const selected = document.getElementById(selectedRowId);
+  if (section.open && selected && section.contains(selected)) selected.focus({ preventScroll: true });
 }, true);
+document.addEventListener("focusin", event => {
+  const row = event.target.closest(".command");
+  if (row) selectRow(row);
+});
 document.addEventListener("click", event => {
   event.target.closest(".command")?.focus({ preventScroll: true });
 });
 
+function logLengths(row) {
+  return row.dataset.logGrowth.split(":").map(Number);
+}
 function growth() {
-  return new Map([...document.querySelectorAll(".command")].map(row => [row.id, row.dataset.logGrowth.split(":").map(Number)]));
+  return new Map([...document.querySelectorAll(".command")].map(row => [row.id, logLengths(row)]));
 }
 
 function morph(html) {
@@ -46,6 +61,7 @@ function morph(html) {
   const wasSummary = active?.matches("summary");
   const scroll = [...current.querySelectorAll("details")].map(section => [section.id, section.querySelector(".commands").scrollTop]);
   const position = [scrollX, scrollY];
+  const selection = selectedRowId;
   const previousGrowth = growth();
   Idiomorph.morph(current, replacement, {
     callbacks: {
@@ -56,6 +72,9 @@ function morph(html) {
   });
   const selected = document.getElementById(focused);
   (wasSummary ? selected?.querySelector("summary") : selected)?.focus({ preventScroll: true });
+  // Focus cannot enter a folded section. Keep the logical row selected so
+  // it remains selected, and regains focus, when that section is reopened.
+  selectRow(document.getElementById(selection));
   for (const [id, top] of scroll) document.getElementById(id).querySelector(".commands").scrollTop = top;
   window.scrollTo(...position);
   document.title = next.title;
@@ -63,7 +82,7 @@ function morph(html) {
   markNew();
   for (const row of document.querySelectorAll('.command[data-logging="true"]')) {
     const previous = previousGrowth.get(row.id) ?? [0, 0];
-    const increased = row.dataset.logGrowth.split(":").some((size, index) => Number(size) > previous[index]);
+    const increased = logLengths(row).some((size, index) => size > previous[index]);
     if (increased && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
       row.querySelector(":scope > .row-head > .heartbeat")?.animate([
         { transform: "scale(1)", opacity: 0.4 },

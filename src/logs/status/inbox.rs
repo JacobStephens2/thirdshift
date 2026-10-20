@@ -159,7 +159,16 @@ fn row(command: &Command, now: DateTime<Local>, outer_log: Option<&Path>) -> Row
     let live = command.state == "live";
     let (subject, title) = subject(&facts.repository, &facts.name, facts.issue.as_ref());
     Row {
-        id: identity(&command.record_path.to_string_lossy()),
+        // A Pass's dispatched Runs share its storage path. Their immutable
+        // Command facts distinguish them without tying identity to ordering.
+        id: identity(&format!(
+            "{}\0{}\0{}\0{}\0{}",
+            command.record_path.to_string_lossy(),
+            facts.kind,
+            facts.name,
+            facts.issue.as_ref().map_or("", |issue| issue.url.as_str()),
+            facts.started_at
+        )),
         started_ms: timestamp(&facts.started_at),
         live,
         logging: live && !matches!(command.health, Some(Health::Silent { .. })),

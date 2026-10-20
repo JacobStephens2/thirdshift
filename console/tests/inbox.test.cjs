@@ -269,3 +269,49 @@ test("heartbeat beats only for server-observed log growth and is flat when Silen
     assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
   } finally { await Promise.all([path, log, session].map(path => rm(path, { force: true }))); }
 });
+
+test("a push keeps a Pass dispatch selected instead of its parent", async t => {
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/security');
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, '20261019T110000+0000~security.command.json');
+  const now = new Date().toISOString();
+  const fixture = {
+    version: 1, kind: 'Security run', name: 'secure-fixture', repository: 'acme/widgets', hostname: 'fixture',
+    issue: null, process_id: 0, process_start: 'gone', harness: 'codex', model: null, effort: null,
+    started_at: now, ended_at: now, stages: [], session_log: null, outcome: 'failed', cause: 'Pass failure', issue_branch: null, pull_request: null
+  };
+  fixture.dispatched = [{ ...fixture, kind: 'Run', name: 'issue-303', issue: { number: 303, url: 'https://github.com/acme/widgets/issues/303', title: 'Dispatch before push' } }];
+  await writeFile(path, JSON.stringify(fixture));
+  try {
+    const page = await pageFor(t);
+    await page.goto(origin);
+    const child = page.locator('.command').filter({ has: page.locator(':scope > .row-head > .subject', { hasText: /^acme\/widgets#303$/ }) });
+    await child.click();
+    fixture.dispatched[0].issue.title = 'Dispatch after push';
+    await writeFile(path, JSON.stringify(fixture));
+    await page.getByText('Dispatch after push', { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement.querySelector(':scope > .row-head > .subject')?.textContent), 'acme/widgets#303');
+    const ids = await page.locator('.command').evaluateAll(rows => rows.map(row => row.id));
+    assert.equal(new Set(ids).size, ids.length);
+  } finally { await rm(path, { force: true }); }
+});
+
+test("selection survives a move into folded Done and regains focus when opened", async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  try {
+    const page = await pageFor(t);
+    await page.goto(origin);
+    const row = page.locator('.command').filter({ has: page.locator(':scope > .row-head > .subject', { hasText: /^acme\/widgets#1$/ }) });
+    await row.click();
+    const id = await row.getAttribute('id');
+    const fixture = JSON.parse(original);
+    fixture.outcome = 'merged';
+    await writeFile(path, JSON.stringify(fixture));
+    await page.waitForFunction(id => document.getElementById(id)?.closest('details').dataset.group === 'done', id);
+    assert.equal(await page.evaluate(() => document.querySelector('.command[aria-current="true"]')?.id ?? document.activeElement.id), id);
+    assert.equal(await page.locator('[data-group="done"][open]').count(), 0);
+    await page.locator('[data-group="done"] > summary').click();
+    await page.waitForFunction(id => document.activeElement.id === id, id);
+  } finally { await writeFile(path, original); }
+});
