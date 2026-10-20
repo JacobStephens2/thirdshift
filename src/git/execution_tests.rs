@@ -128,6 +128,38 @@ fn repository_lock_is_shared_by_worktrees_and_owned_until_drop() {
     assert!(path.exists(), "release removed the shared locking identity");
 }
 
+/// A path with a newline, or ending in a space, still reads as it is.
+#[test]
+fn a_checkout_location_reads_a_linked_worktree_whatever_its_path() {
+    let (temp, git) = super::tests::repo_with_origin();
+    let head = git.run(&["rev-parse", "HEAD"]).unwrap();
+    for name in ["worktree", "work\ntree", "worktree "] {
+        let path = temp.path().join(name);
+        git.run(&[
+            "worktree",
+            "add",
+            "--detach",
+            path.to_str().unwrap(),
+            "HEAD",
+        ])
+        .unwrap();
+        let worktree = Git::new(&path);
+        let location = worktree.checkout_location().unwrap();
+        assert_eq!(
+            location.root,
+            Path::new(&worktree.run(&["rev-parse", "--show-toplevel"]).unwrap()),
+            "{name:?}"
+        );
+        assert_eq!(
+            location.admin,
+            Path::new(&worktree.run(&["rev-parse", "--absolute-git-dir"]).unwrap()),
+            "{name:?}"
+        );
+        assert_eq!(location.common, worktree.common_dir().unwrap(), "{name:?}");
+        assert_eq!(location.head, head, "{name:?}");
+    }
+}
+
 #[test]
 fn ordinary_git_refuses_to_spawn_after_interruption() {
     with_recorded_signal(

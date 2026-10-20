@@ -254,7 +254,7 @@ This section supersedes recommendations only; [eval-tools.md](eval-tools.md) rem
 
 Key primary sources are linked beside the claims. Additional navigation:
 
-- thirdshift: [CONTEXT.md](../../CONTEXT.md), [earlier eval research](eval-tools.md), [replay research](second-opinion-replays.md), [ADR-0015](../adr/0015-security-findings-stay-private-until-fixed.md), [issue #698](https://github.com/JacobStephens2/thirdshift/issues/698).
+- thirdshift: [GLOSSARY.md](../../GLOSSARY.md), [earlier eval research](eval-tools.md), [replay research](second-opinion-replays.md), [ADR-0015](../adr/0015-security-findings-stay-private-until-fixed.md), [issue #698](https://github.com/JacobStephens2/thirdshift/issues/698).
 - Conference: [official 2026 New York schedule](https://ai.engineer/nyc/2026/schedule). This note contains no private recording links.
 - Replay source snapshots: [promptfoo 7901170](https://github.com/promptfoo/promptfoo/tree/79011700b4cb544ddd9267565571a1d42d3a3051), [Inspect a699376](https://github.com/UKGovernmentBEIS/inspect_ai/tree/a699376315c95b6410f5aec01af37c8dec452aea), [Inspect SWE 963523e](https://github.com/meridianlabs-ai/inspect_swe/tree/963523e73f8657535fdaf7a2bcb1fdb5ba3d566d), [Harbor 3e9f14a](https://github.com/harbor-framework/harbor/tree/3e9f14a7c1033896cc600d27de69d6948bcb3410).
 - Local platform snapshots: [MLflow 6d3ff85](https://github.com/mlflow/mlflow/tree/6d3ff8585e55714b22b653cd389b1b4070e5ef8e), [Phoenix c9a3087](https://github.com/Arize-ai/phoenix/tree/c9a3087027fedff23c32b083534d0a16bcce1a25), [Workshop a6b82d7](https://github.com/raindrop-ai/workshop/tree/a6b82d71596cf7e8974e5efae63f9e15260d76ef), [TruLens 8689320](https://github.com/truera/trulens/tree/86893205ee4ae749444df8d59d5a3d73d5bec4a3).

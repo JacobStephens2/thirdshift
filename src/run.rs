@@ -5,16 +5,16 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow};
+use chrono::{DateTime, TimeDelta, Utc};
 
 use crate::asks::Asks;
 use crate::base_fix::{Advice, BaseFix};
 use crate::branch::{self, Selection};
-use crate::child_run::Kind;
+use crate::child_run::{ChildAsks, Kind};
 use crate::claim::{self, Claim};
-use crate::delivery::{Delivery, Opening};
+use crate::delivery::{Delivery, Opening, OpeningSession};
 use crate::failed_run::FailedRun;
 use crate::github::{GitHub, Ticket};
-use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::launch::LaunchDirectory;
@@ -23,10 +23,8 @@ use crate::progress;
 use crate::prompt;
 use crate::session::Logs;
 use crate::spec_run;
+use crate::trust;
 use crate::worktree::Worktree;
-
-/// The implement session's kind, in its progress lines and log name.
-const IMPLEMENT: &str = "implement";
 
 /// Where a Run takes its PR: ready for review, or, in a Merge run, merged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -56,6 +54,11 @@ pub struct Reached {
     /// In a Spec run, a line on each Ticket it landed; empty in a Run.
     pub ticket_lines: Vec<String>,
 }
+
+/// How much earlier than its start a Run counts untrusted edits from. It
+/// covers the gap since the trust check that let it start, and GitHub's
+/// clock running behind this machine's: an edit in either is still caught.
+const STARTED_MARGIN: TimeDelta = TimeDelta::minutes(5);
 
 /// How a Run, or a Spec run, ended.
 pub struct Ended {
@@ -114,22 +117,12 @@ impl<'a> StartedBy<'a> {
 /// Harness's names for them once checked. Its Run notification, if `asks`
 /// has it send one, is for what started the Run to send, once it has ended.
 pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> Ended {
-    let mut base_fix = BaseFix::new(
-        started_by.child(),
-        asks.base_fix.clone(),
-        asks.harness.clone(),
-        crate::security::Options {
-            fix: asks.security_fix,
-            review: asks.security_review,
-        },
-    );
+    let mut base_fix = BaseFix::new(started_by.child(), asks.base_fix.clone());
     let mut outcome = run(issue, asks, started_by, &mut base_fix);
     if let Err(failed) = &mut outcome
         && let Some(recovery) = &mut failed.recovery
     {
-        recovery
-            .local_child_work
-            .extend_from_slice(base_fix.local_work());
+        recovery.add_child_work(base_fix.local_work().iter().cloned());
     }
     Ended {
         outcome,
@@ -150,10 +143,11 @@ pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> E
 /// The Launch directory is opened first, with its Origin match, the check
 /// that `issue` is open and the git identity check. A Run started by its
 /// command then checks the Harness, Model and Effort its sessions run on, as
-/// `asks` say, settling the Model and Effort in them, and in `base_fix`, on
-/// the Harness's names: one started by another thirdshift, or dispatched by
-/// a pass, runs on what that command checked. The rest is [`start`], through the
-/// Launch directory, GitHub and the logs.
+/// `asks` say, settling the Model and Effort in them on the Harness's names:
+/// one started by another thirdshift, or dispatched by a pass, runs on what
+/// that command checked. Only then is what it hands on to every child Run
+/// built from `asks`. The rest is [`start`], through the Launch directory,
+/// GitHub and the logs.
 ///
 /// `base_fix` is the one Base fix the Run, or a Spec run for its Spec PR, may
 /// start, or wait on, when its only red checks are Inherited failures: what
@@ -166,23 +160,30 @@ fn run(
 ) -> Result<Reached, FailedRun> {
     let directory = LaunchDirectory::open_for_run(issue)?;
     if let StartedBy::Command = started_by {
+        match trust::issue_trust(&GitHub::new(), issue) {
+            Ok(Some(check)) => progress::step(format!("warning: #{} {check}", issue.number)),
+            Ok(None) => {}
+            Err(error) => progress::step(format!(
+                "warning: could not check trust for #{}: {error:#}",
+                issue.number
+            )),
+        }
         asks.harness.check()?;
-        base_fix.runs_on(asks.harness.clone());
     }
     let asks = &*asks;
+    let child_asks = ChildAsks::of(asks);
     let mut outside = LaunchAndGitHub {
         directory: &directory,
         issue,
         goal: asks.goal,
-        security_fix: asks.security_fix,
-        security_review: asks.security_review
-            && !matches!(started_by, StartedBy::Child(Kind::Ticket { .. })),
+        security_review: child_asks.runs_security_review(started_by.child()),
+        child_asks: &child_asks,
         base_fix,
         logs: Logs::of_run(issue),
-        harness: &asks.harness,
         claim: None,
         issue_branch: None,
         child: started_by.child().is_some(),
+        started: Utc::now() - STARTED_MARGIN,
     };
     let outcome = start(
         &mut outside,
@@ -276,17 +277,15 @@ fn start<O: Outside>(
     if let Err(failed) = &mut outcome
         && let Some(recovery) = &mut failed.recovery
     {
-        if recovery.preservation == crate::recovery::Preservation::None
-            && matches!(selection, Selection::Continuation { .. })
-        {
-            recovery.preservation = crate::recovery::Preservation::Remote;
-        }
-        recovery.continuation = Some(crate::recovery::Continuation {
-            command: crate::args::continuation(issue, asks, is_spec),
-            launch: outside.launch_path().to_path_buf(),
-            base: base.clone(),
-            branch: selection.branch().to_string(),
-        });
+        recovery.add_command_context(
+            crate::recovery::Continuation {
+                command: crate::args::continuation(issue, asks, is_spec),
+                launch: outside.launch_path().to_path_buf(),
+                base: base.clone(),
+                branch: selection.branch().to_string(),
+            },
+            matches!(selection, Selection::Continuation { .. }),
+        );
     }
     if claims {
         outside.end_claim(outcome.as_ref().ok().map(|reached| reached.goal));
@@ -318,9 +317,8 @@ fn start_in_worktree<O: Outside>(
         return outside.spec_run(tickets, worktree, base, parallel);
     }
     let opening = Opening {
-        kind: IMPLEMENT,
+        session: OpeningSession::Implementation,
         prompt,
-        catch_up_from_origin: false,
     };
     outside.deliver(worktree, base, opening)
 }
@@ -387,19 +385,23 @@ trait Outside {
 /// The outside world of a Run on `issue` from the opened Launch directory
 /// `directory`: GitHub, its git, the logs, the Claim it made, the worktree,
 /// the Spec run and the Delivery to `goal`, with `base_fix` and the Run's
-/// Session `logs`, its sessions on `harness`.
+/// Session `logs`, its sessions on the Harness in `child_asks`, which it
+/// hands on to every child Run.
 struct LaunchAndGitHub<'a> {
     directory: &'a LaunchDirectory,
     issue: &'a IssueUrl,
     goal: Goal,
-    security_fix: bool,
+    /// Whether the Run runs its own Security review.
     security_review: bool,
+    child_asks: &'a ChildAsks,
     base_fix: &'a mut BaseFix,
     logs: Logs,
-    harness: &'a Choice,
     claim: Option<Claim<'a>>,
     issue_branch: Option<String>,
     child: bool,
+    /// When the Run began, less [`STARTED_MARGIN`], for its sessions' check
+    /// for untrusted edits.
+    started: DateTime<Utc>,
 }
 
 impl LaunchAndGitHub<'_> {
@@ -435,14 +437,14 @@ impl LaunchAndGitHub<'_> {
     /// The Delivery of the issue into the Base branch `base`.
     fn delivery<'d>(&'d mut self, base: &'d str) -> Delivery<'d> {
         Delivery {
-            security_fix: self.security_fix,
             security_review: self.security_review,
+            child_asks: self.child_asks,
             issue: self.issue,
             base,
             goal: self.goal,
             base_fix: self.base_fix,
             logs: &self.logs,
-            harness: self.harness,
+            started: self.started,
         }
     }
 }
@@ -459,7 +461,7 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
     }
 
     fn started(&mut self, work: Work) {
-        logs::started(work, self.harness);
+        logs::started(work, &self.child_asks.harness);
         if self.child {
             logs::issue_title(GitHub::new().issue_title(self.issue).ok());
         }
@@ -548,6 +550,7 @@ mod tests {
     use super::*;
     use crate::base_fix::BaseFixAsk;
     use crate::github::{PrState, PullRequest};
+    use crate::harness::Choice;
     use crate::labels::Labels;
     use crate::notification::NotificationAsk;
 
@@ -730,8 +733,7 @@ mod tests {
             base: &str,
             opening: Opening,
         ) -> Result<Reached, FailedRun> {
-            assert_eq!(opening.kind, IMPLEMENT);
-            assert!(!opening.catch_up_from_origin);
+            assert_eq!(opening.session, OpeningSession::Implementation);
             self.calls
                 .push(Call::Deliver(worktree, base.to_string(), opening.prompt));
             self.work_ends()

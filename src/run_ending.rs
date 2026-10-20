@@ -992,19 +992,24 @@ mod tests {
         let mut ended = failed("claude exited 3", Some(LOG), Some(PR));
         let failure = ended.outcome.as_mut().err().unwrap();
         let mut recovery = Recovery::new(Stage::SpecReview, Preservation::Remote);
-        recovery.tickets = Some(TicketProgress {
-            landed: 17,
-            total: 17,
-            reviewed: false,
-        });
-        recovery.continuation = Some(Continuation {
-            command:
-                "thirdshift https://github.com/acme/widgets/issues/21 --no-merge harness claude"
-                    .into(),
-            launch: "/launch".into(),
-            branch: "issue-21".into(),
-            base: "main".into(),
-        });
+        recovery.add_tickets(
+            TicketProgress {
+                landed: 17,
+                total: 17,
+            },
+            true,
+        );
+        recovery.add_command_context(
+            Continuation {
+                command:
+                    "thirdshift https://github.com/acme/widgets/issues/21 --no-merge harness claude"
+                        .into(),
+                launch: "/launch".into(),
+                branch: "issue-21".into(),
+                base: "main".into(),
+            },
+            false,
+        );
         failure.recovery = Some(Box::new(recovery));
         let account = Account::of_run(&ended);
         let shown = Shown::of(&account);

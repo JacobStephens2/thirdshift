@@ -96,7 +96,7 @@ And this will make it easier for agents to work with third shift with without th
 - (c) **A garden word,** chosen when the metaphor moves. If it never moves, you're left without a name.
 - (d) **This host's name, `thirdshift.thirdshift.app`.** This would set the pattern for more machines (`<host>.thirdshift.app`), but it repeats itself here, and Q2 already gives each machine its own address.
 
-*Recommended:* (a), `console.thirdshift.app`. Whatever you pick goes into `CONTEXT.md` as the **Console**. The address is a User config setting, so a second machine picks its own, and renaming one later means changing one Caddy file. Commands for the CLI are named in a later round, after Q10.
+*Recommended:* (a), `console.thirdshift.app`. Whatever you pick goes into `GLOSSARY.md` as the **Console**. The address is a User config setting, so a second machine picks its own, and renaming one later means changing one Caddy file. Commands for the CLI are named in a later round, after Q10.
 
 *Answer:* agree
 
@@ -208,7 +208,7 @@ I don't have objection to npm, but I'm okay waiting on something like Leptos or 
 
 *Answer:* I want to have email / password login, and a way to reset password by email (using the Resend config for thirdshift on that server). But in user config I want a whitelist of email addresses which can login to the console. And if a user hasn't created a password with `thirdshift console password`, I want them to be able to set their first password using the email password reset - or maybe better a create account flow, but only allowing account creation through the ui for users with their email in the User config console whitelist, and requiring the user to confirm their email with an email verification code or something in order to complete account creation. Otherwise I agree with the recommendation.
 
-*Checked:* This replaces "one password, its hash in the Credentials" from Q9 (b) and Q18. The `CONTEXT.md` Credentials entry no longer says the Console checks a password against it; it now says the Resend key also sends the Console's sign-in emails. Where accounts live is Q28, and the flows are Q29 to Q31. The User config already has `email.to` and `email.from` (`src/config.rs`).
+*Checked:* This replaces "one password, its hash in the Credentials" from Q9 (b) and Q18. The `GLOSSARY.md` Credentials entry no longer says the Console checks a password against it; it now says the Resend key also sends the Console's sign-in emails. Where accounts live is Q28, and the flows are Q29 to Q31. The User config already has `email.to` and `email.from` (`src/config.rs`).
 
 **Q19 - The CLI commands.** This builds on Q10 (a), the CLI is the API, and on Q12. The name for a Command on the command line is the issue it's working on, written `chart35#239`, with the owner added only when two repositories share a name, or the issue URL. A Pass with no issue is named by its kind and Command log stamp, such as `architect-20261017T142101`. The options:
 - (a) **Views and actions at the top level, and the Console's own commands under `console`:**
@@ -317,7 +317,7 @@ The variations would live in `.scratch/prototypes/711-console/` and go on a thro
 - (b) **Inside the Credentials file.**
 - (c) **SQLite.**
 
-*Recommended:* (a). The page writes accounts, so they shouldn't share a file with the key that only Setup writes. If a bug in the page corrupts the file, you lose sign-ins, not Run notifications. It also matches Q11's choice of files, and no record here needs a query. The term goes into `CONTEXT.md` as **Console account**.
+*Recommended:* (a). The page writes accounts, so they shouldn't share a file with the key that only Setup writes. If a bug in the page corrupts the file, you lose sign-ins, not Run notifications. It also matches Q11's choice of files, and no record here needs a query. The term goes into `GLOSSARY.md` as **Console account**.
 
 *Answer:* agree
 
@@ -491,7 +491,7 @@ Though alternatively I'm considering allowing users to "Acknowledge" by adding a
 *Checked:* A themes folder that holds fonts too is Q47.
 
 **Q43 - Glossary terms and ADRs.** The candidates:
-- **For `CONTEXT.md`:** **Inbox** (naming its groups), **Needs you**, **Silent**, **Slow**, **Usual range** and **Theme**. Each group and page name is a heading on the page, not a term.
+- **For `GLOSSARY.md`:** **Inbox** (naming its groups), **Needs you**, **Silent**, **Slow**, **Usual range** and **Theme**. Each group and page name is a heading on the page, not a term.
 - **An ADR,** "The Console has one layout, and its looks are themes made of tokens". It's hard to reverse once people have exported themes, a reader might wonder why there aren't several layouts, and you weighed both.
 
 Silence as the stall rule goes in Silent's definition. "Motion only for thirdshift's activity" and "visual calm" go in #776 as rules, since they're cheap to change.
@@ -500,7 +500,7 @@ Silence as the stall rule goes in Silent's definition. "Motion only for thirdshi
 
 *Answer:* agree
 
-*Checked:* `CONTEXT.md` now has Inbox, Needs you, Silent, Slow, Usual range and Theme, and the Console entry opens on the Inbox. The ADR is [0018](../../docs/adr/0018-the-console-has-one-layout-and-themes.md).
+*Checked:* `GLOSSARY.md` now has Inbox, Needs you, Silent, Slow, Usual range and Theme, and the Console entry opens on the Inbox. The ADR is [0018](../../docs/adr/0018-the-console-has-one-layout-and-themes.md).
 
 **Q44 - Recording the verdict.** #711 is closed, now that the CLI has shipped, so the pointer belongs on #776. The options:
 - (a) **Copy the three research notes from the prototype branch onto `web-ui` and commit them with this round.** Leave the prototype on `prototype/711-console`. Post a comment on #776 with the verdict and the branch commit. Then rewrite #776's body (the look, the pages, the new stories and rules) and run `/to-tickets 776`.
@@ -559,12 +559,12 @@ Silence as the stall rule goes in Silent's definition. "Motion only for thirdshi
 - **The first version can act, so it's more than a viewer** (Q1 c). It lists every Command on this host, with their logs, and it can Stop a live one. "Live ones first" is reopened by the Inbox (Q35).
 - **History goes back as far as the logs in the current layout do** (Q1, Q26 b). From 2026-10-03, Commands come from the Activity logs and Command logs, without stages until the Command record exists. From 2026-09-25 to 2026-10-02 there are only Session logs, grouped by issue and stamp, with no outcome.
 - **Each machine serves its own Console** (Q2 a). Nothing needs a list of machines. Finding from GitHub which machine a Run is on is left for when there's a second machine.
-- **Each Command keeps a Command record:** one file beside its Command log, kept after it ends, with its process id, its issue, each child Run's stages and when each began, and its outcome (Q3 b, Q11 a). One whose process is gone, with no outcome, shows as died at its last stage. A SQLite index built from these files can come later, if a query gets slow. The term is now in `CONTEXT.md`.
+- **Each Command keeps a Command record:** one file beside its Command log, kept after it ends, with its process id, its issue, each child Run's stages and when each began, and its outcome (Q3 b, Q11 a). One whose process is gone, with no outcome, shows as died at its last stage. A SQLite index built from these files can come later, if a query gets slow. The term is now in `GLOSSARY.md`.
 - **Security sessions and findings appear on the Console,** behind the sign-in (Q4 b). ADR 0015 keeps write-ups away from third parties, and your own server isn't one.
 - **`thirdshift console` serves the page** as you, on 127.0.0.1, with a proxy in front (Q5 a, Q19 a). It's built on axum, with templates checked at compile time, and the async code stays inside the Console (Q17 a). It re-executes itself when `thirdshift update` replaces the binary. It's an exception to ADR 0009, a reader that runs all the time where nothing that starts work does, so it gets an ADR of its own: [ADR 0016](../../docs/adr/0016-the-console-is-a-long-running-reader.md).
 - **Sign-in is by email and password, for the addresses an allowlist in the User config names** (Q9 b, replaced by your Q18 answer). It has a session cookie, CSRF tokens on every action, and 30-day sessions. After five wrong passwords, sign-in slows to one try a minute. Setting a new password, or `console sign-out`, ends that account's sessions. An account is created, or its password reset, through a code sent by email (Q30), or with `thirdshift console password`. Where accounts are kept is Q28.
 - **Agents use the CLI, not the page** (Q7).
-- **Stop** leaves the issue for the Day shift: `needs-triage`, with `ready-for-agent` not put back, unless `--requeue` (Q12 b). It waits for the end and reports the outcome and anything left behind. It works on whole Commands, and a Spec run's Stop stops its Tickets' Runs (Q13 a). Stopping a single Ticket's Run gets its own issue. `CONTEXT.md` now has Stop, and the Claim entry says a Stop doesn't put `ready-for-agent` back.
+- **Stop** leaves the issue for the Day shift: `needs-triage`, with `ready-for-agent` not put back, unless `--requeue` (Q12 b). It waits for the end and reports the outcome and anything left behind. It works on whole Commands, and a Spec run's Stop stops its Tickets' Runs (Q13 a). Stopping a single Ticket's Run gets its own issue. `GLOSSARY.md` now has Stop, and the Claim entry says a Stop doesn't put `ready-for-agent` back.
 - **Setting up a new server is one command and one `sudo` paste** (Q14 a, Q22 a, Q24 b). `console install` sees whether Caddy or Apache is running and prints one script for `sudo`. The script writes a system unit that runs as you, and the proxy's site file. For Apache, that's a port-80 virtual host with `flushpackets=on` and gzip off on the stream paths, followed by `certbot --apache -d <name>`. Then it enables the unit and restarts the proxy. nginx and others get a README section, and a machine with no proxy uses an SSH tunnel.
 - **This host's Console is `console.thirdshift.app`, and stephens.page's is `thirdshift.stephens.page`** (Q8, Q25). Each Console's User config lists the others' addresses, and its header links to them. Nothing is fetched from another machine (Q23 b). An issue will propose that a Claim say which machine took the issue (Q23 c).
 - **The page is HTML rendered in Rust, with htmx, its server-push extension and idiomorph copied into the repo,** embedded with `include_dir`, with no npm and no CDN (Q15 a). The page's files live under `src/`, since the crate publishes only `/src`, `/skills`, `README.md` and `LICENSE`.
@@ -580,7 +580,7 @@ Silence as the stall rule goes in Silent's definition. "Motion only for thirdshi
 - **One "set your password" flow by email code creates an account or resets its password** (Q30 a). The page answers the same way whether or not an address is allowed. A code is 6 digits, valid for 15 minutes, with 5 tries, and codes go out at most once a minute and 10 times a day per address. `thirdshift console password --email <address>` does the same on the CLI. Without a Resend key, the email flows are off and the CLI is how accounts get passwords (Q31 a). Sign-in emails come from `email.from`.
 - **Setup asks whether to run the Console,** its whole address (with an example), and the allowed emails, which default to `email.to`. Then it offers `console install` (Q32 a).
 - **A Command record that can't be written is a warning, and never changes a Run's outcome,** the same rule as for Run notifications. Shout if you'd rather it fail the Run.
-- **Who did what** (Q33 a). A Stop writes an Activity log line naming who asked: the account's email from the Console, or the Unix user from the CLI. Account events go in a **Console log** per machine, which `thirdshift console log` prints and the page shows. Page views aren't recorded. `CONTEXT.md` has the Console log, and the Activity log and Stop entries now mention who asked.
+- **Who did what** (Q33 a). A Stop writes an Activity log line naming who asked: the account's email from the Console, or the Unix user from the CLI. Account events go in a **Console log** per machine, which `thirdshift console log` prints and the page shows. Page views aren't recorded. `GLOSSARY.md` has the Console log, and the Activity log and Stop entries now mention who asked.
 - **Two Specs, made with `/to-spec`, then `/to-tickets` for each** (Q34 b). #711 is the CLI: the Command record, `status`/`show`/`logs`, then Stop. A new Spec covers the Console: the read-only page with the Session log view, accounts and sign-in, Stop on the page, `console install`, Setup's questions, the Console log, and the look last, once Q27 is decided. The follow-up issues are filed separately: launchd on macOS, stopping a single Ticket's Run, and a Claim that names its machine. The CLI Spec goes first and doesn't wait on Q27; the Console Spec's last Ticket, the look, does (your note on 2026-10-18).
 - **ADR 0016 records `thirdshift console` as a reader that runs all the time,** next to ADR 0009's "nothing schedules itself".
 - **The look (Q27), from the `console` prototype,** in your words where quoted:
@@ -608,7 +608,7 @@ Silence as the stall rule goes in Silent's definition. "Motion only for thirdshi
 - **All seven pages are wanted** (Q40 a). Scope is handled when the Specs and Tickets are cut (Q48).
 - **Built-in Themes are compiled in. Settings live in the User config, which the page can write in part** (Q41 a and b). What it may write is Q46, and where user Themes live is Q47.
 - **The built-in Themes' fonts are embedded,** as Latin-subset woff2 files at the weights they use (Q42 a). Users' own fonts are Q47.
-- **`CONTEXT.md` has Inbox, Needs you, Silent, Slow, Usual range and Theme,** and [ADR 0018](../../docs/adr/0018-the-console-has-one-layout-and-themes.md) records one layout with Themes made of tokens (Q43). "Motion only for thirdshift's activity" and "visual calm" go in #776 as rules.
+- **`GLOSSARY.md` has Inbox, Needs you, Silent, Slow, Usual range and Theme,** and [ADR 0018](../../docs/adr/0018-the-console-has-one-layout-and-themes.md) records one layout with Themes made of tokens (Q43). "Motion only for thirdshift's activity" and "visual calm" go in #776 as rules.
 - **The research notes are on `web-ui`, the prototype stays on its branch, and the verdict is on #776** (Q44 a).
 - **Three new User config settings** (Q45 a):
   - `inbox.days = 7`: how long an ended problem stays in Needs you, and how far back Resolved reaches. Done is one day.
@@ -667,7 +667,7 @@ Silence as the stall rule goes in Silent's definition. "Motion only for thirdshi
 ## Research results (2026-10-19)
 
 - **#711, the CLI, has shipped and is closed.** Its Tickets #768 to #774 merged as #777 and #779 to #784, `thirdshift stop --requeue` included. Confirmed by `gh issue view` and `src/args.rs` on `main`.
-- **#776 is also labelled `architect-idea`,** so an Architecture review chose it as the next move. While it's `needs-triage`, every Architect run on thirdshift is skipped (CONTEXT.md, Architect idea). Confirmed by `gh issue view 776`.
+- **#776 is also labelled `architect-idea`,** so an Architecture review chose it as the next move. While it's `needs-triage`, every Architect run on thirdshift is skipped (GLOSSARY.md, Architect idea). Confirmed by `gh issue view 776`.
 - **Session log lines carry no time.** A Codex Session log is bare `thread.started`, `item.completed` and similar events. The Command log stamps every line `HH:MM:SS`, including one line per tool call (`implement: $ rg …`). Confirmed by `712-20261018T210511-0400-implement.jsonl` and its `.log`.
 - **CI watch logs only when the count of running checks changes.** #712's CI watch had gaps of up to 2.5 minutes, so a longer CI run could go 10 minutes without a line. Confirmed by `712-20261018T210511-0400.log`, lines 218 to 223.
 - **Session logs moved beside their Command log on 2026-10-09** (#599, commit `b26821d`). The ones before that are in `sessions/`. Confirmed by `git log` and `ls`.

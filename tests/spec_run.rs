@@ -392,6 +392,46 @@ fn a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr() {
 }
 
 #[test]
+fn a_spec_stops_before_starting_a_ticket_written_by_an_untrusted_account() {
+    let scenario = linear_spec();
+    let mut state = scenario.gh_state();
+    state["author_associations"] = serde_json::json!({"21": "CONTRIBUTOR"});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_contains(
+        &result.stderr,
+        "Ticket #21: issue author is not a Trusted account",
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.origin_log("issue-21").is_none());
+}
+
+#[test]
+fn a_ticket_edited_by_an_untrusted_account_before_its_spec_was_marked_ready_starts() {
+    let scenario = linear_spec();
+    let mut state = scenario.gh_state();
+    // The later labelling, by an outsider, is not one that counts.
+    state["trust_events"] = serde_json::json!({"20": [
+        {"created_at": "2020-01-04T00:00:00Z", "event": "labeled",
+         "label": {"name": "ready-for-agent"}, "actor": {"login": "acme"}},
+        {"created_at": "2020-01-05T00:00:00Z", "event": "labeled",
+         "label": {"name": "ready-for-agent"}, "actor": {"login": "outsider"}}
+    ]});
+    state["edits"] = serde_json::json!({"21": [
+        {"kind": "body", "by": "outsider", "at": "2020-01-03T00:00:00Z"}
+    ]});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["no-email", &spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(!result.stderr.contains("edited"), "{}", result.stderr);
+}
+
+#[test]
 fn security_review_runs_once_after_spec_review_over_the_whole_spec_branch() {
     let scenario = linear_spec();
     let base_commit = scenario.launch_git(&["rev-parse", "main"]);
@@ -1152,6 +1192,26 @@ gh pr create --base issue-20 --head issue-{fix} --title "Fix CI" --body "Closes 
             checks_on_head(GREEN)
         ),
     );
+}
+
+#[test]
+fn a_base_fix_a_tickets_run_starts_runs_the_security_review_its_ticket_skips() {
+    let scenario = spec_whose_ticket_inherits_a_failure();
+    base_fix_lands_on_the_spec_branch(&scenario, 22);
+    scenario.agent_does_for_in_session(22, 2, &security_review_script(&[]));
+    scenario.agent_does_for_in_session(SPEC, 2, &security_review_script(&[]));
+
+    let result = scenario.run(&[&spec_url(&scenario), "base-fix", "security-review"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "22", "20", "20"]);
+    let calls = scenario.claude_calls();
+    assert_eq!(calls[2]["branch"], "issue-22");
+    assert_contains(
+        calls[2]["prompt"].as_str().unwrap(),
+        "branch issue-22 against Base branch issue-20",
+    );
+    assert_eq!(pr_from(&scenario, "issue-22").unwrap()["state"], "MERGED");
 }
 
 #[test]

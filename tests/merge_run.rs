@@ -19,6 +19,137 @@ gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
 
 const PR_URL: &str = "https://github.com/acme/widgets/pull/1";
 
+#[test]
+fn a_pr_merged_while_the_opening_session_runs_is_reported_as_merged() {
+    for merge in [false, true] {
+        let scenario = Scenario::new();
+        // Simulate a human merging the published work while the session is
+        // still running, then GitHub deleting the Issue branch.
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}\
+             git push -q origin HEAD\n\
+             gh pr merge 1 --merge --match-head-commit \"$(git rev-parse HEAD)\"\n\
+             git push -q origin --delete issue-7\n"
+        ));
+        let issue = scenario.issue_url(7);
+        let args = if merge {
+            vec!["merge", &issue]
+        } else {
+            vec![&*issue]
+        };
+
+        let result = scenario.run(&args);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(result.stdout, format!("{PR_URL}\n"));
+        assert_eq!(
+            result.stderr.lines().last(),
+            Some(format!("thirdshift: PR {PR_URL} is merged").as_str())
+        );
+        assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
+        assert!(scenario.gh_calls_of("pr", "edit").is_empty());
+        assert!(scenario.gh_calls_of("pr", "ready").is_empty());
+        assert_eq!(scenario.origin_log("issue-7"), None);
+        scenario.assert_cleaned_up("issue-7");
+    }
+}
+
+#[test]
+fn a_pr_merged_during_ci_is_reported_as_merged_without_recreating_its_branch() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        on_ci_read(
+            1,
+            r#"gh pr merge 1 --merge --match-head-commit "$(git ls-remote origin refs/heads/issue-7 | cut -f1)"
+git push -q origin --delete issue-7"#
+        )
+    ));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    assert_eq!(
+        result.stderr.lines().last(),
+        Some(format!("thirdshift: PR {PR_URL} is merged").as_str())
+    );
+    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
+    assert_eq!(scenario.origin_log("issue-7"), None);
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn a_merged_pr_with_local_work_left_out_still_fails_and_retains_that_work() {
+    for leftover in [
+        "echo leftover >> feature.txt",
+        "echo leftover > untracked.txt",
+        "echo leftover >> feature.txt; git add feature.txt",
+        "echo leftover >> feature.txt; git add feature.txt; git commit -qm Leftover",
+    ] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}\
+             git push -q origin HEAD\n\
+             gh pr merge 1 --merge --match-head-commit \"$(git rev-parse HEAD)\"\n\
+             git push -q origin --delete issue-7\n\
+             {leftover}\n"
+        ));
+
+        let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("is merged, not open"),
+            "{}",
+            result.stderr
+        );
+        assert!(
+            result.stderr.contains("keeping the worktree"),
+            "{}",
+            result.stderr
+        );
+        let worktree = scenario.launch_dir().with_file_name("widgets-issue-7");
+        let file = if leftover.contains("untracked.txt") {
+            "untracked.txt"
+        } else {
+            "feature.txt"
+        };
+        assert!(
+            std::fs::read_to_string(worktree.join(file))
+                .unwrap()
+                .contains("leftover")
+        );
+        assert_eq!(scenario.origin_log("issue-7"), None);
+    }
+}
+
+#[test]
+fn externally_merged_pr_retains_tracked_changes_hidden_by_index_flags() {
+    for flag in ["assume-unchanged", "skip-worktree"] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}\
+             git push -q origin HEAD\n\
+             gh pr merge 1 --merge --match-head-commit \"$(git rev-parse HEAD)\"\n\
+             git push -q origin --delete issue-7\n\
+             git update-index --{flag} feature.txt\n\
+             echo leftover >> feature.txt\n"
+        ));
+
+        let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "{flag}: {}", result.stderr);
+        let worktree = scenario.launch_dir().with_file_name("widgets-issue-7");
+        assert!(
+            std::fs::read_to_string(worktree.join("feature.txt"))
+                .unwrap()
+                .contains("leftover")
+        );
+        assert_eq!(scenario.origin_log("issue-7"), None);
+    }
+}
+
 /// Launch from `develop`, a branch other than the default, and have the agent
 /// open its PR into it, then run `then`.
 fn merge_into_develop(scenario: &Scenario, then: &str) {
@@ -886,6 +1017,85 @@ fn a_review_repair_whose_background_work_was_killed_gets_a_resume() {
             .any(|log| log.ends_with("-repair-1-resume.jsonl")),
         "logs: {logs:?}"
     );
+}
+
+/// Bash that records `by`'s edit to issue 7's `kind`, its body or title, dated
+/// after any Run's start.
+fn edits_issue_7(kind: &str, by: &str) -> String {
+    format!(
+        "gh fake edits 7 '[{{\"kind\": \"{kind}\", \"by\": \"{by}\", \"at\": \"2999-01-01T00:00:00Z\"}}]'\n"
+    )
+}
+
+#[test]
+fn an_untrusted_edit_while_the_run_is_under_way_starts_no_repair() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}{}",
+            checks_on_head(RED),
+            edits_issue_7("body", "outsider")
+        ),
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains(
+            "#7 body edited since the Run started by an account that is not a Trusted account; starting no further session"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1, "no Repair session");
+}
+
+#[test]
+fn an_untrusted_edit_while_the_run_is_under_way_starts_no_resume() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}{}",
+            edits_issue_7("body", "outsider"),
+            leaves_running("cargo test")
+        ),
+    );
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains("starting no further session"),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1, "no Resume session");
+}
+
+#[test]
+fn an_untrusted_edit_dated_just_before_the_runs_local_start_still_stops_repairs() {
+    let scenario = Scenario::new();
+    // GitHub dates the edit before this machine's clock says the Run
+    // started: the gap since the trust check, or clock lag.
+    let at = (chrono::Utc::now() - chrono::TimeDelta::seconds(30)).format("%Y-%m-%dT%H:%M:%SZ");
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{AGENT_OPENS_PR}{}gh fake edits 7 '[{{\"kind\": \"body\", \"by\": \"outsider\", \"at\": \"{at}\"}}]'\n",
+            checks_on_head(RED),
+        ),
+    );
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains("starting no further session"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1, "no Repair session");
 }
 
 /// Bash that has the next `times` merge attempts fail with `error`.

@@ -1,0 +1,582 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Architecture · thirdshift</title>
+<meta name="description" content="Six diagrams of thirdshift's architecture: what runs where, which steps an agent does and which thirdshift does, the Run, Merge run, Spec run and Passes, and the boundaries around an agent session.">
+<link rel="canonical" href="https://thirdshift.app/architecture/">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="thirdshift">
+<meta property="og:url" content="https://thirdshift.app/architecture/">
+<meta property="og:title" content="Architecture · thirdshift">
+<meta property="og:description" content="Six diagrams of thirdshift's architecture: what runs where, which steps an agent does and which thirdshift does, the Run, Merge run, Spec run and Passes, and the boundaries around an agent session.">
+<meta property="og:image" content="https://thirdshift.app/share-card.png">
+<meta property="og:image:alt" content="thirdshift: your issues go to press overnight.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Architecture · thirdshift">
+<meta name="twitter:description" content="Six diagrams of thirdshift's architecture: what runs where, which steps an agent does and which thirdshift does, the Run, Merge run, Spec run and Passes, and the boundaries around an agent session.">
+<meta name="twitter:image" content="https://thirdshift.app/share-card.png">
+<meta name="twitter:image:alt" content="thirdshift: your issues go to press overnight.">
+<link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/fonts/fonts.css">
+<link rel="stylesheet" href="/styles.css">
+<link rel="stylesheet" href="/how-it-works/guide.css">
+<link rel="stylesheet" href="/architecture/architecture.css">
+<script src="/main.js" defer></script>
+</head>
+<body class="guide">
+<a class="skip-guide" href="#figures">Skip to the figures</a>
+<header class="hero page-head">
+  <div class="wrap">
+    <div class="paper-sheet">
+      <nav class="guide-nav" aria-label="Site"><a href="/">thirdshift / home</a><a href="/how-it-works/">How thirdshift works</a><a href="/prompts/">Prompts and skills</a><a href="/videos/">Videos</a><a href="https://github.com/JacobStephens2/thirdshift">GitHub</a></nav>
+      <p class="eyebrow">Reference architecture · six figures</p>
+      <h1>Architecture</h1>
+      <p class="framing">thirdshift turns a GitHub issue into a pull request by running unattended agent sessions against it. The agents write and review the code. Everything else is thirdshift, one deterministic program: it decides what an agent works on, checks its work, and never lets an agent mark its own work ready. These figures show what runs where, who does each step, and where the boundaries are.</p>
+      <p class="as-of">Drawn from <a href="/docs/">the manual</a> for the source on <code>main</code>; an installed release may differ. For the same process told step by step, read <a href="/how-it-works/">How thirdshift works</a>.</p>
+    </div>
+  </div>
+</header>
+
+<main>
+  <nav class="wrap arch-index" id="figures" aria-label="Figures">
+    <p class="eyebrow">The figures</p>
+    <ol>
+      <li><a href="#factory"><span>Figure 1</span>The factory</a></li>
+      <li><a href="#run"><span>Figure 2</span>A Run</a></li>
+      <li><a href="#merge-run"><span>Figure 3</span>A Merge run</a></li>
+      <li><a href="#spec-run"><span>Figure 4</span>A Spec run</a></li>
+      <li><a href="#passes"><span>Figure 5</span>The Passes</a></li>
+      <li><a href="#containment"><span>Figure 6</span>Containment</a></li>
+    </ol>
+    <ul class="arch-key" aria-label="Key to the figures">
+      <li class="k-tool">thirdshift, deterministic</li>
+      <li class="k-agent">an agent session</li>
+      <li class="k-state">state on GitHub, or with you</li>
+      <li class="k-out">the result</li>
+      <li class="k-machine">your machine</li>
+    </ul>
+  </nav>
+
+  <section class="sec arch-sec" id="factory" aria-labelledby="factory-title">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Figure 1 · the whole system</p><h2 id="factory-title">Agents write the code; thirdshift decides when it counts</h2></div>
+      <p class="lede">An agent session can do anything your user account can, with nobody there to approve it. So every decision that matters is made outside the session, by thirdshift, before the session starts and after it ends. The <strong>Day shift</strong> is you: you shape the issues and review the pull requests.</p>
+      <figure class="arch-fig">
+        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 1, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 652" role="img" aria-labelledby="fig-factory-desc"><title id="fig-factory-desc">The Day shift files issues on GitHub and starts thirdshift, or the operating system’s scheduler starts a Pass. On your machine, thirdshift runs seven deterministic stages: pre-flight checks, the Claim, a Worktree, Delivery, keeping the pull request green, the Self-merge in a Merge run, and cleaning up or failing safely. Inside the Worktree, an agent session on the chosen Harness writes and reviews the code, with Repair sessions when the branch needs work. Every stage that touches GitHub is thirdshift’s, and the pull request goes back to the Day shift for review.</title><defs><marker id="fig-factory-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-factory-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-factory-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-factory-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
+<rect class="zone" x="10.5" y="40.5" width="210" height="572" rx="4"/>
+<rect class="lbg" x="16" y="47" width="77.3" height="15"/><text class="zl" x="20" y="58.5">DAY SHIFT</text>
+<text class="zs" x="20" y="75">you</text>
+<rect class="box" x="25.5" y="95.5" width="180" height="74" rx="3"/>
+<text class="bt" x="35" y="116">Shape the work</text>
+<text class="bl" x="35" y="133">/grill-with-docs,</text>
+<text class="bl" x="35" y="147.5">/to-spec, /to-tickets</text>
+<rect class="box" x="25.5" y="300.5" width="180" height="64" rx="3"/>
+<text class="bt" x="35" y="321">Run notification</text>
+<text class="bl" x="35" y="338">email and logs when</text>
+<text class="bl" x="35" y="352.5">each Run ends</text>
+<rect class="box" x="25.5" y="505.5" width="180" height="64" rx="3"/>
+<text class="bt" x="35" y="526">Review the PR</text>
+<text class="bl" x="35" y="543">or let a Merge run</text>
+<text class="bl" x="35" y="557.5">merge it itself</text>
+<rect class="zone" x="235.5" y="40.5" width="550" height="572" rx="4"/>
+<rect class="lbg" x="241" y="47" width="100.39999999999999" height="15"/><text class="zl" x="245" y="58.5">YOUR MACHINE</text>
+<text class="zs" x="245" y="75">ideally a VM with nothing from production on it</text>
+<rect class="box" x="255.5" y="85.5" width="240" height="60" rx="3"/>
+<text class="bt code" x="265" y="106">thirdshift &lt;Issue URL&gt;</text>
+<text class="bl" x="265" y="123">or merge, architect, pickup …</text>
+<rect class="box" x="510.5" y="85.5" width="255" height="60" rx="3"/>
+<text class="bt" x="520" y="106">OS scheduler</text>
+<text class="bl" x="520" y="123">cron or launchd starts Passes</text>
+<text class="note" x="520" y="136" text-anchor="start">pickup · architect · secure</text>
+<rect class="box big" x="255.5" y="170.5" width="510" height="425" rx="3"/>
+<text class="bt" x="265" y="191">thirdshift</text>
+<text class="bl" x="265" y="208">one Rust binary, deterministic: everything outside the agent’s loop</text>
+<rect class="zone" x="270.5" y="228.5" width="240" height="350" rx="4"/>
+<rect class="lbg" x="276" y="235" width="69.6" height="15"/><text class="zl" x="280" y="246.5">WORKTREE</text>
+<text class="zs" x="280" y="263">&lt;repo&gt;-issue-&lt;n&gt;</text>
+<rect class="box agent" x="285.5" y="282.5" width="210" height="74" rx="3"/>
+<text class="bt" x="295" y="303">Agent session</text>
+<text class="bl" x="295" y="320">on the Harness: claude,</text>
+<text class="bl" x="295" y="334.5">codex, agy, grok, muse</text>
+<text class="bl" x="295" y="349">or opencode</text>
+<rect class="box" x="285.5" y="368.5" width="102" height="64" rx="3"/>
+<text class="bt" x="295" y="389">Prompt</text>
+<text class="bl" x="295" y="406">Session</text>
+<text class="bl" x="295" y="420.5">prompt</text>
+<rect class="box" x="393.5" y="368.5" width="102" height="64" rx="3"/>
+<text class="bt" x="403" y="389">Skills</text>
+<text class="bl" x="403" y="406">Factory</text>
+<text class="bl" x="403" y="420.5">skills</text>
+<rect class="box agent" x="285.5" y="444.5" width="210" height="64" rx="3"/>
+<text class="bt" x="295" y="465">Repair · Resume</text>
+<text class="bl" x="295" y="482">new sessions, same</text>
+<text class="bl" x="295" y="496.5">Harness; ≤ 5 Repairs</text>
+<text class="note" x="285" y="536" text-anchor="start">unattended: all your user’s</text>
+<text class="note" x="285" y="551" text-anchor="start">permissions, nobody approves</text>
+<rect class="box tool" x="530.5" y="228.5" width="220" height="40" rx="3"/>
+<text class="bt" x="540" y="246">Pre-flight checks</text>
+<text class="bl" x="540" y="261">Origin match, open issue</text>
+<circle class="badge" cx="530" cy="228" r="9"/><text class="badge-n" x="530" y="232" text-anchor="middle">1</text>
+<rect class="box tool" x="530.5" y="280.5" width="220" height="40" rx="3"/>
+<text class="bt" x="540" y="298">Claim</text>
+<text class="bl" x="540" y="313">label the issue in-progress</text>
+<circle class="badge" cx="530" cy="280" r="9"/><text class="badge-n" x="530" y="284" text-anchor="middle">2</text>
+<rect class="box tool" x="530.5" y="332.5" width="220" height="40" rx="3"/>
+<text class="bt" x="540" y="350">Worktree</text>
+<text class="bl" x="540" y="365">own checkout, skills in</text>
+<circle class="badge" cx="530" cy="332" r="9"/><text class="badge-n" x="530" y="336" text-anchor="middle">3</text>
+<rect class="box tool" x="530.5" y="384.5" width="220" height="40" rx="3"/>
+<text class="bt" x="540" y="402">Delivery</text>
+<text class="bl" x="540" y="417">push, verify PR, ready it</text>
+<circle class="badge" cx="530" cy="384" r="9"/><text class="badge-n" x="530" y="388" text-anchor="middle">4</text>
+<rect class="box tool" x="530.5" y="436.5" width="220" height="40" rx="3"/>
+<text class="bt" x="540" y="454">Keep it green</text>
+<text class="bl" x="540" y="469">merge base in, CI, Repair</text>
+<circle class="badge" cx="530" cy="436" r="9"/><text class="badge-n" x="530" y="440" text-anchor="middle">5</text>
+<rect class="box tool" x="530.5" y="488.5" width="220" height="40" rx="3"/>
+<text class="bt" x="540" y="506">Self-merge</text>
+<text class="bl" x="540" y="521">Merge run: watched head</text>
+<circle class="badge" cx="530" cy="488" r="9"/><text class="badge-n" x="530" y="492" text-anchor="middle">6</text>
+<rect class="box tool" x="530.5" y="540.5" width="220" height="40" rx="3"/>
+<text class="bt" x="540" y="558">Clean up, or fail safely</text>
+<text class="bl" x="540" y="573">Failed run: push, draft</text>
+<circle class="badge" cx="530" cy="540" r="9"/><text class="badge-n" x="530" y="544" text-anchor="middle">7</text>
+<rect class="zone" x="800.5" y="40.5" width="190" height="572" rx="4"/>
+<rect class="lbg" x="806" y="47" width="54.199999999999996" height="15"/><text class="zl" x="810" y="58.5">GITHUB</text>
+<text class="zs" x="810" y="75">the shared record</text>
+<rect class="box" x="812.5" y="228.5" width="166" height="92" rx="3"/>
+<text class="bt" x="822" y="249">Issue or Spec</text>
+<text class="bl" x="822" y="266">ready-for-agent</text>
+<text class="bl" x="822" y="280.5">→ in-progress</text>
+<text class="bl" x="822" y="295">sub-issues: Tickets</text>
+<rect class="box" x="812.5" y="348.5" width="166" height="72" rx="3"/>
+<text class="bt" x="822" y="369">Issue branch</text>
+<text class="bl code" x="822" y="386">issue-&lt;n&gt;</text>
+<text class="bl code" x="822" y="400.5">on origin</text>
+<rect class="box" x="812.5" y="436.5" width="166" height="40" rx="3"/>
+<text class="bt" x="822" y="454">CI checks</text>
+<text class="bl" x="822" y="469">GitHub Actions</text>
+<rect class="box" x="812.5" y="488.5" width="166" height="90" rx="3"/>
+<text class="bt" x="822" y="509">Pull request</text>
+<text class="bl" x="822" y="526">ready for review,</text>
+<text class="bl" x="822" y="540.5">merged, or a draft</text>
+<text class="bl" x="822" y="555">after a Failed run</text>
+<path class="ar acc" d="M750 248H810" marker-end="url(#fig-factory-acc)"/>
+<path class="ar acc" d="M750 300H810" marker-end="url(#fig-factory-acc)"/>
+<path class="ar acc" d="M750 404H810" marker-end="url(#fig-factory-acc)"/>
+<path class="ar acc" d="M750 456H810" marker-end="url(#fig-factory-acc)"/>
+<path class="ar acc" d="M750 508H810" marker-end="url(#fig-factory-acc)"/>
+<path class="ar acc" d="M750 560H810" marker-end="url(#fig-factory-acc)"/>
+<path class="ar acc" d="M530 352H497" marker-end="url(#fig-factory-acc)"/>
+<path class="ar agent" d="M497 332V404H528" marker-end="url(#fig-factory-agent)"/>
+<path class="ar acc" d="M530 464H497" marker-end="url(#fig-factory-acc)"/>
+<path class="ar ink" d="M205 132H253" marker-end="url(#fig-factory-ink)"/>
+<path class="ar ink" d="M375 145V168" marker-end="url(#fig-factory-ink)"/>
+<path class="ar ink" d="M637 145V168" marker-end="url(#fig-factory-ink)"/>
+<path class="ar ink" d="M253 332H207" marker-end="url(#fig-factory-ink)"/>
+<path class="ar ink" d="M115 95V22H955V226" marker-end="url(#fig-factory-ink)"/>
+<rect class="lbg" x="423" y="12" width="274" height="16"/><text class="al" x="560" y="24" text-anchor="middle">files issues, marks them ready-for-agent</text>
+<path class="ar ink" d="M955 578V634H115V571" marker-end="url(#fig-factory-ink)"/>
+<rect class="lbg" x="456" y="624" width="208" height="16"/><text class="al" x="560" y="636" text-anchor="middle">pull request, ready for review</text>
+</svg></div>
+        <figcaption><b>Figure 1</b> The factory. The numbered stages are thirdshift's; only the magenta boxes are agents.</figcaption>
+      </figure>
+      <ol class="arch-stages">
+        <li><b>Pre-flight checks</b> stop a Run before anything is created: the Issue URL must match the clone's <code>origin</code>, the issue must be open, and the Base branch must be on <code>origin</code>.</li>
+        <li><b>The Claim</b> labels the issue <code>in-progress</code>, so the issue list shows what the factory is working on.</li>
+        <li><b>A Worktree</b> gives the Run its own checkout beside your clone, so yours is never touched.</li>
+        <li><b>Delivery</b> pushes the branch and checks that the pull request exists and targets the Base branch. thirdshift, not the agent, marks it ready.</li>
+        <li><b>Keeping it green</b> merges the Base branch in and watches CI. A conflict or the branch's own red check starts a Repair, at most 5 a Run.</li>
+        <li><b>The Self-merge</b>, in a Merge run only, merges exactly the head commit whose CI thirdshift watched.</li>
+        <li><b>Cleaning up</b> removes the Worktree. A <b>Failed run</b> pushes its work first and turns the pull request back into a draft.</li>
+      </ol>
+    </div>
+  </section>
+
+  <section class="sec arch-sec" id="run" aria-labelledby="run-title">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Figure 2 · <code>thirdshift &lt;Issue URL&gt;</code></p><h2 id="run-title">A Run: one issue in, one pull request out</h2></div>
+      <p class="lede">Work reaches a Run as a <strong>Ready issue</strong>, labelled <code>ready-for-agent</code>. You write most of them, but thirdshift writes some too: an Architect run publishes its plan, a Security run allowed to fix files the fix, and a Base fix files the red CI on the Base branch. One agent session writes, tests and reviews the change, then opens the pull request. A second session reviews it for security, if you ask for that. Then thirdshift checks, pushes and watches.</p>
+      <figure class="arch-fig">
+        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 2, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 392" role="img" aria-labelledby="fig-run-desc"><title id="fig-run-desc">Ready issues come from the Day shift by hand, or from thirdshift itself: an Architect run publishes a plan, a Security run allowed to fix files a fix issue, and a Base fix files an issue for red CI on the Base branch. You, a Pickup run or the run that filed the issue starts a Run on it. thirdshift prepares the Run with checks, the Claim and a Worktree; an agent session implements, tests, reviews and opens the pull request; thirdshift then delivers it and watches CI. Red CI or a conflict starts a Repair session, at most five per Run; out of Repairs, the Run fails with its work pushed and the pull request back to draft. Otherwise the pull request is left ready for review.</title><defs><marker id="fig-run-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-run-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-run-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-run-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
+<path class="vm" d="M136 2H864V384H136Z"/>
+<rect class="lbg" x="146" y="364" width="100.39999999999999" height="15"/><text class="zl" x="150" y="376">YOUR MACHINE</text>
+<rect class="lbg" x="250.39999999999998" y="364" width="318.2" height="15"/><text class="zs" x="254.39999999999998" y="376">ideally a VM with nothing from production on it</text>
+<rect class="box" x="10.5" y="14.5" width="112" height="46" rx="3"/>
+<text class="bt" x="20" y="32">Day shift</text>
+<text class="bl" x="20" y="47">you, by hand</text>
+<rect class="box tool" x="150.5" y="14.5" width="170" height="46" rx="3"/>
+<text class="bt" x="160" y="32">Architect run</text>
+<text class="bl" x="160" y="47">publishes a plan</text>
+<rect class="box tool" x="332.5" y="14.5" width="170" height="46" rx="3"/>
+<text class="bt" x="342" y="32">Security run</text>
+<text class="bl" x="342" y="47">files a fix, if allowed</text>
+<rect class="box tool" x="514.5" y="14.5" width="160" height="46" rx="3"/>
+<text class="bt" x="524" y="32">Base fix</text>
+<text class="bl" x="524" y="47">files “CI red on base”</text>
+<path class="ar ink" d="M235 60V86"/>
+<path class="ar ink" d="M417 60V86"/>
+<path class="ar ink" d="M594 60V86H92V148" marker-end="url(#fig-run-ink)"/>
+<rect class="lbg" x="202.9" y="94" width="254.2" height="16"/><text class="al" x="330" y="106" text-anchor="middle">file issues, labelled ready-for-agent</text>
+<path class="ar ink" d="M50 60V148" marker-end="url(#fig-run-ink)"/>
+<rect class="lbg" x="15.299999999999997" y="94" width="69.4" height="16"/><text class="al" x="50" y="106" text-anchor="middle">files one</text>
+<rect class="box" x="10.5" y="150.5" width="112" height="64" rx="3"/>
+<text class="bt" x="20" y="171">Ready issue</text>
+<text class="bl" x="20" y="188">labelled</text>
+<text class="bl" x="20" y="202.5">ready-for-agent</text>
+<text class="note" x="10" y="236" text-anchor="start">Started by you,</text>
+<text class="note" x="10" y="251" text-anchor="start">a Pickup run, or</text>
+<text class="note" x="10" y="266" text-anchor="start">the run that</text>
+<text class="note" x="10" y="281" text-anchor="start">filed it</text>
+<rect class="box tool" x="148.5" y="150.5" width="150" height="64" rx="3"/>
+<text class="bt" x="158" y="171">Prepare</text>
+<text class="bl" x="158" y="188">checks · Claim</text>
+<text class="bl" x="158" y="202.5">· Worktree</text>
+<circle class="badge" cx="148" cy="150" r="9"/><text class="badge-n" x="148" y="154" text-anchor="middle">1</text>
+<rect class="box agent" x="324.5" y="124.5" width="210" height="116" rx="3"/>
+<text class="bt" x="334" y="145">Agent session</text>
+<text class="bl code" x="334" y="162">/thirdshift-implement</text>
+<text class="bl code" x="334" y="176.5">/thirdshift-tdd</text>
+<text class="bl code" x="334" y="191">/thirdshift-code-review</text>
+<text class="bl code" x="334" y="205.5">/thirdshift-pr → PR</text>
+<rect class="box tool" x="560.5" y="150.5" width="150" height="64" rx="3"/>
+<text class="bt" x="570" y="171">Deliver</text>
+<text class="bl" x="570" y="188">push, gh pr ready,</text>
+<text class="bl" x="570" y="202.5">merge base in</text>
+<circle class="badge" cx="560" cy="150" r="9"/><text class="badge-n" x="560" y="154" text-anchor="middle">2</text>
+<rect class="box tool" x="736.5" y="150.5" width="112" height="64" rx="3"/>
+<text class="bt" x="746" y="171">Watch CI</text>
+<text class="bl" x="746" y="188">own failure</text>
+<text class="bl" x="746" y="202.5">or Inherited</text>
+<circle class="badge" cx="736" cy="150" r="9"/><text class="badge-n" x="736" y="154" text-anchor="middle">3</text>
+<path class="ar ink" d="M122 182H146" marker-end="url(#fig-run-ink)"/>
+<path class="ar ink" d="M298 182H322" marker-end="url(#fig-run-ink)"/>
+<path class="ar ink" d="M534 182H558" marker-end="url(#fig-run-ink)"/>
+<path class="ar ink" d="M710 182H734" marker-end="url(#fig-run-ink)"/>
+<rect class="box agent" x="600.5" y="280.5" width="220" height="60" rx="3"/>
+<text class="bt" x="610" y="301">Repair session</text>
+<text class="bl" x="610" y="318">conflict or red CI; one</text>
+<text class="bl" x="610" y="332.5">Check re-run if unchanged</text>
+<path class="ar agent" d="M792 214V278" marker-end="url(#fig-run-agent)"/>
+<rect class="lbg" x="777.1" y="238" width="29.799999999999997" height="16"/><text class="al" x="792" y="250" text-anchor="middle">red</text>
+<path class="ar agent" d="M620 280V216" marker-end="url(#fig-run-agent)"/>
+<rect class="lbg" x="605.1" y="238" width="29.799999999999997" height="16"/><text class="al" x="620" y="250" text-anchor="middle">≤ 5</text>
+<rect class="box" x="324.5" y="280.5" width="210" height="60" rx="3"/>
+<text class="bt" x="334" y="301">Failed run</text>
+<text class="bl" x="334" y="318">out of Repairs: push work,</text>
+<text class="bl" x="334" y="332.5">PR to draft, Claim kept</text>
+<path class="ar faint" d="M600 310H536" marker-end="url(#fig-run-faint)"/>
+<rect class="box out" x="874.5" y="150.5" width="116" height="64" rx="3"/>
+<text class="bt o" x="884" y="171">PR ready</text>
+<text class="bl o" x="884" y="188">for review</text>
+<path class="ar ink" d="M848 182H872" marker-end="url(#fig-run-ink)"/>
+</svg></div>
+        <figcaption><b>Figure 2</b> A Run. The agent writes and reviews the code, but only thirdshift decides the pull request is ready.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="sec arch-sec" id="merge-run" aria-labelledby="merge-run-title">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Figure 3 · <code>thirdshift merge &lt;Issue URL&gt;</code></p><h2 id="merge-run-title">A Merge run: the Run, then thirdshift merges it</h2></div>
+      <p class="lede">The same Run, one step further. Once the pull request is open, ready, mergeable and green, thirdshift merges it with a merge commit, on exactly the head whose CI it watched. Commits someone else pushed to the branch are reviewed first. A required human review still stops it, leaving the pull request ready for you.</p>
+      <figure class="arch-fig">
+        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 3, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 392" role="img" aria-labelledby="fig-merge-desc"><title id="fig-merge-desc">A Merge run is a Run that goes one step further. If someone else pushed commits to the Issue branch, a review Repair looks at them first. Once the pull request is open, ready, mergeable and green, thirdshift checks the review decision and merges it with a merge commit on exactly the head whose CI it watched. The issue is closed and its Claim removed.</title><defs><marker id="fig-merge-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-merge-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-merge-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-merge-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
+<path class="vm" d="M136 2H996V262H864V384H136Z"/>
+<rect class="lbg" x="146" y="364" width="100.39999999999999" height="15"/><text class="zl" x="150" y="376">YOUR MACHINE</text>
+<rect class="lbg" x="250.39999999999998" y="364" width="318.2" height="15"/><text class="zs" x="254.39999999999998" y="376">ideally a VM with nothing from production on it</text>
+<rect class="box" x="10.5" y="14.5" width="112" height="46" rx="3"/>
+<text class="bt" x="20" y="32">Day shift</text>
+<text class="bl" x="20" y="47">you, by hand</text>
+<rect class="box tool" x="150.5" y="14.5" width="170" height="46" rx="3"/>
+<text class="bt" x="160" y="32">Architect run</text>
+<text class="bl" x="160" y="47">publishes a plan</text>
+<rect class="box tool" x="332.5" y="14.5" width="170" height="46" rx="3"/>
+<text class="bt" x="342" y="32">Security run</text>
+<text class="bl" x="342" y="47">files a fix, if allowed</text>
+<rect class="box tool" x="514.5" y="14.5" width="160" height="46" rx="3"/>
+<text class="bt" x="524" y="32">Base fix</text>
+<text class="bl" x="524" y="47">files “CI red on base”</text>
+<path class="ar ink" d="M235 60V86"/>
+<path class="ar ink" d="M417 60V86"/>
+<path class="ar ink" d="M594 60V86H92V148" marker-end="url(#fig-merge-ink)"/>
+<rect class="lbg" x="202.9" y="94" width="254.2" height="16"/><text class="al" x="330" y="106" text-anchor="middle">file issues, labelled ready-for-agent</text>
+<path class="ar ink" d="M50 60V148" marker-end="url(#fig-merge-ink)"/>
+<rect class="lbg" x="15.299999999999997" y="94" width="69.4" height="16"/><text class="al" x="50" y="106" text-anchor="middle">files one</text>
+<rect class="box" x="10.5" y="150.5" width="112" height="64" rx="3"/>
+<text class="bt" x="20" y="171">Ready issue</text>
+<text class="bl" x="20" y="188">labelled</text>
+<text class="bl" x="20" y="202.5">ready-for-agent</text>
+<text class="note" x="10" y="236" text-anchor="start">Started by you,</text>
+<text class="note" x="10" y="251" text-anchor="start">a Pickup run, or</text>
+<text class="note" x="10" y="266" text-anchor="start">the run that</text>
+<text class="note" x="10" y="281" text-anchor="start">filed it</text>
+<rect class="box tool" x="148.5" y="150.5" width="150" height="64" rx="3"/>
+<text class="bt" x="158" y="171">Prepare</text>
+<text class="bl" x="158" y="188">checks · Claim</text>
+<text class="bl" x="158" y="202.5">· Worktree</text>
+<circle class="badge" cx="148" cy="150" r="9"/><text class="badge-n" x="148" y="154" text-anchor="middle">1</text>
+<rect class="box agent" x="324.5" y="124.5" width="210" height="116" rx="3"/>
+<text class="bt" x="334" y="145">Agent session</text>
+<text class="bl code" x="334" y="162">/thirdshift-implement</text>
+<text class="bl code" x="334" y="176.5">/thirdshift-tdd</text>
+<text class="bl code" x="334" y="191">/thirdshift-code-review</text>
+<text class="bl code" x="334" y="205.5">/thirdshift-pr → PR</text>
+<rect class="box tool" x="560.5" y="150.5" width="150" height="64" rx="3"/>
+<text class="bt" x="570" y="171">Deliver</text>
+<text class="bl" x="570" y="188">push, gh pr ready,</text>
+<text class="bl" x="570" y="202.5">merge base in</text>
+<circle class="badge" cx="560" cy="150" r="9"/><text class="badge-n" x="560" y="154" text-anchor="middle">2</text>
+<rect class="box tool" x="736.5" y="150.5" width="112" height="64" rx="3"/>
+<text class="bt" x="746" y="171">Watch CI</text>
+<text class="bl" x="746" y="188">own failure</text>
+<text class="bl" x="746" y="202.5">or Inherited</text>
+<circle class="badge" cx="736" cy="150" r="9"/><text class="badge-n" x="736" y="154" text-anchor="middle">3</text>
+<path class="ar ink" d="M122 182H146" marker-end="url(#fig-merge-ink)"/>
+<path class="ar ink" d="M298 182H322" marker-end="url(#fig-merge-ink)"/>
+<path class="ar ink" d="M534 182H558" marker-end="url(#fig-merge-ink)"/>
+<path class="ar ink" d="M710 182H734" marker-end="url(#fig-merge-ink)"/>
+<rect class="box agent" x="600.5" y="280.5" width="220" height="60" rx="3"/>
+<text class="bt" x="610" y="301">Repair session</text>
+<text class="bl" x="610" y="318">conflict or red CI; one</text>
+<text class="bl" x="610" y="332.5">Check re-run if unchanged</text>
+<path class="ar agent" d="M792 214V278" marker-end="url(#fig-merge-agent)"/>
+<rect class="lbg" x="777.1" y="238" width="29.799999999999997" height="16"/><text class="al" x="792" y="250" text-anchor="middle">red</text>
+<path class="ar agent" d="M620 280V216" marker-end="url(#fig-merge-agent)"/>
+<rect class="lbg" x="605.1" y="238" width="29.799999999999997" height="16"/><text class="al" x="620" y="250" text-anchor="middle">≤ 5</text>
+<rect class="box" x="324.5" y="280.5" width="210" height="60" rx="3"/>
+<text class="bt" x="334" y="301">Failed run</text>
+<text class="bl" x="334" y="318">out of Repairs: push work,</text>
+<text class="bl" x="334" y="332.5">PR to draft, Claim kept</text>
+<path class="ar faint" d="M600 310H536" marker-end="url(#fig-merge-faint)"/>
+<rect class="box agent new" x="690.5" y="8.5" width="170" height="56" rx="3"/>
+<text class="bt" x="700" y="29">Foreign commits</text>
+<text class="bl" x="700" y="46">someone else pushed:</text>
+<text class="bl" x="700" y="60.5">a review Repair</text>
+<rect class="tagbg" x="825.1" y="0" width="28.9" height="15"/><text class="tag" x="830.1" y="11">new</text>
+<path class="ar agent" d="M775 64V110H640V148" marker-end="url(#fig-merge-agent)"/>
+<rect class="box tool new" x="874.5" y="132.5" width="116" height="100" rx="3"/>
+<text class="bt" x="884" y="153">Self-merge</text>
+<text class="bl" x="884" y="170">review gate,</text>
+<text class="bl" x="884" y="184.5">--merge</text>
+<text class="bl" x="884" y="199">--match-head-</text>
+<text class="bl" x="884" y="213.5">commit</text>
+<circle class="badge" cx="874" cy="132" r="9"/><text class="badge-n" x="874" y="136" text-anchor="middle">4</text>
+<rect class="tagbg" x="955.1" y="124" width="28.9" height="15"/><text class="tag" x="960.1" y="135">new</text>
+<path class="ar ink" d="M848 182H872" marker-end="url(#fig-merge-ink)"/>
+<rect class="box out" x="874.5" y="300.5" width="116" height="60" rx="3"/>
+<text class="bt o" x="884" y="321">Merged</text>
+<text class="bl o" x="884" y="338">issue closed,</text>
+<text class="bl o" x="884" y="352.5">Claim gone</text>
+<path class="ar ink" d="M932 232V298" marker-end="url(#fig-merge-ink)"/>
+</svg></div>
+        <ul class="arch-key"><li class="k-new">new in this workflow</li></ul>
+        <figcaption><b>Figure 3</b> A Merge run. thirdshift merges only code an agent wrote or reviewed, never through GitHub's auto-merge.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="sec arch-sec" id="spec-run" aria-labelledby="spec-run-title">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Figure 4 · <code>thirdshift &lt;Spec URL&gt;</code></p><h2 id="spec-run-title">A Spec run: many Merge runs, one pull request</h2></div>
+      <p class="lede">An issue with sub-issues is a <strong>Spec</strong>, and its sub-issues are <strong>Tickets</strong>. Each Ticket gets its own Merge run, not into <code>main</code> but into the <strong>Spec branch</strong>, in the order GitHub's “blocked by” links allow. Independent Tickets run at once, each in its own Worktree. The Spec ends as one pull request for you to review.</p>
+      <figure class="arch-fig">
+        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 4, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 312" role="img" aria-labelledby="fig-spec-desc"><title id="fig-spec-desc">A Spec is an issue whose sub-issues are Tickets. Each Ticket gets its own Merge run into the Spec branch, in the order its blocked-by links allow. One session then reviews the whole Spec branch against the Spec, thirdshift delivers it and watches CI, and the Spec ends as one Spec PR ready for review.</title><defs><marker id="fig-spec-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-spec-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-spec-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-spec-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
+<path class="vm" d="M140 2H892V304H140Z"/>
+<rect class="lbg" x="150" y="284" width="100.39999999999999" height="15"/><text class="zl" x="154" y="296">YOUR MACHINE</text>
+<rect class="lbg" x="254.39999999999998" y="284" width="318.2" height="15"/><text class="zs" x="258.4" y="296">ideally a VM with nothing from production on it</text>
+<rect class="box" x="10.5" y="112.5" width="112" height="64" rx="3"/>
+<text class="bt" x="20" y="133">Spec</text>
+<text class="bl" x="20" y="150">an issue with</text>
+<text class="bl" x="20" y="164.5">sub-issues</text>
+<rect class="box tool new" x="160.5" y="24.5" width="190" height="56" rx="3"/>
+<text class="bt" x="170" y="45">Ticket a · Merge run</text>
+<text class="bl" x="170" y="62">blocked by nothing</text>
+<rect class="tagbg" x="315.1" y="16" width="28.9" height="15"/><text class="tag" x="320.1" y="27">new</text>
+<rect class="box tool new" x="160.5" y="116.5" width="190" height="56" rx="3"/>
+<text class="bt" x="170" y="137">Ticket b · Merge run</text>
+<text class="bl" x="170" y="154">blocked by a</text>
+<rect class="box tool new" x="160.5" y="208.5" width="190" height="56" rx="3"/>
+<text class="bt" x="170" y="229">Ticket c · Merge run</text>
+<text class="bl" x="170" y="246">blocked by a and b</text>
+<path class="ar ink" d="M122 144H140V52H158" marker-end="url(#fig-spec-ink)"/>
+<path class="ar ink" d="M140 144H158" marker-end="url(#fig-spec-ink)"/>
+<path class="ar ink" d="M140 144V236H158" marker-end="url(#fig-spec-ink)"/>
+<rect class="box new" x="390.5" y="104.5" width="170" height="80" rx="3"/>
+<text class="bt" x="400" y="125">Spec branch</text>
+<text class="bl" x="400" y="142">each Ticket’s PR</text>
+<text class="bl" x="400" y="156.5">merged in; draft</text>
+<text class="bl" x="400" y="171">Spec PR, checklist</text>
+<path class="ar ink" d="M350 52H370V136H388" marker-end="url(#fig-spec-ink)"/>
+<path class="ar ink" d="M350 144H388" marker-end="url(#fig-spec-ink)"/>
+<path class="ar ink" d="M350 236H370V152H388" marker-end="url(#fig-spec-ink)"/>
+<rect class="box agent new" x="590.5" y="94.5" width="180" height="100" rx="3"/>
+<text class="bt" x="600" y="115">Spec review</text>
+<text class="bl" x="600" y="132">one session reviews</text>
+<text class="bl" x="600" y="146.5">the whole branch</text>
+<text class="bl" x="600" y="161">against the Spec</text>
+<rect class="tagbg" x="735.1" y="86" width="28.9" height="15"/><text class="tag" x="740.1" y="97">new</text>
+<path class="ar ink" d="M560 144H588" marker-end="url(#fig-spec-ink)"/>
+<rect class="box tool" x="800.5" y="112.5" width="80" height="64" rx="3"/>
+<text class="bt" x="810" y="133">Deliver</text>
+<text class="bl" x="810" y="150">+ CI</text>
+<path class="ar ink" d="M770 144H798" marker-end="url(#fig-spec-ink)"/>
+<rect class="box out" x="906.5" y="112.5" width="84" height="64" rx="3"/>
+<text class="bt o" x="916" y="133">Spec PR</text>
+<text class="bl o" x="916" y="150">ready</text>
+<path class="ar ink" d="M880 144H904" marker-end="url(#fig-spec-ink)"/>
+<text class="note" x="390" y="230" text-anchor="start">A failed Ticket stops the Tickets that depend on it.</text>
+<text class="note" x="390" y="245" text-anchor="start">The Spec carries the Claim; its Tickets make none.</text>
+</svg></div>
+        <ul class="arch-key"><li class="k-new">new in this workflow</li></ul>
+        <figcaption><b>Figure 4</b> A Spec run. Many Merge runs land on a Spec branch, and one Spec PR reaches the Day shift.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="sec arch-sec" id="passes" aria-labelledby="passes-title">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Figure 5 · <code>thirdshift pickup</code>, <code>architect</code>, <code>secure</code></p><h2 id="passes-title">The Passes: the factory finds its own work</h2></div>
+      <p class="lede">A <strong>Pass</strong> takes no Issue URL, so your operating system's scheduler can start it; thirdshift never schedules itself. Only one Pass runs on a repository at a time, and a Pass with nothing to do is skipped, not failed. Architect and Security runs wait while a Ready issue is open, so work you shaped goes first.</p>
+      <figure class="arch-fig">
+        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 5, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 334" role="img" aria-labelledby="fig-passes-desc"><title id="fig-passes-desc">The operating system’s scheduler starts three kinds of Pass, each taking no Issue URL. A Pickup run sweeps closed issues, respects the Claim limit and runs the lowest-numbered Ready issue. An Architect run reviews the architecture and either publishes a plan, which it builds with a Run or Spec run, or files an idea for the Day shift to triage. A Security run audits the Base branch, runs target code to reproduce what it finds, records each finding privately and, when fixing is allowed, files a fix issue and runs it. Running target code is why the Security run needs an OS sandbox, which is proposed but not built.</title><defs><marker id="fig-passes-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-passes-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-passes-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-passes-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
+<path class="vm" d="M2 2H998V326H2Z"/>
+<rect class="lbg" x="10" y="306" width="100.39999999999999" height="15"/><text class="zl" x="14" y="318">YOUR MACHINE</text>
+<rect class="lbg" x="114.39999999999999" y="306" width="423.79999999999995" height="15"/><text class="zs" x="118.39999999999999" y="318">results leave only as GitHub issues, PRs and private advisories</text>
+<rect class="box new" x="10.5" y="118.5" width="120" height="64" rx="3"/>
+<text class="bt" x="20" y="139">OS scheduler</text>
+<text class="bl" x="20" y="156">cron, launchd</text>
+<rect class="tagbg" x="95.1" y="110" width="28.9" height="15"/><text class="tag" x="100.1" y="121">new</text>
+<path class="ar ink" d="M130 150H150V44H168" marker-end="url(#fig-passes-ink)"/>
+<path class="ar ink" d="M150 150H168" marker-end="url(#fig-passes-ink)"/>
+<path class="ar ink" d="M150 150V256H168" marker-end="url(#fig-passes-ink)"/>
+<rect class="box tool" x="170.5" y="14.5" width="220" height="60" rx="3"/>
+<text class="bt" x="180" y="35">Pickup run</text>
+<text class="bl" x="180" y="52">Sweep, Claim limit, then</text>
+<text class="bl" x="180" y="66.5">the lowest Ready issue</text>
+<rect class="box tool" x="420.5" y="14.5" width="140" height="60" rx="3"/>
+<text class="bt" x="430" y="35">Run</text>
+<text class="bl" x="430" y="52">Figure 2</text>
+<path class="ar ink" d="M390 44H418" marker-end="url(#fig-passes-ink)"/>
+<rect class="box agent" x="170.5" y="120.5" width="220" height="60" rx="3"/>
+<text class="bt" x="180" y="141">Architect run</text>
+<text class="bl" x="180" y="158">an Architecture review</text>
+<text class="bl" x="180" y="172.5">finds the top idea</text>
+<rect class="box" x="420.5" y="106.5" width="180" height="44" rx="3"/>
+<text class="bt" x="430" y="124">Architect plan</text>
+<text class="bl" x="430" y="139">ready-for-agent</text>
+<rect class="box" x="420.5" y="160.5" width="180" height="44" rx="3"/>
+<text class="bt" x="430" y="178">Architect idea</text>
+<text class="bl" x="430" y="193">needs-triage, for you</text>
+<path class="ar ink" d="M390 140H418" marker-end="url(#fig-passes-ink)"/>
+<path class="ar faint" d="M390 165H404V182H418" marker-end="url(#fig-passes-faint)"/>
+<rect class="box tool" x="630.5" y="106.5" width="150" height="44" rx="3"/>
+<text class="bt" x="640" y="124">Run or Spec run</text>
+<text class="bl" x="640" y="139">Figures 2 to 4</text>
+<path class="ar ink" d="M600 128H628" marker-end="url(#fig-passes-ink)"/>
+<rect class="ring prop" x="160.5" y="214.5" width="240" height="84" rx="5"/>
+<rect class="proptag" x="193" y="206" width="199" height="15"/><text class="tag" x="198" y="217">needs an OS sandbox · proposed</text>
+<rect class="box agent" x="170.5" y="226.5" width="220" height="60" rx="3"/>
+<text class="bt" x="180" y="247">Security run</text>
+<text class="bl" x="180" y="264">audits the Base branch;</text>
+<text class="bl" x="180" y="278.5">runs code to reproduce</text>
+<rect class="box" x="430.5" y="226.5" width="190" height="60" rx="3"/>
+<text class="bt" x="440" y="247">Security finding</text>
+<text class="bl" x="440" y="264">recorded privately:</text>
+<text class="bl" x="440" y="278.5">advisory or issue</text>
+<rect class="box agent" x="650.5" y="226.5" width="190" height="60" rx="3"/>
+<text class="bt" x="660" y="247">Security fix</text>
+<text class="bl" x="660" y="264">if allowed: files an</text>
+<text class="bl" x="660" y="278.5">issue and runs it</text>
+<path class="ar ink" d="M400 256H428" marker-end="url(#fig-passes-ink)"/>
+<path class="ar faint" d="M620 256H648" marker-end="url(#fig-passes-faint)"/>
+<text class="note" x="860" y="248" text-anchor="start">Fencing: on a</text>
+<text class="note" x="860" y="263" text-anchor="start">schedule, with</text>
+<text class="note" x="860" y="278" text-anchor="start">fixing allowed</text>
+</svg></div>
+        <ul class="arch-key"><li class="k-new">new in this workflow</li><li class="k-prop">proposed, not built</li></ul>
+        <figcaption><b>Figure 5</b> The Passes. The factory finds Ready issues, architecture plans and vulnerabilities by itself.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section class="sec arch-sec" id="containment" aria-labelledby="containment-title">
+    <div class="wrap">
+      <div class="sec-head"><p class="eyebrow">Figure 6 · from the outside in</p><h2 id="containment-title">Containment: where the boundaries are</h2></div>
+      <p class="lede">thirdshift draws no security boundary around its agents: every session can do what your user account can. So containment comes from where you run it. The boundary that holds is the machine: best a virtual machine with nothing from production on it. An OS sandbox inside it, for the code an agent runs, is proposed but not built.</p>
+      <figure class="arch-fig">
+        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 6, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 500" role="img" aria-labelledby="fig-containment-desc"><title id="fig-containment-desc">Nested boundaries around an agent session, from the outside in: your machine, ideally a virtual machine with nothing from production on it; your user account, whose permissions and logins every session has; the Worktree, which keeps checkouts apart but is not a security boundary; and, proposed but not built, an OS sandbox inside it for the target code an agent runs. Work leaves the machine only to GitHub and to the model provider.</title><defs><marker id="fig-containment-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-containment-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-containment-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-containment-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
+<rect class="ring vmr" x="10.5" y="30.5" width="640" height="455" rx="5"/>
+<text class="zl" x="22" y="50">YOUR MACHINE</text>
+<text class="zs" x="22" y="66">ideally a VM with nothing from production on it</text>
+<rect class="ring user" x="30.5" y="92.5" width="600" height="378" rx="5"/>
+<text class="zl" x="42" y="112">YOUR USER ACCOUNT</text>
+<text class="zs" x="42" y="128">every session has all its permissions, sudo too</text>
+<rect class="box tool" x="50.5" y="170.5" width="160" height="56" rx="3"/>
+<text class="bt" x="60" y="191">thirdshift</text>
+<text class="bl" x="60" y="208">starts every session</text>
+<rect class="box" x="50.5" y="246.5" width="160" height="74" rx="3"/>
+<text class="bt" x="60" y="267">Logins</text>
+<text class="bl" x="60" y="284">gh, git, Harness:</text>
+<text class="bl" x="60" y="298.5">any session can</text>
+<text class="bl" x="60" y="313">read and use them</text>
+<rect class="box" x="50.5" y="340.5" width="160" height="56" rx="3"/>
+<text class="bt" x="60" y="361">Logs</text>
+<text class="bl" x="60" y="378">sessions, audits</text>
+<rect class="ring soft" x="230.5" y="152.5" width="380" height="300" rx="5"/>
+<text class="zl" x="242" y="172">WORKTREE</text>
+<text class="zs" x="242" y="188">keeps checkouts apart; not a boundary</text>
+<rect class="box agent" x="250.5" y="206.5" width="340" height="74" rx="3"/>
+<text class="bt" x="260" y="227">Agent session</text>
+<text class="bl" x="260" y="244">Harness sandbox and approvals off</text>
+<text class="bl" x="260" y="258.5">(ADR-0013); Claude Code’s auto</text>
+<text class="bl" x="260" y="273">mode screens risky actions</text>
+<rect class="ring prop" x="250.5" y="318.5" width="340" height="116" rx="5"/>
+<text class="zl" x="262" y="338">OS SANDBOX</text>
+<text class="zs" x="262" y="354">bubblewrap + AppArmor, or Podman</text>
+<rect class="proptag" x="414.5" y="310" width="167.5" height="15"/><text class="tag" x="419.5" y="321">proposed · #726 #608 #398</text>
+<text class="note" x="262" y="392" text-anchor="start">target code would run here: builds,</text>
+<text class="note" x="262" y="407" text-anchor="start">tests, proofs of concept, with no</text>
+<text class="note" x="262" y="422" text-anchor="start">network and scratch-only writes</text>
+<path class="ar agent" d="M330 280V316" marker-end="url(#fig-containment-agent)"/>
+<rect class="lbg" x="342.9" y="289" width="122.19999999999999" height="16"/><text class="al" x="404" y="301" text-anchor="middle">would run code in</text>
+<path class="ar acc" d="M210 198H230V243H248" marker-end="url(#fig-containment-acc)"/>
+<path class="ar faint" d="M250 262H212" marker-end="url(#fig-containment-faint)"/>
+<rect class="box" x="700.5" y="130.5" width="280" height="74" rx="3"/>
+<text class="bt" x="710" y="151">GitHub</text>
+<text class="bl" x="710" y="168">pushes, PRs, labels, private</text>
+<text class="bl" x="710" y="182.5">advisories: the work leaves here</text>
+<rect class="box" x="700.5" y="260.5" width="280" height="74" rx="3"/>
+<text class="bt" x="710" y="281">Model provider API</text>
+<text class="bl" x="710" y="298">prompts, and the code quoted</text>
+<text class="bl" x="710" y="312.5">in them, leave the machine here</text>
+<path class="ar ink" d="M630 167H698" marker-end="url(#fig-containment-ink)"/>
+<rect class="lbg" x="635.9" y="148" width="56.199999999999996" height="16"/><text class="al" x="664" y="160" text-anchor="middle">git, gh</text>
+<path class="ar ink" d="M590 250H644V297H698" marker-end="url(#fig-containment-ink)"/>
+<rect class="lbg" x="650.5" y="278" width="43" height="16"/><text class="al" x="672" y="290" text-anchor="middle">HTTPS</text>
+</svg></div>
+        <ul class="arch-key"><li class="k-machine">your machine</li><li class="k-user">enforced by the OS</li><li class="k-soft">keeps things apart, not security</li><li class="k-prop">proposed, not built</li></ul>
+        <figcaption><b>Figure 6</b> Containment. Your machine is the boundary that holds; an OS sandbox is the proposed wall inside it.</figcaption>
+      </figure>
+      <dl class="arch-layers">
+        <div><dt>Your machine</dt><dd><em class="st-hold">holds · your setup</em> Keep production data, keys and unrelated logins off it, and assume a session can read or change anything on it.</dd></div>
+        <div><dt>Your user account</dt><dd><em class="st-part">enforced, but shared</em> It separates thirdshift from other users, not from its own sessions: a session can read the <code>gh</code> and <code>git</code> logins and push with them (<a href="https://github.com/JacobStephens2/thirdshift/issues/691">#691</a>).</dd></div>
+        <div><dt>The Worktree</dt><dd><em class="st-none">not a security boundary</em> It keeps your checkout and other Runs apart. Every Harness runs with its own sandbox and approvals off (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0013-every-harness-runs-unattended-and-fully-trusted.md">ADR-0013</a>). Claude Code's auto mode screens risky actions, but enforces no boundary.</dd></div>
+        <div><dt>An OS sandbox</dt><dd><em class="st-prop">proposed</em> A second wall inside the machine, for the code an agent runs: no network, writes only to scratch space, a dummy home directory. On Ubuntu 24.04, bubblewrap needs an AppArmor profile that lets it create user namespaces. Tracked in <a href="https://github.com/JacobStephens2/thirdshift/issues/726">#726</a> (a runner), <a href="https://github.com/JacobStephens2/thirdshift/issues/608">#608</a> (a setup check) and <a href="https://github.com/JacobStephens2/thirdshift/issues/398">#398</a> (sandboxed Codex).</dd></div>
+      </dl>
+      <p class="arch-next">Next: <a href="/docs/#unattended-sessions">what an unattended session can do</a>, <a href="/how-it-works/">How thirdshift works</a> step by step, or <a href="/prompts/">every prompt and skill</a> the agents get.</p>
+    </div>
+  </section>
+</main>
+<footer class="wrap foot">
+  <a href="/">thirdshift home</a>
+  <a href="/how-it-works/">How thirdshift works</a>
+  <a href="/prompts/">Prompts and skills</a>
+  <a href="/videos/">Videos</a>
+  <a href="https://github.com/JacobStephens2/thirdshift">Source and documentation</a>
+  <a href="#figures">Back to the figures ↑</a>
+</footer>
+</body>
+</html>

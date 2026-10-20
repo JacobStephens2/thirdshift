@@ -17,6 +17,8 @@ mod check_read;
 pub(crate) use check_read::is_transient as check_read_is_transient;
 
 mod advisories;
+mod session_issue;
+mod trust;
 pub use advisories::{
     DraftAdvisory, FindingDraft, FindingProvenance, Package, RecordedFinding, SecurityRecord,
     SecurityRecords,
@@ -230,6 +232,39 @@ impl GitHub {
         self.gh_json(&args)
     }
 
+    /// Every node of `issue`'s `connection`, the `what` that `query` reads
+    /// page by page through its `$after` cursor, with the last page's answer.
+    fn paged_nodes(
+        &self,
+        issue: &IssueUrl,
+        query: &str,
+        connection: &str,
+        what: &str,
+    ) -> Result<(Value, Vec<Value>)> {
+        let mut after = None;
+        let mut all = Vec::new();
+        loop {
+            let json = self.issue_query(issue, query, after.as_deref())?;
+            let page = &json["data"]["repository"]["issue"][connection];
+            all.extend(nodes(page, connection)?.iter().cloned());
+            let info = &page["pageInfo"];
+            if !info["hasNextPage"].as_bool().with_context(|| {
+                CommandFailure::InvalidResponse(format!("{what} has no hasNextPage"))
+            })? {
+                return Ok((json, all));
+            }
+            let next = info["endCursor"].as_str().with_context(|| {
+                CommandFailure::InvalidResponse(format!("{what} has no endCursor"))
+            })?;
+            if Some(next) == after.as_deref() {
+                bail!(CommandFailure::InvalidResponse(format!(
+                    "{what} cursor did not advance"
+                )));
+            }
+            after = Some(next.to_string());
+        }
+    }
+
     /// Close `issue` with `comment`.
     pub fn close_issue(&self, issue: &IssueUrl, comment: &str) -> Result<()> {
         self.gh(&[
@@ -405,33 +440,8 @@ impl GitHub {
     /// query per page of label history, oldest first. Every page is read so
     /// missing older Claims cannot be mistaken for never-Claimed work.
     pub fn candidate(&self, issue: &IssueUrl, label: Label) -> Result<Candidate> {
-        let mut after = None;
-        let mut label_events = Vec::new();
-        let json = loop {
-            let json = self.issue_query(issue, CANDIDATE_QUERY, after.as_deref())?;
-            let page = &json["data"]["repository"]["issue"]["labelled"];
-            label_events.extend(nodes(page, "labelled")?.iter().cloned());
-            let info = &page["pageInfo"];
-            if !info["hasNextPage"]
-                .as_bool()
-                .context(CommandFailure::InvalidResponse(
-                    "label history has no hasNextPage".into(),
-                ))?
-            {
-                break json;
-            }
-            let next = info["endCursor"]
-                .as_str()
-                .context(CommandFailure::InvalidResponse(
-                    "label history has no endCursor".into(),
-                ))?;
-            if Some(next) == after.as_deref() {
-                bail!(CommandFailure::InvalidResponse(
-                    "label history cursor did not advance".into()
-                ));
-            }
-            after = Some(next.to_string());
-        };
+        let (json, label_events) =
+            self.paged_nodes(issue, CANDIDATE_QUERY, "labelled", "label history")?;
         let issue = &json["data"]["repository"]["issue"];
         let parent = issue["parent"]["url"]
             .as_str()
@@ -771,9 +781,9 @@ impl GitHub {
         ])
     }
 
-    /// Every check run and commit status on commit `sha`. Of the check runs
-    /// sharing a name, as the attempts of a re-run job do, only the latest is
-    /// here.
+    /// Every check run and commit status on commit `sha`, each with its
+    /// conclusion as GitHub named it. Of the check runs sharing a name, as
+    /// the attempts of a re-run job do, only the latest is here.
     pub fn checks_on(&self, issue: &IssueUrl, sha: &str) -> Result<Vec<Check>> {
         let commit = format!("repos/{}/commits/{sha}", issue.repo_slug());
         // CI retries the complete observation, not its individual requests.
@@ -790,10 +800,9 @@ impl GitHub {
 
         let mut checks = Vec::new();
         for run in &runs {
-            let state = match (run["status"].as_str(), run["conclusion"].as_str()) {
-                (Some("completed"), Some("success" | "neutral" | "skipped")) => CheckState::Passed,
-                (Some("completed"), _) => CheckState::Failed,
-                _ => CheckState::Pending,
+            let conclusion = match run["status"].as_str() {
+                Some("completed") => Conclusion::of_check_run(run["conclusion"].as_str()),
+                _ => Conclusion::Unfinished,
             };
             checks.push(Check {
                 name: run["name"]
@@ -802,17 +811,13 @@ impl GitHub {
                         "a check run has no name".into(),
                     ))?
                     .to_string(),
-                state,
+                conclusion,
                 job: ActionsJob::of(run["id"].as_u64(), run["details_url"].as_str()),
                 url: url(&run["details_url"]).or_else(|| url(&run["html_url"])),
             });
         }
         for status in &statuses {
-            let state = match status["state"].as_str() {
-                Some("success") => CheckState::Passed,
-                Some("pending") => CheckState::Pending,
-                _ => CheckState::Failed,
-            };
+            let conclusion = Conclusion::of_commit_status(status["state"].as_str());
             checks.push(Check {
                 name: status["context"]
                     .as_str()
@@ -820,7 +825,7 @@ impl GitHub {
                         "a commit status has no context".into(),
                     ))?
                     .to_string(),
-                state,
+                conclusion,
                 url: url(&status["target_url"]),
                 job: None,
             });
@@ -1308,19 +1313,66 @@ pub enum Mergeable {
     Unknown,
 }
 
-/// Where a check or status stands.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CheckState {
+/// What GitHub said of a check run or commit status: a check run's
+/// conclusion, or that it has not completed, or a commit status's state,
+/// each named as GitHub names it. What each means for CI is CI watch's to
+/// read.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Conclusion {
+    /// A check run that has not completed.
+    Unfinished,
+    Success,
+    Failure,
+    Neutral,
+    Skipped,
+    Cancelled,
+    TimedOut,
+    ActionRequired,
+    Stale,
+    StartupFailure,
+    /// A commit status still pending.
     Pending,
-    Passed,
-    Failed,
+    /// A commit status in error.
+    Error,
+    /// A conclusion or state GitHub does not document, as GitHub wrote it:
+    /// empty when a completed check run has none.
+    Unrecognised(String),
+}
+
+impl Conclusion {
+    /// The conclusion `conclusion` of a completed check run.
+    fn of_check_run(conclusion: Option<&str>) -> Self {
+        match conclusion {
+            Some("success") => Self::Success,
+            Some("failure") => Self::Failure,
+            Some("neutral") => Self::Neutral,
+            Some("skipped") => Self::Skipped,
+            Some("cancelled") => Self::Cancelled,
+            Some("timed_out") => Self::TimedOut,
+            Some("action_required") => Self::ActionRequired,
+            Some("stale") => Self::Stale,
+            Some("startup_failure") => Self::StartupFailure,
+            other => Self::Unrecognised(other.unwrap_or_default().to_string()),
+        }
+    }
+
+    /// The state `state` of a commit status.
+    fn of_commit_status(state: Option<&str>) -> Self {
+        match state {
+            Some("success") => Self::Success,
+            Some("failure") => Self::Failure,
+            Some("pending") => Self::Pending,
+            Some("error") => Self::Error,
+            other => Self::Unrecognised(other.unwrap_or_default().to_string()),
+        }
+    }
 }
 
 /// A check run or a commit status.
 #[derive(Clone)]
 pub struct Check {
     pub name: String,
-    pub state: CheckState,
+    pub conclusion: Conclusion,
     pub url: Option<String>,
     /// The GitHub Actions job it is, if it is one. No other check can be
     /// re-run: not a commit status, nor a check run of another app.

@@ -13,9 +13,11 @@ use crate::pull_request::MergeAttempt;
 
 use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::PolicyRefusal;
-use crate::recovery::Stage;
 use crate::run::Goal;
 use crate::worktree::{ForeignCommits, Merge};
+
+use super::Stage;
+use crate::session::Kind;
 
 /// Which upstream a conflict Repair resolves a merge of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,7 +44,7 @@ pub(super) trait Outside {
     /// A merge left in progress for a conflict Repair.
     type Pending;
 
-    /// Record the lifecycle stage before entering an operation or its budget gate.
+    /// Enter `stage`, before the operation or budget gate it names.
     fn stage(&mut self, stage: Stage);
 
     /// Merge the Base branch, fetched from origin, into the Issue branch,
@@ -78,8 +80,9 @@ pub(super) trait Outside {
         failed: &FailedChecks,
     ) -> Result<Option<Ci>>;
 
-    /// Start the Repair session `kind`, as in `repair-1`, for `repair`.
-    fn repair(&mut self, kind: &str, repair: Repair) -> Result<()>;
+    /// Start the Repair session of `kind`, as in `Kind::Repair(1)`, for
+    /// `repair`.
+    fn repair(&mut self, kind: Kind, repair: Repair) -> Result<()>;
 
     /// Whether the Run compares its red checks with the Base branch's, so
     /// that some may be Inherited failures.
@@ -123,7 +126,7 @@ pub(super) fn take_to_goal(outside: &mut impl Outside, base: &str, goal: Goal) -
         outside.stage(if goal == Goal::Merged {
             Stage::SelfMerge
         } else {
-            Stage::PullRequest
+            Stage::PullRequestReadiness
         });
         outside.ensure_pr_ready_and_mergeable()?;
         if outside.interrupt_requested() {
@@ -133,6 +136,7 @@ pub(super) fn take_to_goal(outside: &mut impl Outside, base: &str, goal: Goal) -
             return Ok(());
         }
         outside.progress(format!("merging the PR into {base}"));
+        outside.stage(Stage::SelfMerge);
         let error = match outside.merge(&watched)? {
             MergeAttempt::Merged => return Ok(()),
             MergeAttempt::Refused(error) => error,
@@ -171,15 +175,15 @@ struct Budgets {
 }
 
 impl Budgets {
-    /// Counts the Repair about to start, returning its kind, `repair-<n>`,
-    /// and its progress line, or fails if it would be one too many.
-    fn next_repair(&mut self, cause: &str) -> Result<(String, String)> {
+    /// Counts the Repair about to start, returning its numbered kind and its
+    /// progress line, or fails if it would be one too many.
+    fn next_repair(&mut self, cause: &str) -> Result<(Kind, String)> {
         if self.repairs == MAX_REPAIRS {
             bail!("repairs exhausted: {cause}");
         }
         self.repairs += 1;
         let line = format!("{cause}; starting Repair {} of {MAX_REPAIRS}", self.repairs);
-        Ok((format!("repair-{}", self.repairs), line))
+        Ok((Kind::Repair(self.repairs), line))
     }
 
     /// Counts a round taken because `upstream` moved, or fails if it would
@@ -246,6 +250,7 @@ impl CheckReruns {
             .handed_to_repair
             .take()
             .filter(|(handed, _)| handed == head);
+        outside.stage(Stage::CiWatch);
         let ci = match unchanged {
             Some((_, failed)) if self.consumed.insert(head.to_string()) => {
                 outside.rerun(head, compared_with, &failed)?
@@ -275,10 +280,12 @@ impl<O: Outside> RepairLoop<'_, O> {
     /// Start the next Repair, `repair`, for `cause`, counting it against the
     /// Repair cap.
     fn repair(&mut self, cause: &str, repair: Repair) -> Result<()> {
-        self.outside.stage(Stage::Repair);
+        // Exhausted repairs start no session, so record none.
+        self.outside.stage(Stage::RepairLoopRound);
         let (kind, line) = self.budgets.next_repair(cause)?;
         self.outside.progress(line);
-        self.outside.repair(&kind, repair)
+        self.outside.stage(Stage::RepairSession);
+        self.outside.repair(kind, repair)
     }
 
     /// Count a round taken because the Base branch moved `when`.
@@ -316,7 +323,7 @@ impl<O: Outside> RepairLoop<'_, O> {
     fn rounds(&mut self) -> Result<String> {
         let base = self.base;
         loop {
-            self.outside.stage(Stage::Repair);
+            self.outside.stage(Stage::RepairLoopRound);
             if self.goal == Goal::Merged {
                 self.take_in_foreign_commits()?;
             }
@@ -328,6 +335,7 @@ impl<O: Outside> RepairLoop<'_, O> {
                     continue;
                 }
             };
+            self.outside.stage(Stage::Push);
             self.outside.push()?;
             let head = self.outside.head()?;
             let compared_with = self
@@ -361,6 +369,7 @@ impl<O: Outside> RepairLoop<'_, O> {
                             self.count_base_move("while CI ran")?;
                             continue;
                         }
+                        self.outside.stage(Stage::BaseFix);
                         self.outside.base_fix(&base_commit, &failed)?;
                         continue;
                     }
@@ -412,7 +421,7 @@ impl<O: Outside> RepairLoop<'_, O> {
     /// branch that moved since as an upstream move. GitHub's error text is never
     /// consulted.
     fn round_after_failed_merge(&mut self, watched: &str) -> Result<Round> {
-        self.outside.stage(Stage::Repair);
+        self.outside.stage(Stage::RepairLoopRound);
         let before = self.budgets;
         if self.outside.base_branch_moved()? {
             self.count_base_move("since the merge was tried")?;
@@ -433,7 +442,7 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
-    use crate::github::{Check, CheckState};
+    use crate::github::{Check, Conclusion};
 
     /// What the Repair loop did outside itself, in the order it did it.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -450,7 +459,7 @@ mod tests {
         /// Gave this head its Check re-run of these checks of its own.
         Rerun(String, Option<String>, Vec<String>),
         /// Started the Repair session of this kind for this Repair.
-        Repair(String, Started),
+        Repair(Kind, Started),
         /// Took the Base fix for these Inherited failures, at this Base
         /// branch commit.
         BaseFix(String, Vec<String>),
@@ -490,7 +499,7 @@ mod tests {
                     .iter()
                     .map(|name| Check {
                         name: name.to_string(),
-                        state: CheckState::Failed,
+                        conclusion: Conclusion::Failure,
                         url: None,
                         job: None,
                     })
@@ -531,15 +540,22 @@ mod tests {
         /// For each merge, the error it fails with, if it does.
         merges: VecDeque<Option<&'static str>>,
         merge_gate_error: Option<&'static str>,
+        /// The error a merge of the Base branch fails with, if it does.
+        base_merge_error: Option<&'static str>,
+        /// The error a watch of CI fails with, if it does.
+        watch_error: Option<&'static str>,
+        /// The error a Repair session fails with, if it does.
+        repair_error: Option<&'static str>,
         sees_no_inherited_failures: bool,
         interrupted: bool,
     }
 
     /// The outside world as `script` answers it, with what the loop did there
-    /// recorded in `did`.
+    /// recorded in `did`, and the stages it entered, apart, in `stages`.
     struct Scripted {
         script: Script,
         did: Vec<Did>,
+        stages: Vec<Stage>,
     }
 
     /// The next of `answers`, keeping the last one for every call after it.
@@ -563,10 +579,15 @@ mod tests {
         /// The upstream whose merge is pending.
         type Pending = &'static str;
 
-        fn stage(&mut self, _: Stage) {}
+        fn stage(&mut self, stage: Stage) {
+            self.stages.push(stage);
+        }
 
         fn merge_base_branch(&mut self) -> Result<Merge<&'static str>> {
             self.did.push(Did::MergeBase);
+            if let Some(error) = self.script.base_merge_error {
+                bail!(error);
+            }
             let conflicted = self.script.base_conflicts.pop_front().unwrap_or(false);
             if conflicted {
                 return Ok(Merge::Conflicted("origin/main"));
@@ -636,6 +657,9 @@ mod tests {
         fn watch(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
             self.did
                 .push(Did::Watch(head.to_string(), base_commit.map(String::from)));
+            if let Some(error) = self.script.watch_error {
+                bail!(error);
+            }
             let is = self.script.watches.pop_front().expect("no watch scripted");
             Ok(is.ci())
         }
@@ -655,7 +679,7 @@ mod tests {
             Ok(is.map(|is| is.ci()))
         }
 
-        fn repair(&mut self, kind: &str, repair: Repair) -> Result<()> {
+        fn repair(&mut self, kind: Kind, repair: Repair) -> Result<()> {
             let started = match repair {
                 Repair::Conflict(upstream) => Started::Conflict(upstream),
                 Repair::CiFix(failed) => {
@@ -663,8 +687,11 @@ mod tests {
                 }
                 Repair::Review { from } => Started::Review(from.to_string()),
             };
-            self.did.push(Did::Repair(kind.to_string(), started));
-            Ok(())
+            self.did.push(Did::Repair(kind, started));
+            match self.script.repair_error {
+                Some(error) => bail!(error),
+                None => Ok(()),
+            }
         }
 
         fn sees_inherited_failures(&mut self) -> bool {
@@ -710,12 +737,27 @@ mod tests {
     /// Take a PR into `main` to `goal` against `script`: what it came to,
     /// and what the loop did.
     fn deliver(goal: Goal, script: Script) -> (Result<()>, Vec<Did>) {
+        let (delivered, did, _) = deliver_with_stages(goal, script);
+        (delivered, did)
+    }
+
+    /// [`deliver`], with the stages the loop entered, in order.
+    fn deliver_with_stages(goal: Goal, script: Script) -> (Result<()>, Vec<Did>, Vec<Stage>) {
         let mut outside = Scripted {
             script,
             did: Vec::new(),
+            stages: Vec::new(),
         };
         let delivered = take_to_goal(&mut outside, "main", goal);
-        (delivered, outside.did)
+        (delivered, outside.did, outside.stages)
+    }
+
+    /// The stage in force when a Delivery to `goal` against `script` failed,
+    /// and its cause.
+    fn failed_in(goal: Goal, script: Script) -> (Stage, String) {
+        let (delivered, _, stages) = deliver_with_stages(goal, script);
+        let stage = *stages.last().expect("no stage entered");
+        (stage, cause(delivered))
     }
 
     /// `answers` as a script's queue.
@@ -733,9 +775,9 @@ mod tests {
         Did::Watch(head.to_string(), Some("b1".to_string()))
     }
 
-    /// The Repair session `repair-<n>` for `started`.
+    /// The numbered Repair session `n` for `started`.
     fn repair(n: usize, started: Started) -> Did {
-        Did::Repair(format!("repair-{n}"), started)
+        Did::Repair(Kind::Repair(n), started)
     }
 
     /// A CI-fix Repair given the branch's own failures `own`, and the
@@ -2004,7 +2046,7 @@ mod tests {
             assert_eq!(
                 budgets.next_repair(cause).unwrap(),
                 (
-                    format!("repair-{n}"),
+                    Kind::Repair(n),
                     format!("{cause}; starting Repair {n} of {MAX_REPAIRS}")
                 )
             );
@@ -2059,6 +2101,132 @@ mod tests {
                 repairs: MAX_REPAIRS,
                 upstream_moves: MAX_UPSTREAM_MOVES
             }
+        );
+    }
+
+    #[test]
+    fn a_failed_merge_of_the_base_branch_stops_in_a_repair_loop_round() {
+        assert_eq!(
+            failed_in(
+                Goal::ReadyForReview,
+                Script {
+                    base_merge_error: Some("could not fetch origin/main"),
+                    ..Script::default()
+                },
+            ),
+            (
+                Stage::RepairLoopRound,
+                "could not fetch origin/main".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn a_failed_ci_watch_stops_in_the_ci_watch() {
+        assert_eq!(
+            failed_in(
+                Goal::ReadyForReview,
+                Script {
+                    heads: script(["h1"]),
+                    watch_error: Some("gh run list failed"),
+                    ..Script::default()
+                },
+            ),
+            (Stage::CiWatch, "gh run list failed".to_string())
+        );
+    }
+
+    #[test]
+    fn a_failed_repair_session_stops_in_the_repair_session() {
+        assert_eq!(
+            failed_in(
+                Goal::ReadyForReview,
+                Script {
+                    base_conflicts: script([true]),
+                    repair_error: Some("the repair-1 session failed"),
+                    ..Script::default()
+                },
+            ),
+            (
+                Stage::RepairSession,
+                "the repair-1 session failed".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn exhausted_repairs_stop_in_a_repair_loop_round_without_a_session() {
+        let (delivered, _, stages) = deliver_with_stages(
+            Goal::ReadyForReview,
+            Script {
+                base_conflicts: script([true; MAX_REPAIRS + 1]),
+                ..Script::default()
+            },
+        );
+        assert!(cause(delivered).starts_with("repairs exhausted"));
+        assert_eq!(stages.last(), Some(&Stage::RepairLoopRound));
+        assert_eq!(
+            stages
+                .iter()
+                .filter(|stage| **stage == Stage::RepairSession)
+                .count(),
+            MAX_REPAIRS
+        );
+    }
+
+    #[test]
+    fn a_refused_self_merge_stops_in_the_self_merge() {
+        let (delivered, _, stages) = deliver_with_stages(
+            Goal::Merged,
+            Script {
+                heads: script(["h1"]),
+                watches: script([Is::Passed, Is::Passed]),
+                merges: script([Some("refused by a ruleset")]),
+                ..Script::default()
+            },
+        );
+        assert!(delivered.unwrap_err().is::<PolicyRefusal>());
+        assert_eq!(
+            stages,
+            [
+                Stage::RepairLoopRound,
+                Stage::Push,
+                Stage::CiWatch,
+                Stage::SelfMerge,
+                Stage::SelfMerge,
+                Stage::RepairLoopRound,
+                Stage::RepairLoopRound,
+                Stage::Push,
+                Stage::CiWatch,
+                Stage::SelfMerge,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_base_fix_and_a_ready_pull_request_enter_their_stages() {
+        let (delivered, _, stages) = deliver_with_stages(
+            Goal::ReadyForReview,
+            Script {
+                heads: script(["h1"]),
+                watches: script([Is::Failed(&[], &["lint"]), Is::Passed]),
+                base_fixes: script([None]),
+                ..Script::default()
+            },
+        );
+        assert!(delivered.is_ok());
+        assert_eq!(
+            stages,
+            [
+                Stage::RepairLoopRound,
+                Stage::Push,
+                Stage::CiWatch,
+                Stage::BaseFix,
+                Stage::RepairLoopRound,
+                Stage::Push,
+                Stage::CiWatch,
+                Stage::PullRequestReadiness,
+            ]
         );
     }
 }

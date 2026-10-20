@@ -43,6 +43,12 @@
       "skillPath": "skills/engineering/domain-modeling/SKILL.md",
       "computedHash": "b3eb40152b81f0c98fd2095a023c019452dbdce56f7540cc67fece2972db8369"
     },
+    "explainer-video": {
+      "source": "JacobStephens2/skills",
+      "sourceType": "github",
+      "skillPath": "skills/explainer-video/SKILL.md",
+      "computedHash": "e0fd9d83109998604f6a2fae066d8b28e9e98967f605f22247dec943f1f4209f"
+    },
     "git-guardrails-claude-code": {
       "source": "mattpocock/skills",
       "sourceType": "github",

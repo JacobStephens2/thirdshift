@@ -12,10 +12,10 @@ gh pr create --base main --head issue-7 --title Feature --body 'Closes #7'
 
 #[test]
 fn lifecycle_changes_stop_pending_ci_without_recreating_a_deleted_branch() {
-    for (field, value, reason) in [
-        ("state", "\"MERGED\"", "is merged, not open"),
-        ("state", "\"CLOSED\"", "is closed, not open"),
-        ("isDraft", "true", "is a draft"),
+    for (field, value, code, reason) in [
+        ("state", "\"MERGED\"", 0, "is merged"),
+        ("state", "\"CLOSED\"", 1, "is closed, not open"),
+        ("isDraft", "true", 1, "is a draft"),
     ] {
         let scenario = Scenario::new();
         let delete = if field == "state" {
@@ -27,7 +27,7 @@ fn lifecycle_changes_stop_pending_ci_without_recreating_a_deleted_branch() {
             "{OPEN}\ngh fake checks \"$(git rev-parse HEAD)\" '[{{\"name\":\"test\",\"conclusion\":\"success\",\"pending_polls\":100}}]'\ngh fake on-ci-read 1 'gh fake pr issue-7 {field} '\"'\"'{value}'\"'\"'{delete}'\n"
         ));
         let result = scenario.run(&["merge", &scenario.issue_url(7)]);
-        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert_eq!(result.code, Some(code), "{}", result.stderr);
         assert!(result.stderr.contains(reason), "{}", result.stderr);
         assert!(!result.stderr.contains("CI passed"), "{}", result.stderr);
         if field == "state" {

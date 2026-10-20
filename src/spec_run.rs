@@ -16,11 +16,10 @@ use std::num::NonZeroUsize;
 use anyhow::{Result, bail};
 
 use crate::base_fix::BaseFixAsk;
-use crate::child_run::{Ended, Kind, Runs};
-use crate::delivery::{Delivery, Opening};
+use crate::child_run::{ChildAsks, Ended, Kind, Runs};
+use crate::delivery::{Delivery, Opening, OpeningSession};
 use crate::failed_run::{FailedRun, interrupted_or};
 use crate::github::{GitHub, Ticket};
-use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::progress;
@@ -28,12 +27,10 @@ use crate::prompt;
 use crate::pull_request::PullRequest;
 use crate::recovery::{Preservation, Recovery, Stage, TicketProgress};
 use crate::run::Reached;
+use crate::trust;
 use crate::worktree::Worktree;
 
 use ticket_board::TicketBoard;
-
-/// The Spec review session's kind, in its progress lines and log name.
-const SPEC_REVIEW: &str = "spec-review";
 
 /// Whether an issue has Tickets, as a Spec has, and every one is closed:
 /// `open` says of each of its sub-issues whether it is open.
@@ -89,7 +86,7 @@ fn run_through(
 ) -> Result<Reached, FailedRun> {
     let Landing {
         lines: ticket_lines,
-        mut progress,
+        progress,
         pushed,
         landed,
         local_work,
@@ -132,10 +129,8 @@ fn run_through(
             let recovery = failed.recovery.get_or_insert_with(|| {
                 Box::new(Recovery::new(Stage::SpecReview, Preservation::Remote))
             });
-            progress.reviewed = !matches!(recovery.stage, Stage::Tickets | Stage::SpecReview)
-                && all_tickets_accounted;
-            recovery.tickets = Some(progress);
-            recovery.local_child_work = local_work;
+            recovery.add_tickets(progress, all_tickets_accounted);
+            recovery.add_child_work(local_work);
             failed.ticket_lines = ticket_lines;
             Err(failed)
         }
@@ -161,9 +156,8 @@ fn review_and_deliver(
         });
     }
     let opening = Opening {
-        kind: SPEC_REVIEW,
+        session: OpeningSession::SpecReview,
         prompt: prompt::spec_review(spec, base, branch, spec_pr_url),
-        catch_up_from_origin: true,
     };
     // The Spec review may have rewritten the body without the checklist.
     let delivered = outside.deliver(opening, checklist);
@@ -206,8 +200,8 @@ trait Outside {
 
 /// The outside world of a Spec run on `delivery`'s Spec, from its Spec
 /// branch checked out in `worktree`: child `thirdshift` Runs, each of which
-/// may start a Base fix if `base_fix` allows one, and runs its sessions on
-/// `harness`, owned together in `children`, GitHub, the Spec PR
+/// may start a Base fix if `base_fix` allows one, and is handed
+/// `child_asks`, owned together in `children`, GitHub, the Spec PR
 /// `spec_pr`, and `delivery`, which takes the
 /// worktree when it starts.
 struct ChildRunsAndGitHub<'a> {
@@ -222,9 +216,7 @@ struct ChildRunsAndGitHub<'a> {
     /// Held until it starts.
     delivery: Option<Delivery<'a>>,
     base_fix: BaseFixAsk,
-    security_fix: bool,
-    security_review: bool,
-    harness: &'a Choice,
+    child_asks: &'a ChildAsks,
     spec_pr: PullRequest,
 }
 
@@ -232,16 +224,13 @@ impl<'a> ChildRunsAndGitHub<'a> {
     /// The outside world of a Spec run, as the struct says, with no Ticket's
     /// Run started yet.
     fn new(worktree: Worktree, delivery: Delivery<'a>, spec_pr: PullRequest) -> Self {
-        let security_review = delivery.security_review;
         Self {
             spec: delivery.issue,
             children: Runs::default(),
             active: std::collections::BTreeMap::new(),
             worktree: Some(worktree),
             base_fix: delivery.base_fix.ask_of_tickets(),
-            security_fix: delivery.security_fix,
-            security_review,
-            harness: delivery.harness,
+            child_asks: delivery.child_asks,
             delivery: Some(delivery),
             spec_pr,
         }
@@ -270,16 +259,11 @@ impl Outside for ChildRunsAndGitHub<'_> {
         let kind = Kind::Ticket {
             spec_branch: self.worktree().branch().to_string(),
         };
-        self.children.start(
-            ticket,
-            kind,
-            self.base_fix.clone(),
-            crate::security::Options {
-                fix: self.security_fix,
-                review: self.security_review,
-            },
-            self.harness,
-        )?;
+        if let Some(check) = trust::ticket_trust(&GitHub::new(), ticket, self.spec)? {
+            bail!("Ticket #{}: {check}", ticket.number);
+        }
+        self.children
+            .start(ticket, kind, self.base_fix.clone(), self.child_asks)?;
         self.active.insert(ticket.number, ticket.clone());
         Ok(())
     }
@@ -497,7 +481,7 @@ mod tests {
         /// Started the Delivery, opening with the session of this kind and
         /// prompt, caught up from origin first if `catch_up`.
         Deliver {
-            kind: String,
+            kind: crate::session::Kind,
             prompt: String,
             catch_up: bool,
         },
@@ -703,9 +687,9 @@ mod tests {
 
         fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun> {
             self.did.push(Did::Deliver {
-                kind: opening.kind.to_string(),
+                kind: opening.session.kind(),
+                catch_up: opening.session.catches_up_from_origin(),
                 prompt: opening.prompt,
-                catch_up: opening.catch_up_from_origin,
             });
             let delivered = if self.script.review_fails {
                 Err(anyhow!("the spec-review session failed"))
@@ -846,7 +830,7 @@ mod tests {
     fn spec_review_opening() -> Did {
         let spec = IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap();
         Did::Deliver {
-            kind: SPEC_REVIEW.to_string(),
+            kind: crate::session::Kind::SpecReview,
             prompt: prompt::spec_review(&spec, "main", "issue-20", SPEC_PR),
             catch_up: true,
         }

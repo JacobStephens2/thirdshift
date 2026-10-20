@@ -6,7 +6,7 @@ A factory that turns a GitHub issue into a ready-for-review pull request, or on 
 
 Quality over quantity: a pull request marked ready for review is one the factory stands behind. When it can't stand behind the work, the **Run** is a **Failed run**: the work is pushed so nothing is lost, and the pull request goes back to a draft.
 
-Terms in **bold** are defined in [`CONTEXT.md`](../CONTEXT.md).
+Terms in **bold** are defined in [`GLOSSARY.md`](../GLOSSARY.md).
 
 ## Workflows
 

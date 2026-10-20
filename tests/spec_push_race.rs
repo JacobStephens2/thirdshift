@@ -30,12 +30,8 @@ touch "$FAKE_CLAUDE_SCRIPT.armed"
 "#,
     );
     let result = scenario.run(&["merge", &scenario.issue_url(7)]);
-    assert_eq!(result.code, Some(1), "{}", result.stderr);
-    assert!(
-        result.stderr.contains("is merged, not open"),
-        "{}",
-        result.stderr
-    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(result.stderr.contains("is merged\n"), "{}", result.stderr);
     assert!(
         scenario.origin_log("issue-7").is_none(),
         "obsolete push recreated the merged PR's deleted branch: {}",

@@ -44,6 +44,7 @@ mod spec_run;
 mod terminal;
 #[cfg(test)]
 mod test_support;
+mod trust;
 mod update;
 mod worktree;
 

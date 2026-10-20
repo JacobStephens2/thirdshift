@@ -29,6 +29,7 @@ use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 use crate::config::UserConfig;
 use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
+use crate::session::Logged;
 
 use activity::Kind;
 pub use command_record::StageName as Stage;
@@ -204,31 +205,10 @@ pub fn stage(stage: Stage) {
     record().stage(stage, None);
 }
 
-/// Keep the current Session log, including a Resume's own log.
-pub fn session(kind: &str, path: &Path) {
-    let original = kind.strip_suffix("-resume").unwrap_or(kind);
-    let stage = if original == "architecture-review" {
-        Stage::ArchitectureReview
-    } else if original == "security-audit" {
-        Stage::SecurityAudit
-    } else if original.starts_with("security-reproduction-") {
-        Stage::SecurityReproduction
-    } else if original == "security-fix-publishing" {
-        Stage::SecurityFixPublishing
-    } else if kind.ends_with("-resume") {
-        Stage::Resume
-    } else if kind.starts_with("repair-") {
-        Stage::Repair
-    } else if kind == "security-review" {
-        Stage::SecurityReview
-    } else if kind == "implement" {
-        Stage::Implement
-    } else if kind == "spec-review" {
-        Stage::SpecReview
-    } else {
-        return;
-    };
-    record().stage(stage, Some(path));
+/// Keep the current Session log, including a Resume's own log, as
+/// `session` enters its stage.
+pub fn session(session: Logged, path: &Path) {
+    record().stage(session.stage(), Some(path));
 }
 
 /// The selected Issue branch, retained unless completion says it was removed.

@@ -30,4 +30,4 @@ Factory skills named `thirdshift-to-spec` and `thirdshift-to-tickets` follow the
 
 ## `in-progress` is not a triage role
 
-`in-progress` is thirdshift's own label for a **Claim**, defined in `CONTEXT.md`. thirdshift applies and removes it. It is not a sixth triage role: no skill applies it, and it has no row in the table above.
+`in-progress` is thirdshift's own label for a **Claim**, defined in `GLOSSARY.md`. thirdshift applies and removes it. It is not a sixth triage role: no skill applies it, and it has no row in the table above.

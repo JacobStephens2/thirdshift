@@ -5,7 +5,7 @@ const { readFile } = require("node:fs/promises");
 const { join } = require("node:path");
 const { chromium } = require("playwright");
 
-const publicPaths = ["/", "/docs/", "/how-it-works/", "/prompts/"];
+const publicPaths = ["/", "/architecture/", "/docs/", "/how-it-works/", "/prompts/", "/videos/"];
 
 let server, browser, origin;
 before(async () => {
@@ -14,7 +14,8 @@ before(async () => {
     const file = path.endsWith("/") ? `${path.slice(1)}index.html` : path.slice(1);
     try {
       const content = await readFile(join(__dirname, "..", file));
-      const type = file.endsWith(".js") ? "text/javascript" : file.endsWith(".css") ? "text/css" : "text/html";
+      const types = { js: "text/javascript", css: "text/css", jpg: "image/jpeg", woff2: "font/woff2" };
+      const type = types[file.split(".").pop()] ?? "text/html";
       response.writeHead(200, { "Content-Type": type }).end(content);
     } catch {
       response.writeHead(404).end();
@@ -35,6 +36,14 @@ async function pageForTest(t, options) {
   const page = await context.newPage();
   await page.route("https://**", route => route.abort());
   return page;
+}
+
+// Nothing in the selected containers, or the page, scrolls sideways.
+async function assertFits(page, selector, message) {
+  const overflow = await page.locator(selector).evaluateAll(nodes =>
+    nodes.filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.textContent.trim().slice(0, 80)));
+  assert.deepEqual(overflow, [], message);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "no horizontal page scrolling");
 }
 
 async function checkSectionToggles(page, contentSelector, closeKey) {
@@ -114,8 +123,8 @@ test("every public page identifies its canonical URL, purpose and share metadata
     assert.equal(await page.locator("h1").count(), 1, path);
     assert.ok((await page.locator("body").textContent()).includes("GitHub"), path);
   }
-  assert.equal(titles.size, 4, "page titles distinguish the four search results");
-  assert.equal(descriptions.size, 4, "each page has its own search description");
+  assert.equal(titles.size, publicPaths.length, "page titles distinguish the search results");
+  assert.equal(descriptions.size, publicPaths.length, "each page has its own search description");
   await page.goto(`${origin}/`);
   assert.match(await page.title(), /GitHub issues.*pull requests/);
 });
@@ -250,10 +259,7 @@ for (const width of [320, 390, 768, 1280]) {
       assert.equal(await diagram.isVisible(), true);
       assert.ok(await diagram.locator("figcaption").textContent());
     }
-    const overflow = await page.locator("main, header, .guide-diagram, .guide-node, .guide-flow > li, pre").evaluateAll(nodes =>
-      nodes.filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.textContent.trim().slice(0, 80)));
-    assert.deepEqual(overflow, [], "text and diagrams fit their containers");
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "no horizontal page scrolling");
+    await assertFits(page, "main, header, .guide-diagram, .guide-node, .guide-flow > li, pre", "text and diagrams fit their containers");
   });
 }
 
@@ -280,6 +286,169 @@ for (const javaScriptEnabled of [false, true]) {
     await page.locator("#install > pre").first().waitFor({ state: "visible", timeout: 2000 });
     assert.equal(await page.locator("#workflows").isVisible(), false, "unrelated sections stay folded");
   });
+}
+
+test("the homepage, the guide and the videos page link to the architecture page without JavaScript", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  for (const path of ["/", "/how-it-works/", "/videos/"]) {
+    await page.goto(`${origin}${path}`);
+    await page.getByRole("link", { name: "Architecture", exact: true }).first().click();
+    assert.equal(new URL(page.url()).pathname, "/architecture/", path);
+  }
+});
+
+test("the architecture page shows six captioned, described figures, each reachable from its index", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  await page.goto(`${origin}/architecture/`);
+  const figures = page.locator("main figure");
+  assert.equal(await figures.count(), 6);
+  for (const [index, figure] of (await figures.all()).entries()) {
+    assert.equal(await figure.isVisible(), true);
+    assert.match(await figure.locator("figcaption").textContent(), new RegExp(`^Figure ${index + 1} `));
+    // Each drawing names its own description, so a screen reader hears the figure in words.
+    const svg = figure.locator("svg");
+    const description = await svg.evaluate(node => document.getElementById(node.getAttribute("aria-labelledby"))?.textContent ?? "");
+    assert.ok(description.length > 100, `figure ${index + 1} has a description`);
+  }
+  const ids = await page.locator("svg [id]").evaluateAll(nodes => nodes.map(node => node.id));
+  assert.equal(new Set(ids).size, ids.length, "marker and title ids are unique across figures");
+  const links = page.getByRole("navigation", { name: "Figures" }).getByRole("link");
+  assert.equal(await links.count(), 6);
+  for (const link of await links.all()) {
+    const href = await link.getAttribute("href");
+    await link.click();
+    assert.equal(new URL(page.url()).hash, href);
+    assert.ok(await page.locator(href).evaluate(node => Math.abs(node.getBoundingClientRect().top) < 40), `${href} scrolls into view`);
+  }
+  for (const path of await page.locator('a[href^="/"], link[href^="/"]').evaluateAll(nodes => [...new Set(nodes.map(node => node.getAttribute("href").split("#")[0]))])) {
+    assert.equal((await page.request.get(`${origin}${path}`)).status(), 200, path);
+  }
+});
+
+for (const width of [320, 390, 768, 1280]) {
+  test(`the architecture page fits ${width}px, its figures scrolling inside their frames`, async (t) => {
+    const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width, height: 900 } });
+    await page.goto(`${origin}/architecture/`);
+    await assertFits(page, "main, header, .arch-fig, .arch-stages, .arch-layers", "text fits its containers");
+    // Below the breakpoint a figure keeps a legible width rather than shrinking to fit.
+    const svgWidth = await page.locator("main svg").first().evaluate(node => node.getBoundingClientRect().width);
+    assert.ok(svgWidth >= Math.min(720, width - 80), `figure is ${svgWidth}px wide`);
+  });
+}
+
+// The videos page's entries, in order.
+const videos = [
+  { title: "thirdshift in 31 seconds", audience: "Anyone", length: "0:32", id: "eRB6gGOQdJA" },
+  { title: "thirdshift, briefly", audience: "Engineering leaders", length: "2:02", id: "yynbSGpHXGc" },
+  { title: "How thirdshift works", audience: "Engineers", length: "2:38", id: "oL-5pi1AFC4" },
+  { title: "How thirdshift works, step by step", audience: "Engineers, first look", length: "3:22", id: "gehONSA0viQ" },
+  { title: "How to use thirdshift", audience: "New users", length: "3:21", id: "pNhNyW9JgqA" },
+];
+const playerUrl = id => `https://www.youtube-nocookie.com/embed/${id}?autoplay=1`;
+
+// A stand-in for YouTube's player, so tests that play a video never leave the machine.
+async function stubPlayer(page) {
+  await page.route("https://www.youtube-nocookie.com/embed/**", route =>
+    route.fulfill({ contentType: "text/html", body: "<title>player</title>" }));
+}
+
+test("the homepage and the guide link to the videos page without JavaScript", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  for (const path of ["/", "/how-it-works/"]) {
+    await page.goto(`${origin}${path}`);
+    await page.getByRole("link", { name: "Videos", exact: true }).first().click();
+    assert.equal(new URL(page.url()).pathname, "/videos/", path);
+  }
+});
+
+test("the videos page lists every video in order, each a thumbnail linking to YouTube without JavaScript", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  await page.goto(`${origin}/videos/`);
+  assert.deepEqual(await page.locator("main .video").evaluateAll(nodes => nodes.map(node => [
+    node.querySelector("h2").textContent,
+    node.querySelector(".video-audience").textContent,
+    node.querySelector(".video-length").textContent,
+    node.querySelector("a.video-play").getAttribute("href"),
+  ])), videos.map(({ title, audience, length, id }) => [title, audience, length, `https://youtu.be/${id}`]));
+  for (const summary of await page.locator("main .video-text > p:last-child").allTextContents()) {
+    assert.equal(summary.match(/[.!?](\s|$)/g)?.length, 1, `one sentence on what the video covers: ${summary}`);
+  }
+  for (const [index, { title, id }] of videos.entries()) {
+    const thumbnail = page.locator("main .video").nth(index).locator("a.video-play img");
+    assert.equal(await thumbnail.getAttribute("src"), `/videos/${id}.jpg`);
+    assert.equal(await thumbnail.getAttribute("width"), "1280");
+    assert.equal(await thumbnail.getAttribute("height"), "720");
+    assert.ok((await thumbnail.getAttribute("alt")).startsWith(`Title card: ${title}.`), title);
+    const response = await page.request.get(`${origin}/videos/${id}.jpg`);
+    assert.equal(response.status(), 200, id);
+    assert.equal(response.headers()["content-type"], "image/jpeg");
+  }
+  await page.route("https://youtu.be/**", route => route.fulfill({ contentType: "text/html", body: "YouTube" }));
+  await page.locator("a.video-play").first().click();
+  assert.equal(page.url(), `https://youtu.be/${videos[0].id}`);
+});
+
+test("the videos page requests nothing from YouTube or Google until a video plays, then embeds only that video", async (t) => {
+  const page = await pageForTest(t);
+  await stubPlayer(page);
+  const external = [];
+  const failed = [];
+  page.on("request", request => { if (!request.url().startsWith(`${origin}/`)) external.push(request.url()); });
+  page.on("response", response => { if (response.url().startsWith(`${origin}/`) && response.status() !== 200) failed.push(response.url()); });
+  await page.goto(`${origin}/videos/`, { waitUntil: "networkidle" });
+  // Bring the lazily loaded thumbnails in too.
+  await page.locator("main .video").last().scrollIntoViewIfNeeded();
+  await page.waitForLoadState("networkidle");
+  assert.equal(await page.locator("main .video img").evaluateAll(nodes => nodes.every(node => node.complete && node.naturalWidth > 0)), true);
+  assert.deepEqual(external, [], "fonts, thumbnails and scripts are all served by thirdshift.app");
+  assert.deepEqual(failed, []);
+  assert.equal(await page.locator("iframe").count(), 0);
+
+  const { title, id } = videos[2];
+  const video = page.locator("main .video").nth(2);
+  await video.locator("a.video-play").click();
+  const player = video.locator("iframe");
+  await player.waitFor();
+  await page.waitForLoadState("networkidle");
+  assert.equal(await page.locator("iframe").count(), 1);
+  assert.equal(await video.locator("a.video-play").count(), 0, "the player replaces the thumbnail in place");
+  assert.equal(await player.getAttribute("src"), playerUrl(id));
+  assert.equal(await player.getAttribute("title"), title);
+  assert.deepEqual(external, [playerUrl(id)]);
+  const box = await player.boundingBox();
+  assert.ok(Math.abs(box.width / box.height - 16 / 9) < 0.02, `16:9, not ${box.width}x${box.height}`);
+});
+
+test("each video plays from the keyboard, with a visible focus style", async (t) => {
+  const page = await pageForTest(t);
+  await stubPlayer(page);
+  await page.goto(`${origin}/videos/`);
+  const focusedPlay = () => page.evaluate(() => document.activeElement.matches("a.video-play"));
+  for (let presses = 0; presses < 20 && !await focusedPlay(); presses++) await page.keyboard.press("Tab");
+  assert.equal(await focusedPlay(), true, "Tab reaches the first video");
+  assert.notEqual(await page.evaluate(() => getComputedStyle(document.activeElement).outlineStyle), "none");
+  await page.keyboard.press("Enter");
+  // Space, which scrolls the page from a link, plays the next one instead.
+  await page.locator("a.video-play").first().focus();
+  const scrollY = await page.evaluate(() => scrollY);
+  await page.keyboard.press("Space");
+  assert.equal(await page.evaluate(() => scrollY), scrollY);
+  const players = page.locator("main .video iframe");
+  assert.deepEqual(await players.evaluateAll(nodes => nodes.map(node => [node.title, node.src])),
+    videos.slice(0, 2).map(({ title, id }) => [title, playerUrl(id)]));
+  assert.equal(await page.evaluate(() => document.activeElement.title), videos[1].title, "focus moves to the player");
+});
+
+for (const width of [320, 390, 1280]) {
+  for (const javaScriptEnabled of [false, true]) {
+    test(`the videos page fits ${width}px without horizontal scrolling (JavaScript: ${javaScriptEnabled})`, async (t) => {
+      const page = await pageForTest(t, { javaScriptEnabled, viewport: { width, height: 900 } });
+      await stubPlayer(page);
+      await page.goto(`${origin}/videos/`);
+      if (javaScriptEnabled) await page.locator("a.video-play").first().click();
+      await assertFits(page, "main, header, .video, .video-frame", "text and videos fit their containers");
+    });
+  }
 }
 
 // A skill's own SKILL.md starts open, so it shows as soon as its skill does.

@@ -14,16 +14,14 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
-use crate::child_run::{self, Ended, Kind};
+use crate::child_run::{self, ChildAsks, Ended, Kind};
 use crate::ci::{self, FailedChecks};
 use crate::git::Git;
 use crate::github::{Check, GitHub, ListedIssue};
-use crate::harness::Choice;
 use crate::issue::IssueUrl;
 use crate::labels::{Label, Labels, READY_FOR_AGENT};
 use crate::poll;
 use crate::progress;
-use crate::security::Options;
 
 /// The label that marks a Base fix issue, which a Run finds an open one by.
 pub const BASE_FIX: Label = Label::new("base-fix", "A Base fix: CI is red on a Base branch");
@@ -113,10 +111,6 @@ pub struct BaseFix {
     /// What the Run says after its cause, if Inherited failures failed it
     /// with no Base fix taken.
     advice: Vec<Advice>,
-    /// The Harness, Model and Effort a Base fix it starts runs its sessions
-    /// on: the Run's.
-    harness: Choice,
-    security: Options,
 }
 
 /// The Base fix a Run took as its one: one it started, or one it found
@@ -140,10 +134,9 @@ impl Taken {
 
 impl BaseFix {
     /// The Base fix of a Run that is the child Run `child`, if it is one,
-    /// that asked `ask` about a Base fix, and whose sessions run on
-    /// `harness`, as a Base fix it starts does. A Base fix starts none of
-    /// its own, whatever it asked.
-    pub fn new(child: Option<&Kind>, ask: BaseFixAsk, harness: Choice, security: Options) -> Self {
+    /// that asked `ask` about a Base fix. A Base fix starts none of its own,
+    /// whatever it asked.
+    pub fn new(child: Option<&Kind>, ask: BaseFixAsk) -> Self {
         let (on_inherited_failures, retry) = match (child, ask) {
             (Some(Kind::BaseFix { .. }), _) => (OnInheritedFailures::IsBaseFix, None),
             (_, BaseFixAsk::Allow) => (OnInheritedFailures::StartBaseFix, None),
@@ -155,15 +148,7 @@ impl BaseFix {
             retry,
             taken: None,
             advice: Vec::new(),
-            harness,
-            security,
         }
-    }
-
-    /// Have any Base fix it starts run its sessions on `harness`: the Run's,
-    /// once the Run has checked it.
-    pub fn runs_on(&mut self, harness: Choice) {
-        self.harness = harness;
     }
 
     /// Whether the Run compares its red checks with the Base branch's, so
@@ -193,14 +178,15 @@ impl BaseFix {
     }
 
     /// Fix the Inherited failures in `failed`, the only red checks on the PR
-    /// `pr_url` of the Run on `issue`, started from `launch`, which also fail
-    /// on `base` at `base_commit`, where `failed` holds that commit's checks
-    /// of their names, with a Base fix: write its issue, start it as a child
-    /// `thirdshift` and wait for it to merge, after which the Run is to merge
-    /// `base` in and watch CI again. If an open Base fix issue other than
-    /// `issue` already names `base` and those checks, no issue is written:
+    /// `pr_url` of the Run on `outside.issue`, started from `outside.launch`,
+    /// which also fail on `base` at `base_commit`, where `failed` holds that
+    /// commit's checks of their names, with a Base fix: write its issue,
+    /// start it as a child `thirdshift` handed `outside.asks`, and wait for
+    /// it to merge, after which the Run is to merge `base` in and watch CI
+    /// again. If an open Base fix issue other than the Run's issue already
+    /// names `base` and those checks, no issue is written:
     /// the Run waits for that one to close instead, as its one Base fix (see
-    /// [`BaseFix::wait_on`]), or, if a Run from `launch` started that Base fix
+    /// [`BaseFix::wait_on`]), or, if a Run from its Launch directory started that Base fix
     /// and it ended with the issue still open, starts it again on the same
     /// issue. Fails, with the Run's cause, if the Run was not asked to start
     /// one, if the Base fix fails, in which case the cause names its issue,
@@ -209,20 +195,13 @@ impl BaseFix {
     /// [`BaseFix::into_advice`] to give after its cause.
     pub fn fix(
         &mut self,
-        launch: &Git,
-        issue: &IssueUrl,
+        mut outside: LaunchAndGitHub,
         pr_url: &str,
         base: &str,
         base_commit: &str,
         failed: &FailedChecks,
     ) -> Result<()> {
-        let harness = self.harness.clone();
-        let mut outside = LaunchAndGitHub {
-            launch,
-            issue,
-            harness: &harness,
-            security: self.security,
-        };
+        let issue = outside.issue;
         self.fix_through(&mut outside, issue, pr_url, base, base_commit, failed)
     }
 
@@ -485,14 +464,14 @@ impl<W> Mark<W> {
     }
 }
 
-/// The outside world of a Run on `issue` started from `launch`: its git
-/// directory's locks and marks, GitHub, the child Run, its sessions on
-/// `harness`, and the poll interval.
-struct LaunchAndGitHub<'a> {
-    launch: &'a Git,
-    issue: &'a IssueUrl,
-    harness: &'a Choice,
-    security: Options,
+/// The outside world of a Run on `issue` started from `launch`, as it
+/// starts a Base fix: its git directory's locks and marks, GitHub, the child
+/// Run, handed `asks`, as the Run hands every child Run, and the poll
+/// interval.
+pub struct LaunchAndGitHub<'a> {
+    pub launch: &'a Git,
+    pub issue: &'a IssueUrl,
+    pub asks: &'a ChildAsks,
 }
 
 impl Outside for LaunchAndGitHub<'_> {
@@ -550,7 +529,7 @@ impl Outside for LaunchAndGitHub<'_> {
         let kind = Kind::BaseFix {
             base: base.to_string(),
         };
-        child_run::start(fix, kind, BaseFixAsk::Forbid, self.security, self.harness)?.wait()
+        child_run::start(fix, kind, BaseFixAsk::Forbid, self.asks)?.wait()
     }
 
     fn pause(&mut self) -> Result<()> {
@@ -664,7 +643,7 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
-    use crate::github::CheckState;
+    use crate::github::Conclusion;
 
     /// What the Base fix did outside itself, in the order it did it.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -877,7 +856,7 @@ mod tests {
     fn check(name: &str, url: Option<&str>) -> Check {
         Check {
             name: name.to_string(),
-            state: CheckState::Failed,
+            conclusion: Conclusion::Failure,
             url: url.map(String::from),
             job: None,
         }
@@ -898,7 +877,7 @@ mod tests {
 
     /// A Run's Base fix as asked `ask`, not itself a Base fix.
     fn asked(ask: BaseFixAsk) -> BaseFix {
-        BaseFix::new(None, ask, Choice::default(), Options::default())
+        BaseFix::new(None, ask)
     }
 
     fn undecided() -> BaseFixAsk {
@@ -1349,22 +1328,14 @@ mod tests {
             base: "main".to_string(),
         };
         for ask in [BaseFixAsk::Allow, BaseFixAsk::Forbid, undecided()] {
-            let base_fix = BaseFix::new(Some(&child), ask, Choice::default(), Options::default());
+            let base_fix = BaseFix::new(Some(&child), ask);
             assert!(!base_fix.sees_inherited_failures());
             assert_eq!(base_fix.ask_of_tickets(), BaseFixAsk::Forbid);
         }
         let ticket = Kind::Ticket {
             spec_branch: "spec-3".to_string(),
         };
-        assert!(
-            BaseFix::new(
-                Some(&ticket),
-                BaseFixAsk::Allow,
-                Choice::default(),
-                Options::default()
-            )
-            .sees_inherited_failures()
-        );
+        assert!(BaseFix::new(Some(&ticket), BaseFixAsk::Allow).sees_inherited_failures());
         assert!(asked(BaseFixAsk::Forbid).sees_inherited_failures());
     }
 }

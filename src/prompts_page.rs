@@ -12,7 +12,7 @@ use std::fmt::Write;
 use include_dir::{Dir, File};
 
 use crate::ci::FailedChecks;
-use crate::github::{Check, CheckState};
+use crate::github::{Check, Conclusion};
 use crate::harness::{Choice, Harness};
 use crate::issue::IssueUrl;
 use crate::prompt;
@@ -116,7 +116,7 @@ fn prompts() -> Vec<Prompt> {
     };
     let check = |name: &str| Check {
         name: name.to_string(),
-        state: CheckState::Failed,
+        conclusion: Conclusion::Failure,
         url: Some(CHECK_URL.to_string()),
         job: None,
     };

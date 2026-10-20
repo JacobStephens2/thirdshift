@@ -106,7 +106,7 @@ Run `sudo nginx -t`, then `sudo systemctl restart nginx` on a systemd host. The 
 - [The local Console](console/README.md): `thirdshift console --no-sign-in` serves the Inbox on localhost.
 - [Building and testing](docs/guide.md#building-from-source) and [releasing](docs/guide.md#releasing).
 - [Exact prompts](prompts/README.md) and [Factory skills](skills/), also [readable on the site](https://thirdshift.app/prompts/).
-- [Domain vocabulary](CONTEXT.md) and [architectural decisions](docs/adr/).
+- [Domain vocabulary](GLOSSARY.md) and [architectural decisions](docs/adr/).
 - [Open issues](https://github.com/JacobStephens2/thirdshift/issues) for known gaps and planned work.
 
 ## Credits and license

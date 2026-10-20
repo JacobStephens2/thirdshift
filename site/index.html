@@ -63,7 +63,7 @@
         <div class="proof-row">
           <div>
             <p class="framing">The humans are the <b>day shift</b>: you talk the idea through, write the spec and cut it into tickets. Coding agents work the <b>third shift</b>: give thirdshift a GitHub issue URL and it implements the issue, reviews its own work and delivers a pull request ready for review, or merges it when asked. Start a Run whenever you like, or let your operating system start passes on a schedule.</p>
-            <p class="credit"><a href="/how-it-works/">How thirdshift works</a>: an engineer's guide from issue to pull request, through Worktrees, agent review and Delivery. <a href="/docs/">Documentation</a> covers installation, commands and configuration.</p>
+            <p class="credit"><a href="/how-it-works/">How thirdshift works</a>: an engineer's guide from issue to pull request, through Worktrees, agent review and Delivery. <a href="/architecture/">Architecture</a> draws what runs where and who does each step. <a href="/docs/">Documentation</a> covers installation, commands and configuration. <a href="/videos/">Videos</a> explain it in under four minutes.</p>
             <p class="credit">Built on Matt Pocock's skills: <a href="https://www.aihero.dev/skills">aihero.dev/skills</a> · <a href="https://github.com/mattpocock/skills">mattpocock/skills</a>. Read <a href="/prompts/">every prompt and skill thirdshift sends</a>.</p>
           </div>
           <div>
@@ -221,7 +221,7 @@
                 <li><span class="prefix">thirdshift: 00:21:10</span> logging the session to /home/jacob/.thirdshift/logs/JacobStephens2/thirdshift/commands/pickup/663-20261012T002101-0400-implement.jsonl</li>
                 <li><span class="prefix">thirdshift: 00:21:11</span> implement: session started</li>
                 <li><span class="prefix">thirdshift: 00:21:19</span> implement: $ pwd &amp;&amp; git status --short &amp;&amp; git branch --show-current &amp;&amp; cat /tmp/thirdshift-skills-OIZYKN/thirdshi…</li>
-                <li><span class="prefix">thirdshift: 00:21:25</span> implement: $ cat AGENTS.md CONTEXT.md docs/agents/issue-tracker.md docs/agents/domain.md docs/agents/triage-label…</li>
+                <li><span class="prefix">thirdshift: 00:21:25</span> implement: $ cat AGENTS.md GLOSSARY.md docs/agents/issue-tracker.md docs/agents/domain.md docs/agents/triage-label…</li>
                 <li><span class="prefix">thirdshift: 00:21:25</span> implement: $ gh issue view 663 --repo JacobStephens2/thirdshift --json title,body,comments,labels &amp;&amp; git log -5 -…</li>
                 <li><span class="prefix">thirdshift: 00:21:30</span> implement: web search</li>
                 <li><span class="prefix">thirdshift: 00:21:30</span> implement: $ cat CODING_STANDARDS.md &amp;&amp; rg --files | rg '("'^site/|web|index.html|landing|pages|astro|package.jso…</li>
@@ -525,8 +525,10 @@
   <a href="https://github.com/JacobStephens2/thirdshift">GitHub</a>
   <a href="https://github.com/JacobStephens2/thirdshift/releases">Releases</a>
   <a href="/how-it-works/">How thirdshift works</a>
+  <a href="/architecture/">Architecture</a>
   <a href="/docs/">Documentation</a>
   <a href="/prompts/">Prompts and skills</a>
+  <a href="/videos/">Videos</a>
   <a href="https://github.com/JacobStephens2/thirdshift/blob/main/LICENSE">MIT License</a>
   <span>Factory skills adapted from <a href="https://github.com/mattpocock/skills">Matt Pocock's skills</a></span>
 </footer>

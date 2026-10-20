@@ -11,39 +11,47 @@
 //! [`FailedOutside`]: [`InWorktree`] and [`OnFailure`] do each for real;
 //! `Scripted`, in tests, from a script, recording each call.
 
-use std::cell::Cell;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 
 mod repair_loop;
+mod stage;
 
-use crate::pull_request::{Identified, MergeAttempt, PullRequest};
+use crate::pull_request::{AlreadyMerged, Identified, MergeAttempt, PullRequest};
 
-use crate::base_fix::BaseFix;
+use crate::base_fix::{self, BaseFix};
+use crate::child_run::ChildAsks;
 use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::{FailedRun, PolicyRefusal, interrupted_or};
+use crate::git::Git;
 use crate::github::GitHub;
 use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
-use crate::logs::{self, Stage as CommandStage};
 use crate::progress;
 use crate::prompt;
-use crate::recovery::{Preservation, Recovery, Stage};
+use crate::recovery::{self, Preservation, Recovery};
 use crate::run::{Goal, Reached};
 use crate::run_ending::Cause;
 use crate::security::review::{Hold as SecurityHold, Outcome as SecurityOutcome, Review};
-use crate::session::{Logs, Sessions};
+use crate::session::{Kind, Logs, Sessions};
+use crate::skills;
+use crate::trust::{self, IssueText};
 use crate::worktree::{ForeignCommits, Merge, PendingMerge, Preserved, Worktree};
 
 use repair_loop::{Repair, Upstream};
+use stage::{CommandLog, CommandRecord, Stage, Tracker};
 /// A Delivery of the pull request for `issue`, the Run's issue or the Spec,
 /// into the Base branch `base`, to `goal`.
 pub struct Delivery<'a> {
-    pub security_fix: bool,
     /// Whether the opening session is followed by a guidance Security review.
     pub security_review: bool,
+    /// What the Run hands on to every child Run, a Base fix or a Ticket's
+    /// Run, whose Harness, Model and Effort its own sessions run on too.
+    pub child_asks: &'a ChildAsks,
     pub issue: &'a IssueUrl,
     pub base: &'a str,
     pub goal: Goal,
@@ -52,25 +60,52 @@ pub struct Delivery<'a> {
     pub base_fix: &'a mut BaseFix,
     /// Where its Session logs go.
     pub logs: &'a Logs,
-    /// The Harness, Model and Effort its sessions run on, and its child
-    /// Runs' too.
-    pub harness: &'a Choice,
+    /// When the Run began: an untrusted edit to `issue` made since then
+    /// starts no further session.
+    pub started: DateTime<Utc>,
 }
 
-/// The session a Delivery opens with: the implement session, or the Spec
-/// review.
-pub struct Opening<'a> {
-    /// The session's kind, in its progress lines and log name.
-    pub kind: &'a str,
+/// The session a Delivery opens with, given its prompt.
+pub struct Opening {
+    pub session: OpeningSession,
     pub prompt: String,
+}
+
+/// Which session a Delivery opens with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpeningSession {
+    /// A Run's implement session.
+    Implementation,
+    /// A Spec run's Spec review, once its Tickets have landed.
+    SpecReview,
+}
+
+impl OpeningSession {
+    /// The session's kind.
+    pub fn kind(self) -> Kind {
+        match self {
+            Self::Implementation => Kind::Implementation,
+            Self::SpecReview => Kind::SpecReview,
+        }
+    }
+
     /// Whether the branch is first fast-forwarded to its head on origin, as
     /// the Spec branch is to the Tickets landed there.
-    pub catch_up_from_origin: bool,
+    pub fn catches_up_from_origin(self) -> bool {
+        self == Self::SpecReview
+    }
+
+    fn stage(self) -> Stage {
+        match self {
+            Self::Implementation => Stage::Implementation,
+            Self::SpecReview => Stage::SpecReview,
+        }
+    }
 }
 
 impl Delivery<'_> {
     /// Take the pull request from the branch checked out in `worktree` to the
-    /// goal. With `opening.catch_up_from_origin`, first fast-forward the
+    /// goal. For a Spec review opening, first fast-forward the
     /// branch to origin. Then run the opening session and optional Security
     /// review, push the branch, for
     /// any commit the session left unpushed, write the line that says what it
@@ -82,7 +117,9 @@ impl Delivery<'_> {
     /// is tried again on the new head; if that round finds nothing to fix,
     /// this fails with a `PolicyRefusal`. Any failure goes through the Failed
     /// run path, which keeps the worktree if its work did not reach origin;
-    /// otherwise it is cleaned up when this returns.
+    /// otherwise it is cleaned up when this returns. A gate observing an
+    /// already merged PR completes as merged only if that head includes all
+    /// local work; no further publication or PR mutations are performed.
     pub fn deliver(
         self,
         worktree: Worktree,
@@ -90,33 +127,40 @@ impl Delivery<'_> {
         pull_request: &mut PullRequest,
         checklist: Option<&str>,
     ) -> Result<Reached, FailedRun> {
-        let stage = Cell::new(if opening.catch_up_from_origin {
-            Stage::SpecReview
-        } else {
-            Stage::Implementation
-        });
+        let tracker = Tracker::new(opening.session.stage(), CommandLog);
         let route = Route {
             security_review: self.security_review,
             issue: self.issue,
             base: self.base,
             branch: worktree.branch(),
             goal: self.goal,
-            harness: self.harness,
+            harness: &self.child_asks.harness,
         };
         pull_request.begin_delivery();
-        let (delivered, log) =
-            Sessions::within(self.logs, worktree.path(), self.harness, |sessions| {
+        let (issue, started, path) = (self.issue, self.started, worktree.path());
+        let before_each = move || {
+            no_untrusted_edit_since(issue, started)?;
+            hand_over_issue(issue, path)
+        };
+        let (delivered, log) = Sessions::checked_within(
+            self.logs,
+            worktree.path(),
+            &self.child_asks.harness,
+            &before_each,
+            |sessions| {
                 let mut outside = InWorktree {
-                    stage: &stage,
+                    tracker: &tracker,
                     issue: self.issue,
                     worktree: &worktree,
                     base: self.base,
                     base_fix: self.base_fix,
+                    child_asks: self.child_asks,
                     sessions,
                     pull_request,
                 };
                 route.steps(&mut outside, &opening, checklist)
-            });
+            },
+        );
         match delivered {
             Ok(pr_url) => Ok(Reached {
                 pr_url,
@@ -125,21 +169,25 @@ impl Delivery<'_> {
                 ticket_lines: Vec::new(),
             }),
             Err(error) => {
-                if error.is::<SecurityHold>() {
-                    stage.set(Stage::SecurityReview);
+                if let Some(merged) = error.downcast_ref::<AlreadyMerged>()
+                    && worktree.fully_landed_at(&merged.head).unwrap_or(false)
+                {
+                    progress::step("the pull request was merged while Delivery was running");
+                    return Ok(Reached {
+                        pr_url: merged.pr.url.clone(),
+                        goal: Goal::Merged,
+                        log,
+                        ticket_lines: Vec::new(),
+                    });
                 }
+                let stopped_at = stopped_at(&tracker, &error);
                 let path = worktree.path().to_path_buf();
                 let mut outside = OnFailure {
                     base: self.base,
                     worktree,
                     pull_request,
                 };
-                let mut failed = fail(&mut outside, log, error);
-                if let Some(recovery) = &mut failed.recovery {
-                    recovery.stage = stage.get();
-                    recovery.worktree = Some(path);
-                }
-                Err(failed)
+                Err(fail(&mut outside, stopped_at, path, log, error))
             }
         }
     }
@@ -168,19 +216,24 @@ impl Route<'_> {
         opening: &Opening,
         checklist: Option<&str>,
     ) -> Result<String> {
-        if opening.catch_up_from_origin {
+        let session = opening.session;
+        if session.catches_up_from_origin() {
             outside.catch_up()?;
         }
-        outside.session(opening.kind, &opening.prompt)?;
-        let review = self.security_review.then(|| {
-            SecurityOutcome::of(outside.security_review(&prompt::security_review(
-                self.issue,
-                self.base,
-                self.branch,
-            )))
-        });
+        outside.stage(session.stage());
+        outside.session(session.kind(), &opening.prompt)?;
+        let review = match self.security_review.then(|| {
+            outside.stage(Stage::SecurityReview);
+            outside.security_review(&prompt::security_review(self.issue, self.base, self.branch))
+        }) {
+            // Not a Security review outcome: the Run itself must stop.
+            Some(Err(error)) if error.is::<UntrustedEdit>() => return Err(error),
+            review => review.map(SecurityOutcome::of),
+        };
+        outside.stage(Stage::Push);
         outside.push()?;
         self.write_built_with(outside);
+        outside.stage(Stage::PullRequestReadiness);
         let pr = outside.mark_pr_ready(checklist)?;
         let hold = review.as_ref().and_then(SecurityOutcome::hold);
         if let Some(review) = &review
@@ -297,8 +350,15 @@ fn retry_if_interrupted<O: Outside>(
 /// head whose CI was watched. Problems along the way are reported, not
 /// raised, so the error is what the Run fails with. Worktree owns preservation
 /// and retains work that may not have reached origin. `log` is the most recent
-/// Session log, if a session created one.
-fn fail(outside: &mut impl FailedOutside, log: Option<PathBuf>, error: anyhow::Error) -> FailedRun {
+/// Session log, if a session created one; `stopped_at`, the stage its
+/// recovery lines report; `worktree`, where work preserved only locally is.
+fn fail(
+    outside: &mut impl FailedOutside,
+    stopped_at: recovery::Stage,
+    worktree: PathBuf,
+    log: Option<PathBuf>,
+    error: anyhow::Error,
+) -> FailedRun {
     let interrupted = outside.interrupted();
     let error = interrupted_or(error, interrupted);
     // The cause as stderr gives it, down to what a session left running, cut
@@ -327,8 +387,10 @@ fn fail(outside: &mut impl FailedOutside, log: Option<PathBuf>, error: anyhow::E
             None
         }
     };
+    let mut recovery = Recovery::new(stopped_at, preservation);
+    recovery.record_worktree(worktree);
     FailedRun {
-        recovery: Some(Box::new(Recovery::new(Stage::Implementation, preservation))),
+        recovery: Some(Box::new(recovery)),
         error,
         pr_url,
         log,
@@ -337,13 +399,25 @@ fn fail(outside: &mut impl FailedOutside, log: Option<PathBuf>, error: anyhow::E
     }
 }
 
+/// The stage a Delivery that failed with `error` stopped at, from
+/// `tracker`: its Security review if the error is a Security hold, found once
+/// the pull request was ready.
+fn stopped_at(tracker: &Tracker<impl CommandRecord>, error: &anyhow::Error) -> recovery::Stage {
+    if error.is::<SecurityHold>() {
+        tracker.stop_at_security_review();
+    }
+    tracker.stopped_at()
+}
+
 /// What a Delivery's steps do or read outside the Delivery, within its
 /// sessions' scope.
 trait Outside {
+    /// Enter `stage`, before the step it names.
+    fn stage(&mut self, stage: Stage);
     /// Fast-forward the Issue branch to its head on origin.
     fn catch_up(&mut self) -> Result<()>;
-    /// Run the session `kind` given `prompt`.
-    fn session(&mut self, kind: &str, prompt: &str) -> Result<()>;
+    /// Run a session of `kind` given `prompt`.
+    fn session(&mut self, kind: Kind, prompt: &str) -> Result<()>;
     fn security_review(&mut self, prompt: &str) -> Result<Review>;
     fn record_security_review(&mut self, review: &SecurityOutcome) -> Result<()>;
     /// Push the Issue branch.
@@ -384,36 +458,81 @@ trait FailedOutside {
     fn step(&mut self, line: String);
 }
 
+/// Fail with [`UntrustedEdit`] if `issue` has had an edit to its body or
+/// title, since its Run `started`, by an account that is not a Trusted
+/// account: a session started now would work from text no Trusted account
+/// wrote.
+fn no_untrusted_edit_since(issue: &IssueUrl, started: DateTime<Utc>) -> Result<()> {
+    match trust::untrusted_edit(&GitHub::new(), issue, Some(started))? {
+        Some(text) => Err(UntrustedEdit {
+            number: issue.number,
+            text,
+        }
+        .into()),
+        None => Ok(()),
+    }
+}
+
+/// Write `issue` to [`prompt::ISSUE_FILE`] in `worktree`, kept out of git,
+/// for the session about to start to work from: its title, its body and only
+/// the comments of Trusted accounts, as [`GitHub::issue_for_session`] gives
+/// them. Written again before each session, so each has the latest.
+fn hand_over_issue(issue: &IssueUrl, worktree: &Path) -> Result<()> {
+    skills::exclude(&Git::new(worktree), &format!("/{}", prompt::ISSUE_FILE))?;
+    let text = GitHub::new().issue_for_session(issue)?;
+    let path = worktree.join(prompt::ISSUE_FILE);
+    fs::write(&path, text).with_context(|| format!("could not write {}", path.display()))
+}
+
+/// Issue `number`'s `text` was edited during its Run by an account that is
+/// not a Trusted account, so the Run starts no further session.
+#[derive(Debug)]
+struct UntrustedEdit {
+    number: u64,
+    text: IssueText,
+}
+
+impl std::fmt::Display for UntrustedEdit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "#{} {} edited since the Run started by an account that is not a Trusted account; starting no further session",
+            self.number, self.text
+        )
+    }
+}
+
+impl std::error::Error for UntrustedEdit {}
+
 /// A Delivery's worktree, its sessions, its Base fix, and its issue and pull
 /// request on GitHub.
 struct InWorktree<'a> {
-    stage: &'a Cell<Stage>,
+    tracker: &'a Tracker,
     issue: &'a IssueUrl,
     worktree: &'a Worktree,
     base: &'a str,
     base_fix: &'a mut BaseFix,
+    /// What a Base fix it starts is handed.
+    child_asks: &'a ChildAsks,
     sessions: &'a Sessions<'a>,
     pull_request: &'a mut PullRequest,
 }
 
 impl Outside for InWorktree<'_> {
+    fn stage(&mut self, stage: Stage) {
+        self.tracker.enter(stage);
+    }
+
     fn catch_up(&mut self) -> Result<()> {
         self.worktree.fast_forward_to_origin()
     }
 
-    fn session(&mut self, kind: &str, prompt: &str) -> Result<()> {
-        self.stage.set(if kind == "spec-review" {
-            Stage::SpecReview
-        } else {
-            Stage::Implementation
-        });
+    fn session(&mut self, kind: Kind, prompt: &str) -> Result<()> {
         self.sessions.run(kind, prompt)?;
         self.pull_request.ensure_actionable(false)
     }
 
     fn security_review(&mut self, prompt: &str) -> Result<Review> {
-        self.stage.set(Stage::SecurityReview);
-        logs::stage(CommandStage::SecurityReview);
         self.pull_request.ensure_actionable(false)?;
         let review = crate::security::review::run(
             self.sessions,
@@ -431,8 +550,6 @@ impl Outside for InWorktree<'_> {
     }
 
     fn push(&mut self) -> Result<()> {
-        self.stage.set(Stage::Push);
-        logs::stage(CommandStage::PullRequest);
         self.pull_request.ensure_actionable(false)?;
         self.worktree
             .push_if_actionable(&mut || self.pull_request.ensure_actionable(false))
@@ -443,20 +560,18 @@ impl Outside for InWorktree<'_> {
     }
 
     fn mark_pr_ready(&mut self, checklist: Option<&str>) -> Result<Identified> {
-        self.stage.set(Stage::PullRequest);
-        logs::stage(CommandStage::PullRequest);
         self.pull_request.mark_ready(checklist)
     }
 
     fn take_to_goal(&mut self, pr_url: &str, goal: Goal) -> Result<()> {
-        self.stage.set(Stage::Repair);
         let mut outside = RunOutside {
-            stage: self.stage,
+            tracker: self.tracker,
             issue: self.issue,
             worktree: self.worktree,
             base: self.base,
             pr_url,
             base_fix: self.base_fix,
+            child_asks: self.child_asks,
             sessions: self.sessions,
             pull_request: self.pull_request,
         };
@@ -524,12 +639,14 @@ impl FailedOutside for OnFailure<'_> {
 /// What a Run's Repair loop reaches outside itself: the Run's worktree, its
 /// Repair sessions, its Base fix, its issue and its pull request.
 struct RunOutside<'a> {
-    stage: &'a Cell<Stage>,
+    tracker: &'a Tracker,
     issue: &'a IssueUrl,
     worktree: &'a Worktree,
     base: &'a str,
     pr_url: &'a str,
     base_fix: &'a mut BaseFix,
+    /// What a Base fix it starts is handed.
+    child_asks: &'a ChildAsks,
     sessions: &'a Sessions<'a>,
     pull_request: &'a mut PullRequest,
 }
@@ -538,12 +655,7 @@ impl repair_loop::Outside for RunOutside<'_> {
     type Pending = PendingMerge;
 
     fn stage(&mut self, stage: Stage) {
-        self.stage.set(stage);
-        match stage {
-            Stage::SelfMerge => logs::stage(CommandStage::SelfMerge),
-            Stage::PullRequest => logs::stage(CommandStage::PullRequest),
-            _ => {}
-        }
+        self.tracker.enter(stage);
     }
 
     fn merge_base_branch(&mut self) -> Result<Merge> {
@@ -560,8 +672,6 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn push(&mut self) -> Result<()> {
-        self.stage.set(Stage::Push);
-        logs::stage(CommandStage::PullRequest);
         self.pull_request.ensure_actionable(true)?;
         self.worktree
             .push_if_actionable(&mut || self.pull_request.ensure_actionable(true))
@@ -585,8 +695,6 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn watch(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
-        self.stage.set(Stage::Ci);
-        logs::stage(CommandStage::CiWatch);
         ci::watch(self.issue, head, base_commit, &mut || {
             self.pull_request.ensure_actionable(true)
         })
@@ -598,16 +706,12 @@ impl repair_loop::Outside for RunOutside<'_> {
         base_commit: Option<&str>,
         failed: &FailedChecks,
     ) -> Result<Option<Ci>> {
-        self.stage.set(Stage::Ci);
-        logs::stage(CommandStage::CiWatch);
         ci::rerun(self.issue, head, base_commit, failed, &mut || {
             self.pull_request.ensure_actionable(true)
         })
     }
 
-    fn repair(&mut self, kind: &str, repair: Repair) -> Result<()> {
-        self.stage.set(Stage::Repair);
-        logs::stage(CommandStage::Repair);
+    fn repair(&mut self, kind: Kind, repair: Repair) -> Result<()> {
         let (issue, base, pr_url) = (self.issue, self.base, self.pr_url);
         let branch = self.worktree.branch();
         let prompt = match repair {
@@ -630,15 +734,13 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn base_fix(&mut self, base_commit: &str, failed: &FailedChecks) -> Result<()> {
-        self.stage.set(Stage::BaseFix);
-        self.base_fix.fix(
-            self.worktree.launch(),
-            self.issue,
-            self.pr_url,
-            self.base,
-            base_commit,
-            failed,
-        )
+        let outside = base_fix::LaunchAndGitHub {
+            launch: self.worktree.launch(),
+            issue: self.issue,
+            asks: self.child_asks,
+        };
+        self.base_fix
+            .fix(outside, self.pr_url, self.base, base_commit, failed)
     }
 
     fn ensure_pr_ready_and_mergeable(&mut self) -> Result<()> {
@@ -646,8 +748,6 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn merge(&mut self, head: &str) -> Result<MergeAttempt> {
-        self.stage.set(Stage::SelfMerge);
-        logs::stage(CommandStage::SelfMerge);
         self.pull_request.merge(head)
     }
 
@@ -664,6 +764,7 @@ impl repair_loop::Outside for RunOutside<'_> {
 mod tests {
     use super::*;
     use anyhow::{anyhow, bail};
+    use stage::Recorded;
 
     const PR_URL: &str = "https://github.com/acme/widgets/pull/12";
 
@@ -685,7 +786,7 @@ mod tests {
     #[derive(Debug, PartialEq, Eq)]
     enum Call {
         CatchUp,
-        Session(String),
+        Session(Kind),
         Push,
         Annotation,
         Checklist,
@@ -704,6 +805,12 @@ mod tests {
     #[derive(Default)]
     struct Scripted {
         calls: Vec<Call>,
+        /// The stages entered, apart from the calls.
+        stages: Vec<Stage>,
+        /// Whether the Delivery runs a Security review, and whether that
+        /// review ends incomplete, a Security hold.
+        reviews_security: bool,
+        security_held: bool,
         failing: Option<Fails>,
         interrupted: bool,
         refused: bool,
@@ -724,7 +831,13 @@ mod tests {
         fn record_security_review(&mut self, _: &SecurityOutcome) -> Result<()> {
             Ok(())
         }
+        fn stage(&mut self, stage: Stage) {
+            self.stages.push(stage);
+        }
         fn security_review(&mut self, _: &str) -> Result<Review> {
+            if self.security_held {
+                return Review::from_final_message(Some("Security review: incomplete: timed out"));
+            }
             Review::from_final_message(Some(
                 "Security review: {\"unaddressed_count\":0,\"findings\":[],\"pre_existing_count\":0}",
             ))
@@ -733,9 +846,9 @@ mod tests {
             self.calls.push(Call::CatchUp);
             self.check(Fails::CatchUp)
         }
-        fn session(&mut self, kind: &str, _: &str) -> Result<()> {
-            self.calls.push(Call::Session(kind.to_string()));
-            self.log = Some(PathBuf::from(format!("/logs/{kind}.jsonl")));
+        fn session(&mut self, kind: Kind, _: &str) -> Result<()> {
+            self.calls.push(Call::Session(kind));
+            self.log = Some(PathBuf::from(format!("/logs/{}.jsonl", kind.token())));
             self.check(Fails::Session)
         }
         fn push(&mut self) -> Result<()> {
@@ -809,7 +922,7 @@ mod tests {
     fn deliver(outside: &mut Scripted, goal: Goal, spec: bool) -> Result<String, FailedRun> {
         let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
         let route = Route {
-            security_review: false,
+            security_review: outside.reviews_security,
             issue: &issue,
             base: "main",
             branch: "issue-7",
@@ -817,13 +930,35 @@ mod tests {
             harness: &Choice::default(),
         };
         let opening = Opening {
-            kind: if spec { "spec-review" } else { "implement" },
+            session: if spec {
+                OpeningSession::SpecReview
+            } else {
+                OpeningSession::Implementation
+            },
             prompt: String::new(),
-            catch_up_from_origin: spec,
         };
         route
             .steps(outside, &opening, spec.then_some("Tickets"))
-            .map_err(|error| fail(outside, outside.log.clone(), error))
+            .map_err(|error| {
+                // The real adapters enter each stage the steps name.
+                let tracker = Tracker::new(opening.session.stage(), Recorded::default());
+                for stage in &outside.stages {
+                    tracker.enter(*stage);
+                }
+                let stopped_at = stopped_at(&tracker, &error);
+                fail(
+                    outside,
+                    stopped_at,
+                    PathBuf::from("/worktree"),
+                    outside.log.clone(),
+                    error,
+                )
+            })
+    }
+
+    /// The stage `failed` stopped at.
+    fn stopped(failed: &FailedRun) -> recovery::Stage {
+        failed.recovery.as_ref().expect("no recovery").stage()
     }
 
     #[test]
@@ -839,7 +974,7 @@ mod tests {
             outside.calls,
             [
                 Call::CatchUp,
-                Call::Session("spec-review".to_string()),
+                Call::Session(Kind::SpecReview),
                 Call::Push,
                 Call::Annotation,
                 Call::Checklist,
@@ -855,7 +990,7 @@ mod tests {
         assert!(deliver(&mut outside, Goal::ReadyForReview, true).is_ok());
         assert_eq!(
             outside.calls[..2],
-            [Call::CatchUp, Call::Session("spec-review".to_string())]
+            [Call::CatchUp, Call::Session(Kind::SpecReview)]
         );
     }
 
@@ -970,6 +1105,8 @@ mod tests {
             };
             let failed = fail(
                 &mut outside,
+                recovery::Stage::Implementation,
+                PathBuf::from("/worktree"),
                 Some(PathBuf::from("/logs/implement.jsonl")),
                 anyhow!("original\nextra context"),
             );
@@ -1010,6 +1147,73 @@ mod tests {
                 .calls
                 .iter()
                 .any(|call| matches!(call, Call::Close(_)))
+        );
+    }
+
+    #[test]
+    fn a_delivery_enters_each_stage_before_its_step() {
+        let mut outside = Scripted {
+            reviews_security: true,
+            ..Default::default()
+        };
+        assert!(deliver(&mut outside, Goal::ReadyForReview, false).is_ok());
+        assert_eq!(
+            outside.stages,
+            [
+                Stage::Implementation,
+                Stage::SecurityReview,
+                Stage::Push,
+                Stage::PullRequestReadiness
+            ]
+        );
+    }
+
+    #[test]
+    fn a_spec_delivery_opens_in_its_spec_review() {
+        for failing in [Fails::CatchUp, Fails::Session] {
+            let mut outside = Scripted {
+                failing: Some(failing),
+                ..Default::default()
+            };
+            let failed = deliver(&mut outside, Goal::ReadyForReview, true).unwrap_err();
+            assert_eq!(stopped(&failed), recovery::Stage::SpecReview, "{failing:?}");
+        }
+    }
+
+    #[test]
+    fn each_failed_step_stops_at_its_stage() {
+        for (failing, stage) in [
+            (Fails::Session, recovery::Stage::Implementation),
+            (Fails::Push, recovery::Stage::Push),
+            (Fails::Ready, recovery::Stage::PullRequest),
+        ] {
+            let mut outside = Scripted {
+                failing: Some(failing),
+                ..Default::default()
+            };
+            let failed = deliver(&mut outside, Goal::ReadyForReview, false).unwrap_err();
+            assert_eq!(stopped(&failed), stage, "{failing:?}");
+        }
+    }
+
+    #[test]
+    fn a_security_hold_stops_at_the_security_review_without_entering_it_again() {
+        let mut outside = Scripted {
+            reviews_security: true,
+            security_held: true,
+            ..Default::default()
+        };
+        let failed = deliver(&mut outside, Goal::Merged, false).unwrap_err();
+        assert!(failed.error.is::<SecurityHold>(), "{:#}", failed.error);
+        assert_eq!(stopped(&failed), recovery::Stage::SecurityReview);
+        assert_eq!(
+            outside.stages,
+            [
+                Stage::Implementation,
+                Stage::SecurityReview,
+                Stage::Push,
+                Stage::PullRequestReadiness
+            ]
         );
     }
 }

@@ -17,6 +17,22 @@ pub(crate) struct Identified {
     pub url: String,
 }
 
+/// A terminal observation stops all Delivery mutations. Delivery may report
+/// this as completion only after checking that no local work is left out.
+#[derive(Debug)]
+pub(crate) struct AlreadyMerged {
+    pub pr: Identified,
+    pub head: String,
+}
+
+impl std::fmt::Display for AlreadyMerged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "PR {} is merged, not open", self.pr.url)
+    }
+}
+
+impl std::error::Error for AlreadyMerged {}
+
 /// A gate error is terminal (`Err`); only a refused request can return to
 /// the Repair loop. A successful guarded command needs no additional read.
 pub(crate) enum MergeAttempt {
@@ -419,6 +435,17 @@ impl<A: Adapter> PullRequest<A> {
 
     fn validate(&self, snapshot: &PrSnapshot, ready: bool) -> Result<()> {
         let pr = &snapshot.pr;
+        if pr.state == PrState::Merged && pr.base == self.base {
+            return Err(AlreadyMerged {
+                pr: self
+                    .identified
+                    .as_ref()
+                    .expect("observation captured identity")
+                    .clone(),
+                head: snapshot.head_commit.clone(),
+            }
+            .into());
+        }
         if !pr.is_open() {
             bail!("PR {} is {}, not open", pr.url, pr.state);
         }

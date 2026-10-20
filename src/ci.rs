@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
 
-use crate::github::{ActionsJob, Check, CheckState, GitHub};
+use crate::github::{ActionsJob, Check, Conclusion, GitHub};
 use crate::issue::IssueUrl;
 use crate::poll;
 use crate::progress;
@@ -334,7 +334,7 @@ fn watch_to_end(
             !checks.is_empty() && rerun_checks.is_none_or(|rerun| rerun.listed_in(&checks)),
             "CI checks disappeared on {short}; cannot verify CI"
         );
-        let pending = count(&checks, CheckState::Pending);
+        let pending = count(&checks, Reading::Pending);
         if pending == 0 {
             return Ok(Some(checks));
         }
@@ -448,12 +448,39 @@ pub fn short(sha: &str) -> &str {
     &sha[..sha.len().min(7)]
 }
 
-fn is_failed(check: &Check) -> bool {
-    check.state == CheckState::Failed
+/// What a check's conclusion means for CI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Reading {
+    Pending,
+    Passed,
+    Failed,
 }
 
-fn count(checks: &[Check], state: CheckState) -> usize {
-    checks.iter().filter(|check| check.state == state).count()
+/// The reading of `check`: CI watch is the one place a conclusion is read.
+fn reading(check: &Check) -> Reading {
+    match &check.conclusion {
+        Conclusion::Unfinished | Conclusion::Pending => Reading::Pending,
+        Conclusion::Success | Conclusion::Neutral | Conclusion::Skipped => Reading::Passed,
+        Conclusion::Failure
+        | Conclusion::Cancelled
+        | Conclusion::TimedOut
+        | Conclusion::ActionRequired
+        | Conclusion::Stale
+        | Conclusion::StartupFailure
+        | Conclusion::Error
+        | Conclusion::Unrecognised(_) => Reading::Failed,
+    }
+}
+
+fn is_failed(check: &Check) -> bool {
+    reading(check) == Reading::Failed
+}
+
+fn count(checks: &[Check], wanted: Reading) -> usize {
+    checks
+        .iter()
+        .filter(|check| reading(check) == wanted)
+        .count()
 }
 
 #[cfg(test)]
@@ -611,25 +638,29 @@ mod tests {
     const HEAD: &str = "abcdef0123456789";
     const BASE: &str = "0123456789abcdef";
 
-    fn check(name: &str, state: CheckState, url: &str) -> Check {
+    fn check(name: &str, conclusion: Conclusion, url: &str) -> Check {
         Check {
             name: name.to_string(),
-            state,
+            conclusion,
             url: Some(url.to_string()),
             job: None,
         }
     }
 
     fn red(name: &str) -> Check {
-        check(name, CheckState::Failed, &format!("https://head/{name}"))
+        check(name, Conclusion::Failure, &format!("https://head/{name}"))
     }
 
     fn pending(name: &str) -> Check {
-        check(name, CheckState::Pending, &format!("https://head/{name}"))
+        check(
+            name,
+            Conclusion::Unfinished,
+            &format!("https://head/{name}"),
+        )
     }
 
     fn green(name: &str) -> Check {
-        check(name, CheckState::Passed, &format!("https://head/{name}"))
+        check(name, Conclusion::Success, &format!("https://head/{name}"))
     }
 
     /// `check` as the GitHub Actions job whose check run is `check_run`, of
@@ -985,7 +1016,11 @@ mod tests {
             )
             .listing(
                 BASE,
-                vec![vec![check("lint", CheckState::Failed, "https://base/lint")]],
+                vec![vec![check(
+                    "lint",
+                    Conclusion::Failure,
+                    "https://base/lint",
+                )]],
             );
 
         let failed = failed_of(watch_through(&mut github, HEAD, Some(BASE)).unwrap());
@@ -1003,7 +1038,7 @@ mod tests {
 
     #[test]
     fn a_red_check_with_none_of_its_name_on_the_base_branch_is_the_branchs_own() {
-        let on_base = vec![check("lint", CheckState::Failed, "https://base/lint")];
+        let on_base = vec![check("lint", Conclusion::Failure, "https://base/lint")];
 
         let failed = failed_on_watch(vec![red("test")], on_base);
 
@@ -1015,8 +1050,8 @@ mod tests {
     #[test]
     fn a_red_check_whose_every_same_name_check_failed_on_the_base_branch_is_inherited() {
         let on_base = vec![
-            check("test", CheckState::Failed, "https://base/test/1"),
-            check("test", CheckState::Failed, "https://base/test/2"),
+            check("test", Conclusion::Failure, "https://base/test/1"),
+            check("test", Conclusion::Failure, "https://base/test/2"),
         ];
 
         let failed = failed_on_watch(vec![red("test")], on_base);
@@ -1033,8 +1068,8 @@ mod tests {
     fn a_red_check_whose_same_name_checks_only_partly_failed_on_the_base_branch_is_the_branchs_own()
     {
         let on_base = vec![
-            check("test", CheckState::Failed, "https://base/test/1"),
-            check("test", CheckState::Passed, "https://base/test/2"),
+            check("test", Conclusion::Failure, "https://base/test/1"),
+            check("test", Conclusion::Success, "https://base/test/2"),
         ];
 
         let failed = failed_on_watch(vec![red("test")], on_base);
@@ -1047,8 +1082,8 @@ mod tests {
     #[test]
     fn a_base_branch_check_named_as_no_red_check_is_not_carried() {
         let on_base = vec![
-            check("test", CheckState::Failed, "https://base/test"),
-            check("lint", CheckState::Failed, "https://base/lint"),
+            check("test", Conclusion::Failure, "https://base/test"),
+            check("lint", Conclusion::Failure, "https://base/lint"),
         ];
 
         let failed = failed_on_watch(vec![red("test"), green("lint")], on_base);
@@ -1056,6 +1091,97 @@ mod tests {
         assert!(failed.own.is_empty());
         assert_eq!(listed(&failed.inherited), ["test: https://head/test"]);
         assert_eq!(listed(&failed.on_base), ["test: https://base/test"]);
+    }
+
+    /// Every conclusion GitHub can report, with its reading.
+    fn every_conclusion() -> Vec<(Conclusion, Reading)> {
+        // No wildcard arm: a new conclusion fails to compile here until it
+        // has a row below.
+        match Conclusion::Unfinished {
+            Conclusion::Unfinished
+            | Conclusion::Pending
+            | Conclusion::Success
+            | Conclusion::Neutral
+            | Conclusion::Skipped
+            | Conclusion::Failure
+            | Conclusion::Cancelled
+            | Conclusion::TimedOut
+            | Conclusion::ActionRequired
+            | Conclusion::Stale
+            | Conclusion::StartupFailure
+            | Conclusion::Error
+            | Conclusion::Unrecognised(_) => {}
+        }
+        vec![
+            (Conclusion::Unfinished, Reading::Pending),
+            (Conclusion::Pending, Reading::Pending),
+            (Conclusion::Success, Reading::Passed),
+            (Conclusion::Neutral, Reading::Passed),
+            (Conclusion::Skipped, Reading::Passed),
+            (Conclusion::Failure, Reading::Failed),
+            (Conclusion::Cancelled, Reading::Failed),
+            (Conclusion::TimedOut, Reading::Failed),
+            (Conclusion::ActionRequired, Reading::Failed),
+            (Conclusion::Stale, Reading::Failed),
+            (Conclusion::StartupFailure, Reading::Failed),
+            (Conclusion::Error, Reading::Failed),
+            (Conclusion::Unrecognised("".into()), Reading::Failed),
+            (Conclusion::Unrecognised("someday".into()), Reading::Failed),
+        ]
+    }
+
+    #[test]
+    fn each_conclusion_on_the_head_is_read_as_pending_passed_or_the_branchs_own_failure() {
+        for (conclusion, reading) in every_conclusion() {
+            let concluded = vec![check("test", conclusion.clone(), "https://head/test")];
+            // Read as the checks appear, then as the watch's first read.
+            let mut github = InMemory::new().listing(
+                HEAD,
+                vec![concluded.clone(), concluded, vec![green("test")]],
+            );
+
+            let ci = watch_through(&mut github, HEAD, Some(BASE)).unwrap();
+
+            let read = match ci {
+                Ci::Passed
+                    if github
+                        .steps
+                        .iter()
+                        .any(|line| line.contains("still running")) =>
+                {
+                    Reading::Pending
+                }
+                Ci::Passed => Reading::Passed,
+                Ci::Failed(failed) => {
+                    assert_eq!(listed(&failed.own), ["test: https://head/test"]);
+                    assert!(failed.inherited.is_empty(), "{conclusion:?}");
+                    Reading::Failed
+                }
+                Ci::Absent => panic!("CI was Absent with {conclusion:?} on the head"),
+            };
+            assert_eq!(read, reading, "{conclusion:?} on the head");
+        }
+    }
+
+    #[test]
+    fn each_conclusion_on_the_base_branch_commit_counts_as_an_inherited_failure_when_failed() {
+        for (conclusion, reading) in every_conclusion() {
+            let on_base = vec![check("test", conclusion.clone(), "https://base/test")];
+
+            let failed = failed_on_watch(vec![red("test")], on_base);
+
+            let (own, inherited) = if reading == Reading::Failed {
+                (vec![], vec![red("test")])
+            } else {
+                (vec![red("test")], vec![])
+            };
+            assert_eq!(listed(&failed.own), listed(&own), "{conclusion:?}");
+            assert_eq!(
+                listed(&failed.inherited),
+                listed(&inherited),
+                "{conclusion:?} on the base branch commit"
+            );
+        }
     }
 
     #[test]
@@ -1492,12 +1618,16 @@ mod tests {
             )
             .listing(
                 BASE,
-                vec![vec![check("lint", CheckState::Failed, "https://base/lint")]],
+                vec![vec![check(
+                    "lint",
+                    Conclusion::Failure,
+                    "https://base/lint",
+                )]],
             );
         let failed = FailedChecks {
             own: vec![job(red("test"), 11, 1)],
             inherited: vec![job(red("lint"), 12, 1)],
-            on_base: vec![check("lint", CheckState::Failed, "https://base/lint")],
+            on_base: vec![check("lint", Conclusion::Failure, "https://base/lint")],
         };
 
         let ci = rerun_through(&mut github, HEAD, Some(BASE), &failed).unwrap();
