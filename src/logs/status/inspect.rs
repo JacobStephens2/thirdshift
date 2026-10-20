@@ -9,15 +9,6 @@ use serde::Serialize;
 use crate::config::UserConfig;
 use crate::logs::reading::{Command, Observation, Snapshot};
 
-/// Exactly the detailed observations used by show, for the local Console.
-pub(crate) fn details(config: &UserConfig, input: &str) -> Result<serde_json::Value> {
-    let snapshot =
-        Snapshot::load_with_silence(&config.logs_dir, Local::now(), config.silent_interval)?;
-    Ok(serde_json::to_value(
-        snapshot.resolve(input)?.observation.details()?,
-    )?)
-}
-
 pub(crate) fn log_path(
     config: &UserConfig,
     input: &str,

@@ -8,6 +8,9 @@ use std::time::Instant;
 const EMAIL: &str = "owner@example.test";
 const PASSWORD: &str = "correct horse battery staple";
 
+#[path = "stop.rs"]
+mod stop;
+
 fn configured() -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

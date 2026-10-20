@@ -99,9 +99,12 @@ async function refresh() {
   try {
     while (pending) {
       pending = false;
-      const response = await fetch("/", { cache: "no-store" });
-      if (!response.ok) throw new Error("Inbox unavailable");
-      morph(await response.text());
+      if (document.getElementById('inbox')) {
+        const response = await fetch("/", { cache: "no-store" });
+        if (!response.ok) throw new Error("Inbox unavailable");
+        morph(await response.text());
+      }
+      await refreshPeek();
     }
   } catch {
     startPolling();
@@ -111,16 +114,29 @@ let polling;
 function startPolling() {
   polling ??= setInterval(refresh, 5000);
 }
-if (document.getElementById('inbox') && typeof EventSource === "function") {
-  const stream = new EventSource("/events");
-  stream.addEventListener("commands", refresh);
-  stream.addEventListener("error", startPolling);
-  stream.addEventListener("open", () => {
-    clearInterval(polling);
-    polling = undefined;
-    refresh();
-  });
-} else if (document.getElementById('inbox')) { startPolling(); }
+let commandStream;
+function startUpdates() {
+  if (commandStream) return;
+  if (typeof EventSource === "function") {
+    commandStream = new EventSource("/events");
+    commandStream.addEventListener("commands", refresh);
+    commandStream.addEventListener("error", startPolling);
+    commandStream.addEventListener("open", () => {
+      clearInterval(polling);
+      polling = undefined;
+      refresh();
+    });
+  } else { startPolling(); }
+}
+if (document.getElementById('inbox')) startUpdates();
+
+function stopPeekUpdates() {
+  if (document.getElementById('inbox')) return;
+  commandStream?.close();
+  commandStream = undefined;
+  clearInterval(polling);
+  polling = undefined;
+}
 
 const peek = document.querySelector('#peek');
 const content = document.querySelector('#peek-content');
@@ -140,6 +156,7 @@ function select(element, { scroll = true } = {}) {
 }
 
 function closePeek() {
+  stopPeekUpdates();
   pendingPeek?.abort();
   pendingPeek = null;
   peekCommand = null;
@@ -150,22 +167,36 @@ function closePeek() {
 async function togglePeek(row) {
   if (!row.dataset.command) return;
   if (peekCommand === row.dataset.command) { closePeek(); return; }
-  pendingPeek?.abort();
-  const request = new AbortController();
-  pendingPeek = request;
   peekCommand = row.dataset.command;
   content.textContent = 'Loading details…';
   peek.hidden = false;
   document.body.classList.add('peek-open');
+  await loadPeek(row.dataset.peek);
+}
+
+async function refreshPeek() {
+  if (peekCommand && !pendingPeek) {
+    await loadPeek(`/peek?${new URLSearchParams({ command: peekCommand })}`);
+  }
+}
+
+async function loadPeek(url) {
+  pendingPeek?.abort();
+  const request = new AbortController();
+  pendingPeek = request;
   try {
-    const response = await fetch(row.dataset.peek, { signal: request.signal });
+    const response = await fetch(url, { signal: request.signal, cache: 'no-store' });
     if (!response.ok) throw new Error('Details unavailable');
     const html = await response.text();
     if (request.signal.aborted) return;
     // Only the server's escaped show template is inserted, never a log.
     content.replaceChildren(document.createRange().createContextualFragment(html));
+    if (content.querySelector('[data-live="true"]')) startUpdates();
+    else stopPeekUpdates();
   } catch (error) {
     if (!request.signal.aborted && error.name !== 'AbortError') content.textContent = 'Details unavailable. Reload to try again.';
+  } finally {
+    if (pendingPeek === request) pendingPeek = null;
   }
 }
 

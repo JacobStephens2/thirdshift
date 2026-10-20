@@ -8,6 +8,7 @@ mod live;
 mod logs;
 mod peek;
 mod restart;
+mod stop;
 mod time;
 mod waterfall;
 
@@ -52,9 +53,29 @@ enum View {
     SignOut,
     SignInPage,
     SignIn,
+    StopPage,
+    Stop,
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/stop",
+        cli: &[
+            "thirdshift stop widgets#7",
+            "thirdshift stop widgets#7 --requeue",
+        ],
+        method: Method::GET,
+        view: View::StopPage,
+    },
+    PageRoute {
+        path: "/stop",
+        cli: &[
+            "thirdshift stop widgets#7",
+            "thirdshift stop widgets#7 --requeue",
+        ],
+        method: Method::POST,
+        view: View::Stop,
+    },
     PageRoute {
         path: "/waterfall",
         cli: &[
@@ -246,6 +267,8 @@ fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Route
             (View::SignOut, Method::POST) => post(auth::sign_out),
             (View::SignInPage, Method::GET) => get(auth::sign_in_page),
             (View::SignIn, Method::POST) => post(auth::sign_in),
+            (View::StopPage, Method::GET) => get(stop::show),
+            (View::Stop, Method::POST) => post(stop::submit),
             _ => unreachable!("unknown Console page method"),
         };
         router = router.route(page.path, handler);
@@ -378,7 +401,7 @@ async fn inspect(RawQuery(query): RawQuery) -> Response {
     let command = query_value(&query, "command");
     match tokio::task::spawn_blocking(move || -> Result<String> {
         let config = UserConfig::load()?;
-        let details = status::inspect::details(&config, &command)?;
+        let details = crate::logs::stop::inspect(&config, &command)?;
         Ok(peek::Peek::new(command, details).render()?)
     })
     .await
@@ -501,9 +524,13 @@ mod tests {
                 .route("/known", post(|| async {}))
                 .with_state(changes),
         );
-        // Each unique path has one fallback; merging GET and POST at sign-in
-        // adds only the POST service, not another fallback service.
-        let fallback = 1;
+        // Each unique path has one fallback; merged methods share it.
+        let unique_paths = super::PAGES
+            .iter()
+            .map(|page| page.path)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        let shared_fallbacks = super::PAGES.len() - unique_paths;
         let expected = super::PAGES
             .iter()
             .map(|page| {
@@ -515,7 +542,7 @@ mod tests {
             })
             .sum::<usize>()
             + get_methods
-            - fallback;
+            - shared_fallbacks;
         assert_eq!(
             registered_methods(router),
             expected,
