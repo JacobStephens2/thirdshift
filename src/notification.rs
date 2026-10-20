@@ -221,8 +221,10 @@ fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
 /// `account` tells, about `subject`, with its `configured` Harness, Model and Effort, if known,
 /// naming `command_log`, if the command keeps one,
 /// and `host`, for a command that `took` so long. It starts with the command's
-/// outcome, as the subject gives it, then the original Issue URL when the
-/// subject names an issue. An Architect run's then tells how its
+/// outcome, as the subject gives it, then the rest of what the subject
+/// tells, so the body alone carries it: the original Issue URL and the
+/// issue's title, if known, when the subject names an issue, else the
+/// command and its repository, if known. An Architect run's then tells how its
 /// review ended, and the outcome of the run it dispatched, if any. The cause
 /// is left out of an interrupted command's, whose outcome says so.
 fn body(
@@ -234,8 +236,16 @@ fn body(
     took: Duration,
 ) -> String {
     let mut text = format!("Result:       {}\n", account.outcome);
-    if let Subject::Issue { issue, .. } = subject {
-        text += &format!("Issue:        {}\n", issue.url);
+    match subject {
+        Subject::Issue { issue, title } => {
+            text += &format!("Issue:        {}\n", issue.url);
+            if let Some(title) = title {
+                text += &format!("Title:        {title}\n");
+            }
+        }
+        Subject::ArchitectRun(repo) => text += &command_lines("Architect run", repo.as_ref()),
+        Subject::SecurityRun(repo) => text += &command_lines("Security run", repo.as_ref()),
+        Subject::Pending => {}
     }
     if let Some(findings) = account.security_findings {
         let audit = match &account.ended {
@@ -337,6 +347,16 @@ fn body(
     text
 }
 
+/// The body lines naming the `command` a notification is about, and its
+/// `repo`, if known, as its subject does.
+fn command_lines(command: &str, repo: Option<&Repo>) -> String {
+    let mut text = format!("Command:      {command}\n");
+    if let Some(repo) = repo {
+        text += &format!("Repository:   {}\n", repo.slug());
+    }
+    text
+}
+
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
@@ -433,6 +453,7 @@ mod tests {
                 format!(
                     "Result:       merged\n\
                      Issue:        https://github.com/acme/widgets/issues/123\n\
+                     Title:        Add export button\n\
                      Pull request: {PR}\n\
                      Session log:  {LOG}\n\
                      Host:         droplet-1\n\
@@ -453,6 +474,7 @@ mod tests {
                 format!(
                     "Result:       failed\n\
                      Issue:        https://github.com/acme/widgets/issues/123\n\
+                     Title:        Add export button\n\
                      Cause:        claude exited 1\n\
                      Base fix:     {PLAN} not merged\n\
                      Session log:  {LOG}\n\
@@ -476,6 +498,7 @@ mod tests {
                 "[thirdshift] acme/widgets#123 Add export button: interrupted".to_string(),
                 "Result:       interrupted\n\
                  Issue:        https://github.com/acme/widgets/issues/123\n\
+                 Title:        Add export button\n\
                  Host:         droplet-1\n\
                  Took:         4s\n"
                     .to_string()
@@ -499,6 +522,8 @@ mod tests {
                 "[thirdshift] acme/widgets Architect run: merged".to_string(),
                 format!(
                     "Result:       merged\n\
+                     Command:      Architect run\n\
+                     Repository:   acme/widgets\n\
                      Review:       plan published: {PLAN}\n\
                      Dispatched:   merged\n\
                      Pull request: {PR}\n\
@@ -534,6 +559,8 @@ mod tests {
                 "[thirdshift] acme/widgets Architect run: idea filed".to_string(),
                 format!(
                     "Result:       idea filed\n\
+                     Command:      Architect run\n\
+                     Repository:   acme/widgets\n\
                      Review:       idea filed: {PLAN}\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
@@ -560,6 +587,7 @@ mod tests {
                 "[thirdshift] Architect run: review failed".to_string(),
                 format!(
                     "Result:       review failed\n\
+                     Command:      Architect run\n\
                      Review:       failed\n\
                      Cause:        claude exited 1\n\
                      Session log:  {LOG}\n\
@@ -567,6 +595,55 @@ mod tests {
                      Took:         4s\n"
                 )
             ))
+        );
+    }
+
+    #[test]
+    fn the_body_tells_everything_the_subject_does() {
+        let repo = || Repo::of_origin("https://github.com/acme/widgets.git");
+        let subjects = [
+            about_issue(),
+            Subject::Issue {
+                issue: issue(),
+                title: None,
+            },
+            about_architect_run(),
+            Subject::ArchitectRun(None),
+            Subject::SecurityRun(repo()),
+            Subject::SecurityRun(None),
+        ];
+        for subject in &subjects {
+            let (line, body) = told(subject, &merged()).unwrap();
+            // Past the tag, the subject is `<about>: <outcome>`; each word of
+            // what it is about is in the body.
+            let about = line
+                .strip_prefix("[thirdshift]")
+                .and_then(|rest| rest.strip_suffix(": merged"))
+                .unwrap();
+            for word in about.split([' ', '#']).filter(|word| !word.is_empty()) {
+                assert!(body.contains(word), "{word:?} of {line:?} not in:\n{body}");
+            }
+            assert!(body.starts_with("Result:       merged\n"), "{body}");
+        }
+    }
+
+    #[test]
+    fn a_security_runs_body_names_the_command_and_repository() {
+        let account = Account {
+            security_findings: Some(&[]),
+            ..merged()
+        };
+        assert!(
+            body_of(
+                &Subject::SecurityRun(Repo::of_origin("https://github.com/acme/widgets.git")),
+                &account
+            )
+            .starts_with(
+                "Result:       merged\n\
+                     Command:      Security run\n\
+                     Repository:   acme/widgets\n\
+                     Audit:"
+            )
         );
     }
 
