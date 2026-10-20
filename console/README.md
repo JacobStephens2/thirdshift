@@ -55,7 +55,8 @@ never contain passwords, codes, session tokens or page views.
 With a Resend key in `RESEND_API_KEY` or the Credentials, **Set your password**
 on the sign-in page creates an account or resets its password by email code.
 Only allowed addresses receive mail, from `email.from`, but every address gets
-the same answer. Codes are stored as argon2id hashes, last 15 minutes and allow
+the same answer, without waiting for address-dependent delivery. Codes are
+stored as argon2id hashes, last 15 minutes and allow
 5 tries. An address may receive one code a minute and 10 in a rolling 24 hours;
 these limits survive restarts and password changes. A correct code verifies
 the address, sets its password, ends its old sessions and signs it in.
