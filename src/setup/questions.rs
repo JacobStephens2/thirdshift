@@ -8,13 +8,17 @@ use std::path::Path;
 use anyhow::{Result, bail};
 
 use super::{Outside, suggested_address};
-use crate::config::{NotificationAddresses, UserConfig, UserConfigChanges};
+use crate::config::{
+    ConsoleAccess, ConsoleSettings, NotificationAddresses, UserConfig, UserConfigChanges,
+};
 use crate::email::DEFAULT_FROM;
 use crate::harness::{Harness, ModelAndEffort};
 use crate::resend_key::{self, Source};
 
 /// What the user chose.
 pub struct Answers {
+    /// None leaves the Console settings as they were.
+    pub console: Option<ConsoleAccess>,
     /// `harness.default`, and the Model and Effort of the Harness it names,
     /// each none for the Harness's own default; `None` when sessions can run
     /// on no Harness here, and the harness settings stay as they were.
@@ -38,6 +42,7 @@ impl Answers {
     /// The User config changes, without Credentials or email effects.
     pub fn changes(&self) -> UserConfigChanges {
         UserConfigChanges {
+            console: self.console.clone(),
             merge_always: self.merge_always,
             base_fix: self.base_fix,
             launch_pull: self.launch_pull,
@@ -133,20 +138,38 @@ pub fn ask(
         "Runs review their change for Security findings?",
         current.security_review,
     )?;
+    let notifications = ask_notifications(outside, current, found)?;
+    let console = ask_console(
+        outside,
+        &current.console,
+        notifications
+            .as_ref()
+            .map(|email| email.to.as_str())
+            .or(current.email.to.as_deref()),
+    )?;
+    Ok(Answers {
+        harness,
+        merge_always,
+        base_fix,
+        launch_pull,
+        security_fix,
+        security_review,
+        notifications,
+        console,
+    })
+}
+
+fn ask_notifications(
+    outside: &mut impl Outside,
+    current: &UserConfig,
+    found: Option<Source>,
+) -> Result<Option<Notifications>> {
     if !yes_or_no(
         outside,
         "Run notifications, an email as each Run ends?",
         current.email.always,
     )? {
-        return Ok(Answers {
-            harness,
-            merge_always,
-            base_fix,
-            launch_pull,
-            security_fix,
-            security_review,
-            notifications: None,
-        });
+        return Ok(None);
     }
     let suggested = match &current.email.to {
         Some(to) => Some(to.clone()),
@@ -181,20 +204,63 @@ pub fn ask(
         );
         false
     };
-    Ok(Answers {
-        harness,
-        merge_always,
-        base_fix,
-        launch_pull,
-        security_fix,
-        security_review,
-        notifications: Some(Notifications {
-            to,
-            from,
-            key,
-            send_test,
-        }),
-    })
+    Ok(Some(Notifications {
+        to,
+        from,
+        key,
+        send_test,
+    }))
+}
+
+/// Keep existing access as the default, then the chosen notification address.
+/// The example is a hint, never an address written by pressing Enter.
+fn ask_console(
+    outside: &mut impl Outside,
+    current: &ConsoleSettings,
+    email_to: Option<&str>,
+) -> Result<Option<ConsoleAccess>> {
+    if !yes_or_no(outside, "Run the Console?", !current.address.is_empty())? {
+        return Ok(None);
+    }
+    let address = loop {
+        let address = answer(
+            outside,
+            "Console's whole address (e.g. thirdshift.example.com)",
+            (!current.address.is_empty()).then_some(current.address.as_str()),
+        )?;
+        let settings = ConsoleSettings {
+            address: address.clone(),
+            ..ConsoleSettings::default()
+        };
+        match settings.hostname() {
+            Ok(_) => break address,
+            Err(error) => outside.say(error.to_string()),
+        }
+    };
+    let saved_emails = current.allowed_emails.join(", ");
+    let default_emails = if saved_emails.is_empty() {
+        email_to
+    } else {
+        Some(saved_emails.as_str())
+    };
+    let allowed_emails = loop {
+        let emails = answer(outside, "Allowed emails (comma-separated)", default_emails)?;
+        let settings = ConsoleSettings {
+            allowed_emails: emails
+                .split(',')
+                .map(|email| email.trim().to_string())
+                .collect(),
+            ..ConsoleSettings::default()
+        };
+        match settings.validate() {
+            Ok(()) => break settings.allowed_emails,
+            Err(error) => outside.say(error.to_string()),
+        }
+    };
+    Ok(Some(ConsoleAccess {
+        address,
+        allowed_emails,
+    }))
 }
 
 /// Ask `question` until the answer is yes, no or nothing, which is `default`.

@@ -328,6 +328,7 @@ const PULL: &str = "fast-forward";
 const SECURITY_REVIEW: &str = "Runs review their change for Security findings?";
 const SECURITY_FIX: &str = "Security runs may fix reproduced findings?";
 const NOTIFY: &str = "Run notifications, an email";
+const CONSOLE: &str = "Run the Console?";
 const TO: &str = "Send Run notifications to";
 const FROM: &str = "Send them from";
 const TEST_EMAIL: &str = "test email now?";
@@ -335,6 +336,85 @@ const KEY_PROMPT: &str = "Resend API key (input hidden, Enter to skip):";
 const KEPT: &str = "Resend API key (input hidden, Enter keeps the saved one):";
 const WROTE_CREDENTIALS: &str = "wrote the Credentials";
 const KEY: &str = "re_secret_123";
+
+#[test]
+fn setup_console_questions_use_email_to_keep_comments_and_offer_install() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[email]\nto = 'owner@example.com'\n[logs]\nwaiting_line_minutes = 2\n[inbox]\nsilent_minutes = 2\n[console] # my Console\naddress = '' # site\nallowed_emails = [] # people\n");
+    let result = setup_on_terminal(
+        &scenario,
+        &[],
+        &[
+            (HARNESS, ""),
+            (MODEL, ""),
+            (EFFORT, ""),
+            (MERGE, ""),
+            (PULL, ""),
+            (SECURITY_FIX, ""),
+            (SECURITY_REVIEW, ""),
+            (NOTIFY, "n"),
+            (CONSOLE, "y"),
+            (
+                "Console's whole address (e.g. thirdshift.example.com):",
+                "https://thirdshift.example.com",
+            ),
+            ("Allowed emails (comma-separated) [owner@example.com]", ""),
+        ],
+    );
+    let text = result.user_config.unwrap();
+    let config: toml::Table = text.parse().unwrap();
+    assert_eq!(
+        config["console"]["address"].as_str(),
+        Some("https://thirdshift.example.com")
+    );
+    assert_eq!(
+        config["console"]["allowed_emails"][0].as_str(),
+        Some("owner@example.com")
+    );
+    for comment in ["[console] # my Console", "# site", "# people"] {
+        assert!(text.contains(comment), "{text}");
+    }
+    assert!(
+        result.stderr.contains("thirdshift console install"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("logs.waiting_line_minutes must be less than inbox.silent_minutes"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn cancelling_the_console_questions_preserves_the_user_config() {
+    let scenario = Scenario::new();
+    let saved = "[email]\nto = 'owner@example.com'\n";
+    scenario.user_config_is(saved);
+    let result = scenario.run_on_terminal(
+        &["setup"],
+        &[],
+        &[
+            (HARNESS, ""),
+            (MODEL, ""),
+            (EFFORT, ""),
+            (MERGE, ""),
+            (PULL, ""),
+            (SECURITY_FIX, ""),
+            (SECURITY_REVIEW, ""),
+            (NOTIFY, "n"),
+            (CONSOLE, "y"),
+            ("Console's whole address", "thirdshift.example.com"),
+            ("Allowed emails", CTRL_C),
+        ],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(result.stderr.contains("interrupted"), "{}", result.stderr);
+    assert_eq!(result.user_config.as_deref(), Some(saved));
+    assert!(result.terminal_restored);
+}
 
 #[test]
 fn setup_can_enable_security_review_and_keeps_it_as_the_next_default() {
@@ -352,6 +432,7 @@ fn setup_can_enable_security_review_and_keeps_it_as_the_next_default() {
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, answer),
                 (NOTIFY, ""),
+                (CONSOLE, "n"),
             ],
         );
         assert!(
@@ -379,6 +460,7 @@ fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes(
             (SECURITY_FIX, "y"),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
+            (CONSOLE, "n"),
         ],
     );
     assert_eq!(result.stderr.matches(SECURITY_FIX).count(), 1);
@@ -418,6 +500,7 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
                 (SECURITY_FIX, answer),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
+                (CONSOLE, "n"),
             ],
         );
         assert!(result.stderr.contains(&format!("{SECURITY_FIX} {choices}")));
@@ -624,7 +707,7 @@ fn pasted_answers_are_left_available_to_later_terminal_questions() {
         &[],
         &[(
             HARNESS,
-            "  claude  \n\n\n\n\n\n\ny\n  café@example.com  \n\n",
+            "  claude  \n\n\n\n\n\n\ny\n  café@example.com  \n\n\n",
         )],
     );
     let config: toml::Table = result.user_config.unwrap().parse().unwrap();
@@ -737,6 +820,7 @@ fn on_a_terminal_pressing_enter_throughout_writes_what_setup_with_no_terminal_wr
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
+            (CONSOLE, ""),
         ],
     );
 
@@ -761,7 +845,11 @@ fn on_a_terminal_an_entered_key_is_written_to_the_credentials_and_never_shown() 
     let result = setup_on_terminal(
         &scenario,
         &[],
-        &notifications_on(&[(KEY_PROMPT, &format!("  {KEY}  ")), (TEST_EMAIL, "")]),
+        &notifications_on(&[
+            (KEY_PROMPT, &format!("  {KEY}  ")),
+            (TEST_EMAIL, ""),
+            (CONSOLE, "n"),
+        ]),
     );
 
     let path = scenario.path("home/.thirdshift/credentials.toml");
