@@ -339,7 +339,7 @@ for (const width of [320, 390, 768, 1280]) {
 // The videos page's entries, in order.
 const videos = [
   { title: "thirdshift in 31 seconds", audience: "Anyone", length: "0:32", id: "eRB6gGOQdJA" },
-  { title: "thirdshift, in plain terms", audience: "Leaders who don't code", length: "1:41", id: "8ed8VWABqy0" },
+  { title: "thirdshift, in plain terms", audience: "Leaders who don't code", length: "1:52", id: "fvOQMY_PuxQ" },
   { title: "thirdshift, briefly", audience: "Engineering leaders", length: "2:02", id: "yynbSGpHXGc" },
   { title: "How thirdshift works", audience: "Engineers", length: "2:38", id: "oL-5pi1AFC4" },
   { title: "How thirdshift works, step by step", audience: "Engineers, first look", length: "3:22", id: "gehONSA0viQ" },
