@@ -46,6 +46,59 @@ Use `thirdshift help` for the command reference, or read [Run behavior](docs/gui
 
 The operating system schedules Architect, Pickup and Security runs. See [scheduling](docs/guide.md#on-a-schedule), [Weeding](docs/guide.md#weeding) and [Fencing](docs/guide.md#fencing).
 
+## Console on a server
+
+Set the machine's address, fixed localhost port and sign-in allowlist in `~/.thirdshift/config.toml`:
+
+```toml
+[console]
+address = "https://console.example.com" # a DNS name, with or without https://; no port or path
+port = 8711
+allowed_emails = ["you@example.com"]
+```
+
+Point that DNS name at the machine, then run these commands as the owner:
+
+```sh
+thirdshift console password --email you@example.com
+thirdshift console install > install-console.sh
+# Read the script, then install it:
+sudo sh install-console.sh
+```
+
+`console install` only prints a script. On Linux it prefers a running Caddy or Apache service; otherwise it checks for `caddy`, `apache2ctl` or `httpd` on PATH. The script writes `thirdshift-console.service`, running the installed binary as you with your HOME and automatic restarts. Only the script needs root. It enables the service, then restarts the proxy.
+
+For Caddy it writes `/etc/caddy/sites/thirdshift-console.caddy`, imports the sites folder from `/etc/caddy/Caddyfile` if needed, and disables proxy buffering with `flush_interval -1`. Caddy handles HTTPS. It **restarts**, rather than reloads, Caddy to preserve HTTP/3 on Android. For Apache it writes the port-80 site under `/etc/apache2/sites-available` or `/etc/httpd/conf.d`, preserves Host, forwards the request protocol and disables gzip on the Console's event streams. Install certbot with its Apache plugin first; the script runs `certbot --apache -d <name>`. Debian's module/site helpers are included. On an `httpd` machine, enable `proxy`, `proxy_http`, `headers`, `ssl` and `setenvif` and permit proxy connections in the host's SELinux policy first.
+
+With neither proxy, the script installs a localhost-only service with `--no-sign-in` and prints an SSH tunnel command. No address or accounts are needed for that mode. Run the tunnel on your computer and open the printed `http://localhost:<port>` address. On other operating systems, run `thirdshift console --no-sign-in` directly and use the same tunnel; only the Linux installer assumes systemd.
+
+### nginx
+
+For nginx, use the generated service but remove `--no-sign-in` from its `ExecStart` before installing it. Configure the allowlist and password above. Obtain an HTTPS certificate for your DNS name, then add a site like this, adjusting the name, certificate paths and port:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name console.example.com;
+    ssl_certificate /etc/letsencrypt/live/console.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/console.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8711;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+        proxy_read_timeout 1h;
+    }
+}
+```
+
+Run `sudo nginx -t`, then `sudo systemctl restart nginx` on a systemd host. The Console still binds only to 127.0.0.1; nginx terminates HTTPS and passes live updates without buffering.
+
 ## Documentation
 
 - [Configuration](docs/guide.md#user-config), [Harness, Model and Effort](docs/guide.md#harness-model-and-effort), and [email notifications](docs/guide.md#email).
