@@ -22,6 +22,7 @@ use crate::failed_run::{FailedRun, interrupted_or};
 use crate::github::{GitHub, Ticket};
 use crate::interrupt;
 use crate::issue::IssueUrl;
+use crate::labels::Label;
 use crate::progress;
 use crate::prompt;
 use crate::pull_request::PullRequest;
@@ -37,6 +38,41 @@ use ticket_board::TicketBoard;
 pub fn all_closed(open: impl IntoIterator<Item = bool>) -> bool {
     let mut open = open.into_iter().peekable();
     open.peek().is_some() && open.all(|is_open| !is_open)
+}
+
+/// Why a Ticket can't start in a Spec run on `spec`, as if no Ticket were
+/// running yet: the first of these that applies.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unstartable {
+    /// It is closed.
+    Closed,
+    /// It is in another repository than the Spec's.
+    OutsideRepo,
+    /// It has this label, which makes an Unready Ticket.
+    Unready(Label),
+    /// It has sub-issues of its own.
+    HasSubIssues,
+    /// It has an open blocker, its `open_blockers`.
+    Blocked,
+}
+
+/// Why `ticket` can't start in a Spec run on `spec`, or none if it is a
+/// startable Ticket. The one rule both a Spec run's choice of its next
+/// Ticket and a Pickup run's search for a Ready issue use.
+pub fn unstartable(spec: &IssueUrl, ticket: &Ticket) -> Option<Unstartable> {
+    if !ticket.is_open {
+        Some(Unstartable::Closed)
+    } else if !spec.in_same_repo(&ticket.issue) {
+        Some(Unstartable::OutsideRepo)
+    } else if let Some(label) = ticket.labels.unready() {
+        Some(Unstartable::Unready(label))
+    } else if ticket.has_sub_issues {
+        Some(Unstartable::HasSubIssues)
+    } else if !ticket.open_blockers.is_empty() {
+        Some(Unstartable::Blocked)
+    } else {
+        None
+    }
 }
 
 /// Take the Spec, `delivery`'s issue, whose Tickets were last read as

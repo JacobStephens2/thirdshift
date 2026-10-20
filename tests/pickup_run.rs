@@ -869,6 +869,112 @@ fn a_spec_with_one_ticket_still_open_is_taken() {
     assert_eq!(sessions(&scenario), ["9", "7"]);
 }
 
+/// An open issue labelled `ready-for-agent`, #7, that is a Spec whose only
+/// Ticket, #8, is labelled `needs-info`, and whose session would open its PR
+/// into the Spec branch.
+fn spec_with_an_unready_ticket() -> Scenario {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.spec_has_tickets(7, &[(8, &[])]);
+    scenario.issue_labelled(8, &["needs-info"]);
+    scenario.agent_does_for(8, &agent_opens_pr(8, "issue-7"));
+    scenario
+}
+
+#[test]
+fn a_spec_whose_only_open_ticket_is_unready_is_passed_over_changing_nothing() {
+    let scenario = spec_with_an_unready_ticket();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let github = scenario.gh_state();
+
+    let result = run_with_resend(&scenario, &resend, &["pickup"]);
+
+    let passed_over =
+        no_ready_issue_after(&["#7 has no Ticket that can start: #8 labelled needs-info"]);
+    assert_skipped(&scenario, &result, &passed_over);
+    assert_eq!(scenario.gh_state(), github);
+    assert_eq!(
+        scenario.origin_log("issue-7"),
+        None,
+        "the Spec branch was pushed"
+    );
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn a_spec_whose_open_tickets_are_all_blocked_names_why_each_cant_start() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.spec_has_tickets(7, &[(8, &[9]), (9, &[]), (10, &[30])]);
+    scenario.issue_labelled(9, &["ready-for-human"]);
+    let github = scenario.gh_state();
+
+    let result = scenario.run(&["pickup"]);
+
+    let passed_over = no_ready_issue_after(&[
+        "#7 has no Ticket that can start: #8 blocked by #9; #9 labelled ready-for-human; \
+         #10 blocked by #30 (outside the Spec)",
+    ]);
+    assert_skipped(&scenario, &result, &passed_over);
+    assert_eq!(scenario.gh_state(), github);
+}
+
+#[test]
+fn a_spec_with_one_startable_ticket_and_one_unready_ticket_is_taken() {
+    let scenario = ready_spec("");
+    scenario.issue_labelled(8, &[READY_FOR_AGENT, "needs-info"]);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert!(
+        result.stderr.contains("taking Ready issue #7 \"Issue 7\""),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
+    assert_eq!(sessions(&scenario).first().map(String::as_str), Some("9"));
+}
+
+#[test]
+fn a_handed_back_spec_with_no_startable_ticket_is_passed_over() {
+    let scenario = spec_with_an_unready_ticket();
+    scenario.origin_has_branch("issue-7", "main", &["Earlier Spec run"]);
+    scenario.issue_timeline(
+        7,
+        &[
+            (TimelineEvent::Labelled(IN_PROGRESS), 90),
+            (TimelineEvent::Unlabelled(IN_PROGRESS), 61),
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 60),
+        ],
+    );
+    let github = scenario.gh_state();
+
+    let result = scenario.run(&["pickup"]);
+
+    let passed_over =
+        no_ready_issue_after(&["#7 has no Ticket that can start: #8 labelled needs-info"]);
+    assert_skipped(&scenario, &result, &passed_over);
+    assert_eq!(scenario.gh_state(), github);
+}
+
+#[test]
+fn once_its_ticket_is_no_longer_unready_the_next_pass_takes_the_spec() {
+    let scenario = spec_with_an_unready_ticket();
+    let passed_over = scenario.run(&["pickup"]);
+    assert_eq!(
+        after_start(&passed_over.stderr),
+        no_ready_issue_after(&["#7 has no Ticket that can start: #8 labelled needs-info"])
+    );
+
+    scenario.issue_labelled(8, &[READY_FOR_AGENT]);
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
+    assert_eq!(sessions(&scenario), ["8", "7"]);
+}
+
 /// A Ready issue, #7, that is a Spec with two Tickets that don't block each
 /// other, #8 and #9. Each Ticket's session opens its PR into the Spec branch,
 /// #9's after doing `before_ticket_9`.

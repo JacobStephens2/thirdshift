@@ -109,7 +109,7 @@ A **Pickup run**'s removal of `in-progress` from every closed issue in the repos
 _Avoid_: cleanup, garbage collection
 
 **Ready issue**:
-An open issue a **Pickup run** may take: labelled `ready-for-agent`, written by a **Trusted account**, with its most recent `ready-for-agent` labelling made by a Trusted account and no edit to its title or body since then by an account that is not one, with no label that makes an **Unready Ticket** and no **Claim**, not a sub-issue, not a **Base fix**'s or a **Security run**'s fix issue, with no open blocker, either never started (no **Issue branch** and no pull request) or handed back by the **Day shift** applying `ready-for-agent` after the last **Claim** ended, as recorded in its label history, not a **Spec** whose **Tickets** are all closed, and left untouched long enough that whoever is shaping it has finished. On a Spec, the label says its Tickets are published. A `ready-for-agent` Ticket inside a Spec is not one: it is reached through its Spec, when the Spec is itself a Ready issue.
+An open issue a **Pickup run** may take: labelled `ready-for-agent`, written by a **Trusted account**, with its most recent `ready-for-agent` labelling made by a Trusted account and no edit to its title or body since then by an account that is not one, with no label that makes an **Unready Ticket** and no **Claim**, not a sub-issue, not a **Base fix**'s or a **Security run**'s fix issue, with no open blocker, either never started (no **Issue branch** and no pull request) or handed back by the **Day shift** applying `ready-for-agent` after the last **Claim** ended, as recorded in its label history, not a **Spec** whose **Tickets** are all closed, left untouched long enough that whoever is shaping it has finished, and, if it is a Spec, with a **Startable Ticket**. On a Spec, the label says its Tickets are published. A `ready-for-agent` Ticket inside a Spec is not one: it is reached through its Spec, when the Spec is itself a Ready issue.
 _Avoid_: queued issue, backlog item
 
 **Trusted account**:
@@ -143,6 +143,9 @@ The part of the **Spec PR**'s body, between fixed markers, that thirdshift write
 
 **Unready Ticket**:
 An open **Ticket** labelled with a triage role that says it is not agent work: `ready-for-human`, `needs-info`, `wontfix` or `needs-triage`. A **Spec run** never starts a **Run** for one, nor for a Ticket it blocks. An open Ticket with no triage label is taken. A Ticket with sub-issues of its own is treated as one too.
+
+**Startable Ticket**:
+An open **Ticket** in its **Spec**'s repository, with no sub-issues of its own, no open blocker, and not an **Unready Ticket**: one a **Spec run** could start if no Ticket were running. A Spec run starts only these, and a **Spec** with none is not a **Ready issue**.
 
 **Spec review**:
 The agent session a **Spec run** starts once every **Ticket** is done: it reviews the whole **Spec branch** against the **Base branch** and the **Spec**, fixes what it agrees with, and writes the **Spec PR**'s description, listing the rest as **Unaddressed findings**.
