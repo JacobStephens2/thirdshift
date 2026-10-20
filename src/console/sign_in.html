@@ -9,5 +9,9 @@
   <label>Password <input name="password" type="password" autocomplete="current-password" required></label>
   <button type="submit">Sign in</button>
 </form>
+{% if email_enabled %}
+<p><a href="/set-password">Set your password</a> to create an account or reset a forgotten password.</p>
+{% else %}
 <p>Need a password? Ask the machine's owner to run <code>thirdshift console password --email &lt;address&gt;</code>.</p>
+{% endif %}
 {% endblock %}
