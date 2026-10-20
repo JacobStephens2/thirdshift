@@ -57,6 +57,9 @@ enum View {
     Look,
     Theme,
     Sections,
+    SetPasswordPage,
+    SendCode,
+    SetPassword,
 }
 
 const PAGES: &[PageRoute] = &[
@@ -80,6 +83,24 @@ const PAGES: &[PageRoute] = &[
         cli: &["thirdshift console sections --hide done --json"],
         method: Method::POST,
         view: View::Sections,
+    },
+    PageRoute {
+        path: "/set-password",
+        cli: &["thirdshift console password"],
+        method: Method::GET,
+        view: View::SetPasswordPage,
+    },
+    PageRoute {
+        path: "/set-password/code",
+        cli: &["thirdshift console password"],
+        method: Method::POST,
+        view: View::SendCode,
+    },
+    PageRoute {
+        path: "/set-password",
+        cli: &["thirdshift console password"],
+        method: Method::POST,
+        view: View::SetPassword,
     },
     PageRoute {
         path: "/waterfall",
@@ -275,6 +296,9 @@ fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Route
             (View::Look, Method::GET) => get(look::get),
             (View::Theme, Method::POST) => post(look::set_theme),
             (View::Sections, Method::POST) => post(look::set_sections),
+            (View::SetPasswordPage, Method::GET) => get(auth::set_password_page),
+            (View::SendCode, Method::POST) => post(auth::code),
+            (View::SetPassword, Method::POST) => post(auth::set_password),
             _ => unreachable!("unknown Console page method"),
         };
         router = router.route(page.path, handler);
@@ -538,7 +562,7 @@ mod tests {
                 .with_state(changes),
         );
         // Each unique path has one fallback; merging GET and POST at sign-in
-        // adds only the POST service, not another fallback service.
+        // and set-password adds only the POST services, not more fallbacks.
         let fallback = 1;
         let expected = super::PAGES
             .iter()
@@ -551,7 +575,7 @@ mod tests {
             })
             .sum::<usize>()
             + get_methods
-            - fallback;
+            - 2 * fallback;
         assert_eq!(
             registered_methods(router),
             expected,
