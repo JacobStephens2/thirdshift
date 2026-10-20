@@ -94,3 +94,23 @@ end-to-end Runs passed in **12.28 s** test execution (**15.44 s** total,
 including **3.02 s** compilation). These targeted executions on the same host
 show the table's cost fell; concurrent host load and macOS runtime can differ.
 The expected behavior and all original malformed inputs remain covered.
+
+## Where macOS test time goes
+
+Issue [#846](https://github.com/JacobStephens2/thirdshift/issues/846) asked for
+shorter macOS CI. In [main CI run 39337614995](https://github.com/JacobStephens2/thirdshift/actions/runs/39337614995)
+each macOS shard built in about 33 seconds, then spent 990 to 1220 seconds
+running its quarter of the suite, so the tests themselves are the cost.
+
+Locally on x86_64 Linux, the Run tests are bound by spawning processes:
+`spec_run a_ticket_needs_only_a_trusted_author_not_a_ready_label_of_its_own`
+used 12.3 s of system time and 6.2 s of user time in 19.6 s, and ran 5,415 programs.
+About 82% were git commands from Worktree ownership inspection, which runs at
+least twice around every ordinary Worktree operation. Spawning a process costs
+more on macOS, where the same tests run about five times slower.
+
+Each inspection now reads the checkout's top level, administrative directory,
+common directory and HEAD with one `git rev-parse` instead of four. The checks
+are unchanged. That test then ran 4,221 programs (22% fewer) in about 17.2 s.
+`an_ordinary_operation_inspects_ownership_in_few_git_processes` holds one
+ordinary operation to its 23 git processes.

@@ -274,11 +274,24 @@ impl Checkout {
             bail!("administrative common repository link became a symlink");
         }
         let git = Git::new(self.path()).completion();
-        let head = git.run(&["rev-parse", "--verify", "HEAD"])?;
+        // One process observes the paths and HEAD: every Worktree operation
+        // inspects at least twice, and spawning git dominates its cost.
+        let observed = git.run(&[
+            "rev-parse",
+            "--show-toplevel",
+            "--absolute-git-dir",
+            "--git-common-dir",
+            "--verify",
+            "HEAD",
+        ])?;
+        let [root, admin, common, head] = observed.lines().collect::<Vec<_>>()[..] else {
+            bail!("checkout and registration ownership evidence is ambiguous");
+        };
+        let head = head.to_string();
         let backlink = fs::read_to_string(self.admin.path.join("gitdir"))?;
-        if Path::new(&git.run(&["rev-parse", "--show-toplevel"])?) != self.root.path
-            || Path::new(&git.run(&["rev-parse", "--absolute-git-dir"])?) != self.admin.path
-            || git.common_dir()?.canonicalize()? != self.common.path
+        if Path::new(root) != self.root.path
+            || Path::new(admin) != self.admin.path
+            || self.path().join(common).canonicalize()? != self.common.path
             || Path::new(backlink.trim_end()).canonicalize()? != self.path().join(".git")
             || git.run(&["rev-parse", "--symbolic-full-name", "HEAD"])?
                 != reference.as_deref().unwrap_or("HEAD")

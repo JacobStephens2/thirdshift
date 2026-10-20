@@ -1285,3 +1285,29 @@ fn ordinary_merge_errors_are_reported_without_a_pending_conflict() {
     assert!(!contains(&worktree, &base));
     assert!(!Git::new(worktree.path()).merge_in_progress().unwrap());
 }
+
+/// Each git process is the cost of an ownership inspection, which runs at
+/// least twice around every ordinary operation; on macOS CI, spawning git
+/// dominates the suite. One observation reads the checkout's paths and HEAD.
+#[test]
+fn an_ordinary_operation_inspects_ownership_in_few_git_processes() {
+    if git_fault(
+        "worktree::synchronization_tests::an_ordinary_operation_inspects_ownership_in_few_git_processes",
+        r#"
+if test -e "$THIRDSHIFT_FAULT_MARKER.armed"; then
+  printf '%s\n' "$*" >> "$THIRDSHIFT_FAULT_MARKER"
+fi
+"#,
+    ).is_some() { return; }
+    let (_temp, _launch, worktree) = fixture();
+    let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
+    fs::write(marker.with_extension("armed"), "armed").unwrap();
+    worktree.head().unwrap();
+    fs::remove_file(marker.with_extension("armed")).unwrap();
+
+    let commands = fs::read_to_string(&marker).unwrap();
+    let commands: Vec<_> = commands.lines().collect();
+    // Two launch observations take the lock, then three inspections run
+    // seven git processes each. Four separate observations made it 32.
+    assert!(commands.len() <= 23, "{commands:#?}");
+}
