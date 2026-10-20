@@ -84,6 +84,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console sign-out [--email <address>] [--json]  End an account's sessions
        thirdshift console log [--json]                Read this machine's Console log
        thirdshift console theme <name|list> [--json]  Choose or list Console Themes
+       thirdshift console theme import <file>        Import a Theme JSON document
+       thirdshift console theme export <name>        Export a Theme as JSON
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift show <command> [--json]             Show one Command in full
        thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
@@ -155,6 +157,8 @@ fn main() -> ExitCode {
         Ok(Command::ConsoleTheme { name, json }) => {
             return printed(console::theme(name.as_deref(), json));
         }
+        Ok(Command::ConsoleThemeImport(path)) => return printed(console::import_theme(&path)),
+        Ok(Command::ConsoleThemeExport(name)) => return printed(console::export_theme(&name)),
         Ok(Command::ConsoleSections { hide, show, json }) => {
             return printed(console::sections(&hide, &show, json));
         }

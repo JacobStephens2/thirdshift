@@ -41,6 +41,7 @@ pub(super) enum EventKind {
     SignOut,
     BlockedAddress,
     ThemeChanged,
+    ThemeSaved,
     SectionsChanged,
 }
 
@@ -54,6 +55,7 @@ impl std::fmt::Display for EventKind {
             Self::SignOut => "sign-out",
             Self::BlockedAddress => "blocked-address",
             Self::ThemeChanged => "theme-changed",
+            Self::ThemeSaved => "theme-saved",
             Self::SectionsChanged => "sections-changed",
         })
     }
