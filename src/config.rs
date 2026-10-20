@@ -478,6 +478,10 @@ fn set(document: &mut DocumentMut, section: &str, key: &str, value: impl Into<to
         .and_then(|settings| settings.get_mut(key))
         .and_then(Item::as_value_mut)
         .unwrap_or_else(|| panic!("a completed User config has {section}.{key}"));
+    if let (Some(existing), Some(replacement)) = (old.as_array_mut(), value.as_array()) {
+        edit_array(existing, replacement);
+        return;
+    }
     let same = match (old.as_bool(), old.as_str()) {
         (Some(old), _) => value.as_bool() == Some(old),
         (_, Some(old)) => value.as_str() == Some(old),
@@ -500,6 +504,45 @@ fn set(document: &mut DocumentMut, section: &str, key: &str, value: impl Into<to
     }
     *old = value;
     *old.decor_mut() = decor;
+}
+
+/// Retain element decoration and trailing comments when an allowlist changes.
+/// Comments on removed entries stay before the closing bracket.
+fn edit_array(existing: &mut toml_edit::Array, replacement: &toml_edit::Array) {
+    for (index, value) in replacement.iter().enumerate() {
+        if let Some(old) = existing.get(index) {
+            if old.as_str() != value.as_str() {
+                existing.replace(index, value.clone());
+            }
+        } else {
+            let mut value = value.clone();
+            let trailing = existing.trailing().as_str().unwrap_or("").to_string();
+            if trailing.contains('\n') || trailing.contains('#') {
+                // The old last entry's comment must precede the new entry.
+                let closing_indent = trailing.rsplit('\n').next().unwrap_or("");
+                let indent = existing
+                    .iter()
+                    .last()
+                    .map(|last| decor_prefix(last.decor()))
+                    .unwrap_or_default();
+                let indent = indent.rsplit('\n').next().unwrap_or("");
+                value.decor_mut().set_prefix(format!("{trailing}{indent}"));
+                existing.set_trailing(format!("\n{closing_indent}"));
+            }
+            existing.push_formatted(value);
+        }
+    }
+    let mut removed_decor = String::new();
+    while existing.len() > replacement.len() {
+        let removed = existing.remove(replacement.len());
+        removed_decor.push_str(&decor_prefix(removed.decor()));
+        removed_decor.push_str(&decor_suffix(removed.decor()));
+    }
+    if removed_decor.contains('#') {
+        removed_decor.push_str(existing.trailing().as_str().unwrap_or(""));
+        existing.set_trailing(removed_decor);
+        existing.set_trailing_comma(!existing.is_empty());
+    }
 }
 
 /// Set `email.to` in `document` to `to`. With no `email.to` there yet, it

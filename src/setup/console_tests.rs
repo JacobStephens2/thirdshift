@@ -184,3 +184,55 @@ fn first_run_setup_also_saves_console_access_and_offers_install() {
             .any(|line| line.contains("thirdshift console install"))
     );
 }
+
+#[test]
+fn review_changed_console_allowlist_keeps_entry_comments() {
+    let mut answers = NO_NOTIFICATIONS.to_vec();
+    answers.extend([
+        ("Run the Console?", "y"),
+        ("Console's whole address", ""),
+        ("Allowed emails", "saved@example.com, added@example.net"),
+    ]);
+    let saved = "[console] # Console\naddress = 'https://saved.example.com' # site\nallowed_emails = [\n  'saved@example.com', # owner retained\n] # people\n";
+    let mut outside = Scripted {
+        user_config: Some(saved.into()),
+        ..Scripted::answering(&answers)
+    };
+    setup(&mut outside);
+    assert_eq!(
+        config(&outside).console.allowed_emails,
+        ["saved@example.com", "added@example.net"]
+    );
+    let text = outside.user_config.as_deref().unwrap();
+    for comment in ["# Console", "# site", "# owner retained", "# people"] {
+        assert!(text.contains(comment), "lost {comment}:\n{text}");
+    }
+}
+
+#[test]
+fn replacing_or_removing_allowlist_entries_keeps_the_comments() {
+    for (answer, expected) in [
+        (
+            "new@example.com, other@example.com",
+            vec!["new@example.com", "other@example.com"],
+        ),
+        ("saved@example.com", vec!["saved@example.com"]),
+    ] {
+        let mut answers = NO_NOTIFICATIONS.to_vec();
+        answers.extend([
+            ("Run the Console?", "y"),
+            ("whole address", ""),
+            ("Allowed emails", answer),
+        ]);
+        let mut outside = Scripted {
+            user_config: Some("[console]\naddress = 'saved.example.com'\nallowed_emails = [\n  'saved@example.com', # owner\n  'other@example.com', # colleague\n] # people\n".into()),
+            ..Scripted::answering(&answers)
+        };
+        setup(&mut outside);
+        assert_eq!(config(&outside).console.allowed_emails, expected);
+        let text = outside.user_config.as_deref().unwrap();
+        for comment in ["# owner", "# colleague", "# people"] {
+            assert!(text.contains(comment), "lost {comment}:\n{text}");
+        }
+    }
+}
