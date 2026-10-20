@@ -99,6 +99,13 @@ fn sign_in_guards_pages_streams_and_actions_and_pairs_the_console_log_with_cli()
     );
     for path in [
         "/",
+        "/?page=history",
+        "/?page=security",
+        "/?page=logs",
+        "/history",
+        "/security",
+        "/peek?command=widgets%237",
+        "/log?command=widgets%237",
         "/logs",
         "/logs/command/id",
         "/logs/id",
@@ -157,6 +164,19 @@ fn sign_in_guards_pages_streams_and_actions_and_pairs_the_console_log_with_cli()
     let before = cli(home.path(), &["console", "log", "--json"]).stdout;
     let page = get(&console, "/", &session);
     assert_eq!(page.status(), 200);
+    for path in [
+        "/?page=history",
+        "/?page=security",
+        "/?page=logs",
+        "/history",
+        "/security",
+    ] {
+        assert_eq!(
+            get(&console, path, &session).status(),
+            200,
+            "signed-in access failed: {path}"
+        );
+    }
     assert!(
         page.headers()["set-cookie"]
             .to_str()

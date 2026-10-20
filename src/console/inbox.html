@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="htmx-config" content='{"allowEval":false,"includeIndicatorStyles":false}'>
-  <title>Inbox · {{ hostname }} · thirdshift</title>
+  <title>{{ title }} · {{ hostname }} · thirdshift</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/assets/console.css">
   <script src="/assets/vendor/htmx-2.0.7.min.js" defer></script>
@@ -16,9 +16,23 @@
   <header><p class="brand">thirdshift / Console</p><h1>{{ hostname }}</h1>
     {% if !consoles.is_empty() %}<nav aria-label="Other Consoles">{% for address in consoles %}<a href="{{ address }}">{{ address }}</a>{% endfor %}</nav>{% endif %}
   </header>
+  {% include "console/nav.html" %}
   <main>
-    <nav aria-label="Pages"><a href="/">1 Inbox</a><a href="/logs">6 Logs</a><a href="/console-log">Console log</a><a href="/account">Account</a></nav>
-    <div class="page-title"><h2>Inbox</h2><code>{{ cli }}</code></div>
+    <div class="page-title"><h2>{{ title }}</h2><code>{{ cli }}</code></div>
+    {% match archive %}{% when Some with (archive) %}
+    {% if title == "History" %}
+    <form method="get">
+      <input type="hidden" name="page" value="history">
+      <label>Outcome <select name="outcome"><option value="">Every outcome</option>{% for value in archive.outcomes %}<option {% if value.as_str() == outcome.as_str() %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+      <label>Repository <select name="repository"><option value="">Every repository</option>{% for value in archive.repositories %}<option {% if value.as_str() == repository.as_str() %}selected{% endif %}>{{ value }}</option>{% endfor %}</select></label>
+      <button>Filter</button>
+    </form>
+    {% endif %}
+    <details class="group archive" data-group="{{ title }}" open><summary>{{ title }} <span class="count">{{ archive.rows.len() }}</span></summary>
+      {% if archive.rows.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
+      <ul class="commands">{% for item in archive.rows %}{{ self.row(item)|safe }}{% endfor %}</ul>
+    </details>
+    {% when None %}
     {% match inbox.warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning }}</p>{% when None %}{% endmatch %}
     {% for section in inbox.sections %}
     <details class="group" data-group="{{ section.group }}" {% if section.open %}open{% endif %}>
@@ -30,6 +44,8 @@
     </details>
     {% endfor %}
     {% if !inbox.idle_passes.is_empty() %}<aside aria-label="Idle Passes">{% for pass in inbox.idle_passes %}<p>{{ pass }}</p>{% endfor %}</aside>{% endif %}
+    {% endmatch %}
   </main>
+  {% include "console/chrome.html" %}
 </body>
 </html>

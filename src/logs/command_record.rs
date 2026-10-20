@@ -59,6 +59,8 @@ pub(super) struct CommandRecord {
     /// Local knowledge at completion; status never refreshes findings from GitHub.
     #[serde(default)]
     pub security_findings_waiting: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security_findings: Vec<crate::security::RecordedFinding>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -184,6 +186,7 @@ impl CommandRecord {
             .map(|cause| cause.full().into());
         self.pull_request = account.pr_url.map(String::from);
         self.security_findings_waiting = account.security_findings_waiting;
+        self.security_findings = account.security_findings.unwrap_or_default().to_vec();
     }
 
     pub fn live(&self, outside: &mut impl super::effects::Outside) -> bool {
@@ -240,6 +243,7 @@ impl CommandRecord {
             parent_dispatch: None,
             tickets: Vec::new(),
             security_findings_waiting: false,
+            security_findings: Vec::new(),
         }
     }
 

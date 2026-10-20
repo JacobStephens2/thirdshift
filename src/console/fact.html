@@ -1,0 +1,1 @@
+<dt>{{ fact.label }}</dt><dd>{{ fact.value }}{% if !fact.children.is_empty() %}<dl>{% for child in fact.children %}{{ self.child(child)|safe }}{% endfor %}</dl>{% endif %}</dd>

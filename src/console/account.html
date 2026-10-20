@@ -2,6 +2,6 @@
 {% block title %}Account{% endblock %}
 {% block content %}
 <h1>Account</h1><p>{{ email }}</p>
-{% if signed_in %}<form method="post" action="/sign-out"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Sign out this browser</button></form>{% endif %}
+{% if signed_in %}<form class="account-form" method="post" action="/sign-out"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Sign out this browser</button></form>{% endif %}
 <p>End all sessions: <code>thirdshift console sign-out --email &lt;address&gt;</code></p>
 {% endblock %}

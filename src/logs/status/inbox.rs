@@ -5,7 +5,7 @@ use chrono::{DateTime, Local};
 use super::{age, stage_text, ticket_text};
 use crate::config::UserConfig;
 use crate::logs::command_record::Issue;
-use crate::logs::reading::{Command, Entry, Group, Snapshot};
+use crate::logs::reading::{Command, Entry, Group, Observation, Snapshot};
 
 pub(crate) struct Inbox {
     pub sections: Vec<Section>,
@@ -22,6 +22,7 @@ pub(crate) struct Section {
 }
 
 pub(crate) struct Row {
+    pub selector: String,
     pub logs_url: String,
     pub subject: String,
     pub title: String,
@@ -34,6 +35,137 @@ pub(crate) struct Row {
     pub pull_request: String,
     pub tickets: Vec<String>,
     pub children: Vec<Row>,
+    pub findings: Vec<crate::security::RecordedFinding>,
+    pub sessions: Vec<std::path::PathBuf>,
+}
+
+impl Row {
+    pub fn peek_url(&self) -> String {
+        super::inspect::url("/peek", &self.selector, None)
+    }
+    pub fn log_url(&self) -> String {
+        super::inspect::url("/log", &self.selector, None)
+    }
+    pub fn session_url(&self, session: &std::path::Path) -> String {
+        super::inspect::url("/log", &self.selector, Some(session))
+    }
+}
+
+pub(crate) struct Archive {
+    pub rows: Vec<Row>,
+    pub repositories: Vec<String>,
+    pub outcomes: Vec<String>,
+}
+
+#[derive(Clone, Copy)]
+pub(crate) enum ArchivePage {
+    History,
+    Security,
+}
+
+pub(crate) fn archive(
+    config: &UserConfig,
+    page: ArchivePage,
+    outcome: &str,
+    repository: &str,
+) -> Result<Archive> {
+    let now = Local::now();
+    let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
+    let mut entries: Vec<_> = snapshot
+        .entries()
+        .iter()
+        .filter(|entry| match (page, entry) {
+            (ArchivePage::History, Entry::Record(command)) => command.state != "live",
+            (ArchivePage::History, Entry::History(_)) => true,
+            (ArchivePage::Security, Entry::Record(command)) => {
+                command.record.kind == "Security run"
+            }
+            (ArchivePage::Security, Entry::History(command)) => command.kind == "Security run",
+        })
+        .collect();
+    fn facts(entry: &Entry) -> (&str, &str, &str) {
+        match entry {
+            Entry::Record(command) => (
+                &command.record.repository,
+                command.record.outcome.as_deref().unwrap_or(command.state),
+                command
+                    .record
+                    .ended_at
+                    .as_deref()
+                    .unwrap_or(&command.record.started_at),
+            ),
+            Entry::History(command) => (
+                &command.repository,
+                command.outcome.as_deref().unwrap_or(command.state),
+                command.ended_at.as_deref().unwrap_or(&command.started_at),
+            ),
+        }
+    }
+    entries
+        .sort_by_key(|entry| std::cmp::Reverse(DateTime::parse_from_rfc3339(facts(entry).2).ok()));
+    let repositories = entries
+        .iter()
+        .map(|entry| facts(entry).0.to_owned())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let outcomes = entries
+        .iter()
+        .map(|entry| facts(entry).1.to_owned())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let rows = entries
+        .into_iter()
+        .filter(|entry| {
+            let (repo, result, _) = facts(entry);
+            (repository.is_empty() || repository == repo)
+                && (outcome.is_empty() || outcome == result)
+        })
+        .map(|entry| entry_row(entry, now, &config.logs_dir))
+        .collect::<Result<_>>()?;
+    Ok(Archive {
+        rows,
+        repositories,
+        outcomes,
+    })
+}
+
+fn entry_row(entry: &Entry, now: DateTime<Local>, root: &std::path::Path) -> Result<Row> {
+    match entry {
+        Entry::Record(command) => row(command, now, root),
+        Entry::History(command) => {
+            let (subject, title) =
+                subject(&command.repository, &command.kind, command.issue.as_ref());
+            Ok(Row {
+                selector: Observation::History(command).selector().unwrap_or_default(),
+                logs_url: command
+                    .command_log
+                    .as_ref()
+                    .map(|path| logs_url(path, root))
+                    .unwrap_or_else(|| "/?page=logs".into()),
+                subject,
+                title,
+                state: command.state.into(),
+                now_line: command
+                    .outcome
+                    .clone()
+                    .unwrap_or_else(|| "unknown outcome".into()),
+                age: elapsed(
+                    command.ended_at.as_deref().unwrap_or(&command.started_at),
+                    now,
+                ),
+                count: 1,
+                cause: String::new(),
+                harness: String::new(),
+                pull_request: String::new(),
+                tickets: Vec::new(),
+                children: Vec::new(),
+                findings: Vec::new(),
+                sessions: Observation::History(command).sessions()?,
+            })
+        }
+    }
 }
 
 pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
@@ -48,48 +180,15 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                 .iter()
                 .filter(|item| item.group == group)
                 .map(|item| {
-                    let mut row = match item.command {
-                        Entry::Record(command) => row(command, now, &config.logs_dir),
-                        Entry::History(command) => {
-                            let (subject, title) =
-                                subject(&command.repository, &command.kind, command.issue.as_ref());
-                            Row {
-                                logs_url: command
-                                    .command_log
-                                    .as_ref()
-                                    .and_then(|path| path.strip_prefix(&config.logs_dir).ok())
-                                    .map(|path| {
-                                        format!("/logs/command/{}", crate::logs::catalog::id(path))
-                                    })
-                                    .unwrap_or_else(|| "/logs".into()),
-                                subject,
-                                title,
-                                state: command.state.into(),
-                                now_line: command
-                                    .outcome
-                                    .clone()
-                                    .unwrap_or_else(|| "unknown outcome".into()),
-                                age: elapsed(
-                                    command.ended_at.as_deref().unwrap_or(&command.started_at),
-                                    now,
-                                ),
-                                count: 1,
-                                cause: String::new(),
-                                harness: String::new(),
-                                pull_request: String::new(),
-                                tickets: Vec::new(),
-                                children: Vec::new(),
-                            }
-                        }
-                    };
+                    let mut row = entry_row(item.command, now, &config.logs_dir)?;
                     if let Some(kind) = item.needs_you_kind {
                         row.state = kind.title().into();
                     }
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
-                    row
+                    Ok(row)
                 })
-                .collect();
+                .collect::<Result<_>>()?;
             let references = items
                 .iter()
                 .filter(|item| {
@@ -110,7 +209,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     ))
                 })
                 .collect();
-            Section {
+            Ok(Section {
                 group: match group {
                     Group::NeedsYou => "needs you",
                     Group::ReadyForReview => "ready for review",
@@ -124,9 +223,9 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                 open: group == Group::NeedsYou,
                 rows,
                 references,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<_>>()?;
     Ok(Inbox {
         sections,
         idle_passes: snapshot.idle_passes.iter().map(|pass| format!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason)).collect(),
@@ -148,15 +247,12 @@ fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, Stri
     }
 }
 
-fn row(command: &Command, now: DateTime<Local>, root: &std::path::Path) -> Row {
+fn row(command: &Command, now: DateTime<Local>, root: &std::path::Path) -> Result<Row> {
     let facts = &command.record;
     let (subject, title) = subject(&facts.repository, &facts.name, facts.issue.as_ref());
-    Row {
-        logs_url: command
-            .record_path
-            .strip_prefix(root)
-            .map(|path| format!("/logs/command/{}", crate::logs::catalog::id(path)))
-            .unwrap_or_else(|_| "/logs".into()),
+    Ok(Row {
+        selector: Observation::Record(command).selector().unwrap_or_default(),
+        logs_url: logs_url(&command.record_path, root),
         subject,
         title,
         state: command.state.into(),
@@ -181,8 +277,16 @@ fn row(command: &Command, now: DateTime<Local>, root: &std::path::Path) -> Row {
             .iter()
             .chain(&command.children)
             .map(|child| row(child, now, root))
-            .collect(),
-    }
+            .collect::<Result<_>>()?,
+        findings: facts.security_findings.clone(),
+        sessions: command.sessions()?,
+    })
+}
+
+fn logs_url(path: &std::path::Path, root: &std::path::Path) -> String {
+    path.strip_prefix(root)
+        .map(|path| format!("/logs/command/{}", crate::logs::catalog::id(path)))
+        .unwrap_or_else(|_| "/?page=logs".into())
 }
 
 fn elapsed(time: &str, now: DateTime<Local>) -> String {
