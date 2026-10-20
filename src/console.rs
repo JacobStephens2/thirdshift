@@ -8,6 +8,8 @@ mod install;
 pub use install::install;
 mod live;
 mod logs;
+mod look;
+pub use look::{sections, theme};
 mod peek;
 mod restart;
 mod stop;
@@ -55,6 +57,9 @@ enum View {
     SignOut,
     SignInPage,
     SignIn,
+    Look,
+    Theme,
+    Sections,
     StopPage,
     Stop,
     SetPasswordPage,
@@ -63,6 +68,27 @@ enum View {
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/look",
+        cli: &[
+            "thirdshift console theme list --json",
+            "thirdshift console sections --json",
+        ],
+        method: Method::GET,
+        view: View::Look,
+    },
+    PageRoute {
+        path: "/theme",
+        cli: &["thirdshift console theme focus-auto --json"],
+        method: Method::POST,
+        view: View::Theme,
+    },
+    PageRoute {
+        path: "/sections",
+        cli: &["thirdshift console sections --hide done --json"],
+        method: Method::POST,
+        view: View::Sections,
+    },
     PageRoute {
         path: "/stop",
         cli: &[
@@ -294,6 +320,9 @@ fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Route
             (View::SignOut, Method::POST) => post(auth::sign_out),
             (View::SignInPage, Method::GET) => get(auth::sign_in_page),
             (View::SignIn, Method::POST) => post(auth::sign_in),
+            (View::Look, Method::GET) => get(look::get),
+            (View::Theme, Method::POST) => post(look::set_theme),
+            (View::Sections, Method::POST) => post(look::set_sections),
             (View::StopPage, Method::GET) => get(stop::show),
             (View::Stop, Method::POST) => post(stop::submit),
             (View::SetPasswordPage, Method::GET) => get(auth::set_password_page),
@@ -319,6 +348,7 @@ struct InboxPage {
     hostname: String,
     consoles: Vec<String>,
     theme: String,
+    hidden_sections: Vec<String>,
     cli: &'static str,
     inbox: Inbox,
     title: &'static str,
@@ -328,6 +358,11 @@ struct InboxPage {
 }
 
 impl InboxPage {
+    fn hidden(&self, group: &str) -> bool {
+        self.hidden_sections
+            .iter()
+            .any(|section| section == &group.replace(' ', "-"))
+    }
     fn needs_you(&self) -> usize {
         self.inbox.sections[0].rows.len()
     }
@@ -413,6 +448,7 @@ async fn render_page(
             hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
             consoles: config.console.other_consoles.clone(),
             theme: config.console.theme.clone(),
+            hidden_sections: config.console.hidden_sections.clone(),
             cli,
             inbox: status::inbox(&config)?,
             title,

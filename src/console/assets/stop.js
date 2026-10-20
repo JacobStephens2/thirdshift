@@ -1,3 +1,4 @@
+import './look.js';
 import { watchCommands } from './changes.js';
 
 watchCommands(async () => {

@@ -55,7 +55,7 @@ for (const requeue of [false, true]) {
     await rm(request, { force: true });
     await writeFile(path, JSON.stringify(record));
     await writeFile(join(folder, '7-fixture.log'), 'Waiting for Stop\n');
-    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: 'reduce' });
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, reducedMotion: requeue ? 'reduce' : 'no-preference' });
     t.after(() => context.close());
     const page = await context.newPage();
     const errors = [];
@@ -68,7 +68,10 @@ for (const requeue of [false, true]) {
         // route directly to verify the live Command's action is available.
         await page.goto(`${origin}/?page=waterfall`);
       }
-      if (route === '/') await page.locator('[data-group="working"] > summary').click();
+      if (route === '/') {
+        await page.locator('[data-group="working"] > summary').click();
+        if (!requeue) await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
+      }
       await page.locator('.peek-link').first().click();
       await page.getByRole('button', { name: 'Stop', exact: true }).waitFor();
     }

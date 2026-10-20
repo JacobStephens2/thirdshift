@@ -64,6 +64,106 @@ async function pageFor(t, options) {
   return page;
 }
 
+test("Shift+T switches all built-in Themes and saves hidden sections across browsers", async t => {
+  const page = await pageFor(t);
+  const remote = [];
+  page.on('request', request => { if (!request.url().startsWith(origin)) remote.push(request.url()); });
+  await page.goto(origin);
+  await page.keyboard.press('Shift+T');
+  await page.locator('#themes[open]').waitFor({ timeout: 2000 });
+  assert.equal(await page.locator('#look-status').textContent(), '');
+  try {
+    for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
+      for (const mode of ['auto', 'light', 'dark']) {
+        const name = `${family}-${mode}`;
+        await page.selectOption('#theme-name', name);
+        const saved = page.waitForResponse(response => response.url() === `${origin}/theme`);
+        await page.getByRole('button', { name: 'Apply Theme', exact: true }).click();
+        const response = await saved;
+        assert.equal(response.status(), 200, await response.text());
+        assert.equal((await response.json()).theme, name);
+        await page.waitForFunction(name => document.documentElement.dataset.theme === name, name);
+        assert.match(await readFile(join(home, '.thirdshift/config.toml'), 'utf8'), new RegExp(`theme = "${name}"`));
+        await page.evaluate(() => document.fonts.ready);
+        assert.equal(await page.evaluate(() => [...document.fonts].filter(f => f.status === 'error').length), 0);
+      }
+    }
+    await page.getByRole('button', { name: 'Close Themes' }).click();
+    await page.getByRole('button', { name: 'Sections', exact: true }).click();
+    await page.getByLabel('Show Done', { exact: true }).uncheck();
+    await page.getByRole('button', { name: 'Save sections' }).click();
+    await page.locator('[data-group="done"][hidden]').waitFor({ state: 'attached' });
+    const other = await pageFor(t);
+    await other.goto(origin);
+    await other.locator('[data-group="done"][hidden]').waitFor({ state: 'attached' });
+    assert.equal(await other.locator('html').getAttribute('data-theme'), 'factory-dark');
+    assert.deepEqual(remote, [], 'Themes must load fonts and assets locally');
+  } finally { await writeFile(join(home, '.thirdshift/config.toml'), '[console]\nport = 0\n'); }
+});
+
+test("every built-in Theme text pair meets AA in both system modes, including solid tags", async t => {
+  const page = await pageFor(t);
+  const failures = [];
+  const { APCAcontrast, sRGBtoY } = await import('apca-w3');
+  const luminance = rgb => rgb.map(v => v / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4).reduce((sum, v, i) => sum + v * [.2126, .7152, .0722][i], 0);
+  const ratio = (a, b) => (Math.max(luminance(a), luminance(b)) + .05) / (Math.min(luminance(a), luminance(b)) + .05);
+  await page.goto(origin);
+  const backgrounds = { focus: ['rgb(247, 247, 245)', 'rgb(18, 18, 20)'], plain: ['rgb(252, 252, 251)', 'rgb(17, 18, 20)'], press: ['rgb(232, 230, 225)', 'rgb(10, 10, 10)'], signal: ['rgb(250, 250, 250)', 'rgb(17, 19, 21)'], garden: ['rgb(246, 240, 225)', 'rgb(22, 26, 20)'], factory: ['rgb(227, 230, 232)', 'rgb(28, 29, 31)'] };
+  for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
+    for (const mode of ['auto', 'light', 'dark']) {
+      for (const system of ['light', 'dark']) {
+        await page.emulateMedia({ colorScheme: system });
+        const theme = `${family}-${mode}`;
+        const { pairs, background } = await page.evaluate(theme => {
+          document.documentElement.dataset.theme = theme;
+          const probe = document.createElement('span');
+          document.body.append(probe);
+          const color = token => {
+            probe.style.color = `var(--${token})`;
+            return getComputedStyle(probe).color.match(/[\d.]+/g).slice(0, 3).map(Number);
+          };
+          const pairs = [];
+          for (const background of ['bg', 'panel', 'panel-2', 'sel-bg']) {
+            for (const text of ['text', 'head', 'dim', 'link', 'urgent-text', 'look-text', 'working-text', 'ready-text']) {
+              pairs.push({ name: `${text} on ${background}`, text: color(text), background: color(background) });
+            }
+          }
+          for (const state of ['urgent', 'look', 'working', 'landing', 'ready', 'done']) {
+            pairs.push({ name: `on-${state}`, text: color(`on-${state}`), background: color(state) });
+          }
+          probe.remove();
+          const texts = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          while (texts.nextNode()) {
+            const node = texts.currentNode;
+            if (!node.textContent.trim()) continue;
+            const range = document.createRange(); range.selectNode(node);
+            if (!range.getBoundingClientRect().width || !range.getBoundingClientRect().height) continue;
+            const style = getComputedStyle(node.parentElement);
+            let parent = node.parentElement;
+            while (parent && getComputedStyle(parent).backgroundColor === 'rgba(0, 0, 0, 0)') parent = parent.parentElement;
+            if (!parent) continue;
+            pairs.push({ name: `rendered ${node.textContent.trim().slice(0, 30)}`, text: style.color.match(/[\d.]+/g).slice(0, 3).map(Number), background: getComputedStyle(parent).backgroundColor.match(/[\d.]+/g).slice(0, 3).map(Number) });
+          }
+          return { pairs, background: getComputedStyle(document.body).backgroundColor };
+        }, theme);
+        assert.equal(background, backgrounds[family][(mode === 'auto' ? system : mode) === 'dark' ? 1 : 0], `${theme} must respect the chosen mode on ${system}`);
+        for (const pair of pairs) {
+          if (ratio(pair.text, pair.background) < 4.5) failures.push(`${theme} (${system}): ${pair.name} = ${ratio(pair.text, pair.background)}`);
+          if (family === 'focus' && !pair.name.startsWith('on-')) {
+            assert.ok(Math.abs(APCAcontrast(sRGBtoY(pair.text), sRGBtoY(pair.background))) >= 45, `${theme}: ${pair.name} below APCA Lc 45`);
+          }
+          if (pair.name.startsWith('on-')) {
+            const best = Math.max(ratio([0, 0, 0], pair.background), ratio([255, 255, 255], pair.background));
+            assert.equal(ratio(pair.text, pair.background), best, `${theme}: ${pair.name} must use the better black or white`);
+          }
+        }
+      }
+    }
+  }
+  assert.deepEqual(failures, []);
+  assert.equal(await page.evaluate(() => document.getAnimations().length), 0, 'idle Commands must not animate');
+});
+
 test("Inbox folds, loads only its own resources and fits a 390 px phone", async t => {
   const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
   const remote = [], errors = [];
@@ -296,20 +396,50 @@ test("heartbeat beats only for server-observed log growth and is flat when Silen
     await page.locator('[data-group="working"] > summary').click();
     const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#202$/ }) });
     const id = await row.getAttribute('id');
+    await page.waitForFunction(id => document.getElementById(id).querySelector('.state').getAnimations({ subtree: true }).some(a => a.playState === 'running'), id, { timeout: 2000 });
+    await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
+    assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
+    await page.reload();
+    assert.equal(await page.getByRole('button', { name: 'Pause motion', exact: true }).getAttribute('aria-pressed'), 'true');
+    assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
+    await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
     assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
     await appendFile(session, ' growth');
     await page.waitForFunction(id => document.getElementById(id).querySelector('.heartbeat').getAnimations().some(animation => animation.playState === 'running'), id);
     await page.waitForFunction(id => document.getElementById(id).querySelector('.heartbeat').getAnimations().length === 0, id);
+    for (const family of ['garden', 'factory']) {
+      await writeFile(join(home, '.thirdshift/config.toml'), `[console]\nport = 0\ntheme = "${family}-auto"\n`);
+      await page.waitForFunction(theme => document.documentElement.dataset.theme === theme, `${family}-auto`);
+      assert.notEqual(await page.locator('header').evaluate(header => getComputedStyle(header, '::after').animationName), 'none');
+      await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
+      await appendFile(session, ' paused growth');
+      await page.waitForTimeout(350);
+      assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
+      await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+    }
     const old = new Date(Date.now() - 20 * 60 * 1000);
     await utimes(log, old, old);
     await utimes(session, old, old);
     await page.waitForFunction(id => document.getElementById(id).dataset.state === 'Silent', id);
+    assert.equal(await row.locator('.state').evaluate(state => getComputedStyle(state).animationIterationCount), '3');
     assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
     await page.emulateMedia({ reducedMotion: 'reduce' });
+    assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
     await appendFile(log, ' more');
     await page.waitForFunction(id => document.getElementById(id).dataset.logging === 'true', id);
     assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
-  } finally { await Promise.all([path, log, session].map(path => rm(path, { force: true }))); }
+    fixture.outcome = 'merged'; fixture.ended_at = new Date().toISOString();
+    await writeFile(path, JSON.stringify(fixture));
+    await page.waitForFunction(() => document.documentElement.dataset.live === 'false');
+    await page.emulateMedia({ reducedMotion: 'no-preference' });
+    assert.equal(await page.evaluate(() => document.getAnimations().length), 0, 'an ended Command must stop the garden and conveyor');
+  } finally {
+    await Promise.all([path, log, session].map(path => rm(path, { force: true })));
+    await writeFile(join(home, '.thirdshift/config.toml'), '[console]\nport = 0\n');
+  }
 });
 
 test("a push keeps a Pass dispatch selected instead of its parent", async t => {

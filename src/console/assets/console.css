@@ -1,29 +1,13 @@
+@import url("/assets/themes.css");
 @font-face { font-family: "IBM Plex Sans"; src: url("/assets/fonts/ibm-plex-sans-latin.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
 @font-face { font-family: "IBM Plex Mono"; src: url("/assets/fonts/ibm-plex-mono-latin.woff2") format("woff2"); font-weight: 400; font-display: swap; }
 
-/* Focus tokens from prototype/711-console themes.js (05b1b0a), ADR 0018. */
-:root {
-  color-scheme: light dark;
-  --bg: light-dark(#F7F7F5, #121214); --panel: light-dark(#FFFFFF, #19191C);
-  --panel-2: light-dark(#F0F0EE, #212125); --sel-bg: light-dark(#EEEEEB, #2A2A2F);
-  --text: light-dark(#18181A, #E8E8EA); --head: var(--text); --link: var(--text);
-  --dim: light-dark(#6B6B70, #A0A0A8); --rule: light-dark(#E3E3E0, #2C2C31);
-  --urgent: light-dark(#D7263D, #FF6B78); --urgent-text: light-dark(#9A1424, #FFB0B5);
-  --look: light-dark(#B06800, #FFB020); --look-text: light-dark(#7E4C00, #FFB52E);
-  --working: light-dark(#5E5E63, #A8A8B0); --working-text: light-dark(#4A4A4F, #B4B4BC);
-  --landing: light-dark(#6B6B70, #9A9AA2); --ready: light-dark(#3F3F44, #C4C4CA);
-  --ready-text: var(--ready); --done: var(--landing);
-  --font-head: "IBM Plex Sans", sans-serif; --font-body: "IBM Plex Sans", sans-serif;
-  --font-mono: "IBM Plex Mono", monospace; --body-size: 14px; --head-weight: 600; --radius: 4px;
-}
-:root[data-theme="focus-light"] { color-scheme: light; }
-:root[data-theme="focus-dark"] { color-scheme: dark; }
 * { box-sizing: border-box; }
 body { margin: 0 auto; max-width: 1120px; padding: 20px 28px; background: var(--bg); color: var(--text); font: var(--body-size)/1.4 var(--font-body); }
 header { border-bottom: 2px solid var(--head); padding-bottom: 14px; }
 .brand, .harness, .age, .empty, aside { color: var(--dim); }
 .brand { margin: 0; }
-h1 { margin: 4px 0; font: var(--head-weight) clamp(24px, 4vw, 40px)/1.1 var(--font-head); overflow-wrap: anywhere; }
+h1 { margin: 4px 0; font: var(--head-weight) clamp(24px, 4vw, 40px)/1.1 var(--font-head); overflow-wrap: anywhere; text-transform: var(--head-case); text-shadow: var(--title-shadow); }
 nav { display: flex; flex-wrap: wrap; gap: 8px 20px; margin-top: 10px; }
 a { color: var(--link); overflow-wrap: anywhere; }
 .page-title { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin: 16px 0 8px; }
@@ -46,7 +30,7 @@ summary .count { margin-left: 12px; color: var(--dim); font-size: 13px; }
 .now { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .command[data-state="Died"], .command[data-state="Failed"], .command[data-state="Silent"], .command[data-state="Finding"], .command[data-state="Triage"] { background: var(--panel); border-left: 3px solid var(--urgent); color: var(--urgent-text); }
 .command[data-state="Slow"] { border-left: 3px solid var(--look); color: var(--look-text); }
-.command[data-state="Died"] .state, .command[data-state="Failed"] .state, .command[data-state="Silent"] .state, .command[data-state="Finding"] .state, .command[data-state="Triage"] .state { color: var(--urgent-text); font-weight: var(--head-weight); }
+.command[data-state="Died"] .state, .command[data-state="Failed"] .state, .command[data-state="Silent"] .state, .command[data-state="Finding"] .state, .command[data-state="Triage"] .state { color: var(--tag-text); font-weight: var(--head-weight); }
 .plan { margin-top: 6px; }
 .plan li::before { content: "☐ "; }
 .children { border-left: 1px solid var(--rule); padding-left: 14px; margin-top: 8px; }
@@ -73,6 +57,34 @@ dd dl { border-left: 1px solid var(--rule); padding-left: 8px; }
 #jumps button { margin: 3px; }
 dialog::backdrop { background: #0006; }
 footer { margin-top: 16px; }
+#section-options label { display: block; margin: 8px 0; }
+.command { box-shadow: var(--panel-shadow); --tag-bg: var(--tag-done-bg); --tag-text: var(--tag-done-text); }
+.command[data-state="live"] { --tag-bg: var(--tag-working-bg); --tag-text: var(--tag-working-text); }
+.command[data-state="Landing"] { --tag-bg: var(--tag-landing-bg); --tag-text: var(--tag-landing-text); }
+.command[data-state="Ready"] { --tag-bg: var(--tag-ready-bg); --tag-text: var(--tag-ready-text); }
+.command:is([data-state="Silent"], [data-state="Died"], [data-state="Failed"], [data-state="Finding"], [data-state="Triage"]) { --tag-bg: var(--tag-urgent-bg); --tag-text: var(--tag-urgent-text); }
+.command[data-state="Slow"] { --tag-bg: var(--tag-look-bg); --tag-text: var(--tag-look-text); }
+.command .state { background: var(--tag-bg); color: var(--tag-text); border-radius: var(--radius); padding: 0 3px; }
+.command[data-live="true"][data-state="live"] > .row-head > .state::before { content: ""; display: inline-block; width: 9px; height: 9px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; margin-right: 5px; }
+header::after { content: ""; display: block; height: 4px; background: var(--activity-decoration); background-size: 24px 4px; }
+#log-content[data-live="true"]::after { content: "▌"; color: var(--working-text); }
+.command[data-state="Stopping"]::after { content: ""; display: block; height: 3px; background: repeating-linear-gradient(90deg, var(--urgent) 0 12px, transparent 12px 24px); background-size: 48px 3px; }
+.running-stage { background-image: repeating-linear-gradient(120deg, transparent 0 8px, var(--rule) 8px 10px); background-size: 24px 24px; }
+@keyframes working { to { transform: rotate(360deg); } }
+@keyframes activity-drift { to { background-position: 24px 0; } }
+@keyframes alarm { 50% { outline: 2px solid var(--urgent); } }
+@keyframes cursor { 50% { opacity: 0; } }
+@keyframes latest { from { outline: 2px solid var(--working); } }
+@media (prefers-reduced-motion: no-preference) {
+  :root:not([data-paused="true"]) .command[data-live="true"][data-state="live"] > .row-head > .state::before { animation: working 2s linear infinite; }
+  :root:not([data-paused="true"]) .command[data-live="true"][data-state="Silent"] > .row-head > .state { animation: alarm 1.8s ease-in-out 3; }
+  :root:not([data-paused="true"]) #log-content[data-live="true"]::after { animation: cursor 1s steps(1) infinite; }
+  :root:not([data-paused="true"])[data-live="true"] header::after { animation: var(--activity-motion); }
+  :root:not([data-paused="true"]) .command[data-live="true"][data-state="Stopping"]::after, :root:not([data-paused="true"]) .running-stage { animation: activity-drift 1s linear infinite; }
+  :root:not([data-paused="true"]) #log-content[data-live="true"] > :last-child { animation: latest 900ms ease-out; }
+}
+:root[data-paused="true"] *, :root[data-paused="true"] *::before, :root[data-paused="true"] *::after { animation: none !important; transition: none !important; }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
 @media (max-width: 760px) {
   body.peek-open { display: block; }
   #peek { position: fixed; inset: auto 0 0; width: 100%; max-height: 65dvh; margin: 0; z-index: 10; border-radius: 12px 12px 0 0; box-shadow: 0 -4px 20px #0003; }

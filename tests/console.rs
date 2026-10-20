@@ -15,6 +15,9 @@ use serde_json::{Value, json};
 #[path = "console/accounts.rs"]
 mod accounts;
 
+#[path = "console/look.rs"]
+mod look;
+
 struct Console {
     child: Child,
     address: String,

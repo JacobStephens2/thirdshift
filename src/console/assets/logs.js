@@ -1,3 +1,4 @@
+import { activity } from './look.js';
 const content = document.querySelector("#log-content");
 const follow = document.querySelector("#follow-log");
 const status = document.querySelector("#log-status");
@@ -22,6 +23,8 @@ stream.addEventListener("lines", event => {
     scroll();
   }
   status.textContent = batch.done ? "Complete" : "Live";
+  content.dataset.live = String(!batch.done);
+  activity();
   if (batch.done) stream.close();
 });
 stream.addEventListener("log-error", event => { status.textContent = event.data; stream.close(); });

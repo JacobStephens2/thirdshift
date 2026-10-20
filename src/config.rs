@@ -16,7 +16,7 @@ use toml_edit::{DocumentMut, Item};
 
 use crate::harness::{self, Harness, ModelAndEffort};
 
-mod console;
+pub mod console;
 pub use console::{ConsoleAccess, ConsoleSettings};
 
 /// The settings a User config can hold. Each is what a Run does when its
@@ -851,7 +851,8 @@ address = ""        # HTTPS address for console install, e.g. https://console.ex
 port = 8711          # localhost port for the Console; 0 chooses a free port; default 8711
 allowed_emails = []  # addresses that may sign in; empty requires --no-sign-in; default []
 other_consoles = []   # http or https addresses linked in the header, never fetched; default []
-theme = "focus-auto" # Focus follows the system, or focus-light / focus-dark; default focus-auto
+theme = "focus-auto" # focus/plain/press/signal/garden/factory, with -auto/-light/-dark; default focus-auto
+hidden_sections = [] # needs-you/ready-for-review/landing/working/done/resolved; default []
 
 [activity]
 quiet_skips = false   # a skipped Pass prints nothing, leaving only its Activity log line; default false
@@ -1036,6 +1037,7 @@ mod tests {
                 "console.allowed_emails",
                 "console.other_consoles",
                 "console.theme",
+                "console.hidden_sections",
                 "activity.quiet_skips",
                 "spec.parallel",
                 "pickup.limit",

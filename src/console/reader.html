@@ -6,5 +6,5 @@
 <p class="log-row" data-command="{{ log.selector }}" data-peek="{{ crate::logs::status::inspect::url("/peek", log.selector, None) }}"><a class="peek-link" href="{{ crate::logs::status::inspect::url("/peek", log.selector, None) }}">Command details</a></p>
 <label><input id="follow-log" type="checkbox" checked> Follow newest line</label><p id="log-status" role="status">{% if log.live %}Live{% else %}Complete{% endif %}</p>
 {# Only the conversation renderer's escaped HTML is trusted. #}
-<section id="log-content" aria-label="Log" data-stream="/logs/{{ log.id }}/stream/{{ offset }}" data-offset="{{ offset }}">{{ html|safe }}</section>
+<section id="log-content" aria-label="Log" data-live="{{ log.live }}" data-stream="/logs/{{ log.id }}/stream/{{ offset }}" data-offset="{{ offset }}">{{ html|safe }}</section>
 </main>{% include "console/chrome.html" %}</body></html>

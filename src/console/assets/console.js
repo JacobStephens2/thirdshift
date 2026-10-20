@@ -1,3 +1,4 @@
+import { activity, loadLook, motionAllowed } from './look.js';
 import { watchCommands } from './changes.js';
 
 // Browser preferences are conveniences; malformed or unavailable storage hides nothing.
@@ -79,24 +80,50 @@ function morph(html) {
   document.title = next.title;
   document.querySelector('link[rel="icon"]').href = next.querySelector('link[rel="icon"]').getAttribute("href");
   markNew();
+  activity();
+  loadLook();
   for (const row of document.querySelectorAll('.command[data-logging="true"]')) {
     const previous = previousGrowth.get(row.id) ?? [0, 0];
     const increased = logLengths(row).some((size, index) => size > previous[index]);
-    if (increased && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    if (increased && row.dataset.live === 'true' && motionAllowed()) {
       row.querySelector(":scope > .row-head > .heartbeat")?.animate([
         { transform: "scale(1)", opacity: 0.4 },
         { transform: "scale(1.8)", opacity: 1, offset: 0.3 },
         { transform: "scale(1)", opacity: 0.4 }
       ], { duration: 900 });
+      row.querySelector(':scope > .now')?.animate([
+        { outline: '2px solid var(--working)' }, { outline: '2px solid transparent' }
+      ], { duration: 900 });
     }
   }
 }
 
+const timePage = document.querySelector('main[data-time-page]');
+function morphTimePage(html) {
+  const next = new DOMParser().parseFromString(html, 'text/html');
+  const replacement = next.querySelector('main[data-time-page]');
+  if (!replacement) throw new Error('Missing time page');
+  const selection = selected?.dataset.command;
+  const focused = timePage.contains(document.activeElement);
+  const position = [scrollX, scrollY];
+  Idiomorph.morph(timePage, replacement);
+  if (selection) {
+    const row = [...timePage.querySelectorAll('.command')].find(row => row.dataset.command === selection);
+    select(row, { scroll: false });
+    if (focused) row?.focus({ preventScroll: true });
+  }
+  window.scrollTo(...position);
+  activity();
+  loadLook();
+}
+
 async function refresh() {
-  if (document.getElementById('inbox')) {
-    const response = await fetch("/", { cache: "no-store" });
+  if (observesCommands) {
+    const response = await fetch(timePage ? location.href : '/', { cache: "no-store" });
     if (!response.ok) throw new Error("Inbox unavailable");
-    morph(await response.text());
+    const html = await response.text();
+    if (timePage) morphTimePage(html);
+    else morph(html);
   }
   await refreshPeek();
 }
@@ -104,10 +131,11 @@ let stopWatching;
 function startUpdates() {
   stopWatching ??= watchCommands(refresh);
 }
-if (document.getElementById('inbox')) startUpdates();
+const observesCommands = document.getElementById('inbox') || timePage;
+if (observesCommands) startUpdates();
 
 function stopPeekUpdates() {
-  if (document.getElementById('inbox')) return;
+  if (observesCommands) return;
   stopWatching?.();
   stopWatching = undefined;
 }
@@ -178,7 +206,7 @@ function items() {
   return [...document.querySelectorAll('main .group > summary, main .command, main .log-row')]
     .filter(element => {
       for (let parent = element.parentElement; parent; parent = parent.parentElement) {
-        if (parent.tagName === 'DETAILS' && !parent.open && element !== parent.firstElementChild) return false;
+        if (parent.hidden || (parent.tagName === 'DETAILS' && !parent.open && element !== parent.firstElementChild)) return false;
       }
       return true;
     });
@@ -226,6 +254,8 @@ document.addEventListener('keydown', event => {
   if (event.ctrlKey || event.metaKey || event.altKey || event.target.closest('input, select, textarea, [contenteditable="true"]')) return;
   if (event.key === 'Enter' && event.target.closest('a, button')) return;
   if (event.key === ' ' && event.target.closest('button')) return;
+  if (document.querySelector('#themes[open], #sections-chooser[open]')) return;
+  if (event.key === 'T' && event.shiftKey) { event.preventDefault(); document.querySelector('[data-open-themes]').click(); return; }
   if (event.key === 'Escape') {
     event.preventDefault();
     if (help.open) help.close();

@@ -1,5 +1,15 @@
   <aside id="peek" hidden aria-label="Peek"><button type="button" data-close-peek>Close details (Esc)</button><div id="peek-content" aria-live="polite"></div></aside>
-  <footer><button type="button" data-open-keys>Keyboard help (?)</button></footer>
+  <footer><button type="button" data-open-keys>Keyboard help (?)</button> <button type="button" data-open-themes>Themes (Shift+T)</button> <button type="button" data-open-sections>Sections</button> <button type="button" id="pause-motion" aria-pressed="false">Pause motion</button><p id="look-status" role="status"></p></footer>
+  <dialog id="themes" aria-labelledby="themes-title">
+    <h2 id="themes-title">Themes</h2><p><code>thirdshift console theme &lt;name&gt;</code></p>
+    <form id="theme-form"><label>Theme <select id="theme-name" name="theme"></select></label><button>Apply Theme</button></form>
+    <button type="button" data-close-themes>Close Themes</button>
+  </dialog>
+  <dialog id="sections-chooser" aria-labelledby="sections-title">
+    <h2 id="sections-title">Sections</h2><p><code>thirdshift console sections --hide done --show working</code></p>
+    <form id="sections-form"><fieldset id="section-options"><legend>Visible Inbox sections</legend></fieldset><button>Save sections</button></form>
+    <button type="button" data-close-sections>Close Sections</button>
+  </dialog>
   <aside id="jumps" hidden role="tooltip" aria-label="Jump to"><p>Jump to… (Esc to cancel)</p></aside>
   <dialog id="keys" aria-labelledby="keys-title">
     <h2 id="keys-title">Keyboard</h2>
@@ -11,5 +21,6 @@
     <dt>g, then a letter</dt><dd>Jump to a section or page; g lists the letters</dd>
     <dt>z</dt><dd>Fold the current section</dd>
     <dt>?</dt><dd>Show this help</dd></dl>
+    <p>Shift+T opens Themes. Sections and Pause motion are in the footer.</p>
     <button type="button" data-close-keys>Close (Esc)</button>
   </dialog>
