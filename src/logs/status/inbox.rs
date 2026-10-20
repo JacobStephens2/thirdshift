@@ -28,6 +28,7 @@ pub(crate) struct Row {
     pub live: bool,
     pub logging: bool,
     pub log_growth: String,
+    pub logs_url: String,
     pub subject: String,
     pub title: String,
     pub state: String,
@@ -54,7 +55,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                 .filter(|item| item.group == group)
                 .map(|item| {
                     let mut row = match item.command {
-                        Entry::Record(command) => row(command, now, None),
+                        Entry::Record(command) => row(command, now, None, &config.logs_dir),
                         Entry::History(command) => {
                             let (subject, title) =
                                 subject(&command.repository, &command.kind, command.issue.as_ref());
@@ -67,6 +68,14 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                                 live: false,
                                 logging: false,
                                 log_growth: String::new(),
+                                logs_url: command
+                                    .command_log
+                                    .as_ref()
+                                    .and_then(|path| path.strip_prefix(&config.logs_dir).ok())
+                                    .map(|path| {
+                                        format!("/logs/command/{}", crate::logs::catalog::id(path))
+                                    })
+                                    .unwrap_or_else(|| "/logs".into()),
                                 subject,
                                 title,
                                 state: command.state.into(),
@@ -153,7 +162,7 @@ fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, Stri
     }
 }
 
-fn row(command: &Command, now: DateTime<Local>, outer_log: Option<&Path>) -> Row {
+fn row(command: &Command, now: DateTime<Local>, outer_log: Option<&Path>, root: &Path) -> Row {
     let facts = &command.record;
     let log = outer_log.unwrap_or(&command.command_log);
     let live = command.state == "live";
@@ -177,6 +186,11 @@ fn row(command: &Command, now: DateTime<Local>, outer_log: Option<&Path>) -> Row
             log_length(Some(log)),
             log_length(facts.session_log.as_deref())
         ),
+        logs_url: command
+            .record_path
+            .strip_prefix(root)
+            .map(|path| format!("/logs/command/{}", crate::logs::catalog::id(path)))
+            .unwrap_or_else(|_| "/logs".into()),
         subject,
         title,
         state: command.state.into(),
@@ -200,7 +214,7 @@ fn row(command: &Command, now: DateTime<Local>, outer_log: Option<&Path>) -> Row
             .dispatched
             .iter()
             .chain(&command.children)
-            .map(|child| row(child, now, Some(log)))
+            .map(|child| row(child, now, Some(log), root))
             .collect(),
     }
 }

@@ -1,5 +1,7 @@
 //! The machine's Console. Async execution is confined to this module.
+mod conversation;
 mod live;
+mod logs;
 mod restart;
 
 use std::io::Write;
@@ -30,6 +32,10 @@ struct PageRoute {
 enum View {
     Inbox,
     Changes,
+    Logs,
+    CommandLogs,
+    Reader,
+    LogStream,
 }
 
 const PAGES: &[PageRoute] = &[
@@ -42,6 +48,26 @@ const PAGES: &[PageRoute] = &[
         path: "/events",
         cli: "thirdshift status",
         view: View::Changes,
+    },
+    PageRoute {
+        path: "/logs",
+        cli: "thirdshift logs --json",
+        view: View::Logs,
+    },
+    PageRoute {
+        path: "/logs/command/{id}",
+        cli: "thirdshift logs --command id --json",
+        view: View::CommandLogs,
+    },
+    PageRoute {
+        path: "/logs/{id}",
+        cli: "thirdshift logs --file id",
+        view: View::Reader,
+    },
+    PageRoute {
+        path: "/logs/{id}/stream/{offset}",
+        cli: "thirdshift logs --file id --follow",
+        view: View::LogStream,
     },
 ];
 
@@ -63,16 +89,19 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         std::io::stdout().flush()?;
         let watched = executable.clone();
         let (changes, observer) = live::observe(render_inbox("thirdshift status").await?);
-        axum::serve(listener, router(changes))
-            .with_graceful_shutdown(async move {
-                watched.replaced().await;
-                // Dropping the sole sender closes every SSE response before
-                // graceful shutdown waits for the connections to finish.
-                observer.abort();
-                let _ = observer.await;
-            })
-            .await
-            .context("Console server failed")?;
+        axum::serve(
+            listener,
+            router(changes).layer(axum::Extension(executable.clone())),
+        )
+        .with_graceful_shutdown(async move {
+            watched.replaced().await;
+            // Dropping the sole sender closes every SSE response before
+            // graceful shutdown waits for the connections to finish.
+            observer.abort();
+            let _ = observer.await;
+        })
+        .await
+        .context("Console server failed")?;
         Ok::<_, anyhow::Error>(())
     })?;
     // Drop the runtime (and its sockets) before replacing the process.
@@ -89,6 +118,10 @@ fn router(changes: tokio::sync::watch::Receiver<u64>) -> Router {
             match page.view {
                 View::Inbox => get(move || inbox(cli)),
                 View::Changes => get(live::events),
+                View::Logs => get(logs::index),
+                View::CommandLogs => get(logs::command),
+                View::Reader => get(logs::reader),
+                View::LogStream => get(logs::stream),
             },
         );
     }
@@ -136,15 +169,19 @@ impl RowTemplate<'_> {
 }
 
 async fn inbox(cli: &'static str) -> Response {
-    match render_inbox(cli).await {
-        Ok(html) => (
+    page(Ok(render_inbox(cli).await))
+}
+
+fn page(result: std::result::Result<Result<String>, tokio::task::JoinError>) -> Response {
+    match result {
+        Ok(Ok(html)) => (
             [(header::CONTENT_SECURITY_POLICY, "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"),
              (header::CACHE_CONTROL, "no-store"),
              (header::X_CONTENT_TYPE_OPTIONS, "nosniff")], Html(html)
         ).into_response(),
-        Err(error) => {
-            eprintln!("thirdshift Console: can't read Inbox: {error:#}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "Can't read the Inbox; check the Console's stderr.").into_response()
+        error => {
+            eprintln!("thirdshift Console: can't read page: {error:?}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Can't read this page; check the Console's stderr.").into_response()
         }
     }
 }
