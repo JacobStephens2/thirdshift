@@ -1973,6 +1973,49 @@ fn an_edit_whose_account_github_no_longer_knows_is_untrusted() {
 }
 
 #[test]
+fn an_untrusted_edit_is_found_before_a_later_edit_with_no_time() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["edits"] = serde_json::json!({"7": [
+        {"kind": "body", "by": "outsider", "at": "2020-01-03T00:00:00Z"},
+        {"kind": "body", "by": "acme", "at": null}
+    ]});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&[
+            "#7 body edited after it was marked ready by an account that is not a Trusted account",
+        ]),
+    );
+}
+
+#[test]
+fn a_ready_labelling_whose_account_github_no_longer_knows_is_untrusted() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["trust_events"] = serde_json::json!({"7": [
+        {"created_at": "2020-01-01T00:00:00Z", "event": "labeled", "label": {"name": "ready-for-agent"}, "actor": null}
+    ]});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&[
+            "#7 most recent ready-for-agent label actor is not a Trusted account",
+        ]),
+    );
+}
+
+#[test]
 fn an_untrusted_edit_past_the_first_page_of_edit_history_is_found() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7, &[]);

@@ -47,16 +47,18 @@ impl Reads for GitHub {
     }
 
     /// Its `edits` connection is read page by page so that no edit is missed.
-    fn edits(&self, issue: &IssueUrl, text: IssueText) -> Result<Vec<Action>> {
+    /// Each edit is parsed only when the rule reaches it.
+    fn edits(
+        &self,
+        issue: &IssueUrl,
+        text: IssueText,
+    ) -> Result<impl Iterator<Item = Result<Action>>> {
         let (query, field) = match text {
             IssueText::Body => (BODY_EDITS_QUERY, "editedAt"),
             IssueText::Title => (TITLE_EDITS_QUERY, "createdAt"),
         };
-        self.paged_nodes(issue, query, "edits", "edit history")?
-            .1
-            .iter()
-            .map(|node| action(node, field))
-            .collect()
+        let nodes = self.paged_nodes(issue, query, "edits", "edit history")?.1;
+        Ok(nodes.into_iter().map(move |node| action(&node, field)))
     }
 
     /// Public read access alone does not make an actor a repository

@@ -67,8 +67,14 @@ pub trait Reads {
     fn author_association(&self, issue: &IssueUrl) -> Result<String>;
     /// Every `ready-for-agent` labelling of `issue`, oldest first.
     fn ready_labellings(&self, issue: &IssueUrl) -> Result<Vec<Action>>;
-    /// Every edit of `issue`'s `text`.
-    fn edits(&self, issue: &IssueUrl, text: IssueText) -> Result<Vec<Action>>;
+    /// Every edit of `issue`'s `text`, each read only when
+    /// the rule reaches it: an unreadable edit after the first untrusted
+    /// one cannot fail the check.
+    fn edits(
+        &self,
+        issue: &IssueUrl,
+        text: IssueText,
+    ) -> Result<impl Iterator<Item = Result<Action>>>;
     /// Whether `login` is a collaborator on `issue`'s repository or a member
     /// of the organization that owns it.
     fn is_member(&self, issue: &IssueUrl, login: &str) -> Result<bool>;
@@ -162,6 +168,7 @@ impl<'a, R: Reads> Check<'a, R> {
     ) -> Result<Option<IssueText>> {
         for text in [IssueText::Body, IssueText::Title] {
             for edit in self.reads.edits(issue, text)? {
+                let edit = edit?;
                 if since.is_some_and(|since| edit.at <= since) {
                     continue;
                 }
@@ -288,13 +295,18 @@ mod tests {
             Ok(self.issue(issue).labellings.clone())
         }
 
-        fn edits(&self, issue: &IssueUrl, text: IssueText) -> Result<Vec<Action>> {
+        fn edits(
+            &self,
+            issue: &IssueUrl,
+            text: IssueText,
+        ) -> Result<impl Iterator<Item = Result<Action>>> {
             self.edits_read.borrow_mut().push(text);
             let issue = self.issue(issue);
-            Ok(match text {
+            let edits = match text {
                 IssueText::Body => issue.body_edits.clone(),
                 IssueText::Title => issue.title_edits.clone(),
-            })
+            };
+            Ok(edits.into_iter().map(Ok))
         }
 
         fn is_member(&self, _issue: &IssueUrl, login: &str) -> Result<bool> {

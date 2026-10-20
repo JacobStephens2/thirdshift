@@ -410,6 +410,28 @@ fn a_spec_stops_before_starting_a_ticket_written_by_an_untrusted_account() {
 }
 
 #[test]
+fn a_ticket_edited_by_an_untrusted_account_before_its_spec_was_marked_ready_starts() {
+    let scenario = linear_spec();
+    let mut state = scenario.gh_state();
+    // The later labelling, by an outsider, is not one that counts.
+    state["trust_events"] = serde_json::json!({"20": [
+        {"created_at": "2020-01-04T00:00:00Z", "event": "labeled",
+         "label": {"name": "ready-for-agent"}, "actor": {"login": "acme"}},
+        {"created_at": "2020-01-05T00:00:00Z", "event": "labeled",
+         "label": {"name": "ready-for-agent"}, "actor": {"login": "outsider"}}
+    ]});
+    state["edits"] = serde_json::json!({"21": [
+        {"kind": "body", "by": "outsider", "at": "2020-01-03T00:00:00Z"}
+    ]});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["no-email", &spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(!result.stderr.contains("edited"), "{}", result.stderr);
+}
+
+#[test]
 fn security_review_runs_once_after_spec_review_over_the_whole_spec_branch() {
     let scenario = linear_spec();
     let base_commit = scenario.launch_git(&["rev-parse", "main"]);
