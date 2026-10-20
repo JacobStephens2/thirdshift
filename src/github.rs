@@ -909,11 +909,7 @@ impl GitHub {
             crate::progress::step(format!(
                 "{command} failed (attempt {attempt}/3): {error:#}; retrying in {attempt}s"
             ));
-            let delay = Duration::from_secs(attempt);
-            match self.interruption {
-                Interruption::Ordinary => crate::poll::sleep(delay)?,
-                Interruption::Completion => std::thread::sleep(delay),
-            }
+            self.interruption.pause(Duration::from_secs(attempt))?;
         }
         unreachable!("the third attempt returns success or the last cause")
     }

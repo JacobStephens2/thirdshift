@@ -282,3 +282,35 @@ _Avoid_: average, baseline, estimate
 **Theme**:
 How the **Console** looks, its colours, fonts, shapes, effects and motion, over a layout that every Theme shares. thirdshift comes with some, and a user can make their own. Choosing one changes how the page looks, never what it shows.
 _Avoid_: skin, style, variant
+
+**Eval**:
+A test of how well thirdshift's agents do their work, kept in an **Eval suite** and run in a **Replay**.
+_Avoid_: evaluation, benchmark
+
+**Eval suite**:
+The **Eval tasks** that test one kind of session, such as the code review or the **Spec review**.
+_Avoid_: golden dataset, test set
+
+**Eval task**:
+One past situation in an **Eval suite**: a repository as it once was, the kind of session to run on it, and what success means there, such as a bug the review must catch.
+_Avoid_: task, case, test case, sample
+
+**Arm**:
+One setup that a **Replay** compares: a build of thirdshift, with its **Factory skills** and **Session prompts**, and a **Harness**, **Model** and **Effort**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.
+_Avoid_: variant, provider, configuration
+
+**Trial**:
+One attempt at an **Eval task** by one **Arm**, in an agent session of its own. A Trial is not a **Run** and belongs to no **Command**.
+_Avoid_: run, attempt, sample
+
+**Grader**:
+What judges a **Trial** against its **Eval task**'s success criteria: a check in code, an agent session, or the **Day shift**.
+_Avoid_: judge, evaluator, scorer
+
+**Grade**:
+What a **Grader** decides about one **Trial**: whether it met its **Eval task**'s success criteria, and why.
+_Avoid_: rating, score
+
+**Replay**:
+A comparison of a **Baseline arm** with a **Candidate arm** on the **Eval suites** a change touches, against a bar fixed before it starts. It shows whether the change makes the agents better or worse before it reaches production.
+_Avoid_: experiment, eval run, benchmark run
