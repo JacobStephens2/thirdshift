@@ -32,6 +32,7 @@ pub(crate) struct Run {
 #[derive(Clone)]
 pub(crate) struct Stage {
     pub name: String,
+    pub running: bool,
     pub text: String,
     pub seconds: String,
     pub usual: String,
@@ -48,7 +49,12 @@ pub(crate) struct Grid {
 pub(crate) struct GridRow {
     pub name: String,
     pub usual: String,
-    pub cells: Vec<String>,
+    pub cells: Vec<Cell>,
+}
+
+pub(crate) struct Cell {
+    pub text: String,
+    pub running: bool,
 }
 
 fn timestamp(value: &str) -> Option<i64> {
@@ -100,6 +106,7 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
                     });
             Stage {
                 name: stage.name.clone(),
+                running: command.state == "live" && index + 1 == record.stages.len(),
                 text: format!("{state} · {duration}"),
                 seconds: seconds
                     .map(|seconds| seconds.to_string())
@@ -237,18 +244,25 @@ pub(crate) fn load(config: &UserConfig, hours: f64) -> Result<Views> {
                 cells: batch
                     .iter()
                     .map(|run| {
-                        let times: Vec<_> = run
+                        let stages: Vec<_> = run
                             .stages
                             .iter()
                             .filter(|stage| &stage.name == name)
-                            .map(|stage| stage.text.as_str())
                             .collect();
-                        if !run.stage_metadata {
+                        let text = if !run.stage_metadata {
                             "Unknown · no stage times retained".into()
-                        } else if times.is_empty() {
+                        } else if stages.is_empty() {
                             "Not reached · —".into()
                         } else {
-                            times.join("; ")
+                            stages
+                                .iter()
+                                .map(|stage| stage.text.as_str())
+                                .collect::<Vec<_>>()
+                                .join("; ")
+                        };
+                        Cell {
+                            text,
+                            running: stages.iter().any(|stage| stage.running),
                         }
                     })
                     .collect(),

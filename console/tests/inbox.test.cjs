@@ -71,6 +71,7 @@ test("Shift+T switches all built-in Themes and saves hidden sections across brow
   await page.goto(origin);
   await page.keyboard.press('Shift+T');
   await page.locator('#themes[open]').waitFor({ timeout: 2000 });
+  assert.equal(await page.locator('#look-status').textContent(), '');
   try {
     for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
       for (const mode of ['auto', 'light', 'dark']) {

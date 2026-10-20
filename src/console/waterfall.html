@@ -6,6 +6,7 @@
   <title>Waterfall · {{ hostname }} · thirdshift</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/assets/console.css">
+  <script src="/assets/vendor/idiomorph-0.7.4.min.js" defer></script>
   <script src="/assets/console.js" type="module"></script>
 </head>
 <body>
@@ -13,7 +14,7 @@
     {% if !consoles.is_empty() %}<nav aria-label="Other Consoles">{% for address in consoles %}<a href="{{ address }}">{{ address }}</a>{% endfor %}</nav>{% endif %}
   </header>
   {% include "console/nav.html" %}
-  <main>
+  <main data-time-page>
     <div class="page-title"><h2>Waterfall</h2><code>thirdshift show &lt;command&gt; --json · thirdshift logs &lt;command&gt;</code></div>
     <nav class="command-chips" aria-label="Choose a Command">{% for choice in view.choices %}<a href="{{ choice.url }}" {% if choice.selected %}aria-current="true"{% endif %}>{{ choice.subject }} · {{ choice.state }}</a>{% endfor %}</nav>
     {% if view.runs.is_empty() %}<p>No Commands yet.</p>{% else %}

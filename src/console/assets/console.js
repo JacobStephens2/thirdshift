@@ -97,6 +97,25 @@ function morph(html) {
 }
 
 // Coalesce notices, but fetch again if a change arrives during the request.
+const timePage = document.querySelector('main[data-time-page]');
+function morphTimePage(html) {
+  const next = new DOMParser().parseFromString(html, 'text/html');
+  const replacement = next.querySelector('main[data-time-page]');
+  if (!replacement) throw new Error('Missing time page');
+  const selection = selected?.dataset.command;
+  const focused = timePage.contains(document.activeElement);
+  const position = [scrollX, scrollY];
+  Idiomorph.morph(timePage, replacement);
+  if (selection) {
+    const row = [...timePage.querySelectorAll('.command')].find(row => row.dataset.command === selection);
+    select(row, { scroll: false });
+    if (focused) row?.focus({ preventScroll: true });
+  }
+  window.scrollTo(...position);
+  activity();
+  loadLook();
+}
+
 let refreshing = false, pending = false;
 async function refresh() {
   pending = true;
@@ -105,9 +124,11 @@ async function refresh() {
   try {
     while (pending) {
       pending = false;
-      const response = await fetch("/", { cache: "no-store" });
+      const response = await fetch(timePage ? location.href : '/', { cache: "no-store" });
       if (!response.ok) throw new Error("Inbox unavailable");
-      morph(await response.text());
+      const html = await response.text();
+      if (timePage) morphTimePage(html);
+      else morph(html);
     }
   } catch {
     startPolling();
@@ -117,7 +138,8 @@ let polling;
 function startPolling() {
   polling ??= setInterval(refresh, 5000);
 }
-if (document.getElementById('inbox') && typeof EventSource === "function") {
+const observesCommands = document.getElementById('inbox') || timePage;
+if (observesCommands && typeof EventSource === "function") {
   const stream = new EventSource("/events");
   stream.addEventListener("commands", refresh);
   stream.addEventListener("error", startPolling);
@@ -126,7 +148,7 @@ if (document.getElementById('inbox') && typeof EventSource === "function") {
     polling = undefined;
     refresh();
   });
-} else if (document.getElementById('inbox')) { startPolling(); }
+} else if (observesCommands) { startPolling(); }
 
 const peek = document.querySelector('#peek');
 const content = document.querySelector('#peek-content');

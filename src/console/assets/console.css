@@ -58,12 +58,12 @@ dd dl { border-left: 1px solid var(--rule); padding-left: 8px; }
 dialog::backdrop { background: #0006; }
 footer { margin-top: 16px; }
 #section-options label { display: block; margin: 8px 0; }
-.command { box-shadow: var(--panel-shadow); --state-ink: var(--done); --state-on: var(--on-done); }
-.command[data-state="live"] { --state-ink: var(--working); --state-on: var(--on-working); }
-.command[data-state="Landing"] { --state-ink: var(--landing); --state-on: var(--on-landing); }
-.command[data-state="Ready"] { --state-ink: var(--ready); --state-on: var(--on-ready); }
-.command:is([data-state="Silent"], [data-state="Died"], [data-state="Failed"], [data-state="Finding"], [data-state="Triage"]) { --state-ink: var(--urgent); --state-on: var(--on-urgent); }
-.command[data-state="Slow"] { --state-ink: var(--look); --state-on: var(--on-look); }
+.command { box-shadow: var(--panel-shadow); --tag-bg: var(--tag-done-bg); --tag-text: var(--tag-done-text); }
+.command[data-state="live"] { --tag-bg: var(--tag-working-bg); --tag-text: var(--tag-working-text); }
+.command[data-state="Landing"] { --tag-bg: var(--tag-landing-bg); --tag-text: var(--tag-landing-text); }
+.command[data-state="Ready"] { --tag-bg: var(--tag-ready-bg); --tag-text: var(--tag-ready-text); }
+.command:is([data-state="Silent"], [data-state="Died"], [data-state="Failed"], [data-state="Finding"], [data-state="Triage"]) { --tag-bg: var(--tag-urgent-bg); --tag-text: var(--tag-urgent-text); }
+.command[data-state="Slow"] { --tag-bg: var(--tag-look-bg); --tag-text: var(--tag-look-text); }
 .command .state { background: var(--tag-bg); color: var(--tag-text); border-radius: var(--radius); padding: 0 3px; }
 .command[data-live="true"][data-state="live"] > .row-head > .state::before { content: ""; display: inline-block; width: 9px; height: 9px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; margin-right: 5px; }
 header::after { content: ""; display: block; height: 4px; background: var(--activity-decoration); background-size: 24px 4px; }
