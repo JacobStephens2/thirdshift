@@ -30,12 +30,8 @@ use crate::logs::{self, Pass, Work};
 use crate::progress;
 use crate::ready::{self, ReadyIssue};
 use crate::run::{self, Ended, StartedBy};
-use crate::session::{Logs, Purpose, Sessions};
+use crate::session::{Kind, Logs, Purpose, Sessions};
 use crate::worktree::ReviewWorktree;
-
-/// The Architecture review session's kind, in its progress lines and log
-/// name.
-const REVIEW: &str = "architecture-review";
 
 /// What a pass dispatches, as `thirdshift <Issue URL>` would run it, but on
 /// the pass's Base branch `base`, whatever the Launch directory has checked
@@ -222,7 +218,11 @@ impl Outside for LaunchAndGitHub<'_> {
         let harness = self.harness.clone();
         let concluded = Sessions::within(&logs, worktree.path(), &harness, |sessions| {
             progress::step(starting);
-            let final_message = sessions.run_to_final_message(Purpose::Ordinary, REVIEW, prompt)?;
+            let final_message = sessions.run_to_final_message(
+                Purpose::Ordinary,
+                Kind::ArchitectureReview,
+                prompt,
+            )?;
             conclude(self, final_message.as_deref())
         });
         // Removed once the review is concluded.

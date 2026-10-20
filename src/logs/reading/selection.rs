@@ -190,13 +190,7 @@ impl<'a> Observation<'a> {
                 else {
                     return false;
                 };
-                let original = session.strip_suffix("-resume").unwrap_or(session);
-                session == kind
-                    || original == kind
-                    || (kind == "repair"
-                        && original
-                            .strip_prefix("repair-")
-                            .is_some_and(|number| number.parse::<u32>().is_ok()))
+                crate::session::kind::selects(kind, session)
             })
             .with_context(|| format!("no {kind} Session log for this Command"))
     }
