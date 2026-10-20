@@ -101,7 +101,6 @@ impl TicketBoard {
         crate::recovery::TicketProgress {
             landed: self.tickets.iter().filter(|ticket| !ticket.is_open).count(),
             total: self.tickets.len(),
-            reviewed: false,
         }
     }
 

@@ -131,9 +131,7 @@ pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> E
     if let Err(failed) = &mut outcome
         && let Some(recovery) = &mut failed.recovery
     {
-        recovery
-            .local_child_work
-            .extend_from_slice(base_fix.local_work());
+        recovery.add_child_work(base_fix.local_work().iter().cloned());
     }
     Ended {
         outcome,
@@ -289,17 +287,15 @@ fn start<O: Outside>(
     if let Err(failed) = &mut outcome
         && let Some(recovery) = &mut failed.recovery
     {
-        if recovery.preservation == crate::recovery::Preservation::None
-            && matches!(selection, Selection::Continuation { .. })
-        {
-            recovery.preservation = crate::recovery::Preservation::Remote;
-        }
-        recovery.continuation = Some(crate::recovery::Continuation {
-            command: crate::args::continuation(issue, asks, is_spec),
-            launch: outside.launch_path().to_path_buf(),
-            base: base.clone(),
-            branch: selection.branch().to_string(),
-        });
+        recovery.add_continuation(
+            crate::recovery::Continuation {
+                command: crate::args::continuation(issue, asks, is_spec),
+                launch: outside.launch_path().to_path_buf(),
+                base: base.clone(),
+                branch: selection.branch().to_string(),
+            },
+            matches!(selection, Selection::Continuation { .. }),
+        );
     }
     if claims {
         outside.end_claim(outcome.as_ref().ok().map(|reached| reached.goal));

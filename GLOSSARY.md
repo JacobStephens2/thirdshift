@@ -195,7 +195,10 @@ A **Merge run** into a **Run**'s **Base branch** that thirdshift starts when tha
 _Avoid_: hotfix, base repair (a **Repair** works on the Issue branch)
 
 **Failed run**:
-A **Run** that ends, including by interruption, without an open pull request from its **Issue branch** that targets the **Base branch**, is mergeable, and has passing CI, or a confirmed completed merge as described under **Delivery**. For a **Merge run**, it is also a Run that ends without its pull request merged. Even after Command interruption, any unfinished merge is aborted and its work is still pushed so nothing is lost (or, if the push fails, its worktree and local **Issue branch** are kept), and its open pull request, if any, is converted back to a draft through the same finishing path, unless the pull request is ready, mergeable and green and only the **Self-merge** could not happen.
+A **Run** that ends, including by interruption, without an open pull request from its **Issue branch** that targets the **Base branch**, is mergeable, and has passing CI, or a confirmed completed merge as described under **Delivery**. For a **Merge run**, it is also a Run that ends without its pull request merged. Even after Command interruption, any unfinished merge is aborted and its work is still pushed so nothing is lost (or, if the push fails, its worktree and local **Issue branch** are kept), and its open pull request, if any, is converted back to a draft through the same finishing path, unless the pull request is ready, mergeable and green and only the **Self-merge** could not happen. It ends with its **Recovery**.
+
+**Recovery**:
+The lines a **Failed run** ends with, saying where it stopped, what work was preserved and where, and the command that continues or retries it; built only from factory-owned facts, never agent output.
 
 **Issue branch**:
 A branch a **Run** works on for one issue: `issue-<n>` (the first), then `issue-<n>-branch-<k>` for k ≥ 2. A number counts as used once its pull request is merged or closed, even if the branch itself was deleted.
