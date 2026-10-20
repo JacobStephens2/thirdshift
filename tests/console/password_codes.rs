@@ -336,10 +336,10 @@ fn code_response_timing_does_not_reveal_the_allowlist() {
             if line.trim().is_empty() {
                 break;
             }
-            if let Some((name, value)) = line.split_once(':') {
-                if name.eq_ignore_ascii_case("content-length") {
-                    length = value.trim().parse::<usize>().unwrap();
-                }
+            if let Some((name, value)) = line.split_once(':')
+                && name.eq_ignore_ascii_case("content-length")
+            {
+                length = value.trim().parse::<usize>().unwrap();
             }
         }
         reader.read_exact(&mut vec![0; length]).unwrap();
