@@ -8,18 +8,7 @@ use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
 const CSS: &str = include_str!("../../console/assets/themes.css");
-const FAMILIES: &[&str] = &[
-    "Big Shoulders Display",
-    "JetBrains Mono",
-    "Inter",
-    "Caprasimo",
-    "Nunito",
-    "Barlow Condensed",
-    "Titillium Web",
-    "Atkinson Hyperlegible",
-    "IBM Plex Sans",
-    "IBM Plex Mono",
-];
+const CONSOLE_CSS: &str = include_str!("../../console/assets/console.css");
 const STACKS: &[&str] = &[
     "sans-serif",
     "serif",
@@ -30,14 +19,31 @@ const STACKS: &[&str] = &[
     "ui-monospace",
 ];
 
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Serialize)]
 pub struct Theme {
-    pub name: String,
+    name: String,
+    base: String,
+    tokens: BTreeMap<String, String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ThemeDocument {
+    name: String,
     #[serde(default = "default_base")]
-    pub base: String,
+    base: String,
     #[serde(default)]
-    pub tokens: BTreeMap<String, String>,
+    tokens: BTreeMap<String, String>,
+}
+
+fn built_in_font(family: &str) -> bool {
+    let declaration = format!("font-family: \"{family}\";");
+    [CSS, CONSOLE_CSS].iter().any(|css| {
+        css.split("@font-face").skip(1).any(|face| {
+            face.split_once('}')
+                .is_some_and(|(block, _)| block.contains(&declaration))
+        })
+    })
 }
 
 fn default_base() -> String {
@@ -122,7 +128,12 @@ fn font_parts(value: &str) -> Result<Vec<&str>> {
 impl Theme {
     pub fn parse(text: &str) -> Result<Self> {
         ensure!(text.len() <= 16 * 1024, "Theme JSON exceeds 16 KiB");
-        let mut theme: Self = serde_json::from_str(text).context("invalid Theme JSON")?;
+        let document: ThemeDocument = serde_json::from_str(text).context("invalid Theme JSON")?;
+        let mut theme = Self {
+            name: document.name,
+            base: document.base,
+            tokens: document.tokens,
+        };
         ensure!(
             identifier(&theme.name) && !matches!(theme.name.as_str(), "list" | "import" | "export"),
             "invalid or reserved Theme name: {}",
@@ -214,7 +225,7 @@ impl Theme {
             let value = if key.starts_with("font-") {
                 let mut families = Vec::new();
                 for family in font_parts(value).expect("validated font") {
-                    if FAMILIES.contains(&family) {
+                    if built_in_font(family) {
                         families.push(format!("\"{family}\""));
                     } else if STACKS.contains(&family) {
                         families.push(family.into());
@@ -251,12 +262,11 @@ pub fn names() -> Result<Vec<String>> {
     let mut custom = Vec::new();
     for entry in entries {
         let path = entry?.path();
-        if path.extension().is_some_and(|s| s == "json") {
-            if let Some(name) = path.file_stem().and_then(|s| s.to_str()) {
-                if Theme::export(name).is_ok() {
-                    custom.push(name.to_owned());
-                }
-            }
+        if path.extension().is_some_and(|s| s == "json")
+            && let Some(name) = path.file_stem().and_then(|s| s.to_str())
+            && Theme::export(name).is_ok()
+        {
+            custom.push(name.to_owned());
         }
     }
     custom.sort();

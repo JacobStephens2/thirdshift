@@ -10,6 +10,7 @@ let revision = 0;
 let saving = false;
 let paused = false;
 let themeInventory = '';
+let themeRevision = '';
 async function refreshThemeStyles() {
   const previous = document.querySelector('#user-theme-styles');
   const link = document.createElement('link');
@@ -61,10 +62,11 @@ export async function loadLook() {
     csrf = settings.csrf;
     const picker = document.querySelector('#theme-name');
     const inventory = JSON.stringify(settings.themes);
-    if (inventory !== themeInventory || root.dataset.theme !== settings.theme) {
+    if (inventory !== themeInventory || root.dataset.theme !== settings.theme || themeRevision !== settings.theme_revision) {
       await refreshThemeStyles();
       if (requestedRevision !== revision || saving) return;
       themeInventory = inventory;
+      themeRevision = settings.theme_revision;
       const selected = picker.value;
       picker.replaceChildren(...settings.themes.map(name => new Option(name.replace('-', ' · '), name)));
       picker.value = settings.themes.includes(selected) ? selected : settings.theme;
@@ -89,6 +91,7 @@ async function save(path, values) {
   try {
     const response = await fetch(path, { method: 'POST', headers: { 'x-csrf-token': csrf }, body: new URLSearchParams(values) });
     if (!response.ok || response.redirected) throw new Error('Save failed');
+    if (path === '/theme') await refreshThemeStyles();
     apply(await response.json());
     message.textContent = 'Console look saved.';
   } catch { message.textContent = 'Could not save the Console look. Reload to try again.'; }

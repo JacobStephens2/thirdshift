@@ -117,12 +117,15 @@ pub fn sections(hide: &[String], show: &[String], json_output: bool) -> Result<S
 
 pub(super) async fn get(Extension(viewer): Extension<Viewer>) -> Response {
     match tokio::task::spawn_blocking(|| {
-        Ok::<_, anyhow::Error>((UserConfig::load()?, themes::names()?))
+        let config = UserConfig::load()?;
+        let revision = super::accounts::digest(&export_theme(&config.console.theme)?);
+        Ok::<_, anyhow::Error>((config, themes::names()?, revision))
     })
     .await
     {
-        Ok(Ok((config, names))) => Json(json!({
+        Ok(Ok((config, names, revision))) => Json(json!({
             "theme": config.console.theme,
+            "theme_revision": revision,
             "hidden_sections": config.console.hidden_sections,
             "themes": names, "sections": console::SECTIONS,
             "csrf": viewer.csrf,

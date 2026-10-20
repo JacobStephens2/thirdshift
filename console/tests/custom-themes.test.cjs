@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const { once } = require('node:events');
 const { mkdtemp, mkdir, readFile, writeFile, copyFile, rm } = require('node:fs/promises');
 const { join, resolve } = require('node:path');
@@ -31,6 +31,7 @@ test('editor saves, chooses and round-trips Themes without uploading files', asy
     await page.locator('[data-open-themes]').click();
     await page.locator('#theme-name').selectOption('garden-dark');
     await page.locator('#edit-theme').click();
+    await page.waitForFunction(() => document.querySelector('#theme-document').value.length > 0);
     const document = JSON.parse(await page.locator('#theme-document').inputValue());
     assert.equal(document.base, 'garden-dark');
     document.name = 'my-garden';
@@ -47,6 +48,7 @@ test('editor saves, chooses and round-trips Themes without uploading files', asy
     assert.equal(await page.evaluate(() => document.fonts.check('14px "user-mine.woff2"')), true);
     assert.match(await page.locator('body').evaluate(el => getComputedStyle(el).fontFamily), /user-mine.woff2/);
     await page.locator('#export-theme').click();
+    await page.waitForFunction(() => document.querySelector('#theme-editor-status').textContent.includes('Exported JSON'));
     const exported = await page.locator('#theme-document').inputValue();
     assert.deepEqual(JSON.parse(exported), document);
     await page.locator('#save-theme').click();
@@ -56,6 +58,30 @@ test('editor saves, chooses and round-trips Themes without uploading files', asy
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await page.reload();
     await page.waitForFunction(() => getComputedStyle(document.body).backgroundColor === 'rgb(18, 52, 86)');
+    // Import changed contents under the selected name from another client.
+    document.tokens.bg = '#654321';
+    const imported = join(home, 'updated.json');
+    await writeFile(imported, JSON.stringify(document));
+    execFileSync(process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift'), ['console', 'theme', 'import', imported], { env: { ...process.env, HOME: home } });
+    await page.locator('[data-open-themes]').click();
+    await page.locator('#theme-name').selectOption('my-garden');
+    await page.locator('#theme-form button').click();
+    await page.waitForFunction(() => getComputedStyle(document.body).backgroundColor === 'rgb(101, 67, 33)');
+    // Logs has no Inbox refresh. Choosing a previously unselected Theme must
+    // also fetch current contents when its name has not changed.
+    const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift');
+    execFileSync(binary, ['console', 'theme', 'focus-auto'], { env: { ...process.env, HOME: home } });
+    const logs = await browser.newPage();
+    await logs.goto(`${origin}/logs`);
+    await logs.locator('[data-open-themes]').click();
+    await logs.locator('[data-close-themes]').click();
+    document.tokens.bg = '#abcdef';
+    await writeFile(imported, JSON.stringify(document));
+    execFileSync(binary, ['console', 'theme', 'import', imported], { env: { ...process.env, HOME: home } });
+    await logs.locator('[data-open-themes]').click();
+    await logs.locator('#theme-name').selectOption('my-garden');
+    await logs.locator('#theme-form button').click();
+    await logs.waitForFunction(() => getComputedStyle(document.body).backgroundColor === 'rgb(171, 205, 239)');
     assert.deepEqual(violations, []);
   } finally {
     await browser?.close();
