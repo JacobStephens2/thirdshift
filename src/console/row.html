@@ -1,5 +1,5 @@
-<li class="command" data-state="{{ row.state }}" data-command="{{ row.selector }}" data-peek="{{ row.peek_url() }}" data-log="{{ row.log_url() }}" tabindex="-1">
-  <div class="row-head"><span class="state">{{ row.state }}</span> <span class="subject">{{ row.subject }}</span> <span class="issue-title">{{ row.title }}</span><span class="age">{{ row.age }}</span></div>
+<li class="command" id="{{ row.id }}" tabindex="0" data-state="{{ row.state }}" data-started-ms="{{ row.started_ms }}" data-logging="{{ row.logging }}" data-log-growth="{{ row.log_growth }}" data-command="{{ row.selector }}" data-peek="{{ row.peek_url() }}" data-log="{{ row.log_url() }}">
+  <div class="row-head">{% if row.live %}<span class="heartbeat" aria-label="Log activity"></span>{% endif %}<span class="state">{{ row.state }}</span> <span class="subject">{{ row.subject }}</span> <span class="issue-title">{{ row.title }}</span><span class="new" hidden>New since you last looked</span><span class="age">{{ row.age }}</span></div>
   <p class="now">{{ row.now_line }}</p>
   <a href="{{ row.logs_url }}">Run and Session logs</a>
   {% if !row.harness.is_empty() %}<p class="harness">{{ row.harness }}</p>{% endif %}

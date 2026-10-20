@@ -2,7 +2,7 @@ const { test, before, after } = require("node:test");
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
 const { once } = require("node:events");
-const { mkdtemp, mkdir, writeFile, rm } = require("node:fs/promises");
+const { mkdtemp, mkdir, readFile, writeFile, appendFile, utimes, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
@@ -124,6 +124,239 @@ test("explicit Focus light and dark override the system preference", async t => 
   } finally { await writeFile(config, "[console]\nport = 0\n"); }
 });
 
+test("push morphs keep the selected row, folds and scroll without a reload", async t => {
+  const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.goto(origin);
+  const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#1$/ }) });
+  await page.locator('[data-group="done"] > summary').click();
+  await row.click();
+  await page.evaluate(() => {
+    window.visitMarker = "same document";
+    window.selectedRow = document.activeElement;
+    document.querySelector('.commands').scrollTop = 120;
+  });
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const fixture = JSON.parse(await readFile(path, 'utf8'));
+  fixture.issue.title = 'Advanced while you watched';
+  await writeFile(path, JSON.stringify(fixture));
+  await page.getByText('Advanced while you watched', { exact: true }).waitFor();
+  assert.equal(await page.evaluate(() => document.activeElement === window.selectedRow && document.activeElement.matches('.command')), true);
+  assert.equal(await page.evaluate(() => window.visitMarker), "same document");
+  assert.equal(await page.locator('[data-group="done"][open]').count(), 1);
+  assert.equal(await page.locator('[data-group="needs you"][open]').count(), 1);
+  assert.equal(await page.locator('[data-group="needs you"] .commands').evaluate(el => el.scrollTop), 120);
+  assert.deepEqual(errors, []);
+});
+
+test("keyboard selection and the open peek survive an Inbox push", async t => {
+  const page = await pageFor(t);
+  await page.goto(`${origin}/?page=inbox`);
+  await page.keyboard.press('j');
+  await page.keyboard.press('j');
+  const row = page.locator('.is-selected.command');
+  const id = await row.getAttribute('id');
+  const selector = await row.getAttribute('data-command');
+  const path = selector.split('::')[0];
+  const original = await readFile(path, 'utf8');
+  try {
+    await page.keyboard.press('Space');
+    await page.locator('#peek dt').first().waitFor();
+    const fixture = JSON.parse(original);
+    fixture.issue.title = 'Keyboard-selected Command after push';
+    await writeFile(path, JSON.stringify(fixture));
+    await page.getByText(fixture.issue.title, { exact: true }).waitFor();
+    assert.equal(await row.getAttribute('id'), id);
+    assert.equal(await row.getAttribute('aria-current'), 'true');
+    assert.equal(await page.locator('#peek').isVisible(), true);
+    await page.keyboard.press('Space');
+    assert.equal(await page.locator('#peek').isVisible(), false);
+    await page.keyboard.press('g');
+    await page.keyboard.press('w');
+    assert.equal(await page.locator('.is-selected').evaluate(el => el.parentElement.dataset.group), 'working');
+  } finally { await writeFile(path, original); }
+});
+
+test("tab title and favicon follow Needs you through pushes", async t => {
+  const page = await pageFor(t);
+  await page.goto(origin);
+  assert.equal(await page.title(), '10 need you · thirdshift Console');
+  assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/assets/favicon-urgent.svg');
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const fixtures = [];
+  try {
+    for (let number = 1; number <= 10; number++) {
+      const path = join(dir, `${number}-fixture.command.json`);
+      const original = await readFile(path, 'utf8');
+      fixtures.push([path, original]);
+      const fixture = JSON.parse(original);
+      fixture.outcome = 'merged';
+      await writeFile(path, JSON.stringify(fixture));
+    }
+    await page.waitForFunction(() => document.title === '0 need you · thirdshift Console');
+    assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/assets/favicon.svg');
+  } finally { for (const [path, original] of fixtures) await writeFile(path, original); }
+});
+
+test("new since the last visit survives browser storage and clears after looking", async t => {
+  const page = await pageFor(t);
+  await page.goto(origin);
+  await page.waitForFunction(() => localStorage.getItem('thirdshift:console:last-look') !== null);
+  await page.goto('about:blank');
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const path = join(dir, '201-fixture.command.json');
+  try {
+    const fixture = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+    fixture.issue.number = 201;
+    fixture.started_at = fixture.ended_at = new Date().toISOString();
+    fixture.cause = 'New problem after the last visit';
+    await writeFile(path, JSON.stringify(fixture));
+    await page.goto(origin);
+    const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#201$/ }) });
+    await row.locator('.new').waitFor();
+    assert.equal(await page.locator('.new:visible').count(), 1);
+    await page.reload();
+    assert.equal(await page.locator('.new:visible').count(), 0);
+  } finally { await rm(path, { force: true }); }
+});
+
+test("cutting the open stream falls back to polling and catches up", async t => {
+  const page = await pageFor(t);
+  await page.addInitScript(() => {
+    const NativeSource = EventSource;
+    window.EventSource = class extends NativeSource {
+      constructor(...args) { super(...args); window.inboxStream = this; }
+    };
+  });
+  await page.goto(origin);
+  await page.waitForFunction(() => window.inboxStream?.readyState === EventSource.OPEN);
+  await page.evaluate(() => {
+    window.inboxStream.close();
+    window.inboxStream.dispatchEvent(new Event('error'));
+  });
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  try {
+    const fixture = JSON.parse(original);
+    fixture.issue.title = 'Caught up by polling';
+    await writeFile(path, JSON.stringify(fixture));
+    await page.getByText('Caught up by polling', { exact: true }).waitFor({ timeout: 12000 });
+    assert.equal(await page.evaluate(() => window.inboxStream.readyState), 2);
+  } finally { await writeFile(path, original); }
+});
+
+for (const storage of ['blocked', 'malformed']) {
+  test(`live Inbox works with ${storage} browser storage`, async t => {
+    const page = await pageFor(t);
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    await page.addInitScript(mode => {
+      if (mode === 'blocked') Object.defineProperty(window, 'localStorage', { get() { throw new Error('Storage blocked'); } });
+      else {
+        localStorage.setItem('thirdshift:console:folded', 'false');
+        localStorage.setItem('thirdshift:console:last-look', '{broken');
+      }
+    }, storage);
+    await page.goto(origin);
+    const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+    const original = await readFile(path, 'utf8');
+    try {
+      const fixture = JSON.parse(original);
+      fixture.issue.title = `Still live with ${storage} storage`;
+      await writeFile(path, JSON.stringify(fixture));
+      await page.getByText(fixture.issue.title, { exact: true }).waitFor();
+      assert.equal(await page.locator('[data-group="needs you"][open]').count(), 1);
+      assert.deepEqual(errors, []);
+    } finally { await writeFile(path, original); }
+  });
+}
+
+test("heartbeat beats only for server-observed log growth and is flat when Silent", { skip: process.platform !== 'linux' }, async t => {
+  // This fixture borrows the Console's real native process identity. HTTP
+  // coverage uses an actual held Run on both Linux and macOS.
+  const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
+  const start = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const path = join(dir, '202-fixture.command.json');
+  const log = join(dir, '202-fixture.log');
+  const session = join(home, 'heartbeat-session.log');
+  const fixture = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+  Object.assign(fixture, { kind: 'Run', process_id: server.pid, process_start: start, outcome: null, ended_at: null, session_log: session });
+  fixture.issue.number = 202;
+  const began = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+  fixture.stages = [{ name: 'implement', began_at: began, session_log: session }];
+  await writeFile(path, JSON.stringify(fixture));
+  await writeFile(log, 'command');
+  await writeFile(session, 'session');
+  try {
+    const page = await pageFor(t);
+    await page.goto(origin);
+    await page.locator('[data-group="working"] > summary').click();
+    const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#202$/ }) });
+    const id = await row.getAttribute('id');
+    assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
+    await appendFile(session, ' growth');
+    await page.waitForFunction(id => document.getElementById(id).querySelector('.heartbeat').getAnimations().some(animation => animation.playState === 'running'), id);
+    await page.waitForFunction(id => document.getElementById(id).querySelector('.heartbeat').getAnimations().length === 0, id);
+    const old = new Date(Date.now() - 20 * 60 * 1000);
+    await utimes(log, old, old);
+    await utimes(session, old, old);
+    await page.waitForFunction(id => document.getElementById(id).dataset.state === 'Silent', id);
+    assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await appendFile(log, ' more');
+    await page.waitForFunction(id => document.getElementById(id).dataset.logging === 'true', id);
+    assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
+  } finally { await Promise.all([path, log, session].map(path => rm(path, { force: true }))); }
+});
+
+test("a push keeps a Pass dispatch selected instead of its parent", async t => {
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/security');
+  await mkdir(dir, { recursive: true });
+  const path = join(dir, '20261019T110000+0000~security.command.json');
+  const now = new Date().toISOString();
+  const fixture = {
+    version: 1, kind: 'Security run', name: 'secure-fixture', repository: 'acme/widgets', hostname: 'fixture',
+    issue: null, process_id: 0, process_start: 'gone', harness: 'codex', model: null, effort: null,
+    started_at: now, ended_at: now, stages: [], session_log: null, outcome: 'failed', cause: 'Pass failure', issue_branch: null, pull_request: null
+  };
+  fixture.dispatched = [{ ...fixture, kind: 'Run', name: 'issue-303', issue: { number: 303, url: 'https://github.com/acme/widgets/issues/303', title: 'Dispatch before push' } }];
+  await writeFile(path, JSON.stringify(fixture));
+  try {
+    const page = await pageFor(t);
+    await page.goto(origin);
+    const child = page.locator('.command').filter({ has: page.locator(':scope > .row-head > .subject', { hasText: /^acme\/widgets#303$/ }) });
+    await child.click();
+    fixture.dispatched[0].issue.title = 'Dispatch after push';
+    await writeFile(path, JSON.stringify(fixture));
+    await page.getByText('Dispatch after push', { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => document.activeElement.querySelector(':scope > .row-head > .subject')?.textContent), 'acme/widgets#303');
+    const ids = await page.locator('.command').evaluateAll(rows => rows.map(row => row.id));
+    assert.equal(new Set(ids).size, ids.length);
+  } finally { await rm(path, { force: true }); }
+});
+
+test("selection survives a move into folded Done and regains focus when opened", async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  try {
+    const page = await pageFor(t);
+    await page.goto(origin);
+    const row = page.locator('.command').filter({ has: page.locator(':scope > .row-head > .subject', { hasText: /^acme\/widgets#1$/ }) });
+    await row.click();
+    const id = await row.getAttribute('id');
+    const fixture = JSON.parse(original);
+    fixture.outcome = 'merged';
+    await writeFile(path, JSON.stringify(fixture));
+    await page.waitForFunction(id => document.getElementById(id)?.closest('details').dataset.group === 'done', id);
+    assert.equal(await page.evaluate(() => document.querySelector('.command[aria-current="true"]')?.id ?? document.activeElement.id), id);
+    assert.equal(await page.locator('[data-group="done"][open]').count(), 0);
+    await page.locator('[data-group="done"] > summary').click();
+    await page.waitForFunction(id => document.activeElement.id === id, id);
+  } finally { await writeFile(path, original); }
+});
+
 test("every keyboard action preserves list nodes and Escape closes one layer at a time", async t => {
   const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
   await page.goto(origin);
@@ -226,7 +459,12 @@ test("page keys, jump letters and URLs survive reload and the peek is a phone bo
 
 test('History filters and Security findings and sessions work from a phone', async t => {
   const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
+  const streams = [];
+  const errors = [];
+  page.on('request', request => { if (new URL(request.url()).pathname === '/events') streams.push(request.url()); });
+  page.on('pageerror', error => errors.push(error.message));
   await page.goto(`${origin}/?page=history`);
+  assert.match(await page.title(), /^History ·/);
   assert.equal(await page.locator('.command').count(), 11);
   await page.locator('select[name=outcome]').selectOption('failed');
   await page.locator('select[name=outcome]').focus();
@@ -244,6 +482,9 @@ test('History filters and Security findings and sessions work from a phone', asy
   await page.locator('.peek-link').click();
   await page.locator('#peek dt').first().waitFor();
   assert.match(await page.locator('#peek').textContent(), /Bound <input> before storage/);
+  assert.match(await page.title(), /^Security ·/);
+  assert.deepEqual(streams, []);
+  assert.deepEqual(errors, []);
   await page.locator('#peek a').filter({ hasText: 'Session log:' }).click();
   await page.waitForURL('**/log?*');
   assert.match(await page.locator('body').textContent(), /Security Session output/);

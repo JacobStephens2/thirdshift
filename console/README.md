@@ -27,9 +27,18 @@ theme = "focus-auto" # also focus-light or focus-dark
 ```
 
 The header names this machine and links to those addresses, without fetching
-them. The first page pairs with `thirdshift status`. A refresh reads the current
-records; server-push updates are a later Ticket. Replacing the installed binary
-makes the Console re-execute itself with its original arguments.
+them. The Inbox and its `/events` stream pair with `thirdshift status`. One
+server observer checks records and log lengths every second; the page morphs
+after a change notice, preserving the selected row, folds and scroll. If the
+stream drops or is unavailable, the page polls every five seconds until it
+reconnects. The heartbeat only beats for observed log growth, stays flat while
+Silent and respects reduced motion. The tab counts Needs you and its favicon
+marks urgent items (Slow alone is not urgent).
+
+Folds and the last-look time stay in this browser. Commands started since the
+previous visit are marked new, including those arriving while the page is open.
+Missing or malformed storage hides nothing. Replacing the installed binary
+closes open streams and re-executes the Console with its original arguments.
 
 The available pages are Inbox (`1`), Lanes (`2`), Stages (`3`), Waterfall (`4`), History (`5`), Logs (`6`) and Security (`7`). Links
 keep the page in `?page=`. History includes every ended Command, including old

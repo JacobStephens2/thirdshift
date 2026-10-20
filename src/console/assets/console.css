@@ -36,8 +36,10 @@ summary .count { margin-left: 12px; color: var(--dim); font-size: 13px; }
 .commands, .children, .plan { list-style: none; padding: 0; margin: 0; }
 .commands { max-height: 300px; overflow: auto; }
 .command { padding: 8px 10px; margin-bottom: 4px; border-radius: var(--radius); color: var(--dim); overflow-wrap: anywhere; }
+.command:focus, .command[aria-current="true"] { outline: 2px solid var(--head); outline-offset: -2px; }
 .row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .state { color: var(--text); }
+.heartbeat { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--working); opacity: .4; }
 .age { margin-left: auto; white-space: nowrap; }
 .issue-title { flex: 1 1 160px; }
 .command p { margin: 4px 0 0; }

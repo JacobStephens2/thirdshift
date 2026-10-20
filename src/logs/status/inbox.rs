@@ -1,11 +1,12 @@
 //! Owned Inbox presentation for the Console, from the same observations as status.
 use anyhow::Result;
 use chrono::{DateTime, Local};
+use std::path::Path;
 
 use super::{age, stage_text, ticket_text};
 use crate::config::UserConfig;
 use crate::logs::command_record::Issue;
-use crate::logs::reading::{Command, Entry, Group, Observation, Snapshot};
+use crate::logs::reading::{Command, Entry, Group, Health, Observation, Snapshot};
 
 pub(crate) struct Inbox {
     pub sections: Vec<Section>,
@@ -22,6 +23,11 @@ pub(crate) struct Section {
 }
 
 pub(crate) struct Row {
+    pub id: String,
+    pub started_ms: i64,
+    pub live: bool,
+    pub logging: bool,
+    pub log_growth: String,
     pub selector: String,
     pub logs_url: String,
     pub subject: String,
@@ -133,11 +139,19 @@ pub(crate) fn archive(
 
 fn entry_row(entry: &Entry, now: DateTime<Local>, root: &std::path::Path) -> Result<Row> {
     match entry {
-        Entry::Record(command) => row(command, now, root),
+        Entry::Record(command) => row(command, now, None, root),
         Entry::History(command) => {
             let (subject, title) =
                 subject(&command.repository, &command.kind, command.issue.as_ref());
             Ok(Row {
+                id: identity(&format!(
+                    "history:{}:{}:{}",
+                    command.repository, command.kind, command.started_at
+                )),
+                started_ms: timestamp(&command.started_at),
+                live: false,
+                logging: false,
+                log_growth: String::new(),
                 selector: Observation::History(command).selector().unwrap_or_default(),
                 logs_url: command
                     .command_log
@@ -247,10 +261,35 @@ fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, Stri
     }
 }
 
-fn row(command: &Command, now: DateTime<Local>, root: &std::path::Path) -> Result<Row> {
+fn row(
+    command: &Command,
+    now: DateTime<Local>,
+    outer_log: Option<&Path>,
+    root: &Path,
+) -> Result<Row> {
     let facts = &command.record;
+    let log = outer_log.unwrap_or(&command.command_log);
+    let live = command.state == "live";
     let (subject, title) = subject(&facts.repository, &facts.name, facts.issue.as_ref());
     Ok(Row {
+        // A Pass's dispatched Runs share its storage path. Their immutable
+        // Command facts distinguish them without tying identity to ordering.
+        id: identity(&format!(
+            "{}\0{}\0{}\0{}\0{}",
+            command.record_path.to_string_lossy(),
+            facts.kind,
+            facts.name,
+            facts.issue.as_ref().map_or("", |issue| issue.url.as_str()),
+            facts.started_at
+        )),
+        started_ms: timestamp(&facts.started_at),
+        live,
+        logging: live && !matches!(command.health, Some(Health::Silent { .. })),
+        log_growth: format!(
+            "{}:{}",
+            log_length(Some(log)),
+            log_length(facts.session_log.as_deref())
+        ),
         selector: Observation::Record(command).selector().unwrap_or_default(),
         logs_url: logs_url(&command.record_path, root),
         subject,
@@ -276,7 +315,7 @@ fn row(command: &Command, now: DateTime<Local>, root: &std::path::Path) -> Resul
             .dispatched
             .iter()
             .chain(&command.children)
-            .map(|child| row(child, now, root))
+            .map(|child| row(child, now, Some(log), root))
             .collect::<Result<_>>()?,
         findings: facts.security_findings.clone(),
         sessions: command.sessions()?,
@@ -287,6 +326,26 @@ fn logs_url(path: &std::path::Path, root: &std::path::Path) -> String {
     path.strip_prefix(root)
         .map(|path| format!("/logs/command/{}", crate::logs::catalog::id(path)))
         .unwrap_or_else(|_| "/?page=logs".into())
+}
+
+fn log_length(path: Option<&Path>) -> u64 {
+    path.and_then(|path| std::fs::metadata(path).ok())
+        .map_or(0, |file| file.len())
+}
+
+fn timestamp(value: &str) -> i64 {
+    DateTime::parse_from_rfc3339(value).map_or(0, |time| time.timestamp_millis())
+}
+
+fn identity(value: &str) -> String {
+    // Encode the exact storage identity: issue numbers and timestamps alone
+    // can collide, and DOM IDs cannot contain whitespace.
+    let encoded: String = value
+        .as_bytes()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("command-{encoded}")
 }
 
 fn elapsed(time: &str, now: DateTime<Local>) -> String {

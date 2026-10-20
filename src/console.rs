@@ -1,5 +1,6 @@
 //! The machine's Console. Async execution is confined to this module.
 mod conversation;
+mod live;
 mod logs;
 mod peek;
 mod restart;
@@ -28,6 +29,18 @@ static ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/console/assets");
 struct PageRoute {
     path: &'static str,
     cli: &'static [&'static str],
+    view: View,
+}
+
+enum View {
+    Inbox,
+    Inspect,
+    Log,
+    Changes,
+    Logs,
+    CommandLogs,
+    Reader,
+    LogStream,
 }
 
 const PAGES: &[PageRoute] = &[
@@ -37,50 +50,67 @@ const PAGES: &[PageRoute] = &[
             "thirdshift show widgets#7 --json",
             "thirdshift logs widgets#7",
         ],
+        view: View::Inbox,
     },
     PageRoute {
         path: "/lanes",
         cli: &["thirdshift status --all --json"],
+        view: View::Inbox,
     },
     PageRoute {
         path: "/stages",
         cli: &["thirdshift status --all --json"],
+        view: View::Inbox,
     },
     PageRoute {
         path: "/",
         cli: &["thirdshift status"],
+        view: View::Inbox,
+    },
+    PageRoute {
+        path: "/events",
+        cli: &["thirdshift status"],
+        view: View::Changes,
     },
     PageRoute {
         path: "/history",
         cli: &["thirdshift status --all --json"],
+        view: View::Inbox,
     },
     PageRoute {
         path: "/security",
         cli: &["thirdshift status --all --json"],
+        view: View::Inbox,
     },
     PageRoute {
         path: "/peek",
         cli: &["thirdshift show widgets#7 --json"],
+        view: View::Inspect,
     },
     PageRoute {
         path: "/log",
         cli: &["thirdshift logs widgets#7"],
+        view: View::Log,
     },
     PageRoute {
         path: "/logs",
         cli: &["thirdshift logs --json"],
+        view: View::Logs,
     },
     PageRoute {
         path: "/logs/command/{id}",
         cli: &["thirdshift logs --command id --json"],
+        view: View::CommandLogs,
     },
     PageRoute {
         path: "/logs/{id}",
         cli: &["thirdshift logs --file id"],
+        view: View::Reader,
     },
     PageRoute {
         path: "/logs/{id}/stream/{offset}",
         cli: &["thirdshift logs --file id --follow"],
+        view: View::LogStream,
     },
 ];
 
@@ -101,11 +131,18 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
         let watched = executable.clone();
+        let (changes, observer) = live::observe(render_inbox("thirdshift status").await?);
         axum::serve(
             listener,
-            router().layer(axum::Extension(executable.clone())),
+            router(changes).layer(axum::Extension(executable.clone())),
         )
-        .with_graceful_shutdown(async move { watched.replaced().await })
+        .with_graceful_shutdown(async move {
+            watched.replaced().await;
+            // Dropping the sole sender closes every SSE response before
+            // graceful shutdown waits for the connections to finish.
+            observer.abort();
+            let _ = observer.await;
+        })
         .await
         .context("Console server failed")?;
         Ok::<_, anyhow::Error>(())
@@ -115,22 +152,27 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
     executable.exec()
 }
 
-fn router() -> Router {
+fn router(changes: tokio::sync::watch::Receiver<u64>) -> Router {
     let mut router = Router::new();
     for page in PAGES {
         let cli = page.cli[0];
-        router = match page.path {
-            "/peek" => router.route(page.path, get(inspect)),
-            "/log" => router.route(page.path, get(log)),
-            "/logs" => router.route(page.path, get(logs::index)),
-            "/logs/command/{id}" => router.route(page.path, get(logs::command)),
-            "/logs/{id}" => router.route(page.path, get(logs::reader)),
-            "/logs/{id}/stream/{offset}" => router.route(page.path, get(logs::stream)),
-            path => router.route(path, get(move |query| inbox(cli, path, query))),
-        };
+        let path = page.path;
+        router = router.route(
+            page.path,
+            match page.view {
+                View::Inbox => get(move |query| inbox(cli, path, query)),
+                View::Inspect => get(inspect),
+                View::Log => get(log),
+                View::Changes => get(live::events),
+                View::Logs => get(logs::index),
+                View::CommandLogs => get(logs::command),
+                View::Reader => get(logs::reader),
+                View::LogStream => get(logs::stream),
+            },
+        );
     }
     router = router.route("/assets/{*path}", get(asset));
-    router
+    router.with_state(changes)
 }
 
 #[derive(Template)]
@@ -148,6 +190,17 @@ struct InboxPage {
 }
 
 impl InboxPage {
+    fn needs_you(&self) -> usize {
+        self.inbox.sections[0].rows.len()
+    }
+
+    fn urgent(&self) -> bool {
+        self.inbox.sections[0]
+            .rows
+            .iter()
+            .any(|row| row.state != "Slow")
+    }
+
     fn row<'a>(&self, row: &'a Row) -> RowTemplate<'a> {
         RowTemplate { row }
     }
@@ -178,27 +231,35 @@ fn query_value(query: &Option<String>, key: &str) -> String {
 }
 
 async fn inbox(cli: &'static str, path: &'static str, RawQuery(query): RawQuery) -> Response {
-    let mut page = query_value(&query, "page");
-    if page.is_empty() {
-        page = path.trim_start_matches('/').into();
+    let mut requested_page = query_value(&query, "page");
+    if requested_page.is_empty() {
+        requested_page = path.trim_start_matches('/').into();
     }
-    if matches!(page.as_str(), "logs" | "6") {
+    if matches!(requested_page.as_str(), "logs" | "6") {
         return logs::index().await;
     }
-    if matches!(page.as_str(), "waterfall" | "4") {
+    if matches!(requested_page.as_str(), "waterfall" | "4") {
         return waterfall::show(query).await;
     }
-    if matches!(page.as_str(), "lanes" | "2" | "stages" | "3") {
-        return time::show(matches!(page.as_str(), "stages" | "3"), query).await;
+    if matches!(requested_page.as_str(), "lanes" | "2" | "stages" | "3") {
+        return time::show(matches!(requested_page.as_str(), "stages" | "3"), query).await;
     }
-    let archive_page = match page.as_str() {
+    let archive_page = match requested_page.as_str() {
         "history" | "5" => Some(status::ArchivePage::History),
         "security" | "7" => Some(status::ArchivePage::Security),
         "" | "inbox" | "1" => None,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
+    page(Ok(render_page(cli, archive_page, query).await))
+}
+
+async fn render_page(
+    cli: &'static str,
+    archive_page: Option<status::ArchivePage>,
+    query: Option<String>,
+) -> Result<String> {
     // The shared observations and templates stay blocking, off the async executor.
-    match tokio::task::spawn_blocking(move || -> Result<String> {
+    tokio::task::spawn_blocking(move || -> Result<String> {
         let config = UserConfig::load()?;
         let outcome = query_value(&query, "outcome");
         let repository = query_value(&query, "repository");
@@ -225,18 +286,7 @@ async fn inbox(cli: &'static str, path: &'static str, RawQuery(query): RawQuery)
         }
         .render()?)
     })
-    .await
-    {
-        Ok(Ok(html)) => html_response(html),
-        error => {
-            eprintln!("thirdshift Console: can't read Inbox: {error:?}");
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Can't read the Inbox; check the Console's stderr.",
-            )
-                .into_response()
-        }
-    }
+    .await?
 }
 
 async fn inspect(RawQuery(query): RawQuery) -> Response {
@@ -298,6 +348,10 @@ fn page(result: std::result::Result<Result<String>, tokio::task::JoinError>) -> 
     }
 }
 
+async fn render_inbox(cli: &'static str) -> Result<String> {
+    render_page(cli, None, None).await
+}
+
 async fn asset(Path(path): Path<String>) -> Response {
     let Some(file) = ASSETS.get_file(&path) else {
         return StatusCode::NOT_FOUND.into_response();
@@ -308,6 +362,7 @@ async fn asset(Path(path): Path<String>) -> Response {
     {
         Some("css") => "text/css; charset=utf-8",
         Some("js") => "text/javascript; charset=utf-8",
+        Some("svg") => "image/svg+xml",
         Some("woff2") => "font/woff2",
         _ => "text/plain; charset=utf-8",
     };
@@ -330,6 +385,11 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use tower_layer::Layer;
 
+    fn router() -> Router {
+        let (_, changes) = tokio::sync::watch::channel(0);
+        super::router(changes)
+    }
+
     // Router::route_layer walks every registered method service, including
     // routes added directly instead of through PAGES. Nothing is dispatched.
     #[derive(Clone)]
@@ -351,8 +411,14 @@ mod tests {
 
     fn assert_cli_parity(router: Router) {
         // Measure the GET registration footprint through axum's public layer
-        // interface, so this does not depend on its implicit HEAD/fallback count.
-        let get_methods = registered_methods(Router::new().route("/known", get(|| async {})));
+        // interface after attaching state, as the production router does, so
+        // this does not depend on its implicit HEAD/fallback count.
+        let (_, changes) = tokio::sync::watch::channel(0_u64);
+        let get_methods = registered_methods(
+            Router::<tokio::sync::watch::Receiver<u64>>::new()
+                .route("/known", get(|| async {}))
+                .with_state(changes),
+        );
         let expected = (super::PAGES.len() + 1) * get_methods; // one static-resource route
         assert_eq!(
             registered_methods(router),
@@ -383,14 +449,12 @@ mod tests {
 
     #[test]
     fn every_console_route_has_a_cli_equivalent() {
-        assert_cli_parity(super::router());
+        assert_cli_parity(router());
     }
 
     #[test]
     #[should_panic(expected = "registered routes must all have a CLI pair")]
     fn parity_rejects_a_route_registered_without_a_cli_pair() {
-        assert_cli_parity(
-            super::router().route("/unpaired", get(|| async { "page with no CLI pair" })),
-        );
+        assert_cli_parity(router().route("/unpaired", get(|| async { "page with no CLI pair" })));
     }
 }
