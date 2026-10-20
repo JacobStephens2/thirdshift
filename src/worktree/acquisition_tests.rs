@@ -2281,3 +2281,10 @@ fn occupied_checkout_advice_names_the_actual_path_and_removal_refuses_dirty_work
         assert_eq!(worktree.head().unwrap(), head);
     }
 }
+
+#[test]
+fn a_checkout_path_with_a_newline_passes_ownership_inspection() {
+    let (_temp, launch) = super::tests::launch_directory();
+    let worktree = Worktree::create_fresh(&launch, "work\nline", BRANCH, "main").unwrap();
+    worktree.head().unwrap();
+}

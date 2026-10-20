@@ -1298,7 +1298,11 @@ if test -e "$THIRDSHIFT_FAULT_MARKER.armed"; then
   printf '%s\n' "$*" >> "$THIRDSHIFT_FAULT_MARKER"
 fi
 "#,
-    ).is_some() { return; }
+    )
+    .is_some()
+    {
+        return;
+    }
     let (_temp, _launch, worktree) = fixture();
     let marker = PathBuf::from(std::env::var_os("THIRDSHIFT_FAULT_MARKER").unwrap());
     fs::write(marker.with_extension("armed"), "armed").unwrap();

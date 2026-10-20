@@ -111,6 +111,8 @@ more on macOS, where the same tests run about five times slower.
 
 Each inspection now reads the checkout's top level, administrative directory,
 common directory and HEAD with one `git rev-parse` instead of four. The checks
-are unchanged. That test then ran 4,221 programs (22% fewer) in about 17.2 s.
+are unchanged: when a path holds a newline, so the output is not one line per
+value, `Git::checkout_location` reads each value with its own process again. That test then ran 4,221 programs (22% fewer) in about
+17.2 s on the same host; concurrent host load and macOS runtime can differ.
 `an_ordinary_operation_inspects_ownership_in_few_git_processes` holds one
 ordinary operation to its 23 git processes.
