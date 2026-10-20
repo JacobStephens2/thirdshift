@@ -46,9 +46,8 @@ impl TicketBoard {
     /// The Ticket to start next, if any: none once starting has stopped or
     /// `parallel` are running, else the lowest-numbered startable Ticket, as
     /// [`unstartable`] says, with no blocker running, that was not started in
-    /// this Spec run. A blocker's Run
-    /// closes its issue before it ends, so a closed blocker may still be
-    /// running.
+    /// this Spec run. A blocker's Run closes its issue before it ends, so a
+    /// closed blocker may still be running.
     pub(super) fn next_to_start(&self) -> Option<IssueUrl> {
         if self.stopped || self.running() >= self.parallel.get() {
             return None;

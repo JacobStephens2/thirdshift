@@ -282,7 +282,7 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
                 let spec = &self.candidates[at].issue;
                 format!(
                     "has no Ticket that can start: {}",
-                    unstartable_tickets(spec, tickets)
+                    why_none_can_start(spec, tickets)
                 )
             }
             Reason::Unsettled(shaping) => {
@@ -301,7 +301,7 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
 
 /// Each open Ticket of `spec`, lowest number first, with why it can't start,
 /// as in "#21 labelled needs-info; #22 blocked by #21".
-fn unstartable_tickets(spec: &IssueUrl, tickets: &[Ticket]) -> String {
+fn why_none_can_start(spec: &IssueUrl, tickets: &[Ticket]) -> String {
     let name = |issue: &IssueUrl| {
         if spec.in_same_repo(issue) {
             format!("#{}", issue.number)
@@ -405,6 +405,10 @@ fn standing_of(
     let is_spec = read.has_sub_issues();
     if is_spec {
         let tickets = reads.tickets(&candidate.issue)?;
+        // Read after the candidate: its Tickets may have closed since.
+        if !tickets.iter().any(|ticket| ticket.is_open) {
+            return passed_over(Reason::TicketsClosed);
+        }
         if tickets
             .iter()
             .all(|ticket| spec_run::unstartable(&candidate.issue, ticket).is_some())
@@ -516,7 +520,7 @@ mod tests {
                     .zip(&facts.sub_issue_is_open)
                     .map(|(number, &is_open)| Ticket {
                         is_open,
-                        ..ticket(number)
+                        ..startable_ticket(number)
                     })
                     .collect()
             }))
@@ -524,7 +528,7 @@ mod tests {
     }
 
     /// Ticket `number` of a Spec in `acme/widgets`: open, startable.
-    fn ticket(number: u64) -> Ticket {
+    fn startable_ticket(number: u64) -> Ticket {
         Ticket {
             issue: url(number),
             is_open: true,
@@ -540,7 +544,7 @@ mod tests {
         Ticket {
             blockers: blockers.to_vec(),
             open_blockers: blockers.to_vec(),
-            ..ticket(number)
+            ..startable_ticket(number)
         }
     }
 
@@ -548,7 +552,7 @@ mod tests {
     fn labelled_ticket(number: u64, label: &str) -> Ticket {
         Ticket {
             labels: [READY_FOR_AGENT.name(), label].into_iter().collect(),
-            ..ticket(number)
+            ..startable_ticket(number)
         }
     }
 
@@ -954,7 +958,7 @@ mod tests {
 
     #[test]
     fn a_spec_whose_only_open_ticket_is_unready_is_passed_over_naming_the_ticket_and_label() {
-        let mut done = ticket(8);
+        let mut done = startable_ticket(8);
         done.is_open = false;
         let spec = spec_with(vec![done, labelled_ticket(9, "needs-info")]);
 
@@ -976,7 +980,7 @@ mod tests {
     #[test]
     fn a_spec_with_no_startable_ticket_names_why_each_open_ticket_cant_start() {
         let foreign = IssueUrl::parse("https://github.com/other/widgets/issues/21").unwrap();
-        let mut parent = ticket(12);
+        let mut parent = startable_ticket(12);
         parent.has_sub_issues = true;
         let spec = spec_with(vec![
             blocked_ticket(11, &[url(30)]),
@@ -985,7 +989,7 @@ mod tests {
             parent,
             Ticket {
                 issue: foreign,
-                ..ticket(21)
+                ..startable_ticket(21)
             },
         ]);
 
@@ -1004,8 +1008,36 @@ mod tests {
     }
 
     #[test]
+    fn a_spec_whose_tickets_closed_since_the_candidate_read_says_every_ticket_is_closed() {
+        let mut closed = startable_ticket(8);
+        closed.is_open = false;
+        let spec = Facts {
+            sub_issue_is_open: vec![true],
+            ..spec_with(vec![closed])
+        };
+        let (ready, seen) = search(vec![listed(7, &[])], vec![(7, spec)]);
+        assert_eq!(ready, None);
+        assert_eq!(seen.last(), Some(&passed_over("#7 every Ticket is closed")));
+    }
+
+    #[test]
+    fn a_spec_whose_tickets_read_empty_says_every_ticket_is_closed() {
+        let spec = Facts {
+            sub_issue_is_open: vec![true],
+            tickets: Some(vec![]),
+            ..Facts::default()
+        };
+        let (ready, seen) = search(vec![listed(7, &[])], vec![(7, spec)]);
+        assert_eq!(ready, None);
+        assert_eq!(seen.last(), Some(&passed_over("#7 every Ticket is closed")));
+    }
+
+    #[test]
     fn a_spec_with_one_startable_ticket_among_unready_ones_is_a_ready_issue() {
-        let spec = spec_with(vec![labelled_ticket(8, "ready-for-human"), ticket(9)]);
+        let spec = spec_with(vec![
+            labelled_ticket(8, "ready-for-human"),
+            startable_ticket(9),
+        ]);
 
         let (ready, _) = search(vec![listed(7, &[])], vec![(7, spec)]);
 
@@ -1033,7 +1065,7 @@ mod tests {
 
     #[test]
     fn a_spec_failing_an_earlier_gate_has_its_tickets_never_read() {
-        let mut closed = ticket(8);
+        let mut closed = startable_ticket(8);
         closed.is_open = false;
         let unsettled = Facts {
             last_shaped: shaped(Shaping::SubIssues, TimeDelta::minutes(5)),
