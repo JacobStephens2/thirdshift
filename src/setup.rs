@@ -1054,6 +1054,7 @@ port = 8711
 allowed_emails = []
 other_consoles = []
 theme = \"focus-auto\"
+hidden_sections = []
 
 [activity]
 quiet_skips = true
