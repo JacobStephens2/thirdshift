@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} · {{ hostname }} · thirdshift</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/assets/console.css">
+  <script src="/assets/console.js" type="module"></script>
+</head>
+<body>
+  <header><p class="brand">thirdshift / Console</p><h1>{{ hostname }}</h1>
+    {% if !consoles.is_empty() %}<nav aria-label="Other Consoles">{% for address in consoles %}<a href="{{ address }}">{{ address }}</a>{% endfor %}</nav>{% endif %}
+  </header>
+  {% include "console/nav.html" %}
+  <main>
+    <div class="page-title"><h2>{{ title }}</h2><code>thirdshift status --all --json</code></div>
+    {% if title == "Lanes" %}
+    <form method="get">
+      <input type="hidden" name="page" value="lanes">
+      <label>Window <select name="hours">{% for value in ["3.5", "12", "24"] %}<option value="{{ value }}" {% if hours == *value %}selected{% endif %}>{{ value }} hours</option>{% endfor %}</select></label><button>Show</button>
+    </form>
+    <p>Stages drawn to scale from {{ views.start }} to {{ views.end }}. Times below each lane include the whole stage.</p>
+    <p>Older Commands are on <a href="/?page=history">History</a>.</p>
+    {% if views.lanes.is_empty() %}<p class="empty">No Commands in this window.</p>{% endif %}
+    {% for lane in views.lanes %}
+    <section class="lane" aria-label="Command lane">
+      {% for run in lane %}
+      <article class="command time-run" data-command="{{ run.selector }}" data-peek="{{ run.peek_url }}" data-log="{{ run.log_url }}">
+        <h3><a class="peek-link" href="{{ run.peek_url }}">{{ run.subject }}</a> · {{ run.state }}</h3><p>{{ run.title }}</p>
+        <svg class="timeline" width="100%" height="28" aria-hidden="true">
+          {% for stage in run.stages %}<svg x="{{ stage.left }}%" width="{{ stage.width }}%" height="28"><rect width="100%" height="28"/><text x="4" y="19">{{ stage.name }}</text></svg>{% endfor %}
+        </svg>
+        {% if run.stages.is_empty() %}<p>No stage times retained.</p>{% endif %}
+        <ol class="stage-times">{% for stage in run.stages %}<li data-seconds="{{ stage.seconds }}">{{ stage.name }}: {{ stage.text }}</li>{% endfor %}</ol>
+      </article>
+      {% endfor %}
+    </section>
+    {% endfor %}
+    {% else %}
+    <p>Live Runs first, then finished Runs newest first. Tables continue in that order, with each repository's Usual range. Repeated stages list every visit.</p>
+    {% if views.grids.is_empty() %}<p class="empty">No Runs yet.</p>{% endif %}
+    {% for grid in views.grids %}
+    <table class="stage-grid">
+      <caption>{{ grid.repository }}</caption>
+      <thead><tr><th scope="col">Stage<br>Usual range</th>{% for run in grid.runs %}<th scope="col" class="command" data-command="{{ run.selector }}" data-peek="{{ run.peek_url }}" data-log="{{ run.log_url }}"><a class="peek-link" href="{{ run.peek_url }}">{{ run.subject }}</a><br>{{ run.state }}<br>{{ run.title }}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in grid.rows %}<tr><th scope="row">{{ row.name }}<br><span class="usual">Usual range: {{ row.usual }}</span></th>{% for cell in row.cells %}<td><span class="cell-run">{{ grid.runs[loop.index0].subject }}: </span>{{ cell }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+    </table>
+    {% if grid.rows.is_empty() %}<p>No stage times retained.</p>{% endif %}
+    {% endfor %}
+    {% endif %}
+  </main>
+  {% include "console/chrome.html" %}
+</body>
+</html>
