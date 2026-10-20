@@ -106,7 +106,7 @@ fn caddy_script_installs_an_owner_service_and_streaming_site_without_running_the
     assert!(script.contains("reverse_proxy 127.0.0.1:9123"), "{script}");
     assert!(script.contains("flush_interval -1"), "{script}");
     assert!(
-        script.contains("systemctl enable --now thirdshift-console.service"),
+        script.contains("systemctl enable thirdshift-console.service"),
         "{script}"
     );
     assert!(script.contains("systemctl restart caddy"), "{script}");
@@ -136,7 +136,7 @@ fn apache_script_preserves_host_and_protocol_and_certifies_the_streaming_site() 
         assert!(script.contains(required), "missing {required}:\n{script}");
     }
     let enabled = script
-        .find("systemctl enable --now thirdshift-console.service")
+        .find("systemctl enable thirdshift-console.service")
         .unwrap();
     assert!(enabled < script.find("systemctl restart apache2").unwrap());
     assert!(!script.contains("/etc/caddy"));
@@ -175,6 +175,34 @@ fn a_running_apache_wins_over_an_installed_caddy() {
     let script = machine.script();
     assert!(script.contains("systemctl restart apache2"), "{script}");
     assert!(!script.contains("/etc/caddy"), "{script}");
+}
+
+#[test]
+fn reinstall_restarts_the_console_before_exposing_it_through_the_proxy() {
+    let machine = Machine::new();
+    machine.tool("caddy", "exit 0");
+    let script = machine.script();
+    // enable --now leaves an already running tunnel service in --no-sign-in
+    // mode. Replacing its unit must apply the new command before public access.
+    let restart = script
+        .find("systemctl restart thirdshift-console.service")
+        .expect("the replaced service must restart even if it was already running");
+    assert!(script.find("systemctl daemon-reload").unwrap() < restart);
+    assert!(restart < script.find("systemctl restart caddy").unwrap());
+}
+
+#[test]
+fn reinstall_restarts_console_before_certbot_can_activate_the_public_site() {
+    let machine = Machine::new();
+    machine.tool("apache2ctl", "exit 0");
+    let script = machine.script();
+    assert!(
+        script
+            .find("systemctl restart thirdshift-console.service")
+            .unwrap()
+            < script.find("certbot --apache").unwrap(),
+        "certbot can reload Apache, so the Console must already require sign-in:\n{script}"
+    );
 }
 
 #[test]

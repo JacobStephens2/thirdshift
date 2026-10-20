@@ -21,11 +21,12 @@ impl Proxy {
     fn detect() -> Option<Self> {
         // Prefer a running server when both packages are installed. On a
         // machine without a running systemd manager, fall back to PATH.
-        for (service, proxy) in [
-            ("caddy", Self::Caddy),
-            ("apache2", Self::Apache(ApacheLayout::Debian)),
-            ("httpd", Self::Apache(ApacheLayout::RedHat)),
-        ] {
+        const CANDIDATES: [(&str, &str, Proxy); 3] = [
+            ("caddy", "caddy", Proxy::Caddy),
+            ("apache2", "apache2ctl", Proxy::Apache(ApacheLayout::Debian)),
+            ("httpd", "httpd", Proxy::Apache(ApacheLayout::RedHat)),
+        ];
+        for (service, _, proxy) in CANDIDATES {
             if Command::new("systemctl")
                 .args(["is-active", "--quiet", service])
                 .output()
@@ -34,15 +35,10 @@ impl Proxy {
                 return Some(proxy);
             }
         }
-        if available("caddy") {
-            Some(Self::Caddy)
-        } else if available("apache2ctl") {
-            Some(Self::Apache(ApacheLayout::Debian))
-        } else if available("httpd") {
-            Some(Self::Apache(ApacheLayout::RedHat))
-        } else {
-            None
-        }
+        CANDIDATES
+            .into_iter()
+            .find(|(_, executable, _)| available(executable))
+            .map(|(_, _, proxy)| proxy)
     }
 }
 
@@ -117,9 +113,11 @@ RestartSec=5
 WantedBy=multi-user.target
 THIRDSHIFT_UNIT
 
-{site}systemctl daemon-reload
-systemctl enable --now thirdshift-console.service
-{finish}"#
+systemctl daemon-reload
+systemctl enable thirdshift-console.service
+systemctl restart thirdshift-console.service
+
+{site}{finish}"#
     ))
 }
 
