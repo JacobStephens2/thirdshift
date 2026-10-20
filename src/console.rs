@@ -2,6 +2,7 @@
 mod conversation;
 mod live;
 mod logs;
+mod peek;
 mod restart;
 
 use std::io::Write;
@@ -10,7 +11,7 @@ use std::net::Ipv4Addr;
 use anyhow::{Context, Result, ensure};
 use askama::Template;
 use axum::Router;
-use axum::extract::Path;
+use axum::extract::{Path, RawQuery};
 use axum::http::{StatusCode, header};
 use axum::response::{Html, IntoResponse, Response};
 use axum::routing::get;
@@ -31,6 +32,8 @@ struct PageRoute {
 
 enum View {
     Inbox,
+    Inspect,
+    Log,
     Changes,
     Logs,
     CommandLogs,
@@ -48,6 +51,26 @@ const PAGES: &[PageRoute] = &[
         path: "/events",
         cli: "thirdshift status",
         view: View::Changes,
+    },
+    PageRoute {
+        path: "/history",
+        cli: "thirdshift status --all --json",
+        view: View::Inbox,
+    },
+    PageRoute {
+        path: "/security",
+        cli: "thirdshift status --all --json",
+        view: View::Inbox,
+    },
+    PageRoute {
+        path: "/peek",
+        cli: "thirdshift show widgets#7 --json",
+        view: View::Inspect,
+    },
+    PageRoute {
+        path: "/log",
+        cli: "thirdshift logs widgets#7",
+        view: View::Log,
     },
     PageRoute {
         path: "/logs",
@@ -113,10 +136,13 @@ fn router(changes: tokio::sync::watch::Receiver<u64>) -> Router {
     let mut router = Router::new();
     for page in PAGES {
         let cli = page.cli;
+        let path = page.path;
         router = router.route(
             page.path,
             match page.view {
-                View::Inbox => get(move || inbox(cli)),
+                View::Inbox => get(move |query| inbox(cli, path, query)),
+                View::Inspect => get(inspect),
+                View::Log => get(log),
                 View::Changes => get(live::events),
                 View::Logs => get(logs::index),
                 View::CommandLogs => get(logs::command),
@@ -137,6 +163,10 @@ struct InboxPage {
     theme: String,
     cli: &'static str,
     inbox: Inbox,
+    title: &'static str,
+    archive: Option<status::Archive>,
+    outcome: String,
+    repository: String,
 }
 
 impl InboxPage {
@@ -168,38 +198,132 @@ impl RowTemplate<'_> {
     }
 }
 
-async fn inbox(cli: &'static str) -> Response {
-    page(Ok(render_inbox(cli).await))
+fn query_value(query: &Option<String>, key: &str) -> String {
+    let url = reqwest::Url::parse(&format!(
+        "http://localhost/?{}",
+        query.as_deref().unwrap_or_default()
+    ))
+    .expect("fixed URL");
+    url.query_pairs()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.into_owned())
+        .unwrap_or_default()
 }
 
-fn page(result: std::result::Result<Result<String>, tokio::task::JoinError>) -> Response {
-    match result {
-        Ok(Ok(html)) => (
-            [(header::CONTENT_SECURITY_POLICY, "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"),
-             (header::CACHE_CONTROL, "no-store"),
-             (header::X_CONTENT_TYPE_OPTIONS, "nosniff")], Html(html)
-        ).into_response(),
-        error => {
-            eprintln!("thirdshift Console: can't read page: {error:?}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "Can't read this page; check the Console's stderr.").into_response()
-        }
+async fn inbox(cli: &'static str, path: &'static str, RawQuery(query): RawQuery) -> Response {
+    let mut requested_page = query_value(&query, "page");
+    if requested_page.is_empty() {
+        requested_page = path.trim_start_matches('/').into();
     }
+    if matches!(requested_page.as_str(), "logs" | "6") {
+        return logs::index().await;
+    }
+    let archive_page = match requested_page.as_str() {
+        "history" | "5" => Some(status::ArchivePage::History),
+        "security" | "7" => Some(status::ArchivePage::Security),
+        "" | "inbox" | "1" => None,
+        _ => return StatusCode::NOT_FOUND.into_response(),
+    };
+    page(Ok(render_page(cli, archive_page, query).await))
 }
 
-async fn render_inbox(cli: &'static str) -> Result<String> {
+async fn render_page(
+    cli: &'static str,
+    archive_page: Option<status::ArchivePage>,
+    query: Option<String>,
+) -> Result<String> {
     // The shared observations and templates stay blocking, off the async executor.
     tokio::task::spawn_blocking(move || -> Result<String> {
         let config = UserConfig::load()?;
+        let outcome = query_value(&query, "outcome");
+        let repository = query_value(&query, "repository");
+        let (title, cli) = match archive_page {
+            Some(status::ArchivePage::History) => ("History", "thirdshift status --all --json"),
+            Some(status::ArchivePage::Security) => (
+                "Security",
+                "thirdshift status --all --json · thirdshift show <command> --json",
+            ),
+            None => ("Inbox", cli),
+        };
         Ok(InboxPage {
             hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
             consoles: config.console.other_consoles.clone(),
             theme: config.console.theme.clone(),
             cli,
             inbox: status::inbox(&config)?,
+            title,
+            archive: archive_page
+                .map(|page| status::archive(&config, page, &outcome, &repository))
+                .transpose()?,
+            outcome,
+            repository,
         }
         .render()?)
     })
     .await?
+}
+
+async fn inspect(RawQuery(query): RawQuery) -> Response {
+    let command = query_value(&query, "command");
+    match tokio::task::spawn_blocking(move || -> Result<String> {
+        let config = UserConfig::load()?;
+        let details = status::inspect::details(&config, &command)?;
+        Ok(peek::Peek::new(command, details).render()?)
+    })
+    .await
+    {
+        Ok(Ok(html)) => html_response(html),
+        _ => (StatusCode::NOT_FOUND, "Command details are unavailable.").into_response(),
+    }
+}
+
+async fn log(RawQuery(query): RawQuery) -> Response {
+    let command = query_value(&query, "command");
+    let session = query_value(&query, "session");
+    match tokio::task::spawn_blocking(move || {
+        let config = UserConfig::load()?;
+        let path = status::inspect::log_path(
+            &config,
+            &command,
+            (!session.is_empty()).then_some(session.as_str()),
+        )?;
+        crate::logs::catalog::load(&config, None)?
+            .into_iter()
+            .find(|log| log.path == path)
+            .map(|log| log.id)
+            .context("log is unavailable")
+    })
+    .await
+    {
+        Ok(Ok(id)) => logs::reader(Path(id)).await,
+        _ => (StatusCode::NOT_FOUND, "Log is unavailable.").into_response(),
+    }
+}
+
+fn html_response(html: String) -> Response {
+    (
+        [(header::CONTENT_SECURITY_POLICY, "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"),
+         (header::CACHE_CONTROL, "no-store"),
+         (header::X_CONTENT_TYPE_OPTIONS, "nosniff")], Html(html)
+    ).into_response()
+}
+
+fn page(result: std::result::Result<Result<String>, tokio::task::JoinError>) -> Response {
+    match result {
+        Ok(Ok(html)) => html_response(html),
+        error => {
+            eprintln!("thirdshift Console: can't read page: {error:?}");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Can't read this page; check the Console's stderr.",
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn render_inbox(cli: &'static str) -> Result<String> {
+    render_page(cli, None, None).await
 }
 
 async fn asset(Path(path): Path<String>) -> Response {

@@ -9,6 +9,46 @@ use serde::Serialize;
 use crate::config::UserConfig;
 use crate::logs::reading::{Command, Observation, Snapshot};
 
+/// Exactly the detailed observations used by show, for the local Console.
+pub(crate) fn details(config: &UserConfig, input: &str) -> Result<serde_json::Value> {
+    let snapshot =
+        Snapshot::load_with_silence(&config.logs_dir, Local::now(), config.silent_interval)?;
+    Ok(serde_json::to_value(
+        snapshot.resolve(input)?.observation.details()?,
+    )?)
+}
+
+pub(crate) fn log_path(
+    config: &UserConfig,
+    input: &str,
+    session: Option<&str>,
+) -> Result<std::path::PathBuf> {
+    let snapshot = Snapshot::load(&config.logs_dir, Local::now())?;
+    let command = snapshot.resolve(input)?.observation;
+    selected_log(command, session)
+}
+
+fn selected_log(command: Observation<'_>, session: Option<&str>) -> Result<std::path::PathBuf> {
+    match session {
+        Some(session) => command.session(session),
+        None => command
+            .command_log()
+            .context("this Command has no Command log")
+            .map(std::path::Path::to_path_buf),
+    }
+}
+
+pub(crate) fn url(route: &str, command: &str, session: Option<&std::path::Path>) -> String {
+    let mut url = reqwest::Url::parse("http://localhost").expect("fixed URL");
+    url.set_path(route);
+    url.query_pairs_mut().append_pair("command", command);
+    if let Some(session) = session {
+        url.query_pairs_mut()
+            .append_pair("session", &session.to_string_lossy());
+    }
+    format!("{}?{}", url.path(), url.query().unwrap_or_default())
+}
+
 fn print(command: Observation<'_>) -> Result<()> {
     match command {
         Observation::Record(command) => print_details(command, "")?,
@@ -90,13 +130,7 @@ pub fn logs(input: &str, session: Option<&str>, follow: bool) -> Result<()> {
     let snapshot = Snapshot::load(&config.logs_dir, Local::now())?;
     let selection = snapshot.resolve(input)?;
     let command = selection.observation;
-    let path = match session {
-        Some(kind) => command.session(kind)?,
-        None => command
-            .command_log()
-            .context("this Command has no Command log")?
-            .to_path_buf(),
-    };
+    let path = selected_log(command, session)?;
     let mut file =
         std::fs::File::open(&path).with_context(|| format!("could not open {}", path.display()))?;
     let mut stdout = io::stdout().lock();

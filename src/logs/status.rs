@@ -2,6 +2,7 @@
 
 mod inbox;
 pub mod inspect;
+pub(crate) use inbox::{Archive, ArchivePage, archive};
 pub(crate) use inbox::{Inbox, Row, inbox};
 
 use anyhow::Result;
