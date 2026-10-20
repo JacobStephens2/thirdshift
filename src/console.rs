@@ -4,6 +4,7 @@ mod logs;
 mod peek;
 mod restart;
 mod time;
+mod waterfall;
 
 use std::io::Write;
 use std::net::Ipv4Addr;
@@ -30,6 +31,10 @@ struct PageRoute {
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/waterfall",
+        cli: "thirdshift show widgets#7 --json",
+    },
     PageRoute {
         path: "/lanes",
         cli: "thirdshift status --all --json",
@@ -176,6 +181,9 @@ async fn inbox(cli: &'static str, path: &'static str, RawQuery(query): RawQuery)
     }
     if matches!(page.as_str(), "logs" | "6") {
         return logs::index().await;
+    }
+    if matches!(page.as_str(), "waterfall" | "4") {
+        return waterfall::show(query).await;
     }
     if matches!(page.as_str(), "lanes" | "2" | "stages" | "3") {
         return time::show(matches!(page.as_str(), "stages" | "3"), query).await;
