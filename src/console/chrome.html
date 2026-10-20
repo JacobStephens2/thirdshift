@@ -3,6 +3,14 @@
   <dialog id="themes" aria-labelledby="themes-title">
     <h2 id="themes-title">Themes</h2><p><code>thirdshift console theme &lt;name&gt;</code></p>
     <form id="theme-form"><label>Theme <select id="theme-name" name="theme"></select></label><button>Apply Theme</button></form>
+    <p><button type="button" id="edit-theme">Make a Theme from this</button> <button type="button" id="export-theme">Export JSON</button></p>
+    <form id="theme-editor">
+      <label for="theme-document">Theme JSON</label>
+      <p>Edit the name and tokens, or paste an exported Theme. Save custom Themes to <code>~/.thirdshift/console/themes/</code>. Copy fonts by hand into its <code>fonts/</code> folder; name a file followed by its fallback stack, such as <code>mine.woff2, sans-serif</code>.</p>
+      <textarea id="theme-document" rows="12" spellcheck="false" required aria-describedby="theme-editor-status"></textarea>
+      <button id="save-theme">Save / import JSON</button>
+      <p id="theme-editor-status" role="status"></p>
+    </form>
     <button type="button" data-close-themes>Close Themes</button>
   </dialog>
   <dialog id="sections-chooser" aria-labelledby="sections-title">

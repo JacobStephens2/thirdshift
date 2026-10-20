@@ -1,4 +1,5 @@
 @import url("/assets/themes.css");
+@import url("/assets/user-themes.css");
 @font-face { font-family: "IBM Plex Sans"; src: url("/assets/fonts/ibm-plex-sans-latin.woff2") format("woff2"); font-weight: 100 900; font-display: swap; }
 @font-face { font-family: "IBM Plex Mono"; src: url("/assets/fonts/ibm-plex-mono-latin.woff2") format("woff2"); font-weight: 400; font-display: swap; }
 
@@ -56,6 +57,7 @@ dd dl { border-left: 1px solid var(--rule); padding-left: 8px; }
 #jumps { position: fixed; bottom: 20px; right: 20px; z-index: 20; box-shadow: 0 4px 20px #0003; }
 #jumps button { margin: 3px; }
 dialog::backdrop { background: #0006; }
+#theme-editor textarea { display: block; width: 100%; max-width: 100%; font: 12px/1.4 var(--font-mono); color: var(--text); background: var(--bg); border: 1px solid var(--rule); }
 footer { margin-top: 16px; }
 #section-options label { display: block; margin: 8px 0; }
 .command { box-shadow: var(--panel-shadow); --tag-bg: var(--tag-done-bg); --tag-text: var(--tag-done-text); }

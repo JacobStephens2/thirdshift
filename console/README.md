@@ -15,6 +15,53 @@ npm test
 home folder and a free localhost port, and closes its own server and browser.
 Node and npm are test tools only; the release build embeds its assets.
 
+The Themes picker offers **Make a Theme from this**, starting from any built-in
+or custom Theme. Edit its JSON name and tokens, then **Save / import JSON**.
+Choose the saved name in the picker to apply it. **Export JSON** gives a document
+to copy into a file or paste into another Console; there is no file upload control.
+Both CLI commands use exactly the same format and validation:
+
+```sh
+thirdshift console theme export garden-dark > garden.json
+thirdshift console theme import my-garden.json
+thirdshift console theme list --json
+thirdshift console theme my-garden
+```
+
+Custom Themes are `~/.thirdshift/console/themes/<name>.json`. A minimal document:
+
+```json
+{"name":"my-garden","base":"garden-dark","tokens":{"bg":"#142018","font-body":"mine.woff2, sans-serif"}}
+```
+
+`base` is a built-in name with auto/light/dark mode (default `focus-auto`). Missing
+tokens get that base's defaults, including tokens added in later releases. Export
+includes every token. Names use ASCII letters, digits, hyphens and underscores,
+up to 100 characters; `list`, `import`, `export` and altered built-in names are
+reserved. Unchanged built-in exports import successfully without replacing them.
+Invalid JSON, unknown fields/tokens and invalid values are refused with a reason.
+Malformed files placed in the folder by hand are omitted from the picker/list.
+Saving records a `theme-saved` Console log event with its actor; selecting records
+`theme-changed`. Saving does not select the Theme.
+
+Token values are strings. Each token accepts its values from any built-in Theme.
+Colour tokens additionally accept hex colours (3/4/6/8 digits), `transparent`,
+`currentColor`, or `light-dark(<hex>, <hex>)`. Body size accepts 10–32px, radius
+0–32px, heading weight 100–900, heading case none/uppercase/lowercase/capitalize,
+and activity speed 0.1–60s. Effects and activity motion use the built-in values,
+keeping motion tied to activity. Arbitrary CSS and URLs are refused. User Themes
+are their owner's responsibility to check for contrast.
+
+Font tokens (`font-head`, `font-body`, `font-mono`) accept a comma-separated list
+of built-in families, system stacks (`system-ui`, `sans-serif`, `serif`,
+`monospace`, `ui-sans-serif`, `ui-serif`, `ui-monospace`) and font filenames.
+Copy `.woff2`, `.woff`, `.otf` or `.ttf` files by hand into the themes folder's
+`fonts/` directory, then use e.g. `mine.woff2, serif`. Filenames use ASCII letters,
+digits, dots, hyphens and underscores, with no leading dot, up to 100 characters.
+Fonts come from the Console's own address; other extensions, directories and
+symlinks (including a symlinked `fonts/` folder) are refused. Unknown or unavailable
+families fall back to the supplied stack, then sans-serif (monospace for code).
+
 To open your machine's Inbox locally without accounts, run
 `thirdshift console --no-sign-in` and visit the localhost address printed on
 stdout. To require sign-in, set the allowlist in `~/.thirdshift/config.toml`:

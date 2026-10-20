@@ -38,6 +38,8 @@ pub enum Command {
         name: Option<String>,
         json: bool,
     },
+    ConsoleThemeImport(String),
+    ConsoleThemeExport(String),
     ConsoleSections {
         hide: Vec<String>,
         show: Vec<String>,
@@ -270,8 +272,17 @@ pub fn parse(args: &[String]) -> Result<Command> {
             if args.get(1).is_some_and(|action| action == "theme") {
                 let json = args.last().is_some_and(|arg| arg == "--json");
                 let end = args.len() - usize::from(json);
+                if let [action, value] = &args[2..end] {
+                    match action.as_str() {
+                        "import" => return Ok(Command::ConsoleThemeImport(value.clone())),
+                        "export" => return Ok(Command::ConsoleThemeExport(value.clone())),
+                        _ => {}
+                    }
+                }
                 let [name] = &args[2..end] else {
-                    bail!("usage: thirdshift console theme <name|list> [--json]");
+                    bail!(
+                        "usage: thirdshift console theme <name|list> [--json] | import <file> | export <name>"
+                    );
                 };
                 return Ok(Command::ConsoleTheme {
                     name: (name != "list").then(|| name.clone()),

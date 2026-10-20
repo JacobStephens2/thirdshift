@@ -2,6 +2,8 @@
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
 
+pub mod themes;
+
 pub const THEME_FAMILIES: &[&str] = &["focus", "plain", "press", "signal", "garden", "factory"];
 pub const SECTIONS: &[&str] = &[
     "needs-you",
@@ -20,10 +22,8 @@ pub fn theme_names() -> Vec<String> {
 }
 
 pub fn validate_theme(theme: &str) -> Result<()> {
-    ensure!(
-        theme_names().iter().any(|name| name == theme),
-        "unknown Console Theme: {theme}"
-    );
+    themes::Theme::export(theme)
+        .map_err(|error| anyhow::anyhow!("unknown or invalid Console Theme {theme}: {error}"))?;
     Ok(())
 }
 

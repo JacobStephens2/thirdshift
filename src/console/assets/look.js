@@ -9,6 +9,17 @@ let csrf;
 let revision = 0;
 let saving = false;
 let paused = false;
+let themeInventory = '';
+async function refreshThemeStyles() {
+  const previous = document.querySelector('#user-theme-styles');
+  const link = document.createElement('link');
+  link.rel = 'stylesheet';
+  link.href = `/assets/user-themes.css?revision=${Date.now()}`;
+  const loaded = new Promise((resolve, reject) => { link.onload = resolve; link.onerror = reject; });
+  document.head.append(link);
+  try { await loaded; previous?.remove(); link.id = 'user-theme-styles'; }
+  catch (error) { link.remove(); throw error; }
+}
 try { paused = localStorage.getItem('thirdshift:console:pause-motion') === 'true'; } catch { /* optional storage */ }
 
 export function motionAllowed() { return !paused && !reduced.matches; }
@@ -49,8 +60,16 @@ export async function loadLook() {
     if (requestedRevision !== revision || saving) return;
     csrf = settings.csrf;
     const picker = document.querySelector('#theme-name');
-    if (!picker.options.length) {
-      for (const name of settings.themes) picker.add(new Option(name.replace('-', ' · '), name));
+    const inventory = JSON.stringify(settings.themes);
+    if (inventory !== themeInventory || root.dataset.theme !== settings.theme) {
+      await refreshThemeStyles();
+      if (requestedRevision !== revision || saving) return;
+      themeInventory = inventory;
+      const selected = picker.value;
+      picker.replaceChildren(...settings.themes.map(name => new Option(name.replace('-', ' · '), name)));
+      picker.value = settings.themes.includes(selected) ? selected : settings.theme;
+    }
+    if (!document.querySelector('#section-options input')) {
       for (const name of settings.sections) {
         const label = document.createElement('label');
         const checkbox = document.createElement('input');
@@ -77,6 +96,39 @@ async function save(path, values) {
 }
 
 if (themes) {
+  const editor = document.querySelector('#theme-document');
+  const editorStatus = document.querySelector('#theme-editor-status');
+  const exportDocument = async copy => {
+    editorStatus.textContent = '';
+    try {
+      const name = document.querySelector('#theme-name').value;
+      const response = await fetch(`/themes/${encodeURIComponent(name)}`, { cache: 'no-store' });
+      if (!response.ok || response.redirected) throw new Error(await response.text());
+      const theme = await response.json();
+      if (copy) theme.name += '-copy';
+      editor.value = JSON.stringify(theme, null, 2);
+      editor.focus();
+      editorStatus.textContent = copy ? 'Choose a name and edit the tokens, then save.' : 'Exported JSON. Copy it to a file or paste it into another Console.';
+    } catch (error) { editorStatus.textContent = `Could not export Theme: ${error.message}`; }
+  };
+  document.querySelector('#edit-theme').addEventListener('click', () => exportDocument(true));
+  document.querySelector('#export-theme').addEventListener('click', () => exportDocument(false));
+  document.querySelector('#theme-editor').addEventListener('submit', async event => {
+    event.preventDefault();
+    if (saving) return;
+    revision++;
+    saving = true;
+    editorStatus.textContent = '';
+    try {
+      const response = await fetch('/themes', { method: 'POST', headers: { 'content-type': 'application/json', 'x-csrf-token': csrf }, body: editor.value });
+      if (!response.ok || response.redirected) throw new Error(await response.text());
+      editor.value = JSON.stringify(await response.json(), null, 2);
+      await refreshThemeStyles();
+      editorStatus.textContent = 'Theme saved. Choose it above to apply.';
+    } catch (error) { editorStatus.textContent = `Could not save Theme: ${error.message}`; }
+    finally { saving = false; }
+    await loadLook();
+  });
   document.querySelector('[data-open-themes]').addEventListener('click', async () => { await loadLook(); themes.showModal(); });
   document.querySelector('[data-close-themes]').addEventListener('click', () => themes.close());
   document.querySelector('[data-open-sections]').addEventListener('click', async () => { await loadLook(); sections.showModal(); });

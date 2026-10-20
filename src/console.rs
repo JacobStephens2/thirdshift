@@ -9,7 +9,7 @@ pub use install::install;
 mod live;
 mod logs;
 mod look;
-pub use look::{sections, theme};
+pub use look::{export_theme, import_theme, sections, theme};
 mod peek;
 mod restart;
 mod stop;
@@ -59,6 +59,8 @@ enum View {
     SignIn,
     Look,
     Theme,
+    ThemeImport,
+    ThemeExport,
     Sections,
     StopPage,
     Stop,
@@ -68,6 +70,18 @@ enum View {
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/themes",
+        cli: &["thirdshift console theme import theme.json"],
+        method: Method::POST,
+        view: View::ThemeImport,
+    },
+    PageRoute {
+        path: "/themes/{name}",
+        cli: &["thirdshift console theme export focus-auto"],
+        method: Method::GET,
+        view: View::ThemeExport,
+    },
     PageRoute {
         path: "/look",
         cli: &[
@@ -322,6 +336,8 @@ fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Route
             (View::SignIn, Method::POST) => post(auth::sign_in),
             (View::Look, Method::GET) => get(look::get),
             (View::Theme, Method::POST) => post(look::set_theme),
+            (View::ThemeImport, Method::POST) => post(look::import_document),
+            (View::ThemeExport, Method::GET) => get(look::export_document),
             (View::Sections, Method::POST) => post(look::set_sections),
             (View::StopPage, Method::GET) => get(stop::show),
             (View::Stop, Method::POST) => post(stop::submit),
@@ -519,6 +535,12 @@ async fn render_inbox(cli: &'static str) -> Result<String> {
 }
 
 async fn asset(Path(path): Path<String>) -> Response {
+    if path == "user-themes.css" || path.starts_with("user-fonts/") {
+        return match tokio::task::spawn_blocking(move || user_asset(&path)).await {
+            Ok(response) => response,
+            Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+    }
     let Some(file) = ASSETS.get_file(&path) else {
         return StatusCode::NOT_FOUND.into_response();
     };
@@ -540,6 +562,38 @@ async fn asset(Path(path): Path<String>) -> Response {
         file.contents(),
     )
         .into_response()
+}
+
+fn user_asset(path: &str) -> Response {
+    use crate::config::console::themes::{self, Theme};
+    if let Some(name) = path.strip_prefix("user-fonts/") {
+        return match (themes::font_type(name), themes::font(name)) {
+            (Some(kind), Ok(bytes)) => ([(header::CONTENT_TYPE, kind)], bytes).into_response(),
+            _ => StatusCode::NOT_FOUND.into_response(),
+        };
+    }
+    match themes::names() {
+        Ok(names) => {
+            let css: String = names
+                .iter()
+                .filter(|name| !crate::config::console::theme_names().contains(name))
+                .filter_map(|name| Theme::export(name).ok())
+                .map(|theme| theme.stylesheet())
+                .collect();
+            (
+                [
+                    (header::CONTENT_TYPE, "text/css; charset=utf-8"),
+                    (header::CACHE_CONTROL, "no-store"),
+                ],
+                css,
+            )
+                .into_response()
+        }
+        Err(error) => {
+            eprintln!("thirdshift Console: Theme stylesheet failed: {error:#}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
 }
 
 #[cfg(test)]

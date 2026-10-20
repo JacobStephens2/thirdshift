@@ -8,7 +8,54 @@ use serde_json::json;
 
 use super::accounts::{Accounts, EventKind};
 use super::auth::Viewer;
+use crate::config::console::themes::{self, Theme};
 use crate::config::{ConsoleSettings, UserConfig, console};
+
+fn save_theme(theme: &Theme, actor: &str) -> Result<()> {
+    let accounts = Accounts::load()?;
+    theme.save()?;
+    accounts.record(actor, EventKind::ThemeSaved)?;
+    Ok(())
+}
+
+pub fn import_theme(path: &str) -> Result<String> {
+    let theme = Theme::parse(&std::fs::read_to_string(path)?)?;
+    save_theme(&theme, &cli_actor()?)?;
+    Ok(serde_json::to_string_pretty(&theme)?)
+}
+
+pub fn export_theme(name: &str) -> Result<String> {
+    Ok(serde_json::to_string_pretty(&Theme::export(name)?)?)
+}
+
+pub(super) async fn export_document(
+    axum::extract::Path(name): axum::extract::Path<String>,
+) -> Response {
+    match tokio::task::spawn_blocking(move || Theme::export(&name)).await {
+        Ok(Ok(theme)) => Json(theme).into_response(),
+        Ok(Err(error)) => (StatusCode::BAD_REQUEST, error.to_string()).into_response(),
+        error => failed(error),
+    }
+}
+
+pub(super) async fn import_document(
+    Extension(viewer): Extension<Viewer>,
+    text: String,
+) -> Response {
+    let theme = match Theme::parse(&text) {
+        Ok(theme) => theme,
+        Err(error) => return (StatusCode::BAD_REQUEST, format!("{error:#}")).into_response(),
+    };
+    match tokio::task::spawn_blocking(move || {
+        save_theme(&theme, &viewer.email)?;
+        Ok::<_, anyhow::Error>(theme)
+    })
+    .await
+    {
+        Ok(Ok(theme)) => Json(theme).into_response(),
+        error => failed(error),
+    }
+}
 
 fn write_theme(name: &str, actor: &str) -> Result<ConsoleSettings> {
     console::validate_theme(name)?;
@@ -42,9 +89,9 @@ fn cli_actor() -> Result<String> {
 pub fn theme(name: Option<&str>, json_output: bool) -> Result<String> {
     let Some(name) = name else {
         return Ok(if json_output {
-            serde_json::to_string(&console::theme_names())?
+            serde_json::to_string(&themes::names()?)?
         } else {
-            console::theme_names().join("\n")
+            themes::names()?.join("\n")
         });
     };
     let settings = write_theme(name, &cli_actor()?)?;
@@ -69,11 +116,15 @@ pub fn sections(hide: &[String], show: &[String], json_output: bool) -> Result<S
 }
 
 pub(super) async fn get(Extension(viewer): Extension<Viewer>) -> Response {
-    match tokio::task::spawn_blocking(UserConfig::load).await {
-        Ok(Ok(config)) => Json(json!({
+    match tokio::task::spawn_blocking(|| {
+        Ok::<_, anyhow::Error>((UserConfig::load()?, themes::names()?))
+    })
+    .await
+    {
+        Ok(Ok((config, names))) => Json(json!({
             "theme": config.console.theme,
             "hidden_sections": config.console.hidden_sections,
-            "themes": console::theme_names(), "sections": console::SECTIONS,
+            "themes": names, "sections": console::SECTIONS,
             "csrf": viewer.csrf,
         }))
         .into_response(),
