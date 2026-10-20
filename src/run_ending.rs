@@ -990,7 +990,7 @@ mod tests {
             },
             true,
         );
-        recovery.add_continuation(
+        recovery.add_command_context(
             Continuation {
                 command:
                     "thirdshift https://github.com/acme/widgets/issues/21 --no-merge harness claude"

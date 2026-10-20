@@ -287,7 +287,7 @@ fn start<O: Outside>(
     if let Err(failed) = &mut outcome
         && let Some(recovery) = &mut failed.recovery
     {
-        recovery.add_continuation(
+        recovery.add_command_context(
             crate::recovery::Continuation {
                 command: crate::args::continuation(issue, asks, is_spec),
                 launch: outside.launch_path().to_path_buf(),

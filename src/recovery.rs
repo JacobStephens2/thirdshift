@@ -78,10 +78,9 @@ pub struct Recovery {
     stage: Stage,
     preservation: Preservation,
     worktree: Option<PathBuf>,
-    tickets: Option<TicketProgress>,
-    /// Whether the Spec review completed, independently of any later
-    /// delivery failure.
-    reviewed: bool,
+    /// Ticket progress, and whether the Spec review completed,
+    /// independently of any later delivery failure.
+    tickets: Option<(TicketProgress, bool)>,
     continuation: Option<Continuation>,
     /// Factory-reported retention facts from child Runs, including their paths.
     local_child_work: Vec<String>,
@@ -94,7 +93,6 @@ impl Recovery {
             preservation,
             worktree: None,
             tickets: None,
-            reviewed: false,
             continuation: None,
             local_child_work: Vec::new(),
         }
@@ -115,14 +113,14 @@ impl Recovery {
     /// Ticket and Spec review stages, and only if `all_accounted`: every
     /// Ticket was accounted for.
     pub fn add_tickets(&mut self, progress: TicketProgress, all_accounted: bool) {
-        self.tickets = Some(progress);
-        self.reviewed = !matches!(self.stage, Stage::Tickets | Stage::SpecReview) && all_accounted;
+        let reviewed = !matches!(self.stage, Stage::Tickets | Stage::SpecReview) && all_accounted;
+        self.tickets = Some((progress, reviewed));
     }
 
-    /// Add the public command `context`. A Continuation whose Issue branch
-    /// was already on origin, `on_origin`, keeps that work there even when
-    /// nothing more was preserved.
-    pub fn add_continuation(&mut self, context: Continuation, on_origin: bool) {
+    /// Add the public command `context` that continues or retries the Run.
+    /// A **Continuation**, whose Issue branch was already on origin,
+    /// `on_origin`, keeps that work there even when nothing more was preserved.
+    pub fn add_command_context(&mut self, context: Continuation, on_origin: bool) {
         if self.preservation == Preservation::None && on_origin {
             self.preservation = Preservation::Remote;
         }
@@ -137,12 +135,8 @@ impl Recovery {
     /// Literal lines shared by terminal, Activity and Run notification output.
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![format!("{STOPPED}{}", self.stage.name())];
-        if let Some(TicketProgress { landed, total }) = self.tickets {
-            let review = if self.reviewed {
-                "complete"
-            } else {
-                "incomplete"
-            };
+        if let Some((TicketProgress { landed, total }, reviewed)) = self.tickets {
+            let review = if reviewed { "complete" } else { "incomplete" };
             lines.push(format!(
                 "{PROGRESS}{landed}/{total} Tickets landed; final review {review}"
             ));
@@ -239,7 +233,7 @@ mod tests {
     #[test]
     fn a_continuation_with_nothing_pushed_reads_preserved_remotely() {
         let mut recovery = Recovery::new(Stage::Implementation, Preservation::None);
-        recovery.add_continuation(context(), true);
+        recovery.add_command_context(context(), true);
         assert_eq!(preserved(&recovery), "Preserved: remotely on issue-21");
         assert!(has(&recovery, CONTINUING));
         assert!(!has(&recovery, RETRY));
@@ -248,7 +242,7 @@ mod tests {
     #[test]
     fn a_fresh_run_with_nothing_pushed_reads_no_work_preserved() {
         let mut recovery = Recovery::new(Stage::Implementation, Preservation::None);
-        recovery.add_continuation(context(), false);
+        recovery.add_command_context(context(), false);
         assert_eq!(preserved(&recovery), "Preserved: no work preserved");
         assert!(has(&recovery, RETRY));
         assert!(!has(&recovery, CONTINUING));
@@ -280,7 +274,7 @@ mod tests {
     #[test]
     fn retained_work_from_two_layers_is_kept_in_order() {
         let mut recovery = Recovery::new(Stage::Ci, Preservation::Remote);
-        recovery.add_continuation(context(), false);
+        recovery.add_command_context(context(), false);
         recovery.add_child_work(["Ticket #22 kept at /kept/22".to_string()]);
         recovery.add_child_work(["Base fix #30 kept at /kept/30".to_string()]);
         let lines = recovery.lines();
@@ -301,7 +295,7 @@ mod tests {
     #[test]
     fn local_preservation_names_the_recorded_worktree_or_else_the_launch_directory() {
         let mut recovery = Recovery::new(Stage::Push, Preservation::Local);
-        recovery.add_continuation(context(), false);
+        recovery.add_command_context(context(), false);
         assert_eq!(
             preserved(&recovery),
             "Preserved: work may exist only locally on issue-21 at /launch; push was not confirmed"
