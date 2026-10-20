@@ -340,6 +340,8 @@ During a CI wait, `CI on <short sha>: 3 still running out of 4 checks listed so 
 
 CI check observations get at most three total attempts: the original read and two retries, with interruptible delays of one second then two seconds. Transport failures, HTTP 429 or 5xx responses, and truncated JSON can recover this way; known permanent errors and unclassified failures stop immediately with their diagnostics. This applies to the initial watch, pending-check polling, Base comparison and Check re-run reconciliation. Each retry reads the same repository and full commit again. Failed reads never count as passing or absent CI, never start a Repair, and never repeat a workflow re-run request. Progress lines retain each failure and delay; exhaustion reports all three attempts and their causes. Cancellation stops active reads and backoff without another request.
 
+Reads of `origin` by git, `git ls-remote` and `git fetch`, get the same three attempts with the same interruptible delays when git's error says the connection failed in transport: a dropped HTTP/2 stream or connection (`RPC failed; curl <n>`, `early EOF`, `the remote end hung up unexpectedly`, `Connection reset`), a timeout, a name lookup, a TLS read, or HTTP 429 or 5xx. Each retry prints a progress line with the command, its git error and the attempt, as in `git ls-remote --heads origin refs/heads/issue-7 refs/heads/issue-7-branch-* failed: error: RPC failed; curl 16 Error in the HTTP2 framing layer (attempt 1/3); retrying in 1s`. Authentication failures, a repository not found, a missing ref and any error not recognised fail at once, and a read that fails all three times fails with its last error. `git push` is never retried this way.
+
 The other commands:
 
 ```sh

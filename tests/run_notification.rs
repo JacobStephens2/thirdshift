@@ -1119,3 +1119,58 @@ fn delivery_failures_name_the_stopped_stage_in_terminal_and_notification() {
         assert_contains(text(&request), "Command log:");
     }
 }
+
+#[test]
+fn a_dropped_stream_while_selecting_the_issue_branch_is_retried_without_a_failure() {
+    let scenario = Scenario::new();
+    scenario.agent_does(AGENT_OPENS_PR);
+    // Origin drops the first connection, as an HTTP/2 stream can.
+    let connections = scenario.path("connections");
+    let upload_pack = scenario.path("upload-pack");
+    std::fs::write(
+        &upload_pack,
+        format!(
+            "#!/bin/sh\n\
+             if [ ! -e '{0}' ]; then\n\
+             touch '{0}'\n\
+             printf '%s\\n' 'error: RPC failed; curl 16 Error in the HTTP2 framing layer' \
+             'fatal: expected flush after ref listing' >&2\n\
+             exit 128\n\
+             fi\n\
+             exec git upload-pack \"$@\"\n",
+            connections.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&upload_pack, std::fs::Permissions::from_mode(0o755)).unwrap();
+    scenario.launch_git(&[
+        "config",
+        "remote.origin.uploadpack",
+        &upload_pack.display().to_string(),
+    ]);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[&scenario.issue_url(7), "email", "me@example.com"],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains(
+            "git ls-remote --heads origin refs/heads/issue-7 refs/heads/issue-7-branch-* failed: \
+             error: RPC failed; curl 16 Error in the HTTP2 framing layer (attempt 1/3); retrying in 1s"
+        ),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls()[0]["branch"], "issue-7");
+    let request = the_one_request(&resend);
+    assert!(
+        text(&request).starts_with("Result:       ready for review\n"),
+        "{}",
+        text(&request)
+    );
+}
