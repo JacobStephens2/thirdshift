@@ -25,6 +25,11 @@ pub enum Command {
     Console {
         no_sign_in: bool,
     },
+    ConsolePassword(Option<String>),
+    ConsoleSignOut(Option<String>),
+    ConsoleLog {
+        json: bool,
+    },
     Status {
         json: bool,
         all: bool,
@@ -251,7 +256,24 @@ pub fn parse(args: &[String]) -> Result<Command> {
             return match &args[1..] {
                 [] => Ok(Command::Console { no_sign_in: false }),
                 [flag] if flag == "--no-sign-in" => Ok(Command::Console { no_sign_in: true }),
-                _ => bail!("usage: thirdshift console [--no-sign-in]"),
+                [action] if action == "password" => Ok(Command::ConsolePassword(None)),
+                [action] if action == "sign-out" => Ok(Command::ConsoleSignOut(None)),
+                [action, flag, email] if flag == "--email" && !email.starts_with('-') => {
+                    match action.as_str() {
+                        "password" => Ok(Command::ConsolePassword(Some(email.clone()))),
+                        "sign-out" => Ok(Command::ConsoleSignOut(Some(email.clone()))),
+                        _ => {
+                            bail!("usage: thirdshift console password|sign-out [--email <address>]")
+                        }
+                    }
+                }
+                [action] if action == "log" => Ok(Command::ConsoleLog { json: false }),
+                [action, flag] if action == "log" && flag == "--json" => {
+                    Ok(Command::ConsoleLog { json: true })
+                }
+                _ => bail!(
+                    "usage: thirdshift console [--no-sign-in] | password|sign-out [--email <address>] | log [--json]"
+                ),
             };
         }
         Some("stop") => {

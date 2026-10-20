@@ -1,0 +1,7 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Console log · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"></head>
+<body><header><p class="brand">thirdshift / Console</p><nav aria-label="Pages"><a href="/">Inbox</a><a href="/account">Account</a></nav></header><main>
+<div class="page-title"><h1>Console log</h1><code>thirdshift console log</code></div>
+<ul class="log-list">{% for event in events %}<li>{{ event.time }} · {{ event.email }} · {{ event.event }}</li>{% endfor %}</ul>
+{% if events.is_empty() %}<p>No account events.</p>{% endif %}
+</main></body></html>

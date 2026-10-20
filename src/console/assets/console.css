@@ -59,6 +59,10 @@ aside { font-size: 12px; }
 #log-content article, #log-content > pre, .thinking, .tool-group { padding: 8px 12px; border: 1px solid var(--rule); margin: 8px 0; border-radius: var(--radius); }
 #log-content h3 { font-size: 14px; }
 .diff { border-left: 3px solid var(--look); padding-left: 10px; }
+form { max-width: 420px; margin: 20px 0; }
+form label { display: block; margin: 12px 0; }
+form input:not([type="hidden"]), form button { display: block; width: 100%; padding: 10px; margin-top: 6px; font: inherit; background: var(--panel); color: var(--text); border: 1px solid var(--rule); border-radius: var(--radius); }
+form button { cursor: pointer; font-weight: var(--head-weight); }
 @media (max-width: 500px) {
   body { padding: 14px 12px; }
   .issue-title { flex-basis: 100%; order: 1; }

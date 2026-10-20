@@ -6,6 +6,7 @@ use serde::Deserialize;
 #[serde(default, deny_unknown_fields)]
 pub struct ConsoleSettings {
     pub port: u16,
+    pub allowed_emails: Vec<String>,
     pub other_consoles: Vec<String>,
     pub theme: String,
 }
@@ -14,6 +15,7 @@ impl Default for ConsoleSettings {
     fn default() -> Self {
         Self {
             port: 8711,
+            allowed_emails: Vec::new(),
             other_consoles: Vec::new(),
             theme: "focus-auto".into(),
         }
@@ -22,6 +24,12 @@ impl Default for ConsoleSettings {
 
 impl ConsoleSettings {
     pub(super) fn validate(&self) -> Result<()> {
+        for email in &self.allowed_emails {
+            ensure!(
+                email.contains('@') && !email.chars().any(char::is_whitespace),
+                "console.allowed_emails must contain email addresses"
+            );
+        }
         ensure!(
             matches!(
                 self.theme.as_str(),

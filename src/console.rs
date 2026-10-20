@@ -1,5 +1,9 @@
 //! The machine's Console. Async execution is confined to this module.
+mod account_commands;
+mod accounts;
+mod auth;
 mod conversation;
+pub use account_commands::{password, print_log, sign_out};
 mod logs;
 mod restart;
 
@@ -9,10 +13,11 @@ use std::net::Ipv4Addr;
 use anyhow::{Context, Result, ensure};
 use askama::Template;
 use axum::Router;
-use axum::extract::Path;
-use axum::http::{StatusCode, header};
+use axum::extract::{DefaultBodyLimit, Path};
+use axum::http::{Method, StatusCode, header};
+use axum::middleware;
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use include_dir::{Dir, include_dir};
 
 use crate::config::UserConfig;
@@ -25,37 +30,73 @@ static ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/console/assets");
 struct PageRoute {
     path: &'static str,
     cli: &'static str,
+    method: Method,
 }
 
 const PAGES: &[PageRoute] = &[
     PageRoute {
         path: "/",
         cli: "thirdshift status",
+        method: Method::GET,
     },
     PageRoute {
         path: "/logs",
         cli: "thirdshift logs --json",
+        method: Method::GET,
     },
     PageRoute {
         path: "/logs/command/{id}",
         cli: "thirdshift logs --command id --json",
+        method: Method::GET,
     },
     PageRoute {
         path: "/logs/{id}",
         cli: "thirdshift logs --file id",
+        method: Method::GET,
     },
     PageRoute {
         path: "/logs/{id}/stream/{offset}",
         cli: "thirdshift logs --file id --follow",
+        method: Method::GET,
+    },
+    PageRoute {
+        path: "/console-log",
+        cli: "thirdshift console log",
+        method: Method::GET,
+    },
+    PageRoute {
+        path: "/account",
+        cli: "thirdshift console sign-out",
+        method: Method::GET,
+    },
+    PageRoute {
+        path: "/sign-out",
+        cli: "thirdshift console sign-out",
+        method: Method::POST,
+    },
+    // CLI account access is authorized by the terminal's Unix account. HTTP
+    // establishes that access with the password set by this paired command.
+    PageRoute {
+        path: "/sign-in",
+        cli: "thirdshift console password",
+        method: Method::GET,
+    },
+    PageRoute {
+        path: "/sign-in",
+        cli: "thirdshift console password",
+        method: Method::POST,
     },
 ];
 
 pub fn serve(no_sign_in: bool) -> Result<()> {
-    ensure!(
-        no_sign_in,
-        "Console sign-in is not available yet; use thirdshift console --no-sign-in on localhost"
-    );
     let config = UserConfig::load()?;
+    ensure!(
+        no_sign_in || !config.console.allowed_emails.is_empty(),
+        "console.allowed_emails is empty; configure allowed addresses or use --no-sign-in on localhost"
+    );
+    if !no_sign_in {
+        accounts::Accounts::load()?;
+    }
     let executable = restart::Executable::current()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -69,9 +110,27 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         let watched = executable.clone();
         axum::serve(
             listener,
-            router().layer(axum::Extension(executable.clone())),
+            router(no_sign_in).layer(axum::Extension(executable.clone())),
         )
-        .with_graceful_shutdown(async move { watched.replaced().await })
+        .with_graceful_shutdown(async move {
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                if watched.changed() {
+                    return;
+                }
+                // Revoke removed accounts even when nobody makes a request,
+                // so re-adding an address cannot revive its old sessions.
+                if !no_sign_in {
+                    match tokio::task::spawn_blocking(|| accounts::Accounts::load().map(drop)).await
+                    {
+                        Ok(Ok(())) => {}
+                        error => {
+                            eprintln!("thirdshift Console: can't reconcile allowlist: {error:?}")
+                        }
+                    }
+                }
+            }
+        })
         .await
         .context("Console server failed")?;
         Ok::<_, anyhow::Error>(())
@@ -81,22 +140,32 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
     executable.exec()
 }
 
-fn router() -> Router {
+fn router(no_sign_in: bool) -> Router {
     let mut router = Router::new();
     for page in PAGES {
         let cli = page.cli;
-        let handler = match page.path {
-            "/" => get(move || inbox(cli)),
-            "/logs" => get(logs::index),
-            "/logs/command/{id}" => get(logs::command),
-            "/logs/{id}" => get(logs::reader),
-            "/logs/{id}/stream/{offset}" => get(logs::stream),
+        let handler = match (page.path, page.method.clone()) {
+            ("/", Method::GET) => get(move || inbox(cli)),
+            ("/logs", Method::GET) => get(logs::index),
+            ("/logs/command/{id}", Method::GET) => get(logs::command),
+            ("/logs/{id}", Method::GET) => get(logs::reader),
+            ("/logs/{id}/stream/{offset}", Method::GET) => get(logs::stream),
+            ("/console-log", Method::GET) => get(auth::log),
+            ("/account", Method::GET) => get(auth::account),
+            ("/sign-out", Method::POST) => post(auth::sign_out),
+            ("/sign-in", Method::GET) => get(auth::sign_in_page),
+            ("/sign-in", Method::POST) => post(auth::sign_in),
             _ => unreachable!("unknown Console page"),
         };
         router = router.route(page.path, handler);
     }
     router = router.route("/assets/{*path}", get(asset));
+    let access = auth::Access::new(no_sign_in);
     router
+        .layer(DefaultBodyLimit::max(16 * 1024))
+        .layer(middleware::from_fn_with_state(access.clone(), auth::guard))
+        .layer(axum::Extension(access))
+        .layer(middleware::from_fn(auth::headers))
 }
 
 #[derive(Template)]
@@ -147,14 +216,14 @@ async fn inbox(cli: &'static str) -> Response {
 
 fn page(result: std::result::Result<Result<String>, tokio::task::JoinError>) -> Response {
     match result {
-        Ok(Ok(html)) => (
-            [(header::CONTENT_SECURITY_POLICY, "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"),
-             (header::CACHE_CONTROL, "no-store"),
-             (header::X_CONTENT_TYPE_OPTIONS, "nosniff")], Html(html)
-        ).into_response(),
+        Ok(Ok(html)) => Html(html).into_response(),
         error => {
             eprintln!("thirdshift Console: can't read page: {error:?}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "Can't read this page; check the Console's stderr.").into_response()
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Can't read this page; check the Console's stderr.",
+            )
+                .into_response()
         }
     }
 }
@@ -214,7 +283,23 @@ mod tests {
         // Measure the GET registration footprint through axum's public layer
         // interface, so this does not depend on its implicit HEAD/fallback count.
         let get_methods = registered_methods(Router::new().route("/known", get(|| async {})));
-        let expected = (super::PAGES.len() + 1) * get_methods; // one static-resource route
+        let post_methods =
+            registered_methods(Router::new().route("/known", axum::routing::post(|| async {})));
+        // Each unique path has one fallback; merging GET and POST at sign-in
+        // adds only the POST service, not another fallback service.
+        let fallback = 1;
+        let expected = super::PAGES
+            .iter()
+            .map(|page| {
+                if page.method == axum::http::Method::GET {
+                    get_methods
+                } else {
+                    post_methods
+                }
+            })
+            .sum::<usize>()
+            + get_methods
+            - fallback;
         assert_eq!(
             registered_methods(router),
             expected,
@@ -243,14 +328,14 @@ mod tests {
 
     #[test]
     fn every_console_route_has_a_cli_equivalent() {
-        assert_cli_parity(super::router());
+        assert_cli_parity(super::router(false));
     }
 
     #[test]
     #[should_panic(expected = "registered routes must all have a CLI pair")]
     fn parity_rejects_a_route_registered_without_a_cli_pair() {
         assert_cli_parity(
-            super::router().route("/unpaired", get(|| async { "page with no CLI pair" })),
+            super::router(false).route("/unpaired", get(|| async { "page with no CLI pair" })),
         );
     }
 }

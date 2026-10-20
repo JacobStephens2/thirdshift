@@ -15,16 +15,43 @@ npm test
 home folder and a free localhost port, and closes its own server and browser.
 Node and npm are test tools only; the release build embeds its assets.
 
-To open your machine's Inbox, run `thirdshift console --no-sign-in` and visit
-the localhost address printed on stdout. Without `--no-sign-in` the command
-refuses to serve until the sign-in Ticket ships. In `~/.thirdshift/config.toml`:
+To open your machine's Inbox locally without accounts, run
+`thirdshift console --no-sign-in` and visit the localhost address printed on
+stdout. To require sign-in, set the allowlist in `~/.thirdshift/config.toml`:
 
 ```toml
 [console]
 port = 8711
+allowed_emails = ["you@example.com"]
 other_consoles = ["https://console.example.test"]
 theme = "focus-auto" # also focus-light or focus-dark
 ```
+
+Run `thirdshift console password --email you@example.com` in a terminal to set
+the password, then `thirdshift console`. Password entry is hidden and asks
+twice. With exactly one allowed address, `--email` can be omitted. An empty
+allowlist refuses to serve unless `--no-sign-in` is explicit. Both modes bind
+only to 127.0.0.1. Use HTTPS at the machine's reverse proxy for sign-in: cookies
+are always Secure, HttpOnly and SameSite=Strict (localhost is suitable for tests).
+
+Accounts live in `~/.thirdshift/console-accounts.json`, beside the Credentials,
+with owner-only permissions. Passwords use argon2id; only hashes of session
+tokens are stored. Changes use a file lock and atomic replace, including across
+CLI and server processes. Sessions survive restarts and expire 30 days after
+last use. Every action, including sign-in and sign-out, requires a CSRF token.
+After five wrong passwords, an address gets one attempt per minute until a
+successful sign-in or a new password resets the slowdown.
+
+The Account page signs out the current browser. `thirdshift console sign-out
+[--email <address>]` ends every session for that address; setting a new password
+also ends all its sessions. Removing an address from `allowed_emails` blocks
+it and revokes its sessions, while retaining the password for later re-adding.
+The server checks current settings on requests and while streams remain open.
+
+`thirdshift console log [--json]` and the Console log page show the same
+account events from `~/.thirdshift/console.log`. They name the account but
+never contain passwords, session tokens or page views. Email account creation
+and password reset are a later Ticket; ask the owner to use the password command.
 
 The header names this machine and links to those addresses, without fetching
 them. The first page pairs with `thirdshift status`. A refresh reads the current

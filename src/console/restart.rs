@@ -1,6 +1,6 @@
 //! Watch the installed path, rather than /proc's possibly unlinked executable.
 use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 
@@ -23,15 +23,6 @@ impl Executable {
         let path = std::env::current_exe().context("can't locate the Console binary")?;
         let identity = identity(&path)?;
         Ok(Self { path, identity })
-    }
-
-    pub async fn replaced(&self) {
-        loop {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            if self.changed() {
-                return;
-            }
-        }
     }
 
     pub fn changed(&self) -> bool {
