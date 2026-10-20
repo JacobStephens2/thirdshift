@@ -224,10 +224,14 @@ fn cli_and_allowlist_changes_revoke_http_sessions_without_deleting_the_account()
     );
     assert_eq!(get(&console, "/", &first).status(), 303);
     assert_eq!(get(&console, "/", &second).status(), 200);
-    assert!(
-        cli(home.path(), &["console", "sign-out", "--email", EMAIL])
-            .status
-            .success()
+    let signed_out = cli(
+        home.path(),
+        &["console", "sign-out", "--email", EMAIL, "--json"],
+    );
+    assert!(signed_out.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&signed_out.stdout).unwrap(),
+        json!({"email": EMAIL, "signed_out": true})
     );
     assert_eq!(get(&console, "/", &second).status(), 303);
     let third = cookie(&sign_in(&console, EMAIL, PASSWORD));

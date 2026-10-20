@@ -43,7 +43,7 @@ After five wrong passwords, an address gets one attempt per minute until a
 successful sign-in or a new password resets the slowdown.
 
 The Account page signs out the current browser. `thirdshift console sign-out
-[--email <address>]` ends every session for that address; setting a new password
+[--email <address>] [--json]` ends every session for that address; setting a new password
 also ends all its sessions. Removing an address from `allowed_emails` blocks
 it and revokes its sessions, while retaining the password for later re-adding.
 The server checks current settings on requests and while streams remain open.

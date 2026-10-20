@@ -43,10 +43,18 @@ fn prompt(prompt: &str) -> Result<String> {
     Ok(answer)
 }
 
-pub fn sign_out(given: Option<&str>) -> Result<String> {
+pub fn sign_out(given: Option<&str>, json: bool) -> Result<()> {
     let email = email(given)?;
     Accounts::load()?.sign_out(&email, None)?;
-    Ok(format!("Signed out {email}."))
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({ "email": email, "signed_out": true })
+        );
+    } else {
+        println!("Signed out {email}.");
+    }
+    Ok(())
 }
 
 pub fn print_log(json: bool) -> Result<()> {

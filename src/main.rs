@@ -80,7 +80,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift status [--all] [--json]             List this machine's Commands
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
        thirdshift console password [--email <address>]  Set a Console password privately
-       thirdshift console sign-out [--email <address>]  End an account's sessions
+       thirdshift console sign-out [--email <address>] [--json]  End an account's sessions
        thirdshift console log [--json]                Read this machine's Console log
        thirdshift show <command> [--json]             Show one Command in full
        thirdshift stop <command> [--requeue]          Stop a live Command and wait for cleanup
@@ -140,7 +140,12 @@ fn main() -> ExitCode {
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
         Ok(Command::ConsolePassword(email)) => return outcome(console::password(email.as_deref())),
-        Ok(Command::ConsoleSignOut(email)) => return outcome(console::sign_out(email.as_deref())),
+        Ok(Command::ConsoleSignOut { email, json }) => {
+            return match console::sign_out(email.as_deref(), json) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
         Ok(Command::ConsoleLog { json }) => {
             return match console::print_log(json) {
                 Ok(()) => ExitCode::SUCCESS,

@@ -25,10 +25,32 @@ struct Account {
 }
 
 #[derive(Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum EventKind {
+    SignIn,
+    FailedSignIn,
+    PasswordSet,
+    SignOut,
+    BlockedAddress,
+}
+
+impl std::fmt::Display for EventKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::SignIn => "sign-in",
+            Self::FailedSignIn => "failed-sign-in",
+            Self::PasswordSet => "password-set",
+            Self::SignOut => "sign-out",
+            Self::BlockedAddress => "blocked-address",
+        })
+    }
+}
+
+#[derive(Deserialize, Serialize)]
 pub(super) struct Event {
     pub time: i64,
     pub email: String,
-    pub event: String,
+    pub event: EventKind,
 }
 
 pub(super) enum SignIn {
@@ -93,7 +115,7 @@ impl Accounts {
             store.save()?;
         }
         for email in blocked {
-            store.record(&email, "blocked-address")?;
+            store.record(&email, EventKind::BlockedAddress)?;
         }
         Ok(store)
     }
@@ -117,12 +139,12 @@ impl Accounts {
             },
         );
         self.save()?;
-        self.record(email, "password-set")
+        self.record(email, EventKind::PasswordSet)
     }
 
     pub fn sign_in(&mut self, email: &str, password: &str) -> Result<SignIn> {
         if !self.allowed.iter().any(|allowed| allowed == email) {
-            self.record(email, "blocked-address")?;
+            self.record(email, EventKind::BlockedAddress)?;
             return Ok(SignIn::Refused);
         }
         if self
@@ -130,7 +152,7 @@ impl Accounts {
             .get(email)
             .is_some_and(|account| self.now < account.next_attempt)
         {
-            self.record(email, "failed-sign-in")?;
+            self.record(email, EventKind::FailedSignIn)?;
             return Ok(SignIn::Slowdown);
         }
         let valid = self.accounts.get(email).is_some_and(|account| {
@@ -148,7 +170,7 @@ impl Accounts {
                 }
                 self.save()?;
             }
-            self.record(email, "failed-sign-in")?;
+            self.record(email, EventKind::FailedSignIn)?;
             return Ok(SignIn::Refused);
         }
         let token = random_token();
@@ -157,7 +179,7 @@ impl Accounts {
         account.next_attempt = 0;
         account.sessions.insert(digest(&token), self.now);
         self.save()?;
-        self.record(email, "sign-in")?;
+        self.record(email, EventKind::SignIn)?;
         Ok(SignIn::SignedIn(token))
     }
 
@@ -190,7 +212,7 @@ impl Accounts {
             }
             self.save()?;
         }
-        self.record(email, "sign-out")
+        self.record(email, EventKind::SignOut)
     }
 
     pub fn events(&self) -> Result<Vec<Event>> {
@@ -212,14 +234,14 @@ impl Accounts {
         Ok(())
     }
 
-    fn record(&self, email: &str, event: &str) -> Result<()> {
+    fn record(&self, email: &str, event: EventKind) -> Result<()> {
         let mut file = private_file(&self.root.join("console.log"))?;
         serde_json::to_writer(
             &mut file,
             &Event {
                 time: self.now,
                 email: email.into(),
-                event: event.into(),
+                event,
             },
         )?;
         file.write_all(b"\n")?;
