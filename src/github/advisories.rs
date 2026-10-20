@@ -2,7 +2,7 @@
 //! private repositories whose advisory endpoint is unavailable use issues.
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{GitHub, check_read};
@@ -263,7 +263,7 @@ pub struct SecurityRecord {
 }
 
 /// Only the metadata allowed in a Run notification; no private write-up.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RecordedFinding {
     pub severity: Option<String>,
     pub title: String,

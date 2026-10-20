@@ -1,0 +1,7 @@
+<section aria-label="Command details">
+  <h2>Command details</h2>
+  <code>{{ cli }}</code>
+  <p><a href="{{ crate::logs::status::inspect::url("/log", command, None) }}">Full Command log</a></p>
+  {% for log in logs %}<p><a href="{{ log.url }}">Session log: {{ log.name }}</a></p>{% endfor %}
+  <dl>{% for fact in facts %}{{ self.fact(fact)|safe }}{% endfor %}</dl>
+</section>

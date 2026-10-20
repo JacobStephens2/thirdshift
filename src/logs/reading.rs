@@ -32,6 +32,10 @@ pub(super) struct Snapshot {
 }
 
 impl Snapshot {
+    pub(super) fn entries(&self) -> &[Entry] {
+        &self.commands
+    }
+
     pub(super) fn load(root: &Path, now: DateTime<Local>) -> Result<Self> {
         Self::load_with_silence(root, now, std::time::Duration::from_secs(10 * 60))
     }
