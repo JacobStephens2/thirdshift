@@ -17,7 +17,7 @@ use toml_edit::{DocumentMut, Item};
 use crate::harness::{self, Harness, ModelAndEffort};
 
 mod console;
-pub use console::ConsoleSettings;
+pub use console::{ConsoleAccess, ConsoleSettings};
 
 /// The settings a User config can hold. Each is what a Run does when its
 /// command says nothing about it.
@@ -289,6 +289,8 @@ pub struct UserConfigDocument {
 /// The Setup settings to change. Other settings keep their current values.
 /// Credentials and the decision to send a test email stay with Setup.
 pub struct UserConfigChanges {
+    /// None retains all Console settings.
+    pub console: Option<ConsoleAccess>,
     pub merge_always: bool,
     pub base_fix: bool,
     pub launch_pull: bool,
@@ -340,6 +342,18 @@ impl UserConfigDocument {
     pub fn render(self, changes: Option<UserConfigChanges>) -> String {
         let mut document = self.document;
         if let Some(changes) = changes {
+            if let Some(console) = changes.console {
+                set(
+                    &mut document,
+                    "console",
+                    "address",
+                    console.address.as_str(),
+                );
+                if console.allowed_emails != self.settings.console.allowed_emails {
+                    let emails: toml_edit::Array = console.allowed_emails.iter().collect();
+                    set(&mut document, "console", "allowed_emails", emails);
+                }
+            }
             set(&mut document, "merge", "always", changes.merge_always);
             set(&mut document, "base", "fix", changes.base_fix);
             set(&mut document, "launch", "pull", changes.launch_pull);
@@ -1365,6 +1379,7 @@ mod tests {
         assert_eq!(current.logs_dir, home.join(".thirdshift/logs"));
 
         let text = document.render(Some(UserConfigChanges {
+            console: None,
             merge_always: true,
             base_fix: true,
             launch_pull: true,
@@ -1519,6 +1534,7 @@ mod tests {
 
     fn notifications_to(to: &str) -> UserConfigChanges {
         UserConfigChanges {
+            console: None,
             harness: None,
             merge_always: false,
             base_fix: false,
@@ -1614,6 +1630,7 @@ mod tests {
         let text = "# top\n[merge]\n# before\nalways = false   # merge\n# after\n\n\
                     [harness.codex]\nmodel = 'old'       # model\neffort = 'high'      # effort\n";
         let changes = UserConfigChanges {
+            console: None,
             merge_always: true,
             base_fix: false,
             launch_pull: false,
@@ -1659,6 +1676,7 @@ mod tests {
         ] {
             let before = parse(text).unwrap();
             let changes = UserConfigChanges {
+                console: None,
                 merge_always: true,
                 base_fix: true,
                 launch_pull: true,
@@ -1745,6 +1763,7 @@ mod tests {
         }
         let before = parse(&text).unwrap();
         let changes = UserConfigChanges {
+            console: None,
             merge_always: true,
             base_fix: false,
             launch_pull: true,

@@ -12,6 +12,9 @@
 
 pub(crate) mod questions;
 
+#[cfg(test)]
+mod console_tests;
+
 use crate::terminal::EchoOff;
 use std::io::{IsTerminal, Write};
 use std::path::Path;
@@ -105,6 +108,7 @@ fn run_setup(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<Str
     let Some(answers) = &answered else {
         return Ok(written);
     };
+    offer_console_install(outside, answers);
     if let Some(key) = answers.key() {
         outside.step(written);
         written = outside.save_key(key)?;
@@ -139,6 +143,7 @@ fn run_offer(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<()>
         return Ok(());
     };
     outside.step(format!("wrote the User config {}", path.display()));
+    offer_console_install(outside, answers);
     if let Some(key) = answers.key() {
         match outside.save_key(key) {
             Ok(wrote) => outside.step(wrote),
@@ -164,6 +169,14 @@ fn ask_if(
     outside: &mut impl Outside,
     document: UserConfigDocument,
 ) -> Result<(String, Option<Answers>)> {
+    let settings = document.settings();
+    let waiting = settings.effective_waiting_line_interval();
+    if waiting != settings.waiting_line_interval {
+        outside.say(format!(
+            "warning: logs.waiting_line_minutes must be less than inbox.silent_minutes; using half the silent time ({} sec) for waiting lines",
+            waiting.as_secs()
+        ));
+    }
     let answers = if asking {
         let found = outside.find_key()?;
         Some(questions::ask(outside, document.settings(), found)?)
@@ -172,6 +185,13 @@ fn ask_if(
     };
     let changes = answers.as_ref().map(Answers::changes);
     Ok((document.render(changes), answers))
+}
+
+/// Installation is an owner-run command that prints the script for sudo.
+fn offer_console_install(outside: &mut impl Outside, answers: &Answers) {
+    if answers.console.is_some() {
+        outside.say("To install the Console, run `thirdshift console install`; it prints a script to run with sudo.".into());
+    }
 }
 
 /// Write `text` as the User config at `path`, where there is none yet.
@@ -639,6 +659,7 @@ mod tests {
     const SECURITY_REVIEW: &str = "Runs review their change for Security findings?";
     const SECURITY_FIX: &str = "Security runs may fix reproduced findings?";
     const NOTIFY: &str = "Run notifications, an email";
+    const CONSOLE: &str = "Run the Console?";
     const TO: &str = "Send Run notifications to";
     const FROM: &str = "Send them from";
     const TEST_EMAIL: &str = "Send a test email now? [y/N] ";
@@ -652,12 +673,13 @@ mod tests {
     const KEY: &str = "re_secret_123";
 
     /// The answers that take every default and turn nothing on.
-    const ENTER_THROUGHOUT: [(&str, &str); 5] = [
+    const ENTER_THROUGHOUT: [(&str, &str); 6] = [
         (MERGE, ""),
         (PULL, ""),
         (SECURITY_FIX, ""),
         (SECURITY_REVIEW, ""),
         (NOTIFY, ""),
+        (CONSOLE, ""),
     ];
 
     /// The answers that turn Run notifications on, to `me@example.com` from
@@ -718,6 +740,84 @@ mod tests {
     }
 
     // What Setup writes.
+
+    #[test]
+    fn setup_warns_when_waiting_lines_could_read_as_silent() {
+        for terminal in [false, true] {
+            for (waiting, warns) in [(1, false), (2, true), (3, true)] {
+                let mut outside = Scripted {
+                    terminal,
+                    user_config: Some(format!(
+                        "[logs]\nwaiting_line_minutes = {waiting}\n[inbox]\nsilent_minutes = 2\n"
+                    )),
+                    ..Scripted::answering(if terminal { &ENTER_THROUGHOUT } else { &[] })
+                };
+                setup(&mut outside).unwrap();
+                let warning = outside.said().join("\n");
+                assert_eq!(
+                    warning.contains(
+                        "logs.waiting_line_minutes must be less than inbox.silent_minutes"
+                    ),
+                    warns,
+                    "{warning}"
+                );
+                if warns {
+                    assert!(
+                        warning.contains("using half the silent time (60 sec)"),
+                        "{warning}"
+                    );
+                }
+                assert_eq!(
+                    table(&outside)["logs"]["waiting_line_minutes"].as_integer(),
+                    Some(waiting)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn console_answers_are_written_with_comments_and_install_is_offered() {
+        let mut answers = ENTER_THROUGHOUT[..5].to_vec();
+        answers.extend([
+            ("Run the Console?", "y"),
+            ("Console's whole address", "https://thirdshift.example.com"),
+            ("Allowed emails", "me@example.com, other@example.net"),
+        ]);
+        let mut outside = Scripted {
+            user_config: Some("[console] # my Console\naddress = '' # site\nallowed_emails = [] # people\nport = 9000 # local\n".into()),
+            ..Scripted::answering(&answers)
+        };
+
+        setup(&mut outside).unwrap();
+
+        let config = table(&outside);
+        assert_eq!(
+            config["console"]["address"].as_str(),
+            Some("https://thirdshift.example.com")
+        );
+        assert_eq!(
+            config["console"]["allowed_emails"].as_array().unwrap(),
+            &[
+                toml::Value::from("me@example.com"),
+                toml::Value::from("other@example.net")
+            ]
+        );
+        let text = outside.user_config.as_deref().unwrap();
+        for comment in [
+            "[console] # my Console",
+            "# site",
+            "# people",
+            "port = 9000 # local",
+        ] {
+            assert!(text.contains(comment), "{text}");
+        }
+        assert!(
+            outside
+                .said()
+                .iter()
+                .any(|line| line.contains("thirdshift console install"))
+        );
+    }
 
     #[test]
     fn the_harness_interaction_receives_every_current_setting_once_before_other_questions() {
@@ -971,6 +1071,7 @@ to = \"me@example.com\"  # my inbox
                 "Security runs may fix reproduced findings? [y/N] ",
                 "Runs review their change for Security findings? [y/N] ",
                 "Run notifications, an email as each Run ends? [y/N] ",
+                "Run the Console? [y/N] ",
             ]
         );
     }
@@ -989,6 +1090,7 @@ to = \"me@example.com\"  # my inbox
                 (TO, "me@example.com"),
                 (FROM, "ts@acme.dev"),
                 (TEST_EMAIL, ""),
+                (CONSOLE, "n"),
             ])
         };
 
@@ -1112,6 +1214,7 @@ effort = \"\"
                 (TO, ""),
                 (FROM, ""),
                 (TEST_EMAIL, ""),
+                (CONSOLE, "n"),
             ])
         };
 
@@ -1134,6 +1237,7 @@ effort = \"\"
                 "Send Run notifications to [mine@example.net]: ",
                 "Send them from [ts@acme.dev]: ",
                 "Send a test email now? [y/N] ",
+                "Run the Console? [y/N] ",
             ]
         );
     }
@@ -1148,6 +1252,7 @@ effort = \"\"
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
+                (CONSOLE, "n"),
             ])
         };
 
@@ -1185,6 +1290,7 @@ always = false # quiet, please
                 (TO, "me@example.com"),
                 (FROM, ""),
                 (KEY_PROMPT, ""),
+                (CONSOLE, "n"),
             ])
         };
 
@@ -1205,8 +1311,11 @@ always = false # quiet, please
 
     #[test]
     fn the_credentials_are_saved_after_the_user_config_and_the_test_email_goes_last() {
-        let mut outside =
-            Scripted::answering(&notifications_on(&[(KEY_PROMPT, KEY), (TEST_EMAIL, "y")]));
+        let mut outside = Scripted::answering(&notifications_on(&[
+            (KEY_PROMPT, KEY),
+            (TEST_EMAIL, "y"),
+            (CONSOLE, "n"),
+        ]));
 
         let done = setup(&mut outside).unwrap();
 
@@ -1228,8 +1337,11 @@ always = false # quiet, please
 
     #[test]
     fn an_entered_key_alone_ends_with_the_line_saying_where_it_was_saved() {
-        let mut outside =
-            Scripted::answering(&notifications_on(&[(KEY_PROMPT, KEY), (TEST_EMAIL, "n")]));
+        let mut outside = Scripted::answering(&notifications_on(&[
+            (KEY_PROMPT, KEY),
+            (TEST_EMAIL, "n"),
+            (CONSOLE, "n"),
+        ]));
 
         let done = setup(&mut outside).unwrap();
 
@@ -1289,6 +1401,7 @@ always = false # quiet, please
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
+                (CONSOLE, "n"),
             ]);
 
             setup(&mut outside).unwrap();
@@ -1315,6 +1428,7 @@ always = false # quiet, please
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
+                (CONSOLE, "n"),
             ]);
 
             setup(&mut outside).unwrap();
@@ -1336,6 +1450,7 @@ always = false # quiet, please
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
+                (CONSOLE, "n"),
             ])
         };
 
@@ -1362,6 +1477,7 @@ always = false # quiet, please
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
+                (CONSOLE, "n"),
             ])
         };
 
@@ -1382,6 +1498,7 @@ always = false # quiet, please
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
+            (CONSOLE, "n"),
         ]);
 
         setup(&mut outside).unwrap();
@@ -1402,6 +1519,7 @@ always = false # quiet, please
             (TO, "me@example.com"),
             (FROM, ""),
             (KEY_PROMPT, ""),
+            (CONSOLE, "n"),
         ]);
 
         setup(&mut outside).unwrap();
@@ -1430,6 +1548,7 @@ always = false # quiet, please
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, "n"),
+                (CONSOLE, "n"),
             ])
         };
 
@@ -1448,7 +1567,8 @@ always = false # quiet, please
     #[test]
     fn with_no_key_anywhere_skipping_it_saves_nothing_offers_no_test_email_and_says_how_to_add_one()
     {
-        let mut outside = Scripted::answering(&notifications_on(&[(KEY_PROMPT, "")]));
+        let mut outside =
+            Scripted::answering(&notifications_on(&[(KEY_PROMPT, ""), (CONSOLE, "n")]));
 
         let done = setup(&mut outside).unwrap();
 
@@ -1465,6 +1585,7 @@ always = false # quiet, please
             (KEY_PROMPT, "sk_not_resend"),
             (KEY_PROMPT, KEY),
             (TEST_EMAIL, ""),
+            (CONSOLE, "n"),
         ]));
 
         setup(&mut outside).unwrap();
@@ -1491,7 +1612,11 @@ always = false # quiet, please
     fn with_a_saved_key_pressing_enter_keeps_it() {
         let mut outside = Scripted {
             key: Ok(Some(Source::Credentials(CREDENTIALS.into()))),
-            ..Scripted::answering(&notifications_on(&[(KEPT, ""), (TEST_EMAIL, "")]))
+            ..Scripted::answering(&notifications_on(&[
+                (KEPT, ""),
+                (TEST_EMAIL, ""),
+                (CONSOLE, "n"),
+            ]))
         };
 
         setup(&mut outside).unwrap();
@@ -1509,7 +1634,11 @@ always = false # quiet, please
     fn with_a_saved_key_a_new_one_replaces_it() {
         let mut outside = Scripted {
             key: Ok(Some(Source::Credentials(CREDENTIALS.into()))),
-            ..Scripted::answering(&notifications_on(&[(KEPT, KEY), (TEST_EMAIL, "")]))
+            ..Scripted::answering(&notifications_on(&[
+                (KEPT, KEY),
+                (TEST_EMAIL, ""),
+                (CONSOLE, "n"),
+            ]))
         };
 
         setup(&mut outside).unwrap();
@@ -1521,7 +1650,7 @@ always = false # quiet, please
     fn with_resend_api_key_set_no_key_is_asked_and_its_source_is_said() {
         let mut outside = Scripted {
             key: Ok(Some(Source::Environment)),
-            ..Scripted::answering(&notifications_on(&[(TEST_EMAIL, "")]))
+            ..Scripted::answering(&notifications_on(&[(TEST_EMAIL, ""), (CONSOLE, "n")]))
         };
 
         setup(&mut outside).unwrap();
@@ -1540,7 +1669,7 @@ always = false # quiet, please
         for (answer, sent) in [("y", true), ("n", false), ("", false)] {
             let mut outside = Scripted {
                 key: Ok(Some(Source::Environment)),
-                ..Scripted::answering(&notifications_on(&[(TEST_EMAIL, answer)]))
+                ..Scripted::answering(&notifications_on(&[(TEST_EMAIL, answer), (CONSOLE, "n")]))
             };
 
             let done = setup(&mut outside).unwrap();
@@ -1678,6 +1807,7 @@ always = false # quiet, please
                 (TO, ""),
                 (FROM, ""),
                 (KEY_PROMPT, ""),
+                (CONSOLE, "n"),
             ])
         };
 
@@ -1777,6 +1907,7 @@ always = false # quiet, please
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
+            (CONSOLE, "n"),
         ]);
 
         offer(&mut outside).unwrap();
@@ -1801,6 +1932,7 @@ always = false # quiet, please
             (FROM, ""),
             (KEY_PROMPT, KEY),
             (TEST_EMAIL, "y"),
+            (CONSOLE, "n"),
         ]);
 
         offer(&mut outside).unwrap();
@@ -1824,7 +1956,11 @@ always = false # quiet, please
     fn an_unwritable_user_config_is_a_warning_and_the_run_carries_on_with_the_defaults() {
         let mut outside = Scripted {
             failing: vec![Fails::WriteNew],
-            ..Scripted::answering(&notifications_on(&[(KEY_PROMPT, KEY), (TEST_EMAIL, "y")]))
+            ..Scripted::answering(&notifications_on(&[
+                (KEY_PROMPT, KEY),
+                (TEST_EMAIL, "y"),
+                (CONSOLE, "n"),
+            ]))
         };
         outside.answers.push_front((OFFER, "y"));
 
@@ -1844,7 +1980,11 @@ always = false # quiet, please
     fn credentials_that_cant_be_saved_or_a_test_email_that_cant_go_are_warnings() {
         let mut outside = Scripted {
             failing: vec![Fails::SaveKey, Fails::SendTest],
-            ..Scripted::answering(&notifications_on(&[(KEY_PROMPT, KEY), (TEST_EMAIL, "y")]))
+            ..Scripted::answering(&notifications_on(&[
+                (KEY_PROMPT, KEY),
+                (TEST_EMAIL, "y"),
+                (CONSOLE, "n"),
+            ]))
         };
         outside.answers.push_front((OFFER, "y"));
 
