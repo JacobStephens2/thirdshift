@@ -151,23 +151,21 @@ async fn inbox(cli: &'static str, path: &'static str, RawQuery(query): RawQuery)
         let config = UserConfig::load()?;
         let outcome = query_value(&query, "outcome");
         let repository = query_value(&query, "repository");
+        let (title, cli) = match archive_page {
+            Some(status::ArchivePage::History) => ("History", "thirdshift status --all --json"),
+            Some(status::ArchivePage::Security) => (
+                "Security",
+                "thirdshift status --all --json · thirdshift show <command> --json",
+            ),
+            None => ("Inbox", cli),
+        };
         Ok(InboxPage {
             hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
             consoles: config.console.other_consoles.clone(),
             theme: config.console.theme.clone(),
-            cli: match archive_page {
-                Some(status::ArchivePage::History) => "thirdshift status --all --json",
-                Some(status::ArchivePage::Security) => {
-                    "thirdshift status --all --json · thirdshift show <command> --json"
-                }
-                None => cli,
-            },
+            cli,
             inbox: status::inbox(&config)?,
-            title: match archive_page {
-                Some(status::ArchivePage::History) => "History",
-                Some(status::ArchivePage::Security) => "Security",
-                None => "Inbox",
-            },
+            title,
             archive: archive_page
                 .map(|page| status::archive(&config, page, &outcome, &repository))
                 .transpose()?,

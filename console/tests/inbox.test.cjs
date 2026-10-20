@@ -253,3 +253,30 @@ test('History filters and Security findings and sessions work from a phone', asy
   await page.waitForURL('**/log?*');
   assert.match(await page.locator('body').textContent(), /Security Session output/);
 });
+
+test("Enter activates the focused Security session link", async t => {
+  const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
+  await page.goto(`${origin}/?page=security`);
+  await page.locator('.peek-link').click();
+  const sessionLink = page.locator('#peek a').filter({ hasText: 'Session log:' });
+  await sessionLink.waitFor();
+  await sessionLink.focus();
+  await page.keyboard.press('Enter');
+  await page.waitForURL('**/log?*');
+  assert.ok(new URL(page.url()).searchParams.has('session'),
+    `focused Session link opened the Command log instead: ${page.url()}`);
+  assert.match(await page.locator('body').textContent(), /Security Session output/);
+});
+
+test('Enter and Space activate focused peek buttons', async t => {
+  const page = await pageFor(t);
+  await page.goto(`${origin}/?page=security`);
+  for (const key of ['Enter', 'Space']) {
+    await page.locator('.peek-link').click();
+    await page.locator('#peek dt').first().waitFor();
+    await page.locator('[data-close-peek]').focus();
+    await page.keyboard.press(key);
+    assert.equal(await page.locator('#peek').isVisible(), false);
+    assert.equal(new URL(page.url()).searchParams.get('page'), 'security');
+  }
+});

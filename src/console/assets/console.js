@@ -99,6 +99,8 @@ document.addEventListener('click', event => {
 
 document.addEventListener('keydown', event => {
   if (event.ctrlKey || event.metaKey || event.altKey || event.target.closest('input, select, textarea, [contenteditable="true"]')) return;
+  if (event.key === 'Enter' && event.target.closest('a, button')) return;
+  if (event.key === ' ' && event.target.closest('button')) return;
   if (event.key === 'Escape') {
     event.preventDefault();
     if (help.open) help.close();
