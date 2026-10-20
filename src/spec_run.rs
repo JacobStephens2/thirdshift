@@ -17,7 +17,7 @@ use anyhow::{Result, bail};
 
 use crate::base_fix::BaseFixAsk;
 use crate::child_run::{Ended, Kind, Runs};
-use crate::delivery::{Delivery, Opening};
+use crate::delivery::{Delivery, Opening, OpeningSession};
 use crate::failed_run::{FailedRun, interrupted_or};
 use crate::github::{GitHub, Ticket};
 use crate::harness::Choice;
@@ -32,9 +32,6 @@ use crate::trust;
 use crate::worktree::Worktree;
 
 use ticket_board::TicketBoard;
-
-/// The Spec review session's kind, in its progress lines and log name.
-const SPEC_REVIEW: &str = "spec-review";
 
 /// Whether an issue has Tickets, as a Spec has, and every one is closed:
 /// `open` says of each of its sub-issues whether it is open.
@@ -162,9 +159,8 @@ fn review_and_deliver(
         });
     }
     let opening = Opening {
-        kind: SPEC_REVIEW,
+        session: OpeningSession::SpecReview,
         prompt: prompt::spec_review(spec, base, branch, spec_pr_url),
-        catch_up_from_origin: true,
     };
     // The Spec review may have rewritten the body without the checklist.
     let delivered = outside.deliver(opening, checklist);
@@ -707,9 +703,9 @@ mod tests {
 
         fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun> {
             self.did.push(Did::Deliver {
-                kind: opening.kind.to_string(),
+                kind: opening.session.kind().to_string(),
+                catch_up: opening.session.catches_up_from_origin(),
                 prompt: opening.prompt,
-                catch_up: opening.catch_up_from_origin,
             });
             let delivered = if self.script.review_fails {
                 Err(anyhow!("the spec-review session failed"))
@@ -850,7 +846,7 @@ mod tests {
     fn spec_review_opening() -> Did {
         let spec = IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap();
         Did::Deliver {
-            kind: SPEC_REVIEW.to_string(),
+            kind: "spec-review".to_string(),
             prompt: prompt::spec_review(&spec, "main", "issue-20", SPEC_PR),
             catch_up: true,
         }

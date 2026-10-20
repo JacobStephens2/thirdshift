@@ -10,7 +10,7 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | Worktree | `src/worktree.rs` and `src/worktree/` | `src/worktree/acquisition_tests.rs`, `src/worktree/cleanup_tests.rs` |
 | Spec run, Spec branch, Spec PR | `src/spec_run.rs` | `tests/spec_run.rs` |
 | Ticket board, Tickets checklist, Unready Ticket | `src/spec_run/ticket_board.rs` — `TicketBoard`, `next_to_start`; `src/labels.rs` | Inline tests; `tests/spec_run.rs` |
-| Delivery, Repair loop, Foreign commit | `src/delivery.rs` — `Delivery`; `src/delivery/repair_loop.rs` | Inline tests; `tests/merge_run.rs` |
+| Delivery, Repair loop, Foreign commit | `src/delivery.rs` — `Delivery`; `src/delivery/repair_loop.rs`; Delivery stage: `src/delivery/stage.rs` — `Stage`, `Tracker`, its table to the `Stopped at:` and Command record stages | Inline tests; `tests/merge_run.rs` |
 | Failed run | `src/failed_run.rs` | `tests/failed_run.rs` |
 | Inherited failure, check-state reading, Base fix | CI watch, `src/ci.rs` — `reading` of each `Conclusion` the GitHub adapter (`src/github.rs`, `checks_on`) reports; `src/base_fix.rs` | Inline tests; `src/github/execution_tests.rs`; `tests/ci.rs`, `tests/base_fix.rs` |
 | Run notification | `src/notification.rs` — `RunNotification`; `src/email.rs` | `tests/run_notification.rs`, `tests/email_test.rs` |
