@@ -200,7 +200,7 @@ test("every keyboard action preserves list nodes and Escape closes one layer at 
 test("page keys, jump letters and URLs survive reload and the peek is a phone bottom sheet", async t => {
   const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
   await page.goto(origin);
-  for (const [key, name] of [['2', 'lanes'], ['3', 'stages'], ['5', 'history'], ['6', 'logs'], ['7', 'security'], ['1', 'inbox']]) {
+  for (const [key, name] of [['2', 'lanes'], ['3', 'stages'], ['4', 'waterfall'], ['5', 'history'], ['6', 'logs'], ['7', 'security'], ['1', 'inbox']]) {
     await page.keyboard.press(key);
     await page.waitForURL(`**/?page=${name}`);
     await page.reload();
@@ -208,12 +208,7 @@ test("page keys, jump letters and URLs survive reload and the peek is a phone bo
     assert.equal(await page.locator('#peek').isVisible(), false);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   }
-  for (const key of ['4']) {
-    await page.keyboard.press(key);
-    assert.equal(new URL(page.url()).searchParams.get('page'), 'inbox');
-    assert.equal(await page.locator(`[data-key="${key}"]`).count(), 0);
-  }
-  for (const [letter, name] of [['b', 'lanes'], ['t', 'stages'], ['h', 'history'], ['o', 'logs'], ['s', 'security'], ['i', 'inbox']]) {
+  for (const [letter, name] of [['b', 'lanes'], ['t', 'stages'], ['f', 'waterfall'], ['h', 'history'], ['o', 'logs'], ['s', 'security'], ['i', 'inbox']]) {
     await page.keyboard.press('g');
     await page.keyboard.press(letter);
     await page.waitForURL(`**/?page=${name}`);

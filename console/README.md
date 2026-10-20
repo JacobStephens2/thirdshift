@@ -58,7 +58,7 @@ them. The first page pairs with `thirdshift status`. A refresh reads the current
 records; server-push updates are a later Ticket. Replacing the installed binary
 makes the Console re-execute itself with its original arguments.
 
-The available pages are Inbox (`1`), Lanes (`2`), Stages (`3`), History (`5`), Logs (`6`) and Security (`7`). Links
+The available pages are Inbox (`1`), Lanes (`2`), Stages (`3`), Waterfall (`4`), History (`5`), Logs (`6`) and Security (`7`). Links
 keep the page in `?page=`. History includes every ended Command, including old
 logs, and filters by outcome and repository. Security shows retained findings
 and Session logs. Older records without finding metadata still show their logs.
@@ -77,11 +77,26 @@ Both pages use the observations from `status --all --json`. The Rust parity
 test checks their stage times and Usual ranges against the CLI; the Playwright
 time tests check scale in all windows, child selection, live ordering and 390 px.
 
+Waterfall chooses one retained Command with live, died and ended chips, keeping
+its exact selection in `command=`. Runs, stages and tool calls share one axis,
+including a Spec run's Ticket Runs. It pairs with `show --json` and `logs`:
+stage intervals come from the Command record, and Claude/Codex tool summaries
+match their scoped `HH:MM:SS` Command-log lines in order, across midnight.
+Each tool interval extends to the next matched call in its Session or its stage
+boundary. These include waiting; they are not measured tool execution times.
+Unmatched calls stay visible with “Time unknown” and no bar. Session links open
+their retained evidence. The Waterfall browser test checks selection, scale,
+unknown times, escaping and phone layout; Rust checks matching and CLI parity.
+The retained Spec-review checks are `python3 console/reproductions/waterfall-fractional.py`,
+`python3 console/reproductions/waterfall-stage.py` and
+`python3 console/reproductions/waterfall-parity.py` from the repo root after a build.
+The fractional Run/stage boundaries also run in the Rust integration tests.
+
 `j` / `k` select headings and visible rows, wrapping at either end. `Space`
 folds a heading or toggles a row's peek; `Enter` opens that row's full Command
 log. `z` folds the current section. `Escape` closes help, jumps or the peek,
 one layer at a time, then clears selection. `?` opens the key list. `g` opens
-the jump list: `i` Inbox, `b` Lanes, `t` Stages, `h` History, `o` Logs, `s` Security,
+the jump list: `i` Inbox, `b` Lanes, `t` Stages, `f` Waterfall, `h` History, `o` Logs, `s` Security,
 `c` Console log, `a` Account, or a section's displayed
 letter. Text fields keep their normal keys. The peek starts closed and sits
 beside the list on a wide screen or at the bottom of a phone.
