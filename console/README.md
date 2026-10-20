@@ -50,8 +50,18 @@ The server checks current settings on requests and while streams remain open.
 
 `thirdshift console log [--json]` and the Console log page show the same
 account events from `~/.thirdshift/console.log`. They name the account but
-never contain passwords, session tokens or page views. Email account creation
-and password reset are a later Ticket; ask the owner to use the password command.
+never contain passwords, codes, session tokens or page views.
+
+With a Resend key in `RESEND_API_KEY` or the Credentials, **Set your password**
+on the sign-in page creates an account or resets its password by email code.
+Only allowed addresses receive mail, from `email.from`, but every address gets
+the same answer, without waiting for address-dependent delivery. Codes are
+stored as argon2id hashes, last 15 minutes and allow
+5 tries. An address may receive one code a minute and 10 in a rolling 24 hours;
+these limits survive restarts and password changes. A correct code verifies
+the address, sets its password, ends its old sessions and signs it in.
+The Console log records codes sent and passwords set. Without a key the flow
+is off; ask the owner to use `thirdshift console password` instead.
 
 The header names this machine and links to those addresses, without fetching
 them. The Inbox and its `/events` stream pair with `thirdshift status`. One

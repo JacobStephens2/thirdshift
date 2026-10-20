@@ -55,6 +55,9 @@ enum View {
     SignIn,
     StopPage,
     Stop,
+    SetPasswordPage,
+    SendCode,
+    SetPassword,
 }
 
 const PAGES: &[PageRoute] = &[
@@ -79,6 +82,24 @@ const PAGES: &[PageRoute] = &[
         ],
         method: Method::POST,
         view: View::Stop,
+    },
+    PageRoute {
+        path: "/set-password",
+        cli: &["thirdshift console password"],
+        method: Method::GET,
+        view: View::SetPasswordPage,
+    },
+    PageRoute {
+        path: "/set-password/code",
+        cli: &["thirdshift console password"],
+        method: Method::POST,
+        view: View::SendCode,
+    },
+    PageRoute {
+        path: "/set-password",
+        cli: &["thirdshift console password"],
+        method: Method::POST,
+        view: View::SetPassword,
     },
     PageRoute {
         path: "/waterfall",
@@ -273,6 +294,9 @@ fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Route
             (View::SignIn, Method::POST) => post(auth::sign_in),
             (View::StopPage, Method::GET) => get(stop::show),
             (View::Stop, Method::POST) => post(stop::submit),
+            (View::SetPasswordPage, Method::GET) => get(auth::set_password_page),
+            (View::SendCode, Method::POST) => post(auth::code),
+            (View::SetPassword, Method::POST) => post(auth::set_password),
             _ => unreachable!("unknown Console page method"),
         };
         router = router.route(page.path, handler);

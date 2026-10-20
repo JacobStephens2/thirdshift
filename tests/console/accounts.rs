@@ -8,6 +8,9 @@ use std::time::Instant;
 const EMAIL: &str = "owner@example.test";
 const PASSWORD: &str = "correct horse battery staple";
 
+#[path = "password_codes.rs"]
+mod password_codes;
+
 #[path = "stop.rs"]
 mod stop;
 
