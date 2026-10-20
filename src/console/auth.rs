@@ -13,6 +13,9 @@ use subtle::ConstantTimeEq;
 use super::accounts::{self, Accounts, SignIn};
 use crate::config::UserConfig;
 
+mod password;
+pub(super) use password::{code, set_password, set_password_page};
+
 const SESSION: &str = "__Host-thirdshift-session";
 const SIGN_IN: &str = "__Host-thirdshift-sign-in";
 
@@ -84,7 +87,9 @@ pub(super) async fn guard(
     next: Next,
 ) -> Response {
     let path = request.uri().path();
-    if path == "/sign-in" || path.starts_with("/assets/") {
+    if matches!(path, "/sign-in" | "/set-password" | "/set-password/code")
+        || path.starts_with("/assets/")
+    {
         return next.run(request).await;
     }
     let viewer = if access.no_sign_in {
@@ -166,6 +171,7 @@ pub(super) async fn headers(request: Request, next: Next) -> Response {
 struct SignInPage {
     csrf: String,
     theme: String,
+    email_enabled: bool,
 }
 
 pub(super) async fn sign_in_page(
@@ -182,6 +188,7 @@ pub(super) async fn sign_in_page(
             Ok(SignInPage {
                 csrf: form_token,
                 theme: UserConfig::load()?.console.theme,
+                email_enabled: crate::resend_key::ResendKey::find()?.is_some(),
             }
             .render()?)
         })

@@ -48,9 +48,16 @@ impl Console {
         } else {
             &["console"]
         };
-        let mut child = Command::new(binary)
+        let mut command = Command::new(binary);
+        command
             .args(args)
             .env("HOME", home)
+            .env_remove("RESEND_API_KEY");
+        Self::start_command(command)
+    }
+
+    fn start_command(mut command: Command) -> Self {
+        let mut child = command
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()

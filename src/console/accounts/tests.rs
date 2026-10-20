@@ -9,6 +9,110 @@ fn signed_in(accounts: &mut Accounts) -> String {
 }
 
 #[test]
+fn email_codes_expire_at_fifteen_minutes_and_allow_exactly_five_tries() {
+    let allowed = vec!["owner@example.test".into()];
+    for (elapsed, wrong_tries, accepted) in [(899, 4, true), (900, 0, false), (1, 5, false)] {
+        let dir = tempfile::tempdir().unwrap();
+        let mut accounts = Accounts::open(dir.path(), &allowed, 1_000).unwrap();
+        let mut code = String::new();
+        accounts
+            .send_code("owner@example.test", |sent| {
+                code = sent.into();
+                Ok(())
+            })
+            .unwrap();
+        drop(accounts);
+        let wrong = if code == "000000" { "111111" } else { "000000" };
+        for _ in 0..wrong_tries {
+            let mut accounts = Accounts::open(dir.path(), &allowed, 1_000 + elapsed).unwrap();
+            assert!(matches!(
+                accounts
+                    .set_password_by_code("owner@example.test", wrong, "password")
+                    .unwrap(),
+                SignIn::Refused
+            ));
+        }
+        let mut accounts = Accounts::open(dir.path(), &allowed, 1_000 + elapsed).unwrap();
+        assert_eq!(
+            matches!(
+                accounts
+                    .set_password_by_code("owner@example.test", &code, "password")
+                    .unwrap(),
+                SignIn::SignedIn(_)
+            ),
+            accepted
+        );
+        assert!(matches!(
+            accounts
+                .set_password_by_code("owner@example.test", &code, "replay")
+                .unwrap(),
+            SignIn::Refused
+        ));
+    }
+}
+
+#[test]
+fn code_send_limits_survive_restarts_and_password_changes_and_are_per_address() {
+    let dir = tempfile::tempdir().unwrap();
+    let allowed = vec!["owner@example.test".into(), "other@example.test".into()];
+    let mut sends = 0;
+    let mut code = String::new();
+    for (time, expected) in [(1_000, 1), (1_059, 1), (1_060, 2)] {
+        let mut accounts = Accounts::open(dir.path(), &allowed, time).unwrap();
+        accounts
+            .send_code("owner@example.test", |sent| {
+                sends += 1;
+                code = sent.into();
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(sends, expected);
+    }
+    {
+        let mut accounts = Accounts::open(dir.path(), &allowed, 1_061).unwrap();
+        assert!(matches!(
+            accounts
+                .set_password_by_code("owner@example.test", &code, "password")
+                .unwrap(),
+            SignIn::SignedIn(_)
+        ));
+    }
+    for index in 2..11 {
+        let mut accounts = Accounts::open(dir.path(), &allowed, 1_000 + index * 60).unwrap();
+        accounts
+            .send_code("owner@example.test", |_| {
+                sends += 1;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(sends, (index + 1).min(10));
+    }
+    let mut accounts = Accounts::open(dir.path(), &allowed, 1_000 + 24 * 60 * 60 - 1).unwrap();
+    accounts
+        .send_code("owner@example.test", |_| panic!("daily limit bypassed"))
+        .unwrap();
+    accounts
+        .send_code("unknown@example.test", |_| panic!("unknown address sent"))
+        .unwrap();
+    accounts
+        .send_code("other@example.test", |_| {
+            sends += 1;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(sends, 11);
+    drop(accounts);
+    let mut accounts = Accounts::open(dir.path(), &allowed, 1_000 + 24 * 60 * 60).unwrap();
+    accounts
+        .send_code("owner@example.test", |_| {
+            sends += 1;
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(sends, 12, "first send ages out of the rolling day");
+}
+
+#[test]
 fn five_wrong_passwords_slow_the_address_to_one_attempt_per_minute() {
     let dir = tempfile::tempdir().unwrap();
     let allowed = vec!["owner@example.test".into(), "other@example.test".into()];

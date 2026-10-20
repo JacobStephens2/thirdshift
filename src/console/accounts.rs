@@ -11,11 +11,18 @@ use rand_core::{OsRng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+mod codes;
+use codes::Codes;
+
 pub(super) const LIFETIME: i64 = 30 * 24 * 60 * 60;
 
 #[derive(Default, Deserialize, Serialize)]
 struct Account {
     password_hash: String,
+    #[serde(default)]
+    verified: bool,
+    #[serde(default)]
+    codes: Codes,
     #[serde(default)]
     sessions: BTreeMap<String, i64>,
     #[serde(default)]
@@ -30,6 +37,7 @@ pub(super) enum EventKind {
     SignIn,
     FailedSignIn,
     PasswordSet,
+    CodeSent,
     SignOut,
     BlockedAddress,
 }
@@ -40,6 +48,7 @@ impl std::fmt::Display for EventKind {
             Self::SignIn => "sign-in",
             Self::FailedSignIn => "failed-sign-in",
             Self::PasswordSet => "password-set",
+            Self::CodeSent => "code-sent",
             Self::SignOut => "sign-out",
             Self::BlockedAddress => "blocked-address",
         })
@@ -100,6 +109,7 @@ impl Accounts {
         for (email, account) in &mut store.accounts {
             let before = account.sessions.len();
             if !allowed.contains(email) {
+                changed |= account.codes.clear();
                 account.sessions.clear();
                 if before != 0 {
                     blocked.push(email.clone());
@@ -126,18 +136,13 @@ impl Accounts {
             "address is not allowed in console.allowed_emails"
         );
         ensure!(!password.is_empty(), "password must not be empty");
-        let salt = SaltString::generate(&mut OsRng);
-        let password_hash = Argon2::default()
-            .hash_password(password.as_bytes(), &salt)
-            .map_err(|error| anyhow::anyhow!("can't hash password: {error}"))?
-            .to_string();
-        self.accounts.insert(
-            email.into(),
-            Account {
-                password_hash,
-                ..Account::default()
-            },
-        );
+        let password_hash = hash_secret(password)?;
+        let account = self.accounts.entry(email.into()).or_default();
+        account.password_hash = password_hash;
+        account.sessions.clear();
+        account.codes.clear();
+        account.failed_passwords = 0;
+        account.next_attempt = 0;
         self.save()?;
         self.record(email, EventKind::PasswordSet)
     }
@@ -155,13 +160,10 @@ impl Accounts {
             self.record(email, EventKind::FailedSignIn)?;
             return Ok(SignIn::Slowdown);
         }
-        let valid = self.accounts.get(email).is_some_and(|account| {
-            PasswordHash::new(&account.password_hash).is_ok_and(|hash| {
-                Argon2::default()
-                    .verify_password(password.as_bytes(), &hash)
-                    .is_ok()
-            })
-        });
+        let valid = self
+            .accounts
+            .get(email)
+            .is_some_and(|account| matches_secret(password, &account.password_hash));
         if !valid {
             if let Some(account) = self.accounts.get_mut(email) {
                 account.failed_passwords = account.failed_passwords.saturating_add(1);
@@ -173,6 +175,10 @@ impl Accounts {
             self.record(email, EventKind::FailedSignIn)?;
             return Ok(SignIn::Refused);
         }
+        self.start_session(email)
+    }
+
+    fn start_session(&mut self, email: &str) -> Result<SignIn> {
         let token = random_token();
         let account = self.accounts.get_mut(email).expect("verified account");
         account.failed_passwords = 0;
@@ -247,6 +253,22 @@ impl Accounts {
         file.write_all(b"\n")?;
         Ok(())
     }
+}
+
+fn hash_secret(secret: &str) -> Result<String> {
+    let salt = SaltString::generate(&mut OsRng);
+    Argon2::default()
+        .hash_password(secret.as_bytes(), &salt)
+        .map(|hash| hash.to_string())
+        .map_err(|error| anyhow::anyhow!("can't hash secret: {error}"))
+}
+
+fn matches_secret(secret: &str, hash: &str) -> bool {
+    PasswordHash::new(hash).is_ok_and(|hash| {
+        Argon2::default()
+            .verify_password(secret.as_bytes(), &hash)
+            .is_ok()
+    })
 }
 
 fn private_file(path: &Path) -> Result<File> {
