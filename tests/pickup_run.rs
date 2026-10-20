@@ -1355,10 +1355,12 @@ fn the_notification_of_a_run_left_ready_for_review_is_that_runs() {
         text.starts_with(&format!(
             "Result:       ready for review\n\
              Issue:        https://github.com/acme/widgets/issues/7\n\
+             Title:        Sharpen the widgets\n\
              Pull request: {}\n\
              Session log:  {}\n\
              Command log:  {}\n\
              Built with claude · default model · default effort (configured)\n\
+             Sent by:      thirdshift\n\
              Host:         ",
             pr["url"].as_str().unwrap(),
             log.display(),
@@ -1385,7 +1387,7 @@ fn the_notification_of_a_merge_run_says_it_merged() {
         "[thirdshift] acme/widgets#7 Sharpen the widgets: merged"
     );
     let pull_request = format!(
-        "Result:       merged\nIssue:        https://github.com/acme/widgets/issues/7\nPull request: {}\n",
+        "Result:       merged\nIssue:        https://github.com/acme/widgets/issues/7\nTitle:        Sharpen the widgets\nPull request: {}\n",
         pr["url"].as_str().unwrap()
     );
     assert!(text.starts_with(&pull_request), "{text}");
@@ -1409,6 +1411,7 @@ fn the_notification_of_a_failed_run_has_its_pull_request_and_its_cause() {
         text.starts_with(&format!(
             "Result:       failed\n\
              Issue:        https://github.com/acme/widgets/issues/7\n\
+             Title:        Sharpen the widgets\n\
              Pull request: {}\n\
              Cause:        claude exited 3\n\
              Session log:  ",
@@ -1468,7 +1471,7 @@ fn the_notification_of_a_spec_run_is_that_spec_runs_with_a_line_per_ticket() {
         "[thirdshift] acme/widgets#7 Sharpen every widget: ready for review"
     );
     let pull_request = format!(
-        "Result:       ready for review\nIssue:        https://github.com/acme/widgets/issues/7\nPull request: {}\n",
+        "Result:       ready for review\nIssue:        https://github.com/acme/widgets/issues/7\nTitle:        Sharpen every widget\nPull request: {}\n",
         spec_pr["url"].as_str().unwrap()
     );
     assert!(text.starts_with(&pull_request), "{text}");

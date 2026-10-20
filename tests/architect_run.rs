@@ -1443,7 +1443,7 @@ fn plan_only_sends_one_notification_naming_the_plan() {
     );
     assert!(
         text.starts_with(&format!(
-            "Result:       plan published\nReview:       plan published: {PLAN_URL}\nDescription:  Deepen the session module\n"
+            "Result:       plan published\nCommand:      Architect run\nRepository:   acme/widgets\nReview:       plan published: {PLAN_URL}\nDescription:  Deepen the session module\n"
         )),
         "{text}"
     );
@@ -1476,7 +1476,7 @@ printf 'Architecture review idea: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
     );
     assert!(
         text.starts_with(&format!(
-            "Result:       idea filed\nReview:       idea filed: {PLAN_URL}\nDescription:  Deepen the session module\n"
+            "Result:       idea filed\nCommand:      Architect run\nRepository:   acme/widgets\nReview:       idea filed: {PLAN_URL}\nDescription:  Deepen the session module\n"
         )),
         "{text}"
     );
@@ -1506,7 +1506,7 @@ fn a_review_whose_idea_is_already_filed_sends_one_notification_naming_that_issue
     );
     assert!(
         text.starts_with(&format!(
-            "Result:       idea already filed\nReview:       idea already filed: {url}\nDescription:  Issue 7\n"
+            "Result:       idea already filed\nCommand:      Architect run\nRepository:   acme/widgets\nReview:       idea already filed: {url}\nDescription:  Issue 7\n"
         )),
         "{text}"
     );
@@ -1536,6 +1536,8 @@ fn a_failed_review_sends_one_notification_with_the_cause_and_the_session_log() {
     assert!(
         text.starts_with(&format!(
             "Result:       review failed\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       failed\n\
              Cause:        {FAILED_REVIEW_CAUSE}\n\
              Session log:  {log}\n\
@@ -1568,6 +1570,8 @@ fn email_always_sends_one_notification_for_the_review_and_the_run_it_dispatched(
     assert!(
         text.starts_with(&format!(
             "Result:       ready for review\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       plan published: {PLAN_URL}\n\
              Description:  Deepen the session module\n\
              Dispatched:   ready for review\n\
@@ -1594,6 +1598,8 @@ fn the_one_notification_says_what_became_of_the_dispatched_runs_base_fix() {
     assert!(
         text.starts_with(&format!(
             "Result:       ready for review\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       plan published: {PLAN_URL}\n\
              Description:  Deepen the session module\n\
              Dispatched:   ready for review\n\
@@ -1619,6 +1625,8 @@ fn a_dispatched_spec_run_sends_no_notification_of_its_own_and_its_tickets_are_in
     assert!(
         text.starts_with(&format!(
             "Result:       merged\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       plan published: {PLAN_URL}\n\
              Description:  Deepen the session module\n\
              Dispatched:   merged\n\
@@ -1653,6 +1661,8 @@ fn a_dispatched_run_that_fails_sends_one_notification_with_its_outcome_and_cause
     assert!(
         text.starts_with(&format!(
             "Result:       failed\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       plan published: {PLAN_URL}\n\
              Description:  Deepen the session module\n\
              Dispatched:   failed\n\
@@ -1720,7 +1730,7 @@ sleep 60"#,
         "[thirdshift] acme/widgets Architect run: interrupted"
     );
     assert!(
-        text.starts_with("Result:       interrupted\nReview:       interrupted\n"),
+        text.starts_with("Result:       interrupted\nCommand:      Architect run\nRepository:   acme/widgets\nReview:       interrupted\n"),
         "{text}"
     );
     assert!(!text.contains("Cause:"), "{text}");
@@ -1747,6 +1757,8 @@ fn a_plan_that_fails_its_checks_sends_one_notification_naming_it_in_the_cause() 
     assert!(
         text.starts_with(&format!(
             "Result:       review failed\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       failed\n\
              Cause:        the plan {PLAN_URL} is closed\n"
         )),
@@ -1771,6 +1783,8 @@ fn a_dispatched_spec_run_that_fails_sends_one_notification_with_each_tickets_out
     assert!(
         text.starts_with(&format!(
             "Result:       failed\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       plan published: {PLAN_URL}\n\
              Description:  Deepen the session module\n\
              Dispatched:   failed\n"
@@ -2439,6 +2453,8 @@ fn an_idea_that_cannot_be_labelled_sends_one_notification_with_the_cause() {
     assert!(
         text.starts_with(
             "Result:       review failed\n\
+             Command:      Architect run\n\
+             Repository:   acme/widgets\n\
              Review:       failed\n\
              Cause:        could not label the Architect idea #7: gh api --method PUT"
         ),
