@@ -47,7 +47,7 @@
       "source": "JacobStephens2/skills",
       "sourceType": "github",
       "skillPath": "skills/explainer-video/SKILL.md",
-      "computedHash": "1c1bc3644676c22849b97bf55e892e4a9d57ee3e4afb358bf662acbac93910a4"
+      "computedHash": "db0883a99a7623ccd83243a9f638b0fa96b79815b320b1df9d2ed38a4b626ee7"
     },
     "git-guardrails-claude-code": {
       "source": "mattpocock/skills",
