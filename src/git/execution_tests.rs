@@ -442,7 +442,7 @@ fn interruption_ends_the_wait_before_a_read_of_origin_is_run_again() {
                 &git,
                 "uploadpack",
                 3,
-                "error: RPC failed; curl 16 Error in the HTTP2 framing layer",
+                super::tests::DROPPED_STREAM,
             );
             std::thread::scope(|scope| {
                 let reader = scope.spawn(|| git.on_origin("main"));

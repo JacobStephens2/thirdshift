@@ -39,6 +39,19 @@ impl Interruption {
         }
         Ok(())
     }
+
+    /// Wait `delay` before a retry. Ordinary waiting stops with
+    /// `interrupted` as soon as the Command is interrupted; completion
+    /// waiting goes on through it.
+    pub(crate) fn pause(self, delay: Duration) -> Result<()> {
+        match self {
+            Self::Ordinary => crate::poll::sleep(delay),
+            Self::Completion => {
+                std::thread::sleep(delay);
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Caller-supplied diagnostics and interruption behavior for one execution.

@@ -1126,9 +1126,9 @@ fn a_dropped_stream_while_selecting_the_issue_branch_is_retried_without_a_failur
     scenario.agent_does(AGENT_OPENS_PR);
     // Origin drops the first connection, as an HTTP/2 stream can.
     let connections = scenario.path("connections");
-    let upload_pack = scenario.path("upload-pack");
+    let script = scenario.path("upload-pack.sh");
     std::fs::write(
-        &upload_pack,
+        &script,
         format!(
             "#!/bin/sh\n\
              if [ ! -e '{0}' ]; then\n\
@@ -1142,7 +1142,17 @@ fn a_dropped_stream_while_selecting_the_issue_branch_is_retried_without_a_failur
         ),
     )
     .unwrap();
-    std::fs::set_permissions(&upload_pack, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // Installed by `install`, not by this process: a file open for writing
+    // here would be inherited by whatever another test starts meanwhile, and
+    // can't be run until that has let go of it ("Text file busy").
+    let upload_pack = scenario.path("upload-pack");
+    let installed = Command::new("install")
+        .args(["-m", "755"])
+        .arg(&script)
+        .arg(&upload_pack)
+        .status()
+        .unwrap();
+    assert!(installed.success());
     scenario.launch_git(&[
         "config",
         "remote.origin.uploadpack",

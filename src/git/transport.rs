@@ -3,9 +3,10 @@
 
 /// Whether git's `stderr` says the connection to origin failed in a way a
 /// moment's wait can mend: a dropped stream or connection, a name lookup, a
-/// TLS read, or an HTTP 429 or 5xx. An HTTP status git reports decides over
-/// any other wording, so a 401 or 403 stays permanent even when git adds
-/// that the remote end hung up.
+/// TLS read, or an HTTP 429 or 5xx. A permanent cause, such as a failed
+/// login or a missing ref or remote, and then an HTTP status git reports,
+/// decide over any other wording, so each stays permanent even when git
+/// adds that the remote end hung up.
 pub(super) fn is_transient(stderr: &[u8]) -> bool {
     let stderr = String::from_utf8_lossy(stderr).to_ascii_lowercase();
     if [
@@ -14,6 +15,8 @@ pub(super) fn is_transient(stderr: &[u8]) -> bool {
         "could not read password",
         "repository not found",
         "permission denied",
+        "couldn't find remote ref",
+        "does not appear to be a git repository",
     ]
     .iter()
     .any(|permanent| stderr.contains(permanent))
@@ -73,6 +76,13 @@ mod tests {
         ] {
             assert!(is_transient(stderr.as_bytes()), "{stderr}");
         }
+    }
+
+    #[test]
+    fn a_missing_ref_with_a_hang_up_is_permanent() {
+        assert!(!is_transient(
+            b"fatal: couldn't find remote ref absent\nfatal: the remote end hung up unexpectedly"
+        ));
     }
 
     #[test]
