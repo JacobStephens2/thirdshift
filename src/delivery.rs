@@ -20,8 +20,6 @@ use chrono::{DateTime, Utc};
 mod repair_loop;
 mod stage;
 
-pub use stage::Stage;
-
 use crate::pull_request::{AlreadyMerged, Identified, MergeAttempt, PullRequest};
 
 use crate::base_fix::BaseFix;
@@ -44,7 +42,7 @@ use crate::trust::{self, IssueText};
 use crate::worktree::{ForeignCommits, Merge, PendingMerge, Preserved, Worktree};
 
 use repair_loop::{Repair, Upstream};
-use stage::{CommandLog, CommandRecord, Tracker};
+use stage::{CommandLog, CommandRecord, Stage, Tracker};
 /// A Delivery of the pull request for `issue`, the Run's issue or the Spec,
 /// into the Base branch `base`, to `goal`.
 pub struct Delivery<'a> {
@@ -67,22 +65,47 @@ pub struct Delivery<'a> {
     pub started: DateTime<Utc>,
 }
 
-/// The session a Delivery opens with: the implement session, or the Spec
-/// review.
-pub struct Opening<'a> {
-    /// The session's kind, in its progress lines and log name.
-    pub kind: &'a str,
-    /// Its stage: [`Stage::Implementation`] or [`Stage::SpecReview`].
-    pub stage: Stage,
+/// The session a Delivery opens with, given its prompt.
+pub struct Opening {
+    pub session: OpeningSession,
     pub prompt: String,
+}
+
+/// Which session a Delivery opens with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpeningSession {
+    /// A Run's implement session.
+    Implementation,
+    /// A Spec run's Spec review, once its Tickets have landed.
+    SpecReview,
+}
+
+impl OpeningSession {
+    /// The session's kind, in its progress lines and log name.
+    pub fn kind(self) -> &'static str {
+        match self {
+            Self::Implementation => "implement",
+            Self::SpecReview => "spec-review",
+        }
+    }
+
     /// Whether the branch is first fast-forwarded to its head on origin, as
     /// the Spec branch is to the Tickets landed there.
-    pub catch_up_from_origin: bool,
+    pub fn catches_up_from_origin(self) -> bool {
+        self == Self::SpecReview
+    }
+
+    fn stage(self) -> Stage {
+        match self {
+            Self::Implementation => Stage::Implementation,
+            Self::SpecReview => Stage::SpecReview,
+        }
+    }
 }
 
 impl Delivery<'_> {
     /// Take the pull request from the branch checked out in `worktree` to the
-    /// goal. With `opening.catch_up_from_origin`, first fast-forward the
+    /// goal. For a Spec review opening, first fast-forward the
     /// branch to origin. Then run the opening session and optional Security
     /// review, push the branch, for
     /// any commit the session left unpushed, write the line that says what it
@@ -104,7 +127,7 @@ impl Delivery<'_> {
         pull_request: &mut PullRequest,
         checklist: Option<&str>,
     ) -> Result<Reached, FailedRun> {
-        let tracker = Tracker::new(opening.stage, CommandLog);
+        let tracker = Tracker::new(opening.session.stage(), CommandLog);
         let route = Route {
             security_review: self.security_review,
             issue: self.issue,
@@ -196,11 +219,12 @@ impl Route<'_> {
         opening: &Opening,
         checklist: Option<&str>,
     ) -> Result<String> {
-        if opening.catch_up_from_origin {
+        let session = opening.session;
+        if session.catches_up_from_origin() {
             outside.catch_up()?;
         }
-        outside.stage(opening.stage);
-        outside.session(opening.kind, &opening.prompt)?;
+        outside.stage(session.stage());
+        outside.session(session.kind(), &opening.prompt)?;
         let review = match self.security_review.then(|| {
             outside.stage(Stage::SecurityReview);
             outside.security_review(&prompt::security_review(self.issue, self.base, self.branch))
@@ -380,7 +404,7 @@ fn fail(
 /// the pull request was ready.
 fn stopped_at(tracker: &Tracker<impl CommandRecord>, error: &anyhow::Error) -> recovery::Stage {
     if error.is::<SecurityHold>() {
-        tracker.security_hold();
+        tracker.stop_at_security_review();
     }
     tracker.stopped_at()
 }
@@ -902,20 +926,18 @@ mod tests {
             harness: &Choice::default(),
         };
         let opening = Opening {
-            kind: if spec { "spec-review" } else { "implement" },
-            stage: if spec {
-                Stage::SpecReview
+            session: if spec {
+                OpeningSession::SpecReview
             } else {
-                Stage::Implementation
+                OpeningSession::Implementation
             },
             prompt: String::new(),
-            catch_up_from_origin: spec,
         };
         route
             .steps(outside, &opening, spec.then_some("Tickets"))
             .map_err(|error| {
                 // The real adapters enter each stage the steps name.
-                let tracker = Tracker::new(opening.stage, Recorded::default());
+                let tracker = Tracker::new(opening.session.stage(), Recorded::default());
                 for stage in &outside.stages {
                     tracker.enter(*stage);
                 }

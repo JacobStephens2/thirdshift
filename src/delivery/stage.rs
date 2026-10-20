@@ -10,7 +10,7 @@ use crate::recovery;
 
 /// A stage of a Delivery, as its steps and the Repair loop enter it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Stage {
+pub(super) enum Stage {
     Implementation,
     SpecReview,
     SecurityReview,
@@ -75,8 +75,9 @@ pub(super) struct Tracker<R = CommandLog> {
 impl<R: CommandRecord> Tracker<R> {
     /// A Tracker that has entered `first`, recording to `record`.
     pub(super) fn new(first: Stage, record: R) -> Self {
+        // Entering `first` replaces this placeholder at once.
         let tracker = Self {
-            stopped_at: Cell::new(first.records().0),
+            stopped_at: Cell::new(recovery::Stage::Implementation),
             record,
         };
         tracker.enter(first);
@@ -96,7 +97,7 @@ impl<R: CommandRecord> Tracker<R> {
     /// A Security hold, found after the pull request was made ready, stopped
     /// the Delivery at its Security review. Nothing is recorded: the
     /// Security review was over before the stages since.
-    pub(super) fn security_hold(&self) {
+    pub(super) fn stop_at_security_review(&self) {
         self.stopped_at.set(recovery::Stage::SecurityReview);
     }
 
@@ -204,7 +205,7 @@ mod tests {
         ] {
             tracker.enter(stage);
         }
-        tracker.security_hold();
+        tracker.stop_at_security_review();
         assert_eq!(tracker.stopped_at(), recovery::Stage::SecurityReview);
         assert_eq!(
             tracker.record.names(),

@@ -12,7 +12,7 @@ use crate::base_fix::{Advice, BaseFix};
 use crate::branch::{self, Selection};
 use crate::child_run::Kind;
 use crate::claim::{self, Claim};
-use crate::delivery::{Delivery, Opening, Stage};
+use crate::delivery::{Delivery, Opening, OpeningSession};
 use crate::failed_run::FailedRun;
 use crate::github::{GitHub, Ticket};
 use crate::harness::Choice;
@@ -26,9 +26,6 @@ use crate::session::Logs;
 use crate::spec_run;
 use crate::trust;
 use crate::worktree::Worktree;
-
-/// The implement session's kind, in its progress lines and log name.
-const IMPLEMENT: &str = "implement";
 
 /// Where a Run takes its PR: ready for review, or, in a Merge run, merged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -334,10 +331,8 @@ fn start_in_worktree<O: Outside>(
         return outside.spec_run(tickets, worktree, base, parallel);
     }
     let opening = Opening {
-        kind: IMPLEMENT,
-        stage: Stage::Implementation,
+        session: OpeningSession::Implementation,
         prompt,
-        catch_up_from_origin: false,
     };
     outside.deliver(worktree, base, opening)
 }
@@ -751,8 +746,7 @@ mod tests {
             base: &str,
             opening: Opening,
         ) -> Result<Reached, FailedRun> {
-            assert_eq!(opening.kind, IMPLEMENT);
-            assert!(!opening.catch_up_from_origin);
+            assert_eq!(opening.session, OpeningSession::Implementation);
             self.calls
                 .push(Call::Deliver(worktree, base.to_string(), opening.prompt));
             self.work_ends()
