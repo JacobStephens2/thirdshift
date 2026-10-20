@@ -150,7 +150,67 @@ fn history_keeps_every_ended_command_in_time_order_and_filters() {
             .unwrap()
             .contains("acme/widgets#1")
     );
-    assert_eq!(console.get("/?page=lanes").status(), 404);
+    assert_eq!(console.get("/?page=waterfall").status(), 404);
+}
+
+#[test]
+fn time_pages_pair_with_all_status_stages_and_repository_usual_ranges() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let now = chrono::Local::now();
+    for number in 1..=4 {
+        let mut value = record(home.path(), number, Some("merged"), 0);
+        value["started_at"] = json!((now - chrono::Duration::hours(number as i64)).to_rfc3339());
+        let began = value["started_at"].as_str().unwrap().to_owned();
+        let middle = (chrono::DateTime::parse_from_rfc3339(&began).unwrap()
+            + chrono::Duration::minutes(10))
+        .to_rfc3339();
+        let end = (chrono::DateTime::parse_from_rfc3339(&middle).unwrap()
+            + chrono::Duration::minutes(20))
+        .to_rfc3339();
+        value["stages"] = json!([
+            {"name": "implement", "began_at": began, "session_log": null},
+            {"name": "CI watch", "began_at": middle, "session_log": null}
+        ]);
+        value["ended_at"] = json!(end);
+        write_record(home.path(), number, &value);
+    }
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let output = Command::new(binary)
+        .args(["status", "--all", "--json"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let stages = console.get("/stages").text().unwrap();
+    assert!(stages.contains("<h2>Stages</h2>"), "{stages}");
+    assert!(stages.contains("thirdshift status --all --json"));
+    for command in status["commands"].as_array().unwrap() {
+        let number = command["issue"]["number"].as_u64().unwrap();
+        assert!(stages.contains(&format!("acme/widgets#{number}")));
+        assert_eq!(command["usual_ranges"]["implement"]["lower_seconds"], 600.0);
+        assert_eq!(command["usual_ranges"]["CI watch"]["upper_seconds"], 1200.0);
+    }
+    assert!(stages.contains("Usual range"));
+    assert!(stages.contains("10–10 min"));
+    assert!(stages.contains("20–20 min"));
+    assert_eq!(stages.matches("Complete · 10 min").count(), 4);
+    assert_eq!(stages.matches("Complete · 20 min").count(), 4);
+    for (window, count) in [("3.5", 3), ("12", 4), ("24", 4)] {
+        let html = console
+            .get(&format!("/lanes?hours={window}"))
+            .text()
+            .unwrap();
+        assert!(html.contains("<h2>Lanes</h2>"), "{html}");
+        assert_eq!(html.matches("class=\"lane\"").count(), count);
+        assert_eq!(html.matches("data-seconds=\"600\"").count(), count);
+        assert_eq!(html.matches("data-seconds=\"1200\"").count(), count);
+        assert!(html.contains("History"));
+    }
+    assert_eq!(console.get("/?page=2").status(), 200);
+    assert_eq!(console.get("/?page=3").status(), 200);
 }
 
 #[test]

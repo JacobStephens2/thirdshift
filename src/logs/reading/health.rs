@@ -81,26 +81,16 @@ impl UsualRanges {
 }
 
 fn collect_times(record: &CommandRecord, samples: &mut BTreeMap<(String, String), Vec<f64>>) {
-    for (index, stage) in record.stages.iter().enumerate() {
+    for timing in record.stage_times(None) {
+        let stage = timing.stage;
         if !StageName::known(&stage.name) {
             continue;
         }
-        let end = record
-            .stages
-            .get(index + 1)
-            .map(|stage| stage.began_at.as_str())
-            .or_else(|| record.outcome.as_ref().and(record.ended_at.as_deref()));
-        if let Some((began, ended)) = DateTime::parse_from_rfc3339(&stage.began_at)
-            .ok()
-            .zip(end.and_then(|end| DateTime::parse_from_rfc3339(end).ok()))
-        {
-            let seconds = ended.signed_duration_since(began).num_milliseconds() as f64 / 1000.0;
-            if seconds >= 0.0 {
-                samples
-                    .entry((record.repository.clone(), stage.name.clone()))
-                    .or_default()
-                    .push(seconds);
-            }
+        if let Some(seconds) = timing.seconds() {
+            samples
+                .entry((record.repository.clone(), stage.name.clone()))
+                .or_default()
+                .push(seconds);
         }
     }
 }

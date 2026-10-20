@@ -110,7 +110,7 @@ fn account_pages_and_sign_in_follow_the_configured_theme() {
                 .contains(&attribute)
         );
         let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
-        for path in ["/", "/account", "/console-log"] {
+        for path in ["/", "/lanes", "/stages", "/account", "/console-log"] {
             let page = get(&console, path, &session).text().unwrap();
             assert!(page.contains(&attribute), "{path} ignores {theme}");
         }
@@ -129,11 +129,17 @@ fn sign_in_guards_pages_streams_and_actions_and_pairs_the_console_log_with_cli()
     );
     for path in [
         "/",
+        "/?page=lanes",
+        "/?page=stages",
+        "/?page=2",
+        "/?page=3",
         "/?page=history",
         "/?page=security",
         "/?page=logs",
         "/history",
         "/security",
+        "/lanes",
+        "/stages",
         "/peek?command=widgets%237",
         "/log?command=widgets%237",
         "/logs",
