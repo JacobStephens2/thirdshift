@@ -26,6 +26,7 @@ pub(crate) struct Run {
     repository: String,
     started: Option<i64>,
     ended: Option<i64>,
+    stage_metadata: bool,
 }
 
 #[derive(Clone)]
@@ -56,28 +57,20 @@ fn timestamp(value: &str) -> Option<i64> {
         .map(|time| time.timestamp())
 }
 
-fn run(command: &Command, now: i64, cutoff: i64) -> Run {
+fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
     let record = &command.record;
     let selector = Observation::Record(command).selector().unwrap_or_default();
+    let live_until = (command.state == "live").then_some(now.fixed_offset());
+    let now = now.timestamp();
     let stages = record
-        .stages
-        .iter()
+        .stage_times(live_until)
         .enumerate()
-        .map(|(index, stage)| {
-            let began = timestamp(&stage.began_at);
-            let next = record.stages.get(index + 1);
-            let end = if let Some(next) = next {
-                timestamp(&next.began_at)
-            } else if command.state == "live" {
-                Some(now)
-            } else {
-                record.ended_at.as_deref().and_then(timestamp)
-            };
-            let seconds = began
-                .zip(end)
-                .filter(|(start, end)| end >= start)
-                .map(|(start, end)| end - start);
-            let state = if next.is_some() {
+        .map(|(index, timing)| {
+            let stage = timing.stage;
+            let began = timing.began.map(|time| time.timestamp());
+            let end = timing.ended.map(|time| time.timestamp());
+            let seconds = timing.seconds();
+            let state = if index + 1 < record.stages.len() {
                 "Complete"
             } else if command.state == "live" {
                 "Running"
@@ -89,21 +82,22 @@ fn run(command: &Command, now: i64, cutoff: i64) -> Run {
                 record.outcome.as_deref().unwrap_or("Unknown")
             };
             let duration = seconds
-                .map(super::age)
+                .map(|seconds| super::age(seconds as i64))
                 .unwrap_or_else(|| "time unknown".into());
             // Clip only the drawn interval; the text retains the full stage time.
-            let (left, width) = began.zip(end).filter(|(start, end)| end >= start).map_or(
-                (0.0, 0.0),
-                |(start, end)| {
-                    let start = start.clamp(cutoff, now);
-                    let end = end.clamp(cutoff, now);
-                    let scale = 100.0 / (now - cutoff) as f64;
-                    (
-                        (start - cutoff) as f64 * scale,
-                        (end - start).max(0) as f64 * scale,
-                    )
-                },
-            );
+            let (left, width) =
+                began
+                    .zip(end)
+                    .filter(|_| seconds.is_some())
+                    .map_or((0.0, 0.0), |(start, end)| {
+                        let start = start.clamp(cutoff, now);
+                        let end = end.clamp(cutoff, now);
+                        let scale = 100.0 / (now - cutoff) as f64;
+                        (
+                            (start - cutoff) as f64 * scale,
+                            (end - start).max(0) as f64 * scale,
+                        )
+                    });
             Stage {
                 name: stage.name.clone(),
                 text: format!("{state} · {duration}"),
@@ -142,10 +136,11 @@ fn run(command: &Command, now: i64, cutoff: i64) -> Run {
         stages,
         started: timestamp(&record.started_at),
         ended: record.ended_at.as_deref().and_then(timestamp),
+        stage_metadata: true,
     }
 }
 
-fn collect(command: &Command, now: i64, cutoff: i64, runs: &mut Vec<Run>) {
+fn collect(command: &Command, now: DateTime<Local>, cutoff: i64, runs: &mut Vec<Run>) {
     runs.push(run(command, now, cutoff));
     for child in command.dispatched.iter().chain(&command.children) {
         collect(child, now, cutoff, runs);
@@ -161,9 +156,7 @@ pub(crate) fn load(config: &UserConfig, hours: f64) -> Result<Views> {
     for entry in snapshot.entries() {
         let mut runs = Vec::new();
         match entry {
-            Entry::Record(command) => {
-                collect(command, now.timestamp(), cutoff.timestamp(), &mut runs)
-            }
+            Entry::Record(command) => collect(command, now, cutoff.timestamp(), &mut runs),
             Entry::History(command) => {
                 let selector = Observation::History(command).selector().unwrap_or_default();
                 runs.push(Run {
@@ -183,6 +176,7 @@ pub(crate) fn load(config: &UserConfig, hours: f64) -> Result<Views> {
                     stages: Vec::new(),
                     started: timestamp(&command.started_at),
                     ended: command.ended_at.as_deref().and_then(timestamp),
+                    stage_metadata: false,
                 });
             }
         }
@@ -202,54 +196,69 @@ pub(crate) fn load(config: &UserConfig, hours: f64) -> Result<Views> {
         }
     }
     lanes.sort_by_key(|runs| std::cmp::Reverse(runs.first().and_then(|run| run.started)));
+    let mut ordered: Vec<_> = repositories.values().flatten().cloned().collect();
+    ordered.sort_by_key(|run| {
+        (
+            run.state != "live",
+            std::cmp::Reverse(run.ended.or(run.started)),
+        )
+    });
+    // Keep global ordering, continuing a repository's table whenever the next
+    // Run belongs elsewhere or three columns have filled the available width.
+    let mut batches: Vec<Vec<Run>> = Vec::new();
+    for run in ordered {
+        if let Some(batch) = batches.last_mut()
+            && batch.len() < 3
+            && batch[0].repository == run.repository
+        {
+            batch.push(run);
+        } else {
+            batches.push(vec![run]);
+        }
+    }
     let mut grids = Vec::new();
-    for (repository, mut runs) in repositories {
-        runs.sort_by_key(|run| {
-            (
-                run.state != "live",
-                std::cmp::Reverse(run.ended.or(run.started)),
-            )
-        });
-        // Bound the column count while keeping every Run accessible without horizontal scrolling.
+    for batch in batches {
+        let repository = &batch[0].repository;
+        let runs = &repositories[repository];
         let names: BTreeSet<_> = runs
             .iter()
             .flat_map(|run| run.stages.iter().map(|stage| stage.name.clone()))
             .collect();
-        for batch in runs.chunks(3) {
-            let rows = names
-                .iter()
-                .map(|name| GridRow {
-                    name: name.clone(),
-                    usual: runs
-                        .iter()
-                        .flat_map(|run| &run.stages)
-                        .find(|stage| &stage.name == name)
-                        .map(|stage| stage.usual.clone())
-                        .unwrap_or_default(),
-                    cells: batch
-                        .iter()
-                        .map(|run| {
-                            let times: Vec<_> = run
-                                .stages
-                                .iter()
-                                .filter(|stage| &stage.name == name)
-                                .map(|stage| stage.text.as_str())
-                                .collect();
-                            if times.is_empty() {
-                                "Not reached · —".into()
-                            } else {
-                                times.join("; ")
-                            }
-                        })
-                        .collect(),
-                })
-                .collect();
-            grids.push(Grid {
-                repository: repository.clone(),
-                runs: batch.to_vec(),
-                rows,
-            });
-        }
+        let rows = names
+            .iter()
+            .map(|name| GridRow {
+                name: name.clone(),
+                usual: runs
+                    .iter()
+                    .flat_map(|run| &run.stages)
+                    .find(|stage| &stage.name == name)
+                    .map(|stage| stage.usual.clone())
+                    .unwrap_or_default(),
+                cells: batch
+                    .iter()
+                    .map(|run| {
+                        let times: Vec<_> = run
+                            .stages
+                            .iter()
+                            .filter(|stage| &stage.name == name)
+                            .map(|stage| stage.text.as_str())
+                            .collect();
+                        if !run.stage_metadata {
+                            "Unknown · no stage times retained".into()
+                        } else if times.is_empty() {
+                            "Not reached · —".into()
+                        } else {
+                            times.join("; ")
+                        }
+                    })
+                    .collect(),
+            })
+            .collect();
+        grids.push(Grid {
+            repository: repository.clone(),
+            runs: batch,
+            rows,
+        });
     }
     Ok(Views {
         lanes,

@@ -41,6 +41,17 @@ before(async () => {
     await writeFile(join(folder, `${number}-fixture.command.json`), JSON.stringify(record));
     await writeFile(join(folder, `${number}-fixture.log`), `Command ${number}\n`);
   }
+  // A finished Run in an alphabetically earlier repository must not precede
+  // this repository's live Run, or reorder the finished columns by repository.
+  const otherFolder = join(home, '.thirdshift/logs/aaa/first/commands/issue');
+  await mkdir(otherFolder, { recursive: true });
+  const other = JSON.parse(await readFile(join(folder, '3-fixture.command.json'), 'utf8'));
+  other.repository = 'aaa/first';
+  other.issue.number = 8;
+  other.issue.url = 'https://github.com/aaa/first/issues/8';
+  await writeFile(join(otherFolder, '8-fixture.command.json'), JSON.stringify(other));
+  await writeFile(join(home, '.thirdshift/logs/acme/widgets/activity.log'),
+    '2026-10-01 12:00:00 Run #9 started: commands/issue/9-20261001T120000+0000.log\n2026-10-01 12:20:00 Run #9 ended: merged\n');
   server = spawn(binary, ['console', '--no-sign-in'], { env: { ...process.env, HOME: home }, stdio: ['ignore', 'pipe', 'inherit'] });
   exited = once(server, 'exit');
   const lines = createInterface({ input: server.stdout });
@@ -64,7 +75,7 @@ test('Lanes scales every window, nests child Runs and fits 390 px without CSP vi
   for (const hours of [3.5, 12, 24]) {
     await page.goto(`${origin}/?page=lanes&hours=${hours}`);
     assert.equal(await page.locator('[name="hours"]').inputValue(), String(hours));
-    assert.equal(await page.locator('.lane').count(), 5);
+    assert.equal(await page.locator('.lane').count(), 6);
     assert.equal(await page.locator('.lane').filter({ hasText: 'acme/widgets#2' }).locator('.time-run').count(), 2);
     const complete = page.locator('.time-run').filter({ hasText: 'acme/widgets#3' });
     const track = await complete.locator('.timeline').boundingBox();
@@ -99,6 +110,11 @@ test('Stages pins live Runs, matches CLI order and opens the selected child Run 
   assert.equal(await page.locator('thead .command').first().getAttribute('data-command'), runs[0].record_path ?? `${join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json')}::run-1`);
   assert.match(await page.locator('.stage-grid').first().textContent(), /Running ·/);
   assert.match(await page.locator('.stage-grid').first().textContent(), /Usual range: 10–10 min/);
+  const historical = page.locator('.stage-grid').filter({ has: page.locator('thead .peek-link', { hasText: 'acme/widgets#9' }) });
+  const headers = await historical.locator('thead .peek-link').allTextContents();
+  const historicalCell = historical.locator('tbody tr').first().locator('td').nth(headers.indexOf('acme/widgets#9'));
+  assert.match(await historicalCell.textContent(), /Unknown · no stage times retained/);
+  assert.doesNotMatch(await historicalCell.textContent(), /Not reached/);
   const child = page.locator('thead .peek-link').filter({ hasText: 'acme/widgets#6' });
   await child.click();
   await page.locator('#peek-content h2').waitFor();

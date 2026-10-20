@@ -39,9 +39,11 @@ and Session logs. Older records without finding metadata still show their logs.
 Lanes shows each Command and its child Runs on a shared time axis, over the last
 3.5, 12 or 24 hours. The window is kept in `hours=`; bars clip to that window,
 while their text retains the whole stage's time. Older Commands are on History.
-Stages groups Runs by repository so each stage's Usual range belongs to that
-repository. Live columns come first, then finished Runs newest first, continuing
-in tables of three Runs. On phones each stage stacks its labelled cells. Choose
+Stages keeps live Runs first across repositories, then finished Runs newest first.
+Tables continue when the repository changes or three columns are filled, so
+each stage's Usual range belongs to that table's repository. On phones each
+stage stacks its labelled cells. Historical Runs without stage metadata show
+an unknown time, distinct from a stage that was not reached. Choose
 a column's Run link to open its exact peek. Repeated stages retain every visit;
 missing end timestamps say “time unknown” rather than inventing a duration.
 Both pages use the observations from `status --all --json`. The Rust parity

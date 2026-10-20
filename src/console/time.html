@@ -38,7 +38,7 @@
     </section>
     {% endfor %}
     {% else %}
-    <p>Live Runs first, then finished Runs newest first, grouped by repository. Each table continues the preceding columns. Repeated stages list every visit.</p>
+    <p>Live Runs first, then finished Runs newest first. Tables continue in that order, with each repository's Usual range. Repeated stages list every visit.</p>
     {% if views.grids.is_empty() %}<p class="empty">No Runs yet.</p>{% endif %}
     {% for grid in views.grids %}
     <table class="stage-grid">
