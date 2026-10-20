@@ -1,0 +1,9 @@
+<!doctype html>
+<html lang="en" data-theme="{{ theme }}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ log.kind }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/logs.js" type="module"></script></head>
+<body><header><p class="brand">thirdshift / Console</p><nav aria-label="Pages"><a href="/">1 Inbox</a><a href="/logs">6 Logs</a></nav></header>
+<main><h1>{{ log.kind }}</h1><p>{{ log.name }} {% if log.live %}<strong>live</strong>{% endif %}</p><p><code>thirdshift logs --file {{ log.id }}</code></p>
+<label><input id="follow-log" type="checkbox" checked> Follow newest line</label><p id="log-status" role="status">{% if log.live %}Live{% else %}Complete{% endif %}</p>
+{# Only the conversation renderer's escaped HTML is trusted. #}
+<section id="log-content" aria-label="Log" data-stream="/logs/{{ log.id }}/stream/{{ offset }}" data-offset="{{ offset }}">{{ html|safe }}</section>
+</main></body></html>

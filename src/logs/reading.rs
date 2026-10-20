@@ -1,6 +1,7 @@
 //! Filesystem observations of Commands, their Runs and exact ownership.
 //! Loading uses one sampled time; reading never prints or performs Stop effects.
 
+pub(crate) mod catalog;
 mod health;
 mod history;
 mod inbox;

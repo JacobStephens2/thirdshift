@@ -17,6 +17,7 @@
     {% if !consoles.is_empty() %}<nav aria-label="Other Consoles">{% for address in consoles %}<a href="{{ address }}">{{ address }}</a>{% endfor %}</nav>{% endif %}
   </header>
   <main>
+    <nav aria-label="Pages"><a href="/">1 Inbox</a><a href="/logs">6 Logs</a></nav>
     <div class="page-title"><h2>Inbox</h2><code>{{ cli }}</code></div>
     {% match inbox.warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning }}</p>{% when None %}{% endmatch %}
     {% for section in inbox.sections %}

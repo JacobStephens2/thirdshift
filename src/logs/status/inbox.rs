@@ -22,6 +22,7 @@ pub(crate) struct Section {
 }
 
 pub(crate) struct Row {
+    pub logs_url: String,
     pub subject: String,
     pub title: String,
     pub state: String,
@@ -48,11 +49,19 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                 .filter(|item| item.group == group)
                 .map(|item| {
                     let mut row = match item.command {
-                        Entry::Record(command) => row(command, now),
+                        Entry::Record(command) => row(command, now, &config.logs_dir),
                         Entry::History(command) => {
                             let (subject, title) =
                                 subject(&command.repository, &command.kind, command.issue.as_ref());
                             Row {
+                                logs_url: command
+                                    .command_log
+                                    .as_ref()
+                                    .and_then(|path| path.strip_prefix(&config.logs_dir).ok())
+                                    .map(|path| {
+                                        format!("/logs/command/{}", crate::logs::catalog::id(path))
+                                    })
+                                    .unwrap_or_else(|| "/logs".into()),
                                 subject,
                                 title,
                                 state: command.state.into(),
@@ -139,10 +148,15 @@ fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, Stri
     }
 }
 
-fn row(command: &Command, now: DateTime<Local>) -> Row {
+fn row(command: &Command, now: DateTime<Local>, root: &std::path::Path) -> Row {
     let facts = &command.record;
     let (subject, title) = subject(&facts.repository, &facts.name, facts.issue.as_ref());
     Row {
+        logs_url: command
+            .record_path
+            .strip_prefix(root)
+            .map(|path| format!("/logs/command/{}", crate::logs::catalog::id(path)))
+            .unwrap_or_else(|_| "/logs".into()),
         subject,
         title,
         state: command.state.into(),
@@ -166,7 +180,7 @@ fn row(command: &Command, now: DateTime<Local>) -> Row {
             .dispatched
             .iter()
             .chain(&command.children)
-            .map(|child| row(child, now))
+            .map(|child| row(child, now, root))
             .collect(),
     }
 }

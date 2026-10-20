@@ -28,10 +28,14 @@ impl Executable {
     pub async fn replaced(&self) {
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
-            if identity(&self.path).is_ok_and(|current| current != self.identity) {
+            if self.changed() {
                 return;
             }
         }
+    }
+
+    pub fn changed(&self) -> bool {
+        identity(&self.path).is_ok_and(|current| current != self.identity)
     }
 
     pub fn exec(&self) -> Result<()> {

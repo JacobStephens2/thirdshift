@@ -1,6 +1,7 @@
 <li class="command" data-state="{{ row.state }}">
   <div class="row-head"><span class="state">{{ row.state }}</span> <span class="subject">{{ row.subject }}</span> <span class="issue-title">{{ row.title }}</span><span class="age">{{ row.age }}</span></div>
   <p class="now">{{ row.now_line }}</p>
+  <a href="{{ row.logs_url }}">Run and Session logs</a>
   {% if !row.harness.is_empty() %}<p class="harness">{{ row.harness }}</p>{% endif %}
   {% if !row.pull_request.is_empty() %}<p class="pr">{{ row.pull_request }}</p>{% endif %}
   {% if row.count > 1 %}<p>{{ row.count }} Commands with this cause: {{ row.cause }}</p>{% else if !row.cause.is_empty() %}<p>{{ row.cause }}</p>{% endif %}

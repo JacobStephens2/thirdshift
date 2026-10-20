@@ -1,4 +1,6 @@
 //! The machine's Console. Async execution is confined to this module.
+mod conversation;
+mod logs;
 mod restart;
 
 use std::io::Write;
@@ -25,10 +27,28 @@ struct PageRoute {
     cli: &'static str,
 }
 
-const PAGES: &[PageRoute] = &[PageRoute {
-    path: "/",
-    cli: "thirdshift status",
-}];
+const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/",
+        cli: "thirdshift status",
+    },
+    PageRoute {
+        path: "/logs",
+        cli: "thirdshift logs --json",
+    },
+    PageRoute {
+        path: "/logs/command/{id}",
+        cli: "thirdshift logs --command id --json",
+    },
+    PageRoute {
+        path: "/logs/{id}",
+        cli: "thirdshift logs --file id",
+    },
+    PageRoute {
+        path: "/logs/{id}/stream/{offset}",
+        cli: "thirdshift logs --file id --follow",
+    },
+];
 
 pub fn serve(no_sign_in: bool) -> Result<()> {
     ensure!(
@@ -47,10 +67,13 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
         let watched = executable.clone();
-        axum::serve(listener, router())
-            .with_graceful_shutdown(async move { watched.replaced().await })
-            .await
-            .context("Console server failed")?;
+        axum::serve(
+            listener,
+            router().layer(axum::Extension(executable.clone())),
+        )
+        .with_graceful_shutdown(async move { watched.replaced().await })
+        .await
+        .context("Console server failed")?;
         Ok::<_, anyhow::Error>(())
     })?;
     // Drop the runtime (and its sockets) before replacing the process.
@@ -62,7 +85,15 @@ fn router() -> Router {
     let mut router = Router::new();
     for page in PAGES {
         let cli = page.cli;
-        router = router.route(page.path, get(move || inbox(cli)));
+        let handler = match page.path {
+            "/" => get(move || inbox(cli)),
+            "/logs" => get(logs::index),
+            "/logs/command/{id}" => get(logs::command),
+            "/logs/{id}" => get(logs::reader),
+            "/logs/{id}/stream/{offset}" => get(logs::stream),
+            _ => unreachable!("unknown Console page"),
+        };
+        router = router.route(page.path, handler);
     }
     router = router.route("/assets/{*path}", get(asset));
     router
@@ -98,23 +129,32 @@ impl RowTemplate<'_> {
 
 async fn inbox(cli: &'static str) -> Response {
     // The shared observations and templates stay blocking, off the async executor.
-    match tokio::task::spawn_blocking(move || -> Result<String> {
-        let config = UserConfig::load()?;
-        Ok(InboxPage {
-            hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-            consoles: config.console.other_consoles.clone(),
-            theme: config.console.theme.clone(), cli,
-            inbox: status::inbox(&config)?,
-        }.render()?)
-    }).await {
+    page(
+        tokio::task::spawn_blocking(move || -> Result<String> {
+            let config = UserConfig::load()?;
+            Ok(InboxPage {
+                hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
+                consoles: config.console.other_consoles.clone(),
+                theme: config.console.theme.clone(),
+                cli,
+                inbox: status::inbox(&config)?,
+            }
+            .render()?)
+        })
+        .await,
+    )
+}
+
+fn page(result: std::result::Result<Result<String>, tokio::task::JoinError>) -> Response {
+    match result {
         Ok(Ok(html)) => (
             [(header::CONTENT_SECURITY_POLICY, "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"),
              (header::CACHE_CONTROL, "no-store"),
              (header::X_CONTENT_TYPE_OPTIONS, "nosniff")], Html(html)
         ).into_response(),
         error => {
-            eprintln!("thirdshift Console: can't read Inbox: {error:?}");
-            (StatusCode::INTERNAL_SERVER_ERROR, "Can't read the Inbox; check the Console's stderr.").into_response()
+            eprintln!("thirdshift Console: can't read page: {error:?}");
+            (StatusCode::INTERNAL_SERVER_ERROR, "Can't read this page; check the Console's stderr.").into_response()
         }
     }
 }
