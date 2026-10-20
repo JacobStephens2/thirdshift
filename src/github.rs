@@ -23,7 +23,6 @@ pub use advisories::{
     DraftAdvisory, FindingDraft, FindingProvenance, Package, RecordedFinding, SecurityRecord,
     SecurityRecords,
 };
-pub use trust::{IssueText, UntrustedIssue};
 
 #[cfg(test)]
 mod execution_tests;

@@ -28,6 +28,7 @@ use crate::prompt;
 use crate::pull_request::PullRequest;
 use crate::recovery::{Preservation, Recovery, Stage, TicketProgress};
 use crate::run::Reached;
+use crate::trust;
 use crate::worktree::Worktree;
 
 use ticket_board::TicketBoard;
@@ -270,7 +271,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
         let kind = Kind::Ticket {
             spec_branch: self.worktree().branch().to_string(),
         };
-        if let Some(check) = GitHub::new().ticket_trust(ticket, self.spec)? {
+        if let Some(check) = trust::ticket_trust(&GitHub::new(), ticket, self.spec)? {
             bail!("Ticket #{}: {check}", ticket.number);
         }
         self.children.start(

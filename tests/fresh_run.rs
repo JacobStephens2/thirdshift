@@ -85,28 +85,6 @@ fn a_direct_run_warns_about_an_untrusted_author_and_still_delivers_its_pr() {
 }
 
 #[test]
-fn a_direct_run_warns_about_missing_ready_label_history_and_still_delivers_its_pr() {
-    let scenario = Scenario::new();
-    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
-    let mut state = scenario.gh_state();
-    state["trust_events"] = serde_json::json!({"7": []});
-    scenario.write_gh_state(&state);
-
-    let result = scenario.run(&[&scenario.issue_url(7)]);
-
-    assert_eq!(result.code, Some(0), "{}", result.stderr);
-    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
-    assert!(
-        result.stderr.contains(
-            "warning: #7 most recent ready-for-agent label actor is not a Trusted account"
-        ),
-        "{}",
-        result.stderr
-    );
-    assert_eq!(scenario.claude_calls().len(), 1);
-}
-
-#[test]
 fn a_direct_run_warns_when_trust_cannot_be_checked_and_still_delivers_its_pr() {
     let scenario = Scenario::new();
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);

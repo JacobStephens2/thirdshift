@@ -1,6 +1,6 @@
-//! The fixed Trusted account rule, shared by every path that starts work.
-
-use std::fmt;
+//! The GitHub adapter's reads for the Trusted account rule in
+//! [`crate::trust`]: the queries, their paging and parsing, and the reading
+//! of membership endpoints.
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
@@ -9,157 +9,23 @@ use serde_json::Value;
 use super::{CommandFailure, GitHub};
 use crate::issue::IssueUrl;
 use crate::labels::READY_FOR_AGENT;
+use crate::trust::{Action, IssueText, Reads};
 
-/// The first trust check an issue failed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UntrustedIssue {
-    Author,
-    ReadyLabel,
-    /// Its `IssueText` was edited, after it was last marked ready, by an account
-    /// that is not a Trusted account.
-    Edited(IssueText),
-}
-
-impl fmt::Display for UntrustedIssue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Author => f.write_str("issue author is not a Trusted account"),
-            Self::ReadyLabel => {
-                f.write_str("most recent ready-for-agent label actor is not a Trusted account")
-            }
-            Self::Edited(edit) => write!(
-                f,
-                "{edit} edited after it was marked ready by an account that is not a Trusted account"
-            ),
-        }
-    }
-}
-
-/// The part of an issue an edit changed: its body or its title.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum IssueText {
-    Body,
-    Title,
-}
-
-impl fmt::Display for IssueText {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Body => "body",
-            Self::Title => "title",
-        })
-    }
-}
-
-/// One `ready-for-agent` labelling from an issue's event history.
-struct Labelling {
-    actor: Option<String>,
-    at: DateTime<Utc>,
-}
-
-impl GitHub {
-    /// Check the issue author, the most recent ready-for-agent label actor,
-    /// and every edit to its body or title made since that labelling.
-    pub fn issue_trust(&self, issue: &IssueUrl) -> Result<Option<UntrustedIssue>> {
-        if let Some(check) = self.author_trust(issue)? {
-            return Ok(Some(check));
-        }
-        let Some(Labelling {
-            actor: Some(actor),
-            at,
-        }) = self.ready_labellings(issue)?.pop()
-        else {
-            return Ok(Some(UntrustedIssue::ReadyLabel));
-        };
-        if !self.trusted_actor(issue, &actor)? {
-            return Ok(Some(UntrustedIssue::ReadyLabel));
-        }
-        Ok(self
-            .untrusted_edit(issue, Some(at))?
-            .map(UntrustedIssue::Edited))
+impl Reads for GitHub {
+    fn author_association(&self, issue: &IssueUrl) -> Result<String> {
+        let json = self.gh_json(&[
+            "api",
+            &format!("repos/{}/issues/{}", issue.repo_slug(), issue.number),
+        ])?;
+        Ok(json["author_association"]
+            .as_str()
+            .context("gh api output has no author_association")?
+            .to_string())
     }
 
-    /// Check a Ticket before its Run starts: its author, and every edit to
-    /// its body or title made since the later of the Ticket's and its
-    /// `spec`'s last ready-for-agent labellings by a Trusted account, or
-    /// every edit if neither has one. A Ticket needs no label of its own:
-    /// its Spec's labelling already passed the full check.
-    pub fn ticket_trust(
-        &self,
-        ticket: &IssueUrl,
-        spec: &IssueUrl,
-    ) -> Result<Option<UntrustedIssue>> {
-        if let Some(check) = self.author_trust(ticket)? {
-            return Ok(Some(check));
-        }
-        let since = self
-            .trusted_ready_at(ticket)?
-            .max(self.trusted_ready_at(spec)?);
-        Ok(self
-            .untrusted_edit(ticket, since)?
-            .map(UntrustedIssue::Edited))
-    }
-
-    /// The first edit to `issue`'s body or title made after `since`, or ever
-    /// if `since` is `None`, by an account that is not a Trusted account, if
-    /// there is one. An edit whose account GitHub no longer knows counts.
-    pub fn untrusted_edit(
-        &self,
-        issue: &IssueUrl,
-        since: Option<DateTime<Utc>>,
-    ) -> Result<Option<IssueText>> {
-        let mut trusted: Vec<String> = Vec::new();
-        for (edit, query, field) in [
-            (IssueText::Body, BODY_EDITS_QUERY, "editedAt"),
-            (IssueText::Title, TITLE_EDITS_QUERY, "createdAt"),
-        ] {
-            for node in self.edits(issue, query)? {
-                if let Some(since) = since
-                    && time_at(&node, field)? <= since
-                {
-                    continue;
-                }
-                let Some(login) = node["actor"]["login"].as_str() else {
-                    return Ok(Some(edit));
-                };
-                if trusted
-                    .iter()
-                    .any(|known| known.eq_ignore_ascii_case(login))
-                {
-                    continue;
-                }
-                if !self.trusted_actor(issue, login)? {
-                    return Ok(Some(edit));
-                }
-                trusted.push(login.to_string());
-            }
-        }
-        Ok(None)
-    }
-
-    /// Every edit `query` reads of `issue`, its `edits` connection read page
-    /// by page so that no edit is missed.
-    fn edits(&self, issue: &IssueUrl, query: &str) -> Result<Vec<Value>> {
-        Ok(self.paged_nodes(issue, query, "edits", "edit history")?.1)
-    }
-
-    /// When `issue` was last labelled ready-for-agent by a Trusted account,
-    /// if it ever was.
-    fn trusted_ready_at(&self, issue: &IssueUrl) -> Result<Option<DateTime<Utc>>> {
-        for labelling in self.ready_labellings(issue)?.into_iter().rev() {
-            if let Some(actor) = &labelling.actor
-                && self.trusted_actor(issue, actor)?
-            {
-                return Ok(Some(labelling.at));
-            }
-        }
-        Ok(None)
-    }
-
-    /// Every ready-for-agent labelling of `issue`, oldest first. A Claim
-    /// removes the label, but its historical event still matters. Every page
-    /// is read: a later reapplication supersedes an earlier one.
-    fn ready_labellings(&self, issue: &IssueUrl) -> Result<Vec<Labelling>> {
+    /// A Claim removes the label, but its historical event still matters.
+    /// Every page is read: a later reapplication supersedes an earlier one.
+    fn ready_labellings(&self, issue: &IssueUrl) -> Result<Vec<Action>> {
         let events = self.gh_api_items(
             &format!(
                 "repos/{}/issues/{}/events?per_page=100",
@@ -176,49 +42,41 @@ impl GitHub {
                         .as_str()
                         .is_some_and(|name| READY_FOR_AGENT.is_named(name))
             })
-            .map(|event| {
-                Ok(Labelling {
-                    actor: event["actor"]["login"].as_str().map(str::to_string),
-                    at: time_at(event, "created_at")?,
-                })
-            })
+            .map(|event| action(event, "created_at"))
             .collect()
     }
 
-    /// Check only the issue author.
-    fn author_trust(&self, issue: &IssueUrl) -> Result<Option<UntrustedIssue>> {
-        let json = self.gh_json(&[
-            "api",
-            &format!("repos/{}/issues/{}", issue.repo_slug(), issue.number),
-        ])?;
-        let association = json["author_association"]
-            .as_str()
-            .context("gh api output has no author_association")?;
-        if !trusted_association(association) {
-            return Ok(Some(UntrustedIssue::Author));
-        }
-        Ok(None)
+    /// Its `edits` connection is read page by page so that no edit is missed.
+    fn edits(&self, issue: &IssueUrl, text: IssueText) -> Result<Vec<Action>> {
+        let (query, field) = match text {
+            IssueText::Body => (BODY_EDITS_QUERY, "editedAt"),
+            IssueText::Title => (TITLE_EDITS_QUERY, "createdAt"),
+        };
+        self.paged_nodes(issue, query, "edits", "edit history")?
+            .1
+            .iter()
+            .map(|node| action(node, field))
+            .collect()
     }
 
-    /// Events have no author association. Check actual membership: public
-    /// read access alone does not make an actor a repository collaborator.
-    fn trusted_actor(&self, issue: &IssueUrl, actor: &str) -> Result<bool> {
-        if actor.eq_ignore_ascii_case(&issue.owner) {
-            return Ok(true);
-        }
+    /// Public read access alone does not make an actor a repository
+    /// collaborator: this checks actual membership.
+    fn is_member(&self, issue: &IssueUrl, login: &str) -> Result<bool> {
         if self.membership(&format!(
-            "repos/{}/collaborators/{actor}",
+            "repos/{}/collaborators/{login}",
             issue.repo_slug()
         ))? {
             return Ok(true);
         }
         let repo = self.gh_json(&["api", &format!("repos/{}", issue.repo_slug())])?;
         if repo["owner"]["type"] == "Organization" {
-            return self.membership(&format!("orgs/{}/members/{actor}", issue.owner));
+            return self.membership(&format!("orgs/{}/members/{login}", issue.owner));
         }
         Ok(false)
     }
+}
 
+impl GitHub {
     /// Membership endpoints return 204 for a member and 404 otherwise.
     /// Other failures must stop unattended selection instead of granting trust.
     fn membership(&self, path: &str) -> Result<bool> {
@@ -239,11 +97,13 @@ impl GitHub {
     }
 }
 
-/// Whether an author's `authorAssociation` with the repository makes them a
-/// Trusted account: its owner, a member of the organization that owns it, or
-/// a collaborator on it.
-pub(super) fn trusted_association(association: &str) -> bool {
-    matches!(association, "OWNER" | "MEMBER" | "COLLABORATOR")
+/// The account that made the event or edit `node`, if GitHub still knows it,
+/// and when, from its `field`.
+fn action(node: &Value, field: &str) -> Result<Action> {
+    Ok(Action {
+        actor: node["actor"]["login"].as_str().map(str::to_string),
+        at: time_at(node, field)?,
+    })
 }
 
 /// The time in `node`'s `field`, when an event or edit was made.
