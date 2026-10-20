@@ -31,16 +31,30 @@ them. The first page pairs with `thirdshift status`. A refresh reads the current
 records; server-push updates are a later Ticket. Replacing the installed binary
 makes the Console re-execute itself with its original arguments.
 
-The available pages are Inbox (`1`), History (`5`), Logs (`6`) and Security (`7`). Links
+The available pages are Inbox (`1`), Lanes (`2`), Stages (`3`), History (`5`), Logs (`6`) and Security (`7`). Links
 keep the page in `?page=`. History includes every ended Command, including old
 logs, and filters by outcome and repository. Security shows retained findings
 and Session logs. Older records without finding metadata still show their logs.
+
+Lanes shows each Command and its child Runs on a shared time axis, over the last
+3.5, 12 or 24 hours. The window is kept in `hours=`; bars clip to that window,
+while their text retains the whole stage's time. Older Commands are on History.
+Stages keeps live Runs first across repositories, then finished Runs newest first.
+Tables continue when the repository changes or three columns are filled, so
+each stage's Usual range belongs to that table's repository. On phones each
+stage stacks its labelled cells. Historical Runs without stage metadata show
+an unknown time, distinct from a stage that was not reached. Choose
+a column's Run link to open its exact peek. Repeated stages retain every visit;
+missing end timestamps say “time unknown” rather than inventing a duration.
+Both pages use the observations from `status --all --json`. The Rust parity
+test checks their stage times and Usual ranges against the CLI; the Playwright
+time tests check scale in all windows, child selection, live ordering and 390 px.
 
 `j` / `k` select headings and visible rows, wrapping at either end. `Space`
 folds a heading or toggles a row's peek; `Enter` opens that row's full Command
 log. `z` folds the current section. `Escape` closes help, jumps or the peek,
 one layer at a time, then clears selection. `?` opens the key list. `g` opens
-the jump list: `i` Inbox, `h` History, `o` Logs, `s` Security, or a section's displayed
+the jump list: `i` Inbox, `a` Lanes, `t` Stages, `h` History, `o` Logs, `s` Security, or a section's displayed
 letter. Text fields keep their normal keys. The peek starts closed and sits
 beside the list on a wide screen or at the bottom of a phone.
 
