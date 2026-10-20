@@ -689,8 +689,26 @@ fn child_runs_nest_and_each_request_reads_current_records() {
             .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture.command.json")
     );
     write_record(home.path(), 8, &child);
+    let child_log = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue/8-fixture-implement.jsonl");
+    fs::write(&child_log, "Ticket Session output\n").unwrap();
+    child["session_log"] = json!(child_log);
+    write_record(home.path(), 8, &child);
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get("/").text().unwrap();
+    let parent_link = html
+        .split("href=\"")
+        .skip(1)
+        .filter_map(|part| part.split_once('"'))
+        .find(|(_, label)| label.starts_with(">Run and Session logs</a>"))
+        .unwrap()
+        .0;
+    let parent_logs = console.get(parent_link).text().unwrap();
+    assert!(
+        parent_logs.contains("8-fixture-implement.jsonl"),
+        "{parent_logs}"
+    );
     let nested = html.split("class=\"children\"").nth(1).expect(&html);
     assert!(
         nested
@@ -762,6 +780,37 @@ fn replacing_the_binary_executes_the_replacement_with_the_original_arguments() {
     assert!(copied.success());
     let console = Console::start(&binary, home.path());
     assert_eq!(console.get("/").status(), 200);
+    // A reader must not keep graceful shutdown waiting on an infinite stream.
+    #[cfg(target_os = "linux")]
+    let _stream = {
+        let mut live = record(home.path(), 7, None, 0);
+        let stat = fs::read_to_string(format!("/proc/{}/stat", std::process::id())).unwrap();
+        let ticks = stat
+            .rsplit_once(") ")
+            .unwrap()
+            .1
+            .split_whitespace()
+            .nth(19)
+            .unwrap();
+        let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap();
+        live["process_id"] = json!(std::process::id());
+        live["process_start"] = json!(format!("{}:{ticks}", boot.trim()));
+        let log = home
+            .path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture-implement.jsonl");
+        fs::write(&log, "initial line\n").unwrap();
+        live["session_log"] = json!(log);
+        write_record(home.path(), 7, &live);
+        let inventory = console.get("/logs").text().unwrap();
+        let link = inventory
+            .split("href=\"")
+            .skip(1)
+            .filter_map(|part| part.split_once('"'))
+            .find(|(url, _)| url.starts_with("/logs/"))
+            .unwrap()
+            .0;
+        console.get(&format!("{link}/stream/0"))
+    };
     let replacement = home.path().join("replacement");
     fs::write(&replacement, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/reexec-args\"\nprintf 'replacement executed\\n'\n").unwrap();
     fs::set_permissions(&replacement, fs::Permissions::from_mode(0o755)).unwrap();
