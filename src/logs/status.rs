@@ -3,6 +3,7 @@
 mod inbox;
 pub mod inspect;
 pub(crate) mod time;
+pub(crate) mod waterfall;
 pub(crate) use inbox::{Archive, ArchivePage, archive};
 pub(crate) use inbox::{Inbox, Row, inbox};
 
