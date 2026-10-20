@@ -169,9 +169,29 @@ fn collect(
             let stage = call
                 .start
                 .and_then(|start| {
+                    // A log timestamp denotes its whole second. Prefer an
+                    // explicit Session reference among compatible intervals,
+                    // especially when a transition retains fractional time.
                     intervals.iter().position(|timing| {
-                        timing.began.is_some_and(|began| start >= began)
-                            && timing.ended.is_none_or(|end| start < end)
+                        timing.stage.session_log.as_ref() == Some(&session)
+                            && timing
+                                .began
+                                .is_some_and(|began| start.timestamp() >= began.timestamp())
+                            && timing
+                                .ended
+                                .is_none_or(|end| start.timestamp() <= end.timestamp())
+                    })
+                })
+                .or_else(|| {
+                    call.start.and_then(|start| {
+                        intervals.iter().position(|timing| {
+                            timing
+                                .began
+                                .is_some_and(|began| start.timestamp() >= began.timestamp())
+                                && timing
+                                    .ended
+                                    .is_none_or(|end| start.timestamp() < end.timestamp())
+                        })
                     })
                 })
                 .or_else(|| {

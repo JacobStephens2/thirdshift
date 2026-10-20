@@ -60,6 +60,10 @@ boundary. These include waiting; they are not measured tool execution times.
 Unmatched calls stay visible with “Time unknown” and no bar. Session links open
 their retained evidence. The Waterfall browser test checks selection, scale,
 unknown times, escaping and phone layout; Rust checks matching and CLI parity.
+The retained Spec-review checks are `python3 console/reproductions/waterfall-fractional.py`,
+`python3 console/reproductions/waterfall-stage.py` and
+`python3 console/reproductions/waterfall-parity.py` from the repo root after a build.
+The fractional Run/stage boundaries also run in the Rust integration tests.
 
 `j` / `k` select headings and visible rows, wrapping at either end. `Space`
 folds a heading or toggles a row's peek; `Enter` opens that row's full Command

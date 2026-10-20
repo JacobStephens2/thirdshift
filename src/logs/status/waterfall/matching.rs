@@ -172,7 +172,8 @@ pub(super) fn calls(
                                     path == detail || path.ends_with(&format!("/{detail}"))
                                 }
                             }))
-                        && began.is_none_or(|began| line.time >= began)
+                        // The log truncates fractions that the record keeps.
+                        && began.is_none_or(|began| line.time.timestamp() >= began.timestamp())
                         && ended.is_none_or(|ended| line.time <= ended)
                 });
             let start = matched.map(|(index, line)| {

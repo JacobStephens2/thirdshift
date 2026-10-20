@@ -155,7 +155,8 @@ fn waterfall_matches_claude_calls_to_command_times_and_keeps_unmatched_calls() {
     )).unwrap();
     fs::write(dir.join("7-fixture.log"), "thirdshift: 23:59:50 starting\nthirdshift: 23:59:55 implement: $ rg widgets\nthirdshift: 00:00:05 implement: $ rg widgets\nthirdshift: 00:00:10 finished\n").unwrap();
     value["harness"] = json!("claude");
-    value["started_at"] = json!("2026-10-01T23:59:50+00:00");
+    // Records retain fractions; Command logs quantize calls to whole seconds.
+    value["started_at"] = json!("2026-10-01T23:59:55.100+00:00");
     value["ended_at"] = json!("2026-10-02T00:00:10+00:00");
     value["stages"] =
         json!([{ "name": "implement", "began_at": value["started_at"], "session_log": session }]);
@@ -230,8 +231,10 @@ fn waterfall_nests_ticket_runs_and_matches_codex_items_once_in_their_scope() {
     child["parent_record"] = json!(dir.join("7-fixture.command.json"));
     child["started_at"] = json!("2026-10-01T12:00:10+00:00");
     child["ended_at"] = json!("2026-10-01T12:00:40+00:00");
-    child["stages"] =
-        json!([{ "name": "implement", "began_at": child["started_at"], "session_log": session }]);
+    child["stages"] = json!([
+        { "name": "Setup", "began_at": child["started_at"], "session_log": null },
+        { "name": "implement", "began_at": "2026-10-01T12:00:15.100+00:00", "session_log": session }
+    ]);
     child["session_log"] = json!(session);
     fs::write(
         dir.join("7-fixture.issue-99.child.json"),
@@ -252,6 +255,11 @@ fn waterfall_nests_ticket_runs_and_matches_codex_items_once_in_their_scope() {
         3,
         "{html}"
     );
+    let tool_stage = html
+        .split("<li class=\"waterfall-stage\">")
+        .find(|stage| stage.contains("data-start=\"2026-10-01T12:00:15+00:00\""))
+        .unwrap();
+    assert!(tool_stage.contains("<h4>implement</h4>"), "{tool_stage}");
     for (start, seconds) in [("15", 5), ("20", 10), ("30", 10)] {
         assert!(
             html.contains(&format!(
