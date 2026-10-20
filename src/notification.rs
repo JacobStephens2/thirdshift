@@ -83,6 +83,18 @@ enum Subject {
     Pending,
 }
 
+impl Subject {
+    /// The Command a notification about an Architect or Security run is
+    /// about, by name, with its repository if known.
+    fn command(&self) -> Option<(&'static str, Option<&Repo>)> {
+        match self {
+            Subject::ArchitectRun(repo) => Some(("Architect run", repo.as_ref())),
+            Subject::SecurityRun(repo) => Some(("Security run", repo.as_ref())),
+            Subject::Issue { .. } | Subject::Pending => None,
+        }
+    }
+}
+
 /// A Run notification, checked and waiting for its command to end.
 pub struct RunNotification {
     checked: Checked,
@@ -183,18 +195,12 @@ impl RunNotification {
 /// The subject of a notification about `subject` for a command whose
 /// outcome is `outcome`: none about a Pickup run that took no issue.
 fn subject_line(subject: &Subject, outcome: &str) -> Option<String> {
-    match subject {
-        Subject::Issue { issue, title } => Some(issue_subject(issue, title.as_deref(), outcome)),
-        Subject::ArchitectRun(repo) => Some(architect_subject(repo.as_ref(), outcome)),
-        Subject::SecurityRun(repo) => {
-            let repo = repo
-                .as_ref()
-                .map(|repo| format!(" {}", repo.slug()))
-                .unwrap_or_default();
-            Some(format!("[thirdshift]{repo} Security run: {outcome}"))
-        }
-        Subject::Pending => None,
+    if let Subject::Issue { issue, title } = subject {
+        return Some(issue_subject(issue, title.as_deref(), outcome));
     }
+    subject
+        .command()
+        .map(|(command, repo)| command_subject(command, repo, outcome))
 }
 
 /// `[thirdshift] <owner>/<repo>#<n> <title>: <outcome>`, without the title
@@ -208,13 +214,13 @@ fn issue_subject(issue: &IssueUrl, title: Option<&str>, outcome: &str) -> String
     )
 }
 
-/// `[thirdshift] <owner>/<repo> Architect run: <outcome>`, without the
+/// `[thirdshift] <owner>/<repo> <command>: <outcome>`, without the
 /// repository if it isn't known.
-fn architect_subject(repo: Option<&Repo>, outcome: &str) -> String {
+fn command_subject(command: &str, repo: Option<&Repo>, outcome: &str) -> String {
     let repo = repo
         .map(|repo| format!(" {}", repo.slug()))
         .unwrap_or_default();
-    format!("[thirdshift]{repo} Architect run: {outcome}")
+    format!("[thirdshift]{repo} {command}: {outcome}")
 }
 
 /// The plain-text body of the notification for a command that ended as
@@ -236,16 +242,14 @@ fn body(
     took: Duration,
 ) -> String {
     let mut text = format!("Result:       {}\n", account.outcome);
-    match subject {
-        Subject::Issue { issue, title } => {
-            text += &format!("Issue:        {}\n", issue.url);
-            if let Some(title) = title {
-                text += &format!("Title:        {title}\n");
-            }
+    if let Subject::Issue { issue, title } = subject {
+        text += &format!("Issue:        {}\n", issue.url);
+        if let Some(title) = title {
+            text += &format!("Title:        {title}\n");
         }
-        Subject::ArchitectRun(repo) => text += &command_lines("Architect run", repo.as_ref()),
-        Subject::SecurityRun(repo) => text += &command_lines("Security run", repo.as_ref()),
-        Subject::Pending => {}
+    }
+    if let Some((command, repo)) = subject.command() {
+        text += &command_lines(command, repo);
     }
     if let Some(findings) = account.security_findings {
         let audit = match &account.ended {
@@ -331,6 +335,7 @@ fn body(
             text += &format!("Built with {configured}\n");
         }
     }
+    text += "Sent by:      thirdshift\n";
     text += &format!("Host:         {host}\n");
     text += &format!("Took:         {}\n", progress::duration(took));
     if !account.ticket_lines.is_empty() {
@@ -456,6 +461,7 @@ mod tests {
                      Title:        Add export button\n\
                      Pull request: {PR}\n\
                      Session log:  {LOG}\n\
+                     Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
                 )
@@ -478,6 +484,7 @@ mod tests {
                      Cause:        claude exited 1\n\
                      Base fix:     {PLAN} not merged\n\
                      Session log:  {LOG}\n\
+                     Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
                 )
@@ -499,6 +506,7 @@ mod tests {
                 "Result:       interrupted\n\
                  Issue:        https://github.com/acme/widgets/issues/123\n\
                  Title:        Add export button\n\
+                 Sent by:      thirdshift\n\
                  Host:         droplet-1\n\
                  Took:         4s\n"
                     .to_string()
@@ -528,6 +536,7 @@ mod tests {
                      Dispatched:   merged\n\
                      Pull request: {PR}\n\
                      Session log:  {LOG}\n\
+                     Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
                 )
@@ -562,6 +571,7 @@ mod tests {
                      Command:      Architect run\n\
                      Repository:   acme/widgets\n\
                      Review:       idea filed: {PLAN}\n\
+                     Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
                 )
@@ -591,6 +601,7 @@ mod tests {
                      Review:       failed\n\
                      Cause:        claude exited 1\n\
                      Session log:  {LOG}\n\
+                     Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
                 )
@@ -624,6 +635,19 @@ mod tests {
                 assert!(body.contains(word), "{word:?} of {line:?} not in:\n{body}");
             }
             assert!(body.starts_with("Result:       merged\n"), "{body}");
+        }
+    }
+
+    #[test]
+    fn the_body_names_thirdshift_as_the_subject_does() {
+        for subject in [
+            about_issue(),
+            about_architect_run(),
+            Subject::SecurityRun(None),
+        ] {
+            let (line, body) = told(&subject, &merged()).unwrap();
+            assert!(line.starts_with("[thirdshift]"));
+            assert!(body.contains("thirdshift"), "{body}");
         }
     }
 
@@ -670,6 +694,7 @@ mod tests {
             body_of(&Subject::Pending, &failed("origin mismatch")),
             "Result:       failed\n\
              Cause:        origin mismatch\n\
+             Sent by:      thirdshift\n\
              Host:         droplet-1\n\
              Took:         4s\n"
         );
@@ -691,6 +716,7 @@ mod tests {
              Session log:  /home/me/.thirdshift/logs/sessions/x.jsonl\n\
              Command log:  /home/me/.thirdshift/logs/commands/issue/x.log\n\
              Built with claude · opus · high\n\
+             Sent by:      thirdshift\n\
              Host:         droplet-1\n\
              Took:         4s\n"
         );
@@ -709,6 +735,7 @@ mod tests {
              Pull request: https://github.com/acme/widgets/pull/1\n\
              Cause:        claude exited 1\n\
              Base fix:     https://github.com/acme/widgets/issues/8 merged\n\
+             Sent by:      thirdshift\n\
              Host:         droplet-1\n\
              Took:         4s\n"
         );
@@ -740,6 +767,7 @@ mod tests {
              Base check:   test: https://ci.example/main/test\n\
              Or set:       base.fix = true\n\
              Session log:  /home/me/.thirdshift/logs/x.jsonl\n\
+             Sent by:      thirdshift\n\
              Host:         droplet-1\n\
              Took:         4s\n"
         );
@@ -759,6 +787,7 @@ mod tests {
             body_of(&Subject::Pending, &account),
             "Result:       failed\n\
              Cause:        Tickets not done: #21, #22\n\
+             Sent by:      thirdshift\n\
              Host:         droplet-1\n\
              Took:         4s\n\
              \n\
@@ -772,11 +801,11 @@ mod tests {
     fn an_architect_runs_subject_names_the_repository_if_known_and_the_outcome() {
         let repo = Repo::of_origin("https://github.com/acme/widgets.git").unwrap();
         assert_eq!(
-            architect_subject(Some(&repo), "plan published"),
+            command_subject("Architect run", Some(&repo), "plan published"),
             "[thirdshift] acme/widgets Architect run: plan published"
         );
         assert_eq!(
-            architect_subject(None, "review failed"),
+            command_subject("Architect run", None, "review failed"),
             "[thirdshift] Architect run: review failed"
         );
     }
