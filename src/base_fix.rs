@@ -664,7 +664,7 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
-    use crate::github::CheckState;
+    use crate::github::Conclusion;
 
     /// What the Base fix did outside itself, in the order it did it.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -877,7 +877,7 @@ mod tests {
     fn check(name: &str, url: Option<&str>) -> Check {
         Check {
             name: name.to_string(),
-            state: CheckState::Failed,
+            conclusion: Conclusion::Failure,
             url: url.map(String::from),
             job: None,
         }
