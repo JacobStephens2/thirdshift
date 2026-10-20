@@ -22,7 +22,8 @@ mod stage;
 
 use crate::pull_request::{AlreadyMerged, Identified, MergeAttempt, PullRequest};
 
-use crate::base_fix::BaseFix;
+use crate::base_fix::{self, BaseFix};
+use crate::child_run::ChildAsks;
 use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::{FailedRun, PolicyRefusal, interrupted_or};
 use crate::git::Git;
@@ -46,9 +47,11 @@ use stage::{CommandLog, CommandRecord, Stage, Tracker};
 /// A Delivery of the pull request for `issue`, the Run's issue or the Spec,
 /// into the Base branch `base`, to `goal`.
 pub struct Delivery<'a> {
-    pub security_fix: bool,
     /// Whether the opening session is followed by a guidance Security review.
     pub security_review: bool,
+    /// What the Run hands on to every child Run, a Base fix or a Ticket's
+    /// Run, whose Harness, Model and Effort its own sessions run on too.
+    pub child_asks: &'a ChildAsks,
     pub issue: &'a IssueUrl,
     pub base: &'a str,
     pub goal: Goal,
@@ -57,9 +60,6 @@ pub struct Delivery<'a> {
     pub base_fix: &'a mut BaseFix,
     /// Where its Session logs go.
     pub logs: &'a Logs,
-    /// The Harness, Model and Effort its sessions run on, and its child
-    /// Runs' too.
-    pub harness: &'a Choice,
     /// When the Run began: an untrusted edit to `issue` made since then
     /// starts no further session.
     pub started: DateTime<Utc>,
@@ -134,7 +134,7 @@ impl Delivery<'_> {
             base: self.base,
             branch: worktree.branch(),
             goal: self.goal,
-            harness: self.harness,
+            harness: &self.child_asks.harness,
         };
         pull_request.begin_delivery();
         let (issue, started, path) = (self.issue, self.started, worktree.path());
@@ -145,7 +145,7 @@ impl Delivery<'_> {
         let (delivered, log) = Sessions::checked_within(
             self.logs,
             worktree.path(),
-            self.harness,
+            &self.child_asks.harness,
             &before_each,
             |sessions| {
                 let mut outside = InWorktree {
@@ -154,6 +154,7 @@ impl Delivery<'_> {
                     worktree: &worktree,
                     base: self.base,
                     base_fix: self.base_fix,
+                    child_asks: self.child_asks,
                     sessions,
                     pull_request,
                 };
@@ -511,6 +512,8 @@ struct InWorktree<'a> {
     worktree: &'a Worktree,
     base: &'a str,
     base_fix: &'a mut BaseFix,
+    /// What a Base fix it starts is handed.
+    child_asks: &'a ChildAsks,
     sessions: &'a Sessions<'a>,
     pull_request: &'a mut PullRequest,
 }
@@ -568,6 +571,7 @@ impl Outside for InWorktree<'_> {
             base: self.base,
             pr_url,
             base_fix: self.base_fix,
+            child_asks: self.child_asks,
             sessions: self.sessions,
             pull_request: self.pull_request,
         };
@@ -641,6 +645,8 @@ struct RunOutside<'a> {
     base: &'a str,
     pr_url: &'a str,
     base_fix: &'a mut BaseFix,
+    /// What a Base fix it starts is handed.
+    child_asks: &'a ChildAsks,
     sessions: &'a Sessions<'a>,
     pull_request: &'a mut PullRequest,
 }
@@ -728,14 +734,13 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn base_fix(&mut self, base_commit: &str, failed: &FailedChecks) -> Result<()> {
-        self.base_fix.fix(
-            self.worktree.launch(),
-            self.issue,
-            self.pr_url,
-            self.base,
-            base_commit,
-            failed,
-        )
+        let outside = base_fix::LaunchAndGitHub {
+            launch: self.worktree.launch(),
+            issue: self.issue,
+            asks: self.child_asks,
+        };
+        self.base_fix
+            .fix(outside, self.pr_url, self.base, base_commit, failed)
     }
 
     fn ensure_pr_ready_and_mergeable(&mut self) -> Result<()> {

@@ -109,10 +109,10 @@ impl Asks {
             tickets_at_once: config.spec_parallel,
             parallel_asked: false,
             base_fix: given.base_fix.clone(),
-            security_fix: given.security.fix,
-            security_review: given.security.review,
+            security_fix: given.asks.security_fix,
+            security_review: given.asks.security_review,
             launch_pull: false,
-            harness: given.harness.clone(),
+            harness: given.asks.harness.clone(),
         }
     }
 
@@ -424,11 +424,13 @@ mod tests {
     fn given(kind: Kind, base_fix: BaseFixAsk) -> Given {
         Given {
             command: crate::logs::CommandKind::Issue,
-            security: crate::security::Options::default(),
             kind,
             stamp: "20261003T120000-0400".to_string(),
             base_fix,
-            harness: sonnet(None),
+            asks: crate::child_run::ChildAsks {
+                harness: sonnet(None),
+                ..crate::child_run::ChildAsks::default()
+            },
         }
     }
 

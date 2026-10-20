@@ -148,7 +148,7 @@ An open **Ticket** labelled with a triage role that says it is not agent work: `
 The agent session a **Spec run** starts once every **Ticket** is done: it reviews the whole **Spec branch** against the **Base branch** and the **Spec**, fixes what it agrees with, and writes the **Spec PR**'s description, listing the rest as **Unaddressed findings**.
 
 **Security review**:
-When a flag or the **User config** asks for one, the agent session a **Run** starts after its opening session, or a **Spec run** starts on its **Spec PR** after the **Spec review**: it reviews the branch's change against the **Base branch** for vulnerabilities, and fixes each **Security finding** it can show with a failing test. A **Ticket**'s Run gets none. A Security review that a model refused, or that ended early, holds a **Self-merge** as an unaddressed Security finding does.
+When a flag or the **User config** asks for one, the agent session a **Run** starts after its opening session, or a **Spec run** starts on its **Spec PR** after the **Spec review**: it reviews the branch's change against the **Base branch** for vulnerabilities, and fixes each **Security finding** it can show with a failing test. A **Ticket**'s Run gets none. A **Base fix** gets one when its Command asked for one, whichever Run started it, a Ticket's Run included. A Security review that a model refused, or that ended early, holds a **Self-merge** as an unaddressed Security finding does.
 _Avoid_: security axis, security audit (a **Security audit** covers the whole Base branch)
 
 **Failed spec run**:

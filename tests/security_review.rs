@@ -504,11 +504,14 @@ gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let calls = scenario.claude_calls();
     assert_eq!(calls.len(), 4);
+    // The Base fix's own Delivery runs the Security review its Command asked
+    // for, on its own branch.
+    assert_eq!(calls[3]["branch"], "issue-8");
+    let prompt = calls[3]["prompt"].as_str().unwrap();
+    assert!(prompt.contains("guidance mode"), "{prompt}");
     assert!(
-        calls[3]["prompt"]
-            .as_str()
-            .unwrap()
-            .contains("against Base branch main")
+        prompt.contains("branch issue-8 against Base branch main"),
+        "{prompt}"
     );
     assert_eq!(scenario.gh_state()["prs"][1]["state"], "MERGED");
 }

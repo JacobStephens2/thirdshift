@@ -16,11 +16,10 @@ use std::num::NonZeroUsize;
 use anyhow::{Result, bail};
 
 use crate::base_fix::BaseFixAsk;
-use crate::child_run::{Ended, Kind, Runs};
+use crate::child_run::{ChildAsks, Ended, Kind, Runs};
 use crate::delivery::{Delivery, Opening, OpeningSession};
 use crate::failed_run::{FailedRun, interrupted_or};
 use crate::github::{GitHub, Ticket};
-use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
 use crate::progress;
@@ -201,8 +200,8 @@ trait Outside {
 
 /// The outside world of a Spec run on `delivery`'s Spec, from its Spec
 /// branch checked out in `worktree`: child `thirdshift` Runs, each of which
-/// may start a Base fix if `base_fix` allows one, and runs its sessions on
-/// `harness`, owned together in `children`, GitHub, the Spec PR
+/// may start a Base fix if `base_fix` allows one, and is handed
+/// `child_asks`, owned together in `children`, GitHub, the Spec PR
 /// `spec_pr`, and `delivery`, which takes the
 /// worktree when it starts.
 struct ChildRunsAndGitHub<'a> {
@@ -217,9 +216,7 @@ struct ChildRunsAndGitHub<'a> {
     /// Held until it starts.
     delivery: Option<Delivery<'a>>,
     base_fix: BaseFixAsk,
-    security_fix: bool,
-    security_review: bool,
-    harness: &'a Choice,
+    child_asks: &'a ChildAsks,
     spec_pr: PullRequest,
 }
 
@@ -227,16 +224,13 @@ impl<'a> ChildRunsAndGitHub<'a> {
     /// The outside world of a Spec run, as the struct says, with no Ticket's
     /// Run started yet.
     fn new(worktree: Worktree, delivery: Delivery<'a>, spec_pr: PullRequest) -> Self {
-        let security_review = delivery.security_review;
         Self {
             spec: delivery.issue,
             children: Runs::default(),
             active: std::collections::BTreeMap::new(),
             worktree: Some(worktree),
             base_fix: delivery.base_fix.ask_of_tickets(),
-            security_fix: delivery.security_fix,
-            security_review,
-            harness: delivery.harness,
+            child_asks: delivery.child_asks,
             delivery: Some(delivery),
             spec_pr,
         }
@@ -268,16 +262,8 @@ impl Outside for ChildRunsAndGitHub<'_> {
         if let Some(check) = trust::ticket_trust(&GitHub::new(), ticket, self.spec)? {
             bail!("Ticket #{}: {check}", ticket.number);
         }
-        self.children.start(
-            ticket,
-            kind,
-            self.base_fix.clone(),
-            crate::security::Options {
-                fix: self.security_fix,
-                review: self.security_review,
-            },
-            self.harness,
-        )?;
+        self.children
+            .start(ticket, kind, self.base_fix.clone(), self.child_asks)?;
         self.active.insert(ticket.number, ticket.clone());
         Ok(())
     }

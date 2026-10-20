@@ -1195,6 +1195,26 @@ gh pr create --base issue-20 --head issue-{fix} --title "Fix CI" --body "Closes 
 }
 
 #[test]
+fn a_base_fix_a_tickets_run_starts_runs_the_security_review_its_ticket_skips() {
+    let scenario = spec_whose_ticket_inherits_a_failure();
+    base_fix_lands_on_the_spec_branch(&scenario, 22);
+    scenario.agent_does_for_in_session(22, 2, &security_review_script(&[]));
+    scenario.agent_does_for_in_session(SPEC, 2, &security_review_script(&[]));
+
+    let result = scenario.run(&[&spec_url(&scenario), "base-fix", "security-review"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "22", "20", "20"]);
+    let calls = scenario.claude_calls();
+    assert_eq!(calls[2]["branch"], "issue-22");
+    assert_contains(
+        calls[2]["prompt"].as_str().unwrap(),
+        "branch issue-22 against Base branch issue-20",
+    );
+    assert_eq!(pr_from(&scenario, "issue-22").unwrap()["state"], "MERGED");
+}
+
+#[test]
 fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branch() {
     let scenario = spec_whose_ticket_inherits_a_failure();
     base_fix_lands_on_the_spec_branch(&scenario, 22);
