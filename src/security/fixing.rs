@@ -12,7 +12,7 @@ use crate::issue::{IssueUrl, Repo};
 use crate::labels::Label;
 use crate::prompt;
 use crate::security::reproduction::FixSize;
-use crate::session::{Logs, Purpose, Sessions};
+use crate::session::{Kind, Logs, Purpose, Sessions};
 use crate::worktree::ReviewWorktree;
 
 mod publication;
@@ -58,7 +58,8 @@ pub fn publish(
         } else {
             Purpose::Security
         };
-        let message = sessions.run_to_final_message(purpose, "security-fix-publishing", &prompt)?;
+        let message =
+            sessions.run_to_final_message(purpose, Kind::SecurityFixPublishing, &prompt)?;
         publication::publish(
             &mut GitHub::new(),
             repo,

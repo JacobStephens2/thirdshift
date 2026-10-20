@@ -17,6 +17,7 @@ use crate::run::Goal;
 use crate::worktree::{ForeignCommits, Merge};
 
 use super::Stage;
+use crate::session::Kind;
 
 /// Which upstream a conflict Repair resolves a merge of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,8 +80,9 @@ pub(super) trait Outside {
         failed: &FailedChecks,
     ) -> Result<Option<Ci>>;
 
-    /// Start the Repair session `kind`, as in `repair-1`, for `repair`.
-    fn repair(&mut self, kind: &str, repair: Repair) -> Result<()>;
+    /// Start the Repair session of `kind`, as in `Kind::Repair(1)`, for
+    /// `repair`.
+    fn repair(&mut self, kind: Kind, repair: Repair) -> Result<()>;
 
     /// Whether the Run compares its red checks with the Base branch's, so
     /// that some may be Inherited failures.
@@ -173,15 +175,15 @@ struct Budgets {
 }
 
 impl Budgets {
-    /// Counts the Repair about to start, returning its kind, `repair-<n>`,
-    /// and its progress line, or fails if it would be one too many.
-    fn next_repair(&mut self, cause: &str) -> Result<(String, String)> {
+    /// Counts the Repair about to start, returning its numbered kind and its
+    /// progress line, or fails if it would be one too many.
+    fn next_repair(&mut self, cause: &str) -> Result<(Kind, String)> {
         if self.repairs == MAX_REPAIRS {
             bail!("repairs exhausted: {cause}");
         }
         self.repairs += 1;
         let line = format!("{cause}; starting Repair {} of {MAX_REPAIRS}", self.repairs);
-        Ok((format!("repair-{}", self.repairs), line))
+        Ok((Kind::Repair(self.repairs), line))
     }
 
     /// Counts a round taken because `upstream` moved, or fails if it would
@@ -283,7 +285,7 @@ impl<O: Outside> RepairLoop<'_, O> {
         let (kind, line) = self.budgets.next_repair(cause)?;
         self.outside.progress(line);
         self.outside.stage(Stage::RepairSession);
-        self.outside.repair(&kind, repair)
+        self.outside.repair(kind, repair)
     }
 
     /// Count a round taken because the Base branch moved `when`.
@@ -457,7 +459,7 @@ mod tests {
         /// Gave this head its Check re-run of these checks of its own.
         Rerun(String, Option<String>, Vec<String>),
         /// Started the Repair session of this kind for this Repair.
-        Repair(String, Started),
+        Repair(Kind, Started),
         /// Took the Base fix for these Inherited failures, at this Base
         /// branch commit.
         BaseFix(String, Vec<String>),
@@ -677,7 +679,7 @@ mod tests {
             Ok(is.map(|is| is.ci()))
         }
 
-        fn repair(&mut self, kind: &str, repair: Repair) -> Result<()> {
+        fn repair(&mut self, kind: Kind, repair: Repair) -> Result<()> {
             let started = match repair {
                 Repair::Conflict(upstream) => Started::Conflict(upstream),
                 Repair::CiFix(failed) => {
@@ -685,7 +687,7 @@ mod tests {
                 }
                 Repair::Review { from } => Started::Review(from.to_string()),
             };
-            self.did.push(Did::Repair(kind.to_string(), started));
+            self.did.push(Did::Repair(kind, started));
             match self.script.repair_error {
                 Some(error) => bail!(error),
                 None => Ok(()),
@@ -773,9 +775,9 @@ mod tests {
         Did::Watch(head.to_string(), Some("b1".to_string()))
     }
 
-    /// The Repair session `repair-<n>` for `started`.
+    /// The numbered Repair session `n` for `started`.
     fn repair(n: usize, started: Started) -> Did {
-        Did::Repair(format!("repair-{n}"), started)
+        Did::Repair(Kind::Repair(n), started)
     }
 
     /// A CI-fix Repair given the branch's own failures `own`, and the
@@ -2044,7 +2046,7 @@ mod tests {
             assert_eq!(
                 budgets.next_repair(cause).unwrap(),
                 (
-                    format!("repair-{n}"),
+                    Kind::Repair(n),
                     format!("{cause}; starting Repair {n} of {MAX_REPAIRS}")
                 )
             );

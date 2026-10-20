@@ -495,7 +495,7 @@ mod tests {
         /// Started the Delivery, opening with the session of this kind and
         /// prompt, caught up from origin first if `catch_up`.
         Deliver {
-            kind: String,
+            kind: crate::session::Kind,
             prompt: String,
             catch_up: bool,
         },
@@ -701,7 +701,7 @@ mod tests {
 
         fn deliver(&mut self, opening: Opening, checklist: &str) -> Result<Reached, FailedRun> {
             self.did.push(Did::Deliver {
-                kind: opening.session.kind().to_string(),
+                kind: opening.session.kind(),
                 catch_up: opening.session.catches_up_from_origin(),
                 prompt: opening.prompt,
             });
@@ -844,7 +844,7 @@ mod tests {
     fn spec_review_opening() -> Did {
         let spec = IssueUrl::parse("https://github.com/acme/widgets/issues/20").unwrap();
         Did::Deliver {
-            kind: "spec-review".to_string(),
+            kind: crate::session::Kind::SpecReview,
             prompt: prompt::spec_review(&spec, "main", "issue-20", SPEC_PR),
             catch_up: true,
         }

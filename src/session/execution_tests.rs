@@ -122,7 +122,7 @@ fn execute_session(root: &Path) -> anyhow::Error {
     };
     let prompt = format!("/thirdshift-implement {}", "p".repeat(1024 * 1024));
     let (result, log) = Sessions::within(&logs, &worktree, &choice, |sessions| {
-        sessions.run_to_final_message(Purpose::Ordinary, "implement", &prompt)
+        sessions.run_to_final_message(Purpose::Ordinary, Kind::Implementation, &prompt)
     });
     assert!(log.unwrap().exists());
     result.unwrap_err()
@@ -391,7 +391,10 @@ fn with_review_sessions(
 fn execute_review(root: &Path, harness: Harness) -> (Result<()>, PathBuf) {
     let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
     with_review_sessions(root, harness, |sessions| {
-        sessions.run("implement", &prompt::fresh(&issue, "main", "issue-7"))?;
+        sessions.run(
+            Kind::Implementation,
+            &prompt::fresh(&issue, "main", "issue-7"),
+        )?;
         fs::write(root.join("carried-on"), "").unwrap();
         Ok(())
     })
@@ -537,7 +540,10 @@ fn unavailable_report_setup_warns_and_the_run_carries_on() {
             let exclude = root.join("worktree/.git/info/exclude");
             let original_permissions = fs::metadata(&exclude).unwrap().permissions();
             fs::set_permissions(&exclude, fs::Permissions::from_mode(0o444)).unwrap();
-            let result = sessions.run("implement", &prompt::fresh(&issue, "main", "issue-7"));
+            let result = sessions.run(
+                Kind::Implementation,
+                &prompt::fresh(&issue, "main", "issue-7"),
+            );
             fs::set_permissions(&exclude, original_permissions).unwrap();
             result?;
             fs::write(root.join("carried-on"), "").unwrap();

@@ -36,7 +36,7 @@ use crate::recovery::{self, Preservation, Recovery};
 use crate::run::{Goal, Reached};
 use crate::run_ending::Cause;
 use crate::security::review::{Hold as SecurityHold, Outcome as SecurityOutcome, Review};
-use crate::session::{Logs, Sessions};
+use crate::session::{Kind, Logs, Sessions};
 use crate::skills;
 use crate::trust::{self, IssueText};
 use crate::worktree::{ForeignCommits, Merge, PendingMerge, Preserved, Worktree};
@@ -81,11 +81,11 @@ pub enum OpeningSession {
 }
 
 impl OpeningSession {
-    /// The session's kind, in its progress lines and log name.
-    pub fn kind(self) -> &'static str {
+    /// The session's kind.
+    pub fn kind(self) -> Kind {
         match self {
-            Self::Implementation => "implement",
-            Self::SpecReview => "spec-review",
+            Self::Implementation => Kind::Implementation,
+            Self::SpecReview => Kind::SpecReview,
         }
     }
 
@@ -415,8 +415,8 @@ trait Outside {
     fn stage(&mut self, stage: Stage);
     /// Fast-forward the Issue branch to its head on origin.
     fn catch_up(&mut self) -> Result<()>;
-    /// Run the session `kind` given `prompt`.
-    fn session(&mut self, kind: &str, prompt: &str) -> Result<()>;
+    /// Run a session of `kind` given `prompt`.
+    fn session(&mut self, kind: Kind, prompt: &str) -> Result<()>;
     fn security_review(&mut self, prompt: &str) -> Result<Review>;
     fn record_security_review(&mut self, review: &SecurityOutcome) -> Result<()>;
     /// Push the Issue branch.
@@ -524,7 +524,7 @@ impl Outside for InWorktree<'_> {
         self.worktree.fast_forward_to_origin()
     }
 
-    fn session(&mut self, kind: &str, prompt: &str) -> Result<()> {
+    fn session(&mut self, kind: Kind, prompt: &str) -> Result<()> {
         self.sessions.run(kind, prompt)?;
         self.pull_request.ensure_actionable(false)
     }
@@ -705,7 +705,7 @@ impl repair_loop::Outside for RunOutside<'_> {
         })
     }
 
-    fn repair(&mut self, kind: &str, repair: Repair) -> Result<()> {
+    fn repair(&mut self, kind: Kind, repair: Repair) -> Result<()> {
         let (issue, base, pr_url) = (self.issue, self.base, self.pr_url);
         let branch = self.worktree.branch();
         let prompt = match repair {
@@ -781,7 +781,7 @@ mod tests {
     #[derive(Debug, PartialEq, Eq)]
     enum Call {
         CatchUp,
-        Session(String),
+        Session(Kind),
         Push,
         Annotation,
         Checklist,
@@ -841,9 +841,9 @@ mod tests {
             self.calls.push(Call::CatchUp);
             self.check(Fails::CatchUp)
         }
-        fn session(&mut self, kind: &str, _: &str) -> Result<()> {
-            self.calls.push(Call::Session(kind.to_string()));
-            self.log = Some(PathBuf::from(format!("/logs/{kind}.jsonl")));
+        fn session(&mut self, kind: Kind, _: &str) -> Result<()> {
+            self.calls.push(Call::Session(kind));
+            self.log = Some(PathBuf::from(format!("/logs/{}.jsonl", kind.token())));
             self.check(Fails::Session)
         }
         fn push(&mut self) -> Result<()> {
@@ -969,7 +969,7 @@ mod tests {
             outside.calls,
             [
                 Call::CatchUp,
-                Call::Session("spec-review".to_string()),
+                Call::Session(Kind::SpecReview),
                 Call::Push,
                 Call::Annotation,
                 Call::Checklist,
@@ -985,7 +985,7 @@ mod tests {
         assert!(deliver(&mut outside, Goal::ReadyForReview, true).is_ok());
         assert_eq!(
             outside.calls[..2],
-            [Call::CatchUp, Call::Session("spec-review".to_string())]
+            [Call::CatchUp, Call::Session(Kind::SpecReview)]
         );
     }
 

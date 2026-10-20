@@ -9,7 +9,7 @@ use super::reproduction::{FixSize, Outcome as ReproductionOutcome, Reproduction,
 use crate::github::{DraftAdvisory, FindingDraft, FindingProvenance, GitHub};
 use crate::harness::interpretation::SafeguardRefusal;
 use crate::issue::IssueUrl;
-use crate::session::{Purpose, Sessions};
+use crate::session::{Kind, Purpose, Sessions};
 use crate::worktree::Worktree;
 use crate::{logs, progress, prompt};
 
@@ -41,7 +41,7 @@ pub(crate) fn run(
         report.display()
     ));
     let message =
-        sessions.run_to_final_message(Purpose::SecurityReview, "security-review", &text)?;
+        sessions.run_to_final_message(Purpose::SecurityReview, Kind::SecurityReview, &text)?;
     // A session may change commits on the Issue branch, but it cannot hand
     // us a replacement checkout to observe or publish findings from.
     worktree.head()?;
