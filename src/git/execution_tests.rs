@@ -430,3 +430,35 @@ fn completion_lock_retries_ignore_existing_and_arriving_interruption() {
         },
     );
 }
+
+#[test]
+fn interruption_ends_the_wait_before_a_read_of_origin_is_run_again() {
+    with_recorded_signal(
+        "git::execution_tests::interruption_ends_the_wait_before_a_read_of_origin_is_run_again",
+        |signal| {
+            let (temp, git) = super::tests::repo_with_origin();
+            let count = super::tests::origin_fails(
+                &temp,
+                &git,
+                "uploadpack",
+                3,
+                super::tests::DROPPED_STREAM,
+            );
+            std::thread::scope(|scope| {
+                let reader = scope.spawn(|| git.on_origin("main"));
+                // The first attempt fails at once; its retry waits a second.
+                while !count.exists() {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                std::thread::sleep(Duration::from_millis(200));
+                let interrupted = Instant::now();
+                signal_hook::low_level::raise(signal).unwrap();
+                let result = reader.join().unwrap();
+
+                assert!(interrupted.elapsed() < Duration::from_millis(500));
+                assert_eq!(result.unwrap_err().to_string(), "interrupted");
+                assert_eq!(fs::read_to_string(&count).unwrap().trim(), "1");
+            });
+        },
+    );
+}

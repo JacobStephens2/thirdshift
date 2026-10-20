@@ -12,6 +12,7 @@ use crate::progress;
 
 #[cfg(test)]
 mod execution_tests;
+mod transport;
 
 /// `git` bound to a working directory. Output is captured, never passed
 /// through, so stdout stays reserved for the PR URL.
@@ -47,7 +48,9 @@ impl Git {
     /// explanation can end up. While it fails on a lock file another git
     /// holds, or on a ref another git moved meanwhile, as when a Spec run's
     /// Tickets fetch or create worktrees from one Launch directory at once,
-    /// it is run again, for up to [`LOCK_WAIT`].
+    /// it is run again, for up to [`LOCK_WAIT`]. An `ls-remote` or `fetch`
+    /// that fails to reach origin in transport is run again, up to
+    /// [`TRANSPORT_ATTEMPTS`] times in all, after a progress line each time.
     pub fn run(&self, args: &[&str]) -> Result<String> {
         self.run_checked(args, || Ok(()))
     }
@@ -109,12 +112,37 @@ impl Git {
         args: &[&str],
         check: &dyn Fn() -> Result<()>,
     ) -> Result<Output> {
-        Self::retry_output(|| {
-            check()?;
-            let result = self.output(args);
-            check()?;
-            result
-        })
+        let attempt = || {
+            Self::retry_output(|| {
+                check()?;
+                let result = self.output(args);
+                check()?;
+                result
+            })
+        };
+        if !reads_remote(args) {
+            return attempt();
+        }
+        // A read of origin that a dropped connection failed is tried again,
+        // after one then two seconds. Pushes and other mutations never are.
+        for tried in 1..=TRANSPORT_ATTEMPTS {
+            let output = attempt()?;
+            if output.status.success()
+                || tried == TRANSPORT_ATTEMPTS
+                || !transport::is_transient(&output.stderr)
+            {
+                return Ok(output);
+            }
+            let cause = command_result(args, &output).unwrap_err();
+            let cause = format!("{cause:#}");
+            let cause = cause.lines().next().unwrap_or_default();
+            progress::step(format_args!(
+                "{cause} (attempt {tried}/{TRANSPORT_ATTEMPTS}); retrying in {tried}s"
+            ));
+            self.interruption
+                .pause(Duration::from_secs(u64::from(tried)))?;
+        }
+        unreachable!("the last attempt returns its output")
     }
 
     fn retry_output(attempt: impl Fn() -> Result<Output>) -> Result<Output> {
@@ -306,6 +334,26 @@ pub struct CheckoutLocation {
     pub admin: PathBuf,
     pub common: PathBuf,
     pub head: String,
+}
+
+/// How many times a read of origin is run while it fails in transport.
+const TRANSPORT_ATTEMPTS: u32 = 3;
+
+/// Whether `args` is a git command that only reads a remote, such as
+/// origin, over the network: `ls-remote` or `fetch`, after any of git's own
+/// options such as `-c`.
+fn reads_remote(args: &[&str]) -> bool {
+    let mut args = args.iter();
+    while let Some(arg) = args.next() {
+        match *arg {
+            "-c" | "-C" => {
+                args.next();
+            }
+            option if option.starts_with('-') => {}
+            command => return matches!(command, "ls-remote" | "fetch"),
+        }
+    }
+    false
 }
 
 /// How long [`Git::run`] keeps trying a command that fails on a lock file
@@ -578,6 +626,150 @@ mod tests {
             "{error}"
         );
         assert!(error.contains(&required), "{error}");
+    }
+
+    /// Make origin's `pack` side (`uploadpack`, which serves `ls-remote` and
+    /// `fetch`, or `receivepack`, which serves `push`) write `stderr` and
+    /// fail its first `fails` connections. The file returned counts them.
+    pub(super) fn origin_fails(
+        temp: &tempfile::TempDir,
+        git: &Git,
+        pack: &str,
+        fails: u32,
+        stderr: &str,
+    ) -> PathBuf {
+        let count = temp.path().join(format!("{pack}-connections"));
+        let script = temp.path().join(pack);
+        let serve = if pack == "uploadpack" {
+            "upload-pack"
+        } else {
+            "receive-pack"
+        };
+        crate::test_support::write_executable(
+            &script,
+            &format!(
+                "#!/bin/sh\n\
+                 n=$(($(cat '{count}' 2>/dev/null || echo 0) + 1))\n\
+                 echo $n > '{count}'\n\
+                 if [ $n -le {fails} ]; then printf '%s\\n' '{stderr}' >&2; exit 128; fi\n\
+                 exec git {serve} \"$@\"\n",
+                count = count.display(),
+            ),
+        );
+        git.run(&[
+            "config",
+            &format!("remote.origin.{pack}"),
+            &script.display().to_string(),
+        ])
+        .unwrap();
+        count
+    }
+
+    fn connections(count: &Path) -> u32 {
+        std::fs::read_to_string(count)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    }
+
+    pub(super) const DROPPED_STREAM: &str =
+        "error: RPC failed; curl 16 Error in the HTTP2 framing layer";
+
+    #[test]
+    fn an_ls_remote_a_dropped_stream_failed_is_run_again() {
+        let (temp, git) = repo_with_origin();
+        git.run(&["push", "--no-verify", "origin", "main"]).unwrap();
+        let count = origin_fails(&temp, &git, "uploadpack", 1, DROPPED_STREAM);
+
+        assert!(git.on_origin("main").unwrap());
+        assert_eq!(connections(&count), 2);
+    }
+
+    #[test]
+    fn a_fetch_a_dropped_stream_failed_is_run_again() {
+        let (temp, git) = repo_with_origin();
+        git.run(&["push", "--no-verify", "origin", "main"]).unwrap();
+        let count = origin_fails(&temp, &git, "uploadpack", 1, DROPPED_STREAM);
+
+        git.fetch(&["main"]).unwrap();
+
+        assert_eq!(connections(&count), 2);
+        git.run(&["rev-parse", "--verify", "FETCH_HEAD"]).unwrap();
+    }
+
+    #[test]
+    fn a_read_of_origin_failing_in_transport_throughout_fails_with_the_last_cause() {
+        let (temp, git) = repo_with_origin();
+        let count = origin_fails(&temp, &git, "uploadpack", 3, DROPPED_STREAM);
+        let started = Instant::now();
+
+        let error = git.on_origin("main").unwrap_err().to_string();
+
+        assert!(started.elapsed() < Duration::from_secs(10));
+        assert_eq!(connections(&count), 3);
+        assert!(
+            error.starts_with(&format!(
+                "git ls-remote --heads origin refs/heads/main failed: {DROPPED_STREAM}"
+            )),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_read_of_origin_failing_permanently_is_run_once() {
+        for stderr in [
+            "fatal: Authentication failed for https://github.com/acme/widgets/",
+            "remote: Repository not found.",
+            "fatal: something nobody has classified",
+        ] {
+            let (temp, git) = repo_with_origin();
+            let count = origin_fails(&temp, &git, "uploadpack", 3, stderr);
+
+            let error = git.fetch(&["main"]).unwrap_err().to_string();
+
+            assert_eq!(connections(&count), 1, "{stderr}");
+            assert!(error.contains(stderr), "{error}");
+        }
+    }
+
+    #[test]
+    fn a_fetch_of_a_missing_ref_over_protocol_v0_is_run_once() {
+        let (temp, git) = repo_with_origin();
+        git.run(&["push", "--no-verify", "origin", "main"]).unwrap();
+        git.run(&["config", "protocol.version", "0"]).unwrap();
+        let count = origin_fails(&temp, &git, "uploadpack", 0, "");
+        let error = git.fetch(&["absent"]).unwrap_err().to_string();
+        assert_eq!(connections(&count), 1, "{error}");
+    }
+
+    #[test]
+    fn a_push_failing_in_transport_is_attempted_once() {
+        let (temp, git) = repo_with_origin();
+        let count = origin_fails(&temp, &git, "receivepack", 1, DROPPED_STREAM);
+        let head = git.run(&["rev-parse", "HEAD"]).unwrap();
+
+        let error = git
+            .push_checked("main", &head, None, || Ok(()))
+            .unwrap_err()
+            .to_string();
+
+        assert_eq!(connections(&count), 1);
+        assert!(error.contains(DROPPED_STREAM), "{error}");
+    }
+
+    #[test]
+    fn only_ls_remote_and_fetch_read_a_remote() {
+        assert!(reads_remote(&["ls-remote", "--heads", "origin"]));
+        assert!(reads_remote(&[
+            "-c",
+            "http.version=HTTP/2",
+            "fetch",
+            "origin"
+        ]));
+        assert!(!reads_remote(&["push", "origin", "main"]));
+        assert!(!reads_remote(&["-c", "alias.fetch=x", "status"]));
+        assert!(!reads_remote(&["rev-parse", "--verify", "fetch"]));
     }
 
     #[test]
