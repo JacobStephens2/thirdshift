@@ -339,9 +339,11 @@ for (const width of [320, 390, 768, 1280]) {
 // The videos page's entries, in order.
 const videos = [
   { title: "thirdshift in 31 seconds", audience: "Anyone", length: "0:32", id: "eRB6gGOQdJA" },
+  { title: "thirdshift, in plain terms", audience: "Leaders who don't code", length: "1:41", id: "8ed8VWABqy0" },
   { title: "thirdshift, briefly", audience: "Engineering leaders", length: "2:02", id: "yynbSGpHXGc" },
   { title: "How thirdshift works", audience: "Engineers", length: "2:38", id: "oL-5pi1AFC4" },
   { title: "How thirdshift works, step by step", audience: "Engineers, first look", length: "3:22", id: "gehONSA0viQ" },
+  { title: "How thirdshift uses Matt Pocock's workflow", audience: "Engineers", length: "4:11", id: "2sQOQG4lGDE" },
   { title: "How to use thirdshift", audience: "New users", length: "3:21", id: "pNhNyW9JgqA" },
 ];
 const playerUrl = id => `https://www.youtube-nocookie.com/embed/${id}?autoplay=1`;
