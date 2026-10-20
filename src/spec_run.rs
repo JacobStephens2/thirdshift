@@ -17,7 +17,7 @@ use anyhow::{Result, bail};
 
 use crate::base_fix::BaseFixAsk;
 use crate::child_run::{Ended, Kind, Runs};
-use crate::delivery::{Delivery, Opening};
+use crate::delivery::{self, Delivery, Opening};
 use crate::failed_run::{FailedRun, interrupted_or};
 use crate::github::{GitHub, Ticket};
 use crate::harness::Choice;
@@ -163,6 +163,7 @@ fn review_and_deliver(
     }
     let opening = Opening {
         kind: SPEC_REVIEW,
+        stage: delivery::Stage::SpecReview,
         prompt: prompt::spec_review(spec, base, branch, spec_pr_url),
         catch_up_from_origin: true,
     };

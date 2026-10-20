@@ -12,7 +12,7 @@ use crate::base_fix::{Advice, BaseFix};
 use crate::branch::{self, Selection};
 use crate::child_run::Kind;
 use crate::claim::{self, Claim};
-use crate::delivery::{Delivery, Opening};
+use crate::delivery::{Delivery, Opening, Stage};
 use crate::failed_run::FailedRun;
 use crate::github::{GitHub, Ticket};
 use crate::harness::Choice;
@@ -335,6 +335,7 @@ fn start_in_worktree<O: Outside>(
     }
     let opening = Opening {
         kind: IMPLEMENT,
+        stage: Stage::Implementation,
         prompt,
         catch_up_from_origin: false,
     };
