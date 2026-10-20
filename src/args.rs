@@ -25,6 +25,14 @@ pub enum Command {
     Console {
         no_sign_in: bool,
     },
+    ConsolePassword(Option<String>),
+    ConsoleSignOut {
+        email: Option<String>,
+        json: bool,
+    },
+    ConsoleLog {
+        json: bool,
+    },
     Status {
         json: bool,
         all: bool,
@@ -248,10 +256,45 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
         Some("console") => {
+            if args.get(1).is_some_and(|action| action == "sign-out") {
+                let mut email = None;
+                let mut json = false;
+                let mut arguments = args[2..].iter();
+                while let Some(flag) = arguments.next() {
+                    match flag.as_str() {
+                        "--email" if email.is_none() => {
+                            email = Some(
+                                arguments
+                                    .next()
+                                    .filter(|email| !email.starts_with('-'))
+                                    .ok_or_else(|| anyhow::anyhow!("--email needs an address"))?
+                                    .clone(),
+                            );
+                        }
+                        "--json" if !json => json = true,
+                        _ => {
+                            bail!("usage: thirdshift console sign-out [--email <address>] [--json]")
+                        }
+                    }
+                }
+                return Ok(Command::ConsoleSignOut { email, json });
+            }
             return match &args[1..] {
                 [] => Ok(Command::Console { no_sign_in: false }),
                 [flag] if flag == "--no-sign-in" => Ok(Command::Console { no_sign_in: true }),
-                _ => bail!("usage: thirdshift console [--no-sign-in]"),
+                [action] if action == "password" => Ok(Command::ConsolePassword(None)),
+                [action, flag, email]
+                    if action == "password" && flag == "--email" && !email.starts_with('-') =>
+                {
+                    Ok(Command::ConsolePassword(Some(email.clone())))
+                }
+                [action] if action == "log" => Ok(Command::ConsoleLog { json: false }),
+                [action, flag] if action == "log" && flag == "--json" => {
+                    Ok(Command::ConsoleLog { json: true })
+                }
+                _ => bail!(
+                    "usage: thirdshift console [--no-sign-in] | password [--email <address>] | sign-out [--email <address>] [--json] | log [--json]"
+                ),
             };
         }
         Some("stop") => {

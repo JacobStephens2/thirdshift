@@ -441,10 +441,16 @@ test("page keys, jump letters and URLs survive reload and the peek is a phone bo
     assert.equal(await page.locator('#peek').isVisible(), false);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   }
-  for (const [letter, name] of [['a', 'lanes'], ['t', 'stages'], ['f', 'waterfall'], ['h', 'history'], ['o', 'logs'], ['s', 'security'], ['i', 'inbox']]) {
+  for (const [letter, name] of [['b', 'lanes'], ['t', 'stages'], ['f', 'waterfall'], ['h', 'history'], ['o', 'logs'], ['s', 'security'], ['i', 'inbox']]) {
     await page.keyboard.press('g');
     await page.keyboard.press(letter);
     await page.waitForURL(`**/?page=${name}`);
+  }
+  for (const [letter, path] of [['a', '/account'], ['c', '/console-log']]) {
+    await page.keyboard.press('g');
+    await page.keyboard.press(letter);
+    await page.waitForURL(`${origin}${path}`);
+    await page.goto(`${origin}/?page=inbox`);
   }
   await page.keyboard.press('j');
   await page.keyboard.press('j');

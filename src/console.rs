@@ -1,5 +1,9 @@
 //! The machine's Console. Async execution is confined to this module.
+mod account_commands;
+mod accounts;
+mod auth;
 mod conversation;
+pub use account_commands::{password, print_log, sign_out};
 mod live;
 mod logs;
 mod peek;
@@ -13,10 +17,11 @@ use std::net::Ipv4Addr;
 use anyhow::{Context, Result, ensure};
 use askama::Template;
 use axum::Router;
-use axum::extract::{Path, RawQuery};
-use axum::http::{StatusCode, header};
+use axum::extract::{DefaultBodyLimit, Path, RawQuery};
+use axum::http::{Method, StatusCode, header};
+use axum::middleware;
 use axum::response::{Html, IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use include_dir::{Dir, include_dir};
 
 use crate::config::UserConfig;
@@ -29,6 +34,7 @@ static ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/src/console/assets");
 struct PageRoute {
     path: &'static str,
     cli: &'static [&'static str],
+    method: Method,
     view: View,
 }
 
@@ -41,6 +47,11 @@ enum View {
     CommandLogs,
     Reader,
     LogStream,
+    ConsoleLog,
+    Account,
+    SignOut,
+    SignInPage,
+    SignIn,
 }
 
 const PAGES: &[PageRoute] = &[
@@ -50,76 +61,124 @@ const PAGES: &[PageRoute] = &[
             "thirdshift show widgets#7 --json",
             "thirdshift logs widgets#7",
         ],
+        method: Method::GET,
         view: View::Inbox,
     },
     PageRoute {
         path: "/lanes",
         cli: &["thirdshift status --all --json"],
+        method: Method::GET,
         view: View::Inbox,
     },
     PageRoute {
         path: "/stages",
         cli: &["thirdshift status --all --json"],
+        method: Method::GET,
         view: View::Inbox,
     },
     PageRoute {
         path: "/",
         cli: &["thirdshift status"],
+        method: Method::GET,
         view: View::Inbox,
     },
     PageRoute {
         path: "/events",
         cli: &["thirdshift status"],
+        method: Method::GET,
         view: View::Changes,
     },
     PageRoute {
         path: "/history",
         cli: &["thirdshift status --all --json"],
+        method: Method::GET,
         view: View::Inbox,
     },
     PageRoute {
         path: "/security",
         cli: &["thirdshift status --all --json"],
+        method: Method::GET,
         view: View::Inbox,
     },
     PageRoute {
         path: "/peek",
         cli: &["thirdshift show widgets#7 --json"],
+        method: Method::GET,
         view: View::Inspect,
     },
     PageRoute {
         path: "/log",
         cli: &["thirdshift logs widgets#7"],
+        method: Method::GET,
         view: View::Log,
     },
     PageRoute {
         path: "/logs",
         cli: &["thirdshift logs --json"],
+        method: Method::GET,
         view: View::Logs,
     },
     PageRoute {
         path: "/logs/command/{id}",
         cli: &["thirdshift logs --command id --json"],
+        method: Method::GET,
         view: View::CommandLogs,
     },
     PageRoute {
         path: "/logs/{id}",
         cli: &["thirdshift logs --file id"],
+        method: Method::GET,
         view: View::Reader,
     },
     PageRoute {
         path: "/logs/{id}/stream/{offset}",
         cli: &["thirdshift logs --file id --follow"],
+        method: Method::GET,
         view: View::LogStream,
+    },
+    PageRoute {
+        path: "/console-log",
+        cli: &["thirdshift console log"],
+        method: Method::GET,
+        view: View::ConsoleLog,
+    },
+    PageRoute {
+        path: "/account",
+        cli: &["thirdshift console sign-out"],
+        method: Method::GET,
+        view: View::Account,
+    },
+    PageRoute {
+        path: "/sign-out",
+        cli: &["thirdshift console sign-out"],
+        method: Method::POST,
+        view: View::SignOut,
+    },
+    // CLI account access is authorized by the terminal's Unix account. HTTP
+    // establishes that access with the password set by this paired command.
+    PageRoute {
+        path: "/sign-in",
+        cli: &["thirdshift console password"],
+        method: Method::GET,
+        view: View::SignInPage,
+    },
+    PageRoute {
+        path: "/sign-in",
+        cli: &["thirdshift console password"],
+        method: Method::POST,
+        view: View::SignIn,
     },
 ];
 
 pub fn serve(no_sign_in: bool) -> Result<()> {
-    ensure!(
-        no_sign_in,
-        "Console sign-in is not available yet; use thirdshift console --no-sign-in on localhost"
-    );
     let config = UserConfig::load()?;
+    ensure!(
+        no_sign_in || !config.console.allowed_emails.is_empty(),
+        "console.allowed_emails is empty; configure allowed addresses or use --no-sign-in on localhost"
+    );
+    if !no_sign_in {
+        accounts::Accounts::load()?;
+    }
     let executable = restart::Executable::current()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
@@ -134,10 +193,26 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         let (changes, observer) = live::observe(render_inbox("thirdshift status").await?);
         axum::serve(
             listener,
-            router(changes).layer(axum::Extension(executable.clone())),
+            router(no_sign_in, changes).layer(axum::Extension(executable.clone())),
         )
         .with_graceful_shutdown(async move {
-            watched.replaced().await;
+            loop {
+                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                if watched.changed() {
+                    break;
+                }
+                // Revoke removed accounts even when nobody makes a request,
+                // so re-adding an address cannot revive its old sessions.
+                if !no_sign_in {
+                    match tokio::task::spawn_blocking(|| accounts::Accounts::load().map(drop)).await
+                    {
+                        Ok(Ok(())) => {}
+                        error => {
+                            eprintln!("thirdshift Console: can't reconcile allowlist: {error:?}")
+                        }
+                    }
+                }
+            }
             // Dropping the sole sender closes every SSE response before
             // graceful shutdown waits for the connections to finish.
             observer.abort();
@@ -152,27 +227,37 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
     executable.exec()
 }
 
-fn router(changes: tokio::sync::watch::Receiver<u64>) -> Router {
+fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Router {
     let mut router = Router::new();
     for page in PAGES {
         let cli = page.cli[0];
         let path = page.path;
-        router = router.route(
-            page.path,
-            match page.view {
-                View::Inbox => get(move |query| inbox(cli, path, query)),
-                View::Inspect => get(inspect),
-                View::Log => get(log),
-                View::Changes => get(live::events),
-                View::Logs => get(logs::index),
-                View::CommandLogs => get(logs::command),
-                View::Reader => get(logs::reader),
-                View::LogStream => get(logs::stream),
-            },
-        );
+        let handler = match (&page.view, page.method.clone()) {
+            (View::Inbox, Method::GET) => get(move |query| inbox(cli, path, query)),
+            (View::Inspect, Method::GET) => get(inspect),
+            (View::Log, Method::GET) => get(log),
+            (View::Changes, Method::GET) => get(live::events),
+            (View::Logs, Method::GET) => get(logs::index),
+            (View::CommandLogs, Method::GET) => get(logs::command),
+            (View::Reader, Method::GET) => get(logs::reader),
+            (View::LogStream, Method::GET) => get(logs::stream),
+            (View::ConsoleLog, Method::GET) => get(auth::log),
+            (View::Account, Method::GET) => get(auth::account),
+            (View::SignOut, Method::POST) => post(auth::sign_out),
+            (View::SignInPage, Method::GET) => get(auth::sign_in_page),
+            (View::SignIn, Method::POST) => post(auth::sign_in),
+            _ => unreachable!("unknown Console page method"),
+        };
+        router = router.route(page.path, handler);
     }
     router = router.route("/assets/{*path}", get(asset));
-    router.with_state(changes)
+    let access = auth::Access::new(no_sign_in);
+    router
+        .with_state(changes)
+        .layer(DefaultBodyLimit::max(16 * 1024))
+        .layer(middleware::from_fn_with_state(access.clone(), auth::guard))
+        .layer(axum::Extension(access))
+        .layer(middleware::from_fn(auth::headers))
 }
 
 #[derive(Template)]
@@ -298,7 +383,7 @@ async fn inspect(RawQuery(query): RawQuery) -> Response {
     })
     .await
     {
-        Ok(Ok(html)) => html_response(html),
+        Ok(Ok(html)) => Html(html).into_response(),
         _ => (StatusCode::NOT_FOUND, "Command details are unavailable.").into_response(),
     }
 }
@@ -326,17 +411,9 @@ async fn log(RawQuery(query): RawQuery) -> Response {
     }
 }
 
-fn html_response(html: String) -> Response {
-    (
-        [(header::CONTENT_SECURITY_POLICY, "default-src 'self'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"),
-         (header::CACHE_CONTROL, "no-store"),
-         (header::X_CONTENT_TYPE_OPTIONS, "nosniff")], Html(html)
-    ).into_response()
-}
-
 fn page(result: std::result::Result<Result<String>, tokio::task::JoinError>) -> Response {
     match result {
-        Ok(Ok(html)) => html_response(html),
+        Ok(Ok(html)) => Html(html).into_response(),
         error => {
             eprintln!("thirdshift Console: can't read page: {error:?}");
             (
@@ -380,14 +457,14 @@ async fn asset(Path(path): Path<String>) -> Response {
 mod tests {
     use axum::{
         Router,
-        routing::{Route, get},
+        routing::{Route, get, post},
     };
     use std::sync::{Arc, Mutex};
     use tower_layer::Layer;
 
     fn router() -> Router {
         let (_, changes) = tokio::sync::watch::channel(0);
-        super::router(changes)
+        super::router(false, changes)
     }
 
     // Router::route_layer walks every registered method service, including
@@ -417,9 +494,28 @@ mod tests {
         let get_methods = registered_methods(
             Router::<tokio::sync::watch::Receiver<u64>>::new()
                 .route("/known", get(|| async {}))
+                .with_state(changes.clone()),
+        );
+        let post_methods = registered_methods(
+            Router::<tokio::sync::watch::Receiver<u64>>::new()
+                .route("/known", post(|| async {}))
                 .with_state(changes),
         );
-        let expected = (super::PAGES.len() + 1) * get_methods; // one static-resource route
+        // Each unique path has one fallback; merging GET and POST at sign-in
+        // adds only the POST service, not another fallback service.
+        let fallback = 1;
+        let expected = super::PAGES
+            .iter()
+            .map(|page| {
+                if page.method == axum::http::Method::GET {
+                    get_methods
+                } else {
+                    post_methods
+                }
+            })
+            .sum::<usize>()
+            + get_methods
+            - fallback;
         assert_eq!(
             registered_methods(router),
             expected,

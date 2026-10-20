@@ -1,6 +1,7 @@
 //! One reader per Console; slow browsers only need the latest change notice.
 use std::{convert::Infallible, time::Duration};
 
+use axum::Extension;
 use axum::extract::State;
 use axum::response::{
     IntoResponse, Response, Sse,
@@ -28,10 +29,35 @@ pub(super) fn observe(initial: String) -> (watch::Receiver<u64>, tokio::task::Jo
     (changes, observer)
 }
 
-pub(super) async fn events(State(changes): State<watch::Receiver<u64>>) -> Response {
+pub(super) async fn events(
+    State(changes): State<watch::Receiver<u64>>,
+    Extension(viewer): Extension<super::auth::Viewer>,
+) -> Response {
     // WatchStream emits immediately, so every reconnect also catches up.
-    let stream = WatchStream::new(changes)
-        .map(|_| Ok::<_, Infallible>(Event::default().event("commands").data("changed")));
+    let stream = futures_util::stream::unfold(
+        (WatchStream::new(changes), viewer),
+        |(mut changes, viewer)| async move {
+            loop {
+                let signed_in = viewer.clone();
+                match tokio::task::spawn_blocking(move || signed_in.still_allowed()).await {
+                    Ok(Ok(true)) => {}
+                    Ok(Ok(false)) => return None,
+                    error => {
+                        eprintln!("thirdshift Console: can't authorize Inbox stream: {error:?}");
+                        return None;
+                    }
+                }
+                match tokio::time::timeout(Duration::from_millis(250), changes.next()).await {
+                    Ok(Some(_)) => {
+                        let event = Event::default().event("commands").data("changed");
+                        return Some((Ok::<_, Infallible>(event), (changes, viewer)));
+                    }
+                    Ok(None) => return None,
+                    Err(_) => {}
+                }
+            }
+        },
+    );
     (
         [("x-accel-buffering", "no"), ("cache-control", "no-store")],
         Sse::new(stream).keep_alive(KeepAlive::default()),

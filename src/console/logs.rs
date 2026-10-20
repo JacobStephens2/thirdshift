@@ -141,6 +141,7 @@ fn read_lines(log: &Log, offset: u64, budget: usize) -> Result<Lines> {
 pub(super) async fn stream(
     Path((id, offset)): Path<(String, u64)>,
     Extension(executable): Extension<super::restart::Executable>,
+    Extension(viewer): Extension<super::auth::Viewer>,
     headers: HeaderMap,
 ) -> Response {
     let offset = headers
@@ -155,7 +156,14 @@ pub(super) async fn stream(
             offset <= std::fs::metadata(log.path)?.len(),
             "invalid log offset"
         );
-        Ok((std::sync::Arc::new(config), id, offset, false, executable))
+        Ok((
+            std::sync::Arc::new(config),
+            id,
+            offset,
+            false,
+            executable,
+            viewer,
+        ))
     })
     .await;
     let state = match checked {
@@ -164,7 +172,7 @@ pub(super) async fn stream(
     };
     let events = futures_util::stream::unfold(
         state,
-        |(config, id, mut offset, done, executable)| async move {
+        |(config, id, mut offset, done, executable, viewer)| async move {
             if done {
                 return None;
             }
@@ -172,8 +180,9 @@ pub(super) async fn stream(
                 let root = config.clone();
                 let selected = id.clone();
                 let watched = executable.clone();
+                let signed_in = viewer.clone();
                 let result = tokio::task::spawn_blocking(move || {
-                    if watched.changed() {
+                    if watched.changed() || !signed_in.still_allowed()? {
                         return Ok(None);
                     }
                     appended(&root, &selected, offset).map(Some)
@@ -190,7 +199,7 @@ pub(super) async fn stream(
                             .data(serde_json::to_string(&batch).expect("serializable log batch"));
                         return Some((
                             Ok::<_, Infallible>(event),
-                            (config, id, offset, done, executable),
+                            (config, id, offset, done, executable, viewer),
                         ));
                     }
                     Ok(Ok(Some(_))) => {
@@ -201,7 +210,7 @@ pub(super) async fn stream(
                         let event = Event::default()
                             .event("log-error")
                             .data("Can't read log; reopen the reader. Check the Console's stderr.");
-                        return Some((Ok(event), (config, id, offset, true, executable)));
+                        return Some((Ok(event), (config, id, offset, true, executable, viewer)));
                     }
                 }
             }

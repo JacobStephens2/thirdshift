@@ -85,6 +85,10 @@ footer { margin-top: 16px; }
 #log-content article, #log-content > pre, .thinking, .tool-group { padding: 8px 12px; border: 1px solid var(--rule); margin: 8px 0; border-radius: var(--radius); }
 #log-content h3 { font-size: 14px; }
 .diff { border-left: 3px solid var(--look); padding-left: 10px; }
+.account-form { display: block; max-width: 420px; margin: 20px 0; }
+.account-form label { display: block; margin: 12px 0; }
+.account-form input:not([type="hidden"]), .account-form button { display: block; width: 100%; padding: 10px; margin-top: 6px; font: inherit; background: var(--panel); color: var(--text); border: 1px solid var(--rule); border-radius: var(--radius); }
+.account-form button { cursor: pointer; font-weight: var(--head-weight); }
 .lane { border-bottom: 1px solid var(--rule); padding: 10px 0; }
 .time-run h3 { font-size: 14px; margin: 4px 0; color: var(--text); }
 .lane .time-run + .time-run { margin-left: 12px; border-left: 1px solid var(--rule); }

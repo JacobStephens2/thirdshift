@@ -11,6 +11,10 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+#[cfg(unix)]
+#[path = "console/accounts.rs"]
+mod accounts;
+
 struct Console {
     child: Child,
     address: String,
@@ -35,8 +39,17 @@ impl Drop for HeldFixture {
 
 impl Console {
     fn start(binary: &Path, home: &Path) -> Self {
+        Self::start_mode(binary, home, true)
+    }
+
+    fn start_mode(binary: &Path, home: &Path, no_sign_in: bool) -> Self {
+        let args: &[&str] = if no_sign_in {
+            &["console", "--no-sign-in"]
+        } else {
+            &["console"]
+        };
         let mut child = Command::new(binary)
-            .args(["console", "--no-sign-in"])
+            .args(args)
             .env("HOME", home)
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())

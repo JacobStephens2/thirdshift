@@ -791,6 +791,7 @@ silent_minutes = 10   # minutes without growth in either log before a Run is Sil
 
 [console]
 port = 8711          # localhost port for the Console; 0 chooses a free port; default 8711
+allowed_emails = []  # addresses that may sign in; empty requires --no-sign-in; default []
 other_consoles = []   # http or https addresses linked in the header, never fetched; default []
 theme = "focus-auto" # Focus follows the system, or focus-light / focus-dark; default focus-auto
 
@@ -973,6 +974,7 @@ mod tests {
                 "inbox.days",
                 "inbox.silent_minutes",
                 "console.port",
+                "console.allowed_emails",
                 "console.other_consoles",
                 "console.theme",
                 "activity.quiet_skips",
