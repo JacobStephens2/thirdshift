@@ -5,7 +5,7 @@ const { readFile } = require("node:fs/promises");
 const { join } = require("node:path");
 const { chromium } = require("playwright");
 
-const publicPaths = ["/", "/docs/", "/how-it-works/", "/prompts/", "/videos/"];
+const publicPaths = ["/", "/architecture/", "/docs/", "/how-it-works/", "/prompts/", "/videos/"];
 
 let server, browser, origin;
 before(async () => {
@@ -285,6 +285,54 @@ for (const javaScriptEnabled of [false, true]) {
     await installLink.click();
     await page.locator("#install > pre").first().waitFor({ state: "visible", timeout: 2000 });
     assert.equal(await page.locator("#workflows").isVisible(), false, "unrelated sections stay folded");
+  });
+}
+
+test("the homepage, the guide and the videos page link to the architecture page without JavaScript", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  for (const path of ["/", "/how-it-works/", "/videos/"]) {
+    await page.goto(`${origin}${path}`);
+    await page.getByRole("link", { name: "Architecture", exact: true }).first().click();
+    assert.equal(new URL(page.url()).pathname, "/architecture/", path);
+  }
+});
+
+test("the architecture page shows six captioned, described figures, each reachable from its index", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  await page.goto(`${origin}/architecture/`);
+  const figures = page.locator("main figure");
+  assert.equal(await figures.count(), 6);
+  for (const [index, figure] of (await figures.all()).entries()) {
+    assert.equal(await figure.isVisible(), true);
+    assert.match(await figure.locator("figcaption").textContent(), new RegExp(`^Figure ${index + 1} `));
+    // Each drawing names its own description, so a screen reader hears the figure in words.
+    const svg = figure.locator("svg");
+    const description = await svg.evaluate(node => document.getElementById(node.getAttribute("aria-labelledby"))?.textContent ?? "");
+    assert.ok(description.length > 100, `figure ${index + 1} has a description`);
+  }
+  const ids = await page.locator("svg [id]").evaluateAll(nodes => nodes.map(node => node.id));
+  assert.equal(new Set(ids).size, ids.length, "marker and title ids are unique across figures");
+  const links = page.getByRole("navigation", { name: "Figures" }).getByRole("link");
+  assert.equal(await links.count(), 6);
+  for (const link of await links.all()) {
+    const href = await link.getAttribute("href");
+    await link.click();
+    assert.equal(new URL(page.url()).hash, href);
+    assert.ok(await page.locator(href).evaluate(node => Math.abs(node.getBoundingClientRect().top) < 40), `${href} scrolls into view`);
+  }
+  for (const path of await page.locator('a[href^="/"], link[href^="/"]').evaluateAll(nodes => [...new Set(nodes.map(node => node.getAttribute("href").split("#")[0]))])) {
+    assert.equal((await page.request.get(`${origin}${path}`)).status(), 200, path);
+  }
+});
+
+for (const width of [320, 390, 768, 1280]) {
+  test(`the architecture page fits ${width}px, its figures scrolling inside their frames`, async (t) => {
+    const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width, height: 900 } });
+    await page.goto(`${origin}/architecture/`);
+    await assertFits(page, "main, header, .arch-fig, .arch-stages, .arch-layers", "text fits its containers");
+    // Below the breakpoint a figure keeps a legible width rather than shrinking to fit.
+    const svgWidth = await page.locator("main svg").first().evaluate(node => node.getBoundingClientRect().width);
+    assert.ok(svgWidth >= Math.min(720, width - 80), `figure is ${svgWidth}px wide`);
   });
 }
 
