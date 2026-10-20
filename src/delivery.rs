@@ -26,7 +26,7 @@ use crate::base_fix::BaseFix;
 use crate::ci::{self, Ci, FailedChecks};
 use crate::failed_run::{FailedRun, PolicyRefusal, interrupted_or};
 use crate::git::Git;
-use crate::github::{GitHub, IssueText};
+use crate::github::GitHub;
 use crate::harness::Choice;
 use crate::interrupt;
 use crate::issue::IssueUrl;
@@ -39,6 +39,7 @@ use crate::run_ending::Cause;
 use crate::security::review::{Hold as SecurityHold, Outcome as SecurityOutcome, Review};
 use crate::session::{Logs, Sessions};
 use crate::skills;
+use crate::trust::{self, IssueText};
 use crate::worktree::{ForeignCommits, Merge, PendingMerge, Preserved, Worktree};
 
 use repair_loop::{Repair, Upstream};
@@ -419,7 +420,7 @@ trait FailedOutside {
 /// account: a session started now would work from text no Trusted account
 /// wrote.
 fn no_untrusted_edit_since(issue: &IssueUrl, started: DateTime<Utc>) -> Result<()> {
-    match GitHub::new().untrusted_edit(issue, Some(started))? {
+    match trust::untrusted_edit(&GitHub::new(), issue, Some(started))? {
         Some(text) => Err(UntrustedEdit {
             number: issue.number,
             text,

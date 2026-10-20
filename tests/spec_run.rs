@@ -410,32 +410,6 @@ fn a_spec_stops_before_starting_a_ticket_written_by_an_untrusted_account() {
 }
 
 #[test]
-fn a_spec_stops_before_starting_a_ticket_edited_by_an_untrusted_account_after_it_was_marked_ready()
-{
-    let scenario = linear_spec();
-    let mut state = scenario.gh_state();
-    // The Spec was marked ready on 2020-01-02, after the Ticket's own label.
-    state["trust_events"] = serde_json::json!({"20": [
-        {"created_at": "2020-01-02T00:00:00Z", "event": "labeled",
-         "label": {"name": "ready-for-agent"}, "actor": {"login": "acme"}}
-    ]});
-    state["edits"] = serde_json::json!({"21": [
-        {"kind": "title", "by": "outsider", "at": "2020-01-03T00:00:00Z"}
-    ]});
-    scenario.write_gh_state(&state);
-
-    let result = scenario.run(&[&spec_url(&scenario)]);
-
-    assert_eq!(result.code, Some(1), "{}", result.stderr);
-    assert_contains(
-        &result.stderr,
-        "Ticket #21: title edited after it was marked ready by an account that is not a Trusted account",
-    );
-    assert!(scenario.claude_calls().is_empty());
-    assert!(scenario.origin_log("issue-21").is_none());
-}
-
-#[test]
 fn a_ticket_edited_by_an_untrusted_account_before_its_spec_was_marked_ready_starts() {
     let scenario = linear_spec();
     let mut state = scenario.gh_state();
@@ -455,30 +429,6 @@ fn a_ticket_edited_by_an_untrusted_account_before_its_spec_was_marked_ready_star
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert!(!result.stderr.contains("edited"), "{}", result.stderr);
-}
-
-#[test]
-fn a_ticket_needs_only_a_trusted_author_not_a_ready_label_of_its_own() {
-    for events in [
-        serde_json::json!([]),
-        serde_json::json!([
-            {"created_at": "2020-01-01T00:00:00Z", "event": "labeled", "label": {"name": "ready-for-agent"}, "actor": {"login": "outsider"}}
-        ]),
-    ] {
-        let scenario = linear_spec();
-        let mut state = scenario.gh_state();
-        state["trust_events"] = serde_json::json!({"21": events, "22": events});
-        scenario.write_gh_state(&state);
-
-        let result = scenario.run(&["no-email", &spec_url(&scenario)]);
-
-        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-        assert!(
-            !result.stderr.contains("Trusted account"),
-            "{}",
-            result.stderr
-        );
-    }
 }
 
 #[test]

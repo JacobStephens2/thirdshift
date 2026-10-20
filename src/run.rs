@@ -24,6 +24,7 @@ use crate::progress;
 use crate::prompt;
 use crate::session::Logs;
 use crate::spec_run;
+use crate::trust;
 use crate::worktree::Worktree;
 
 /// The implement session's kind, in its progress lines and log name.
@@ -172,7 +173,7 @@ fn run(
 ) -> Result<Reached, FailedRun> {
     let directory = LaunchDirectory::open_for_run(issue)?;
     if let StartedBy::Command = started_by {
-        match GitHub::new().issue_trust(issue) {
+        match trust::issue_trust(&GitHub::new(), issue) {
             Ok(Some(check)) => progress::step(format!("warning: #{} {check}", issue.number)),
             Ok(None) => {}
             Err(error) => progress::step(format!(

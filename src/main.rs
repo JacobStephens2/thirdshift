@@ -42,6 +42,7 @@ mod skills;
 mod spec_run;
 #[cfg(test)]
 mod test_support;
+mod trust;
 mod update;
 mod worktree;
 

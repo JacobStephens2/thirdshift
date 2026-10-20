@@ -10,11 +10,12 @@ use crate::base_fix;
 use crate::branch::{self, Started};
 use crate::claim;
 use crate::git::Git;
-use crate::github::{Candidate, GitHub, ListedIssue, Shaping, UntrustedIssue};
+use crate::github::{Candidate, GitHub, ListedIssue, Shaping};
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Label, READY_FOR_AGENT};
 use crate::progress;
 use crate::spec_run;
+use crate::trust::{self, UntrustedIssue};
 
 /// The lowest-numbered Ready issue a search found.
 pub struct ReadyIssue {
@@ -96,7 +97,7 @@ struct GitHubAndOrigin<'a> {
 
 impl Reads for GitHubAndOrigin<'_> {
     fn issue_trust(&self, issue: &IssueUrl) -> Result<Option<UntrustedIssue>> {
-        self.github.issue_trust(issue)
+        trust::issue_trust(&self.github, issue)
     }
 
     fn candidate(&self, issue: &IssueUrl) -> Result<Candidate> {

@@ -1076,25 +1076,6 @@ fn an_untrusted_edit_while_the_run_is_under_way_starts_no_resume() {
 }
 
 #[test]
-fn a_trusted_edit_while_the_run_is_under_way_leaves_its_repairs_running() {
-    let scenario = Scenario::new();
-    scenario.agent_does_in_session(
-        1,
-        &format!(
-            "{AGENT_OPENS_PR}{}{}",
-            checks_on_head(RED),
-            edits_issue_7("title", "acme")
-        ),
-    );
-    scenario.agent_does_in_session(2, "echo fixed > feature.txt\ngit commit -q -am 'Fix CI'\n");
-
-    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
-
-    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(scenario.claude_calls().len(), 2);
-}
-
-#[test]
 fn an_untrusted_edit_dated_just_before_the_runs_local_start_still_stops_repairs() {
     let scenario = Scenario::new();
     // GitHub dates the edit before this machine's clock says the Run

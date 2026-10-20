@@ -4,9 +4,9 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
 
-use super::trust::trusted_association;
 use super::{CommandFailure, GitHub};
 use crate::issue::IssueUrl;
+use crate::trust::trusted_association;
 
 /// What stands in for each comment by an account that is not a Trusted
 /// account.
