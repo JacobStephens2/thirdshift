@@ -145,6 +145,10 @@ It updates through `/events`, with polling if the stream disconnects.
 The stopping bar respects reduced motion. HTTP tests use real Commands
 with a waiting fake Harness and fake GitHub; Playwright checks confirmation,
 cancellation, live controls and pushed completion on a phone.
+`thirdshift stop <command> [--requeue] --json` waits quietly and returns the
+outcome, `issue_branches` and `pull_requests` as one JSON object.
+On Linux after a build, `python3 console/reproductions/session-stop.py` checks that
+a live Session reader's Details link reaches its exact Command's Stop.
 
 Claude Edit events include old/new text and show unified diff excerpts. Codex
 `file_change` events retain only file paths and change kinds, so the reader

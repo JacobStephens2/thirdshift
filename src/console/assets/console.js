@@ -1,3 +1,5 @@
+import { watchCommands } from './changes.js';
+
 // Browser preferences are conveniences; malformed or unavailable storage hides nothing.
 function stored(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
@@ -90,52 +92,24 @@ function morph(html) {
   }
 }
 
-// Coalesce notices, but fetch again if a change arrives during the request.
-let refreshing = false, pending = false;
 async function refresh() {
-  pending = true;
-  if (refreshing) return;
-  refreshing = true;
-  try {
-    while (pending) {
-      pending = false;
-      if (document.getElementById('inbox')) {
-        const response = await fetch("/", { cache: "no-store" });
-        if (!response.ok) throw new Error("Inbox unavailable");
-        morph(await response.text());
-      }
-      await refreshPeek();
-    }
-  } catch {
-    startPolling();
-  } finally { refreshing = false; }
+  if (document.getElementById('inbox')) {
+    const response = await fetch("/", { cache: "no-store" });
+    if (!response.ok) throw new Error("Inbox unavailable");
+    morph(await response.text());
+  }
+  await refreshPeek();
 }
-let polling;
-function startPolling() {
-  polling ??= setInterval(refresh, 5000);
-}
-let commandStream;
+let stopWatching;
 function startUpdates() {
-  if (commandStream) return;
-  if (typeof EventSource === "function") {
-    commandStream = new EventSource("/events");
-    commandStream.addEventListener("commands", refresh);
-    commandStream.addEventListener("error", startPolling);
-    commandStream.addEventListener("open", () => {
-      clearInterval(polling);
-      polling = undefined;
-      refresh();
-    });
-  } else { startPolling(); }
+  stopWatching ??= watchCommands(refresh);
 }
 if (document.getElementById('inbox')) startUpdates();
 
 function stopPeekUpdates() {
   if (document.getElementById('inbox')) return;
-  commandStream?.close();
-  commandStream = undefined;
-  clearInterval(polling);
-  polling = undefined;
+  stopWatching?.();
+  stopWatching = undefined;
 }
 
 const peek = document.querySelector('#peek');

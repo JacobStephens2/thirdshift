@@ -63,6 +63,8 @@ const PAGES: &[PageRoute] = &[
         cli: &[
             "thirdshift stop widgets#7",
             "thirdshift stop widgets#7 --requeue",
+            "thirdshift stop widgets#7 --json",
+            "thirdshift stop widgets#7 --requeue --json",
         ],
         method: Method::GET,
         view: View::StopPage,
@@ -72,6 +74,8 @@ const PAGES: &[PageRoute] = &[
         cli: &[
             "thirdshift stop widgets#7",
             "thirdshift stop widgets#7 --requeue",
+            "thirdshift stop widgets#7 --json",
+            "thirdshift stop widgets#7 --requeue --json",
         ],
         method: Method::POST,
         view: View::Stop,

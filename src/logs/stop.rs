@@ -66,7 +66,7 @@ fn require_live(record: &CommandRecord) -> Result<()> {
     Ok(())
 }
 
-pub fn stop(input: &str, requeue: bool) -> Result<()> {
+pub fn stop(input: &str, requeue: bool, json: bool) -> Result<()> {
     let user = std::process::Command::new("id")
         .arg("-un")
         .output()
@@ -84,6 +84,7 @@ pub fn stop(input: &str, requeue: bool) -> Result<()> {
         &path,
         &mut WallClock(Instant::now()),
         &mut std::io::stdout(),
+        json,
     )
 }
 
@@ -168,15 +169,15 @@ impl Clock for WallClock {
     }
 }
 
-fn wait(path: &Path, clock: &mut impl Clock, output: &mut impl Write) -> Result<()> {
+fn wait(path: &Path, clock: &mut impl Clock, output: &mut impl Write, json: bool) -> Result<()> {
     let mut reminder = clock.elapsed();
     loop {
         let tree = read(path)?;
         if tree.command.outcome.is_some() || !tree.command.live(&mut OnMachine) {
-            print_ending(path, &tree, output)?;
+            print_ending(path, &tree, output, json)?;
             return Ok(());
         }
-        if clock.elapsed().saturating_sub(reminder) >= Duration::from_secs(60) {
+        if !json && clock.elapsed().saturating_sub(reminder) >= Duration::from_secs(60) {
             writeln!(output, "{} still ending", tree.command.name)?;
             output.flush()?;
             reminder = clock.elapsed();
@@ -185,7 +186,27 @@ fn wait(path: &Path, clock: &mut impl Clock, output: &mut impl Write) -> Result<
     }
 }
 
-fn print_ending(path: &Path, tree: &CommandTree, output: &mut impl Write) -> Result<()> {
+fn print_ending(
+    path: &Path,
+    tree: &CommandTree,
+    output: &mut impl Write,
+    json: bool,
+) -> Result<()> {
+    let work = reading::retained_work(path, chrono::Local::now())?;
+    if json {
+        writeln!(
+            output,
+            "{}",
+            serde_json::json!({
+                "version": 1,
+                "name": tree.command.name,
+                "outcome": tree.command.outcome.as_deref().unwrap_or("died before recording an outcome"),
+                "issue_branches": work.branches,
+                "pull_requests": work.pull_requests,
+            })
+        )?;
+        return Ok(());
+    }
     writeln!(
         output,
         "{}: {}",
@@ -195,7 +216,6 @@ fn print_ending(path: &Path, tree: &CommandTree, output: &mut impl Write) -> Res
             .as_deref()
             .unwrap_or("died before recording an outcome")
     )?;
-    let work = reading::retained_work(path, chrono::Local::now())?;
     for branch in work.branches {
         writeln!(output, "Issue branch left: {branch}")?;
     }
@@ -262,6 +282,7 @@ mod tests {
                 path: path.clone(),
             },
             &mut output,
+            false,
         )
         .unwrap();
         assert_eq!(
