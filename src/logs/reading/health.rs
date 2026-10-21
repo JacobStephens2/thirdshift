@@ -83,7 +83,7 @@ impl UsualRanges {
 fn collect_times(record: &CommandRecord, samples: &mut BTreeMap<(String, String), Vec<f64>>) {
     for timing in record.stage_times(None) {
         let stage = timing.stage;
-        if !StageName::known(&stage.name) {
+        if !StageName::known(&stage.name) || StageName::is_dispatch(&stage.name) {
             continue;
         }
         if let Some(seconds) = timing.seconds() {
@@ -164,7 +164,9 @@ pub(super) fn observe(
         .collect();
     if command.state == "live" {
         command.health = Some(Health::Ok);
-        if let Some(stage) = &command.stage {
+        if let Some(stage) = &command.stage
+            && !StageName::is_dispatch(&stage.name)
+        {
             if let Some(range) = ranges.get(&command.record.repository, &stage.name)
                 && stage.age_seconds as f64 > range.upper_seconds
             {

@@ -193,7 +193,7 @@ fn run_through<R>(
         listed.issue.number, listed.title, listed.issue.url
     ));
     outside.check_harness()?;
-    outside.started(Work::PickupRun(&listed.issue));
+    outside.started(Work::PickupRun(&listed));
     let ended = outside.dispatch(Dispatch::ReadyIssue {
         issue: &listed.issue,
         is_spec,

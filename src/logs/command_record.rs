@@ -137,6 +137,10 @@ pub enum StageName {
     SecurityAudit,
     SecurityReproduction,
     SecurityFixPublishing,
+    /// A Pickup run or Security run waiting on the Run it dispatched.
+    DispatchedRun,
+    /// A Pickup run or Security run waiting on the Spec run it dispatched.
+    DispatchedSpecRun,
 }
 
 impl StageName {
@@ -156,7 +160,30 @@ impl StageName {
             Self::SecurityAudit => "Security audit",
             Self::SecurityReproduction => "Security reproduction",
             Self::SecurityFixPublishing => "Security fix publishing",
+            Self::DispatchedRun => "dispatched Run",
+            Self::DispatchedSpecRun => "dispatched Spec run",
         }
+    }
+
+    /// The stage a pass enters while `work`, the Command it dispatched, runs.
+    pub(super) fn dispatched(work: Work<'_>) -> Self {
+        match work {
+            Work::SpecRun(_) => Self::DispatchedSpecRun,
+            Work::Run(_)
+            | Work::BaseFix(_)
+            | Work::PickupRun(_)
+            | Work::ArchitectRun(_)
+            | Work::SecurityRun(_) => Self::DispatchedRun,
+        }
+    }
+
+    /// Whether the stage named `name` is a pass's dispatch stage. Such a
+    /// stage has no Usual range and is never Silent: the dispatched
+    /// Command's own stages carry its health.
+    pub(super) fn is_dispatch(name: &str) -> bool {
+        [Self::DispatchedRun, Self::DispatchedSpecRun]
+            .into_iter()
+            .any(|stage| stage.name() == name)
     }
 
     pub(super) fn known(name: &str) -> bool {
@@ -175,6 +202,8 @@ impl StageName {
             Self::SecurityAudit,
             Self::SecurityReproduction,
             Self::SecurityFixPublishing,
+            Self::DispatchedRun,
+            Self::DispatchedSpecRun,
         ]
         .into_iter()
         .any(|stage| stage.name() == name)
@@ -235,17 +264,15 @@ impl CommandRecord {
     }
 
     pub fn new(work: Work<'_>, stamp: &str, harness: &Choice, now: DateTime<FixedOffset>) -> Self {
-        let issue = match work {
-            Work::Run(issue)
-            | Work::BaseFix(issue)
-            | Work::SpecRun(issue)
-            | Work::PickupRun(issue) => Some(Issue {
-                number: issue.number,
-                url: issue.url.clone(),
-                title: None,
-            }),
-            Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
-        };
+        let issue = work.issue_url().map(|issue| Issue {
+            number: issue.number,
+            url: issue.url.clone(),
+            // The Ready issue listing named a Pickup run's issue before it started.
+            title: match work {
+                Work::PickupRun(listed) => Some(listed.title.clone()),
+                _ => None,
+            },
+        });
         let name = match work {
             Work::ArchitectRun(_) => format!("architect-{stamp}"),
             Work::SecurityRun(_) => format!("secure-{stamp}"),

@@ -168,6 +168,132 @@ gh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7
 }
 
 #[test]
+fn a_live_pickup_run_names_its_issue_and_the_run_it_dispatched() {
+    let scenario = Scenario::new();
+    scenario.issue_titled(7, "Make widgets");
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does(&format!(
+        "touch '{started}'\nwhile ! test -f '{release}'; do sleep 0.02; done\n{OPENS_PR}",
+        started = scenario.path("started").display(),
+        release = scenario.path("release").display()
+    ));
+    let held = scenario.run_until(&["pickup"], &[], "started");
+    let json = scenario.run(&["status", "--json"]);
+    let text = scenario.run(&["status"]);
+    let status: Value = serde_json::from_str(&json.stdout).unwrap();
+    let name = status["commands"][0]["name"].as_str().unwrap().to_string();
+    let shown = scenario.run(&["show", &name]);
+    fs::write(scenario.path("release"), "").unwrap();
+    let ended = held.finish();
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let pickup = &status["commands"][0];
+    assert_eq!(pickup["kind"], "Pickup run", "{status:#}");
+    assert_eq!(pickup["state"], "live");
+    assert_eq!(pickup["issue"]["title"], "Make widgets");
+    assert_eq!(pickup["stage"]["name"], "dispatched Run");
+    assert_eq!(pickup["stages"][0]["name"], "dispatched Run");
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(pickup["stage"]["began_at"].as_str().unwrap()).is_ok()
+    );
+    assert!(pickup["stage"]["age_seconds"].is_number());
+    assert_eq!(pickup["dispatched"][0]["stage"]["name"], "implement");
+    let row = text
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("Pickup run "))
+        .expect(&text.stdout);
+    assert!(
+        row.starts_with("Pickup run acme/widgets#7 Make widgets · "),
+        "{row}"
+    );
+    assert!(row.contains(" · dispatched Run · "), "{row}");
+    assert!(
+        text.stdout.contains("  Run acme/widgets#7 Make widgets · "),
+        "{}",
+        text.stdout
+    );
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    assert!(
+        shown
+            .stdout
+            .starts_with(&format!("Pickup run {name} · dispatched Run · ")),
+        "{}",
+        shown.stdout
+    );
+    assert!(
+        shown.stdout.lines().any(|line| line == "Make widgets"),
+        "{}",
+        shown.stdout
+    );
+}
+
+const PICKUP_LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/pickup";
+
+/// The status line of a Pickup run whose record `change` rewrites, on a
+/// Pickup run that took #7 and ended.
+fn pickup_row_after(change: impl FnOnce(&mut Value)) -> String {
+    let scenario = Scenario::new();
+    scenario.issue_titled(7, "Make widgets");
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does(OPENS_PR);
+    let ended = scenario.run(&["pickup"]);
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let path = fs::read_dir(scenario.path(PICKUP_LOGS))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| path.to_string_lossy().ends_with(".command.json"))
+        .unwrap();
+    let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    change(&mut record);
+    fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let text = scenario.run(&["status"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    text.stdout
+        .lines()
+        .find(|line| line.starts_with("Pickup run "))
+        .expect(&text.stdout)
+        .to_string()
+}
+
+/// Make an ended record read as a Command that died without an outcome.
+fn died(record: &mut Value) {
+    record["outcome"] = Value::Null;
+    record["ended_at"] = Value::Null;
+    record["process_start"] = "gone".into();
+}
+
+#[test]
+fn an_ended_pickup_run_shows_its_outcome_and_one_that_died_names_its_dispatch() {
+    let ended = pickup_row_after(|_| {});
+    assert!(
+        ended.starts_with("Pickup run acme/widgets#7 Make widgets · "),
+        "{ended}"
+    );
+    assert!(ended.ends_with(" · ready for review"), "{ended}");
+    let dead = pickup_row_after(died);
+    assert!(dead.ends_with(" · died at dispatched Run"), "{dead}");
+}
+
+#[test]
+fn a_pickup_record_from_before_dispatch_stages_and_titles_reads_as_it_did() {
+    let before = |record: &mut Value| {
+        record["stages"] = serde_json::json!([]);
+        record["issue"]["title"] = Value::Null;
+    };
+    let ended = pickup_row_after(before);
+    assert!(
+        ended.starts_with("Pickup run acme/widgets#7 (title unavailable) · "),
+        "{ended}"
+    );
+    assert!(ended.ends_with(" · ready for review"), "{ended}");
+    let dead = pickup_row_after(|record| {
+        before(record);
+        died(record);
+    });
+    assert!(dead.ends_with(" · died before first stage"), "{dead}");
+}
+
+#[test]
 fn a_merge_run_retains_delivery_stages_and_their_start_times() {
     let scenario = Scenario::new();
     scenario.agent_does(OPENS_PR);

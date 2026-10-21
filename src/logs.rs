@@ -27,6 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{LazyLock, Mutex, MutexGuard, PoisonError};
 
 use crate::config::UserConfig;
+use crate::github::ListedIssue;
 use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
 use crate::session::Logged;
@@ -91,8 +92,8 @@ pub enum Work<'a> {
     BaseFix(&'a IssueUrl),
     /// A Spec run on its Spec.
     SpecRun(&'a IssueUrl),
-    /// A Pickup run, on the Ready issue it took.
-    PickupRun(&'a IssueUrl),
+    /// A Pickup run, on the Ready issue it took, as the listing named it.
+    PickupRun(&'a ListedIssue),
     /// An Architect run, on its repository.
     ArchitectRun(&'a Repo),
     /// A Security run, on its repository.
@@ -301,7 +302,7 @@ fn root_under(logs_dir: &Path, repo: &Repo) -> PathBuf {
     logs_dir.join(&repo.owner).join(&repo.name)
 }
 
-impl Work<'_> {
+impl<'a> Work<'a> {
     fn initial_stage(self) -> Option<Stage> {
         match self {
             Work::Run(_) | Work::BaseFix(_) => Some(Stage::Implement),
@@ -314,10 +315,8 @@ impl Work<'_> {
     /// The repository whose work it records.
     fn repo(self) -> Repo {
         match self {
-            Work::Run(issue)
-            | Work::BaseFix(issue)
-            | Work::SpecRun(issue)
-            | Work::PickupRun(issue) => issue.repo(),
+            Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => issue.repo(),
+            Work::PickupRun(listed) => listed.issue.repo(),
             Work::ArchitectRun(repo) | Work::SecurityRun(repo) => repo.clone(),
         }
     }
@@ -333,15 +332,18 @@ impl Work<'_> {
         }
     }
 
-    /// Its issue's number, if it has one.
-    fn issue(self) -> Option<u64> {
+    /// Its issue, if it has one.
+    pub(crate) fn issue_url(self) -> Option<&'a IssueUrl> {
         match self {
-            Work::Run(issue)
-            | Work::BaseFix(issue)
-            | Work::SpecRun(issue)
-            | Work::PickupRun(issue) => Some(issue.number),
+            Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => Some(issue),
+            Work::PickupRun(listed) => Some(&listed.issue),
             Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
         }
+    }
+
+    /// Its issue's number, if it has one.
+    fn issue(self) -> Option<u64> {
+        self.issue_url().map(|issue| issue.number)
     }
 }
 

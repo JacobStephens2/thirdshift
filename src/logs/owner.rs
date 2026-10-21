@@ -139,7 +139,7 @@ pub(super) fn allocate<F: Files>(
         Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => {
             (CommandKind::Issue, format!("{}-", issue.number))
         }
-        Work::PickupRun(issue) => (CommandKind::Pickup, format!("{}-", issue.number)),
+        Work::PickupRun(listed) => (CommandKind::Pickup, format!("{}-", listed.issue.number)),
         Work::ArchitectRun(_) => (CommandKind::Architect, String::new()),
         Work::SecurityRun(_) => (CommandKind::Secure, String::new()),
     };

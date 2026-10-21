@@ -40,10 +40,14 @@ impl LiveRun {
     }
 
     fn stage_age(&mut self, minutes: i64) {
+        self.named_stage_age("implement", minutes);
+    }
+
+    fn named_stage_age(&mut self, stage: &str, minutes: i64) {
         let began = (chrono::Local::now() - chrono::Duration::minutes(minutes)).to_rfc3339();
         self.record["started_at"] = began.clone().into();
         self.record["stages"] = json!([{
-            "name": "implement", "began_at": began,
+            "name": stage, "began_at": began,
             "session_log": self.record["session_log"]
         }]);
         fs::write(&self.path, serde_json::to_vec(&self.record).unwrap()).unwrap();
@@ -93,6 +97,17 @@ impl LiveRun {
     }
 
     fn history(&self, number: u32, duration: Option<i64>, minutes_ago: i64, repo: &str) {
+        self.named_history("implement", number, duration, minutes_ago, repo);
+    }
+
+    fn named_history(
+        &self,
+        stage: &str,
+        number: u32,
+        duration: Option<i64>,
+        minutes_ago: i64,
+        repo: &str,
+    ) {
         let mut record = self.record.clone();
         let ended = chrono::Local::now() - chrono::Duration::minutes(minutes_ago);
         let began = ended - chrono::Duration::minutes(duration.unwrap_or(1));
@@ -104,7 +119,7 @@ impl LiveRun {
         record["session_log"] = Value::Null;
         record["stages"] = duration.map_or(json!([]), |_| {
             json!([{
-                "name": "implement", "began_at": began.to_rfc3339(), "session_log": null
+                "name": stage, "began_at": began.to_rfc3339(), "session_log": null
             }])
         });
         let folder = self
@@ -222,4 +237,27 @@ fn status_warns_when_waiting_lines_are_not_more_frequent_than_silence() {
     }
     scenario.user_config_is("[logs]\nwaiting_line_minutes = 1\n[inbox]\nsilent_minutes = 2\n");
     assert!(!scenario.run(&["status"]).stderr.contains("warning"));
+}
+
+#[test]
+fn a_dispatch_stage_is_never_slow_or_silent_since_its_dispatched_command_carries_health() {
+    let mut run = LiveRun::new();
+    for number in 10..13 {
+        run.named_history("dispatched Run", number, Some(10), 100, "acme/widgets");
+    }
+    run.named_stage_age("dispatched Run", 600);
+    run.log_ages(300, 300);
+    let status = run.status();
+    assert_eq!(status["stage"]["name"], "dispatched Run", "{status}");
+    assert_eq!(status["health"]["state"], "ok", "{status}");
+    assert!(
+        status["usual_ranges"]["dispatched Run"].is_null(),
+        "{status}"
+    );
+    let text = run.scenario.run(&["status"]);
+    assert!(
+        text.stdout.contains(" · dispatched Run · 10 hr 0 min\n"),
+        "{}",
+        text.stdout
+    );
 }
