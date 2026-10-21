@@ -92,7 +92,7 @@ A continuation of the same agent session, started once when that session ended i
 ### Runs
 
 **Command**:
-One invocation of thirdshift that does factory work: a **Run** or **Spec run** started on an **Issue URL**, an **Architect run**, a **Pickup run**, or a **Security run**. A child Run, a **Ticket**'s Run or a **Base fix**, is part of the command that started it, not one of its own. Interruption stops its ordinary CLI work and prevents more from starting, while Failed run salvage, confirmed Self-merge completion, Claim ending and Spec accounting still finish; finishing never clears the recorded interruption.
+One invocation of thirdshift that does factory work: a **Run** or **Spec run** started on an **Issue URL**, an **Architect run**, a **Pickup run**, a **Security run**, or a **Scoring run**. A child Run, a **Ticket**'s Run or a **Base fix**, is part of the command that started it, not one of its own. Interruption stops its ordinary CLI work and prevents more from starting, while Failed run salvage, confirmed Self-merge completion, Claim ending and Spec accounting still finish; finishing never clears the recorded interruption.
 _Avoid_: invocation, job
 
 **Run**:
@@ -171,7 +171,7 @@ A finding from the Standards axis of a code review: the change breaks a document
 A finding from the Spec axis of a code review: the change is missing, gets wrong, or goes beyond what the issue asked for.
 
 **Security finding**:
-A vulnerability a **Security review** or a **Security audit** found. One the **Run**'s own change introduced, left unaddressed, holds a **Self-merge** into the **Base branch**. One already on the Base branch is never written up in public before it is fixed: it is recorded privately for the **Day shift**, as a draft security advisory on a public repository or a labelled issue on a private one. Once recorded, it waits for the Day shift, unless it is reproduced and fixing is allowed, until the Day shift triages it: by closing its draft advisory, publishing it or giving it a severity, or by taking `needs-triage` off its issue. That decision is also its grade, real or not.
+A vulnerability a **Security review** or a **Security audit** found. One the **Run**'s own change introduced, left unaddressed, holds a **Self-merge** into the **Base branch**. One already on the Base branch is never written up in public before it is fixed: it is recorded privately for the **Day shift**, as a draft security advisory on a public repository or a labelled issue on a private one. Once recorded, it waits for the Day shift, unless it is reproduced and fixing is allowed, until the Day shift triages it: by closing its draft advisory, publishing it or giving it a severity, or by taking `needs-triage` off its issue. That decision also settles whether it was real.
 _Avoid_: vulnerability report, security issue
 
 **Unaddressed finding**:
@@ -313,19 +313,19 @@ _Avoid_: skin, style, variant
 ### Evals
 
 **Eval**:
-A test of how well thirdshift's agents do their work, kept in an **Eval suite** and run in a **Replay**.
+A test of how well thirdshift's agents do their work: offline, on an **Eval suite** in an **Experiment**, or online, on a sample of merged work in a **Scoring run**.
 _Avoid_: evaluation, benchmark
 
 **Eval suite**:
 The **Eval tasks** that test one kind of session, such as the code review or the **Spec review**.
-_Avoid_: golden dataset, test set
+_Avoid_: dataset, golden dataset, test set
 
 **Eval task**:
 One past situation in an **Eval suite**: a repository as it once was, the kind of session to run on it, and what success means there, such as a bug the review must catch.
-_Avoid_: task, case, test case, sample
+_Avoid_: task, case, test case, example, sample
 
 **Arm**:
-One setup that a **Replay** compares: a build of thirdshift, with its **Factory skills** and **Session prompts**, and a **Harness**, **Model** and **Effort**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.
+One setup that an **Experiment** compares: a build of thirdshift, with its **Factory skills** and **Session prompts**, and a **Harness**, **Model** and **Effort**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.
 _Avoid_: variant, provider, configuration
 
 **Trial**:
@@ -333,13 +333,25 @@ One attempt at an **Eval task** by one **Arm**, in an agent session of its own. 
 _Avoid_: run, attempt, sample
 
 **Grader**:
-What judges a **Trial** against its **Eval task**'s success criteria: a check in code, an agent session, or the **Day shift**.
+What judges a **Trial** against its **Eval task**'s success criteria, or a **Run** in a **Scoring run**'s sample against the criteria merged work is held to: a check in code, an agent session, or the **Day shift**.
 _Avoid_: judge, evaluator, scorer
 
-**Grade**:
-What a **Grader** decides about one **Trial**: whether it met its **Eval task**'s success criteria, and why.
-_Avoid_: rating, score
+**Score**:
+What a **Grader** decides about one **Trial** against its **Eval task**'s success criteria, or about a sampled **Run** on one criterion: whether it passed, and why.
+_Avoid_: grade, rating, feedback
 
-**Replay**:
+**Experiment**:
 A comparison of a **Baseline arm** with a **Candidate arm** on the **Eval suites** a change touches, against a bar fixed before it starts. It shows whether the change makes the agents better or worse before it reaches production.
-_Avoid_: experiment, eval run, benchmark run
+_Avoid_: replay, eval run, benchmark run, A/B test
+
+**Scoring run**:
+The weekly **Command** that evaluates production work. A **Grader** gives **Scores** to a sample of the week's merged factory pull requests, whichever machine made them, and a session proposes a **Bug origin** for each bug fixed that week.
+_Avoid_: grading run, tasting, production monitoring
+
+**Run metrics**:
+What a **Run**'s **Command record** and **Session logs** show about how it went, such as its outcome, **Repairs**, CI rounds, **Unaddressed findings**, stage times, tokens and tool errors. Each is kept apart, never combined into one number.
+_Avoid_: Run score, KPI
+
+**Bug origin**:
+The pull request that introduced a bug, and the **Run** that made it if a Run did, as a session proposed it and the **Day shift** confirmed it.
+_Avoid_: culprit, blame
