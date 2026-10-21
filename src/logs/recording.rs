@@ -144,6 +144,11 @@ impl<O: Outside> Record<O> {
                 // The launch checks have now established whether the issue is
                 // a Spec. The dispatch itself was kept before those checks.
                 dispatched.kind = work.kind().to_string();
+                if let Some(stage) = tree.command.stages.last_mut()
+                    && StageName::is_dispatch(&stage.name)
+                {
+                    stage.name = StageName::dispatched(work).name().into();
+                }
                 self.stage(work.initial_stage().unwrap(), None);
             }
             return;
@@ -338,6 +343,10 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn dispatching(&mut self, work: Work, harness: &Choice) {
+        // Entered while the pass is still the active record, timing the dispatch.
+        if matches!(self.command, CommandKind::Pickup | CommandKind::Secure) {
+            self.stage(StageName::dispatched(work), None);
+        }
         let stamp = self.stamp();
         let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
         if let Some((_, tree)) = &mut self.command_record {

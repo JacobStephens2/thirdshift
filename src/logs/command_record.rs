@@ -137,6 +137,10 @@ pub enum StageName {
     SecurityAudit,
     SecurityReproduction,
     SecurityFixPublishing,
+    /// A Pickup run or Security run waiting on the Run it dispatched.
+    DispatchedRun,
+    /// A Pickup run or Security run waiting on the Spec run it dispatched.
+    DispatchedSpecRun,
 }
 
 impl StageName {
@@ -156,7 +160,25 @@ impl StageName {
             Self::SecurityAudit => "Security audit",
             Self::SecurityReproduction => "Security reproduction",
             Self::SecurityFixPublishing => "Security fix publishing",
+            Self::DispatchedRun => "dispatched Run",
+            Self::DispatchedSpecRun => "dispatched Spec run",
         }
+    }
+
+    /// The stage a pass enters while `work`, the Command it dispatched, runs.
+    pub(super) fn dispatched(work: Work<'_>) -> Self {
+        match work {
+            Work::SpecRun(_) => Self::DispatchedSpecRun,
+            _ => Self::DispatchedRun,
+        }
+    }
+
+    /// A dispatch has no Usual range and is never Silent: its health is the
+    /// dispatched Command's.
+    pub(super) fn is_dispatch(name: &str) -> bool {
+        [Self::DispatchedRun, Self::DispatchedSpecRun]
+            .into_iter()
+            .any(|stage| stage.name() == name)
     }
 
     pub(super) fn known(name: &str) -> bool {
@@ -175,6 +197,8 @@ impl StageName {
             Self::SecurityAudit,
             Self::SecurityReproduction,
             Self::SecurityFixPublishing,
+            Self::DispatchedRun,
+            Self::DispatchedSpecRun,
         ]
         .into_iter()
         .any(|stage| stage.name() == name)
@@ -236,13 +260,16 @@ impl CommandRecord {
 
     pub fn new(work: Work<'_>, stamp: &str, harness: &Choice, now: DateTime<FixedOffset>) -> Self {
         let issue = match work {
-            Work::Run(issue)
-            | Work::BaseFix(issue)
-            | Work::SpecRun(issue)
-            | Work::PickupRun(issue) => Some(Issue {
+            Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => Some(Issue {
                 number: issue.number,
                 url: issue.url.clone(),
                 title: None,
+            }),
+            // The Ready issue listing named it before the Pickup run started.
+            Work::PickupRun(listed) => Some(Issue {
+                number: listed.issue.number,
+                url: listed.issue.url.clone(),
+                title: Some(listed.title.clone()),
             }),
             Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
         };

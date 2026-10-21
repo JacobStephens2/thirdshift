@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use chrono::{DateTime, FixedOffset};
 
 use super::*;
+use crate::github::ListedIssue;
 use crate::harness::{ChosenBy, Harness};
 use crate::issue::IssueUrl;
 use crate::logs::effects::Tail;
@@ -195,6 +196,14 @@ impl Outside for Scripted {
 
 fn issue() -> IssueUrl {
     IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap()
+}
+
+fn listed() -> ListedIssue {
+    ListedIssue {
+        issue: issue(),
+        title: "Make widgets".into(),
+        labels: Default::default(),
+    }
 }
 
 #[test]
@@ -469,6 +478,7 @@ fn a_run_records_its_complete_output_and_activity_under_its_repository() {
 #[test]
 fn each_work_kind_records_only_its_first_start_and_keeps_its_own_command_folder() {
     let issue = issue();
+    let listed = listed();
     let repo = issue.repo();
     let dispatched = IssueUrl::parse("https://github.com/other/repo/issues/8").unwrap();
     for (begin, work, beginning, subject, relative) in [
@@ -488,7 +498,7 @@ fn each_work_kind_records_only_its_first_start_and_keeps_its_own_command_folder(
         ),
         (
             Begin::PickupRun,
-            Work::PickupRun(&issue),
+            Work::PickupRun(&listed),
             "Pickup run starting",
             "Pickup run #7",
             "commands/pickup/7-20261003T120000-0400.log",
@@ -534,7 +544,7 @@ fn each_work_kind_records_only_its_first_start_and_keeps_its_own_command_folder(
 
 #[test]
 fn held_output_keeps_streams_and_order_through_configuration_release_and_start() {
-    let issue = issue();
+    let listed = listed();
     for quiet in [false, true] {
         let memory = Scripted::default();
         let mut record = Record::new(memory.clone());
@@ -551,7 +561,7 @@ fn held_output_keeps_streams_and_order_through_configuration_release_and_start()
         assert_eq!(memory.terminal(), held);
         record.print("");
         record.eprint("thirdshift: 09:08:07 #21: relayed unchanged");
-        record.started(Work::PickupRun(&issue), &harness());
+        record.started(Work::PickupRun(&listed), &harness());
         record.show_held();
         record.print("after start");
         record.ended("done");
@@ -619,6 +629,7 @@ fn a_child_inherits_its_parent_stamp_and_relays_output_without_a_beginning_or_lo
     let memory = Scripted::default();
     let mut record = Record::new(memory.clone());
     let issue = issue();
+    let listed = listed();
     let repo = issue.repo();
     record.begin(Begin::ChildRun(
         "parent-stamp",
@@ -629,7 +640,7 @@ fn a_child_inherits_its_parent_stamp_and_relays_output_without_a_beginning_or_lo
     for work in [
         Work::Run(&issue),
         Work::SpecRun(&issue),
-        Work::PickupRun(&issue),
+        Work::PickupRun(&listed),
         Work::ArchitectRun(&repo),
     ] {
         record.started(work, &harness());
@@ -757,7 +768,7 @@ fn separate_recordings_suppress_skips_from_shared_history_until_their_kind_chang
     let mut pickup = Record::new(memory.clone());
     pickup.begin(Begin::PickupRun);
     pickup.configured(&config(true));
-    pickup.started(Work::PickupRun(&issue()), &harness());
+    pickup.started(Work::PickupRun(&listed()), &harness());
     // Even just an intervening start permits the same skip again.
     skip(&memory, Pass::Pickup, "idle");
     pickup.ended("ready");
@@ -1157,7 +1168,7 @@ fn concurrent_output_and_start_have_the_same_terminal_and_command_log_order() {
             record
                 .lock()
                 .unwrap()
-                .started(Work::PickupRun(&issue()), &harness());
+                .started(Work::PickupRun(&listed()), &harness());
         });
     });
     record.lock().unwrap().ended("done");
@@ -1191,4 +1202,145 @@ fn a_pass_can_reveal_output_before_configuration_when_loading_it_fails() {
     );
     assert_eq!(record.command_log_path(), None);
     assert!(memory.0.lock().unwrap().files.is_empty());
+}
+
+fn command_tree(memory: &Scripted) -> serde_json::Value {
+    let memory = memory.0.lock().unwrap();
+    let (_, record) = memory
+        .files
+        .iter()
+        .find(|(path, _)| path.to_string_lossy().ends_with(".command.json"))
+        .unwrap();
+    serde_json::from_str(record).unwrap()
+}
+
+#[test]
+fn a_pickup_or_security_run_enters_a_stage_naming_what_it_dispatched_and_when() {
+    let ready = listed();
+    let repo = ready.issue.repo();
+    let dispatched = IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap();
+    for (begin, work, before, spec, expected) in [
+        (
+            Begin::PickupRun,
+            Work::PickupRun(&ready),
+            None,
+            false,
+            "dispatched Run",
+        ),
+        (
+            Begin::PickupRun,
+            Work::PickupRun(&ready),
+            None,
+            true,
+            "dispatched Spec run",
+        ),
+        (
+            Begin::SecurityRun,
+            Work::SecurityRun(&repo),
+            Some(StageName::SecurityFixPublishing),
+            false,
+            "dispatched Run",
+        ),
+        (
+            Begin::SecurityRun,
+            Work::SecurityRun(&repo),
+            Some(StageName::SecurityFixPublishing),
+            true,
+            "dispatched Spec run",
+        ),
+    ] {
+        let memory = Scripted::default();
+        let mut record = Record::new(memory.clone());
+        record.begin(begin);
+        record.configured(&config(true));
+        record.started(work, &harness());
+        if let Some(stage) = before {
+            record.stage(stage, None);
+        }
+        let undispatched = command_tree(&memory)["stages"].clone();
+        assert_eq!(
+            undispatched.as_array().unwrap().len(),
+            usize::from(before.is_some())
+        );
+        memory.0.lock().unwrap().now =
+            Some(DateTime::parse_from_rfc3339("2026-10-03T13:30:00-04:00").unwrap());
+        let child = if spec {
+            Work::SpecRun(&dispatched)
+        } else {
+            Work::Run(&dispatched)
+        };
+        record.dispatching(child, &harness());
+        // The dispatched Command's own stages are its own, not the pass's.
+        memory.0.lock().unwrap().now =
+            Some(DateTime::parse_from_rfc3339("2026-10-03T13:31:00-04:00").unwrap());
+        record.started(child, &harness());
+        record.stage(StageName::PullRequest, None);
+        let tree = command_tree(&memory);
+        let stages = tree["stages"].as_array().unwrap();
+        assert_eq!(stages.len(), usize::from(before.is_some()) + 1, "{tree:#}");
+        assert_eq!(stages.last().unwrap()["name"], expected);
+        assert_eq!(
+            stages.last().unwrap()["began_at"],
+            "2026-10-03T13:30:00-04:00"
+        );
+        let child_stages: Vec<_> = tree["dispatched"][0]["stages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|stage| stage["name"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            child_stages,
+            [if spec { "Tickets" } else { "implement" }, "pull request"]
+        );
+    }
+}
+
+#[test]
+fn a_dispatch_found_to_be_a_spec_by_its_launch_checks_renames_the_pass_stage() {
+    let ready = listed();
+    let dispatched = IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap();
+    let memory = Scripted::default();
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::PickupRun);
+    record.configured(&config(true));
+    record.started(Work::PickupRun(&ready), &harness());
+    record.dispatching(Work::Run(&dispatched), &harness());
+    record.started(Work::SpecRun(&dispatched), &harness());
+    let tree = command_tree(&memory);
+    assert_eq!(tree["stages"][0]["name"], "dispatched Spec run");
+    assert_eq!(tree["dispatched"][0]["kind"], "Spec run");
+}
+
+#[test]
+fn an_architect_run_keeps_its_own_stage_while_its_plan_is_dispatched() {
+    let repo = issue().repo();
+    let plan = IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap();
+    let memory = Scripted::default();
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::ArchitectRun);
+    record.configured(&config(true));
+    record.started(Work::ArchitectRun(&repo), &harness());
+    record.dispatching(Work::Run(&plan), &harness());
+    record.started(Work::Run(&plan), &harness());
+    let tree = command_tree(&memory);
+    let stages: Vec<_> = tree["stages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|stage| stage["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(stages, ["Architecture review"]);
+}
+
+#[test]
+fn a_pickup_run_records_the_title_its_ready_issue_was_listed_with() {
+    let memory = Scripted::default();
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::PickupRun);
+    record.configured(&config(true));
+    record.started(Work::PickupRun(&listed()), &harness());
+    let issue = command_tree(&memory)["issue"].clone();
+    assert_eq!(issue["number"], 7);
+    assert_eq!(issue["title"], "Make widgets");
 }

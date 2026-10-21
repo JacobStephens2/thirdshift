@@ -68,6 +68,13 @@ fn status_nests_a_pickups_spec_with_running_waiting_merged_and_not_started_ticke
     assert_eq!(commands.len(), 1, "{status:#}");
     let pickup = &commands[0];
     assert_eq!(pickup["kind"], "Pickup run");
+    assert_eq!(pickup["issue"]["title"], SPEC_TITLE);
+    assert_eq!(pickup["stage"]["name"], "dispatched Spec run");
+    assert_eq!(pickup["stages"][0]["name"], "dispatched Spec run");
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(pickup["stage"]["began_at"].as_str().unwrap()).is_ok()
+    );
+    assert_eq!(pickup["health"]["state"], "ok");
     let spec = &pickup["dispatched"][0];
     assert_eq!(spec["kind"], "Spec run");
     assert_eq!(spec["stage"]["name"], "Tickets");
@@ -84,6 +91,16 @@ fn status_nests_a_pickups_spec_with_running_waiting_merged_and_not_started_ticke
     assert_eq!(run["state"], "live");
     assert_eq!(run["stage"]["name"], "implement");
     assert!(run["stage"]["age_seconds"].is_number());
+    let row = text
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("Pickup run "))
+        .expect(&text.stdout);
+    assert!(
+        row.starts_with(&format!("Pickup run acme/widgets#{SPEC} {SPEC_TITLE} · ")),
+        "{row}"
+    );
+    assert!(row.contains(" · dispatched Spec run · "), "{row}");
     for expected in [
         "Pickup run",
         "Spec run",

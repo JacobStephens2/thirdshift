@@ -456,6 +456,14 @@ fn status_tracks_security_stages_and_nests_the_dispatched_fix() {
         assert_eq!(active["stage"]["name"], stage, "{status}");
         assert!(active["stage"]["age_seconds"].is_number());
         if held_session == 4 {
+            assert_eq!(pass["stage"]["name"], "dispatched Run", "{status}");
+            assert_eq!(pass["health"]["state"], "ok", "{status}");
+            let row = text
+                .stdout
+                .lines()
+                .find(|line| line.starts_with("Security run "))
+                .expect(&text.stdout);
+            assert!(row.contains(" · dispatched Run · "), "{row}");
             assert_eq!(active["issue"]["number"], 8);
             assert!(
                 text.stdout.contains("\n  Run acme/widgets#8"),
@@ -476,7 +484,8 @@ fn status_tracks_security_stages_and_nests_the_dispatched_fix() {
             [
                 "Security audit",
                 "Security reproduction",
-                "Security fix publishing"
+                "Security fix publishing",
+                "dispatched Run"
             ]
         );
         assert_eq!(record["outcome"], "ready for review");
