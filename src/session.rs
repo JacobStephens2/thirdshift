@@ -116,8 +116,8 @@ pub struct Sessions<'a> {
     /// What must still hold before each session starts, a Resume included:
     /// a session it fails is not started, and the step fails with it.
     before_each: &'a dyn Fn() -> Result<()>,
-    /// The log of the session started last, a Resume included.
-    last_log: RefCell<Option<PathBuf>>,
+    /// The session started last, a Resume included, and its log.
+    last_log: RefCell<Option<(Logged, PathBuf)>>,
     /// How each session ended whose last ending, its Resume's if it got one,
     /// left background work running, as in "implement session ended with a
     /// background task still running (cargo test), which was killed", oldest
@@ -197,7 +197,7 @@ impl<'a> Sessions<'a> {
             endings_with_killed_work: RefCell::default(),
         };
         let taken = steps(&sessions);
-        let log = sessions.last_log.into_inner();
+        let log = sessions.last_log.into_inner().map(|(_, log)| log);
         let endings = sessions.endings_with_killed_work.into_inner();
         if endings.is_empty() {
             return (taken, log);
@@ -306,7 +306,7 @@ impl<'a> Sessions<'a> {
         logs::session(session, &log);
         let label = &session.token();
         self.step(format!("logging the session to {}", log.display()));
-        *self.last_log.borrow_mut() = Some(log.clone());
+        *self.last_log.borrow_mut() = Some((session, log.clone()));
         let prompt = reports.map_or_else(
             || prompt.replace(prompt::REVIEW_REPORTS, ""),
             |reports| reports.prompt(prompt),
@@ -321,6 +321,17 @@ impl<'a> Sessions<'a> {
             }
         }
         ended
+    }
+
+    /// The log of the session started last, its Resume's if it got one, if
+    /// that session is of `kind` and the log exists: the log a cause from
+    /// that session is reported with.
+    pub fn last_log_of(&self, kind: Kind) -> Option<PathBuf> {
+        self.last_log
+            .borrow()
+            .as_ref()
+            .filter(|(session, log)| session.kind == kind && log.exists())
+            .map(|(_, log)| log.clone())
     }
 
     /// Hand on the progress line `line`.

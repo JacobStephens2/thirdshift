@@ -228,8 +228,8 @@ impl Route<'_> {
             outside.security_review(&prompt::security_review(self.issue, self.base, self.branch))
         }) {
             // Not a Security review outcome: the Run itself must stop.
-            Some(Err(error)) if error.is::<UntrustedEdit>() => return Err(error),
-            review => review.map(SecurityOutcome::of),
+            Some((Err(error), _)) if error.is::<UntrustedEdit>() => return Err(error),
+            review => review.map(|(result, log)| SecurityOutcome::of(result, log)),
         };
         outside.stage(Stage::Push);
         outside.push()?;
@@ -351,8 +351,11 @@ fn retry_if_interrupted<O: Outside>(
 /// head whose CI was watched. Problems along the way are reported, not
 /// raised, so the error is what the Run fails with. Worktree owns preservation
 /// and retains work that may not have reached origin. `log` is the most recent
-/// Session log, if a session created one; `stopped_at`, the stage its
-/// recovery lines report; `worktree`, where work preserved only locally is.
+/// Session log, if a session created one, which the Failed run reports unless
+/// the error is a Security hold with its review's own Session log: a hold is
+/// raised only after the Repair loop, whose sessions may have run since.
+/// `stopped_at` is the stage its recovery lines report; `worktree`, where work
+/// preserved only locally is.
 fn fail(
     outside: &mut impl FailedOutside,
     stopped_at: recovery::Stage,
@@ -367,6 +370,11 @@ fn fail(
     let reason = Cause::of(&error).first_line().to_string();
     // Everything is already on origin: the Repair loop pushed the head.
     let keep_ready = error.is::<PolicyRefusal>() || error.is::<SecurityHold>();
+    let log = error
+        .downcast_ref::<SecurityHold>()
+        .and_then(SecurityHold::log)
+        .map(Path::to_path_buf)
+        .or(log);
     let preservation = if keep_ready {
         Preservation::Remote
     } else {
@@ -419,7 +427,9 @@ trait Outside {
     fn catch_up(&mut self) -> Result<()>;
     /// Run a session of `kind` given `prompt`.
     fn session(&mut self, kind: Kind, prompt: &str) -> Result<()>;
-    fn security_review(&mut self, prompt: &str) -> Result<Review>;
+    /// Run the Security review given `prompt`, with its Session log, its
+    /// Resume's if it got one, if it started a session.
+    fn security_review(&mut self, prompt: &str) -> (Result<Review>, Option<PathBuf>);
     fn record_security_review(&mut self, review: &SecurityOutcome) -> Result<()>;
     /// Push the Issue branch.
     fn push(&mut self) -> Result<()>;
@@ -533,17 +543,9 @@ impl Outside for InWorktree<'_> {
         self.pull_request.ensure_actionable(false)
     }
 
-    fn security_review(&mut self, prompt: &str) -> Result<Review> {
-        self.pull_request.ensure_actionable(false)?;
-        let review = crate::security::review::run(
-            self.sessions,
-            self.worktree,
-            self.issue,
-            self.base,
-            prompt,
-        )?;
-        self.pull_request.ensure_actionable(false)?;
-        Ok(review)
+    fn security_review(&mut self, prompt: &str) -> (Result<Review>, Option<PathBuf>) {
+        let review = self.review_while_actionable(prompt);
+        (review, self.sessions.last_log_of(Kind::SecurityReview))
     }
 
     fn record_security_review(&mut self, review: &SecurityOutcome) -> Result<()> {
@@ -601,6 +603,23 @@ impl Outside for InWorktree<'_> {
 
     fn warn(&mut self, error: &anyhow::Error, warning: String) {
         progress::warn(error, format_args!("{warning}"));
+    }
+}
+
+impl InWorktree<'_> {
+    /// Run the Security review given `prompt`, failing unless the pull
+    /// request is still actionable both before and after it.
+    fn review_while_actionable(&mut self, prompt: &str) -> Result<Review> {
+        self.pull_request.ensure_actionable(false)?;
+        let review = crate::security::review::run(
+            self.sessions,
+            self.worktree,
+            self.issue,
+            self.base,
+            prompt,
+        )?;
+        self.pull_request.ensure_actionable(false)?;
+        Ok(review)
     }
 }
 
@@ -827,6 +846,8 @@ mod tests {
         /// review ends incomplete, a Security hold.
         reviews_security: bool,
         security_held: bool,
+        /// Whether taking the PR to its goal runs a Repair session first.
+        repairs: bool,
         failing: Option<Fails>,
         interrupted: bool,
         refused: bool,
@@ -850,13 +871,17 @@ mod tests {
         fn stage(&mut self, stage: Stage) {
             self.stages.push(stage);
         }
-        fn security_review(&mut self, _: &str) -> Result<Review> {
-            if self.security_held {
-                return Review::from_final_message(Some("Security review: incomplete: timed out"));
-            }
-            Review::from_final_message(Some(
-                "Security review: {\"unaddressed_count\":0,\"findings\":[],\"pre_existing_count\":0}",
-            ))
+        fn security_review(&mut self, _: &str) -> (Result<Review>, Option<PathBuf>) {
+            let log = PathBuf::from("/logs/security-review.jsonl");
+            self.log = Some(log.clone());
+            let review = if self.security_held {
+                Review::from_final_message(Some("Security review: incomplete: timed out"))
+            } else {
+                Review::from_final_message(Some(
+                    "Security review: {\"unaddressed_count\":0,\"findings\":[],\"pre_existing_count\":0}",
+                ))
+            };
+            (review, Some(log))
         }
         fn catch_up(&mut self) -> Result<()> {
             self.calls.push(Call::CatchUp);
@@ -889,6 +914,9 @@ mod tests {
         }
         fn take_to_goal(&mut self, _: &str, goal: Goal) -> Result<()> {
             self.calls.push(Call::Goal(goal));
+            if self.repairs {
+                self.log = Some(PathBuf::from("/logs/repair-1.jsonl"));
+            }
             if self.refused {
                 return Err(anyhow!("merge refused").context(PolicyRefusal::NothingToFix));
             }
@@ -1231,5 +1259,54 @@ mod tests {
                 Stage::PullRequestReadiness
             ]
         );
+    }
+
+    #[test]
+    fn a_security_hold_after_a_repair_reports_the_reviews_session_log() {
+        let mut outside = Scripted {
+            reviews_security: true,
+            security_held: true,
+            repairs: true,
+            ..Default::default()
+        };
+        let failed = deliver(&mut outside, Goal::Merged, false).unwrap_err();
+        assert!(failed.error.is::<SecurityHold>(), "{:#}", failed.error);
+        assert_eq!(outside.log, Some(PathBuf::from("/logs/repair-1.jsonl")));
+        assert_eq!(
+            failed.log,
+            Some(PathBuf::from("/logs/security-review.jsonl"))
+        );
+    }
+
+    #[test]
+    fn a_failure_after_a_repair_reports_the_most_recent_session_log() {
+        // A failing Repair session, or a cause no session gave, as with
+        // Repairs exhausted, is reported with the most recent Session log,
+        // whether or not a Security review ran before it.
+        for reviews_security in [false, true] {
+            let mut outside = Scripted {
+                reviews_security,
+                repairs: true,
+                failing: Some(Fails::Goal),
+                ..Default::default()
+            };
+            let failed = deliver(&mut outside, Goal::Merged, false).unwrap_err();
+            assert_eq!(failed.log, Some(PathBuf::from("/logs/repair-1.jsonl")));
+        }
+    }
+
+    #[test]
+    fn a_security_hold_whose_review_started_no_session_reports_the_most_recent_session_log() {
+        let hold = SecurityOutcome::of(Err(anyhow!("no merge base")), None)
+            .hold()
+            .unwrap();
+        let failed = fail(
+            &mut Scripted::default(),
+            recovery::Stage::SecurityReview,
+            PathBuf::from("/worktree"),
+            Some(PathBuf::from("/logs/repair-1.jsonl")),
+            hold.into(),
+        );
+        assert_eq!(failed.log, Some(PathBuf::from("/logs/repair-1.jsonl")));
     }
 }

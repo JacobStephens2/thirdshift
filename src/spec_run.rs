@@ -12,6 +12,7 @@
 mod ticket_board;
 
 use std::num::NonZeroUsize;
+use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
@@ -122,6 +123,7 @@ fn run_through(
 ) -> Result<Reached, FailedRun> {
     let Landing {
         lines: ticket_lines,
+        failed_log,
         progress,
         pushed,
         landed,
@@ -142,7 +144,7 @@ fn run_through(
             Err(FailedRun {
                 error: interrupted_or(error, interrupted),
                 pr_url: outside.spec_pr_url(),
-                log: None,
+                log: failed_log,
                 interrupted,
                 ticket_lines: Vec::new(),
                 recovery: Some(Box::new(Recovery::new(
@@ -365,6 +367,9 @@ impl Outside for ChildRunsAndGitHub<'_> {
 /// another error ended it first.
 struct Landing {
     lines: Vec<String>,
+    /// The Session log of the one failed Ticket's session the landing
+    /// failed on, if just one failed.
+    failed_log: Option<PathBuf>,
     progress: TicketProgress,
     pushed: bool,
     landed: Result<String>,
@@ -382,6 +387,7 @@ fn land_tickets(
     if let Err(error) = outside.push() {
         return Landing {
             lines: Vec::new(),
+            failed_log: None,
             progress: board.progress(),
             pushed: false,
             landed: Err(error),
@@ -390,6 +396,12 @@ fn land_tickets(
     }
     let landing = run_ready_tickets(outside, &mut board);
     let lines = board.lines();
+    // Only a landing that ran to its end failed on its Tickets alone.
+    let failed_log = landing
+        .is_ok()
+        .then(|| board.failed_log())
+        .flatten()
+        .map(PathBuf::from);
     let landed = landing.and_then(|()| {
         let not_done = board.not_done();
         if not_done.is_empty() {
@@ -402,6 +414,7 @@ fn land_tickets(
     });
     Landing {
         lines,
+        failed_log,
         progress: board.progress(),
         local_work: board.local_work(),
         pushed: true,
@@ -1468,7 +1481,7 @@ mod tests {
 
         assert_eq!(format!("{:#}", failed.error), "Tickets not done: #21");
         assert_eq!(failed.pr_url.as_deref(), Some(SPEC_PR));
-        assert_eq!(failed.log, None);
+        assert_eq!(failed.log, Some(PathBuf::from("/logs/session.jsonl")));
         assert!(!failed.interrupted);
         assert_eq!(
             failed.ticket_lines,
@@ -1617,5 +1630,43 @@ mod tests {
                 Did::Show(done)
             ]
         );
+    }
+
+    #[test]
+    fn a_spec_run_failed_by_one_tickets_session_names_that_sessions_log() {
+        let mut outside = Scripted::new(Script {
+            tickets: vec![open(21, &[])],
+            endings: VecDeque::from([(21, Ok(failed("claude exited 1")))]),
+            ..Script::default()
+        });
+        let failed = failed_of(spec_run(&mut outside, 1));
+        assert_eq!(failed.log, Some(PathBuf::from("/logs/session.jsonl")));
+    }
+
+    #[test]
+    fn a_spec_run_whose_other_ticket_is_blocked_names_the_failed_tickets_log() {
+        let mut outside = Scripted::new(Script {
+            tickets: vec![open(21, &[]), open(22, &[21])],
+            endings: VecDeque::from([(21, Ok(failed("claude exited 1")))]),
+            ..Script::default()
+        });
+        let failed = failed_of(spec_run(&mut outside, 1));
+        assert_eq!(format!("{:#}", failed.error), "Tickets not done: #21, #22");
+        assert_eq!(failed.log, Some(PathBuf::from("/logs/session.jsonl")));
+    }
+
+    #[test]
+    fn a_spec_run_failed_by_several_tickets_sessions_names_no_single_log() {
+        let mut outside = Scripted::new(Script {
+            tickets: vec![open(21, &[]), open(22, &[])],
+            endings: VecDeque::from([
+                (21, Ok(failed("claude exited 1"))),
+                (22, Ok(failed("claude exited 1"))),
+            ]),
+            ..Script::default()
+        });
+        let failed = failed_of(spec_run(&mut outside, 1));
+        assert_eq!(format!("{:#}", failed.error), "Tickets not done: #21, #22");
+        assert_eq!(failed.log, None);
     }
 }

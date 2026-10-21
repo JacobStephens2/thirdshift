@@ -122,7 +122,8 @@ pub struct Account<'a> {
     pub advice: &'a [Advice],
     /// What became of the Base fix the Run started or waited on, if any.
     pub base_fix: Option<&'a str>,
-    /// The most recent session log, if a session was started.
+    /// The Session log of the session a failure came from, else the most
+    /// recent one, if a session was started.
     pub log: Option<&'a Path>,
     /// In a Spec run, a line on each Ticket, as in its summary on stderr.
     pub ticket_lines: &'a [String],

@@ -3,6 +3,7 @@
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 use std::{fmt, fs};
 
 use super::reproduction::{FixSize, Outcome as ReproductionOutcome, Reproduction, Severity};
@@ -165,16 +166,25 @@ pub(crate) enum Ask {
     Forbid,
 }
 
-pub(crate) enum Outcome {
+/// How a Security review ended, with the Session log of the session it ran,
+/// which any Security hold it raises is reported with.
+pub(crate) struct Outcome {
+    ended: Ended,
+    log: Option<PathBuf>,
+}
+
+enum Ended {
     Complete(Review),
     Incomplete(String),
 }
 
 impl Outcome {
-    pub fn of(result: Result<Review>) -> Self {
-        match result {
-            Ok(review) => Self::Complete(review),
-            Err(error) => Self::Incomplete(
+    /// The review that came to `result`, its session logged to `log`, its
+    /// Resume's if it got one, if it started one.
+    pub fn of(result: Result<Review>, log: Option<PathBuf>) -> Self {
+        let ended = match result {
+            Ok(review) => Ended::Complete(review),
+            Err(error) => Ended::Incomplete(
                 if let Some(refusal) = error.downcast_ref::<SafeguardRefusal>() {
                     format!("Security review refused: {refusal}")
                 } else if let Some(incomplete) = error.downcast_ref::<Incomplete>() {
@@ -183,43 +193,60 @@ impl Outcome {
                     "Security review incomplete: session failed, ended early or omitted a valid final line; see Session log".to_string()
                 },
             ),
-        }
+        };
+        Self { ended, log }
     }
 
     pub fn hold(&self) -> Option<Hold> {
-        match self {
-            Self::Complete(review) if review.findings.is_empty() => None,
-            Self::Complete(review) => Some(Hold(format!(
+        let reason = match &self.ended {
+            Ended::Complete(review) if review.findings.is_empty() => return None,
+            Ended::Complete(review) => format!(
                 "Security review left {} unaddressed introduced finding(s): {}",
                 review.findings.len(),
                 review.findings.join("; ")
-            ))),
-            Self::Incomplete(reason) => Some(Hold(reason.clone())),
-        }
+            ),
+            Ended::Incomplete(reason) => reason.clone(),
+        };
+        Some(Hold {
+            reason,
+            log: self.log.clone(),
+        })
     }
 
     pub fn entry(&self) -> String {
-        match self {
-            Self::Complete(review) if review.findings.is_empty() => {
+        match &self.ended {
+            Ended::Complete(review) if review.findings.is_empty() => {
                 "No unaddressed introduced findings.".to_string()
             }
-            Self::Complete(review) => review
+            Ended::Complete(review) => review
                 .findings
                 .iter()
                 .map(|title| format!("- {title}\n"))
                 .collect(),
-            Self::Incomplete(reason) => format!("- {reason}\n"),
+            Ended::Incomplete(reason) => format!("- {reason}\n"),
         }
     }
 }
 
 /// Delivery has pushed and marked the PR ready before raising this hold.
+/// It is reported with `log`, the Security review's Session log, however
+/// many sessions ran after the review.
 #[derive(Debug)]
-pub(crate) struct Hold(pub String);
+pub(crate) struct Hold {
+    reason: String,
+    log: Option<PathBuf>,
+}
+
+impl Hold {
+    /// The Security review's Session log, if it started a session.
+    pub fn log(&self) -> Option<&Path> {
+        self.log.as_deref()
+    }
+}
 
 impl fmt::Display for Hold {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.reason)
     }
 }
 
