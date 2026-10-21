@@ -28,8 +28,71 @@ runs and does not require Release on PRs. Thus there is no current required
 Release check stranded by the path filter. If protection/rulesets later require
 a Release check on every PR, replace the trigger filter with an always-created
 gate before enabling that requirement. CI's stable `test-macos` aggregate stays
-unfiltered, with `always()` and an explicit success-only test rejecting failed,
-cancelled or skipped shards.
+unfiltered: it runs with `always()` on every run and passes only on the macOS
+work its event requires, as below.
+
+### Which runs test on macOS
+
+Issue [#893](https://github.com/JacobStephens2/thirdshift/issues/893) moved the
+full macOS suite off pull requests. A `macos-plan` job in CI decides, per event:
+
+| Event | macOS work | `test-macos` passes when |
+| --- | --- | --- |
+| Push to `main` | Full 4-shard suite | every shard passed |
+| Nightly `schedule`, on `main` | Full 4-shard suite | every shard passed |
+| `workflow_dispatch` | Full 4-shard suite on the chosen ref | every shard passed |
+| PR into `main` | One gate job | the gate passed |
+| PR into `main` labelled `test:macos` | Full 4-shard suite, no gate | every shard passed |
+| PR into any other base (a Spec branch, including a Base fix into one, or anything else) | None | both were skipped |
+
+A failed or cancelled job, or a skipped one the event requires, fails
+`test-macos`. The Linux checks `test`, `site-test` and `console-test` run on
+every pull request as before.
+
+The gate is one `macos-26` job: `cargo clippy --all-targets -- -D warnings`,
+then `cargo nextest run --profile macos-gate`. That profile's `default-filter`
+in `.config/nextest.toml` selects the tests of the macOS-specific code: the
+`#[cfg(target_os = "macos")]` process identity, the non-Linux skills directory
+handle, and the platform branches in child Run handling. New macOS-specific
+code adds its tests there.
+
+Adding `test:macos` to an open PR into `main` starts the full suite on its
+current head: CI also runs on the `labeled` activity type. Any label starts a
+whole new run, Linux included, and the concurrency group cancels an older run
+still in progress. A label stays on a PR, so its later pushes run the full
+suite too.
+
+Label a PR after its CI run has finished. The cancelled run's unfinished jobs
+stay on the same head as `cancelled` check runs, beside the new run's, and the
+factory's CI watch reads a cancelled check as failed. On #925, labelling during
+a run left its cancelled `test` there.
+
+**Why.** The research in [macos-ci-speed.md](research/macos-ci-speed.md) found
+the macOS queue comes from this repository's own load on GitHub's 5-job macOS
+cap for personal accounts: 3.8 of 5 slots busy on average, and a median 33
+minutes from job creation to the last shard, against 11 minutes for Linux. PRs
+into `main` used 47% of macOS runner time, PRs into Spec branches 29% and pushes
+to `main` 23%. Every Ticket PR in a Spec run waited about an hour on macOS
+before it could Self-merge into its Spec branch, and the same code met macOS
+again on the Spec PR. The gate takes one slot for a few minutes where the full
+suite takes four for about 18. This is uv's pattern: macOS tests only on main
+without a label to opt in.
+
+**Trade-offs.**
+
+- A macOS-only regression from a Spec's Ticket shows up at the Spec PR. The
+  gate on the Spec PR catches it if it is in the gate's filterset; otherwise the
+  push to `main` after the Spec PR merges, or the nightly run, does.
+- A macOS-only regression outside the gate's filterset shows up on `main` or
+  overnight, not on its PR. A PR that touches platform-sensitive code can ask
+  for the full suite with `test:macos`.
+
+**When the nightly run is red.** GitHub sends a scheduled workflow's failure
+notification to the user who last changed its `schedule` cron
+([GitHub: notifications for workflow runs](https://docs.github.com/en/actions/concepts/workflows-and-actions/notifications-for-workflow-runs)),
+so the Day shift hears of it there, and sees it as the red run in the CI
+workflow's history on `main`. Fix forward on `main`: open the fixing PR and label
+it `test:macos`, so its own run shows the full suite green before it merges.
 
 ## Generated Release ownership
 
