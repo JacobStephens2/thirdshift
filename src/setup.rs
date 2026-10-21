@@ -11,6 +11,7 @@
 //! under the home folder; `Scripted`, in tests, from a script, recording each call.
 
 pub(crate) mod questions;
+pub(crate) mod sandbox;
 
 #[cfg(test)]
 mod console_tests;
@@ -104,6 +105,7 @@ fn run_setup(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<Str
             }
         }
     };
+    check_security_sandbox(outside, &text, path, home)?;
     let Some(answers) = &answered else {
         return Ok(written);
     };
@@ -142,6 +144,7 @@ fn run_offer(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<()>
         return Ok(());
     };
     outside.step(format!("wrote the User config {}", path.display()));
+    check_security_sandbox(outside, &text, path, home)?;
     offer_console_install(outside, answers);
     if let Some(key) = answers.key() {
         match outside.save_key(key) {
@@ -156,6 +159,22 @@ fn run_offer(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<()>
             Ok(sent) => outside.step(sent),
             Err(error) => outside.step(format!("warning: {error:#}")),
         }
+    }
+    Ok(())
+}
+
+/// Check the settings actually saved, including retained non-terminal answers.
+fn check_security_sandbox(
+    outside: &mut impl Outside,
+    text: &str,
+    path: &Path,
+    home: &Path,
+) -> Result<()> {
+    let config = UserConfig::parse(text, path, home)?;
+    if config.security_review || config.security_fix == Some(true) {
+        let result = outside.security_sandbox(path);
+        outside.say(result);
+        interrupt::check()?;
     }
     Ok(())
 }
@@ -262,6 +281,8 @@ pub(crate) trait Outside: Terminal {
     /// Send the test email, with `email`, as `email-test` sends it: the line
     /// saying it went.
     fn send_test(&mut self, email: &EmailSettings) -> Result<String>;
+    /// Probe OS isolation and return its result and any operator-run remedies.
+    fn security_sandbox(&mut self, config_path: &Path) -> String;
     /// Hand on the progress line `line`.
     fn step(&mut self, line: String);
 }
@@ -381,6 +402,10 @@ impl Outside for OnMachine<'_> {
 
     fn send_test(&mut self, email: &EmailSettings) -> Result<String> {
         Ok(email::send_test(None, email)?.to_string())
+    }
+
+    fn security_sandbox(&mut self, config_path: &Path) -> String {
+        sandbox::report(config_path)
     }
 
     fn step(&mut self, line: String) {
@@ -631,6 +656,10 @@ mod scripted {
             });
             self.fail_if(Fails::SendTest)?;
             Ok(SENT.to_string())
+        }
+
+        fn security_sandbox(&mut self, _: &Path) -> String {
+            "Security sandbox probe: scripted result".into()
         }
 
         fn step(&mut self, line: String) {
