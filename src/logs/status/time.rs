@@ -5,7 +5,7 @@ use anyhow::Result;
 use chrono::{DateTime, Local};
 
 use crate::config::UserConfig;
-use crate::logs::command_record::StageName;
+use crate::logs::command_record::{Issue, StageName};
 use crate::logs::reading::{Command, Entry, Observation, Snapshot};
 
 pub(crate) struct Views {
@@ -62,6 +62,13 @@ fn timestamp(value: &str) -> Option<i64> {
     DateTime::parse_from_rfc3339(value)
         .ok()
         .map(|time| time.timestamp())
+}
+
+fn subject(kind: &str, repository: &str, issue: Option<&Issue>) -> String {
+    issue.map_or_else(
+        || format!("{kind} on {repository}"),
+        |issue| format!("{kind} · {repository}#{}", issue.number),
+    )
 }
 
 fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
@@ -127,10 +134,7 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
         })
         .collect();
     Run {
-        subject: record.issue.as_ref().map_or_else(
-            || format!("{} on {}", record.kind, record.repository),
-            |issue| format!("{}#{}", record.repository, issue.number),
-        ),
+        subject: subject(&record.kind, &record.repository, record.issue.as_ref()),
         title: record
             .issue
             .as_ref()
@@ -172,10 +176,7 @@ pub(crate) fn load(config: &UserConfig, hours: f64) -> Result<Views> {
             Entry::History(command) => {
                 let selector = Observation::History(command).selector().unwrap_or_default();
                 runs.push(Run {
-                    subject: command.issue.as_ref().map_or_else(
-                        || format!("{} on {}", command.kind, command.repository),
-                        |issue| format!("{}#{}", command.repository, issue.number),
-                    ),
+                    subject: subject(&command.kind, &command.repository, command.issue.as_ref()),
                     title: String::new(),
                     state: command
                         .outcome
