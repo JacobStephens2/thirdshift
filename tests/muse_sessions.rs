@@ -296,6 +296,7 @@ fn setup_checks_muses_proposed_model_with_the_same_flags_and_environment() {
             ("Model for muse", ""),
             ("Effort for muse", "low"),
             ("Every Run a Merge run", ""),
+            ("Every Run may start a Base fix", ""),
             ("Every Run first fast-forwards", ""),
             ("Security runs may fix reproduced findings?", ""),
             ("Runs review their change for Security findings?", ""),

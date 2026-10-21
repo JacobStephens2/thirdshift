@@ -6,6 +6,7 @@ const HOME: &str = "/home/me";
 const PATH: &str = "/home/me/.thirdshift/config.toml";
 const NO_NOTIFICATIONS: &[(&str, &str)] = &[
     ("Merge run?", ""),
+    ("Every Run may start a Base fix", ""),
     ("fast-forwards", ""),
     ("Security runs may fix", ""),
     ("Runs review", ""),
@@ -53,7 +54,7 @@ fn console_allowlist_defaults_to_email_to_even_with_notifications_off() {
 
 #[test]
 fn console_allowlist_defaults_to_the_notification_address_just_chosen() {
-    let mut answers = NO_NOTIFICATIONS[..4].to_vec();
+    let mut answers = NO_NOTIFICATIONS[..5].to_vec();
     answers.extend([
         ("Run notifications", "y"),
         ("Send Run notifications to", "new@example.com"),
@@ -197,7 +198,7 @@ fn rejected_console_sign_in_entries_are_named_and_reasked_before_writing() {
 
 #[test]
 fn eof_during_console_questions_saves_no_config_credentials_or_test_email() {
-    let mut answers = NO_NOTIFICATIONS[..4].to_vec();
+    let mut answers = NO_NOTIFICATIONS[..5].to_vec();
     answers.extend([
         ("Run notifications", "y"),
         ("Send Run notifications to", "owner@example.com"),

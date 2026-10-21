@@ -35,10 +35,9 @@ use questions::Answers;
 
 /// Setup: write the User config. From a terminal, the Setup questions come
 /// first, each with the current value as its default answer, and the answers
-/// are written, with `base.fix`, asked about only when every Run is a Merge
-/// run, otherwise at its default; with no terminal, nothing is asked, and
-/// every setting is at its default, with `email.to` as the suggested
-/// address, if there is one.
+/// are written, with `base.fix` independent of `merge.always`; with no
+/// terminal, nothing is asked, and every setting is at its default, with
+/// `email.to` as the suggested address, if there is one.
 /// An existing User config is edited in place, once it parses as a Run would
 /// parse it: its comments and key order stay, as do the values Setup didn't
 /// ask about, and each key it lacks is added at its default, so Setup with no
@@ -673,8 +672,9 @@ mod tests {
     const KEY: &str = "re_secret_123";
 
     /// The answers that take every default and turn nothing on.
-    const ENTER_THROUGHOUT: [(&str, &str); 6] = [
+    const ENTER_THROUGHOUT: [(&str, &str); 7] = [
         (MERGE, ""),
+        (BASE_FIX, ""),
         (PULL, ""),
         (SECURITY_FIX, ""),
         (SECURITY_REVIEW, ""),
@@ -689,6 +689,7 @@ mod tests {
     ) -> Vec<(&'static str, &'static str)> {
         let mut answers = vec![
             (MERGE, ""),
+            (BASE_FIX, ""),
             (PULL, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
@@ -1067,6 +1068,7 @@ to = \"me@example.com\"  # my inbox
             outside.prompts(),
             [
                 "Every Run a Merge run? [y/N] ",
+                "Every Run may start a Base fix when the Base branch's CI is red? [y/N] ",
                 "Every Run first fast-forwards your checkout of the Base branch? [y/N] ",
                 "Security runs may fix reproduced findings? [y/N] ",
                 "Runs review their change for Security findings? [y/N] ",
@@ -1249,6 +1251,7 @@ effort = \"\"
             user_config: Some(DEFAULTS.to_string()),
             ..Scripted::answering(&[
                 (MERGE, ""),
+                (BASE_FIX, ""),
                 (PULL, "y"),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
@@ -1421,10 +1424,11 @@ always = false # quiet, please
     }
 
     #[test]
-    fn with_merging_off_setup_asks_nothing_about_base_fixes_and_writes_the_default() {
+    fn with_merging_off_setup_can_allow_base_fixes() {
         for answer in ["", "n"] {
             let mut outside = Scripted::answering(&[
                 (MERGE, answer),
+                (BASE_FIX, "y"),
                 (PULL, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
@@ -1436,7 +1440,7 @@ always = false # quiet, please
 
             let config = table(&outside);
             assert_eq!(config["merge"]["always"].as_bool(), Some(false));
-            assert_eq!(config["base"]["fix"].as_bool(), Some(false));
+            assert_eq!(config["base"]["fix"].as_bool(), Some(true));
         }
     }
 
@@ -1469,11 +1473,12 @@ always = false # quiet, please
     }
 
     #[test]
-    fn turning_merging_off_writes_base_fix_at_its_default() {
+    fn turning_merging_off_keeps_the_current_base_fix_answer_by_default() {
         let mut outside = Scripted {
             user_config: Some("[merge]\nalways = true\n\n[base]\nfix = true  # mine\n".to_string()),
             ..Scripted::answering(&[
                 (MERGE, "n"),
+                (BASE_FIX, ""),
                 (PULL, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
@@ -1485,7 +1490,12 @@ always = false # quiet, please
         setup(&mut outside).unwrap();
 
         let text = outside.user_config.clone().unwrap();
-        assert!(text.contains("fix = false # mine\n"), "{text}");
+        assert!(text.contains("fix = true # mine\n"), "{text}");
+        assert!(
+            outside
+                .prompts()
+                .contains(&format!("{BASE_FIX} [Y/n] ").as_str())
+        );
         assert_eq!(table(&outside)["merge"]["always"].as_bool(), Some(false));
     }
 
@@ -1511,6 +1521,7 @@ always = false # quiet, please
     fn an_address_without_an_at_is_asked_again() {
         let mut outside = Scripted::answering(&[
             (MERGE, ""),
+            (BASE_FIX, ""),
             (PULL, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
@@ -1545,6 +1556,7 @@ always = false # quiet, please
             github_email: Ok(Some("octo@example.com")),
             ..Scripted::answering(&[
                 (MERGE, ""),
+                (BASE_FIX, ""),
                 (PULL, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
@@ -1801,6 +1813,7 @@ always = false # quiet, please
             github_email: Ok(Some("octo@example.com")),
             ..Scripted::answering(&[
                 (MERGE, ""),
+                (BASE_FIX, ""),
                 (PULL, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
@@ -1925,6 +1938,7 @@ always = false # quiet, please
         let mut outside = Scripted::answering(&[
             (OFFER, "y"),
             (MERGE, ""),
+            (BASE_FIX, ""),
             (PULL, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
@@ -2033,6 +2047,7 @@ always = false # quiet, please
             vec![
                 (OFFER, "y"),
                 (MERGE, ""),
+                (BASE_FIX, ""),
                 (PULL, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
