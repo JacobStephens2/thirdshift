@@ -41,6 +41,38 @@ From a clone of the issue's repository, `thirdshift <Issue URL>`:
 7. In a **Merge run** (`thirdshift merge <Issue URL>`), does the **Self-merge**: once the pull request is open, ready for review, mergeable and green, thirdshift merges it into the Base branch with a merge commit, on exactly the head commit whose CI it watched (`gh pr merge --merge --match-head-commit <sha>`). Just before each attempt, it reads the PR's `reviewDecision`: `REVIEW_REQUIRED` or `CHANGES_REQUESTED` ends the Run as **review required**, a policy refusal, without attempting the merge or taking another Repair round. An empty or `APPROVED` decision, or a failed read, keeps the existing merge behavior. It never uses GitHub's auto-merge ([ADR-0004](adr/0004-self-merge-by-thirdshift-not-github-auto-merge.md)). A merge that fails goes back round step 6, within the same budgets, and is tried again on the new green head. If that round finds nothing to fix, the refusal is a **policy refusal**, such as merge commits being disallowed or a review being required. After the merge, thirdshift deletes the Issue branch on `origin`, and closes the issue if it is still open, with the comment `Closed by #<pr>, merged into <base> by a thirdshift Merge run.` GitHub closes it on its own only for a merge into the repository's default branch, and then thirdshift leaves it alone. Once the issue is closed, either way, thirdshift takes `in-progress` off it, [removing the Claim](#when-the-claim-ends).
 8. Cleans up: removes the worktree, the local Issue branch and the temporary directory the Factory skills were written out to, whether the Run succeeded or not. The one exception is a **Failed run** whose work could not be pushed: see below.
 
+### Worktree ownership and cleanup
+
+A factory-owned checkout, on an **Issue branch** for a **Run** or detached for an **Architecture review**.
+
+Acquisition accounts for partial local effects: failed-acquisition recovery rechecks clean-only, instance-specific authority before and after every destructive attempt, including retries, advances only on verified transitions, and retains and names remaining work or uncertain partial effects. Failed-acquisition retention survives later Architecture review attempts.
+
+Successful acquisition carries checkout and registration identity through its lifetime; ordinary synchronization, observations and Failed run preservation share acquired-instance checks before and after every Git subprocess attempt, including retries, acting only on that acquired checkout and selected Issue branch and refusing changed or uncertain ownership. Failed run preservation retains work when ownership has changed or is uncertain and finishes after Command interruption without clearing it; ordinary synchronization remains interruptible. Confirmed Self-merge branch deletion uses the captured Launch repository independently of checkout validity.
+
+Cleanup checks stage-specific disposal authority before and after every destructive Git attempt, including retries: acquired identity and the captured cleanup head for checkout removal, removed-path absence and an unused expected head for local branch removal, then ref absence and the exact original local subsection for branch configuration removal. Only successful, verified transitions advance disposal; partial failures retain and name every remaining or uncertain resource. Live cleanup finishes after Command interruption without clearing it; stale disposal stays interruptible.
+
+Stale Architecture review scratch is disposable only with evidence of successful detached acquisition and unchanged ownership; unmarked or uncertain checkouts are retained.
+
+See [ADR-0014](adr/0014-successful-review-acquisition-authorizes-stale-disposal.md) for the ownership evidence that authorizes stale review disposal.
+
+### Delivery and pull request identity
+
+What a **Run**, or a **Spec run** for its **Spec PR**, does from its worktree once its work begins. It runs the opening session (the implement session, or the **Spec review**), pushes, marks the pull request ready, keeps it mergeable and green through the **Repair loop**, and, in a **Merge run**, does the **Self-merge**.
+
+For a Spec PR, Delivery ends Ticket accounting's capture before the Spec review, allowing that session to replace the PR. The first successful observation after the opening session, or during Failed run completion after an opening failure, captures one pull request number and URL in the issue's repository; all later observations and transitions use that identity. Readiness and every mergeability poll validate its expected **Issue branch** and **Base branch**, open state and readiness where required. A missing, closed or retargeted captured PR fails Delivery; a replacement from the same branch is never substituted.
+
+A Delivery that fails takes the **Failed run** path, drafting that same captured open PR after preserving work. Spec PR checklist restoration uses that Delivery capture before readiness and for final accounting after failure.
+
+If a Delivery gate observes that its pull request has already merged into the expected Base branch, and its merged head includes all local work (the exact local head, with no uncommitted changes), the Run ends as merged, even when it originally asked only for ready for review. Delivery stops further publication, PR edits and Self-merge work. A merged PR that leaves local work out still fails and retains that work; a merged state alone never establishes completion.
+
+### Check re-run allowance
+
+A **Check re-run** is allowed once per full head commit across one **Delivery**. The allowance is consumed before the request and stays consumed through green CI, **Inherited failures**, a **Base fix**, upstream moves, later Repair rounds and refused **Self-merge** reconciliation, even after visiting another head and returning.
+
+Later watches still obtain fresh CI facts. If the branch's own checks are red on a head whose allowance has been consumed, the Run ends as a **Declined CI fix** without another CI-fix Repair or Check re-run. A different head has its own allowance, and a separately started **Continuation** begins a new Delivery with fresh allowances. Inherited-only failures keep their usual handling.
+
+The trigger, eligible GitHub Actions checks, refusal handling and CI watching are described in step 6 above and [ADR-0010](adr/0010-one-check-re-run-before-a-declined-ci-fix.md). A Check re-run starts no Repair, counts against no Repair or upstream-move budget, and never re-runs a check for being an Inherited failure.
+
 ### The Claim
 
 The **Claim** is the mark that the factory has taken an issue, so the issue list shows what it is working on. When a Run or a [Spec run](#spec-runs) starts on an issue, thirdshift labels the issue `in-progress`, in place of `ready-for-agent` if it has that. An issue with no `ready-for-agent` label still gets `in-progress`, so the label means the same thing however the Run was started.
