@@ -3,6 +3,7 @@ mod account_commands;
 mod accounts;
 mod auth;
 mod conversation;
+mod cronjobs;
 mod filters;
 pub use account_commands::{password, print_log, sign_out};
 mod install;
@@ -62,6 +63,7 @@ struct PageRoute {
 }
 
 enum View {
+    CronJobs,
     Inbox,
     Inspect,
     Log,
@@ -88,6 +90,12 @@ enum View {
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/cronjobs",
+        cli: &["thirdshift cronjobs --json"],
+        method: Method::GET,
+        view: View::CronJobs,
+    },
     PageRoute {
         path: "/themes",
         cli: &["thirdshift console theme import theme.json"],
@@ -339,6 +347,7 @@ fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Route
         let cli = page.cli[0];
         let path = page.path;
         let handler = match (&page.view, page.method.clone()) {
+            (View::CronJobs, Method::GET) => get(cronjobs::show),
             (View::Inbox, Method::GET) => get(move |query| inbox(cli, path, query)),
             (View::Inspect, Method::GET) => get(inspect),
             (View::Log, Method::GET) => get(log),

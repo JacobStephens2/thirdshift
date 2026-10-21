@@ -18,6 +18,10 @@ mod accounts;
 #[path = "console/look.rs"]
 mod look;
 
+#[cfg(unix)]
+#[path = "console/cronjobs.rs"]
+mod cronjobs;
+
 struct Console {
     child: Child,
     address: String,
