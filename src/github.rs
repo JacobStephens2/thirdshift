@@ -833,6 +833,25 @@ impl GitHub {
         Ok(checks)
     }
 
+    /// The GitHub Actions job whose check run is `check_run`, as the jobs
+    /// API reports it: its conclusion and each of its steps'.
+    pub fn job_run(&self, issue: &IssueUrl, check_run: u64) -> Result<JobRun> {
+        let path = format!("repos/{}/actions/jobs/{check_run}", issue.repo_slug());
+        let job = self.gh_json(&["api", &path])?;
+        let conclusion = |value: &Value| match value["status"].as_str() {
+            Some("completed") => Conclusion::of_check_run(value["conclusion"].as_str()),
+            _ => Conclusion::Unfinished,
+        };
+        let steps = job["steps"]
+            .as_array()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        Ok(JobRun {
+            conclusion: conclusion(&job),
+            steps: steps.iter().map(conclusion).collect(),
+        })
+    }
+
     /// Ask GitHub to re-run the failed jobs of the GitHub Actions workflow run
     /// `workflow_run`, as a new attempt of it.
     pub fn rerun_failed_jobs(&self, issue: &IssueUrl, workflow_run: u64) -> Result<()> {
@@ -1383,6 +1402,18 @@ pub struct ActionsJob {
     pub check_run: u64,
     /// The workflow run it belongs to.
     pub workflow_run: u64,
+    /// Whether it is an Abandoned job, which only the CI watch tells, and
+    /// only of a job that failed: false until then.
+    pub abandoned: bool,
+}
+
+/// A GitHub Actions job as the jobs API reports it, with no annotation or
+/// log text: its conclusion and each of its steps', in order, a step not
+/// completed being [`Conclusion::Unfinished`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct JobRun {
+    pub conclusion: Conclusion,
+    pub steps: Vec<Conclusion>,
 }
 
 impl ActionsJob {
@@ -1394,6 +1425,7 @@ impl ActionsJob {
         Some(ActionsJob {
             check_run: check_run?,
             workflow_run: workflow_run.parse().ok()?,
+            abandoned: false,
         })
     }
 }
@@ -1409,7 +1441,8 @@ mod tests {
             ActionsJob::of(Some(41), Some(job)),
             Some(ActionsJob {
                 check_run: 41,
-                workflow_run: 900
+                workflow_run: 900,
+                abandoned: false,
             })
         );
         for not_a_job in [

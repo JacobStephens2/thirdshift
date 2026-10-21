@@ -272,6 +272,51 @@ fn assert_one_repair(scenario: &Scenario, result: &support::RunResult) {
 }
 
 #[test]
+fn an_abandoned_job_is_re_run_with_no_repair_and_green_is_success() {
+    let scenario = Scenario::new();
+    // As GitHub ends a job whose runner was lost: failed, with a step still
+    // in progress and none failed.
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}",
+        checks_on_head(
+            r#"[{"name": "smoke / wsl", "conclusion": "failure",
+                 "url": "https://github.com/acme/widgets/actions/runs/900/job/1",
+                 "steps": [{"status": "completed", "conclusion": "success"},
+                           {"status": "in_progress", "conclusion": null},
+                           {"status": "queued", "conclusion": null}],
+                 "rerun": {"conclusion": "success", "stale_polls": 1}}]"#
+        )
+    ));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1, "the implement session");
+    assert!(
+        !result.stderr.contains("starting Repair"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(rerun_requests(&scenario), ["900"]);
+    let head = scenario.origin_git(&["rev-parse", "issue-7"]);
+    assert!(
+        result.stderr.contains(&format!(
+            "thirdshift: smoke / wsl lost its runner on {}; re-running it\n",
+            &head[..7]
+        )),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains(&format!("CI passed on {}", &head[..7])),
+        "stderr: {}",
+        result.stderr
+    );
+}
+
+#[test]
 fn a_ci_fix_repair_that_makes_no_commit_gets_one_check_re_run_and_green_is_success() {
     let scenario = Scenario::new();
     // Two failed checks of one workflow run, and a third of another.
