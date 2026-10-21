@@ -743,6 +743,10 @@ impl repair_loop::Outside for RunOutside<'_> {
             .fix(outside, self.pr_url, self.base, base_commit, failed)
     }
 
+    fn pr_mergeable(&mut self) -> Result<bool> {
+        self.pull_request.is_mergeable()
+    }
+
     fn ensure_pr_ready_and_mergeable(&mut self) -> Result<()> {
         self.pull_request.ensure_ready_and_mergeable()
     }

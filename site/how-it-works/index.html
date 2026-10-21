@@ -126,7 +126,7 @@ thirdshift --no-merge https://github.com/acme/widgets/issues/7</code></pre>
         </ol>
         <div class="guide-pair guide-loop-branches">
           <div class="guide-node"><strong>Conflict or the branch's own CI failure?</strong><span>Start a Repair to resolve or fix it.</span><a href="#delivery-sync">Then return to merging the Base branch ↑</a></div>
-          <div class="guide-node"><strong>Base branch moved during CI?</strong><span>Reconcile the new upstream state.</span><a href="#delivery-sync">Return to merging the Base branch ↑</a></div>
+          <div class="guide-node"><strong>Base branch moved during CI?</strong><span>A Self-merge reconciles the new upstream state. A pull request left for review stops on green CI if it still merges cleanly.</span><a href="#delivery-sync">Return to merging the Base branch ↑</a></div>
         </div>
       </figure>
       <p>Repair and upstream-move budgets keep the loop bounded. If a CI-fix Repair leaves the same failing head, that head gets one <strong>Check re-run</strong>; if its own checks stay red, the Run fails rather than spending more Repairs on unchanged code.</p>

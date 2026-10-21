@@ -283,21 +283,33 @@ impl<A: Adapter> PullRequest<A> {
     /// coherent numbered observation. Waiting remains interruptible.
     pub fn ensure_ready_and_mergeable(&mut self) -> Result<()> {
         progress::step("checking the PR is open, ready and mergeable");
+        let (mergeable, url) = self.ready_mergeability()?;
+        match mergeable {
+            Mergeable::Yes => Ok(()),
+            Mergeable::No => bail!("PR {url} is not mergeable"),
+            Mergeable::Unknown => {
+                bail!("GitHub has not worked out whether PR {url} is mergeable")
+            }
+        }
+    }
+
+    /// Whether GitHub reports this open, ready PR mergeable, as
+    /// [`Self::ensure_ready_and_mergeable`] polls it. Mergeability GitHub has
+    /// not worked out within the grace period is not mergeable.
+    pub fn is_mergeable(&mut self) -> Result<bool> {
+        Ok(self.ready_mergeability()?.0 == Mergeable::Yes)
+    }
+
+    /// The mergeability GitHub reports for this open, ready PR, and its URL,
+    /// polled while unknown until the grace period ends.
+    fn ready_mergeability(&mut self) -> Result<(Mergeable, String)> {
         let deadline = std::time::Instant::now() + self.adapter.grace_period();
         let mut waiting_line = poll::WaitingLine::new();
         loop {
             let snapshot = self.observe(false)?.context("no PR found")?;
             self.validate(&snapshot, true)?;
             match snapshot.mergeable {
-                Mergeable::Yes => return Ok(()),
-                Mergeable::No => bail!("PR {} is not mergeable", snapshot.pr.url),
-                Mergeable::Unknown if std::time::Instant::now() >= deadline => {
-                    bail!(
-                        "GitHub has not worked out whether PR {} is mergeable",
-                        snapshot.pr.url
-                    );
-                }
-                Mergeable::Unknown => {
+                Mergeable::Unknown if std::time::Instant::now() < deadline => {
                     if waiting_line.should_report(()) {
                         progress::step(format!(
                             "waiting for GitHub to calculate mergeability of PR {}",
@@ -306,6 +318,7 @@ impl<A: Adapter> PullRequest<A> {
                     }
                     self.adapter.pause()?;
                 }
+                mergeable => return Ok((mergeable, snapshot.pr.url)),
             }
         }
     }
@@ -1430,6 +1443,33 @@ mod tests {
                     .to_string()
                     .contains(message)
             );
+        }
+    }
+
+    #[test]
+    fn only_a_pr_github_reports_mergeable_is_mergeable_and_only_an_unready_one_fails() {
+        let mut conflicting = snapshot();
+        conflicting.mergeable = Mergeable::No;
+        let mut unknown = snapshot();
+        unknown.mergeable = Mergeable::Unknown;
+        let mut draft = snapshot();
+        draft.pr.is_draft = true;
+        for (answer, mergeable) in [
+            (snapshot(), Some(true)),
+            (conflicting, Some(false)),
+            (unknown, Some(false)),
+            (draft, None),
+        ] {
+            let (mut pr, _) = owner(World {
+                observations: VecDeque::from([
+                    Ok(Some(snapshot())),
+                    Ok(Some(snapshot())),
+                    Ok(Some(answer)),
+                ]),
+                ..World::default()
+            });
+            pr.mark_ready(None).unwrap();
+            assert_eq!(pr.is_mergeable().ok(), mergeable);
         }
     }
 
