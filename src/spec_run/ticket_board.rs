@@ -134,6 +134,26 @@ impl TicketBoard {
             .collect()
     }
 
+    /// The Session log of the one Ticket not done whose Run failed, if just
+    /// one did and it named its log: the session the Spec run's failure came
+    /// from. With several, no single session caused it.
+    pub(super) fn failed_log(&self) -> Option<String> {
+        let mut failed = self
+            .tickets
+            .iter()
+            .filter(|ticket| ticket.is_open)
+            .filter_map(
+                |ticket| match self.standings.get(&ticket.issue.identity()) {
+                    Some(Standing::Ended(Ended::Failed { log, .. })) => Some(log),
+                    _ => None,
+                },
+            );
+        match (failed.next(), failed.next()) {
+            (Some(log), None) => log.clone(),
+            _ => None,
+        }
+    }
+
     /// The Tickets not done, the open ones, in the order they were read.
     pub(super) fn not_done(&self) -> Vec<String> {
         self.tickets

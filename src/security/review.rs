@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::{fmt, fs};
 
 use super::reproduction::{FixSize, Outcome as ReproductionOutcome, Reproduction, Severity};
@@ -234,7 +234,14 @@ impl Outcome {
 #[derive(Debug)]
 pub(crate) struct Hold {
     reason: String,
-    pub log: Option<PathBuf>,
+    log: Option<PathBuf>,
+}
+
+impl Hold {
+    /// The Security review's Session log, if it started a session.
+    pub fn log(&self) -> Option<&Path> {
+        self.log.as_deref()
+    }
 }
 
 impl fmt::Display for Hold {

@@ -372,7 +372,8 @@ fn fail(
     let keep_ready = error.is::<PolicyRefusal>() || error.is::<SecurityHold>();
     let log = error
         .downcast_ref::<SecurityHold>()
-        .and_then(|hold| hold.log.clone())
+        .and_then(SecurityHold::log)
+        .map(Path::to_path_buf)
         .or(log);
     let preservation = if keep_ready {
         Preservation::Remote
@@ -543,18 +544,7 @@ impl Outside for InWorktree<'_> {
     }
 
     fn security_review(&mut self, prompt: &str) -> (Result<Review>, Option<PathBuf>) {
-        let review = (|| {
-            self.pull_request.ensure_actionable(false)?;
-            let review = crate::security::review::run(
-                self.sessions,
-                self.worktree,
-                self.issue,
-                self.base,
-                prompt,
-            )?;
-            self.pull_request.ensure_actionable(false)?;
-            Ok(review)
-        })();
+        let review = self.review_while_actionable(prompt);
         (review, self.sessions.last_log_of(Kind::SecurityReview))
     }
 
@@ -613,6 +603,23 @@ impl Outside for InWorktree<'_> {
 
     fn warn(&mut self, error: &anyhow::Error, warning: String) {
         progress::warn(error, format_args!("{warning}"));
+    }
+}
+
+impl InWorktree<'_> {
+    /// Run the Security review given `prompt`, failing unless the pull
+    /// request is still actionable both before and after it.
+    fn review_while_actionable(&mut self, prompt: &str) -> Result<Review> {
+        self.pull_request.ensure_actionable(false)?;
+        let review = crate::security::review::run(
+            self.sessions,
+            self.worktree,
+            self.issue,
+            self.base,
+            prompt,
+        )?;
+        self.pull_request.ensure_actionable(false)?;
+        Ok(review)
     }
 }
 
