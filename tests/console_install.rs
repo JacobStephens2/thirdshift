@@ -40,8 +40,14 @@ impl Machine {
     }
 
     fn install(&self) -> Output {
+        self.install_with(&[])
+    }
+
+    fn install_with(&self, extra: &[&str]) -> Output {
         Command::new(env!("CARGO_BIN_EXE_thirdshift"))
             .args(["console", "install"])
+            .args(extra)
+            .current_dir(self.root.path())
             .env("HOME", self.path("home"))
             .env("PATH", self.path("bin"))
             .env("USER", "not-the-owner")
@@ -295,6 +301,67 @@ fn unit_preserves_literal_paths_with_shell_and_systemd_metacharacters() {
             .unwrap();
         assert!(
             output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
+#[test]
+fn output_saves_the_printed_script_and_names_the_sudo_command() {
+    let machine = Machine::new();
+    machine.tool("caddy", "exit 0");
+    let printed = machine.script();
+    let output = machine.install_with(&["--output", "install-console.sh"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        fs::read_to_string(machine.path("install-console.sh")).unwrap(),
+        printed
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("sudo sh install-console.sh"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // A second install replaces the saved script rather than refusing.
+    fs::write(machine.path("install-console.sh"), "stale").unwrap();
+    assert!(
+        machine
+            .install_with(&["--output", "install-console.sh"])
+            .status
+            .success()
+    );
+    assert_eq!(
+        fs::read_to_string(machine.path("install-console.sh")).unwrap(),
+        printed
+    );
+}
+
+#[test]
+fn output_saves_nothing_when_the_settings_are_unusable() {
+    let machine = Machine::new();
+    machine.tool("caddy", "exit 0");
+    machine.configure("", 9123);
+    let output = machine.install_with(&["--output", "install-console.sh"]);
+    assert!(!output.status.success());
+    assert!(!machine.path("install-console.sh").exists());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("console.address"));
+}
+
+#[test]
+fn output_needs_a_file_name() {
+    let machine = Machine::new();
+    for extra in [&["--output"][..], &["--output", "--output"], &["--json"]] {
+        let output = machine.install_with(extra);
+        assert!(!output.status.success(), "accepted {extra:?}");
+        assert!(output.stdout.is_empty());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("install [--output <file>]"),
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );

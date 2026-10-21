@@ -1,5 +1,6 @@
 //! Only this command knows about systemd and the machine's proxy layout.
 //! It reads local settings and prints a script; it never installs anything.
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
@@ -118,6 +119,16 @@ systemctl enable thirdshift-console.service
 systemctl restart thirdshift-console.service
 
 {site}{finish}"#
+    ))
+}
+
+/// Save the script for the owner to read; nothing is written when it can't be made.
+pub fn install_to(path: &Path) -> Result<String> {
+    let script = install()?;
+    fs::write(path, script).with_context(|| format!("can't write {}", path.display()))?;
+    Ok(format!(
+        "Wrote {path}. Read it, then run: sudo sh {path}",
+        path = path.display()
     ))
 }
 

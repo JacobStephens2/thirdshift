@@ -25,7 +25,9 @@ pub enum Command {
     Console {
         no_sign_in: bool,
     },
-    ConsoleInstall,
+    ConsoleInstall {
+        output: Option<String>,
+    },
     ConsolePassword(Option<String>),
     ConsoleSignOut {
         email: Option<String>,
@@ -340,7 +342,14 @@ pub fn parse(args: &[String]) -> Result<Command> {
             return match &args[1..] {
                 [] => Ok(Command::Console { no_sign_in: false }),
                 [flag] if flag == "--no-sign-in" => Ok(Command::Console { no_sign_in: true }),
-                [action] if action == "install" => Ok(Command::ConsoleInstall),
+                [action] if action == "install" => Ok(Command::ConsoleInstall { output: None }),
+                [action, flag, file]
+                    if action == "install" && flag == "--output" && !file.starts_with('-') =>
+                {
+                    Ok(Command::ConsoleInstall {
+                        output: Some(file.clone()),
+                    })
+                }
                 [action] if action == "password" => Ok(Command::ConsolePassword(None)),
                 [action, flag, email]
                     if action == "password" && flag == "--email" && !email.starts_with('-') =>
@@ -352,7 +361,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                     Ok(Command::ConsoleLog { json: true })
                 }
                 _ => bail!(
-                    "usage: thirdshift console [--no-sign-in] | install | password [--email <address>] | sign-out [--email <address>] [--json] | log [--json]"
+                    "usage: thirdshift console [--no-sign-in] | install [--output <file>] | password [--email <address>] | sign-out [--email <address>] [--json] | log [--json]"
                 ),
             };
         }

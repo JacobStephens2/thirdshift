@@ -190,7 +190,7 @@ fn ask_if(
 /// Installation is an owner-run command that prints the script for sudo.
 fn offer_console_install(outside: &mut impl Outside, answers: &Answers) {
     if answers.console.is_some() {
-        outside.say("To install the Console, run `thirdshift console install`; it prints a script to run with sudo.".into());
+        outside.say("To install the Console, run `thirdshift console install --output install-console.sh`, read the script, then run `sudo sh install-console.sh`.".into());
     }
 }
 
