@@ -144,7 +144,7 @@ fn run_through(
             Err(FailedRun {
                 error: interrupted_or(error, interrupted),
                 pr_url: outside.spec_pr_url(),
-                log: failed_log.filter(|_| !interrupted),
+                log: failed_log,
                 interrupted,
                 ticket_lines: Vec::new(),
                 recovery: Some(Box::new(Recovery::new(
@@ -396,7 +396,12 @@ fn land_tickets(
     }
     let landing = run_ready_tickets(outside, &mut board);
     let lines = board.lines();
-    let mut failed_log = None;
+    // Only a landing that ran to its end failed on its Tickets alone.
+    let failed_log = landing
+        .is_ok()
+        .then(|| board.failed_log())
+        .flatten()
+        .map(PathBuf::from);
     let landed = landing.and_then(|()| {
         let not_done = board.not_done();
         if not_done.is_empty() {
@@ -405,7 +410,6 @@ fn land_tickets(
         for line in &lines {
             outside.step(line.clone());
         }
-        failed_log = board.failed_log().map(PathBuf::from);
         bail!("Tickets not done: {}", not_done.join(", "));
     });
     Landing {
@@ -1636,6 +1640,18 @@ mod tests {
             ..Script::default()
         });
         let failed = failed_of(spec_run(&mut outside, 1));
+        assert_eq!(failed.log, Some(PathBuf::from("/logs/session.jsonl")));
+    }
+
+    #[test]
+    fn a_spec_run_whose_other_ticket_is_blocked_names_the_failed_tickets_log() {
+        let mut outside = Scripted::new(Script {
+            tickets: vec![open(21, &[]), open(22, &[21])],
+            endings: VecDeque::from([(21, Ok(failed("claude exited 1")))]),
+            ..Script::default()
+        });
+        let failed = failed_of(spec_run(&mut outside, 1));
+        assert_eq!(format!("{:#}", failed.error), "Tickets not done: #21, #22");
         assert_eq!(failed.log, Some(PathBuf::from("/logs/session.jsonl")));
     }
 
