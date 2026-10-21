@@ -28,6 +28,179 @@ fn user_config(scenario: &Scenario) -> Option<String> {
     fs::read_to_string(scenario.path("home/.thirdshift/config.toml")).ok()
 }
 
+#[cfg(target_os = "linux")]
+#[test]
+fn security_sandbox_start_failure_warns_and_still_writes_the_user_config() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[security]\nreview = true\n");
+    let bwrap = scenario.path("bin/bwrap");
+    fs::write(&bwrap, "#!/bin/sh\nexit 1\n").unwrap();
+    fs::set_permissions(&bwrap, fs::Permissions::from_mode(0o755)).unwrap();
+
+    let result = scenario.run(&["setup"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("Security sandbox probe: FAIL (sandbox start"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("sudo apt install bubblewrap"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("profile bwrap /usr/bin/bwrap flags=(unconfined)"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("sudo apparmor_parser -r /etc/apparmor.d/bwrap"),
+        "{}",
+        result.stderr
+    );
+    assert!(user_config(&scenario).unwrap().contains("[harness]"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn security_sandbox_missing_bwrap_warns_without_losing_settings() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[security]\nfix = true\n");
+    let result = scenario.run_with_env(&["setup"], &[("PATH", "/thirdshift-no-tools")]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("sandbox start: could not launch bwrap from PATH"),
+        "{}",
+        result.stderr
+    );
+    assert!(result.stderr.contains("sudo apt install bubblewrap"));
+    assert!(user_config(&scenario).unwrap().contains("fix = true"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn security_sandbox_runs_only_for_the_saved_security_settings() {
+    for (review, fix) in [(false, false), (true, false), (false, true)] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(&format!("[security]\nreview = {review}\nfix = {fix}\n"));
+        let marker = scenario.path("probe-ran");
+        let bwrap = scenario.path("bin/bwrap");
+        fs::write(
+            &bwrap,
+            format!(
+                "#!/bin/sh\nprintf probed > '{}'\nexit 1\n",
+                marker.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(bwrap, fs::Permissions::from_mode(0o755)).unwrap();
+        let result = scenario.run(&["setup"]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(marker.exists(), review || fix);
+        assert_eq!(
+            result.stderr.contains("Security sandbox probe:"),
+            review || fix
+        );
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn security_sandbox_hung_bwrap_is_bounded_and_reaped() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[security]\nreview = true\n");
+    let bwrap = scenario.path("bin/bwrap");
+    fs::write(&bwrap, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
+    fs::set_permissions(bwrap, fs::Permissions::from_mode(0o755)).unwrap();
+    let start = std::time::Instant::now();
+    let result = scenario.run(&["setup"]);
+    assert!(start.elapsed() < std::time::Duration::from_secs(8));
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("sandbox completion: timed out"),
+        "{}",
+        result.stderr
+    );
+    assert!(user_config(&scenario).unwrap().contains("[harness]"));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn security_sandbox_checks_real_isolation_and_detects_each_removed_control() {
+    let available = std::process::Command::new("/usr/bin/bwrap")
+        .args(["--unshare-all", "--ro-bind", "/", "/", "--", "/bin/true"])
+        .output()
+        .is_ok_and(|result| result.status.success());
+    if !available {
+        eprintln!("real isolation cases require working /usr/bin/bwrap; stand-in cases still run");
+        return;
+    }
+    for (wrapper, expected) in [
+        ("exec /usr/bin/bwrap \"$@\"", "Security sandbox probe: PASS"),
+        (
+            "first=$1; shift; exec /usr/bin/bwrap \"$first\" --share-net \"$@\"",
+            "FAIL (network isolation:",
+        ),
+        // Substitute only mount option tokens, preserving paths as separate arguments.
+        (
+            "args=(); for arg; do if [[ $arg == --ro-bind ]]; then args+=(--bind); else args+=(\"$arg\"); fi; done; exec /usr/bin/bwrap \"${args[@]}\"",
+            "FAIL (host home read-only:",
+        ),
+        (
+            "args=(); for arg; do if [[ $arg == --bind ]]; then args+=(--ro-bind); else args+=(\"$arg\"); fi; done; exec /usr/bin/bwrap \"${args[@]}\"",
+            "FAIL (scratch write:",
+        ),
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is("[security]\nreview = true\n");
+        let bwrap = scenario.path("bin/bwrap");
+        fs::write(&bwrap, format!("#!/bin/bash\n{wrapper}\n")).unwrap();
+        fs::set_permissions(bwrap, fs::Permissions::from_mode(0o755)).unwrap();
+        let before = fs::read_dir(scenario.path("tmp")).unwrap().count();
+        let result = scenario.run(&["setup"]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            result.stderr.contains(expected),
+            "expected {expected}: {}",
+            result.stderr
+        );
+        assert_eq!(fs::read_dir(scenario.path("tmp")).unwrap().count(), before);
+        let config: toml::Table = user_config(&scenario).unwrap().parse().unwrap();
+        assert_eq!(config["security"]["review"].as_bool(), Some(true));
+    }
+}
+
+#[test]
+fn setup_probe_scope_tracks_security_skill_requirements() {
+    // This contract snapshot intentionally fails if the skill's controls change,
+    // requiring a decision about Setup's probe coverage. #608 checks network,
+    // read-only host home and scratch writes; it does not certify the remaining
+    // environment/resource/credential controls of the target-code runner (#726).
+    let skill = include_str!("../skills/thirdshift-security-audit/SKILL.md");
+    let requirements = skill
+        .split_once("provides all of these controls:\n\n")
+        .unwrap()
+        .1
+        .split_once("\n\n")
+        .unwrap()
+        .0;
+    assert_eq!(requirements, "\
+- no external network; use only an isolated loopback namespace when the check needs local client/server traffic;
+- an empty environment populated from an explicit allowlist with safe values, with scratch-local `HOME`, temporary directories, and caches;
+- a read-only target and toolchain, with the target-controlled process able to write only inside its assigned `scratch/` directory; and
+- explicit low CPU, memory, process, file-size, disk, and wall-clock limits.");
+}
+
 #[test]
 fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     let scenario = Scenario::new();
@@ -470,6 +643,11 @@ fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes(
         ],
     );
     assert_eq!(result.stderr.matches(SECURITY_FIX).count(), 1);
+    assert!(
+        result.stderr.contains("Security sandbox probe:"),
+        "{}",
+        result.stderr
+    );
     assert!(result.stderr.contains(&format!("{SECURITY_FIX} [y/N]")));
     let text = result.user_config.unwrap();
     let config: toml::Table = text.parse().unwrap();
@@ -511,6 +689,12 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
             ],
         );
         assert!(result.stderr.contains(&format!("{SECURITY_FIX} {choices}")));
+        assert_eq!(
+            result.stderr.contains("Security sandbox probe:"),
+            enabled,
+            "{}",
+            result.stderr
+        );
         assert_eq!(result.stderr.matches(SECURITY_FIX).count(), 1);
         let text = result.user_config.unwrap();
         let config: toml::Table = text.parse().unwrap();

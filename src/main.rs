@@ -132,6 +132,9 @@ For workflow details, settings, Harness setup, email, logs and scheduling, see t
 fn main() -> ExitCode {
     child_run::name_this_process();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if let Some(result) = setup::sandbox::child(&args) {
+        return result;
+    }
     let RunArgs {
         issue,
         flags,
