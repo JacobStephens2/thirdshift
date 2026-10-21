@@ -16,6 +16,8 @@ Before exploring, look up the issue's terms via `docs/agents/domain.md` and its 
 
 Use `rg -n` for terms/symbols, then bounded ranges (`sed -n '40,100p' file`), one large file per call, especially for `GLOSSARY.md`, `README.md`, `tests/fakes/gh.rs` and `tests/spec_run.rs`. For the fake-test layout, see `docs/code-navigation.md`; for site browser-test setup and runner, see `site/tests/README.md`.
 
+For final local validation, run `scripts/affected-tests <base>` (normally `main`); see `docs/testing.md` for selection, setup and CI responsibilities. This binary-only crate's targeted selectors are `cargo test --bin thirdshift <module>::tests` and `cargo test --test <file>`; it has no lib target.
+
 ### Generated prompts
 
 `prompts/` and the generated fragment in `site/prompts/index.html` come from `src/prompts_page.rs`: prompts in `src/prompt.rs`, titles/when sentences in `src/prompts_page.rs`, plus session arguments (`src/harness/claude.rs`, `src/harness/codex.rs`) and embedded Factory skills (`skills/`) for the site. Edit the sources and regenerate with `UPDATE_PROMPTS=1 cargo test prompts_page`; verify with `cargo test prompts_page`. Preserve the site's surrounding hand-written HTML.
