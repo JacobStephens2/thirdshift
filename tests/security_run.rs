@@ -2684,15 +2684,30 @@ fn another_pass_holds_the_security_run_and_its_skip_is_logged() {
     assert!(log.contains("Security run skipped: another Pass is already running"));
 }
 
-#[test]
-fn missing_node_fails_before_any_session_and_names_the_prerequisite() {
-    let scenario = Scenario::new();
+/// Link the git on `PATH` into the scenario's `bin`, for a test that runs
+/// thirdshift with `bin` as its whole `PATH`. Over a local transport git runs
+/// `git-upload-pack` and `git-receive-pack` by name. Linux's and Homebrew's
+/// git find them in their exec path, but Xcode's finds them only beside
+/// itself, so they are linked too wherever they are beside `git`.
+fn link_git(scenario: &Scenario) {
     let git = std::process::Command::new("which")
         .arg("git")
         .output()
         .unwrap();
-    let git = String::from_utf8(git.stdout).unwrap();
-    std::os::unix::fs::symlink(git.trim(), scenario.path("bin/git")).unwrap();
+    let git = std::path::PathBuf::from(String::from_utf8(git.stdout).unwrap().trim());
+    std::os::unix::fs::symlink(&git, scenario.path("bin/git")).unwrap();
+    for name in ["git-upload-pack", "git-receive-pack"] {
+        let program = git.with_file_name(name);
+        if program.exists() {
+            std::os::unix::fs::symlink(program, scenario.path("bin").join(name)).unwrap();
+        }
+    }
+}
+
+#[test]
+fn missing_node_fails_before_any_session_and_names_the_prerequisite() {
+    let scenario = Scenario::new();
+    link_git(&scenario);
     let path = scenario.path("bin");
     let result = scenario.run_with_env(&["secure"], &[("PATH", path.to_str().unwrap())]);
     assert_eq!(result.code, Some(1), "{}", result.stderr);
@@ -3482,12 +3497,7 @@ fn invalid_schema_pre_audit_github_response_has_dependency_cause() {
 #[test]
 fn an_unavailable_github_cli_has_a_safe_pre_audit_dependency_cause() {
     let scenario = Scenario::new();
-    let git = std::process::Command::new("which")
-        .arg("git")
-        .output()
-        .unwrap();
-    let git = String::from_utf8(git.stdout).unwrap();
-    std::os::unix::fs::symlink(git.trim(), scenario.path("bin/git")).unwrap();
+    link_git(&scenario);
     fs::remove_file(scenario.path("bin/gh")).unwrap();
     let path = scenario.path("bin");
     let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
