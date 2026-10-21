@@ -80,7 +80,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift setup                               Choose defaults and write the User config
        thirdshift status [--all] [--json]             List this machine's Commands
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
-       thirdshift console install                     Print a service and proxy install script for sudo
+       thirdshift console install [--output <file>]   Print, or save, a service and proxy install script for sudo
        thirdshift console password [--email <address>]  Set a Console password privately
        thirdshift console sign-out [--email <address>] [--json]  End an account's sessions
        thirdshift console log [--json]                Read this machine's Console log
@@ -145,7 +145,7 @@ fn main() -> ExitCode {
         }
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
-        Ok(Command::ConsoleInstall) => {
+        Ok(Command::ConsoleInstall { output: None }) => {
             return match console::install() {
                 Ok(script) => {
                     print!("{script}");
@@ -153,6 +153,9 @@ fn main() -> ExitCode {
                 }
                 Err(error) => failure(&error),
             };
+        }
+        Ok(Command::ConsoleInstall { output: Some(path) }) => {
+            return outcome(console::install_to(std::path::Path::new(&path)));
         }
         Ok(Command::ConsolePassword(email)) => return outcome(console::password(email.as_deref())),
         Ok(Command::ConsoleTheme { name, json }) => {

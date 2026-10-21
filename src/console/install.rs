@@ -1,10 +1,12 @@
 //! Only this command knows about systemd and the machine's proxy layout.
-//! It reads local settings and prints a script; it never installs anything.
+//! It reads local settings and prints or saves a script; it never installs anything.
+use std::fs;
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, ensure};
 
+use crate::args::shell_command;
 use crate::config::{self, UserConfig};
 
 enum Proxy {
@@ -94,7 +96,7 @@ pub fn install() -> Result<String> {
     };
     Ok(format!(
         r#"#!/bin/sh
-# Save this script, then run: sudo sh install-console.sh
+# Read this script, then run it with sudo sh.
 set -eu
 
 cat > /etc/systemd/system/thirdshift-console.service <<'THIRDSHIFT_UNIT'
@@ -118,6 +120,17 @@ systemctl enable thirdshift-console.service
 systemctl restart thirdshift-console.service
 
 {site}{finish}"#
+    ))
+}
+
+/// Save the script for the owner to read; nothing is written when it can't be made.
+pub fn install_to(path: &Path) -> Result<String> {
+    let script = install()?;
+    fs::write(path, script).with_context(|| format!("can't write {}", path.display()))?;
+    let run = shell_command(vec!["sudo".into(), "sh".into(), path_text(path)?.into()]);
+    Ok(format!(
+        "Wrote {}. Read it, then run: {run}",
+        path.display()
     ))
 }
 
