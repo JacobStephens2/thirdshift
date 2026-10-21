@@ -506,6 +506,55 @@ fn time_pages_pair_with_all_status_stages_and_repository_usual_ranges() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn stages_distinguishes_dispatch_from_insufficient_usual_range_samples() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let now = chrono::Local::now();
+    let stat = fs::read_to_string(format!("/proc/{}/stat", std::process::id())).unwrap();
+    let ticks = stat
+        .rsplit_once(") ")
+        .unwrap()
+        .1
+        .split_whitespace()
+        .nth(19)
+        .unwrap();
+    let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap();
+    for (number, kind, stage) in [
+        (1, "Pickup run", "dispatched Run"),
+        (2, "Security run", "dispatched Spec run"),
+    ] {
+        let mut value = record(home.path(), number, None, 0);
+        value["kind"] = json!(kind);
+        value["name"] = json!(format!("pass-{number}"));
+        value["issue"] = Value::Null;
+        value["process_id"] = json!(std::process::id());
+        value["process_start"] = json!(format!("{}:{ticks}", boot.trim()));
+        value["started_at"] = json!((now - chrono::Duration::minutes(2)).to_rfc3339());
+        value["stages"] = json!([
+            {"name": "implement", "began_at": value["started_at"], "session_log": null},
+            {"name": stage, "began_at": (now - chrono::Duration::minutes(1)).to_rfc3339(), "session_log": null}
+        ]);
+        write_record(home.path(), number, &value);
+    }
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/?page=stages").text().unwrap();
+    for name in ["dispatched Run", "dispatched Spec run"] {
+        let row = html
+            .split("<tr>")
+            .find(|row| row.starts_with(&format!("<th scope=\"row\">{name}<br>")))
+            .unwrap();
+        assert!(row.contains("Usual range: —</span>"), "{row}");
+        assert!(row.contains("class=\"running-stage\""), "{row}");
+        assert!(row.contains("Running · 1 min"), "{row}");
+        assert!(row.contains("Not reached · —"), "{row}");
+    }
+    assert!(
+        html.contains("implement<br><span class=\"usual\">Usual range: Not enough samples</span>")
+    );
+}
+
+#[test]
 fn security_lists_findings_and_sessions_from_the_cli_inventory() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
