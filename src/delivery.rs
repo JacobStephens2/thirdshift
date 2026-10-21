@@ -711,6 +711,17 @@ impl repair_loop::Outside for RunOutside<'_> {
         })
     }
 
+    fn rerun_abandoned(
+        &mut self,
+        head: &str,
+        base_commit: Option<&str>,
+        failed: &FailedChecks,
+    ) -> Result<Option<Ci>> {
+        ci::rerun_abandoned(self.issue, head, base_commit, failed, &mut || {
+            self.pull_request.ensure_actionable(true)
+        })
+    }
+
     fn repair(&mut self, kind: Kind, repair: Repair) -> Result<()> {
         let (issue, base, pr_url) = (self.issue, self.base, self.pr_url);
         let branch = self.worktree.branch();

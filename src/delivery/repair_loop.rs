@@ -79,6 +79,14 @@ pub(super) trait Outside {
         base_commit: Option<&str>,
         failed: &FailedChecks,
     ) -> Result<Option<Ci>>;
+    /// The re-run of `head`'s Abandoned jobs, every one of the branch's own
+    /// failures in `failed`: `None` if it was refused or never appeared.
+    fn rerun_abandoned(
+        &mut self,
+        head: &str,
+        base_commit: Option<&str>,
+        failed: &FailedChecks,
+    ) -> Result<Option<Ci>>;
 
     /// Start the Repair session of `kind`, as in `Kind::Repair(1)`, for
     /// `repair`.
@@ -225,13 +233,15 @@ enum Round {
     NothingToFix,
 }
 
-/// Check re-run decisions for one complete Delivery, including rounds after
-/// a refused Self-merge. CI observation and attempt reconciliation stay with
-/// `Outside`; the pending Repair facts and consumed full head IDs stay here.
+/// Check re-run and Abandoned job re-run decisions for one complete
+/// Delivery, including rounds after a refused Self-merge. CI observation and
+/// attempt reconciliation stay with `Outside`; the pending Repair facts and
+/// the full head IDs whose allowances are consumed stay here.
 #[derive(Default)]
 struct CheckReruns {
     handed_to_repair: Option<(String, FailedChecks)>,
     consumed: HashSet<String>,
+    abandoned_rerun: HashSet<String>,
 }
 
 impl CheckReruns {
@@ -243,7 +253,8 @@ impl CheckReruns {
 
     /// Assess fresh CI against this round's selected Base commit. An
     /// unchanged Repair head consumes its allowance before any re-run
-    /// request. Later watches remain allowed, but own failures on a consumed
+    /// request; any other head is watched, its Abandoned jobs re-run if
+    /// they are its only own failures. Later watches remain allowed, but own failures on a consumed
     /// head decline the CI fix before another Repair can start.
     fn assess(
         &mut self,
@@ -260,7 +271,10 @@ impl CheckReruns {
             Some((_, failed)) if self.consumed.insert(head.to_string()) => {
                 outside.rerun(head, compared_with, &failed)?
             }
-            _ => Some(outside.watch(head, compared_with)?),
+            _ => {
+                let watched = outside.watch(head, compared_with)?;
+                Some(self.past_abandoned_jobs(outside, head, compared_with, watched)?)
+            }
         };
         match ci {
             Some(ci) if !(self.consumed.contains(head) && ci.has_own_failures()) => Ok(ci),
@@ -269,6 +283,32 @@ impl CheckReruns {
                 ci::short(head)
             ),
         }
+    }
+}
+
+impl CheckReruns {
+    /// `ci`, a watch of `head`, or, if it is red only on Abandoned jobs of
+    /// the branch's own and `head` has had neither their re-run nor its
+    /// Check re-run, what their re-run came to. A refused or unseen re-run
+    /// leaves `ci` as it was.
+    fn past_abandoned_jobs(
+        &mut self,
+        outside: &mut impl Outside,
+        head: &str,
+        compared_with: Option<&str>,
+        ci: Ci,
+    ) -> Result<Ci> {
+        let Ci::Failed(failed) = &ci else {
+            return Ok(ci);
+        };
+        if !failed.only_abandoned_jobs_own()
+            || self.consumed.contains(head)
+            || !self.abandoned_rerun.insert(head.to_string())
+        {
+            return Ok(ci);
+        }
+        let rerun = outside.rerun_abandoned(head, compared_with, failed)?;
+        Ok(rerun.unwrap_or(ci))
     }
 }
 
@@ -323,6 +363,10 @@ impl<O: Outside> RepairLoop<'_, O> {
     /// as a Base move, and otherwise once its Base fix has returned, or fails
     /// with the Base fix's cause. A Run that sees no Inherited failures
     /// compares with no Base branch commit.
+    /// A head whose own failures are all Abandoned jobs first has them
+    /// re-run, once per head for the complete Delivery, before any CI-fix
+    /// Repair; their re-run's CI is taken as from any watch, and a refused or
+    /// unseen re-run leaves the red CI first watched to its CI-fix Repair.
     /// If, after a CI-fix Repair and the Base branch merged again, the head
     /// is still the one whose CI failed, it gets its Check re-run instead of
     /// a watch, once per head for the complete Delivery, whatever the Repair
@@ -471,7 +515,7 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
-    use crate::github::{Check, Conclusion};
+    use crate::github::{ActionsJob, Check, Conclusion};
 
     /// What the Repair loop did outside itself, in the order it did it.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -487,6 +531,8 @@ mod tests {
         Watch(String, Option<String>),
         /// Gave this head its Check re-run of these checks of its own.
         Rerun(String, Option<String>, Vec<String>),
+        /// Re-ran these Abandoned jobs of this head's own.
+        RerunAbandoned(String, Option<String>, Vec<String>),
         /// Started the Repair session of this kind for this Repair.
         Repair(Kind, Started),
         /// Took the Base fix for these Inherited failures, at this Base
@@ -520,6 +566,9 @@ mod tests {
         /// Red on these checks of the branch's own, and these Inherited
         /// failures.
         Failed(&'static [&'static str], &'static [&'static str]),
+        /// Red on these Abandoned jobs of the branch's own, and these other
+        /// checks of its own.
+        Lost(&'static [&'static str], &'static [&'static str]),
     }
 
     impl Is {
@@ -536,6 +585,17 @@ mod tests {
                     })
                     .collect()
             };
+            let abandoned = |names: &[&str]| -> Vec<Check> {
+                let mut checks = checks(names);
+                for check in &mut checks {
+                    check.job = Some(ActionsJob {
+                        check_run: 1,
+                        workflow_run: 900,
+                        abandoned: true,
+                    });
+                }
+                checks
+            };
             match self {
                 Is::Absent => Ci::Absent,
                 Is::Passed => Ci::Passed,
@@ -543,6 +603,11 @@ mod tests {
                     own: checks(own),
                     inherited: checks(inherited),
                     on_base: checks(inherited),
+                }),
+                Is::Lost(lost, own) => Ci::Failed(FailedChecks {
+                    own: [abandoned(lost), checks(own)].concat(),
+                    inherited: Vec::new(),
+                    on_base: Vec::new(),
                 }),
             }
         }
@@ -569,6 +634,7 @@ mod tests {
         new_commits: VecDeque<ForeignCommits>,
         watches: VecDeque<Is>,
         reruns: VecDeque<Option<Is>>,
+        abandoned_reruns: VecDeque<Option<Is>>,
         /// For each Base fix, the cause it fails with, if it does.
         base_fixes: VecDeque<Option<&'static str>>,
         /// For each merge, the error it fails with, if it does.
@@ -710,6 +776,25 @@ mod tests {
                 names(&failed.own),
             ));
             let is = self.script.reruns.pop_front().expect("no re-run scripted");
+            Ok(is.map(|is| is.ci()))
+        }
+
+        fn rerun_abandoned(
+            &mut self,
+            head: &str,
+            base_commit: Option<&str>,
+            failed: &FailedChecks,
+        ) -> Result<Option<Ci>> {
+            self.did.push(Did::RerunAbandoned(
+                head.to_string(),
+                base_commit.map(String::from),
+                names(&failed.own),
+            ));
+            let is = self
+                .script
+                .abandoned_reruns
+                .pop_front()
+                .expect("no re-run of Abandoned jobs scripted");
             Ok(is.map(|is| is.ci()))
         }
 
@@ -1341,6 +1426,135 @@ mod tests {
             );
             assert_eq!(did, up_to_the_rerun());
         }
+    }
+
+    /// The re-run of `h1`'s Abandoned job `wsl`, compared with `b1`.
+    fn rerun_abandoned_wsl() -> Did {
+        Did::RerunAbandoned(
+            "h1".to_string(),
+            Some("b1".to_string()),
+            vec!["wsl".to_string()],
+        )
+    }
+
+    #[test]
+    fn an_abandoned_job_alone_is_re_run_with_no_repair_and_green_reaches_the_goal() {
+        let (delivered, did) = deliver(
+            Goal::Merged,
+            Script {
+                heads: script(["h1"]),
+                watches: script([Is::Lost(&["wsl"], &[])]),
+                abandoned_reruns: script([Some(Is::Passed)]),
+                merges: script([None]),
+                ..Script::default()
+            },
+        );
+
+        delivered.unwrap();
+        assert_eq!(
+            did,
+            [&round("h1")[..], &[rerun_abandoned_wsl()], &merge("h1"),].concat()
+        );
+    }
+
+    #[test]
+    fn an_abandoned_job_abandoned_again_or_not_re_run_gets_the_ci_fix_repair_then_its_check_re_run()
+    {
+        for rerun in [Some(Is::Lost(&["wsl"], &[])), None] {
+            let (delivered, did) = deliver(
+                Goal::Merged,
+                Script {
+                    heads: script(["h1"]),
+                    watches: script([Is::Lost(&["wsl"], &[])]),
+                    abandoned_reruns: script([rerun]),
+                    reruns: script([Some(Is::Passed)]),
+                    merges: script([None]),
+                    ..Script::default()
+                },
+            );
+
+            delivered.unwrap();
+            assert_eq!(
+                did,
+                [
+                    &round("h1")[..],
+                    &[
+                        rerun_abandoned_wsl(),
+                        line("CI red; starting Repair 1 of 5"),
+                        repair(1, ci_fix(&["wsl"], &[])),
+                        Did::MergeBase,
+                        Did::Push,
+                        Did::Rerun(
+                            "h1".to_string(),
+                            Some("b1".to_string()),
+                            vec!["wsl".to_string()],
+                        ),
+                    ],
+                    &merge("h1"),
+                ]
+                .concat()
+            );
+        }
+    }
+
+    #[test]
+    fn a_head_whose_abandoned_jobs_were_re_run_gets_no_second_re_run_after_a_refused_merge() {
+        let (delivered, did) = deliver(
+            Goal::Merged,
+            Script {
+                heads: script(["h1", "h1", "h2"]),
+                watches: script([Is::Lost(&["wsl"], &[]), Is::Lost(&["wsl"], &[]), Is::Passed]),
+                abandoned_reruns: script([Some(Is::Passed)]),
+                merges: script([Some("merge refused"), None]),
+                ..Script::default()
+            },
+        );
+
+        delivered.unwrap();
+        assert_eq!(
+            did,
+            [
+                &round("h1")[..],
+                &[rerun_abandoned_wsl()],
+                &merge("h1"),
+                &[line("the merge failed: merge refused")],
+                &round("h1"),
+                &[
+                    line("CI red; starting Repair 1 of 5"),
+                    repair(1, ci_fix(&["wsl"], &[])),
+                ],
+                &round("h2"),
+                &merge("h2"),
+            ]
+            .concat()
+        );
+    }
+
+    #[test]
+    fn abandoned_jobs_beside_ordinary_own_failures_get_the_ci_fix_repair_as_any_red_ci() {
+        let (delivered, did) = deliver(
+            Goal::ReadyForReview,
+            Script {
+                heads: script(["h1", "h2"]),
+                watches: script([Is::Lost(&["wsl"], &["test"]), Is::Passed]),
+                ..Script::default()
+            },
+        );
+
+        delivered.unwrap();
+        assert_eq!(
+            did,
+            [
+                &round("h1")[..],
+                &[
+                    line("CI red; starting Repair 1 of 5"),
+                    repair(1, ci_fix(&["wsl", "test"], &[])),
+                ],
+                &round("h2"),
+                &[Did::CheckPr],
+            ]
+            .concat()
+        );
     }
 
     /// What the loop does up to and including the Inherited failures line

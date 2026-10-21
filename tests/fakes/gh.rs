@@ -20,7 +20,9 @@
 //!  "prs": [{"number", "url", "head", "base", "state", "isDraft", "title", "body",
 //!           "mergeable"?, "unknown_polls"?, "reviewDecision"?}],
 //!  "checks": {"<sha>": [{"id", "name", "conclusion", "url", "pending_polls"?,
-//!                        "rerun"?: {"conclusion", "stale_polls"?, "pending_polls"?},
+//!                        "steps"?: [{"status", "conclusion"}],
+//!                        "rerun"?: {"conclusion", "stale_polls"?, "pending_polls"?,
+//!                                   "steps"?},
 //!                        "stale"?: {"id", "conclusion", "polls"}}]},
 //!  "next_check_id"?: <number>,
 //!  "statuses": {"<sha>": [{"context", "state", "url"}]},
@@ -154,6 +156,11 @@
 //! one reports as in progress for its `pending_polls` reads, then as
 //! completed with its `conclusion`. With no `rerun`, the new attempt fails as
 //! the one before it did.
+//!
+//! `gh api repos/<repo>/actions/jobs/<id>` answers with the job whose check
+//! run has that `id`: its status and conclusion, as the check-runs endpoint
+//! last reported them, and its `steps`, else one completed step that came to
+//! the check's conclusion. A new attempt takes its `rerun`'s `steps`, if any.
 //!
 //! Tests and fake agents change that state with `gh fake …` (not a real gh
 //! command):
@@ -1401,6 +1408,13 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
         );
         return;
     }
+    if let Some((repo, rest)) = repo_prefix(path)
+        && let Some(id) = rest.strip_prefix("actions/jobs/")
+    {
+        check_repo_is(state, Some(repo));
+        println!("{}", actions_job(state, id));
+        return;
+    }
     let Some((repo, sha, endpoint)) = commit_endpoint(path) else {
         die(&format!("fake gh: unsupported api path {path}"), 2)
     };
@@ -1537,6 +1551,58 @@ fn read_checks(state: &mut Json, sha: &str) -> Vec<Json> {
     runs
 }
 
+/// The GitHub Actions job whose check run's `id` is `id`, with its steps.
+fn actions_job(state: &Json, id: &str) -> Json {
+    let checks = state.get("checks").cloned().unwrap_or(object([]));
+    let Json::Object(commits) = &checks else {
+        panic!("checks is an object")
+    };
+    let has_id = |run: Option<&Json>| {
+        run.and_then(|run| run.get("id"))
+            .is_some_and(|run_id| run_id.python() == id)
+    };
+    let checks: Vec<&Json> = commits.iter().flat_map(|(_, list)| list.items()).collect();
+    // The attempt before a re-run failed on a failed step.
+    if let Some(check) = checks.iter().find(|check| has_id(check.get("stale"))) {
+        let conclusion = check.at("stale").at("conclusion").clone();
+        let step = object([
+            ("status", string("completed")),
+            ("conclusion", conclusion.clone()),
+        ]);
+        return object([
+            ("id", check.at("stale").at("id").clone()),
+            ("status", string("completed")),
+            ("conclusion", conclusion),
+            ("steps", Array(vec![step])),
+        ]);
+    }
+    let Some(check) = checks.into_iter().find(|check| has_id(Some(check))) else {
+        die(&format!("gh: Not Found (HTTP 404): no job {id}"), 1)
+    };
+    let pending = check
+        .get("pending_polls")
+        .and_then(Json::as_i64)
+        .is_some_and(|polls| polls > 0);
+    let (status, conclusion) = if pending {
+        (string("in_progress"), Null)
+    } else {
+        (string("completed"), check.at("conclusion").clone())
+    };
+    let steps = match check.get("steps").filter(|steps| steps.truthy()) {
+        Some(steps) => steps.clone(),
+        None => Array(vec![object([
+            ("status", status.clone()),
+            ("conclusion", conclusion.clone()),
+        ])]),
+    };
+    object([
+        ("id", check.at("id").clone()),
+        ("status", status),
+        ("conclusion", conclusion),
+        ("steps", steps),
+    ])
+}
+
 /// The next check run `id`, each one higher than the last.
 fn next_check_id(state: &mut Json) -> Json {
     let next = state.get("next_check_id").and_then(Json::as_i64);
@@ -1597,6 +1663,8 @@ fn run_rerun(state: &mut Json, positional: &[String], flags: &Flags) {
         if let Some(rerun) = &rerun {
             check.set("conclusion", rerun.at("conclusion").clone());
         }
+        let steps = rerun.as_ref().and_then(|rerun| rerun.get("steps")).cloned();
+        check.set("steps", steps.unwrap_or(Null));
         let (stale_polls, pending_polls) = (polls("stale_polls"), polls("pending_polls"));
         let before = check.at("id").clone();
         check.set(
