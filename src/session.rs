@@ -369,7 +369,10 @@ impl Outside for OnMachine {
     ) -> Result<Ended> {
         let (harness, adapter) = match (purpose, &self.security_review) {
             (Purpose::SecurityReview, Some((choice, adapter))) => {
-                progress::step(format!("{label}: on {choice}, from security.harness"));
+                progress::step(format!(
+                    "{label}: on {choice}, chosen by {}",
+                    choice.chosen_by
+                ));
                 (choice, *adapter)
             }
             _ => (&self.harness, self.adapter),

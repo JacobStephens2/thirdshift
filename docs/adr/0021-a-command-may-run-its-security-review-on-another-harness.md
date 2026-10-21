@@ -14,6 +14,6 @@ This is the first step towards choosing a Harness per session. The direction is 
 
 ## Consequences
 
-- A Command that will run its Security review on a Harness, Model or Effort other than its own checks that one before any work, as it checks its own, and fails before any work naming `security.harness` if it can't run. A Pass checks it with its own Harness, before dispatching, and a child Run is handed it checked, as it is handed the Command's.
+- A Command that will run its Security review on a Harness, Model or Effort other than its own checks that one before any work, as it checks its own, and fails before any work naming `security.harness` if it can't run. A Pass checks it with its own Harness, only when it may dispatch a Run, and a child Run is handed it checked, as it is handed the Command's.
 - Both Harnesses' Factory skills are linked into the worktree.
 - The review's Session log, its `.models.json`, the Command log's line for it and the Run notification's session models name the Harness it ran on. The `Built with` line in the pull request and Run notification still names the Command's Harness.

@@ -2,6 +2,7 @@ mod support;
 
 use serde_json::json;
 use support::Scenario;
+use support::resend::ResendStandIn;
 
 const OPENS_PR: &str = r#"
 echo feature > feature.txt
@@ -946,24 +947,48 @@ fn session_models(scenario: &Scenario) -> Vec<(String, serde_json::Value)> {
 fn a_runs_security_review_runs_on_the_security_harness_and_its_other_sessions_on_the_commands() {
     let scenario = Scenario::new();
     scenario.user_config_is(CODEX_WITH_A_CLAUDE_SECURITY_HARNESS);
+    // The implement session leaves CI red, and the Repair, which comes
+    // after the Security review, turns it green.
     scenario.agent_does_for(
         7,
         &reviewed_on_any_harness(&format!(
-            r#"{OPENS_PR}
+            r#"
+if [ -f feature.txt ]; then
+echo fixed > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m 'Fix CI'
 gh fake checks "$(git rev-parse HEAD)" '[{{"name":"test","conclusion":"success"}}]'
+else
+{OPENS_PR}
+gh fake checks "$(git rev-parse HEAD)" '[{{"name":"test","conclusion":"failure"}}]'
+fi
 "#
         )),
     );
-    let result = scenario.run(&[&scenario.issue_url(7), "security-review"]);
+    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+    let result = scenario.run_with_env(
+        &[
+            &scenario.issue_url(7),
+            "security-review",
+            "email",
+            "you@example.com",
+        ],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test"),
+        ],
+    );
     assert_eq!(result.code, Some(0), "{}", result.stderr);
 
     let codex = scenario.codex_calls();
-    assert_eq!(codex.len(), 1, "{codex:?}");
+    assert_eq!(codex.len(), 2, "{codex:?}");
+    for call in &codex {
+        assert!(!call["prompt"].as_str().unwrap().contains("guidance mode"));
+    }
     assert!(
-        !codex[0]["prompt"]
-            .as_str()
-            .unwrap()
-            .contains("guidance mode")
+        codex[1]["prompt"].as_str().unwrap().contains("CI"),
+        "{}",
+        codex[1]["prompt"]
     );
     let claude: Vec<_> = scenario
         .claude_calls()
@@ -1000,11 +1025,37 @@ gh fake checks "$(git rev-parse HEAD)" '[{{"name":"test","conclusion":"success"}
         "{models:?}"
     );
     assert!(
-        result
-            .stderr
-            .contains("security-review: on claude · claude-opus-5-5 · high"),
+        result.stderr.contains(
+            "security-review: on claude · claude-opus-5-5 · high, chosen by security.harness"
+        ),
         "{}",
         result.stderr
+    );
+    // The Run notification's session models name each session's Harness.
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let text = requests[0].body["text"].as_str().unwrap().to_string();
+    let sessions: Vec<_> = text
+        .lines()
+        .skip_while(|line| !line.starts_with("Session models:"))
+        .skip(1)
+        .skip_while(|line| !line.starts_with("- "))
+        .take_while(|line| line.starts_with("- "))
+        .collect();
+    assert_eq!(sessions.len(), 3, "{text}");
+    for line in &sessions {
+        let on = if line.starts_with("- security-review:") {
+            "claude"
+        } else {
+            "codex"
+        };
+        assert!(line.contains(&format!(": {on} · ")), "{text}");
+    }
+    assert!(
+        sessions
+            .iter()
+            .any(|line| line.starts_with("- security-review: claude · claude-opus-5-5")),
+        "{text}"
     );
     // The line that says what the Command built with keeps the Command's.
     let body = scenario.gh_state()["prs"][0]["body"]
@@ -1125,7 +1176,7 @@ fn a_security_harness_that_cannot_run_fails_the_run_before_any_work() {
     assert!(
         result
             .stderr
-            .contains("the Security review's Harness claude, from security.harness, can't run"),
+            .contains("the Security review's Harness claude, chosen by security.harness in the User config, can't run"),
         "{}",
         result.stderr
     );
@@ -1136,4 +1187,56 @@ fn a_security_harness_that_cannot_run_fails_the_run_before_any_work() {
     // With no Security review asked, the security Harness is not checked.
     let result = scenario.run(&[&scenario.issue_url(7)]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
+}
+
+#[test]
+fn a_continuation_from_the_recovery_command_runs_its_security_review_on_the_security_harness_again()
+{
+    let scenario = Scenario::new();
+    scenario.user_config_is(CODEX_WITH_A_CLAUDE_SECURITY_HARNESS);
+    // Each Harness counts its own sessions: the first on each is the first
+    // Run's, the second the Continuation's.
+    scenario.agent_does_for_in_session(
+        7,
+        1,
+        &format!(
+            r#"
+if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'guidance mode'; then
+{review}
+else
+{OPENS_PR}
+fi
+"#,
+            review = review_script(&json!([]), &["Cross-tenant read"])
+        ),
+    );
+    scenario.agent_does_for_in_session(7, 2, &reviewed_on_any_harness("true"));
+    let first = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+    assert_eq!(first.code, Some(1), "{}", first.stderr);
+    let recovery = first
+        .stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("thirdshift: Recovery: thirdshift "))
+        .unwrap_or_else(|| panic!("no Recovery command: {}", first.stderr))
+        .to_string();
+    // It names the Command's Harness, which must not move the review.
+    assert!(recovery.ends_with(" harness codex"), "{recovery}");
+    let words: Vec<&str> = recovery.split_whitespace().collect();
+
+    let second = scenario.run(&words);
+
+    assert_eq!(second.code, Some(0), "{recovery}: {}", second.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+    let codex = scenario.codex_calls();
+    assert_eq!(codex.len(), 2, "{codex:?}");
+    for call in &codex {
+        assert!(!call["prompt"].as_str().unwrap().contains("guidance mode"));
+    }
+    let reviews = claude_session_prompts(&scenario);
+    assert_eq!(reviews.len(), 2, "{reviews:?}");
+    assert!(
+        reviews
+            .iter()
+            .all(|prompt| prompt.contains("guidance mode"))
+    );
 }

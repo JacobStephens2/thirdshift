@@ -252,12 +252,20 @@ impl Choice {
         adapter.check(self)
     }
 
-    /// [`Choice::check`], for the Harness a Command's Security review runs
-    /// on, a failure saying so.
-    pub fn check_for_security_review(&mut self) -> Result<()> {
-        let harness = self.harness.name();
-        self.check().with_context(|| {
-            format!("the Security review's Harness {harness}, from security.harness, can't run")
+    /// [`Choice::check`] this, a Command's, then `security_review`, what its
+    /// Security review runs on where that differs: a failure of the second
+    /// says it is the Security review's, and what chose it.
+    pub fn check_with_security_review(
+        &mut self,
+        security_review: Option<&mut Choice>,
+    ) -> Result<()> {
+        self.check()?;
+        let Some(review) = security_review else {
+            return Ok(());
+        };
+        let (harness, chosen_by) = (review.harness.name(), review.chosen_by);
+        review.check().with_context(|| {
+            format!("the Security review's Harness {harness}, chosen by {chosen_by}, can't run")
         })
     }
 }

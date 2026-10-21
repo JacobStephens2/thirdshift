@@ -4531,3 +4531,26 @@ exec "$(dirname "$0")/original/gh" "$@"
         "{text}"
     );
 }
+
+#[test]
+fn an_audit_only_security_run_does_not_check_the_security_review_harness() {
+    let scenario = Scenario::new();
+    // A Model Codex's catalog lacks: checking it would fail the run.
+    scenario.user_config_is(
+        "[security]\nharness = \"codex\"\nreview = true\n\
+         [harness.codex]\nmodel = \"no-such-model\"\n",
+    );
+    scenario.agent_does(&audit_script("[]"));
+    let result = scenario.run(&["secure", "harness", "claude"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        scenario.codex_calls().is_empty(),
+        "{:?}",
+        scenario.codex_calls()
+    );
+    assert!(
+        !result.stderr.contains("no-such-model"),
+        "{}",
+        result.stderr
+    );
+}

@@ -2363,7 +2363,7 @@ review = true
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert!(
         result.stderr.contains(
-            "the Security review's Harness claude, from security.harness, can't run: \
+            "the Security review's Harness claude, chosen by security.harness in the User config, can't run: \
              claude refused a test call on the Model claude-opus-5-5: no such model\n"
         ),
         "stderr: {}",

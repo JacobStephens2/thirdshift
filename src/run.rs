@@ -169,10 +169,8 @@ fn run(
                 issue.number
             )),
         }
-        asks.harness.check()?;
-        if let Some(security) = &mut asks.security_review_harness {
-            security.check_for_security_review()?;
-        }
+        asks.harness
+            .check_with_security_review(asks.security_review_harness.as_mut())?;
     }
     let asks = &*asks;
     let child_asks = ChildAsks::of(asks);

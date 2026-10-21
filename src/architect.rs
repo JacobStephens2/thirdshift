@@ -342,7 +342,7 @@ fn up_to_the_dispatch(
         pull,
         ..
     } = *architect_run;
-    outside.check_harness()?;
+    outside.check_harness(!architect_run.plan_only)?;
     outside.started(Work::ArchitectRun(repo));
     if pull {
         outside.pull();

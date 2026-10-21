@@ -233,7 +233,7 @@ fn fix(
 ) -> Outcome {
     let mut log = None;
     let ended = (|| -> Result<crate::run::Ended> {
-        outside.check_harness()?;
+        outside.check_harness(true)?;
         outside.started(Work::SecurityRun(repo));
         let (published, session_log) = outside.publish_security_fix(base, &record, &metadata.url);
         log = session_log;
@@ -292,7 +292,7 @@ fn audit_and_record(
     let mut reproduction = None;
     let mut audit_started = false;
     let recorded = (|| -> Result<Recorded> {
-        outside.check_harness()?;
+        outside.check_harness(false)?;
         outside.check_node()?;
         outside.started(Work::SecurityRun(repo));
         let attempt = outside.audit(base);
