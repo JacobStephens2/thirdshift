@@ -8,6 +8,7 @@ use std::collections::hash_map::Entry;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::num::NonZeroUsize;
 
+use super::unstartable;
 use crate::child_run::Ended;
 use crate::github::Ticket;
 use crate::issue::{IssueIdentity, IssueUrl};
@@ -43,11 +44,10 @@ impl TicketBoard {
     }
 
     /// The Ticket to start next, if any: none once starting has stopped or
-    /// `parallel` are running, else the lowest-numbered Ticket that is open,
-    /// not an Unready Ticket, has no sub-issues, has every blocker closed and
-    /// none running, and was not started in this Spec run. A blocker's Run
-    /// closes its issue before it ends, so a closed blocker may still be
-    /// running.
+    /// `parallel` are running, else the lowest-numbered startable Ticket, as
+    /// [`unstartable`] says, with no blocker running, that was not started in
+    /// this Spec run. A blocker's Run closes its issue before it ends, so a
+    /// closed blocker may still be running.
     pub(super) fn next_to_start(&self) -> Option<IssueUrl> {
         if self.stopped || self.running() >= self.parallel.get() {
             return None;
@@ -55,16 +55,12 @@ impl TicketBoard {
         self.tickets
             .iter()
             .filter(|ticket| {
-                self.spec.in_same_repo(&ticket.issue)
-                    && ticket.is_open
-                    && !ticket.has_sub_issues
-                    && ticket.open_blockers.is_empty()
+                unstartable(&self.spec, ticket).is_none()
                     && !ticket
                         .blockers
                         .iter()
                         .any(|blocker| self.is_running(blocker))
                     && !self.standings.contains_key(&ticket.issue.identity())
-                    && ticket.labels.unready().is_none()
             })
             .min_by_key(|ticket| ticket.issue.number)
             .map(|ticket| ticket.issue.clone())

@@ -9,7 +9,7 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | Run, Continuation, Issue branch | `src/run.rs`; `src/branch.rs` | `tests/fresh_run.rs`, `tests/continuation.rs`, `tests/numbered_branches.rs` |
 | Worktree | `src/worktree.rs` and `src/worktree/` | `src/worktree/acquisition_tests.rs`, `src/worktree/cleanup_tests.rs` |
 | Spec run, Spec branch, Spec PR | `src/spec_run.rs` | `tests/spec_run.rs` |
-| Ticket board, Tickets checklist, Unready Ticket | `src/spec_run/ticket_board.rs` — `TicketBoard`, `next_to_start`; `src/labels.rs` | Inline tests; `tests/spec_run.rs` |
+| Ticket board, Tickets checklist, Unready Ticket, Startable Ticket | `src/spec_run/ticket_board.rs` — `TicketBoard`, `next_to_start`; `src/spec_run.rs` — `unstartable`, shared with `src/ready.rs`; `src/labels.rs` | Inline tests; `tests/spec_run.rs` |
 | Delivery, Repair loop, Foreign commit | `src/delivery.rs` — `Delivery`; `src/delivery/repair_loop.rs`; Delivery stage: `src/delivery/stage.rs` — `Stage`, `Tracker`, its table to the `Stopped at:` and Command record stages | Inline tests; `tests/merge_run.rs` |
 | Failed run | `src/failed_run.rs` | `tests/failed_run.rs` |
 | Recovery | `src/recovery.rs` — `Recovery`, its add-a-fact methods and `lines` | Inline tests in `src/recovery.rs`; `tests/failed_run.rs`, `tests/spec_run.rs` |

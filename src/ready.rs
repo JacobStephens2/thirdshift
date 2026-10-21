@@ -10,11 +10,11 @@ use crate::base_fix;
 use crate::branch::{self, Started};
 use crate::claim;
 use crate::git::Git;
-use crate::github::{Candidate, GitHub, ListedIssue, Shaping};
+use crate::github::{Candidate, GitHub, ListedIssue, Shaping, Ticket};
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::{Label, READY_FOR_AGENT};
 use crate::progress;
-use crate::spec_run;
+use crate::spec_run::{self, Unstartable};
 use crate::trust::{self, UntrustedIssue};
 
 /// The lowest-numbered Ready issue a search found.
@@ -86,6 +86,9 @@ trait Reads {
     fn candidate(&self, issue: &IssueUrl) -> Result<Candidate>;
     /// What shows `issue` was ever started, if it was.
     fn started(&self, issue: &IssueUrl) -> Result<Option<Started>>;
+    /// The Tickets of `spec`, an issue with sub-issues, as a Spec run reads
+    /// them.
+    fn tickets(&self, spec: &IssueUrl) -> Result<Vec<Ticket>>;
     fn issue_trust(&self, issue: &IssueUrl) -> Result<Option<UntrustedIssue>>;
 }
 
@@ -106,6 +109,10 @@ impl Reads for GitHubAndOrigin<'_> {
 
     fn started(&self, issue: &IssueUrl) -> Result<Option<Started>> {
         branch::started(self.launch, &self.github, issue)
+    }
+
+    fn tickets(&self, spec: &IssueUrl) -> Result<Vec<Ticket>> {
+        self.github.tickets(spec)
     }
 }
 
@@ -143,6 +150,9 @@ enum Reason {
     /// It is a Spec whose Tickets are all closed: the Spec run it would be
     /// dispatched as refuses it, having nothing to do.
     TicketsClosed,
+    /// It is a Spec with no startable Ticket, its Tickets as read: the Spec
+    /// run it would be dispatched as could start none, and would fail.
+    NoStartableTicket(Vec<Ticket>),
     /// It is not settled: it was last shaped, by this, within the
     /// configured settling window.
     Unsettled(Shaping),
@@ -268,6 +278,13 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
                 )
             }
             Reason::TicketsClosed => "every Ticket is closed".to_string(),
+            Reason::NoStartableTicket(tickets) => {
+                let spec = &self.candidates[at].issue;
+                format!(
+                    "has no Ticket that can start: {}",
+                    why_none_can_start(spec, tickets)
+                )
+            }
             Reason::Unsettled(shaping) => {
                 let shaped = match shaping {
                     Shaping::Labelled => format!("labelled {READY_FOR_AGENT}"),
@@ -282,6 +299,52 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
     }
 }
 
+/// Each open Ticket of `spec`, lowest number first, with why it can't start,
+/// as in "#21 labelled needs-info; #22 blocked by #21".
+fn why_none_can_start(spec: &IssueUrl, tickets: &[Ticket]) -> String {
+    let name = |issue: &IssueUrl| {
+        if spec.in_same_repo(issue) {
+            format!("#{}", issue.number)
+        } else {
+            issue.url.clone()
+        }
+    };
+    let in_spec = |issue: &IssueUrl| {
+        tickets
+            .iter()
+            .any(|ticket| ticket.issue.identity() == issue.identity())
+    };
+    let mut by_number: Vec<&Ticket> = tickets.iter().collect();
+    by_number.sort_by_key(|ticket| ticket.issue.number);
+    let lines: Vec<String> = by_number
+        .into_iter()
+        .filter_map(|ticket| {
+            let why = match spec_run::unstartable(spec, ticket)? {
+                Unstartable::Closed => return None,
+                Unstartable::OutsideRepo => "outside the Spec's repository".to_string(),
+                Unstartable::Unready(label) => format!("labelled {label}"),
+                Unstartable::HasSubIssues => "has sub-issues".to_string(),
+                Unstartable::Blocked => {
+                    let blockers: Vec<String> = ticket
+                        .open_blockers
+                        .iter()
+                        .map(|blocker| {
+                            if in_spec(blocker) {
+                                name(blocker)
+                            } else {
+                                format!("{} (outside the Spec)", name(blocker))
+                            }
+                        })
+                        .collect();
+                    format!("blocked by {}", blockers.join(", "))
+                }
+            };
+            Some(format!("{} {why}", name(&ticket.issue)))
+        })
+        .collect();
+    lines.join("; ")
+}
+
 /// Where `candidate`, an open issue labelled `ready-for-agent`, stands at
 /// `now`, reading what its listing doesn't give through `reads`. It is a
 /// Ready issue when its author and latest ready-for-agent label actor are
@@ -289,9 +352,10 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
 /// Claim, is not a sub-issue, has no `base-fix` or `security-fix` label and no
 /// open blocker, was never started or has a recorded ready-for-agent
 /// hand-back after its last Claim ended, is not a Spec whose Tickets are all
-/// closed, and is settled: `wait` has passed since it was last labelled
+/// closed, is settled: `wait` has passed since it was last labelled
 /// `ready-for-agent` and since a sub-issue or a "blocked by" link of its was
-/// last added or removed.
+/// last added or removed, and, if it is a Spec, has a startable Ticket. Its
+/// Tickets are read only for that last check.
 fn standing_of(
     reads: &impl Reads,
     candidate: &ListedIssue,
@@ -338,8 +402,22 @@ fn standing_of(
     {
         return passed_over(Reason::Unsettled(shaped.by));
     }
+    let is_spec = read.has_sub_issues();
+    if is_spec {
+        let tickets = reads.tickets(&candidate.issue)?;
+        // Read after the candidate: its Tickets may have closed since.
+        if !tickets.iter().any(|ticket| ticket.is_open) {
+            return passed_over(Reason::TicketsClosed);
+        }
+        if tickets
+            .iter()
+            .all(|ticket| spec_run::unstartable(&candidate.issue, ticket).is_some())
+        {
+            return passed_over(Reason::NoStartableTicket(tickets));
+        }
+    }
     Ok(Standing::Ready {
-        is_spec: read.has_sub_issues(),
+        is_spec,
         claim_generation: read.claim_generation,
     })
 }
@@ -361,6 +439,8 @@ mod tests {
         CandidateRead(u64),
         /// It checked whether this issue was started.
         StartedCheck(u64),
+        /// It read this Spec's Tickets.
+        TicketsRead(u64),
         /// It passed over an issue with this line.
         Line(String),
     }
@@ -380,6 +460,9 @@ mod tests {
         handed_back: bool,
         /// What shows it was started, if it was.
         started: Option<Started>,
+        /// Its Tickets as a Spec run reads them, if they are not each a
+        /// startable Ticket, open or not as `sub_issue_is_open` says.
+        tickets: Option<Vec<Ticket>>,
     }
 
     /// Reads from memory, each recorded in `seen`, with an issue that has no
@@ -426,6 +509,59 @@ mod tests {
                 .borrow_mut()
                 .push(Seen::StartedCheck(issue.number));
             Ok(self.facts(issue).and_then(|facts| facts.started.clone()))
+        }
+
+        fn tickets(&self, spec: &IssueUrl) -> Result<Vec<Ticket>> {
+            self.seen.borrow_mut().push(Seen::TicketsRead(spec.number));
+            let facts = self.facts(spec).expect("only a Spec's Tickets are read");
+            Ok(facts.tickets.clone().unwrap_or_else(|| {
+                let numbers = 100..;
+                numbers
+                    .zip(&facts.sub_issue_is_open)
+                    .map(|(number, &is_open)| Ticket {
+                        is_open,
+                        ..startable_ticket(number)
+                    })
+                    .collect()
+            }))
+        }
+    }
+
+    /// Ticket `number` of a Spec in `acme/widgets`: open, startable.
+    fn startable_ticket(number: u64) -> Ticket {
+        Ticket {
+            issue: url(number),
+            is_open: true,
+            labels: [READY_FOR_AGENT.name()].into_iter().collect(),
+            has_sub_issues: false,
+            blockers: Vec::new(),
+            open_blockers: Vec::new(),
+        }
+    }
+
+    /// Ticket `number`, open and blocked by the open issues `blockers`.
+    fn blocked_ticket(number: u64, blockers: &[IssueUrl]) -> Ticket {
+        Ticket {
+            blockers: blockers.to_vec(),
+            open_blockers: blockers.to_vec(),
+            ..startable_ticket(number)
+        }
+    }
+
+    /// Ticket `number`, open and labelled `label` as well.
+    fn labelled_ticket(number: u64, label: &str) -> Ticket {
+        Ticket {
+            labels: [READY_FOR_AGENT.name(), label].into_iter().collect(),
+            ..startable_ticket(number)
+        }
+    }
+
+    /// A Spec, settled and never started, with `tickets`.
+    fn spec_with(tickets: Vec<Ticket>) -> Facts {
+        Facts {
+            sub_issue_is_open: tickets.iter().map(|ticket| ticket.is_open).collect(),
+            tickets: Some(tickets),
+            ..Facts::default()
         }
     }
 
@@ -607,7 +743,12 @@ mod tests {
         let [candidate_20, started_20] = every_read(20);
         assert_eq!(
             seen,
-            [Seen::CandidateRead(7), candidate_20, started_20],
+            [
+                Seen::CandidateRead(7),
+                candidate_20,
+                started_20,
+                Seen::TicketsRead(20)
+            ],
             "below"
         );
 
@@ -617,7 +758,12 @@ mod tests {
             vec![(20, spec()), (21, ticket())],
         );
         assert_eq!(ready, Some((20, true)));
-        assert_eq!(seen, every_read(20), "above");
+        let [candidate_20, started_20] = every_read(20);
+        assert_eq!(
+            seen,
+            [candidate_20, started_20, Seen::TicketsRead(20)],
+            "above"
+        );
     }
 
     #[test]
@@ -762,6 +908,7 @@ mod tests {
                     Shaping::Labelled,
                     TimeDelta::minutes(if recent { 29 } else { 31 }),
                 ),
+                tickets: None,
             };
             let (ready, seen) = search(vec![listed(7, &labels)], vec![(7, facts)]);
             assert_eq!(ready, None, "{reason}");
@@ -805,7 +952,154 @@ mod tests {
         let (ready, seen) = search(vec![listed(7, &[])], vec![(7, spec)]);
 
         assert_eq!(ready, Some((7, true)));
-        assert_eq!(seen, every_read(7));
+        let [candidate, started] = every_read(7);
+        assert_eq!(seen, [candidate, started, Seen::TicketsRead(7)]);
+    }
+
+    #[test]
+    fn a_spec_whose_only_open_ticket_is_unready_is_passed_over_naming_the_ticket_and_label() {
+        let mut done = startable_ticket(8);
+        done.is_open = false;
+        let spec = spec_with(vec![done, labelled_ticket(9, "needs-info")]);
+
+        let (ready, seen) = search(vec![listed(7, &[])], vec![(7, spec)]);
+
+        assert_eq!(ready, None);
+        let [candidate, started] = every_read(7);
+        assert_eq!(
+            seen,
+            [
+                candidate,
+                started,
+                Seen::TicketsRead(7),
+                passed_over("#7 has no Ticket that can start: #9 labelled needs-info"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_spec_with_no_startable_ticket_names_why_each_open_ticket_cant_start() {
+        let foreign = IssueUrl::parse("https://github.com/other/widgets/issues/21").unwrap();
+        let mut parent = startable_ticket(12);
+        parent.has_sub_issues = true;
+        let spec = spec_with(vec![
+            blocked_ticket(11, &[url(30)]),
+            blocked_ticket(10, &[url(9)]),
+            labelled_ticket(9, "needs-triage"),
+            parent,
+            Ticket {
+                issue: foreign,
+                ..startable_ticket(21)
+            },
+        ]);
+
+        let (ready, seen) = search(vec![listed(7, &[])], vec![(7, spec)]);
+
+        assert_eq!(ready, None);
+        assert_eq!(
+            seen.last(),
+            Some(&passed_over(
+                "#7 has no Ticket that can start: #9 labelled needs-triage; \
+                 #10 blocked by #9; #11 blocked by #30 (outside the Spec); \
+                 #12 has sub-issues; \
+                 https://github.com/other/widgets/issues/21 outside the Spec's repository"
+            ))
+        );
+    }
+
+    #[test]
+    fn a_spec_whose_tickets_closed_since_the_candidate_read_says_every_ticket_is_closed() {
+        let mut closed = startable_ticket(8);
+        closed.is_open = false;
+        let spec = Facts {
+            sub_issue_is_open: vec![true],
+            ..spec_with(vec![closed])
+        };
+        let (ready, seen) = search(vec![listed(7, &[])], vec![(7, spec)]);
+        assert_eq!(ready, None);
+        assert_eq!(seen.last(), Some(&passed_over("#7 every Ticket is closed")));
+    }
+
+    #[test]
+    fn a_spec_whose_tickets_read_empty_says_every_ticket_is_closed() {
+        let spec = Facts {
+            sub_issue_is_open: vec![true],
+            tickets: Some(vec![]),
+            ..Facts::default()
+        };
+        let (ready, seen) = search(vec![listed(7, &[])], vec![(7, spec)]);
+        assert_eq!(ready, None);
+        assert_eq!(seen.last(), Some(&passed_over("#7 every Ticket is closed")));
+    }
+
+    #[test]
+    fn a_spec_with_one_startable_ticket_among_unready_ones_is_a_ready_issue() {
+        let spec = spec_with(vec![
+            labelled_ticket(8, "ready-for-human"),
+            startable_ticket(9),
+        ]);
+
+        let (ready, _) = search(vec![listed(7, &[])], vec![(7, spec)]);
+
+        assert_eq!(ready, Some((7, true)));
+    }
+
+    #[test]
+    fn a_handed_back_spec_with_no_startable_ticket_is_passed_over() {
+        let spec = Facts {
+            started: Some(Started::Branch("issue-7".to_string())),
+            handed_back: true,
+            ..spec_with(vec![labelled_ticket(8, "wontfix")])
+        };
+
+        let (ready, seen) = search(vec![listed(7, &[])], vec![(7, spec)]);
+
+        assert_eq!(ready, None);
+        assert_eq!(
+            seen.last(),
+            Some(&passed_over(
+                "#7 has no Ticket that can start: #8 labelled wontfix"
+            ))
+        );
+    }
+
+    #[test]
+    fn a_spec_failing_an_earlier_gate_has_its_tickets_never_read() {
+        let mut closed = startable_ticket(8);
+        closed.is_open = false;
+        let unsettled = Facts {
+            last_shaped: shaped(Shaping::SubIssues, TimeDelta::minutes(5)),
+            ..spec_with(vec![labelled_ticket(9, "needs-info")])
+        };
+        let blocked = Facts {
+            open_blockers: vec![30],
+            ..spec_with(vec![labelled_ticket(9, "needs-info")])
+        };
+
+        let (ready, seen) = search(
+            vec![listed(5, &[]), listed(6, &[]), listed(7, &[])],
+            vec![(5, spec_with(vec![closed])), (6, unsettled), (7, blocked)],
+        );
+
+        assert_eq!(ready, None);
+        assert!(
+            !seen.iter().any(|seen| matches!(seen, Seen::TicketsRead(_))),
+            "{seen:?}"
+        );
+        let lines: Vec<&Seen> = seen
+            .iter()
+            .filter(|seen| matches!(seen, Seen::Line(_)))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                &passed_over("#5 every Ticket is closed"),
+                &passed_over(
+                    "#6 not settled: a sub-issue added or removed less than 30 minutes ago"
+                ),
+                &passed_over("#7 blocked by #30"),
+            ]
+        );
     }
 
     #[test]
@@ -851,14 +1145,23 @@ mod tests {
     fn a_passed_over_issue_has_one_line_with_the_first_reason_that_applies() {
         // Every reason applies to #7 in the first row: each row takes the
         // first one away. Tickets all closed and not settled can't both
-        // apply with nothing started, so not settled has a row of its own.
+        // apply with nothing started, so not settled has a row of its own,
+        // and no startable Ticket the last, once #7 has settled.
         let facts = |parent: bool, blocked: bool, started: bool, closed: bool| Facts {
             parent: parent.then(|| url(3)),
-            sub_issue_is_open: if closed { vec![false] } else { vec![] },
+            sub_issue_is_open: vec![!closed],
             open_blockers: if blocked { vec![5] } else { vec![] },
             last_shaped: shaped(Shaping::Labelled, TimeDelta::minutes(1)),
             started: started.then(|| Started::Branch("issue-7".to_string())),
             handed_back: false,
+            tickets: Some(vec![Ticket {
+                is_open: !closed,
+                ..labelled_ticket(8, "needs-info")
+            }]),
+        };
+        let settled = Facts {
+            last_shaped: None,
+            ..facts(false, false, false, false)
         };
         for (labels, facts, said) in [
             (
@@ -896,6 +1199,11 @@ mod tests {
                 &[],
                 facts(false, false, false, false),
                 "#7 not settled: labelled ready-for-agent less than 30 minutes ago",
+            ),
+            (
+                &[],
+                settled,
+                "#7 has no Ticket that can start: #8 labelled needs-info",
             ),
         ] {
             let (ready, seen) = search(vec![listed(7, labels)], vec![(7, facts)]);

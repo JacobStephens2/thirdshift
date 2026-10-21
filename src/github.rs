@@ -1010,6 +1010,7 @@ pub fn add_label_command(issue: &IssueUrl, label: Label) -> String {
 }
 
 /// A Spec's sub-issue, as a Spec run reads it.
+#[derive(Clone)]
 pub struct Ticket {
     pub issue: IssueUrl,
     pub is_open: bool,
