@@ -134,7 +134,8 @@ previous visit are marked new, including those arriving while the page is open.
 Missing or malformed storage hides nothing. Replacing the installed binary
 closes open streams and re-executes the Console with its original arguments.
 
-The available pages are Inbox (`1`), Lanes (`2`), Stages (`3`), Waterfall (`4`), History (`5`), Logs (`6`), Security (`7`) and Cron jobs (`8`). Links
+The available pages are Inbox (`1`), Lanes (`2`), Stages (`3`), Waterfall (`4`),
+History (`5`), Logs (`6`), Security (`7`) and Cron jobs (`8`). Inbox through Security links
 keep the page in `?page=`. History includes every ended Command, including old
 logs, and filters by outcome and repository. Security shows retained findings
 and Session logs. Older records without finding metadata still show their logs.
@@ -145,8 +146,9 @@ with `thirdshift cronjobs [--json]`. It selects active entries containing a
 literal `thirdshift` word or an executable path ending in `/thirdshift`, including
 commands after `cd` and wrappers. Shell scripts and variable-built executable
 names are not inspected or evaluated. Comments and environment assignments
-are omitted. Other users, system crontabs and other schedulers are outside this
-view. Schedules retain cron's expressions and time zone; reload to see changes.
+are omitted, and input after cron's first unescaped `%` is not searched.
+Other users, system crontabs and other schedulers are outside this view.
+Schedules retain cron's expressions and time zone; reload to see changes.
 No matching entries or no crontab shows an empty view; an unavailable `crontab`
 command or a read failure reports an error. This view never changes the crontab
 or starts a Command.

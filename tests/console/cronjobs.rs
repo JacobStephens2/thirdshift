@@ -116,3 +116,20 @@ fn cronjobs_distinguishes_empty_crontabs_from_read_failures() {
     assert_eq!(response.status(), 500);
     assert!(!response.text().unwrap().contains("No thirdshift cron jobs"));
 }
+
+#[test]
+fn cronjobs_respects_crons_command_and_stdin_separator() {
+    let home = fixture();
+    fs::write(home.path().join("crontab"), "* * * * * /usr/local/bin/thirdshift%stdin\n* * * * * backup% /usr/local/bin/thirdshift\n* * * * * /usr/local/bin/thirdshift\\%other\n").unwrap();
+    let output = command(home.path())
+        .args(["cronjobs", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+        json!([
+            {"schedule": "* * * * *", "command": "/usr/local/bin/thirdshift%stdin"}
+        ])
+    );
+}

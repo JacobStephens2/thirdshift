@@ -67,9 +67,20 @@ fn entry(line: &str) -> Option<CronJob> {
         schedule.push(&command[..end]);
         command = command[end..].trim_start();
     }
+    // Cron sends everything after its first unescaped % to stdin, even inside
+    // shell quotes. Keep it for display, but don't match input as a command.
+    let mut escaped = false;
+    let command_end = command
+        .char_indices()
+        .find_map(|(index, character)| {
+            let separator = character == '%' && !escaped;
+            escaped = character == '\\' && !escaped;
+            separator.then_some(index)
+        })
+        .unwrap_or(command.len());
     // Match literal executable names, including quoted paths and commands
     // after cd, env or flock. Never evaluate the shell text to discover jobs.
-    let mentions_thirdshift = command
+    let mentions_thirdshift = command[..command_end]
         .split(|c: char| c.is_whitespace() || "'\";&|()<>".contains(c))
         .any(|word| word.rsplit('/').next() == Some("thirdshift"));
     mentions_thirdshift.then(|| CronJob {
