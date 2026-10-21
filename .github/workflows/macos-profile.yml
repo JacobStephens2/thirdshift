@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        part: [dtrace, baseline, fsync-off, apple-git]
+        part: [spotlight-off, shard-1, shard-2, shard-3, shard-4]
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install
@@ -21,40 +21,22 @@ jobs:
           shared-key: test-macos
           save-if: false
       - uses: taiki-e/install-action@nextest
+      - name: Spotlight off
+        run: sudo mdutil -a -i off
+      - name: Apple git first on PATH
+        if: startsWith(matrix.part, 'shard')
+        run: |
+          mkdir -p "$HOME/apple-git"
+          ln -s "$(xcrun -f git)" "$HOME/apple-git/git"
+          echo "$HOME/apple-git" >> "$GITHUB_PATH"
       - name: Build the tests
         run: cargo nextest run --no-run
-      - name: Runner
-        run: |
-          sw_vers
-          sysctl -n hw.ncpu hw.memsize machdep.cpu.brand_string
-          echo "PATH=$PATH"
-          which -a git
-          git --version
-          /usr/bin/git --version || true
-          csrutil status || true
-      - name: Spawn costs
-        if: matrix.part == 'dtrace'
-        run: |
-          rustc --edition 2024 --crate-name fakes -C debuginfo=0 -o /tmp/fakes-debug tests/fakes.rs
-          rustc --edition 2024 --crate-name fakes -C debuginfo=0 -C opt-level=2 -o /tmp/fakes-opt tests/fakes.rs
-          cargo build
-          python3 .github/profile/spawn.py /tmp/fakes "$PWD/target/debug/thirdshift"
-      - name: Programs, fsync and CPU under dtrace
-        if: matrix.part == 'dtrace'
-        run: |
-          otool -L /opt/homebrew/bin/git
-          python3 .github/profile/profile.py .github/profile/dtrace.txt --dtrace
+      - run: git --version
       - name: Each traced test alone, wall against CPU
-        if: matrix.part != 'dtrace'
+        if: matrix.part == 'spotlight-off'
+        run: python3 .github/profile/profile.py .github/profile/dtrace.txt
+      - name: Shard
+        if: startsWith(matrix.part, 'shard')
         env:
           MATRIX_PART: ${{ matrix.part }}
-        run: |
-          if [ "$MATRIX_PART" = fsync-off ]; then export PROFILE_GIT_FSYNC_OFF=1; fi
-          if [ "$MATRIX_PART" = apple-git ]; then
-            mkdir -p "$HOME/apple-git"
-            ln -s "$(xcrun -f git)" "$HOME/apple-git/git"
-            export PATH="$HOME/apple-git:$PATH"
-            otool -L "$(xcrun -f git)"
-          fi
-          git --version
-          python3 .github/profile/profile.py .github/profile/dtrace.txt
+        run: cargo nextest run --partition hash:${MATRIX_PART#shard-}/4
