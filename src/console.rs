@@ -3,6 +3,7 @@ mod account_commands;
 mod accounts;
 mod auth;
 mod conversation;
+mod filters;
 pub use account_commands::{password, print_log, sign_out};
 mod install;
 pub use install::{install, install_to};

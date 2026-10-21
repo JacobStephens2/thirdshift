@@ -31,6 +31,8 @@ pub(crate) struct Row {
     pub selector: String,
     pub logs_url: String,
     pub subject: String,
+    /// The issue's `https://` address, which the subject links to.
+    pub subject_url: Option<String>,
     pub title: String,
     pub state: String,
     pub now_line: String,
@@ -168,6 +170,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                     .map(|path| logs_url(path, root))
                     .unwrap_or_else(|| "/?page=logs".into()),
                 subject,
+                subject_url: issue_url(command.issue.as_ref()),
                 title,
                 state: command.state.into(),
                 now_line: command
@@ -279,6 +282,12 @@ fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, Stri
     }
 }
 
+fn issue_url(issue: Option<&Issue>) -> Option<String> {
+    issue
+        .map(|issue| issue.url.clone())
+        .filter(|url| url.starts_with("https://"))
+}
+
 fn row(
     command: &Command,
     now: DateTime<Local>,
@@ -311,6 +320,7 @@ fn row(
         selector: Observation::Record(command).selector().unwrap_or_default(),
         logs_url: logs_url(&command.record_path, root),
         subject,
+        subject_url: issue_url(facts.issue.as_ref()),
         title,
         state: command.state.into(),
         now_line: stage_text(command),
