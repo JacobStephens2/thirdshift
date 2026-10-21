@@ -1,13 +1,15 @@
 //! The Harness a Command's agent sessions run on, with its Model and Effort:
 //! one [`Choice`] per Command, made by the command, else the User config,
 //! else the default, checked before any work, passed on to every session and
-//! child Run, and recorded with what the Command did.
+//! child Run, and recorded with what the Command did. A Security review is
+//! the one session that may run on another: the User config's
+//! `security.harness`, when set (ADR-0021).
 
 use std::fmt;
 use std::path::Path;
 use std::process::Output;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 
 mod adapter;
 pub(crate) mod agy;
@@ -176,6 +178,27 @@ impl Default for Choice {
 }
 
 impl Choice {
+    /// What a Security review runs on when the User config's
+    /// `security.harness` names `security`: that Harness, with the Model and
+    /// Effort its own section in `settings` sets, whatever the command asked.
+    /// None when `security` is none, and the review runs on the Command's.
+    pub fn of_security_review(security: Option<Harness>, settings: &Settings) -> Option<Choice> {
+        let harness = security?;
+        let set = settings.of(harness);
+        Some(Choice {
+            harness,
+            model: set.model.clone(),
+            effort: set.effort.clone(),
+            chosen_by: ChosenBy::SecurityConfig,
+        })
+    }
+
+    /// Whether sessions on this run as they do on `other`: the same Harness,
+    /// Model and Effort, whatever chose them.
+    pub fn runs_as(&self, other: &Choice) -> bool {
+        (self.harness, &self.model, &self.effort) == (other.harness, &other.model, &other.effort)
+    }
+
     /// What a command that `asked` for it runs on, given the User config's
     /// `settings`: for each of the Harness, Model and Effort, what the
     /// command asked, else what the User config sets, else the default. The
@@ -227,6 +250,23 @@ impl Choice {
             );
         }
         adapter.check(self)
+    }
+
+    /// [`Choice::check`] this, a Command's, then `security_review`, what its
+    /// Security review runs on where that differs: a failure of the second
+    /// says it is the Security review's, and what chose it.
+    pub fn check_with_security_review(
+        &mut self,
+        security_review: Option<&mut Choice>,
+    ) -> Result<()> {
+        self.check()?;
+        let Some(review) = security_review else {
+            return Ok(());
+        };
+        let (harness, chosen_by) = (review.harness.name(), review.chosen_by);
+        review.check().with_context(|| {
+            format!("the Security review's Harness {harness}, chosen by {chosen_by}, can't run")
+        })
     }
 }
 

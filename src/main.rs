@@ -234,7 +234,7 @@ fn main() -> ExitCode {
         Ok(Command::Architect(architect_args)) => return architect(architect_args),
         Ok(Command::Pickup(pickup_args)) => return pickup(pickup_args),
         Ok(Command::Secure(args)) => return secure(args),
-        Ok(Command::Run(run_args)) => run_args,
+        Ok(Command::Run(run_args)) => *run_args,
         Err(error) => return argument_error(format_args!("{error:#}")),
     };
     let issue = match launch::resolve_issue(issue) {

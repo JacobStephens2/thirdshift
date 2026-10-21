@@ -76,8 +76,10 @@ pub trait Outside {
     /// Record that `pass` was skipped for `reason`.
     fn skipped(&mut self, pass: Pass, reason: &dyn Display);
     /// Check the Harness, Model and Effort the pass's sessions, and the run
-    /// it dispatches, run on, failing if they can't run.
-    fn check_harness(&mut self) -> Result<()>;
+    /// it dispatches, run on, failing if they can't run. If it `dispatches`
+    /// a run, or may, check those of that run's Security review too, where
+    /// they differ.
+    fn check_harness(&mut self, dispatches: bool) -> Result<()>;
     /// Record that the pass started `work`, on the Harness it checked.
     fn started(&mut self, work: Work);
     /// Request the prepared Base branch's checkout update: only a warning
@@ -153,6 +155,10 @@ pub struct LaunchAndGitHub<'a> {
     pub harness: &'a mut Choice,
     pub flags: &'a Flags,
     pub config: &'a UserConfig,
+    /// What the run it dispatches runs its Security review on instead of
+    /// `harness`, if anything, once [`Outside::check_harness`] has checked
+    /// it.
+    pub security_review_harness: Option<Choice>,
 }
 
 impl Outside for LaunchAndGitHub<'_> {
@@ -188,8 +194,14 @@ impl Outside for LaunchAndGitHub<'_> {
         logs::skipped(pass, self.repo, reason);
     }
 
-    fn check_harness(&mut self) -> Result<()> {
-        self.harness.check()
+    fn check_harness(&mut self, dispatches: bool) -> Result<()> {
+        let mut security = self
+            .flags
+            .security_review_harness(self.config, self.harness)
+            .filter(|_| dispatches);
+        self.harness.check_with_security_review(security.as_mut())?;
+        self.security_review_harness = security;
+        Ok(())
     }
 
     fn started(&mut self, work: Work) {
@@ -309,6 +321,7 @@ impl Outside for LaunchAndGitHub<'_> {
         };
         let mut asks = Asks {
             harness: self.harness.clone(),
+            security_review_harness: self.security_review_harness.clone(),
             ..asks
         };
         logs::dispatching(
@@ -716,7 +729,7 @@ mod in_memory {
             self.calls.push(Call::Skipped(reason.to_string()));
         }
 
-        fn check_harness(&mut self) -> Result<()> {
+        fn check_harness(&mut self, _dispatches: bool) -> Result<()> {
             self.calls.push(Call::HarnessCheck);
             if self.harness_failing {
                 bail!("claude is not on PATH");

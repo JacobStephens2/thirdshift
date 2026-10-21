@@ -2,6 +2,7 @@ mod support;
 
 use serde_json::json;
 use support::Scenario;
+use support::resend::ResendStandIn;
 
 const OPENS_PR: &str = r#"
 echo feature > feature.txt
@@ -872,4 +873,370 @@ fn an_untrusted_edit_before_the_security_review_fails_the_run() {
         result.stderr
     );
     assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+/// A User config whose sessions run on Codex but whose Security reviews run
+/// on Claude Code, with its own Model and Effort.
+const CODEX_WITH_A_CLAUDE_SECURITY_HARNESS: &str = r#"
+[harness]
+default = "codex"
+
+[harness.claude]
+model = "claude-opus-5-5"
+effort = "high"
+
+[security]
+harness = "claude"
+"#;
+
+/// The script for every session of issue `issue`, whichever Harness runs
+/// it: the Security review's, which its prompt names, reports nothing;
+/// any other runs `other`.
+fn reviewed_on_any_harness(other: &str) -> String {
+    format!(
+        r#"
+if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'guidance mode'; then
+{review}
+else
+{other}
+fi
+"#,
+        review = review_script(&json!([]), &[])
+    )
+}
+
+/// The arguments of `call`.
+fn argv(call: &serde_json::Value) -> Vec<String> {
+    call["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arg| arg.as_str().unwrap().to_string())
+        .collect()
+}
+
+/// The prompts of every Claude Code agent session, leaving out any test
+/// call checking its Model.
+fn claude_session_prompts(scenario: &Scenario) -> Vec<String> {
+    scenario
+        .claude_calls()
+        .iter()
+        .filter(|call| argv(call).iter().any(|arg| arg == "--output-format"))
+        .map(|call| call["prompt"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Every `.models.json` under the scenario's Command logs, by file name.
+fn session_models(scenario: &Scenario) -> Vec<(String, serde_json::Value)> {
+    let dir = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");
+    let mut models: Vec<_> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.to_string_lossy().ends_with(".models.json"))
+        .map(|path| {
+            let name = path.file_name().unwrap().to_string_lossy().to_string();
+            let record = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            (name, record)
+        })
+        .collect();
+    models.sort_by(|a, b| a.0.cmp(&b.0));
+    models
+}
+
+#[test]
+fn a_runs_security_review_runs_on_the_security_harness_and_its_other_sessions_on_the_commands() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(CODEX_WITH_A_CLAUDE_SECURITY_HARNESS);
+    // The implement session leaves CI red, and the Repair, which comes
+    // after the Security review, turns it green.
+    scenario.agent_does_for(
+        7,
+        &reviewed_on_any_harness(&format!(
+            r#"
+if [ -f feature.txt ]; then
+echo fixed > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m 'Fix CI'
+gh fake checks "$(git rev-parse HEAD)" '[{{"name":"test","conclusion":"success"}}]'
+else
+{OPENS_PR}
+gh fake checks "$(git rev-parse HEAD)" '[{{"name":"test","conclusion":"failure"}}]'
+fi
+"#
+        )),
+    );
+    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+    let result = scenario.run_with_env(
+        &[
+            &scenario.issue_url(7),
+            "security-review",
+            "email",
+            "you@example.com",
+        ],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test"),
+        ],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+
+    let codex = scenario.codex_calls();
+    assert_eq!(codex.len(), 2, "{codex:?}");
+    for call in &codex {
+        assert!(!call["prompt"].as_str().unwrap().contains("guidance mode"));
+    }
+    assert!(
+        codex[1]["prompt"].as_str().unwrap().contains("CI"),
+        "{}",
+        codex[1]["prompt"]
+    );
+    let claude: Vec<_> = scenario
+        .claude_calls()
+        .iter()
+        .map(argv)
+        .filter(|args| args.iter().any(|arg| arg == "--output-format"))
+        .collect();
+    assert_eq!(claude.len(), 1, "{claude:?}");
+    let args = &claude[0];
+    let at = |flag: &str| {
+        args.iter()
+            .position(|arg| arg == flag)
+            .map(|at| &args[at + 1])
+    };
+    assert_eq!(at("--model").map(String::as_str), Some("claude-opus-5-5"));
+    assert_eq!(at("--effort").map(String::as_str), Some("high"));
+    assert!(claude_session_prompts(&scenario)[0].contains("guidance mode"));
+
+    let models = session_models(&scenario);
+    let harness_of = |kind: &str| {
+        models
+            .iter()
+            .find(|(name, _)| name.ends_with(&format!("-{kind}.models.json")))
+            .map(|(_, record)| record["harness"].as_str().unwrap().to_string())
+    };
+    assert_eq!(
+        harness_of("implement").as_deref(),
+        Some("codex"),
+        "{models:?}"
+    );
+    assert_eq!(
+        harness_of("security-review").as_deref(),
+        Some("claude"),
+        "{models:?}"
+    );
+    assert!(
+        result.stderr.contains(
+            "security-review: on claude · claude-opus-5-5 · high, chosen by security.harness"
+        ),
+        "{}",
+        result.stderr
+    );
+    // The Run notification's session models name each session's Harness.
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let text = requests[0].body["text"].as_str().unwrap().to_string();
+    let sessions: Vec<_> = text
+        .lines()
+        .skip_while(|line| !line.starts_with("Session models:"))
+        .skip(1)
+        .skip_while(|line| !line.starts_with("- "))
+        .take_while(|line| line.starts_with("- "))
+        .collect();
+    assert_eq!(sessions.len(), 3, "{text}");
+    for line in &sessions {
+        let on = if line.starts_with("- security-review:") {
+            "claude"
+        } else {
+            "codex"
+        };
+        assert!(line.contains(&format!(": {on} · ")), "{text}");
+    }
+    assert!(
+        sessions
+            .iter()
+            .any(|line| line.starts_with("- security-review: claude · claude-opus-5-5")),
+        "{text}"
+    );
+    // The line that says what the Command built with keeps the Command's.
+    let body = scenario.gh_state()["prs"][0]["body"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(body.contains("Built with codex"), "{body}");
+}
+
+#[test]
+fn a_commands_harness_word_does_not_choose_the_security_reviews_harness() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        r#"
+[harness.claude]
+model = "claude-opus-5-5"
+
+[security]
+harness = "claude"
+"#,
+    );
+    scenario.agent_does_for(7, &reviewed_on_any_harness(OPENS_PR));
+    let result = scenario.run(&[
+        &scenario.issue_url(7),
+        "security-review",
+        "harness",
+        "codex",
+        "effort",
+        "max",
+    ]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let codex = scenario.codex_calls();
+    assert_eq!(codex.len(), 1, "{codex:?}");
+    let prompts = claude_session_prompts(&scenario);
+    assert_eq!(prompts.len(), 1, "{prompts:?}");
+    assert!(prompts[0].contains("guidance mode"));
+    let models = session_models(&scenario);
+    let review = models
+        .iter()
+        .find(|(name, _)| name.ends_with("-security-review.models.json"))
+        .map(|(_, record)| record.clone())
+        .unwrap();
+    // Its Model and Effort are [harness.claude]'s, not the command's words.
+    assert_eq!(review["harness"], "claude");
+    assert_eq!(review["requested"], "claude-opus-5-5");
+    assert_eq!(review["effort"], serde_json::Value::Null);
+}
+
+#[test]
+fn a_base_fix_runs_its_security_review_on_the_security_harness() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(CODEX_WITH_A_CLAUDE_SECURITY_HARNESS);
+    scenario.agent_does_for(
+        7,
+        &reviewed_on_any_harness(&format!(
+            r#"{OPENS_PR}
+gh fake checks "$(git rev-parse HEAD)" '[{{"name":"test","conclusion":"failure"}}]'
+gh fake checks "$(git rev-parse origin/main)" '[{{"name":"test","conclusion":"failure"}}]'
+"#
+        )),
+    );
+    scenario.agent_does_for(
+        8,
+        &reviewed_on_any_harness(
+            r#"
+echo fixed > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m 'Fix base CI'
+gh pr create --base main --head issue-8 --title 'Fix base CI' --body 'Closes #8'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]'
+"#,
+        ),
+    );
+    let result = scenario.run(&[&scenario.issue_url(7), "security-review", "base-fix"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let codex: Vec<_> = scenario
+        .codex_calls()
+        .iter()
+        .map(|call| call["prompt"].as_str().unwrap().to_string())
+        .collect();
+    assert!(codex.iter().all(|prompt| !prompt.contains("guidance mode")));
+    let reviews = claude_session_prompts(&scenario);
+    assert_eq!(reviews.len(), 2, "{reviews:?}");
+    assert!(
+        reviews[1].contains("branch issue-8 against Base branch main"),
+        "{}",
+        reviews[1]
+    );
+    let claude: Vec<_> = scenario
+        .claude_calls()
+        .iter()
+        .map(argv)
+        .filter(|args| args.iter().any(|arg| arg == "--output-format"))
+        .collect();
+    for args in &claude {
+        assert!(
+            args.windows(2)
+                .any(|pair| pair == ["--model", "claude-opus-5-5"]),
+            "{args:?}"
+        );
+        assert!(
+            args.windows(2).any(|pair| pair == ["--effort", "high"]),
+            "{args:?}"
+        );
+    }
+    assert_eq!(scenario.gh_state()["prs"][1]["state"], "MERGED");
+}
+
+#[test]
+fn a_security_harness_that_cannot_run_fails_the_run_before_any_work() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(CODEX_WITH_A_CLAUDE_SECURITY_HARNESS);
+    scenario.agent_does_for(7, OPENS_PR);
+    // Claude refuses the test call on its Model.
+    scenario.agent_does("echo \"There's an issue with the selected model.\"\nexit 1\n");
+    let result = scenario.run(&[&scenario.issue_url(7), "security-review"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("the Security review's Harness claude, chosen by security.harness in the User config, can't run"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.codex_calls().is_empty());
+    assert!(claude_session_prompts(&scenario).is_empty());
+    assert!(scenario.issue_labels(7).is_empty(), "the Claim was made");
+
+    // With no Security review asked, the security Harness is not checked.
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+}
+
+#[test]
+fn a_continuation_from_the_recovery_command_runs_its_security_review_on_the_security_harness_again()
+{
+    let scenario = Scenario::new();
+    scenario.user_config_is(CODEX_WITH_A_CLAUDE_SECURITY_HARNESS);
+    // Each Harness counts its own sessions: the first on each is the first
+    // Run's, the second the Continuation's.
+    scenario.agent_does_for_in_session(
+        7,
+        1,
+        &format!(
+            r#"
+if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'guidance mode'; then
+{review}
+else
+{OPENS_PR}
+fi
+"#,
+            review = review_script(&json!([]), &["Cross-tenant read"])
+        ),
+    );
+    scenario.agent_does_for_in_session(7, 2, &reviewed_on_any_harness("true"));
+    let first = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+    assert_eq!(first.code, Some(1), "{}", first.stderr);
+    let recovery = first
+        .stderr
+        .lines()
+        .find_map(|line| line.strip_prefix("thirdshift: Recovery: thirdshift "))
+        .unwrap_or_else(|| panic!("no Recovery command: {}", first.stderr))
+        .to_string();
+    // It names the Command's Harness, which must not move the review.
+    assert!(recovery.ends_with(" harness codex"), "{recovery}");
+    let words: Vec<&str> = recovery.split_whitespace().collect();
+
+    let second = scenario.run(&words);
+
+    assert_eq!(second.code, Some(0), "{recovery}: {}", second.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+    let codex = scenario.codex_calls();
+    assert_eq!(codex.len(), 2, "{codex:?}");
+    for call in &codex {
+        assert!(!call["prompt"].as_str().unwrap().contains("guidance mode"));
+    }
+    let reviews = claude_session_prompts(&scenario);
+    assert_eq!(reviews.len(), 2, "{reviews:?}");
+    assert!(
+        reviews
+            .iter()
+            .all(|prompt| prompt.contains("guidance mode"))
+    );
 }

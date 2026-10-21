@@ -283,8 +283,12 @@ fn spec_url(scenario: &Scenario) -> String {
 /// The issue number each agent session was for, the first Issue URL its
 /// prompt names, in order.
 fn sessions_by_issue(scenario: &Scenario) -> Vec<String> {
-    scenario
-        .claude_calls()
+    issues_of(&scenario.claude_calls())
+}
+
+/// The issue each of `calls` was for, the first Issue URL its prompt names.
+fn issues_of(calls: &[serde_json::Value]) -> Vec<String> {
+    calls
         .iter()
         .map(|call| {
             let prompt = call["prompt"].as_str().unwrap();
@@ -3367,4 +3371,76 @@ fn spec_notification_reports_a_tickets_locally_retained_work() {
         "Before retrying: inspect and publish the retained work",
     );
     assert_contains(text, "reconcile with origin without forcing");
+}
+
+/// The issue number each Codex session was for, as [`sessions_by_issue`]
+/// gives Claude Code's.
+fn codex_sessions_by_issue(scenario: &Scenario) -> Vec<String> {
+    issues_of(&scenario.codex_calls())
+}
+
+#[test]
+fn a_spec_runs_security_review_runs_on_the_security_harness_and_its_tickets_on_the_commands() {
+    let scenario = linear_spec();
+    scenario.user_config_is(
+        r#"
+[harness]
+default = "codex"
+
+[harness.claude]
+model = "claude-opus-5-5"
+effort = "high"
+
+[security]
+harness = "claude"
+review = true
+"#,
+    );
+    // The Spec's first session on each Harness: the Spec review on Codex,
+    // the Security review on Claude Code.
+    scenario.agent_does_for_in_session(
+        SPEC,
+        1,
+        &format!(
+            r#"
+if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'guidance mode'; then
+{review}
+fi
+"#,
+            review = security_review_script(&[])
+        ),
+    );
+
+    let result = scenario.run(&[&spec_url(&scenario), "merge"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(codex_sessions_by_issue(&scenario), ["21", "22", "20"]);
+    let calls: Vec<_> = scenario
+        .claude_calls()
+        .into_iter()
+        .filter(|call| {
+            call["prompt"]
+                .as_str()
+                .is_some_and(|p| p.contains("/issues/"))
+        })
+        .collect();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert_contains(calls[0]["prompt"].as_str().unwrap(), "guidance mode");
+    assert_eq!(calls[0]["branch"], "issue-20");
+    let args: Vec<_> = calls[0]["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arg| arg.as_str().unwrap())
+        .collect();
+    assert!(
+        args.windows(2)
+            .any(|pair| pair == ["--model", "claude-opus-5-5"]),
+        "{args:?}"
+    );
+    assert!(
+        args.windows(2).any(|pair| pair == ["--effort", "high"]),
+        "{args:?}"
+    );
+    assert_eq!(spec_pr(&scenario)["state"], "MERGED");
 }

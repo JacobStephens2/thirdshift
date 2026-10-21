@@ -133,6 +133,7 @@ pub fn run(
         harness,
         flags,
         config,
+        security_review_harness: None,
     };
     run_through(
         &mut outside,
@@ -192,7 +193,7 @@ fn run_through<R>(
         "taking Ready issue #{} \"{}\", as thirdshift {} would",
         listed.issue.number, listed.title, listed.issue.url
     ));
-    outside.check_harness()?;
+    outside.check_harness(true)?;
     outside.started(Work::PickupRun(&listed));
     let ended = outside.dispatch(Dispatch::ReadyIssue {
         issue: &listed.issue,

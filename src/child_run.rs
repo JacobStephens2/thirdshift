@@ -121,6 +121,18 @@ const SESSIONS_MODEL: &str = "--sessions-model";
 /// on. Without it, the Effort is left to the Harness.
 const SESSIONS_EFFORT: &str = "--sessions-effort";
 
+/// The hidden argument followed by the Harness the child Run's Security
+/// review runs on, when it is not [`SESSIONS_HARNESS`]'s.
+const SECURITY_REVIEW_HARNESS: &str = "--security-review-harness";
+
+/// The hidden argument followed by the Model the child Run's Security
+/// review runs on, given only with [`SECURITY_REVIEW_HARNESS`].
+const SECURITY_REVIEW_MODEL: &str = "--security-review-model";
+
+/// The hidden argument followed by the Effort the child Run's Security
+/// review runs on, given only with [`SECURITY_REVIEW_HARNESS`].
+const SECURITY_REVIEW_EFFORT: &str = "--security-review-effort";
+
 impl Given {
     /// The hidden arguments that give a child Run this, as [`Reader`] reads
     /// them back.
@@ -152,6 +164,15 @@ impl Given {
         if let Some(effort) = &harness.effort {
             args.extend([SESSIONS_EFFORT, effort]);
         }
+        if let Some(security) = &self.asks.security_review_harness {
+            args.extend([SECURITY_REVIEW_HARNESS, security.harness.name()]);
+            if let Some(model) = &security.model {
+                args.extend([SECURITY_REVIEW_MODEL, model]);
+            }
+            if let Some(effort) = &security.effort {
+                args.extend([SECURITY_REVIEW_EFFORT, effort]);
+            }
+        }
         args
     }
 }
@@ -170,6 +191,9 @@ pub struct Reader {
     harness: Option<Harness>,
     model: Option<String>,
     effort: Option<String>,
+    security_review_harness: Option<Harness>,
+    security_review_model: Option<String>,
+    security_review_effort: Option<String>,
 }
 
 impl Reader {
@@ -233,12 +257,25 @@ impl Reader {
                     }
                 });
             }
-            SESSIONS_HARNESS => {
-                not_yet_given(&self.harness, arg)?;
+            SESSIONS_HARNESS | SECURITY_REVIEW_HARNESS => {
+                let given = if arg == SESSIONS_HARNESS {
+                    &mut self.harness
+                } else {
+                    &mut self.security_review_harness
+                };
+                not_yet_given(given, arg)?;
                 let name = value("Harness")?;
                 let harness = Harness::named(&name)
                     .with_context(|| format!("{arg} must be followed by a Harness, not {name}"))?;
-                self.harness = Some(harness);
+                *given = Some(harness);
+            }
+            SECURITY_REVIEW_MODEL => {
+                not_yet_given(&self.security_review_model, arg)?;
+                self.security_review_model = Some(value("Model")?);
+            }
+            SECURITY_REVIEW_EFFORT => {
+                not_yet_given(&self.security_review_effort, arg)?;
+                self.security_review_effort = Some(value("Effort")?);
             }
             SESSIONS_MODEL => {
                 not_yet_given(&self.model, arg)?;
@@ -266,14 +303,34 @@ impl Reader {
                 || self.harness.is_some()
                 || self.model.is_some()
                 || self.effort.is_some()
+                || self.security_review_harness.is_some()
+                || self.security_review_model.is_some()
+                || self.security_review_effort.is_some()
             {
                 bail!(
                     "only a child Run is given {STAMP}, {ALLOW_BASE_FIX}, {OFFER_BASE_FIX}, \
-                     {SESSIONS_HARNESS}, {SESSIONS_MODEL}, {SESSIONS_EFFORT} or {LOGS_COMMAND}"
+                     {SESSIONS_HARNESS}, {SESSIONS_MODEL}, {SESSIONS_EFFORT}, \
+                     {SECURITY_REVIEW_HARNESS}, {SECURITY_REVIEW_MODEL}, \
+                     {SECURITY_REVIEW_EFFORT} or {LOGS_COMMAND}"
                 );
             }
             return Ok(None);
         };
+        if self.security_review_harness.is_none()
+            && (self.security_review_model.is_some() || self.security_review_effort.is_some())
+        {
+            bail!(
+                "{SECURITY_REVIEW_MODEL} and {SECURITY_REVIEW_EFFORT} need {SECURITY_REVIEW_HARNESS}"
+            );
+        }
+        let security_review_harness = self.security_review_harness.map(|harness| Choice {
+            harness,
+            model: self.security_review_model,
+            effort: self.security_review_effort,
+            // Chosen by the User config of the command that started it,
+            // whose checks it passed.
+            chosen_by: ChosenBy::SecurityConfig,
+        });
         let stamp = self.stamp.with_context(|| format!("missing {STAMP}"))?;
         let harness = self
             .harness
@@ -294,6 +351,7 @@ impl Reader {
                     // passed.
                     chosen_by: ChosenBy::Command,
                 },
+                security_review_harness,
                 security_fix: self.security_fix,
                 security_review: self.security_review,
             },
@@ -795,11 +853,23 @@ mod tests {
             effort: Some("max".to_string()),
             ..on_claude.clone()
         };
+        let reviewed_on_codex = Choice {
+            harness: Harness::Codex,
+            model: Some("gpt-6.1-sol".to_string()),
+            effort: Some("max".to_string()),
+            chosen_by: ChosenBy::SecurityConfig,
+        };
+        let reviewed_on_claude = Choice {
+            chosen_by: ChosenBy::SecurityConfig,
+            ..Choice::default()
+        };
         let harnesses = [on_claude, on_opus];
+        let reviews = [None, Some(reviewed_on_codex), Some(reviewed_on_claude)];
         let securities = [(false, false), (true, false), (false, true), (true, true)];
-        for (kind, harness) in [ticket(), base_fix()]
+        for ((kind, harness), security_review_harness) in [ticket(), base_fix()]
             .into_iter()
             .zip(harnesses.iter().cycle())
+            .flat_map(|kind| reviews.clone().map(|review| (kind.clone(), review)))
         {
             for (base_fix, (security_fix, security_review)) in
                 [BaseFixAsk::Allow, BaseFixAsk::Forbid, offer.clone()]
@@ -813,6 +883,7 @@ mod tests {
                     base_fix,
                     asks: ChildAsks {
                         harness: harness.clone(),
+                        security_review_harness: security_review_harness.clone(),
                         security_fix,
                         security_review,
                     },
@@ -839,7 +910,9 @@ mod tests {
     /// What a Run given a hidden argument only a child Run is given, without
     /// a kind, is rejected with.
     const ONLY_A_CHILD_RUN: &str = "only a child Run is given --stamp, --allow-base-fix, \
-        --offer-base-fix, --sessions-harness, --sessions-model, --sessions-effort or --logs-command";
+        --offer-base-fix, --sessions-harness, --sessions-model, --sessions-effort, \
+        --security-review-harness, --security-review-model, --security-review-effort or \
+        --logs-command";
 
     #[test]
     fn hidden_arguments_that_are_repeated_have_no_value_or_lack_a_kind_or_stamp_are_rejected() {
@@ -905,6 +978,37 @@ mod tests {
                 "repeated argument: --sessions-model",
             ),
             (vec![&[URL, "--sessions-effort", "max"]], ONLY_A_CHILD_RUN),
+            (
+                vec![&[URL, "--security-review-harness", "claude"]],
+                ONLY_A_CHILD_RUN,
+            ),
+            (
+                vec![
+                    &ticket,
+                    &stamp,
+                    &[
+                        "--sessions-harness",
+                        "codex",
+                        "--security-review-model",
+                        "opus",
+                    ],
+                ],
+                "--security-review-model and --security-review-effort need \
+                 --security-review-harness",
+            ),
+            (
+                vec![
+                    &ticket,
+                    &stamp,
+                    &[
+                        "--security-review-harness",
+                        "claude",
+                        "--security-review-harness",
+                        "claude",
+                    ],
+                ],
+                "repeated argument: --security-review-harness",
+            ),
             (vec![&["--base-fix-into", "main", URL]], "missing --stamp"),
             (vec![&stamp, &[URL]], ONLY_A_CHILD_RUN),
             (vec![&[URL, "--allow-base-fix"]], ONLY_A_CHILD_RUN),

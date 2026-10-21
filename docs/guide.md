@@ -400,7 +400,7 @@ wait_minutes = 60   # minutes since the latest shaping event before an issue is 
 
 [security]
 review = true   # review each Run's change for Security findings
-harness = "claude"   # the Harness for Security runs; blank or missing follows harness.default
+harness = "claude"   # the Harness for Security runs and Security reviews; blank or missing follows the Command's
 
 [harness]
 default = "claude"   # the Harness every session runs on; claude unless set
@@ -483,7 +483,7 @@ effort = ""   # the Model's variant, passed as #effort; default blank, for OpenC
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
 review = false   # Runs review their change for Security findings; default false
-harness = ""   # the Harness a Security run uses unless its command names one; default blank; blank or missing uses harness.default, or Claude Code if harness.default is missing
+harness = ""   # the Harness for Security runs, unless the command names one, and for every Security review; default blank; blank or missing leaves Security runs on harness.default, or Claude Code if that is missing, and Security reviews on their Command's Harness
 ```
 
 Every key holds its real value, so a Run reading it does exactly what it does with no file. `email.to` has no default, so `setup` suggests one: the public email of your GitHub profile (from `gh api user`), else your global git `user.email`, unless that is a `@users.noreply.github.com` address, which can't receive mail. With neither, `email.to` is the only line written commented out, as above. `setup` never asks `gh` for more scopes, so a private GitHub email is not read, and a Run never looks the suggestion up: `--email` with no address and no `email.to` still stops the Run. From a terminal (stdin and stderr both terminals), `setup` first asks, on stderr:
@@ -529,7 +529,7 @@ A Run reads the file before any work. One that isn't valid TOML, or that has a k
 
 The available Harnesses are Claude Code (`claude`), Codex (`codex`), Antigravity CLI (`agy`), Grok Build (`grok`), Muse Code (`muse`) and OpenCode (`opencode`).
 
-Every session of a command, its implement session, each Repair and Resume, a Spec review, an Architecture review, each Ticket's Run and a Base fix, runs on one **Harness**, with one **Model** and one **Effort**. `harness <name>`, `model <name>` and `effort <level>` (or `--harness`, `--model` and `--effort`) choose them for one command, before or after the Issue URL, and on `architect` (but not with `--plan-only`) and `pickup` too:
+Every session of a command, its implement session, each Repair and Resume, a Spec review, an Architecture review, each Ticket's Run and a Base fix, runs on one **Harness**, with one **Model** and one **Effort**. The one exception is a [Security review](#security-review): with `security.harness` set in the User config, it runs on that Harness ([ADR-0021](adr/0021-a-command-may-run-its-security-review-on-another-harness.md)). `harness <name>`, `model <name>` and `effort <level>` (or `--harness`, `--model` and `--effort`) choose them for one command, before or after the Issue URL, and on `architect` (but not with `--plan-only`) and `pickup` too:
 
 ```sh
 thirdshift https://github.com/<owner>/<repo>/issues/<n> model claude-opus-5-5 effort high
@@ -1019,6 +1019,8 @@ A finding's title becomes the advisory summary. Its description preserves its wr
 ### Security review
 
 `security-review`, or `review = true` under `[security]`, enables one guidance review after a Run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. A Spec run reviews the whole Spec branch against its Base branch once; its Tickets' Runs get none. `no-security-review` overrides the setting. Both words, with or without dashes, are accepted on commands that start Runs and follow dispatched Runs and Base fixes. Setup asks about the setting; it is off by default.
+
+The review runs on `[security] harness` when that is set, with that Harness's own `[harness.<name>]` Model and Effort, wherever it runs: in a Run, on a Spec run's Spec PR or in a Base fix. The command's `harness`, `model` and `effort` words choose the Harness of every other session, and don't change the review's; there is no word for the review's Harness. With `security.harness` blank or missing, the review runs on the Command's Harness. Every other session, Repairs and Resumes after the review included, stays on the Command's Harness. A command that will run its review on another Harness checks that Harness, Model and Effort before any work too, as for its own, and fails naming `security.harness` if it can't run. A Pass checks it only if it may dispatch a Run: a Security run that only audits, or `architect --plan-only`, does not. The review's Session log and `.models.json`, its `security-review: on <harness> · <model> · <effort>, chosen by security.harness in the User config` line in the Command log, and the Run notification's session models name the Harness it ran on; the `Built with` line names the Command's. A Continuation started by the printed Recovery command reads `security.harness` again, so its review runs where the first did.
 
 The session reads the relevant attack-class guidance and supporting code without delegated auditors or the full audit workflow. It fixes only findings reproduced by a failing proof-of-concept test, keeps that test and commits the fix. Unaddressed introduced findings appear under Security in the PR's Unaddressed findings. A Merge run, including a Spec run asked to merge its Spec PR, leaves the PR ready for review and fails with the findings named if any remain, or if the review was refused or incomplete. A Run or Spec run not asked to merge records the outcome and continues. An old finding, whose proof-of-concept also fails at the pinned merge base, is reported in a private file under the repository's logs (`security-reviews/`). thirdshift records it as a draft advisory, or a `security-finding`/`needs-triage` issue on a private repository, reusing existing fingerprints and preserving the Day shift's grades. New records include scored reproduction and fix-size metadata so a later Security run can take the fix when allowed. Its details stay out of the PR and it does not hold Self-merge; fixing belongs to a separate Security run. The separate Security audit retains its full audit workflow.
 

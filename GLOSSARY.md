@@ -31,7 +31,7 @@ The message thirdshift starts or resumes an agent session with. It carries the *
 _Avoid_: instructions, system prompt
 
 **Harness**:
-The headless agent CLI that runs every agent session of a **Command**, named as its CLI is: Claude Code (`claude`), Codex (`codex`), Antigravity CLI (`agy`), Grok Build (`grok`), Muse Code (`muse`) or OpenCode (`opencode`). One per Command, its child Runs and every **Resume** and **Repair** included. Chosen by the command, else, for a **Security run**, the User config's `security.harness`, else the **User config**'s default Harness, else Claude Code.
+The headless agent CLI that runs every agent session of a **Command**, named as its CLI is: Claude Code (`claude`), Codex (`codex`), Antigravity CLI (`agy`), Grok Build (`grok`), Muse Code (`muse`) or OpenCode (`opencode`). One per Command, its child Runs and every **Resume** and **Repair** included, except the **Security review**, which runs on the User config's `security.harness` when that is set. Chosen by the command, else, for a **Security run**, the User config's `security.harness`, else the **User config**'s default Harness, else Claude Code.
 _Avoid_: agent, provider, backend
 
 **Model**:
@@ -151,7 +151,7 @@ An open **Ticket** in its **Spec**'s repository, with no sub-issues of its own, 
 The agent session a **Spec run** starts once every **Ticket** is done: it reviews the whole **Spec branch** against the **Base branch** and the **Spec**, fixes what it agrees with, and writes the **Spec PR**'s description, listing the rest as **Unaddressed findings**.
 
 **Security review**:
-When a flag or the **User config** asks for one, the agent session a **Run** starts after its opening session, or a **Spec run** starts on its **Spec PR** after the **Spec review**: it reviews the branch's change against the **Base branch** for vulnerabilities, and fixes each **Security finding** it can show with a failing test. A **Ticket**'s Run gets none. A **Base fix** gets one when its Command asked for one, whichever Run started it, a Ticket's Run included. A Security review that a model refused, or that ended early, holds a **Self-merge** as an unaddressed Security finding does.
+When a flag or the **User config** asks for one, the agent session a **Run** starts after its opening session, or a **Spec run** starts on its **Spec PR** after the **Spec review**: it reviews the branch's change against the **Base branch** for vulnerabilities, and fixes each **Security finding** it can show with a failing test. A **Ticket**'s Run gets none. A **Base fix** gets one when its Command asked for one, whichever Run started it, a Ticket's Run included. It runs on the User config's `security.harness` when that is set, whatever **Harness** the Command chose, and on the Command's Harness otherwise. A Security review that a model refused, or that ended early, holds a **Self-merge** as an unaddressed Security finding does.
 _Avoid_: security axis, security audit (a **Security audit** covers the whole Base branch)
 
 **Failed spec run**:
