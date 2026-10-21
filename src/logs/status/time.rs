@@ -124,7 +124,7 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
     Run {
         subject: record.issue.as_ref().map_or_else(
             || format!("{} on {}", record.kind, record.repository),
-            |issue| format!("{}#{}", record.repository, issue.number),
+            |issue| format!("{} · {}#{}", record.kind, record.repository, issue.number),
         ),
         title: record
             .issue
@@ -169,7 +169,9 @@ pub(crate) fn load(config: &UserConfig, hours: f64) -> Result<Views> {
                 runs.push(Run {
                     subject: command.issue.as_ref().map_or_else(
                         || format!("{} on {}", command.kind, command.repository),
-                        |issue| format!("{}#{}", command.repository, issue.number),
+                        |issue| {
+                            format!("{} · {}#{}", command.kind, command.repository, issue.number)
+                        },
                     ),
                     title: String::new(),
                     state: command

@@ -442,6 +442,52 @@ fn waterfall_nests_ticket_runs_and_matches_codex_items_once_in_their_scope() {
 }
 
 #[test]
+fn time_pages_name_the_command_kind_without_repeating_it_for_commands_without_issues() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut pickup = record(home.path(), 7, Some("merged"), 0);
+    pickup["kind"] = json!("Pickup run");
+    pickup["name"] = json!("pickup-fixture");
+    pickup["stages"][0]["name"] = json!("dispatched Run");
+    let mut dispatched = pickup.clone();
+    dispatched["kind"] = json!("Run");
+    dispatched["name"] = json!("acme/widgets#7");
+    dispatched["stages"][0]["name"] = json!("implement");
+    pickup["dispatched"] = json!([dispatched]);
+    write_record(home.path(), 7, &pickup);
+    let mut security = record(home.path(), 8, Some("findings recorded"), 0);
+    security["kind"] = json!("Security run");
+    security["issue"] = Value::Null;
+    write_record(home.path(), 8, &security);
+    let now = chrono::Local::now();
+    let time = now.format("%Y-%m-%d %H:%M:%S");
+    let stamp = now.format("%Y%m%dT%H%M%S%z");
+    fs::write(
+        home.path().join(".thirdshift/logs/acme/widgets/activity.log"),
+        format!(
+            "{time} Spec run #9 started: commands/issue/9-{stamp}.log\n{time} Spec run #9 ended: merged\n"
+        ),
+    )
+    .unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for page in ["/lanes", "/stages"] {
+        let html = console.get(page).text().unwrap();
+        for heading in [
+            "Pickup run · acme/widgets#7",
+            "Run · acme/widgets#7",
+            "Security run on acme/widgets",
+            "Spec run · acme/widgets#9",
+        ] {
+            assert!(html.contains(&format!(">{heading}</a>")), "{page}: {html}");
+            if page == "/stages" {
+                assert!(html.contains(&format!("class=\"cell-run\">{heading}: </span>")));
+            }
+        }
+        assert!(!html.contains("Security run · Security run"));
+    }
+}
+
+#[test]
 fn time_pages_pair_with_all_status_stages_and_repository_usual_ranges() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
