@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
   # `labeled` lets the `test:macos` label start the full macOS suite on a
-  # PR's current head. Any label starts a whole new run, which replaces the
-  # older one under the concurrency group below.
+  # PR's current head. Any label starts a whole new run, which cancels an
+  # older one still running under the concurrency group below.
   pull_request:
     types: [opened, synchronize, reopened, labeled]
   # Nightly, on main: the full macOS suite catches what the PR gate's
@@ -115,9 +115,12 @@ jobs:
         run: |
           rustup toolchain install
           rustc --version
+      # Restore what the full suite saved on main; a gate's narrower build
+      # saved under the same key would leave a labelled PR's shards without it.
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: test-macos
+          save-if: false
       - run: cargo clippy --all-targets -- -D warnings
       - uses: taiki-e/install-action@nextest
       - run: cargo nextest run --profile macos-gate

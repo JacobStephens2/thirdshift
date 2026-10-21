@@ -43,7 +43,7 @@ full macOS suite off pull requests. A `macos-plan` job in CI decides, per event:
 | `workflow_dispatch` | Full 4-shard suite on the chosen ref | every shard passed |
 | PR into `main` | One gate job | the gate passed |
 | PR into `main` labelled `test:macos` | Full 4-shard suite, no gate | every shard passed |
-| PR into any other base (Spec branch, Base fix base, anything else) | None | both were skipped |
+| PR into any other base (a Spec branch, including a Base fix into one, or anything else) | None | both were skipped |
 
 A failed or cancelled job, or a skipped one the event requires, fails
 `test-macos`. The Linux checks `test`, `site-test` and `console-test` run on
@@ -58,9 +58,14 @@ code adds its tests there.
 
 Adding `test:macos` to an open PR into `main` starts the full suite on its
 current head: CI also runs on the `labeled` activity type. Any label starts a
-whole new run, Linux included, and the concurrency group cancels the older run,
-so no older result stands for the head. A label stays on a PR, so its later
-pushes run the full suite too.
+whole new run, Linux included, and the concurrency group cancels an older run
+still in progress. A label stays on a PR, so its later pushes run the full
+suite too.
+
+Label a PR after its CI run has finished. The cancelled run's unfinished jobs
+stay on the same head as `cancelled` check runs, beside the new run's, and the
+factory's CI watch reads a cancelled check as failed. On #925, labelling during
+a run left its cancelled `test` there.
 
 **Why.** The research in [macos-ci-speed.md](research/macos-ci-speed.md) found
 the macOS queue comes from this repository's own load on GitHub's 5-job macOS
