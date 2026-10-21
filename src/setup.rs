@@ -778,7 +778,7 @@ mod tests {
 
     #[test]
     fn console_answers_are_written_with_comments_and_install_is_offered() {
-        let mut answers = ENTER_THROUGHOUT[..5].to_vec();
+        let mut answers = ENTER_THROUGHOUT[..6].to_vec();
         answers.extend([
             ("Run the Console?", "y"),
             ("Console's whole address", "https://thirdshift.example.com"),
@@ -1490,7 +1490,7 @@ always = false # quiet, please
         setup(&mut outside).unwrap();
 
         let text = outside.user_config.clone().unwrap();
-        assert!(text.contains("fix = true # mine\n"), "{text}");
+        assert!(text.contains("fix = true  # mine\n"), "{text}");
         assert!(
             outside
                 .prompts()
