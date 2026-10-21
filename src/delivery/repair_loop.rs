@@ -92,6 +92,9 @@ pub(super) trait Outside {
     /// go round again.
     fn base_fix(&mut self, base_commit: &str, failed: &FailedChecks) -> Result<()>;
 
+    /// Whether GitHub reports the open, ready pull request mergeable with the
+    /// Base branch. Mergeability it has not worked out in time is not.
+    fn pr_mergeable(&mut self) -> Result<bool>;
     /// Fail unless the pull request is open, ready for review and mergeable.
     fn ensure_pr_ready_and_mergeable(&mut self) -> Result<()>;
     /// Merge the pull request at `head`.
@@ -162,7 +165,9 @@ const MAX_REPAIRS: usize = 5;
 /// CI ran or since a merge was tried, or, in a Merge run, because Foreign
 /// commits arrived, whether or not the merge that follows needs a Repair. A
 /// clean merge of the Base branch uses no Repair, so without this a busy Base
-/// branch could keep a Delivery going forever.
+/// branch could keep a Delivery going forever. A Base branch that moved while
+/// green or absent CI ran is not counted for a Delivery left ready for review
+/// whose pull request still merges cleanly, since that Delivery stops there.
 const MAX_UPSTREAM_MOVES: usize = 5;
 
 /// What a Delivery has spent of its Repair and upstream-move budgets,
@@ -288,6 +293,13 @@ impl<O: Outside> RepairLoop<'_, O> {
         self.outside.repair(kind, repair)
     }
 
+    /// Whether GitHub reports the pull request mergeable, read in the
+    /// readiness stage.
+    fn pr_merges_cleanly(&mut self) -> Result<bool> {
+        self.outside.stage(Stage::PullRequestReadiness);
+        self.outside.pr_mergeable()
+    }
+
     /// Count a round taken because the Base branch moved `when`.
     fn count_base_move(&mut self, when: &str) -> Result<()> {
         let line = self.budgets.count_base_move(self.base, when)?;
@@ -299,8 +311,11 @@ impl<O: Outside> RepairLoop<'_, O> {
     /// Base branch (never rebase), push, and watch CI on the head commit,
     /// starting a Repair session for a conflict or red
     /// CI and then going round again, since the Base branch may have moved
-    /// meanwhile. Green or absent CI also goes round again if the Base branch
-    /// moved while CI ran, or, in a Merge run, if Foreign commits arrived.
+    /// meanwhile. Green or absent CI also goes round again, in a Merge run, if
+    /// the Base branch moved while CI ran or Foreign commits arrived. Left
+    /// ready for review, it returns that head without counting the move if
+    /// GitHub reports the pull request mergeable, and otherwise goes round
+    /// again.
     /// A red check that also fails on the Base branch commit the head last
     /// merged in is an Inherited failure, which no Repair is started for: the
     /// CI-fix Repair is given the branch's own failures, and when there are
@@ -348,6 +363,20 @@ impl<O: Outside> RepairLoop<'_, O> {
             match ci {
                 Ci::Absent | Ci::Passed => {
                     if self.outside.base_branch_moved()? {
+                        // Green CI on a head that merges cleanly is enough
+                        // for review; only a Self-merge needs the moved Base
+                        // branch merged in and watched.
+                        if self.goal == Goal::ReadyForReview {
+                            if self.pr_merges_cleanly()? {
+                                self.outside.progress(format!(
+                                    "origin/{base} moved while CI ran; leaving the PR for \
+                                     review on {}, which merges cleanly",
+                                    ci::short(&head)
+                                ));
+                                return Ok(head);
+                            }
+                            self.outside.stage(Stage::RepairLoopRound);
+                        }
                         self.count_base_move("while CI ran")?;
                     } else if self.goal == Goal::ReadyForReview
                         || self.outside.new_commits_on_origin()?.commits().is_empty()
@@ -463,6 +492,8 @@ mod tests {
         /// Took the Base fix for these Inherited failures, at this Base
         /// branch commit.
         BaseFix(String, Vec<String>),
+        /// Read whether GitHub reports the PR mergeable.
+        ReadMergeable,
         /// Checked the PR is open, ready and mergeable.
         CheckPr,
         /// Merged the PR at this head.
@@ -519,8 +550,8 @@ mod tests {
 
     /// What the outside world answers, call by call. A head or Base branch
     /// commit stays the last one given; a merge is clean, the Base branch
-    /// unmoved, origin without new commits and a Base fix returns, unless
-    /// scripted otherwise.
+    /// unmoved, the PR mergeable, origin without new commits and a Base fix
+    /// returns, unless scripted otherwise.
     #[derive(Default)]
     struct Script {
         heads: VecDeque<&'static str>,
@@ -532,6 +563,9 @@ mod tests {
         tree_matches: VecDeque<Result<bool, &'static str>>,
         merge_completion_error: Option<&'static str>,
         base_moved: VecDeque<bool>,
+        /// For each read of the PR's mergeability, whether GitHub reports it
+        /// mergeable.
+        mergeable: VecDeque<bool>,
         new_commits: VecDeque<ForeignCommits>,
         watches: VecDeque<Is>,
         reruns: VecDeque<Option<Is>>,
@@ -707,6 +741,11 @@ mod tests {
                 Some(cause) => Err(anyhow!(cause)),
                 None => Ok(()),
             }
+        }
+
+        fn pr_mergeable(&mut self) -> Result<bool> {
+            self.did.push(Did::ReadMergeable);
+            Ok(self.script.mergeable.pop_front().unwrap_or(true))
         }
 
         fn ensure_pr_ready_and_mergeable(&mut self) -> Result<()> {
@@ -1045,6 +1084,8 @@ mod tests {
                 heads: script(["h1"]),
                 base_commits: script(["b1", "b2", "b3"]),
                 base_moved: script([true]),
+                // The PR conflicts with the moved Base branch.
+                mergeable: script([false]),
                 watches: script([Is::Failed(&["test"], &[]), Is::Failed(&["test"], &[])]),
                 reruns: script([Some(Is::Passed)]),
                 ..Script::default()
@@ -1075,6 +1116,8 @@ mod tests {
                 heads: script(["h1", "h1", "h2", "h1"]),
                 base_commits: script(["b1", "b2", "b3", "b4"]),
                 base_moved: script([true, false]),
+                // The PR conflicts with the moved Base branch.
+                mergeable: script([false]),
                 watches: script([
                     Is::Failed(&["test"], &[]),
                     Is::Failed(&[], &["lint"]),
@@ -1112,6 +1155,8 @@ mod tests {
                 heads: script([first, first, second, second]),
                 base_commits: script(["b1", "b2", "b3", "b4"]),
                 base_moved: script([true, false]),
+                // The PR conflicts with the moved Base branch.
+                mergeable: script([false]),
                 watches: script([Is::Failed(&["test"], &[]), Is::Failed(&["lint"], &[])]),
                 reruns: script([Some(Is::Passed), Some(Is::Passed)]),
                 ..Script::default()
@@ -1172,6 +1217,8 @@ mod tests {
                 heads: script(["h1"]),
                 base_commits: script(["b1", "b2", "rewound-base", "b3"]),
                 base_moved: script([true, false]),
+                // The PR conflicts with the moved Base branch.
+                mergeable: script([false]),
                 watches: script([
                     Is::Failed(&["test"], &[]),
                     Is::Failed(&[], &["lint"]),
@@ -1411,13 +1458,14 @@ mod tests {
     }
 
     #[test]
-    fn the_base_branch_moving_while_ci_ran_goes_round_again_as_a_base_move() {
+    fn in_a_merge_run_the_base_branch_moving_while_ci_ran_goes_round_again_as_a_base_move() {
         let (delivered, did) = deliver(
-            Goal::ReadyForReview,
+            Goal::Merged,
             Script {
                 heads: script(["h1", "h2"]),
                 base_moved: script([true]),
                 watches: script([Is::Passed, Is::Passed]),
+                merges: script([None]),
                 ..Script::default()
             },
         );
@@ -1428,6 +1476,72 @@ mod tests {
             [
                 &round("h1")[..],
                 &[line("origin/main moved while CI ran; merging it again")],
+                &round("h2"),
+                &merge("h2"),
+            ]
+            .concat()
+        );
+    }
+
+    #[test]
+    fn a_run_left_ready_for_review_ends_on_green_ci_when_the_moved_base_branch_merges_cleanly() {
+        for is in [Is::Passed, Is::Absent] {
+            let (delivered, did) = deliver(
+                Goal::ReadyForReview,
+                Script {
+                    heads: script(["h1234567890", "h2"]),
+                    base_moved: script([true]),
+                    watches: script([is]),
+                    ..Script::default()
+                },
+            );
+
+            delivered.unwrap();
+            assert_eq!(
+                did,
+                [
+                    &[Did::MergeBase, Did::Push, watch("h1234567890")][..],
+                    &[
+                        Did::ReadMergeable,
+                        line(
+                            "origin/main moved while CI ran; leaving the PR for review on \
+                             h123456, which merges cleanly"
+                        ),
+                        Did::CheckPr,
+                    ],
+                ]
+                .concat()
+            );
+        }
+    }
+
+    #[test]
+    fn a_run_left_ready_for_review_goes_round_again_as_a_base_move_if_the_pr_does_not_merge() {
+        let (delivered, did) = deliver(
+            Goal::ReadyForReview,
+            Script {
+                heads: script(["h1", "h2"]),
+                base_moved: script([true]),
+                base_conflicts: script([false, true]),
+                mergeable: script([false]),
+                watches: script([Is::Passed, Is::Passed]),
+                ..Script::default()
+            },
+        );
+
+        delivered.unwrap();
+        assert_eq!(
+            did,
+            [
+                &round("h1")[..],
+                &[
+                    Did::ReadMergeable,
+                    line("origin/main moved while CI ran; merging it again"),
+                    Did::MergeBase,
+                    line("conflict; starting Repair 1 of 5"),
+                    repair(1, Started::Conflict(Upstream::BaseBranch)),
+                    Did::CheckMerged("origin/main"),
+                ],
                 &round("h2"),
                 &[Did::CheckPr],
             ]
@@ -2118,6 +2232,34 @@ mod tests {
                 Stage::RepairLoopRound,
                 "could not fetch origin/main".to_string()
             )
+        );
+    }
+
+    #[test]
+    fn a_run_left_ready_for_review_reads_mergeability_in_readiness_and_counts_an_unmergeable_pr_in_a_round()
+     {
+        let (delivered, _, stages) = deliver_with_stages(
+            Goal::ReadyForReview,
+            Script {
+                heads: script(["h1"]),
+                base_moved: script([true; MAX_UPSTREAM_MOVES + 1]),
+                mergeable: script([false; MAX_UPSTREAM_MOVES + 1]),
+                watches: script((0..=MAX_UPSTREAM_MOVES).map(|_| Is::Passed)),
+                ..Script::default()
+            },
+        );
+
+        assert_eq!(
+            cause(delivered),
+            "origin/main kept moving: merged it again 5 times"
+        );
+        assert_eq!(
+            stages[stages.len() - 3..],
+            [
+                Stage::CiWatch,
+                Stage::PullRequestReadiness,
+                Stage::RepairLoopRound
+            ]
         );
     }
 
