@@ -12,8 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        variant: [spotlight-off, apple-git]
-        shard: [1, 2, 3, 4]
+        part: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
       - run: rustup toolchain install
@@ -22,18 +21,8 @@ jobs:
           shared-key: test-macos
           save-if: false
       - uses: taiki-e/install-action@nextest
-      - name: Spotlight off
-        if: matrix.variant == 'spotlight-off'
-        run: sudo mdutil -a -i off
-      - name: Apple git first on PATH
-        if: matrix.variant == 'apple-git'
-        run: |
-          mkdir -p "$HOME/apple-git"
-          ln -s "$(dirname "$(xcrun -f git)")"/git* "$HOME/apple-git/"
-          ls -l "$HOME/apple-git"
-          echo "$HOME/apple-git" >> "$GITHUB_PATH"
       - name: Build the tests
         run: cargo nextest run --no-run
       - run: git --version
-      - name: Shard
-        run: cargo nextest run --no-fail-fast --partition hash:${{ matrix.shard }}/4
+      - name: Programs, fsync and CPU under dtrace
+        run: python3 .github/profile/profile.py .github/profile/rest-${{ matrix.part }}.txt --dtrace
