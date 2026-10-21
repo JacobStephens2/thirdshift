@@ -2,7 +2,7 @@
 
 Research date: 2026-10-21 (America/New_York).
 
-**Question.** Q4.2 of the [#698 grilling](../../.scratch/grill-with-docs/698-evals/README.md) asks how a Replay is started: (a) a `thirdshift replay` command that records the bar, builds both Arms, prepares the Eval tasks, runs Trials and Graders, applies the bar and writes the result; or (b) promptfoo run by hand from a config kept in the repository, with thirdshift only reading the results. This note works out, for six candidates, what each provides natively for each settled requirement, what thirdshift would still write (in which language, roughly how much), and what keeping it running looks like. It builds on [eval-tools.md](eval-tools.md), [eval-tools-landscape.md](eval-tools-landscape.md), and the grilling's research results of 2026-10-18 and 2026-10-20 (promptfoo's egress audit, the Rust survey and the error-bars papers), and doesn't repeat them.
+**Question.** Q4.2 of the [#698 grilling](../../.scratch/grill-with-docs/done/698-evals/README.md) asks how a Replay is started: (a) a `thirdshift replay` command that records the bar, builds both Arms, prepares the Eval tasks, runs Trials and Graders, applies the bar and writes the result; or (b) promptfoo run by hand from a config kept in the repository, with thirdshift only reading the results. This note works out, for six candidates, what each provides natively for each settled requirement, what thirdshift would still write (in which language, roughly how much), and what keeping it running looks like. It builds on [eval-tools.md](eval-tools.md), [eval-tools-landscape.md](eval-tools-landscape.md), and the grilling's research results of 2026-10-18 and 2026-10-20 (promptfoo's egress audit, the Rust survey and the error-bars papers), and doesn't repeat them.
 
 The candidates:
 
@@ -423,7 +423,7 @@ Each estimate covers the draws, the quantiles, the three verdicts, pass^3, the m
 
 ## Sources
 
-- **thirdshift** at `dfadafa`: `src/session.rs`, `src/process.rs`, `src/interrupt.rs`, `src/harness/interpretation/stream.rs`, `src/main.rs`, `Cargo.lock`, `tests/fakes/`, [ADR 0016](../adr/0016-the-console-is-a-long-running-reader.md), [`replay.py`](second-opinion-replays/replay.py), and the [#698 grilling](../../.scratch/grill-with-docs/698-evals/README.md).
+- **thirdshift** at `dfadafa`: `src/session.rs`, `src/process.rs`, `src/interrupt.rs`, `src/harness/interpretation/stream.rs`, `src/main.rs`, `Cargo.lock`, `tests/fakes/`, [ADR 0016](../adr/0016-the-console-is-a-long-running-reader.md), [`replay.py`](second-opinion-replays/replay.py), and the [#698 grilling](../../.scratch/grill-with-docs/done/698-evals/README.md).
 - **promptfoo** 0.124.1: [source at `421e795`](https://github.com/promptfoo/promptfoo/tree/421e7959642c5d4cc1c983259a268de1c6f847b9) and the [npm registry](https://registry.npmjs.org/promptfoo), read 2026-10-21.
 - **Inspect AI** 0.3.282: [source at `386e099`](https://github.com/UKGovernmentBEIS/inspect_ai/tree/386e09942510e93de2db6d108f24f62f65eecbdc) and [PyPI](https://pypi.org/project/inspect-ai/0.3.282/).
 - **MLflow** 3.17.2: [source at `d0b397f`](https://github.com/mlflow/mlflow/tree/d0b397f85b602e8f146be0d0373b28bba2ca2b74), [PyPI](https://pypi.org/project/mlflow/3.17.2/), the [usage-tracking docs](https://mlflow.org/docs/latest/community/usage-tracking/) and the [v3.16.1 release notes](https://github.com/mlflow/mlflow/releases/tag/v3.16.1).
