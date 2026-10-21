@@ -57,10 +57,10 @@ test("sign-in and sign-out work on a phone without JavaScript using secure cooki
   assert.equal(session.sameSite, "Strict");
   assert.ok(session.expires > Date.now() / 1000 + 29 * 86400);
   assert.equal((await context.request.post(`${origin}/sign-out`)).status(), 403);
-  await page.getByRole("link", { name: "Console log", exact: true }).click();
+  await Promise.all([page.waitForURL(`${origin}/console-log`), page.getByRole("link", { name: "Console log", exact: true }).click()]);
   await page.getByText(/owner@example.test · sign-in/).waitFor();
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(18, 18, 20)");
-  await page.getByRole("link", { name: "Account", exact: true }).click();
+  await Promise.all([page.waitForURL(`${origin}/account`), page.getByRole("link", { name: "Account", exact: true }).click()]);
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(18, 18, 20)");
   await Promise.all([page.waitForURL(`${origin}/sign-in`), page.getByRole("button", { name: "Sign out this browser" }).click()]);
   await page.goto(origin);
