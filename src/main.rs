@@ -9,6 +9,7 @@ mod claim;
 mod command;
 mod config;
 mod console;
+mod cronjobs;
 mod delivery;
 mod email;
 mod failed_run;
@@ -79,6 +80,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
        thirdshift status [--all] [--json]             List this machine's Commands
+       thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
        thirdshift console install [--output <file>]   Print, or save, a service and proxy install script for sudo
        thirdshift console password [--email <address>]  Set a Console password privately
@@ -145,6 +147,7 @@ fn main() -> ExitCode {
         }
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
+        Ok(Command::CronJobs { json }) => return printed(cronjobs::show(json)),
         Ok(Command::ConsoleInstall { output: None }) => {
             return match console::install() {
                 Ok(script) => {
