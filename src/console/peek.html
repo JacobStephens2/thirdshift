@@ -3,7 +3,7 @@
   {% if can_stop %}<form method="get" action="/stop"><input type="hidden" name="command" value="{{ command }}"><button>Stop</button> <code>{{ stop_cli }}</code></form>{% endif %}
   {% if stopping %}<p role="status">still ending</p><div class="stopping-bar" role="progressbar" aria-label="Command stopping"></div>{% endif %}
   {% for branch in branches %}<p>Issue branch left: {{ branch }}</p>{% endfor %}
-  {% for pr in pull_requests %}<p>Pull request left: {{ pr }}</p>{% endfor %}
+  {% for pr in pull_requests %}<p>Pull request left: {{ pr|linkify }}</p>{% endfor %}
   <code>{{ cli }}</code>
   <p><a href="{{ crate::logs::status::inspect::url("/log", command, None) }}">Full Command log</a></p>
   {% for log in logs %}<p><a href="{{ log.url }}">Session log: {{ log.name }}</a></p>{% endfor %}

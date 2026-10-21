@@ -43,10 +43,10 @@
       {% if section.rows.is_empty() && section.references.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
       {# Only the rendered, auto-escaped RowTemplate is trusted as HTML. #}
       <ul class="commands">{% for item in section.rows %}{{ self.row(item)|safe }}{% endfor %}</ul>
-      {% for reference in section.references %}<p>{{ reference }}</p>{% endfor %}
+      {% for reference in section.references %}<p>{{ reference|linkify }}</p>{% endfor %}
     </details>
     {% endfor %}
-    {% if !inbox.idle_passes.is_empty() %}<aside aria-label="Idle Passes">{% for pass in inbox.idle_passes %}<p>{{ pass }}</p>{% endfor %}</aside>{% endif %}
+    {% if !inbox.idle_passes.is_empty() %}<aside aria-label="Idle Passes">{% for pass in inbox.idle_passes %}<p>{{ pass|linkify }}</p>{% endfor %}</aside>{% endif %}
     {% endmatch %}
   </main>
   {% include "console/chrome.html" %}

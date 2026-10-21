@@ -985,7 +985,8 @@ fn inbox_over_http_matches_status_and_embeds_only_local_resources() {
     let subjects: Vec<_> = html
         .split("<span class=\"subject\">")
         .skip(1)
-        .map(|rest| rest.split("</span>").next().unwrap())
+        .map(|rest| rest.split("</a></span>").next().unwrap())
+        .map(|subject| subject.rsplit('>').next().unwrap())
         .collect();
     let expected: Vec<_> = status["commands"]
         .as_array()
@@ -1211,4 +1212,45 @@ fn replacing_the_binary_executes_the_replacement_with_the_original_arguments() {
         fs::read_to_string(home.path().join("reexec-args")).unwrap(),
         "console\n--no-sign-in\n"
     );
+}
+
+#[test]
+fn urls_in_inbox_and_peek_text_are_links_and_other_text_stays_escaped() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut failed = record(home.path(), 812, Some("failed"), 0);
+    failed["cause"] =
+        json!("PR https://github.com/acme/widgets/pull/834 is a draft. <b>javascript:alert(1)</b>");
+    failed["pull_request"] = json!("https://github.com/acme/widgets/pull/834");
+    failed["tickets"][0]["blockers"][0]["url"] = json!("https://github.com/other/repo/issues/98");
+    write_record(home.path(), 812, &failed);
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let html = console.get("/").text().unwrap();
+    let pr = "<a href=\"https://github.com/acme/widgets/pull/834\">https://github.com/acme/widgets/pull/834</a>";
+    for expected in [
+        "<span class=\"subject\"><a href=\"https://github.com/acme/widgets/issues/812\">acme/widgets#812</a></span>",
+        &format!("<p class=\"pr\">{pr}</p>"),
+        &format!("<p>PR {pr} is a draft. &#60;b&#62;javascript:alert(1)&#60;/b&#62;</p>"),
+        "waiting on <a href=\"https://github.com/other/repo/issues/98\">https://github.com/other/repo/issues/98</a>",
+    ] {
+        assert!(html.contains(expected), "missing {expected}: {html}");
+    }
+    let selector = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue/812-fixture.command.json");
+    let mut url = reqwest::Url::parse("http://localhost/peek").unwrap();
+    url.query_pairs_mut()
+        .append_pair("command", selector.to_str().unwrap());
+    let peek = console
+        .get(&format!("/peek?{}", url.query().unwrap()))
+        .text()
+        .unwrap();
+    for expected in [
+        &format!("<dd>{pr}</dd>"),
+        "<dd><a href=\"https://github.com/acme/widgets/issues/812\">https://github.com/acme/widgets/issues/812</a>",
+        "<dd>PR <a href=",
+    ] {
+        assert!(peek.contains(expected), "missing {expected}: {peek}");
+    }
 }

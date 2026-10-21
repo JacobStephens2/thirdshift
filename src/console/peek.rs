@@ -2,6 +2,8 @@
 use askama::Template;
 use serde_json::Value;
 
+use super::filters;
+
 #[derive(Template)]
 #[template(path = "console/peek.html")]
 pub(super) struct Peek {
