@@ -725,14 +725,8 @@ mod in_memory {
         }
 
         fn started(&mut self, work: Work) {
-            let issue = match work {
-                Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => {
-                    Some(issue.number)
-                }
-                Work::PickupRun(listed) => Some(listed.issue.number),
-                Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
-            };
-            self.calls.push(Call::Started(issue));
+            self.calls
+                .push(Call::Started(work.issue_url().map(|issue| issue.number)));
         }
 
         fn pull(&mut self) {

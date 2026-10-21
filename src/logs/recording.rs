@@ -343,7 +343,9 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn dispatching(&mut self, work: Work, harness: &Choice) {
-        // Entered while the pass is still the active record, timing the dispatch.
+        // Entered while the pass is still the active record, timing the
+        // dispatch. An Architect run keeps its Architecture review stage,
+        // as #889 asked only for Pickup runs and Security runs.
         if matches!(self.command, CommandKind::Pickup | CommandKind::Secure) {
             self.stage(StageName::dispatched(work), None);
         }

@@ -169,12 +169,17 @@ impl StageName {
     pub(super) fn dispatched(work: Work<'_>) -> Self {
         match work {
             Work::SpecRun(_) => Self::DispatchedSpecRun,
-            _ => Self::DispatchedRun,
+            Work::Run(_)
+            | Work::BaseFix(_)
+            | Work::PickupRun(_)
+            | Work::ArchitectRun(_)
+            | Work::SecurityRun(_) => Self::DispatchedRun,
         }
     }
 
-    /// A dispatch has no Usual range and is never Silent: its health is the
-    /// dispatched Command's.
+    /// Whether the stage named `name` is a pass's dispatch stage. Such a
+    /// stage has no Usual range and is never Silent: the dispatched
+    /// Command's own stages carry its health.
     pub(super) fn is_dispatch(name: &str) -> bool {
         [Self::DispatchedRun, Self::DispatchedSpecRun]
             .into_iter()
@@ -259,20 +264,15 @@ impl CommandRecord {
     }
 
     pub fn new(work: Work<'_>, stamp: &str, harness: &Choice, now: DateTime<FixedOffset>) -> Self {
-        let issue = match work {
-            Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => Some(Issue {
-                number: issue.number,
-                url: issue.url.clone(),
-                title: None,
-            }),
-            // The Ready issue listing named it before the Pickup run started.
-            Work::PickupRun(listed) => Some(Issue {
-                number: listed.issue.number,
-                url: listed.issue.url.clone(),
-                title: Some(listed.title.clone()),
-            }),
-            Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
-        };
+        let issue = work.issue_url().map(|issue| Issue {
+            number: issue.number,
+            url: issue.url.clone(),
+            // The Ready issue listing named a Pickup run's issue before it started.
+            title: match work {
+                Work::PickupRun(listed) => Some(listed.title.clone()),
+                _ => None,
+            },
+        });
         let name = match work {
             Work::ArchitectRun(_) => format!("architect-{stamp}"),
             Work::SecurityRun(_) => format!("secure-{stamp}"),

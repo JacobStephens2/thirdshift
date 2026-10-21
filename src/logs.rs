@@ -302,7 +302,7 @@ fn root_under(logs_dir: &Path, repo: &Repo) -> PathBuf {
     logs_dir.join(&repo.owner).join(&repo.name)
 }
 
-impl Work<'_> {
+impl<'a> Work<'a> {
     fn initial_stage(self) -> Option<Stage> {
         match self {
             Work::Run(_) | Work::BaseFix(_) => Some(Stage::Implement),
@@ -332,13 +332,18 @@ impl Work<'_> {
         }
     }
 
-    /// Its issue's number, if it has one.
-    fn issue(self) -> Option<u64> {
+    /// Its issue, if it has one.
+    pub(crate) fn issue_url(self) -> Option<&'a IssueUrl> {
         match self {
-            Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => Some(issue.number),
-            Work::PickupRun(listed) => Some(listed.issue.number),
+            Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => Some(issue),
+            Work::PickupRun(listed) => Some(&listed.issue),
             Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
         }
+    }
+
+    /// Its issue's number, if it has one.
+    fn issue(self) -> Option<u64> {
+        self.issue_url().map(|issue| issue.number)
     }
 }
 
