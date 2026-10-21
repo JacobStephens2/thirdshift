@@ -76,7 +76,8 @@ pub trait Outside {
     /// Record that `pass` was skipped for `reason`.
     fn skipped(&mut self, pass: Pass, reason: &dyn Display);
     /// Check the Harness, Model and Effort the pass's sessions, and the run
-    /// it dispatches, run on, failing if they can't run.
+    /// it dispatches, run on, and those of that run's Security review where
+    /// they differ, failing if they can't run.
     fn check_harness(&mut self) -> Result<()>;
     /// Record that the pass started `work`, on the Harness it checked.
     fn started(&mut self, work: Work);
@@ -153,6 +154,10 @@ pub struct LaunchAndGitHub<'a> {
     pub harness: &'a mut Choice,
     pub flags: &'a Flags,
     pub config: &'a UserConfig,
+    /// What the run it dispatches runs its Security review on instead of
+    /// `harness`, if anything, once [`Outside::check_harness`] has checked
+    /// it.
+    pub security_review_harness: Option<Choice>,
 }
 
 impl Outside for LaunchAndGitHub<'_> {
@@ -189,7 +194,15 @@ impl Outside for LaunchAndGitHub<'_> {
     }
 
     fn check_harness(&mut self) -> Result<()> {
-        self.harness.check()
+        let mut security = self
+            .flags
+            .security_review_harness(self.config, self.harness);
+        self.harness.check()?;
+        if let Some(security) = &mut security {
+            security.check_for_security_review()?;
+        }
+        self.security_review_harness = security;
+        Ok(())
     }
 
     fn started(&mut self, work: Work) {
@@ -309,6 +322,7 @@ impl Outside for LaunchAndGitHub<'_> {
         };
         let mut asks = Asks {
             harness: self.harness.clone(),
+            security_review_harness: self.security_review_harness.clone(),
             ..asks
         };
         logs::dispatching(

@@ -143,7 +143,8 @@ pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> E
 /// The Launch directory is opened first, with its Origin match, the check
 /// that `issue` is open and the git identity check. A Run started by its
 /// command then checks the Harness, Model and Effort its sessions run on, as
-/// `asks` say, settling the Model and Effort in them on the Harness's names:
+/// `asks` say, and those of its Security review where they differ, settling
+/// the Model and Effort in them on the Harness's names:
 /// one started by another thirdshift, or dispatched by a pass, runs on what
 /// that command checked. Only then is what it hands on to every child Run
 /// built from `asks`. The rest is [`start`], through the Launch directory,
@@ -169,6 +170,9 @@ fn run(
             )),
         }
         asks.harness.check()?;
+        if let Some(security) = &mut asks.security_review_harness {
+            security.check_for_security_review()?;
+        }
     }
     let asks = &*asks;
     let child_asks = ChildAsks::of(asks);
@@ -789,6 +793,7 @@ mod tests {
     /// What a Run started by its command is asked, by default.
     fn asks() -> Asks {
         Asks {
+            security_review_harness: None,
             security_fix: false,
             security_review: false,
             goal: Goal::ReadyForReview,

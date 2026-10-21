@@ -2339,3 +2339,37 @@ fn started_work_requires_a_hand_back_after_the_last_claim_ended() {
         );
     }
 }
+
+#[test]
+fn a_security_harness_that_cannot_run_fails_the_pass_once_it_has_taken_an_issue_before_any_work() {
+    let scenario = ready_ticket();
+    scenario.user_config_is(
+        r#"
+[harness]
+default = "codex"
+
+[harness.claude]
+model = "claude-opus-5-5"
+
+[security]
+harness = "claude"
+review = true
+"#,
+    );
+    scenario.agent_does_in_session(1, "echo 'no such model'\nexit 1");
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert!(
+        result.stderr.contains(
+            "the Security review's Harness claude, from security.harness, can't run: \
+             claude refused a test call on the Model claude-opus-5-5: no such model\n"
+        ),
+        "stderr: {}",
+        result.stderr
+    );
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
+    assert!(scenario.codex_calls().is_empty());
+    assert_eq!(scenario.claude_calls().len(), 1);
+}

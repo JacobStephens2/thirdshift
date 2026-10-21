@@ -146,6 +146,7 @@ impl Delivery<'_> {
             self.logs,
             worktree.path(),
             &self.child_asks.harness,
+            self.child_asks.security_review_harness.as_ref(),
             &before_each,
             |sessions| {
                 let mut outside = InWorktree {

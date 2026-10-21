@@ -139,28 +139,38 @@ impl<'a> Sessions<'a> {
         harness: &'a Choice,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
-        Self::checked_within(logs, worktree, harness, &|| Ok(()), steps)
+        Self::checked_within(logs, worktree, harness, None, &|| Ok(()), steps)
     }
 
     /// [`Sessions::within`], checking `before_each` before each session
-    /// starts, a Resume included: a session it fails is not started.
+    /// starts, a Resume included: a session it fails is not started. A
+    /// Security review, and its Resume, run on `security_review` instead of
+    /// `harness`, when given, with its Factory skills linked too.
     pub fn checked_within<T>(
         logs: &'a Logs,
         worktree: &'a Path,
         harness: &'a Choice,
+        security_review: Option<&'a Choice>,
         before_each: &'a dyn Fn() -> Result<()>,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
         let adapter = harness.harness.adapter();
-        if let Err(error) = skills::link_into(worktree, adapter)
-            .and_then(|()| adapter.link_instruction_fallback(worktree))
-        {
+        let security_review =
+            security_review.map(|choice| (choice.clone(), choice.harness.adapter()));
+        let linked = std::iter::once(adapter)
+            .chain(security_review.as_ref().map(|(_, adapter)| *adapter))
+            .try_for_each(|adapter| {
+                skills::link_into(worktree, adapter)?;
+                adapter.link_instruction_fallback(worktree)
+            });
+        if let Err(error) = linked {
             return (Err(error), None);
         }
         let on_machine = OnMachine {
             worktree: worktree.to_path_buf(),
             harness: harness.clone(),
             adapter,
+            security_review,
             recording: logs.recording().clone(),
         };
         let (taken, log) =
@@ -338,11 +348,13 @@ trait Outside {
 }
 
 /// Sessions run by the Command's `harness`'s CLI in `worktree`, where it
-/// finds the Factory skills, and progress lines printed on stderr.
+/// finds the Factory skills, and progress lines printed on stderr. A
+/// Security review runs on `security_review`'s instead, if it is given.
 struct OnMachine {
     worktree: PathBuf,
     harness: Choice,
     adapter: &'static dyn Adapter,
+    security_review: Option<(Choice, &'static dyn Adapter)>,
     recording: recording::Recording,
 }
 
@@ -355,28 +367,31 @@ impl Outside for OnMachine {
         prompt: &str,
         log: &Path,
     ) -> Result<Ended> {
-        let interpretation = self.adapter.interpretation(&self.worktree, prompt);
+        let (harness, adapter) = match (purpose, &self.security_review) {
+            (Purpose::SecurityReview, Some((choice, adapter))) => {
+                progress::step(format!("{label}: on {choice}, from security.harness"));
+                (choice, *adapter)
+            }
+            _ => (&self.harness, self.adapter),
+        };
+        let interpretation = adapter.interpretation(&self.worktree, prompt);
         let (invocation, interpretation) = match purpose {
             Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview => (
-                self.adapter.security_session(
-                    &self.harness,
+                adapter.security_session(
+                    harness,
                     resume,
                     prompt,
                     matches!(purpose, Purpose::Security | Purpose::SecurityPublishing),
                 ),
-                interpretation.for_security(self.harness.model.as_deref()),
+                interpretation.for_security(harness.model.as_deref()),
             ),
-            Purpose::Ordinary => (
-                self.adapter.session(&self.harness, resume, prompt),
-                interpretation,
-            ),
+            Purpose::Ordinary => (adapter.session(harness, resume, prompt), interpretation),
             Purpose::CodeReview => (
-                self.adapter
-                    .code_review_session(&self.harness, resume, prompt),
+                adapter.code_review_session(harness, resume, prompt),
                 interpretation,
             ),
         };
-        let mut command = Command::new(self.adapter.name());
+        let mut command = Command::new(adapter.name());
         command.args(&invocation.args).current_dir(&self.worktree);
         // Keep the empty config alive until the process and descendants
         // finish. A fresh one on each launch also fences the Resume.
@@ -402,7 +417,7 @@ impl Outside for OnMachine {
         };
         let ended = self.recording.run(
             label,
-            &self.harness,
+            harness,
             &mut command,
             invocation.stdin.as_deref(),
             log,

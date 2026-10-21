@@ -58,6 +58,9 @@ pub struct Asks {
     /// The Harness, Model and Effort its sessions, and its child Runs', run
     /// on.
     pub harness: Choice,
+    /// What its Security review, and its child Runs', run on instead of
+    /// [`Asks::harness`], if anything: see [`Flags::security_review_harness`].
+    pub security_review_harness: Option<Choice>,
 }
 
 impl Asks {
@@ -79,6 +82,7 @@ impl Asks {
                 BaseFixAsk::Undecided { retry }
             }
         });
+        let harness = flags.harness(config);
         Asks {
             goal,
             notification: flags.notification(config),
@@ -86,12 +90,10 @@ impl Asks {
             parallel_asked: flags.parallel.is_some(),
             base_fix,
             security_fix: flags.security_fix_allowed(config),
-            security_review: flags
-                .security_review
-                .map(|ask| ask == crate::security::review::Ask::Allow)
-                .unwrap_or(config.security_review),
+            security_review: flags.security_review(config),
             launch_pull: config.launch_pull,
-            harness: flags.harness(config),
+            security_review_harness: flags.security_review_harness(config, &harness),
+            harness,
         }
     }
 
@@ -113,6 +115,7 @@ impl Asks {
             security_review: given.asks.security_review,
             launch_pull: false,
             harness: given.asks.harness.clone(),
+            security_review_harness: given.asks.security_review_harness.clone(),
         }
     }
 
@@ -160,6 +163,29 @@ impl Asks {
 }
 
 impl Flags {
+    /// Whether a Run with these flags runs a Security review: as
+    /// `security-review` or `no-security-review` asked, else as `config`
+    /// says.
+    pub fn security_review(&self, config: &UserConfig) -> bool {
+        self.security_review
+            .map(|ask| ask == crate::security::review::Ask::Allow)
+            .unwrap_or(config.security_review)
+    }
+
+    /// What the Security review of a run with these flags runs on, if not
+    /// the Command's `harness`: `security.harness` in `config`, with that
+    /// Harness's own Model and Effort, whatever the command's `harness`,
+    /// `model` and `effort` words asked. None when no Security review is
+    /// asked, `security.harness` is blank or missing, or it comes to what
+    /// `harness` already runs on.
+    pub fn security_review_harness(&self, config: &UserConfig, harness: &Choice) -> Option<Choice> {
+        if !self.security_review(config) {
+            return None;
+        }
+        Choice::of_security_review(config.security_harness, &config.harness)
+            .filter(|choice| !choice.runs_as(harness))
+    }
+
     pub fn security_fix_allowed(&self, config: &UserConfig) -> bool {
         match self.security_fix {
             Some(crate::security::FixAsk::Allow) => true,
@@ -336,6 +362,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_review_harness: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::ReadyForReview,
@@ -356,6 +383,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_review_harness: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::Merged,
@@ -384,6 +412,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_review_harness: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::ReadyForReview,
@@ -410,6 +439,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_review_harness: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::Merged,
@@ -510,6 +540,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_review_harness: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::Merged,
@@ -528,6 +559,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_review_harness: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::Merged,
@@ -548,6 +580,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_review_harness: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::Merged,
@@ -566,6 +599,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                security_review_harness: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::Merged,
@@ -706,5 +740,69 @@ mod tests {
         let asks = Asks::of_run(&issue(), &Flags::default(), &config);
 
         assert_eq!(asks.notification, NotificationAsk::Skip);
+    }
+
+    #[test]
+    fn a_security_review_runs_on_security_harness_with_its_own_settings_whatever_the_command_asked()
+    {
+        let reviewed = || UserConfig {
+            security_review: true,
+            security_harness: Some(Harness::Claude),
+            ..every_setting()
+        };
+        let on_claude = Choice {
+            harness: Harness::Claude,
+            model: Some("opus".to_string()),
+            effort: Some("high".to_string()),
+            chosen_by: ChosenBy::SecurityConfig,
+        };
+        let on_codex = Flags {
+            harness: harness::Asked {
+                harness: Some(Harness::Codex),
+                ..harness::Asked::default()
+            },
+            ..Flags::default()
+        };
+        let asks = Asks::of_run(&issue(), &on_codex, &reviewed());
+        assert_eq!(asks.security_review_harness, Some(on_claude.clone()));
+
+        // Words for Claude choose the Command's Harness; the review keeps
+        // [harness.claude]'s Model and Effort.
+        let words = Flags {
+            harness: claude_on_sonnet(),
+            ..Flags::default()
+        };
+        let asks = Asks::of_run(&issue(), &words, &reviewed());
+        assert_eq!(asks.security_review_harness, Some(on_claude));
+
+        // Where it comes to the Command's own, or isn't set, or no review is
+        // asked, the review runs on the Command's.
+        let same = Flags {
+            harness: harness::Asked {
+                harness: Some(Harness::Claude),
+                ..harness::Asked::default()
+            },
+            ..Flags::default()
+        };
+        for (flags, config) in [
+            (&same, reviewed()),
+            (
+                &on_codex,
+                UserConfig {
+                    security_harness: None,
+                    ..reviewed()
+                },
+            ),
+            (
+                &on_codex,
+                UserConfig {
+                    security_review: false,
+                    ..reviewed()
+                },
+            ),
+        ] {
+            let asks = Asks::of_run(&issue(), flags, &config);
+            assert_eq!(asks.security_review_harness, None, "{flags:?}");
+        }
     }
 }

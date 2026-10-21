@@ -133,6 +133,7 @@ pub fn run(
         harness,
         flags,
         config,
+        security_review_harness: None,
     };
     run_through(
         &mut outside,

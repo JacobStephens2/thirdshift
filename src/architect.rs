@@ -248,6 +248,7 @@ pub fn run(
         harness,
         flags,
         config,
+        security_review_harness: None,
     };
     let architect_run = ArchitectRun {
         repo: &repo,
