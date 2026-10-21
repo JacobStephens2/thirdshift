@@ -179,3 +179,116 @@ value, `Git::checkout_location` reads each value with its own process again. Tha
 17.2 s on the same host; concurrent host load and macOS runtime can differ.
 `an_ordinary_operation_inspects_ownership_in_few_git_processes` holds one
 ordinary operation to its 23 git processes.
+
+### After #857: the macOS breakdown
+
+Issue [#894](https://github.com/JacobStephens2/thirdshift/issues/894) asked
+where the macOS shards' 3,900-4,250 seconds still go. Four passes of a
+temporary diagnostic workflow on `macos-26` (3 vCPU Apple M1, macOS 26.6,
+Homebrew git 2.56.0 first on `PATH`) measured it. It lived only on the
+`issue-894-profile` branch:
+
+| Pass | Run | What it measured |
+| --- | --- | --- |
+| 1 | [39544139072](https://github.com/JacobStephens2/thirdshift/actions/runs/39544139072) | the 23 slowest tests, each alone; one `spec_run` partition at 3 and 6 threads |
+| 2 | [39545174138](https://github.com/JacobStephens2/thirdshift/actions/runs/39545174138) | seven of them alone under dtrace; the same seven with git's fsync off and with Xcode's git; one process of each program |
+| 3 | [39546189462](https://github.com/JacobStephens2/thirdshift/actions/runs/39546189462) | the four shards with Spotlight off and Xcode's git; the seven with Spotlight off |
+| 4 | [39547327478](https://github.com/JacobStephens2/thirdshift/actions/runs/39547327478) | the four shards with each change alone |
+
+"Alone" means the test binary run directly, `<binary> --exact <test>
+--test-threads 1`, from a Python driver that read wall time and the
+`RUSAGE_CHILDREN` CPU time of the test and every process it reaped. Under
+dtrace (SIP is off on the hosted image) the driver ran `sudo dtrace` with
+`progenyof(<driver pid>)` predicates: `proc:::exec-success` and
+`proc:::exit` counted each program the test started and summed its lifetime;
+`fsync` and `fcntl(F_FULLFSYNC | F_BARRIERFSYNC)` and `__semwait_signal`
+(where `thread::sleep` waits) summed by program; `profile-997` sampled every
+CPU, system-wide, by program. The same tests were then straced on x86_64
+Linux, whose git command lines, unlike dtrace's program names, say which
+code ran each git. Its git counts match macOS's within 4% for the Run tests.
+
+**The slowest tests are git processes.** Alone, each of the 23 tests was on
+a CPU for 66-93% of its wall time (78% on average), so it waits little: no
+fixed sleep or poll interval dominates. In the dtrace pass, git processes
+were alive for most of each test's wall time:
+
+| Test (alone, pass 2) | Wall s | CPU s | git processes | git alive s | Launch recheck | Ownership inspection | Other git |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `spec_run spec_delivery_rejects_late_retargeting_and_keeps_the_original_identity` | 83.9 | 69.0 | 7,630 | 77.0 | 41% | 45% | 14% |
+| `pickup_run pickup_wait_in_the_user_config_shortens_lengthens_or_disables_settling` | 89.7 | 67.3 | 4,946 | 79.4 | 38% | 39% | 23% |
+| `issue_number a_number_resolves_supported_origins_from_nested_directories` | 60.3 | 41.0 | 3,185 | 48.5 | 40% | 42% | 18% |
+| `worktree::acquisition_tests::recovery_retains_changed_checkout_authority_during_removal` | 58.9 | 52.6 | 4,486 | 58.0 | 29% | 23% | 48% |
+| `ci a_check_re_run_cannot_deliver_or_merge_without_readable_nonempty_checks` | 48.7 | 34.6 | 3,078 | 39.0 | 41% | 45% | 15% |
+| `spec_run a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr` | 47.3 | 32.8 | 1,900 | 36.5 | 41% | 45% | 14% |
+| `merge_run unblocked_or_unknown_review_decisions_allow_the_guarded_merge` | 30.6 | 24.8 | 2,680 | 28.3 | 41% | 44% | 15% |
+
+The last three columns split the Linux trace's git processes.
+"Launch recheck" is `git rev-parse --git-common-dir`, mostly
+`Directory::verify_repository`, which
+[#858](https://github.com/JacobStephens2/thirdshift/issues/858) holds.
+"Ownership inspection" is `worktree list --porcelain -z`, the combined
+`rev-parse --show-toplevel …`, `rev-parse --symbolic-full-name HEAD` and the
+branch `for-each-ref`. "Other git" is everything else, including git's own
+subprocesses and the scenario's setup. The slowest test of all,
+`spec_run security_findings_refusals_and_incomplete_reviews_hold_only_the_spec_self_merge`
+(245 s alone on macOS), splits the same way: 15,360 git processes, 41% /
+45% / 14%. Everything else the tests start is small: the fake `gh`,
+`claude` and `codex` lived 2-3% of each test's wall time, and shells under
+1%, except in the worktree unit test, whose own fake-git scripts ran 141
+shells for 6 s.
+
+What did not matter:
+
+- **fsync.** Git's fsyncs took under 0.05 s in each test. With
+  `core.fsync = none` the seven tests took 344 s against 346 s.
+- **Sleeps and polls.** thirdshift's own `thread::sleep` totals (up to 60 s
+  in a Spec run test) are a parent waiting at the 100 ms poll while its child
+  Runs work. That overlaps their git time and adds no wall time.
+- **More test threads.** One third of `spec_run` took 493 s at 3 threads and
+  461 s at 6 (-6%): CPU use stayed at about 58% of three cores either way.
+
+What did:
+
+- **Each git process costs more on macOS.** One process of each program,
+  started 200 times in a scratch clone (pass 2), median:
+
+  | Program | macOS ms | x86_64 Linux ms |
+  | --- | ---: | ---: |
+  | `/usr/bin/true` | 1.7 | 1.1 |
+  | `/bin/sh -c true` | 4.2 | 1.2 |
+  | Homebrew `git rev-parse --git-common-dir` | 13.2 | 2.4 |
+  | Xcode `git rev-parse --git-common-dir` | 9.1 | |
+  | `/usr/bin/git --version` (the `xcrun` shim) | 16.7 | |
+  | the fake `gh`, debug build | 3.7 | 3.7 |
+  | `thirdshift --version`, debug build | 7.7 | |
+
+  Homebrew's git loads `pcre2` and `gettext` from `/opt/homebrew`, outside
+  the dyld shared cache. Under the shards' parallel load the gap grows.
+- **Spotlight.** In the dtrace pass, `mdworker_shared`, `mds_stores` and
+  `mds` took 18-35% of all CPU samples in the first three tests after the
+  build, against git's 18-21%. They index the repositories the tests create.
+
+**The changes.** Both macOS jobs in CI now turn Spotlight indexing off
+(`sudo mdutil -a -i off`) and put Xcode's git (`xcrun -f git`, 2.50.1 on
+this image) first on `PATH`, with the `git-*` programs beside it. Summed
+nextest time of the four shards, build excluded:
+
+| Runs | Shards 1 / 2 / 3 / 4 s | Sum s |
+| --- | --- | ---: |
+| `main`, five runs from [39511690293](https://github.com/JacobStephens2/thirdshift/actions/runs/39511690293) to [39536115478](https://github.com/JacobStephens2/thirdshift/actions/runs/39536115478) | 595-994 / 789-1,012 / 773-981 / 728-951 | 3,327-3,595 |
+| Spotlight off (pass 4) | 800 / 835 / 852 / 722 | 3,209 |
+| Xcode's git (pass 4) | 549 / 475 / 571 / 537 | 2,132 |
+| Both (pass 3) | stopped early / stopped early / 341 / 555 | |
+
+Xcode's git alone took 38% off the mean of `main`'s five runs. Spotlight off
+alone was 7% below that mean, inside the ±15% run-to-run noise; it is kept for
+the CPU the samples show it freeing. In passes 3 and 4 two `security_run`
+tests failed under Xcode's git: they run thirdshift with only a link to git on
+`PATH`, and Xcode's git finds `git-upload-pack` only beside itself, not in
+its exec path as Homebrew's and Linux's do. They now link it too.
+
+**What remains.** About 86% of the git processes in the Run tests are
+Worktree ownership inspection and the launch-side recheck. Both are
+read-only here; the macOS numbers above are on #858, which decides whether
+inspection may recheck less often. Linux CI keeps Ubuntu's git, and a
+macOS contributor's local run uses whichever git is first on their `PATH`.
