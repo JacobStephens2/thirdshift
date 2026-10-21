@@ -61,7 +61,8 @@ pub struct UserConfig {
     /// on, and a Model and Effort for each Harness.
     pub harness: harness::Settings,
     /// `security.harness`: the Harness a Security run uses ahead of
-    /// `harness.default`, unless its command names one.
+    /// `harness.default`, unless its command names one, and every Security
+    /// review uses, whatever its command names.
     pub security_harness: Option<Harness>,
     /// `security.fix`: off by default; None leaves the decision unmade.
     pub security_fix: Option<bool>,
@@ -894,7 +895,7 @@ effort = ""   # the Model's variant, passed as #effort; default blank, for OpenC
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
 review = false   # Runs review their change for Security findings; default false
-harness = ""   # the Harness a Security run uses unless its command names one; default blank; blank or missing uses harness.default, or Claude Code if harness.default is missing
+harness = ""   # the Harness for Security runs, unless the command names one, and for every Security review; default blank; blank or missing leaves Security runs on harness.default, or Claude Code if that is missing, and Security reviews on their Command's Harness
 "#;
 
 /// The line `DEFAULTS` holds for `email.to`, which has no default.

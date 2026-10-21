@@ -78,7 +78,7 @@ pub enum Command {
     Architect(ArchitectArgs),
     Pickup(PassArgs),
     Secure(PassArgs),
-    Run(RunArgs),
+    Run(Box<RunArgs>),
 }
 
 /// The flag that stops an Architect run once its plan is published and
@@ -530,11 +530,11 @@ pub fn parse(args: &[String]) -> Result<Command> {
     let Some(issue) = issue else {
         bail!("missing Issue URL");
     };
-    Ok(Command::Run(RunArgs {
+    Ok(Command::Run(Box::new(RunArgs {
         issue,
         flags,
         given,
-    }))
+    })))
 }
 
 /// Parse the arguments after `architect`: at most one focus, and its flags,
@@ -1065,7 +1065,7 @@ mod tests {
     /// The Run `args` parse to.
     fn run_args(args: &[&str]) -> RunArgs {
         match parse_strs(args) {
-            Ok(Command::Run(run_args)) => run_args,
+            Ok(Command::Run(run_args)) => *run_args,
             Ok(_) => panic!("{args:?}: not a Run"),
             Err(error) => panic!("{args:?}: {error:#}"),
         }
