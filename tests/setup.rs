@@ -375,7 +375,9 @@ fn setup_console_questions_use_email_to_keep_comments_and_offer_install() {
         assert!(text.contains(comment), "{text}");
     }
     assert!(
-        result.stderr.contains("thirdshift console install --output install-console.sh"),
+        result
+            .stderr
+            .contains("thirdshift console install --output install-console.sh"),
         "{}",
         result.stderr
     );

@@ -367,3 +367,20 @@ fn output_needs_a_file_name() {
         );
     }
 }
+
+#[test]
+fn output_names_a_copyable_sudo_command_for_a_spaced_path() {
+    let machine = Machine::new();
+    machine.tool("caddy", "exit 0");
+    let output = machine.install_with(&["--output", "my script.sh"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("sudo sh 'my script.sh'"), "{stderr}");
+    // The saved script must not tell its reader to run some other file.
+    let saved = fs::read_to_string(machine.path("my script.sh")).unwrap();
+    assert!(!saved.contains("install-console.sh"), "{saved}");
+}
