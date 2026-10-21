@@ -319,7 +319,7 @@ impl<A: Adapter> PullRequest<A> {
                     }
                     self.adapter.pause()?;
                 }
-                _ => return Ok(snapshot),
+                Mergeable::Yes | Mergeable::No | Mergeable::Unknown => return Ok(snapshot),
             }
         }
     }
