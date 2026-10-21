@@ -92,7 +92,7 @@ A continuation of the same agent session, started once when that session ended i
 ### Runs
 
 **Command**:
-One invocation of thirdshift that does factory work: a **Run** or **Spec run** started on an **Issue URL**, an **Architect run**, a **Pickup run**, a **Security run**, or a **Scoring run**. A child Run, a **Ticket**'s Run or a **Base fix**, is part of the command that started it, not one of its own. Interruption stops its ordinary CLI work and prevents more from starting, while Failed run salvage, confirmed Self-merge completion, Claim ending and Spec accounting still finish; finishing never clears the recorded interruption.
+One invocation of thirdshift that does factory work: a **Run** or **Spec run** started on an **Issue URL**, an **Architect run**, a **Pickup run**, a **Security run**, a **Scoring run**, or an **Experiment**. A child Run, a **Ticket**'s Run or a **Base fix**, is part of the command that started it, not one of its own. Interruption stops its ordinary CLI work and prevents more from starting, while Failed run salvage, confirmed Self-merge completion, Claim ending and Spec accounting still finish; finishing never clears the recorded interruption.
 _Avoid_: invocation, job
 
 **Run**:
@@ -329,8 +329,12 @@ One setup that an **Experiment** compares: a build of thirdshift, with its **Fac
 _Avoid_: variant, provider, configuration
 
 **Trial**:
-One attempt at an **Eval task** by one **Arm**, in an agent session of its own. A Trial is not a **Run** and belongs to no **Command**.
+One attempt at an **Eval task** by one **Arm**, in an agent session of its own, within an **Experiment**. A Trial is not a **Run**, and writes no **Command record** of its own.
 _Avoid_: run, attempt, sample
+
+**Void Trial**:
+A **Trial** that failed for a reason outside its **Arm**, under rules fixed with the **Bar**, such as a sandbox that didn't start or a plan-limit stop. It is re-run, and kept out of the **Verdict**.
+_Avoid_: errored Trial, infrastructure failure
 
 **Grader**:
 What judges a **Trial** against its **Eval task**'s success criteria, or a **Run** in a **Scoring run**'s sample against the criteria merged work is held to: a check in code, an agent session, or the **Day shift**.
@@ -341,8 +345,16 @@ What a **Grader** decides about one **Trial** against its **Eval task**'s succes
 _Avoid_: grade, rating, feedback
 
 **Experiment**:
-A comparison of a **Baseline arm** with a **Candidate arm** on the **Eval suites** a change touches, against a bar fixed before it starts. It shows whether the change makes the agents better or worse before it reaches production.
+The **Command** that compares a **Baseline arm** with a **Candidate arm** on the **Eval suites** a change touches, against a **Bar** fixed before it starts, and ends in a **Verdict**. It shows whether the change makes the agents better or worse before it reaches production.
 _Avoid_: replay, eval run, benchmark run, A/B test
+
+**Bar**:
+The rules an **Experiment**'s **Verdict** follows, fixed before it starts: the margin, the credible level, the prior, the seed and draw count, the **Trials** per **Eval task**, and the rules for **Void Trials**.
+_Avoid_: threshold, gate, acceptance criteria
+
+**Verdict**:
+What an **Experiment** ends in under its **Bar**: pass, fail or inconclusive.
+_Avoid_: result, outcome
 
 **Scoring run**:
 The weekly **Command** that evaluates production work. A **Grader** gives **Scores** to a sample of the week's merged factory pull requests, whichever machine made them, and a session proposes a **Bug origin** for each bug fixed that week.
