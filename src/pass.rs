@@ -947,7 +947,6 @@ mod in_memory {
     /// A dispatched run that ended ready for review on [`PR_URL`].
     pub fn ready_for_review() -> Ended {
         Ended {
-            is_spec: false,
             outcome: Ok(Reached {
                 pr_url: PR_URL.to_string(),
                 goal: Goal::ReadyForReview,

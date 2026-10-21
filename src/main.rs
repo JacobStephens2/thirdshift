@@ -341,10 +341,11 @@ fn pickup(args: PassArgs) -> ExitCode {
     match took {
         Ok(pickup::Outcome::Took(Took {
             issue,
+            is_spec,
             title,
             ended,
         })) => {
-            started.took(&issue, title);
+            started.took(&issue, title, is_spec);
             started.finish(Ending::Run(ended))
         }
         Ok(pickup::Outcome::Skipped(skipped)) => started.finish(Ending::Skipped(skipped.into())),

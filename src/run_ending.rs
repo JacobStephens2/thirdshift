@@ -643,7 +643,6 @@ mod tests {
     fn an_interrupted_run_reads_as_interrupted() {
         let ended = Ended {
             outcome: Err(interrupted(failed_run("claude exited 1"))),
-            is_spec: false,
             base_fix: None,
             advice: Vec::new(),
         };
@@ -665,7 +664,6 @@ mod tests {
                 ticket_lines: tickets.clone(),
                 ..failed_run("Tickets not done: #22")
             }),
-            is_spec: true,
             base_fix: None,
             advice: Vec::new(),
         };
@@ -963,7 +961,6 @@ mod tests {
 
     fn reached(goal: Goal) -> Ended {
         Ended {
-            is_spec: false,
             outcome: Ok(Reached {
                 pr_url: PR.to_string(),
                 goal,
@@ -977,7 +974,6 @@ mod tests {
 
     fn failed(cause: &str, log: Option<&str>, pr_url: Option<&str>) -> Ended {
         Ended {
-            is_spec: false,
             outcome: Err(FailedRun {
                 error: anyhow!("{cause}"),
                 pr_url: pr_url.map(String::from),

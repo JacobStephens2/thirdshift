@@ -74,6 +74,7 @@ enum Subject {
         issue: IssueUrl,
         title: Option<String>,
         picked_up: bool,
+        is_spec: bool,
     },
     /// An Architect run, with the repository the Launch directory's `origin`
     /// names, if it names one.
@@ -108,7 +109,7 @@ impl RunNotification {
     /// The Run notification for a command about `about` starting now, sent
     /// to `to`, else to `email.to`. Fails, before any work, with the same
     /// checks as `email-test`: an address is known and a Resend API key is
-    /// found. Once they pass, it reads a Run's issue title now, while someone
+    /// found. Once they pass, it reads a Run's issue title and kind now, while someone
     /// may be watching, rather than after the Run, when a hung `gh` could
     /// keep the notification from ever going; and an Architect run's
     /// repository.
@@ -118,6 +119,11 @@ impl RunNotification {
             About::Issue(issue) => Subject::Issue {
                 issue: issue.clone(),
                 picked_up: false,
+                // Keep the kind even if launch or Harness preflight fails.
+                // A failed read leaves the Run's own preflight to report why.
+                is_spec: GitHub::new()
+                    .tickets(issue)
+                    .is_ok_and(|tickets| !tickets.is_empty()),
                 // Left out of the subject if GitHub can't be asked; the Run's
                 // own preflight reports why.
                 title: GitHub::new().issue_title(issue).ok(),
@@ -138,11 +144,12 @@ impl RunNotification {
     /// Take note that the Pickup run took `issue`, titled `title`, as its
     /// search listed it. Its notification keeps the issue subject and names
     /// the Pickup run and the kind of run it dispatched in the body.
-    pub fn took(&mut self, issue: &IssueUrl, title: String) {
+    pub fn took(&mut self, issue: &IssueUrl, title: String, is_spec: bool) {
         self.subject = Subject::Issue {
             issue: issue.clone(),
             title: Some(title),
             picked_up: true,
+            is_spec,
         };
     }
 
@@ -153,12 +160,11 @@ impl RunNotification {
     }
 
     /// Send the one notification for the command that ended as `account`
-    /// tells, naming a Run on an issue as a Spec run when `is_spec`.
-    /// A Pickup run that took no issue has nothing to tell, and sends
+    /// tells. A Pickup run that took no issue has nothing to tell, and sends
     /// none, as a skipped pass, which has no account, does not either. A
     /// failed send is only a warning: it never changes the command's
     /// outcome.
-    pub fn send(self, account: &Account, is_spec: bool) {
+    pub fn send(self, account: &Account) {
         let Some(subject) = subject_line(&self.subject, account.outcome) else {
             return;
         };
@@ -167,7 +173,6 @@ impl RunNotification {
         let mut text = body(
             &self.subject,
             account,
-            is_spec,
             self.configured.as_deref(),
             command_log.as_deref(),
             host.as_deref().unwrap_or("unknown host"),
@@ -229,7 +234,6 @@ fn command_subject(command: &str, repo: Option<&Repo>, outcome: &str) -> String 
 
 /// The plain-text body of the notification for a command that ended as
 /// `account` tells, about `subject`, with its `configured` Harness, Model and Effort, if known,
-/// naming the issue's run as a Spec run when `is_spec`,
 /// naming `command_log`, if the command keeps one,
 /// and `host`, for a command that `took` so long. It starts with the command's
 /// outcome, as the subject gives it, then the rest of what the subject
@@ -241,7 +245,6 @@ fn command_subject(command: &str, repo: Option<&Repo>, outcome: &str) -> String 
 fn body(
     subject: &Subject,
     account: &Account,
-    is_spec: bool,
     configured: Option<&str>,
     command_log: Option<&Path>,
     host: &str,
@@ -252,13 +255,14 @@ fn body(
         issue,
         title,
         picked_up,
+        is_spec,
     } = subject
     {
         text += &format!("Issue:        {}\n", issue.url);
         if let Some(title) = title {
             text += &format!("Title:        {title}\n");
         }
-        let command = match (*picked_up, is_spec) {
+        let command = match (*picked_up, *is_spec) {
             (false, false) => "Run",
             (false, true) => "Spec run",
             (true, false) => "Pickup run, which dispatched a Run",
@@ -401,6 +405,7 @@ mod tests {
             issue: issue(),
             title: Some("Add export button".to_string()),
             picked_up: false,
+            is_spec: false,
         }
     }
 
@@ -463,7 +468,6 @@ mod tests {
         body(
             subject,
             account,
-            false,
             None,
             None,
             "droplet-1",
@@ -643,6 +647,7 @@ mod tests {
                 issue: issue(),
                 title: None,
                 picked_up: false,
+                is_spec: false,
             },
             about_architect_run(),
             Subject::ArchitectRun(None),
@@ -732,7 +737,6 @@ mod tests {
             body(
                 &Subject::Pending,
                 &account,
-                false,
                 Some("claude · opus · high"),
                 Some(Path::new("/home/me/.thirdshift/logs/commands/issue/x.log")),
                 "droplet-1",

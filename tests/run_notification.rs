@@ -266,6 +266,27 @@ fn an_interrupted_notification_keeps_models_observed_before_the_signal() {
 }
 
 #[test]
+fn a_spec_with_missing_harness_still_names_its_command() {
+    let scenario = Scenario::new();
+    scenario.spec_has_tickets(20, &[(21, &[])]);
+    std::fs::remove_file(scenario.path("bin/claude")).unwrap();
+    let path = format!("{}:/usr/bin:/bin", scenario.path("bin").display());
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let result = scenario.run_with_env(
+        &[&scenario.issue_url(20), "email", "me@example.com"],
+        &[
+            ("PATH", &path),
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", KEY),
+        ],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_contains(&result.stderr, "claude is not on PATH");
+    let request = the_one_request(&resend);
+    assert_contains(text(&request), "\nCommand:      Spec run\n");
+}
+
+#[test]
 fn a_spec_notification_names_the_command_before_any_tickets_start() {
     let scenario = Scenario::new();
     scenario.spec_has_tickets(20, &[(21, &[])]);
