@@ -268,6 +268,7 @@ fn fix(
     })();
     Outcome::Fixed {
         ended: ended.unwrap_or_else(|error| crate::run::Ended {
+            is_spec: false,
             outcome: Err(FailedRun {
                 log,
                 ..error.into()

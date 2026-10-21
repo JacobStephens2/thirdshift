@@ -167,7 +167,8 @@ impl Started {
         };
         let code = account.show(elapsed);
         if let Some(notification) = self.notification {
-            notification.send(&account);
+            let is_spec = matches!(&ending, Ending::Run(ended) if ended.is_spec);
+            notification.send(&account, is_spec);
         }
         code
     }

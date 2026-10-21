@@ -63,6 +63,9 @@ const STARTED_MARGIN: TimeDelta = TimeDelta::minutes(5);
 /// How a Run, or a Spec run, ended.
 pub struct Ended {
     pub outcome: Result<Reached, FailedRun>,
+    /// Whether the issue was identified as a Spec, even if it failed before
+    /// starting any Tickets. False until the issue's Tickets are known.
+    pub is_spec: bool,
     /// What became of the Base fix it started or waited on, if any, as
     /// [`BaseFix::report`] tells it.
     pub base_fix: Option<String>,
@@ -118,7 +121,8 @@ impl<'a> StartedBy<'a> {
 /// has it send one, is for what started the Run to send, once it has ended.
 pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> Ended {
     let mut base_fix = BaseFix::new(started_by.child(), asks.base_fix.clone());
-    let mut outcome = run(issue, asks, started_by, &mut base_fix);
+    let mut is_spec = false;
+    let mut outcome = run(issue, asks, started_by, &mut base_fix, &mut is_spec);
     if let Err(failed) = &mut outcome
         && let Some(recovery) = &mut failed.recovery
     {
@@ -126,6 +130,7 @@ pub fn run_to_end(issue: &IssueUrl, asks: &mut Asks, started_by: StartedBy) -> E
     }
     Ended {
         outcome,
+        is_spec,
         base_fix: base_fix.report(),
         advice: base_fix.into_advice(),
     }
@@ -158,6 +163,7 @@ fn run(
     asks: &mut Asks,
     started_by: StartedBy,
     base_fix: &mut BaseFix,
+    is_spec: &mut bool,
 ) -> Result<Reached, FailedRun> {
     let directory = LaunchDirectory::open_for_run(issue)?;
     if let StartedBy::Command = started_by {
@@ -186,6 +192,7 @@ fn run(
         issue_branch: None,
         child: started_by.child().is_some(),
         started: Utc::now() - STARTED_MARGIN,
+        is_spec,
     };
     let outcome = start(
         &mut outside,
@@ -404,6 +411,7 @@ struct LaunchAndGitHub<'a> {
     /// When the Run began, less [`STARTED_MARGIN`], for its sessions' check
     /// for untrusted edits.
     started: DateTime<Utc>,
+    is_spec: &'a mut bool,
 }
 
 impl LaunchAndGitHub<'_> {
@@ -463,6 +471,7 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
     }
 
     fn started(&mut self, work: Work) {
+        *self.is_spec = matches!(work, Work::SpecRun(_));
         logs::started(work, &self.child_asks.harness);
         if self.child {
             logs::issue_title(GitHub::new().issue_title(self.issue).ok());

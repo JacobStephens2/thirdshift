@@ -266,6 +266,34 @@ fn an_interrupted_notification_keeps_models_observed_before_the_signal() {
 }
 
 #[test]
+fn a_spec_notification_names_the_command_before_any_tickets_start() {
+    let scenario = Scenario::new();
+    scenario.spec_has_tickets(20, &[(21, &[])]);
+    scenario.issue_is(21, "CLOSED");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[&scenario.issue_url(20), "email", "me@example.com"],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let request = the_one_request(&resend);
+    assert_contains(text(&request), "\nCommand:      Spec run\n");
+    assert_contains(
+        text(&request),
+        "every Ticket is closed and there is no Spec branch",
+    );
+    assert!(
+        !text(&request).contains("\nTickets:\n"),
+        "{}",
+        text(&request)
+    );
+}
+
+#[test]
 fn a_spec_notification_includes_child_models_and_excludes_an_earlier_commands_models() {
     let scenario = Scenario::new();
     scenario.agent_does_for(7, &format!(
@@ -300,6 +328,7 @@ gh pr create --base issue-20 --head issue-{ticket} --title 'Ticket {ticket}' --b
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let request = the_one_request(&resend);
     let text = text(&request);
+    assert_contains(text, "\nCommand:      Spec run\n");
     assert_contains(text, "- implement: claude · claude-sonnet-5");
     assert_contains(text, "- implement: claude · claude-opus-4-8");
     assert_contains(
@@ -468,6 +497,7 @@ fn a_run_ready_for_review_sends_one_notification_to_the_address_given() {
         "{text}"
     );
     assert_one_issue_line(text);
+    assert_contains(text, "\nCommand:      Run\n");
     assert_contains(text, PR_URL);
     assert_contains(text, &the_one_log(&scenario));
     assert_contains(text, &hostname());
@@ -505,6 +535,7 @@ fn a_merge_run_sends_one_notification_that_it_merged() {
         text(&request)
     );
     assert_contains(text(&request), PR_URL);
+    assert_contains(text(&request), "\nCommand:      Run\n");
 }
 
 #[test]
