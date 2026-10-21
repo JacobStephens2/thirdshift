@@ -2,7 +2,7 @@
 
 Research date: 2026-10-21 (America/New_York).
 
-**Question.** Should the eval system run Trials, and perhaps Graders, inside Docker or another sandbox? And how would that change the decisions in the [#698 grilling](../../.scratch/grill-with-docs/698-evals/README.md)?
+**Question.** Should the eval system run Trials, and perhaps Graders, inside Docker or another sandbox? And how would that change the decisions in the [#698 grilling](../../.scratch/grill-with-docs/done/698-evals/README.md)?
 
 Q3.6 settled this much:
 - each Trial gets a throwaway repository, checked for later commits;
@@ -790,7 +790,7 @@ Q3.6 settled file binds only, sharing the host's network and PID namespace.
 ## Sources
 
 thirdshift:
-- the [#698 grilling](../../.scratch/grill-with-docs/698-evals/README.md);
+- the [#698 grilling](../../.scratch/grill-with-docs/done/698-evals/README.md);
 - [eval-runners.md](eval-runners.md), [eval-viewers.md](eval-viewers.md), [eval-tools-landscape.md](eval-tools-landscape.md) and [harness-candidates.md](harness-candidates.md);
 - [ADR 0012](../adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md) and [ADR 0013](../adr/0013-every-harness-runs-unattended-and-fully-trusted.md);
 - [the Security skill](../../skills/thirdshift-security-audit/SKILL.md);

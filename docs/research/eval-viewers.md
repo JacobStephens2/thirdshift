@@ -2,7 +2,7 @@
 
 Research date: 2026-10-21 (America/New_York).
 
-**Question.** Which pages should show thirdshift's traces and its Replay results? The traces are the Session traces of [ADR 0019](../adr/0019-session-logs-become-session-traces.md). A Replay result is a Baseline arm against a Candidate arm across Eval tasks, with repeated Trials and their Grades. The choices are the **Console**, an existing viewer, or both, with the Console linking to the viewer. This feeds Q4.1 and Q4.12 of the [#698 grilling](../../.scratch/grill-with-docs/698-evals.md). After using the Console, Jacob is open to an existing viewer, but wary of two that overlap and of the upkeep.
+**Question.** Which pages should show thirdshift's traces and its Replay results? The traces are the Session traces of [ADR 0019](../adr/0019-session-logs-become-session-traces.md). A Replay result is a Baseline arm against a Candidate arm across Eval tasks, with repeated Trials and their Grades. The choices are the **Console**, an existing viewer, or both, with the Console linking to the viewer. This feeds Q4.1 and Q4.12 of the [#698 grilling](../../.scratch/grill-with-docs/done/698-evals/README.md). After using the Console, Jacob is open to an existing viewer, but wary of two that overlap and of the upkeep.
 
 The candidates:
 - MLflow;
@@ -635,7 +635,7 @@ What follows is new beyond the network audit.
 
 ## Sources
 
-thirdshift: [ADR 0016](../adr/0016-the-console-is-a-long-running-reader.md), [ADR 0019](../adr/0019-session-logs-become-session-traces.md), [ADR 0015](../adr/0015-security-findings-stay-private-until-fixed.md), [the #698 grilling](../../.scratch/grill-with-docs/698-evals.md), [eval-tools.md](eval-tools.md), [eval-tools-landscape.md](eval-tools-landscape.md), [`src/console/`](../../src/console/), [`src/logs/status/`](../../src/logs/status/).
+thirdshift: [ADR 0016](../adr/0016-the-console-is-a-long-running-reader.md), [ADR 0019](../adr/0019-session-logs-become-session-traces.md), [ADR 0015](../adr/0015-security-findings-stay-private-until-fixed.md), [the #698 grilling](../../.scratch/grill-with-docs/done/698-evals/README.md), [eval-tools.md](eval-tools.md), [eval-tools-landscape.md](eval-tools-landscape.md), [`src/console/`](../../src/console/), [`src/logs/status/`](../../src/logs/status/).
 
 Source at the pinned commits:
 - [MLflow `d0b397f`](https://github.com/mlflow/mlflow/tree/d0b397f85b602e8f146be0d0373b28bba2ca2b74)

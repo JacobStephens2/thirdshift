@@ -3,7 +3,7 @@
 Issue: https://github.com/JacobStephens2/thirdshift/issues/698
 Research: `docs/research/eval-tools.md`, `docs/research/eval-tools-landscape.md` (#741), `docs/research/eval-viewers.md`, `docs/research/eval-runners.md`, `docs/research/otlp-file-writer.md`, `docs/research/eval-sandboxes.md`
 
-The grilling follows `../TEMPLATE.md`, with one file per round and three that every round updates:
+The grilling follows `../../TEMPLATE.md`, with one file per round and three that every round updates:
 - each round's questions, answers and `Checked:` notes go in its own `round-<n>.md`;
 - what follows from the answers goes in `settled.md`;
 - findings go in `research.md`, and pending work in `waiting.md`.
@@ -22,7 +22,13 @@ Questions are numbered `<round>.<question>`, so Q6.2 is Round 6's second questio
 
 ## Status
 
-Every question is answered, and no new ones follow from the answers (2026-10-21). The four Specs are written with `to-spec` and `to-tickets` once you confirm the shared understanding.
+Done on 2026-10-21. Every question is answered, and the decisions became four Specs, each broken into Tickets with `to-tickets`:
+- #700, **Session traces:** OTLP JSON Lines in place of Session logs;
+- #977, **Experiments,** which measure a change before it reaches production;
+- #978, **the Scoring run,** which scores a weekly sample of production work;
+- #981, **Run metrics,** the signals each Run leaves, kept apart.
+
+Two decisions went to issues of their own, outside the Specs: #966, Self-merge settings for each kind of command (Q6.2), and #937, Claude Code's own attribution on factory pull requests.
 
 ## Every round
 

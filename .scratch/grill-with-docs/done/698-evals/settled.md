@@ -2,7 +2,7 @@
 
 Part of the [#698 grilling](README.md).
 
-- No write-up of a Security finding goes to a new third party. That's why a Security run's Run notification, which passes through Resend, carries only severity, title and link ([ADR-0015](../../../docs/adr/0015-security-findings-stay-private-until-fixed.md)). So Security sessions' logs and grades stay off any hosted eval service, whatever Q1.2 decides.
+- No write-up of a Security finding goes to a new third party. That's why a Security run's Run notification, which passes through Resend, carries only severity, title and link ([ADR-0015](../../../../docs/adr/0015-security-findings-stay-private-until-fixed.md)). So Security sessions' logs and grades stay off any hosted eval service, whatever Q1.2 decides.
 - **Order and Specs.** Four Specs, for Session traces, Experiments, the Scoring run and Run metrics, each with its own Tickets and all linked from #698 (Q4.13, Q7.4). All four are published together, as #921 allows. Session traces and Experiments are built in parallel (Q3.18), and Session traces come before the Console's log view and Waterfall are reworked (Q3.19). The Scoring run's Grader Ticket waits only for the Experiments Spec's sandbox Ticket, and its other Tickets can start at once. Only Run metrics' Session-trace Tickets wait for the Session-trace Spec. The Specs are written with `to-spec` and `to-tickets` once this grilling ends, and published as `docs/agents/triage-labels.md` says.
 - Accuracy and quality come first. Efficiency (minutes, tokens, cost-equivalent) is measured and shown beside them, never folded into one score (Q1.1).
 - A Run's outcome, its Repairs and its CI rounds don't count as evidence of quality on their own (Q1.1, and the triage notes on the issue).
