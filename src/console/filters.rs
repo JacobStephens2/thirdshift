@@ -2,33 +2,54 @@
 use askama::filters::{Escaper, Html, Safe};
 use askama::{Result, Values};
 
-/// Escape `text` and link each `https://` URL in it, as the findings list does.
-/// Trailing sentence punctuation stays outside the link.
+/// Escape `text` and link each `https://` URL in it; other schemes stay text.
 #[askama::filter_fn]
 pub fn linkify(text: impl std::fmt::Display, _: &dyn Values) -> Result<Safe<String>> {
-    let text = text.to_string();
+    Ok(Safe(linked(&text.to_string())))
+}
+
+/// Escaped HTML for `text`, with each `https://` URL a link. Trailing
+/// sentence punctuation, and a `)` the URL did not open, stay outside it.
+pub(super) fn linked(text: &str) -> String {
     let mut html = String::new();
-    let mut rest = text.as_str();
+    let mut rest = text;
     while let Some(start) = rest.find("https://") {
         let (before, tail) = rest.split_at(start);
         let end = tail
             .find(|c: char| c.is_whitespace() || matches!(c, '<' | '>' | '"' | '\'' | '`'))
             .unwrap_or(tail.len());
-        let url = tail[..end].trim_end_matches(['.', ',', ';', ':', '!', '?', ')']);
-        Html.write_escaped_str(&mut html, before)?;
+        let mut url = &tail[..end];
+        loop {
+            let trimmed = url.trim_end_matches(['.', ',', ';', ':', '!', '?']);
+            match trimmed.strip_suffix(')') {
+                Some(open) if trimmed.matches('(').count() < trimmed.matches(')').count() => {
+                    url = open
+                }
+                _ => {
+                    url = trimmed;
+                    break;
+                }
+            }
+        }
+        escape(&mut html, before);
         if url.len() > "https://".len() {
             html.push_str("<a href=\"");
-            Html.write_escaped_str(&mut html, url)?;
+            escape(&mut html, url);
             html.push_str("\">");
-            Html.write_escaped_str(&mut html, url)?;
+            escape(&mut html, url);
             html.push_str("</a>");
         } else {
-            Html.write_escaped_str(&mut html, url)?;
+            escape(&mut html, url);
         }
         rest = &tail[url.len()..];
     }
-    Html.write_escaped_str(&mut html, rest)?;
-    Ok(Safe(html))
+    escape(&mut html, rest);
+    html
+}
+
+fn escape(html: &mut String, text: &str) {
+    Html.write_escaped_str(html, text)
+        .expect("writing to a String cannot fail");
 }
 
 #[cfg(test)]
@@ -62,6 +83,14 @@ mod tests {
         assert_eq!(
             linked("http://x.test javascript:alert(1) https://"),
             "http://x.test javascript:alert(1) https://"
+        );
+    }
+
+    #[test]
+    fn keeps_a_closing_paren_that_belongs_to_the_url() {
+        assert_eq!(
+            linked("see https://en.wikipedia.org/wiki/Rust_(programming_language)."),
+            "see <a href=\"https://en.wikipedia.org/wiki/Rust_(programming_language)\">https://en.wikipedia.org/wiki/Rust_(programming_language)</a>."
         );
     }
 }

@@ -1,4 +1,6 @@
-//! Normalize retained Claude and Codex events into one escaped conversation.
+//! Normalize retained Claude and Codex events into one escaped conversation,
+//! with each `https://` URL a link.
+use super::filters::linked;
 use crate::logs::catalog::Kind;
 use serde_json::Value;
 
@@ -11,7 +13,7 @@ enum Part {
 
 pub(super) fn render(lines: &str, kind: Kind) -> String {
     if matches!(kind, Kind::Command) {
-        return format!("<pre class=\"command-output\">{}</pre>", escape(lines));
+        return format!("<pre class=\"command-output\">{}</pre>", linked(lines));
     }
     let mut html = String::new();
     let mut tools_open = false;
@@ -31,11 +33,11 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
             Part::Message(role, text) => html.push_str(&format!(
                 "<article class=\"message\"><h3>{}</h3><pre>{}</pre></article>",
                 escape(&role),
-                escape(&text)
+                linked(&text)
             )),
             Part::Thinking(text) => html.push_str(&format!(
                 "<details class=\"thinking\"><summary>Thinking</summary><pre>{}</pre></details>",
-                escape(&text)
+                linked(&text)
             )),
             Part::Tool(name, body) => html.push_str(&format!(
                 "<article class=\"tool\" data-tool=\"{}\"><h3>{}</h3>{body}</article>",
@@ -44,7 +46,7 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
             )),
             Part::Plain(text) => html.push_str(&format!(
                 "<pre class=\"unknown-event\">{}</pre>",
-                escape(&text)
+                linked(&text)
             )),
         }
     }
@@ -154,7 +156,7 @@ fn tool(name: &str, input: &Value) -> Part {
 }
 
 fn pre(class: &str, text: &str) -> String {
-    format!("<pre class=\"{class}\">{}</pre>", escape(text))
+    format!("<pre class=\"{class}\">{}</pre>", linked(text))
 }
 fn text<'a>(value: &'a Value, key: &str) -> &'a str {
     value[key].as_str().unwrap_or("")

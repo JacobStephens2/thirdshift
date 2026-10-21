@@ -31,8 +31,8 @@ pub(crate) struct Row {
     pub selector: String,
     pub logs_url: String,
     pub subject: String,
-    /// The issue's address, linked from the subject when it is `https://`.
-    pub subject_url: String,
+    /// The issue's `https://` address, which the subject links to.
+    pub subject_url: Option<String>,
     pub title: String,
     pub state: String,
     pub now_line: String,
@@ -282,8 +282,10 @@ fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, Stri
     }
 }
 
-fn issue_url(issue: Option<&Issue>) -> String {
-    issue.map(|issue| issue.url.clone()).unwrap_or_default()
+fn issue_url(issue: Option<&Issue>) -> Option<String> {
+    issue
+        .map(|issue| issue.url.clone())
+        .filter(|url| url.starts_with("https://"))
 }
 
 fn row(

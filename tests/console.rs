@@ -721,11 +721,11 @@ fn logs_inventory_matches_cli_and_reads_current_layout_only() {
     fs::create_dir_all(&folder).unwrap();
     fs::write(
         folder.join("7-20261003T120000-0400.log"),
-        "Command <output>\n",
+        "Command <output> https://github.com/acme/widgets/pull/9\n",
     )
     .unwrap();
     fs::write(folder.join("7-20261003T120000-0400-implement.jsonl"),
-        "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"Hello <reader>\"}}\n").unwrap();
+        "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"Hello <reader> (https://github.com/acme/widgets/issues/7)\"}}\n").unwrap();
     let old = home.path().join(".thirdshift/logs/acme/widgets/sessions");
     fs::create_dir_all(&old).unwrap();
     fs::write(old.join("7-20261003T120000-0400-implement.jsonl"), "old\n").unwrap();
@@ -759,7 +759,10 @@ fn logs_inventory_matches_cli_and_reads_current_layout_only() {
             .unwrap();
         assert!(raw.status.success());
         if log["kind"] == "Command log" {
-            assert_eq!(raw.stdout, b"Command <output>\n");
+            assert_eq!(
+                raw.stdout,
+                b"Command <output> https://github.com/acme/widgets/pull/9\n"
+            );
             assert!(
                 html.contains("Command &#60;output&#62;")
                     || html.contains("Command &lt;output&gt;"),
@@ -772,6 +775,15 @@ fn logs_inventory_matches_cli_and_reads_current_layout_only() {
             );
         }
         assert!(!html.contains("<output>"));
+        let url = if log["kind"] == "Command log" {
+            "https://github.com/acme/widgets/pull/9"
+        } else {
+            "https://github.com/acme/widgets/issues/7"
+        };
+        assert!(
+            html.contains(&format!("<a href=\"{url}\">{url}</a>")),
+            "{html}"
+        );
     }
     assert_eq!(console.get("/logs/not-an-inventory-id").status(), 404);
 }
