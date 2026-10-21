@@ -1,4 +1,5 @@
-//! Template filters shared by the Console's pages.
+//! Escaping and URL linking shared by the Console's templates and its
+//! conversation renderer. Askama finds template filters by this module's name.
 use askama::filters::{Escaper, Html, Safe};
 use askama::{Result, Values};
 
@@ -44,6 +45,13 @@ pub(super) fn linked(text: &str) -> String {
         rest = &tail[url.len()..];
     }
     escape(&mut html, rest);
+    html
+}
+
+/// Escaped HTML for `text`, the same as the templates' own escaping.
+pub(super) fn escaped(text: &str) -> String {
+    let mut html = String::new();
+    escape(&mut html, text);
     html
 }
 

@@ -1,6 +1,6 @@
 //! Normalize retained Claude and Codex events into one escaped conversation,
 //! with each `https://` URL a link.
-use super::filters::linked;
+use super::filters::{escaped, linked};
 use crate::logs::catalog::Kind;
 use serde_json::Value;
 
@@ -32,7 +32,7 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
         match part {
             Part::Message(role, text) => html.push_str(&format!(
                 "<article class=\"message\"><h3>{}</h3><pre>{}</pre></article>",
-                escape(&role),
+                escaped(&role),
                 linked(&text)
             )),
             Part::Thinking(text) => html.push_str(&format!(
@@ -41,8 +41,8 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
             )),
             Part::Tool(name, body) => html.push_str(&format!(
                 "<article class=\"tool\" data-tool=\"{}\"><h3>{}</h3>{body}</article>",
-                escape(&name),
-                escape(&name)
+                escaped(&name),
+                escaped(&name)
             )),
             Part::Plain(text) => html.push_str(&format!(
                 "<pre class=\"unknown-event\">{}</pre>",
@@ -166,11 +166,4 @@ fn pretty(value: &Value) -> String {
         .as_str()
         .map(str::to_owned)
         .unwrap_or_else(|| serde_json::to_string_pretty(value).unwrap_or_default())
-}
-pub(super) fn escape(text: &str) -> String {
-    text.replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
-        .replace('\'', "&#39;")
 }
