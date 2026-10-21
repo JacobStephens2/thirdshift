@@ -26,7 +26,7 @@ before(async () => {
   for (let number = 1; number <= 7; number++) {
     const live = number === 1;
     const record = {
-      version: 1, kind: 'Run', name: `run-${number}`, repository: 'acme/widgets', hostname: 'fixture',
+      version: 1, kind: number === 2 ? 'Spec run' : 'Run', name: `run-${number}`, repository: 'acme/widgets', hostname: 'fixture',
       issue: { number, url: `https://github.com/acme/widgets/issues/${number}`, title: `Run ${number} <script>unsafe()</script>` },
       process_id: live ? process.pid : 0, process_start: live ? processStart : 'gone', harness: 'codex',
       started_at: time(number === 7 ? 1500 : 180 - number * 10),
@@ -38,9 +38,21 @@ before(async () => {
       ],
       ...(number === 6 ? { parent_record: join(folder, '2-fixture.command.json') } : {})
     };
+    if (live) {
+      const dispatched = { ...record };
+      record.kind = 'Pickup run';
+      record.name = 'pickup-fixture';
+      record.stages = [{ name: 'dispatched Run', began_at: time(170), session_log: null }];
+      record.dispatched = [dispatched];
+    }
     await writeFile(join(folder, `${number}-fixture.command.json`), JSON.stringify(record));
     await writeFile(join(folder, `${number}-fixture.log`), `Command ${number}\n`);
   }
+  const security = JSON.parse(await readFile(join(folder, '3-fixture.command.json'), 'utf8'));
+  security.kind = 'Security run';
+  security.name = 'security-fixture';
+  security.issue = null;
+  await writeFile(join(folder, '10-fixture.command.json'), JSON.stringify(security));
   // A finished Run in an alphabetically earlier repository must not precede
   // this repository's live Run, or reorder the finished columns by repository.
   const otherFolder = join(home, '.thirdshift/logs/aaa/first/commands/issue');
@@ -75,7 +87,7 @@ test('Lanes scales every window, nests child Runs and fits 390 px without CSP vi
   for (const hours of [3.5, 12, 24]) {
     await page.goto(`${origin}/?page=lanes&hours=${hours}`);
     assert.equal(await page.locator('[name="hours"]').inputValue(), String(hours));
-    assert.equal(await page.locator('.lane').count(), 6);
+    assert.equal(await page.locator('.lane').count(), 7);
     assert.equal(await page.locator('.lane').filter({ hasText: 'acme/widgets#2' }).locator('.time-run').count(), 2);
     const complete = page.locator('.time-run').filter({ hasText: 'acme/widgets#3' });
     const track = await complete.locator('.timeline').boundingBox();
@@ -98,21 +110,48 @@ test('Lanes scales every window, nests child Runs and fits 390 px without CSP vi
   assert.deepEqual(errors, []);
 });
 
+test('time headings distinguish a live Pickup run and its Run and name kinds once at 390 px', { skip: process.platform !== 'linux' }, async t => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  for (const view of ['lanes', 'stages']) {
+    await page.goto(`${origin}/?page=${view}`);
+    const headings = view === 'lanes' ? page.locator('.time-run h3') : page.locator('thead .command');
+    for (const heading of ['Pickup run · acme/widgets#1', 'Run · acme/widgets#1', 'Spec run · acme/widgets#2', 'Run · acme/widgets#6', 'Security run on acme/widgets']) {
+      assert.equal(await headings.getByRole('link', { name: heading, exact: true }).count(), 1);
+      if (view === 'stages') {
+        assert.ok((await page.locator('.cell-run').allTextContents()).includes(`${heading}: `));
+      }
+    }
+    for (const heading of ['Pickup run · acme/widgets#1', 'Run · acme/widgets#1']) {
+      const link = headings.getByRole('link', { name: heading, exact: true });
+      assert.match(await link.locator('..').textContent(), /live/);
+      await link.click();
+      await page.locator('#peek-content h2').waitFor();
+      const details = await page.locator('#peek-content').textContent();
+      assert.ok(details.includes(heading.startsWith('Pickup') ? 'pickup-fixture' : 'run-1'));
+      await page.keyboard.press('Escape');
+    }
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  }
+});
+
 test('Stages pins live Runs, matches CLI order and opens the selected child Run at 390 px', { skip: process.platform !== 'linux' }, async t => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   t.after(() => context.close());
   const page = await context.newPage();
   await page.goto(`${origin}/?page=stages`);
   const status = JSON.parse(execFileSync(binary, ['status', '--all', '--json'], { env: { ...process.env, HOME: home } }));
-  const runs = status.commands.flatMap(command => [command, ...(command.children ?? [])]);
+  const flatten = command => [command, ...(command.dispatched ?? []).flatMap(flatten), ...(command.children ?? []).flatMap(flatten)];
+  const runs = status.commands.flatMap(flatten);
   runs.sort((a, b) => (a.state !== 'live') - (b.state !== 'live') || Date.parse(b.ended_at ?? b.started_at) - Date.parse(a.ended_at ?? a.started_at));
-  assert.deepEqual(await page.locator('thead .peek-link').allTextContents(), runs.map(run => `${run.repository}#${run.issue.number}`));
-  assert.equal(await page.locator('thead .command').first().getAttribute('data-command'), runs[0].record_path ?? `${join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json')}::run-1`);
+  assert.deepEqual(await page.locator('thead .peek-link').allTextContents(), runs.map(run => run.issue ? `${run.kind} · ${run.repository}#${run.issue.number}` : `${run.kind} on ${run.repository}`));
+  assert.equal(await page.locator('thead .command').first().getAttribute('data-command'), runs[0].record_path ?? `${join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json')}::pickup-fixture`);
   assert.match(await page.locator('.stage-grid').first().textContent(), /Running ·/);
   assert.match(await page.locator('.stage-grid').first().textContent(), /Usual range: 10–10 min/);
   const historical = page.locator('.stage-grid').filter({ has: page.locator('thead .peek-link', { hasText: 'acme/widgets#9' }) });
   const headers = await historical.locator('thead .peek-link').allTextContents();
-  const historicalCell = historical.locator('tbody tr').first().locator('td').nth(headers.indexOf('acme/widgets#9'));
+  const historicalCell = historical.locator('tbody tr').first().locator('td').nth(headers.indexOf('Run · acme/widgets#9'));
   assert.match(await historicalCell.textContent(), /Unknown · no stage times retained/);
   assert.doesNotMatch(await historicalCell.textContent(), /Not reached/);
   const child = page.locator('thead .peek-link').filter({ hasText: 'acme/widgets#6' });
