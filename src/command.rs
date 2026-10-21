@@ -136,9 +136,9 @@ impl Started {
 
     /// Take note that the Pickup run took the Ready issue `issue`, titled
     /// `title`, which its Run notification is then about.
-    pub fn took(&mut self, issue: &IssueUrl, title: String) {
+    pub fn took(&mut self, issue: &IssueUrl, title: String, is_spec: bool) {
         if let Some(notification) = &mut self.notification {
-            notification.took(issue, title);
+            notification.took(issue, title, is_spec);
         }
     }
 

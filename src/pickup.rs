@@ -38,6 +38,8 @@ pub enum Outcome {
 /// The Ready issue a Pickup run took, and how the run it dispatched ended.
 pub struct Took {
     pub issue: IssueUrl,
+    /// Whether the Ready issue was a Spec when taken.
+    pub is_spec: bool,
     /// Its title, as the search listed it.
     pub title: String,
     /// How the Spec run or Run it was dispatched as ended.
@@ -202,6 +204,7 @@ fn run_through<R>(
     });
     Ok(Outcome::Took(Took {
         issue: listed.issue,
+        is_spec,
         title: listed.title,
         ended,
     }))

@@ -10,8 +10,8 @@
 //! its Claim limit, or while an Architect run or another Pickup run on the
 //! repository is still running, it is skipped. Each pass that gets the lock
 //! first sweeps `in-progress` off the repository's closed issues.
-//! Asked for a Run notification, a pass that took an issue sends one, the
-//! dispatched run's, and a skipped one sends none.
+//! Asked for a Run notification, a pass that took an issue sends one naming
+//! the Pickup run and the kind of run it dispatched; a skipped one sends none.
 
 mod support;
 
@@ -1462,6 +1462,7 @@ fn the_notification_of_a_run_left_ready_for_review_is_that_runs() {
             "Result:       ready for review\n\
              Issue:        https://github.com/acme/widgets/issues/7\n\
              Title:        Sharpen the widgets\n\
+             Command:      Pickup run, which dispatched a Run\n\
              Pull request: {}\n\
              Session log:  {}\n\
              Command log:  {}\n\
@@ -1493,7 +1494,7 @@ fn the_notification_of_a_merge_run_says_it_merged() {
         "[thirdshift] acme/widgets#7 Sharpen the widgets: merged"
     );
     let pull_request = format!(
-        "Result:       merged\nIssue:        https://github.com/acme/widgets/issues/7\nTitle:        Sharpen the widgets\nPull request: {}\n",
+        "Result:       merged\nIssue:        https://github.com/acme/widgets/issues/7\nTitle:        Sharpen the widgets\nCommand:      Pickup run, which dispatched a Run\nPull request: {}\n",
         pr["url"].as_str().unwrap()
     );
     assert!(text.starts_with(&pull_request), "{text}");
@@ -1518,6 +1519,7 @@ fn the_notification_of_a_failed_run_has_its_pull_request_and_its_cause() {
             "Result:       failed\n\
              Issue:        https://github.com/acme/widgets/issues/7\n\
              Title:        Sharpen the widgets\n\
+             Command:      Pickup run, which dispatched a Run\n\
              Pull request: {}\n\
              Cause:        claude exited 3\n\
              Session log:  ",
@@ -1577,7 +1579,7 @@ fn the_notification_of_a_spec_run_is_that_spec_runs_with_a_line_per_ticket() {
         "[thirdshift] acme/widgets#7 Sharpen every widget: ready for review"
     );
     let pull_request = format!(
-        "Result:       ready for review\nIssue:        https://github.com/acme/widgets/issues/7\nTitle:        Sharpen every widget\nPull request: {}\n",
+        "Result:       ready for review\nIssue:        https://github.com/acme/widgets/issues/7\nTitle:        Sharpen every widget\nCommand:      Pickup run, which dispatched a Spec run\nPull request: {}\n",
         spec_pr["url"].as_str().unwrap()
     );
     assert!(text.starts_with(&pull_request), "{text}");

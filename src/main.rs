@@ -324,8 +324,8 @@ fn architect(args: ArchitectArgs) -> ExitCode {
 /// is the Pickup run's. One that is skipped, as when the repository is at the
 /// User config's Claim limit, says why on stderr, puts nothing on stdout, and
 /// is no failure. If asked, by the command or the User config, one that took
-/// an issue sends one Run notification, the one the dispatched run would send
-/// started by hand, and that run sends none of its own; one that is skipped
+/// an issue sends one Run notification, naming the Pickup run and the kind
+/// of run it dispatched, and that run sends none of its own; one that is skipped
 /// sends none. The notification's checks are made before any other work all
 /// the same, so a pass that would be skipped fails on them too. Its Command
 /// log is kept once it has taken an issue, and covers the dispatched run.
@@ -344,10 +344,11 @@ fn pickup(args: PassArgs) -> ExitCode {
     match took {
         Ok(pickup::Outcome::Took(Took {
             issue,
+            is_spec,
             title,
             ended,
         })) => {
-            started.took(&issue, title);
+            started.took(&issue, title, is_spec);
             started.finish(Ending::Run(ended))
         }
         Ok(pickup::Outcome::Skipped(skipped)) => started.finish(Ending::Skipped(skipped.into())),

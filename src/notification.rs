@@ -73,6 +73,8 @@ enum Subject {
     Issue {
         issue: IssueUrl,
         title: Option<String>,
+        picked_up: bool,
+        is_spec: bool,
     },
     /// An Architect run, with the repository the Launch directory's `origin`
     /// names, if it names one.
@@ -107,7 +109,7 @@ impl RunNotification {
     /// The Run notification for a command about `about` starting now, sent
     /// to `to`, else to `email.to`. Fails, before any work, with the same
     /// checks as `email-test`: an address is known and a Resend API key is
-    /// found. Once they pass, it reads a Run's issue title now, while someone
+    /// found. Once they pass, it reads a Run's issue title and kind now, while someone
     /// may be watching, rather than after the Run, when a hung `gh` could
     /// keep the notification from ever going; and an Architect run's
     /// repository.
@@ -116,6 +118,12 @@ impl RunNotification {
         let subject = match about {
             About::Issue(issue) => Subject::Issue {
                 issue: issue.clone(),
+                picked_up: false,
+                // Keep the kind even if launch or Harness preflight fails.
+                // A failed read leaves the Run's own preflight to report why.
+                is_spec: GitHub::new()
+                    .tickets(issue)
+                    .is_ok_and(|tickets| !tickets.is_empty()),
                 // Left out of the subject if GitHub can't be asked; the Run's
                 // own preflight reports why.
                 title: GitHub::new().issue_title(issue).ok(),
@@ -134,13 +142,14 @@ impl RunNotification {
     }
 
     /// Take note that the Pickup run took `issue`, titled `title`, as its
-    /// search listed it: the notification is then the one the Spec run or
-    /// Run it is dispatched as would send started by hand, which the Pickup
-    /// run sends in its place.
-    pub fn took(&mut self, issue: &IssueUrl, title: String) {
+    /// search listed it. Its notification keeps the issue subject and names
+    /// the Pickup run and the kind of run it dispatched in the body.
+    pub fn took(&mut self, issue: &IssueUrl, title: String, is_spec: bool) {
         self.subject = Subject::Issue {
             issue: issue.clone(),
             title: Some(title),
+            picked_up: true,
+            is_spec,
         };
     }
 
@@ -195,7 +204,7 @@ impl RunNotification {
 /// The subject of a notification about `subject` for a command whose
 /// outcome is `outcome`: none about a Pickup run that took no issue.
 fn subject_line(subject: &Subject, outcome: &str) -> Option<String> {
-    if let Subject::Issue { issue, title } = subject {
+    if let Subject::Issue { issue, title, .. } = subject {
         return Some(issue_subject(issue, title.as_deref(), outcome));
     }
     subject
@@ -242,11 +251,24 @@ fn body(
     took: Duration,
 ) -> String {
     let mut text = format!("Result:       {}\n", account.outcome);
-    if let Subject::Issue { issue, title } = subject {
+    if let Subject::Issue {
+        issue,
+        title,
+        picked_up,
+        is_spec,
+    } = subject
+    {
         text += &format!("Issue:        {}\n", issue.url);
         if let Some(title) = title {
             text += &format!("Title:        {title}\n");
         }
+        let command = match (*picked_up, *is_spec) {
+            (false, false) => "Run",
+            (false, true) => "Spec run",
+            (true, false) => "Pickup run, which dispatched a Run",
+            (true, true) => "Pickup run, which dispatched a Spec run",
+        };
+        text += &command_lines(command, None);
     }
     if let Some((command, repo)) = subject.command() {
         text += &command_lines(command, repo);
@@ -382,6 +404,8 @@ mod tests {
         Subject::Issue {
             issue: issue(),
             title: Some("Add export button".to_string()),
+            picked_up: false,
+            is_spec: false,
         }
     }
 
@@ -461,6 +485,7 @@ mod tests {
                     "Result:       merged\n\
                      Issue:        https://github.com/acme/widgets/issues/123\n\
                      Title:        Add export button\n\
+                     Command:      Run\n\
                      Pull request: {PR}\n\
                      Session log:  {LOG}\n\
                      Sent by:      thirdshift\n\
@@ -483,6 +508,7 @@ mod tests {
                     "Result:       failed\n\
                      Issue:        https://github.com/acme/widgets/issues/123\n\
                      Title:        Add export button\n\
+                     Command:      Run\n\
                      Cause:        claude exited 1\n\
                      Base fix:     {PLAN} not merged\n\
                      Session log:  {LOG}\n\
@@ -508,6 +534,7 @@ mod tests {
                 "Result:       interrupted\n\
                  Issue:        https://github.com/acme/widgets/issues/123\n\
                  Title:        Add export button\n\
+                 Command:      Run\n\
                  Sent by:      thirdshift\n\
                  Host:         droplet-1\n\
                  Took:         4s\n"
@@ -619,6 +646,8 @@ mod tests {
             Subject::Issue {
                 issue: issue(),
                 title: None,
+                picked_up: false,
+                is_spec: false,
             },
             about_architect_run(),
             Subject::ArchitectRun(None),
