@@ -880,7 +880,7 @@ When thirdshift has written the issue to `.thirdshift-issue.md` at the root of t
 
 Use the `thirdshift-tdd` skill where possible, at pre-agreed seams.
 
-Run typechecking regularly, single test files regularly, and the full test suite once at the end.
+Run typechecking and single test files regularly. For final validation, run the tests the change affects, using the repository's documented test selection when it names one; otherwise run the full test suite once at the end. Before additional validation, check whether the branch's pull request remains open. After it is merged or closed, stop. Do not repeat a full-suite run on the same head already covered by successful CI.
 
 Once done, use the `thirdshift-code-review` skill to review the work.
 
