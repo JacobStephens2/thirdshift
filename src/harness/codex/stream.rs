@@ -23,6 +23,7 @@ use crate::progress::{bash, shorten};
 /// Codex exits: the completed interpretation records that evidence.
 #[derive(Default)]
 pub struct CodexProgress {
+    events: super::events::Events,
     /// The worktree the session runs in, which Codex's stream doesn't name.
     cwd: String,
     session_id: Option<String>,
@@ -197,6 +198,7 @@ impl Decoder for CodexProgress {
             evidence.push(Evidence::SafeguardRefusal(SafeguardRefusal::CodexCyber));
         }
         StreamUpdate {
+            events: self.events.decode(&event),
             progress: self.progress(&event),
             evidence,
         }

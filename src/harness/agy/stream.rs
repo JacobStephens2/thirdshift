@@ -91,6 +91,7 @@ impl Decoder for AgyProgress {
         StreamUpdate {
             progress: self.progress(&event),
             evidence,
+            ..StreamUpdate::default()
         }
     }
 

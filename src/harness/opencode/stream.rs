@@ -81,6 +81,7 @@ impl Decoder for OpenCodeProgress {
         StreamUpdate {
             progress,
             evidence: Vec::new(),
+            ..StreamUpdate::default()
         }
     }
     fn complete(self: Box<Self>) -> Facts {

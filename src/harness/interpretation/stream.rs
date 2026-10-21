@@ -13,8 +13,10 @@ use super::{
     TurnOutcome,
 };
 use crate::progress::{bash, shorten};
+mod events;
 
 pub struct Stream {
+    events: events::Events,
     init: Option<Init>,
     /// Cumulative totals survive later results without a complete pair.
     turns_and_cost: Option<(u64, f64)>,
@@ -119,6 +121,7 @@ impl Stream {
 
     fn new(dialect: Dialect) -> Self {
         Self {
+            events: events::Events::default(),
             init: None,
             turns_and_cost: None,
             final_message: None,
@@ -265,6 +268,9 @@ impl Decoder for Stream {
         };
         let evidence = self.dialect.evidence(&event);
         StreamUpdate {
+            events: self
+                .events
+                .decode(&event, matches!(self.dialect, Dialect::Grok(_))),
             progress: self.progress(&event),
             evidence,
         }
