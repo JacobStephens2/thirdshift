@@ -158,8 +158,8 @@ jobs:
       - name: Turn Spotlight indexing off
         run: sudo mdutil -a -i off
       # Homebrew's git, first on the image's PATH, takes about 13 ms to run
-      # here and Xcode's about 9 ms. Some tests build a PATH from the
-      # directory git is in, so git-upload-pack and the rest go beside it.
+      # here and Xcode's about 9 ms. Xcode's git runs git-upload-pack and
+      # the rest only from beside itself, so they are linked here too.
       - name: Put Xcode's git first on PATH
         run: |
           mkdir -p "$RUNNER_TEMP/xcode-git"

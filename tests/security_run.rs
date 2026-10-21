@@ -2695,9 +2695,10 @@ fn link_git(scenario: &Scenario) {
         .output()
         .unwrap();
     let git = std::path::PathBuf::from(String::from_utf8(git.stdout).unwrap().trim());
-    for name in ["git", "git-upload-pack", "git-receive-pack"] {
+    std::os::unix::fs::symlink(&git, scenario.path("bin/git")).unwrap();
+    for name in ["git-upload-pack", "git-receive-pack"] {
         let program = git.with_file_name(name);
-        if name == "git" || program.exists() {
+        if program.exists() {
             std::os::unix::fs::symlink(program, scenario.path("bin").join(name)).unwrap();
         }
     }
