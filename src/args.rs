@@ -22,6 +22,9 @@ pub enum Command {
     Version,
     Update,
     Setup,
+    CronJobs {
+        json: bool,
+    },
     Console {
         no_sign_in: bool,
     },
@@ -474,6 +477,13 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 session,
                 follow,
             });
+        }
+        Some("cronjobs") => {
+            return match &args[1..] {
+                [] => Ok(Command::CronJobs { json: false }),
+                [flag] if flag == "--json" => Ok(Command::CronJobs { json: true }),
+                _ => bail!("usage: thirdshift cronjobs [--json]"),
+            };
         }
         Some("status") => {
             return match &args[1..] {

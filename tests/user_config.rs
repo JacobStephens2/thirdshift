@@ -82,6 +82,41 @@ fn an_unknown_key_or_section_stops_the_run_naming_it_and_the_file() {
 }
 
 #[test]
+fn invalid_console_sign_in_entries_stop_loading_and_name_the_entry() {
+    for email in [
+        "jstephens@etadoichuk@etadventures.com",
+        "@example.com",
+        "owner@",
+        "owner@localhost",
+        "owner@.com",
+        "owner@example.",
+        "owner example@test.com",
+        "owner\u{2003}@example.com",
+        "missing-at",
+        "",
+    ] {
+        let scenario = Scenario::new();
+        let emails = toml::Value::Array(vec![
+            toml::Value::from("owner@example.test"),
+            toml::Value::from(email),
+        ]);
+        let path = scenario.user_config_is(&format!("[console]\nallowed_emails = {emails}\n"));
+
+        let result = scenario.run(&["status", "--json"]);
+
+        assert_eq!(result.code, Some(1), "{email:?}: {}", result.stderr);
+        scenario.assert_rejected_before_any_work(&result, &path.display().to_string());
+        assert!(
+            result.stderr.contains(&format!(
+                "console.allowed_emails: {email:?} is not an email address"
+            )),
+            "{email:?}: {}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
 fn a_spec_parallel_that_is_not_a_whole_number_from_1_up_stops_the_run() {
     for config in [
         "[spec]\nparallel = 0\n",

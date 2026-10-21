@@ -6,6 +6,7 @@ const HOME: &str = "/home/me";
 const PATH: &str = "/home/me/.thirdshift/config.toml";
 const NO_NOTIFICATIONS: &[(&str, &str)] = &[
     ("Merge run?", ""),
+    ("Every Run may start a Base fix", ""),
     ("fast-forwards", ""),
     ("Security runs may fix", ""),
     ("Runs review", ""),
@@ -53,7 +54,7 @@ fn console_allowlist_defaults_to_email_to_even_with_notifications_off() {
 
 #[test]
 fn console_allowlist_defaults_to_the_notification_address_just_chosen() {
-    let mut answers = NO_NOTIFICATIONS[..4].to_vec();
+    let mut answers = NO_NOTIFICATIONS[..5].to_vec();
     answers.extend([
         ("Run notifications", "y"),
         ("Send Run notifications to", "new@example.com"),
@@ -139,8 +140,65 @@ fn console_reasks_invalid_addresses_and_allowlists_without_using_the_example_as_
 }
 
 #[test]
+fn rejected_console_sign_in_entries_are_named_and_reasked_before_writing() {
+    for (answer, rejected) in [
+        (
+            "jstephens@etadoichuk@etadventures.com",
+            "jstephens@etadoichuk@etadventures.com",
+        ),
+        ("@example.com", "@example.com"),
+        ("owner@", "owner@"),
+        ("owner@localhost", "owner@localhost"),
+        ("owner@.com", "owner@.com"),
+        ("a@b.com c@d.com", "a@b.com c@d.com"),
+        ("a@b.com,", ""),
+        (",a@b.com", ""),
+        ("a@b.com, ,c@d.com", ""),
+    ] {
+        let mut answers = NO_NOTIFICATIONS.to_vec();
+        answers.extend([
+            ("Run the Console?", "y"),
+            ("whole address", "thirdshift.example.com"),
+            ("Allowed emails", answer),
+        ]);
+        let mut outside = Scripted::answering(&answers);
+        let error = run_setup(&mut outside, Path::new(HOME), Path::new(PATH)).unwrap_err();
+        assert!(error.to_string().contains("nothing written"), "{error}");
+        assert!(outside.user_config.is_none());
+        assert!(outside.effects().is_empty(), "{:?}", outside.effects());
+        let expected = format!("console.allowed_emails: {rejected:?} is not an email address");
+        assert!(
+            outside.said().contains(&expected.as_str()),
+            "{:?}",
+            outside.said()
+        );
+
+        answers.push(("Allowed emails", "a@b.com, c@d.com"));
+        let mut outside = Scripted::answering(&answers);
+        setup(&mut outside);
+        assert_eq!(
+            config(&outside).console.allowed_emails,
+            ["a@b.com", "c@d.com"]
+        );
+        assert!(
+            outside.said().contains(&expected.as_str()),
+            "{:?}",
+            outside.said()
+        );
+        assert_eq!(
+            outside
+                .prompts()
+                .iter()
+                .filter(|prompt| prompt.contains("Allowed emails"))
+                .count(),
+            2
+        );
+    }
+}
+
+#[test]
 fn eof_during_console_questions_saves_no_config_credentials_or_test_email() {
-    let mut answers = NO_NOTIFICATIONS[..4].to_vec();
+    let mut answers = NO_NOTIFICATIONS[..5].to_vec();
     answers.extend([
         ("Run notifications", "y"),
         ("Send Run notifications to", "owner@example.com"),

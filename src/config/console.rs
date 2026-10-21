@@ -100,8 +100,14 @@ impl ConsoleSettings {
         }
         for email in &self.allowed_emails {
             ensure!(
-                email.contains('@') && !email.chars().any(char::is_whitespace),
-                "console.allowed_emails must contain email addresses"
+                email.split_once('@').is_some_and(|(local, domain)| {
+                    !local.is_empty()
+                        && !domain.contains('@')
+                        && domain.contains('.')
+                        && !domain.starts_with('.')
+                        && !domain.ends_with('.')
+                }) && !email.chars().any(char::is_whitespace),
+                "console.allowed_emails: {email:?} is not an email address"
             );
         }
         validate_theme(&self.theme)?;

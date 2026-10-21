@@ -5,7 +5,7 @@ use anyhow::Result;
 use chrono::{DateTime, Local};
 
 use crate::config::UserConfig;
-use crate::logs::command_record::Issue;
+use crate::logs::command_record::{Issue, StageName};
 use crate::logs::reading::{Command, Entry, Observation, Snapshot};
 
 pub(crate) struct Views {
@@ -119,11 +119,15 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
                 seconds: seconds
                     .map(|seconds| seconds.to_string())
                     .unwrap_or_default(),
-                usual: command
-                    .usual_ranges
-                    .get(&stage.name)
-                    .map(|range| range.text())
-                    .unwrap_or_else(|| "Not enough samples".into()),
+                usual: if StageName::is_dispatch(&stage.name) {
+                    "—".into()
+                } else {
+                    command
+                        .usual_ranges
+                        .get(&stage.name)
+                        .map(|range| range.text())
+                        .unwrap_or_else(|| "Not enough samples".into())
+                },
                 left,
                 width,
             }

@@ -78,6 +78,12 @@ theme = "focus-auto" # also focus-light or focus-dark
 For a persistent service behind Caddy, Apache or nginx, see the root README's
 [server installation instructions](../README.md#console-on-a-server).
 
+Each allowed address must contain exactly one `@`, a nonempty local part,
+and a domain containing a dot, with no leading or trailing dot. Whitespace
+is not allowed. Setup trims each comma-separated entry, but rejects empty
+items, including trailing commas, and asks again with the invalid entry named.
+Loading a User config with an invalid entry also fails and names the entry.
+
 Run `thirdshift console password --email you@example.com` in a terminal to set
 the password, then `thirdshift console`. Password entry is hidden and asks
 twice. With exactly one allowed address, `--email` can be omitted. An empty
@@ -128,10 +134,24 @@ previous visit are marked new, including those arriving while the page is open.
 Missing or malformed storage hides nothing. Replacing the installed binary
 closes open streams and re-executes the Console with its original arguments.
 
-The available pages are Inbox (`1`), Lanes (`2`), Stages (`3`), Waterfall (`4`), History (`5`), Logs (`6`) and Security (`7`). Links
+The available pages are Inbox (`1`), Lanes (`2`), Stages (`3`), Waterfall (`4`),
+History (`5`), Logs (`6`), Security (`7`) and Cron jobs (`8`). Inbox through Security links
 keep the page in `?page=`. History includes every ended Command, including old
 logs, and filters by outcome and repository. Security shows retained findings
 and Session logs. Older records without finding metadata still show their logs.
+
+Cron jobs (`/cronjobs`, or `g` then `j`) shows schedules and commands from the
+Unix account running the Console's `crontab -l`. The same inventory is available
+with `thirdshift cronjobs [--json]`. It selects active entries containing a
+literal `thirdshift` word or an executable path ending in `/thirdshift`, including
+commands after `cd` and wrappers. Shell scripts and variable-built executable
+names are not inspected or evaluated. Comments and environment assignments
+are omitted, and input after cron's first unescaped `%` is not searched.
+Other users, system crontabs and other schedulers are outside this view.
+Schedules retain cron's expressions and time zone; reload to see changes.
+No matching entries or no crontab shows an empty view; an unavailable `crontab`
+command or a read failure reports an error. This view never changes the crontab
+or starts a Command.
 
 Lanes shows each Command and its child Runs on a shared time axis, over the last
 3.5, 12 or 24 hours. The window is kept in `hours=`; bars clip to that window,
@@ -166,7 +186,7 @@ The fractional Run/stage boundaries also run in the Rust integration tests.
 folds a heading or toggles a row's peek; `Enter` opens that row's full Command
 log. `z` folds the current section. `Escape` closes help, jumps or the peek,
 one layer at a time, then clears selection. `?` opens the key list. `g` opens
-the jump list: `i` Inbox, `b` Lanes, `t` Stages, `f` Waterfall, `h` History, `o` Logs, `s` Security,
+the jump list: `i` Inbox, `b` Lanes, `t` Stages, `f` Waterfall, `h` History, `o` Logs, `s` Security, `j` Cron jobs,
 `c` Console log, `a` Account, or a section's displayed
 letter. Text fields keep their normal keys. The peek starts closed and sits
 beside the list on a wide screen or at the bottom of a phone.
