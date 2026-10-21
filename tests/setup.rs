@@ -349,6 +349,7 @@ fn setup_console_questions_use_email_to_keep_comments_and_offer_install() {
             (MODEL, ""),
             (EFFORT, ""),
             (MERGE, ""),
+            (BASE_FIX, ""),
             (PULL, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
@@ -403,6 +404,7 @@ fn cancelling_the_console_questions_preserves_the_user_config() {
             (MODEL, ""),
             (EFFORT, ""),
             (MERGE, ""),
+            (BASE_FIX, ""),
             (PULL, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
@@ -430,6 +432,7 @@ fn setup_can_enable_security_review_and_keeps_it_as_the_next_default() {
                 (MODEL, ""),
                 (EFFORT, ""),
                 (MERGE, ""),
+                (BASE_FIX, ""),
                 (PULL, ""),
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, answer),
@@ -458,6 +461,7 @@ fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes(
             (MODEL, ""),
             (EFFORT, ""),
             (MERGE, ""),
+            (BASE_FIX, ""),
             (PULL, ""),
             (SECURITY_FIX, "y"),
             (SECURITY_REVIEW, ""),
@@ -498,6 +502,7 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
                 (MODEL, ""),
                 (EFFORT, ""),
                 (MERGE, ""),
+                (BASE_FIX, ""),
                 (PULL, ""),
                 (SECURITY_FIX, answer),
                 (SECURITY_REVIEW, ""),
@@ -663,6 +668,7 @@ fn cancelling_later_questions_after_successful_or_repeated_checks_restores_echo_
             if hidden {
                 keys.extend([
                     TerminalStep::line(MERGE, ""),
+                    TerminalStep::line(BASE_FIX, ""),
                     TerminalStep::line(PULL, ""),
                     TerminalStep::line(SECURITY_FIX, ""),
                     TerminalStep::line(SECURITY_REVIEW, ""),
@@ -709,7 +715,7 @@ fn pasted_answers_are_left_available_to_later_terminal_questions() {
         &[],
         &[(
             HARNESS,
-            "  claude  \n\n\n\n\n\n\ny\n  café@example.com  \n\n\n",
+            "  claude  \n\n\n\n\n\n\n\ny\n  café@example.com  \n\n\n",
         )],
     );
     let config: toml::Table = result.user_config.unwrap().parse().unwrap();
@@ -750,6 +756,7 @@ fn a_partial_final_terminal_answer_is_trimmed_and_accepted_before_eof() {
             TerminalStep::line(MODEL, ""),
             TerminalStep::line(EFFORT, ""),
             TerminalStep::line(MERGE, ""),
+            TerminalStep::line(BASE_FIX, ""),
             TerminalStep::line(PULL, ""),
             TerminalStep::line(SECURITY_FIX, ""),
             TerminalStep::line(SECURITY_REVIEW, ""),
@@ -791,6 +798,7 @@ fn notifications_on<'a>(rest: &[Keystrokes<'a>]) -> Vec<Keystrokes<'a>> {
         (MODEL, ""),
         (EFFORT, ""),
         (MERGE, ""),
+        (BASE_FIX, ""),
         (PULL, ""),
         (SECURITY_FIX, ""),
         (SECURITY_REVIEW, ""),
@@ -818,6 +826,7 @@ fn on_a_terminal_pressing_enter_throughout_writes_what_setup_with_no_terminal_wr
             (MODEL, ""),
             (EFFORT, ""),
             (MERGE, ""),
+            (BASE_FIX, ""),
             (PULL, ""),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
@@ -827,7 +836,7 @@ fn on_a_terminal_pressing_enter_throughout_writes_what_setup_with_no_terminal_wr
     );
 
     assert_eq!(result.user_config, user_config(&unattended));
-    for prompt in [MERGE, PULL, SECURITY_FIX, NOTIFY] {
+    for prompt in [MERGE, BASE_FIX, PULL, SECURITY_FIX, NOTIFY] {
         assert!(
             result.stderr.contains(prompt),
             "terminal: {}",
@@ -939,6 +948,7 @@ fn ctrl_c_during_the_questions_leaves_an_existing_user_config_unchanged() {
             (MODEL, ""),
             (EFFORT, ""),
             (MERGE, "n"),
+            (BASE_FIX, ""),
             (PULL, "y"),
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),

@@ -25,8 +25,7 @@ pub struct Answers {
     pub harness: Option<(Harness, ModelAndEffort)>,
     /// `merge.always`.
     pub merge_always: bool,
-    /// `base.fix`: asked only with `merge.always` on, and otherwise its
-    /// default, false.
+    /// `base.fix`, independent of `merge.always`.
     pub base_fix: bool,
     /// `launch.pull`.
     pub launch_pull: bool,
@@ -102,9 +101,8 @@ pub fn offer(outside: &mut impl Outside, path: &Path) -> Result<bool> {
 /// Ask the Setup questions, with the settings in `current` as the default
 /// answers, and the suggested address for `email.to` when `current` has
 /// none. The Harness, Model and Effort come first, through one complete
-/// Harness settings interaction. Base fixes are asked about only with every
-/// Run a Merge run;
-/// otherwise the answer is `base.fix`'s default, no.
+/// Harness settings interaction. The Base fix question follows the Merge
+/// run question, whatever the Merge run answer.
 /// The address is re-asked until it has an `@`. With Run notifications on,
 /// the Resend API key is asked for too, unless `found`, where the key was
 /// found, is `RESEND_API_KEY`, with Enter keeping the one in the
@@ -117,12 +115,11 @@ pub fn ask(
 ) -> Result<Answers> {
     let harness = outside.ask_harness_settings(&current.harness)?;
     let merge_always = yes_or_no(outside, "Every Run a Merge run?", current.merge_always)?;
-    let base_fix = merge_always
-        && yes_or_no(
-            outside,
-            "Every Run may start a Base fix when the Base branch's CI is red?",
-            current.base_fix,
-        )?;
+    let base_fix = yes_or_no(
+        outside,
+        "Every Run may start a Base fix when the Base branch's CI is red?",
+        current.base_fix,
+    )?;
     let launch_pull = yes_or_no(
         outside,
         "Every Run first fast-forwards your checkout of the Base branch?",
