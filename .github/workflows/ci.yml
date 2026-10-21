@@ -3,7 +3,17 @@ name: CI
 on:
   push:
     branches: [main]
+  # `labeled` lets the `test:macos` label start the full macOS suite on a
+  # PR's current head. Any label starts a whole new run, which replaces the
+  # older one under the concurrency group below.
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  # Nightly, on main: the full macOS suite catches what the PR gate's
+  # filterset misses. GitHub tells the user who last changed this cron when
+  # it fails; see docs/ci-performance.md for what to do then.
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
 
 # PR numbers distinguish fork branches. Unique non-PR groups also preserve
 # pending main runs, which GitHub would otherwise replace.
@@ -69,7 +79,52 @@ jobs:
       # which the tests build from tests/fakes.rs with rustc.
       - run: cargo test
 
+  # Which macOS work this event gets (#893, docs/ci-performance.md): the full
+  # suite on pushes to main, nightly, by hand or for a PR into main labelled
+  # `test:macos`; the gate for any other PR into main; none for a PR into
+  # another base, such as a Spec branch.
+  macos-plan:
+    runs-on: ubuntu-24.04
+    outputs:
+      suite: ${{ steps.plan.outputs.suite }}
+    steps:
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.base_ref }}
+          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'test:macos') }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then suite=full
+          elif [ "$BASE" != main ]; then suite=none
+          elif [ "$LABELLED" = true ]; then suite=full
+          else suite=gate
+          fi
+          echo "macOS suite: $suite"
+          echo "suite=$suite" >> "$GITHUB_OUTPUT"
+
+  # One macOS job: clippy for the macOS target and the tests of the
+  # macOS-specific code, which the macos-gate profile in .config/nextest.toml
+  # selects.
+  test-macos-gate:
+    needs: macos-plan
+    if: ${{ needs.macos-plan.outputs.suite == 'gate' }}
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install the Rust version and components rust-toolchain.toml names
+        run: |
+          rustup toolchain install
+          rustc --version
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-macos
+      - run: cargo clippy --all-targets -- -D warnings
+      - uses: taiki-e/install-action@nextest
+      - run: cargo nextest run --profile macos-gate
+
   test-macos-shard:
+    needs: macos-plan
+    if: ${{ needs.macos-plan.outputs.suite == 'full' }}
     runs-on: macos-26
     strategy:
       fail-fast: false
@@ -94,13 +149,24 @@ jobs:
       # Hash partitions cover the same suite once across all four runners.
       - run: cargo nextest run --partition hash:${{ matrix.shard }}/${{ strategy.job-total }}
 
-  # Keep one stable check name and reject failed, cancelled or skipped shards.
+  # Keep one stable check name on every run. It requires what the plan
+  # asked for: every shard passed, or the gate passed, or, with no macOS work,
+  # both were skipped. A failed, cancelled or wrongly skipped job fails it.
   test-macos:
-    needs: test-macos-shard
+    needs: [macos-plan, test-macos-gate, test-macos-shard]
     if: ${{ always() }}
     runs-on: ubuntu-24.04
     steps:
-      - name: Require every macOS shard to pass
+      - name: Require the macOS work the plan asked for to pass
         env:
-          RESULT: ${{ needs.test-macos-shard.result }}
-        run: test "$RESULT" = success
+          SUITE: ${{ needs.macos-plan.outputs.suite }}
+          GATE: ${{ needs.test-macos-gate.result }}
+          SHARDS: ${{ needs.test-macos-shard.result }}
+        run: |
+          echo "plan: ${SUITE:-none made}, gate: $GATE, shards: $SHARDS"
+          case "$SUITE" in
+            full) test "$SHARDS" = success ;;
+            gate) test "$GATE" = success ;;
+            none) test "$GATE" = skipped && test "$SHARDS" = skipped ;;
+            *) exit 1 ;;
+          esac
