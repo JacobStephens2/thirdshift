@@ -1377,6 +1377,12 @@ test -f {root}/{COPY_REPLACED}
             origin = self.origin_dir().display(),
             github = self.github_url(),
         );
+        // Temporary #894 profile switch.
+        let config = if std::env::var_os("PROFILE_GIT_FSYNC_OFF").is_some() {
+            format!("{config}[core]\n\tfsync = none\n")
+        } else {
+            config
+        };
         fs::write(self.path("home/.gitconfig"), config).unwrap();
     }
 }

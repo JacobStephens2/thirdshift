@@ -37,6 +37,9 @@ def main():
     with open(os.path.join(root, "gh-state.json"), "w") as f:
         f.write('{"repo":"acme/widgets","issues":{},"pulls":[]}')
     git = shutil.which("git")
+    global APPLE
+    APPLE = subprocess.run(["xcrun", "-f", "git"], capture_output=True, text=True).stdout.strip()
+    print(f"Apple git = {APPLE}")
     subprocess.run([git, "init", "-q", "repo"], cwd=root, env=env, check=True)
     repo = os.path.join(root, "repo")
     subprocess.run(
@@ -50,8 +53,14 @@ def main():
         "/bin/sh -c true": ["/bin/sh", "-c", "true"],
         "git --version": [git, "--version"],
         "/usr/bin/git --version": ["/usr/bin/git", "--version"],
+        "Apple git --version": [APPLE, "--version"],
+        "Apple git rev-parse --git-common-dir": [APPLE, "rev-parse", "--git-common-dir"],
         "git rev-parse --git-common-dir": [git, "rev-parse", "--git-common-dir"],
         "git worktree list --porcelain -z": [git, "worktree", "list", "--porcelain", "-z"],
+        "git update-ref (default fsync)": [git, "update-ref", "refs/heads/x", "HEAD"],
+        "git update-ref (core.fsync=none)": [git, "-c", "core.fsync=none", "update-ref", "refs/heads/x", "HEAD"],
+        "git commit (default fsync)": [git, "-c", "user.name=a", "-c", "user.email=a@b", "commit", "-q", "--allow-empty", "-m", "y"],
+        "git commit (core.fsync=none)": [git, "-c", "core.fsync=none", "-c", "user.name=a", "-c", "user.email=a@b", "commit", "-q", "--allow-empty", "-m", "y"],
         "fake gh (debug) issue list": [fakes + "-debug", "issue", "list", "--repo", "acme/widgets", "--json", "number"],
         "fake gh (opt) issue list": [fakes + "-opt", "issue", "list", "--repo", "acme/widgets", "--json", "number"],
         "thirdshift (debug) --version": [thirdshift, "--version"],
