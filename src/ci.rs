@@ -12,6 +12,7 @@ use anyhow::{Context, Result, ensure};
 use crate::github::{ActionsJob, Check, Conclusion, GitHub, JobRun};
 use crate::issue::IssueUrl;
 use crate::poll;
+use crate::process::Interruption;
 use crate::progress;
 
 /// How CI on a commit ended.
@@ -31,18 +32,6 @@ impl Ci {
     }
 }
 
-impl FailedChecks {
-    /// Whether the branch's own failures, at least one, are all Abandoned
-    /// jobs, whatever the Inherited failures are.
-    pub fn only_abandoned_jobs_own(&self) -> bool {
-        !self.own.is_empty()
-            && self
-                .own
-                .iter()
-                .all(|check| check.job.is_some_and(|job| job.abandoned))
-    }
-}
-
 /// The checks that failed on a commit, at least one, split by whether the
 /// branch is the one to fix them.
 pub struct FailedChecks {
@@ -56,6 +45,18 @@ pub struct FailedChecks {
     /// and shares its name with an Inherited failure; empty exactly when
     /// `inherited` is.
     pub on_base: Vec<Check>,
+}
+
+impl FailedChecks {
+    /// Whether the branch's own failures, at least one, are all Abandoned
+    /// jobs, whatever the Inherited failures are.
+    pub fn own_failures_all_abandoned(&self) -> bool {
+        !self.own.is_empty()
+            && self
+                .own
+                .iter()
+                .all(|check| check.job.is_some_and(|job| job.abandoned))
+    }
 }
 
 /// Wait up to the grace period for any check or status on `sha`, then watch
@@ -132,8 +133,10 @@ trait Outside {
     type Deadline;
     /// The checks and statuses on the commit `sha`.
     fn checks_on(&mut self, sha: &str) -> Result<Vec<Check>>;
-    /// The GitHub Actions job whose check run is `check_run`, with its steps.
-    fn job_run(&mut self, check_run: u64) -> Result<JobRun>;
+    /// The GitHub Actions job whose check run is `check_run`, with its
+    /// steps, or why it could not be read. Fails only if the Run is not to
+    /// go on.
+    fn job_run(&mut self, check_run: u64) -> Result<Result<JobRun>>;
     /// Ask GitHub to re-run the failed jobs of the workflow run
     /// `workflow_run`.
     fn rerun_failed_jobs(&mut self, workflow_run: u64) -> Result<()>;
@@ -168,9 +171,10 @@ impl Outside for OnGitHub<'_> {
         Ok(checks)
     }
 
-    fn job_run(&mut self, check_run: u64) -> Result<JobRun> {
+    fn job_run(&mut self, check_run: u64) -> Result<Result<JobRun>> {
         (self.actionable)()?;
-        let job_run = GitHub::new().job_run(self.issue, check_run)?;
+        let job_run = GitHub::new().job_run(self.issue, check_run);
+        Interruption::Ordinary.check()?;
         (self.actionable)()?;
         Ok(job_run)
     }
@@ -276,7 +280,7 @@ fn rerun_through(
         "re-running the failed checks on {short}: {}",
         check_names(&failed.own)
     ));
-    let (rerun_checks, _) = request_reruns(outside, sha, failed)?;
+    let rerun_checks = request_reruns(outside, sha, failed)?;
     if rerun_checks.requested.is_empty() {
         return watch_to_end(outside, sha, base_commit, Some(&rerun_checks)).map(Some);
     }
@@ -299,21 +303,22 @@ fn rerun_abandoned_through(
         check_names(&failed.own),
         short(sha)
     ));
-    match request_reruns(outside, sha, failed)? {
-        (rerun_checks, true) => watch_new_attempts(outside, sha, base_commit, &rerun_checks),
-        (_, false) => Ok(None),
+    let rerun_checks = request_reruns(outside, sha, failed)?;
+    if !rerun_checks.all_requested {
+        return Ok(None);
     }
+    watch_new_attempts(outside, sha, base_commit, &rerun_checks)
 }
 
 /// Ask GitHub to re-run the failed jobs of each workflow run the branch's
 /// own failures in `failed`, all GitHub Actions jobs, belong to, stopping at
 /// the first refusal, which is reported. Returns the checks whose new
-/// attempts the watch must see, and whether every request succeeded.
+/// attempts the watch must see.
 fn request_reruns<'a>(
     outside: &mut impl Outside,
     sha: &str,
     failed: &'a FailedChecks,
-) -> Result<(RerunChecks<'a>, bool)> {
+) -> Result<RerunChecks<'a>> {
     let mut workflow_runs: Vec<u64> = jobs_of(&failed.own).map(|job| job.workflow_run).collect();
     workflow_runs.sort_unstable();
     workflow_runs.dedup();
@@ -334,15 +339,14 @@ fn request_reruns<'a>(
         }
         requested.push(*workflow_run);
     }
-    let all_requested = requested.len() == workflow_runs.len();
     // GitHub re-runs every failed job of a workflow run, so an Inherited
     // failure that shares one with the branch's own gets a new attempt too.
-    let rerun_checks = RerunChecks {
+    Ok(RerunChecks {
         checks: failed.own.iter().chain(&failed.inherited).collect(),
         previous_attempt,
+        all_requested: requested.len() == workflow_runs.len(),
         requested,
-    };
-    Ok((rerun_checks, all_requested))
+    })
 }
 
 /// Wait up to the grace period for the new attempts of `rerun_checks` to be
@@ -370,12 +374,15 @@ fn watch_new_attempts(
     watch_to_end(outside, sha, base_commit, Some(rerun_checks)).map(Some)
 }
 
-/// Known failed checks that must stay listed during a Check re-run. Those
-/// in successfully requested workflow runs must also have new attempts.
+/// Known failed checks that must stay listed during a Check re-run or a
+/// re-run of Abandoned jobs. Those in successfully requested workflow runs
+/// must also have new attempts.
 struct RerunChecks<'a> {
     checks: Vec<&'a Check>,
     previous_attempt: Vec<u64>,
     requested: Vec<u64>,
+    /// Whether every workflow run asked for was requested, none refused.
+    all_requested: bool,
 }
 
 impl RerunChecks<'_> {
@@ -450,15 +457,39 @@ fn watch_to_end(
         None => Vec::new(),
     };
     let mut failed = split(failed, on_base);
-    // Only the branch's own failures can be re-run for losing their runner.
-    for check in &mut failed.own {
-        if let Some(job) = &mut check.job
-            && check.conclusion == Conclusion::Failure
-        {
-            job.abandoned = is_abandoned(&outside.job_run(job.check_run)?);
+    mark_abandoned_jobs(outside, sha, &mut failed.own)?;
+    Ok(Ci::Failed(failed))
+}
+
+/// Mark which of `own`, the branch's own failures on `sha`, are Abandoned
+/// jobs. Only every one being abandoned changes anything, so nothing is read
+/// unless each is a GitHub Actions job concluded `failure`, and reading stops
+/// at the first that is not abandoned. A job whose steps cannot be read is
+/// not one, told in a progress line, so that red CI is taken as it was.
+fn mark_abandoned_jobs(outside: &mut impl Outside, sha: &str, own: &mut [Check]) -> Result<()> {
+    let may_all_be_abandoned = own
+        .iter()
+        .all(|check| check.job.is_some() && check.conclusion == Conclusion::Failure);
+    if !may_all_be_abandoned {
+        return Ok(());
+    }
+    for check in own {
+        let Some(job) = &mut check.job else {
+            unreachable!("every own failure is a job")
+        };
+        match outside.job_run(job.check_run)? {
+            Ok(job_run) => job.abandoned = is_abandoned(&job_run),
+            Err(error) => outside.step(format!(
+                "couldn't read the steps of {} on {}: {error:#}",
+                check.name,
+                short(sha)
+            )),
+        }
+        if !job.abandoned {
+            break;
         }
     }
-    Ok(Ci::Failed(failed))
+    Ok(())
 }
 
 /// Ask `probe` every poll interval of `outside` until it answers `Some`, and
@@ -597,7 +628,7 @@ fn count(checks: &[Check], wanted: Reading) -> usize {
 mod in_memory {
     use std::time::Duration;
 
-    use anyhow::{Result, bail};
+    use anyhow::{Result, anyhow, bail};
 
     use super::Outside;
     use crate::github::{Check, Conclusion, JobRun};
@@ -616,6 +647,7 @@ mod in_memory {
         grace_pauses: usize,
         pauses: usize,
         job_runs: Vec<(u64, JobRun)>,
+        failing_job_reads: Vec<u64>,
         /// The check run of each job read, in order.
         pub job_reads: Vec<u64>,
         /// The commit of each read, in order.
@@ -639,6 +671,7 @@ mod in_memory {
                 grace_pauses: 3,
                 pauses: 0,
                 job_runs: Vec::new(),
+                failing_job_reads: Vec::new(),
                 job_reads: Vec::new(),
                 reads: Vec::new(),
                 reruns: Vec::new(),
@@ -669,6 +702,12 @@ mod in_memory {
         /// not scripted failed on a failed step.
         pub fn job_run(mut self, check_run: u64, job_run: JobRun) -> Self {
             self.job_runs.push((check_run, job_run));
+            self
+        }
+
+        /// Fail each read of the job whose check run is `check_run`.
+        pub fn job_read_failing(mut self, check_run: u64) -> Self {
+            self.failing_job_reads.push(check_run);
             self
         }
 
@@ -717,16 +756,19 @@ mod in_memory {
             Ok(listing.cloned().unwrap_or_default())
         }
 
-        fn job_run(&mut self, check_run: u64) -> Result<JobRun> {
+        fn job_run(&mut self, check_run: u64) -> Result<Result<JobRun>> {
             self.job_reads.push(check_run);
+            if self.failing_job_reads.contains(&check_run) {
+                return Ok(Err(anyhow!("gh: HTTP 403: Resource not accessible")));
+            }
             let scripted = self.job_runs.iter().find(|(id, _)| *id == check_run);
-            Ok(scripted.map_or_else(
+            Ok(Ok(scripted.map_or_else(
                 || JobRun {
                     conclusion: Conclusion::Failure,
                     steps: vec![Conclusion::Success, Conclusion::Failure],
                 },
                 |(_, job_run)| job_run.clone(),
-            ))
+            )))
         }
 
         fn rerun_failed_jobs(&mut self, workflow_run: u64) -> Result<()> {
@@ -1782,47 +1824,71 @@ mod tests {
         );
     }
 
-    /// A job run as GitHub ends one whose runner was lost.
-    fn lost_runner() -> JobRun {
+    /// An Abandoned job's run, as GitHub ends one whose runner was lost.
+    fn abandoned_job_run() -> JobRun {
         JobRun {
             conclusion: Conclusion::Failure,
             steps: vec![Conclusion::Success, Conclusion::Unfinished],
         }
     }
 
-    /// The names of the Abandoned jobs among `checks`.
-    fn abandoned(checks: &[Check]) -> Vec<&str> {
-        checks
-            .iter()
-            .filter(|check| check.job.is_some_and(|job| job.abandoned))
-            .map(|check| check.name.as_str())
-            .collect()
-    }
-
     #[test]
-    fn a_watch_reads_the_steps_of_failed_jobs_alone_and_marks_the_abandoned_ones() {
+    fn a_watch_reads_steps_only_while_every_own_failure_may_yet_be_an_abandoned_job() {
+        let lost = job(red("wsl"), 1, 900);
         let mut github = InMemory::new()
             .listing(
                 HEAD,
                 vec![vec![
-                    job(red("wsl"), 1, 900),
+                    lost.clone(),
                     job(red("test"), 2, 900),
-                    job(
-                        check("lint", Conclusion::Cancelled, "https://head/lint"),
-                        3,
-                        901,
-                    ),
+                    job(red("docs"), 3, 901),
                     job(green("build"), 4, 900),
-                    red("status"),
                 ]],
             )
-            .job_run(1, lost_runner());
+            .job_run(1, abandoned_job_run());
 
         let failed = failed_of(watch_through(&mut github, HEAD, None).unwrap());
 
-        assert_eq!(abandoned(&failed.own), ["wsl"]);
+        // `test` failed on a step, so `docs` can change nothing.
         assert_eq!(github.job_reads, [1, 2]);
-        assert!(!failed.only_abandoned_jobs_own());
+        assert!(!failed.own_failures_all_abandoned());
+
+        // A failure that is no job concluded `failure` can't be re-run so.
+        for other in [
+            red("status"),
+            job(
+                check("lint", Conclusion::Cancelled, "https://head/lint"),
+                3,
+                901,
+            ),
+        ] {
+            let mut github = InMemory::new()
+                .listing(HEAD, vec![vec![lost.clone(), other]])
+                .job_run(1, abandoned_job_run());
+
+            let failed = failed_of(watch_through(&mut github, HEAD, None).unwrap());
+
+            assert!(github.job_reads.is_empty());
+            assert!(!failed.own_failures_all_abandoned());
+        }
+    }
+
+    #[test]
+    fn a_job_whose_steps_cannot_be_read_is_not_abandoned_and_ci_stays_red() {
+        let mut github = InMemory::new()
+            .listing(HEAD, vec![vec![job(red("wsl"), 1, 900)]])
+            .job_read_failing(1);
+
+        let failed = failed_of(watch_through(&mut github, HEAD, None).unwrap());
+
+        assert_eq!(listed(&failed.own), ["wsl: https://head/wsl"]);
+        assert!(!failed.own_failures_all_abandoned());
+        assert_eq!(
+            github.steps.last().map(String::as_str),
+            Some(
+                "couldn't read the steps of wsl on abcdef0: gh: HTTP 403: Resource not accessible"
+            )
+        );
     }
 
     #[test]
@@ -1833,13 +1899,15 @@ mod tests {
                 vec![vec![job(red("wsl"), 1, 900), job(red("lint"), 2, 901)]],
             )
             .listing(BASE, vec![vec![red("lint")]])
-            .job_run(1, lost_runner());
+            .job_run(1, abandoned_job_run());
 
         let failed = failed_of(watch_through(&mut github, HEAD, Some(BASE)).unwrap());
 
-        assert!(failed.only_abandoned_jobs_own());
+        assert!(failed.own_failures_all_abandoned());
         assert_eq!(github.job_reads, [1]);
-        assert!(!failed_on_watch(vec![red("lint")], vec![red("lint")]).only_abandoned_jobs_own());
+        assert!(
+            !failed_on_watch(vec![red("lint")], vec![red("lint")]).own_failures_all_abandoned()
+        );
     }
 
     /// `check` as the Abandoned job whose check run is `check_run`, of the

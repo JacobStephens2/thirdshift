@@ -240,8 +240,10 @@ enum Round {
 #[derive(Default)]
 struct CheckReruns {
     handed_to_repair: Option<(String, FailedChecks)>,
+    /// The heads whose Check re-run allowance is consumed.
     consumed: HashSet<String>,
-    abandoned_rerun: HashSet<String>,
+    /// The heads whose Abandoned jobs have had their one re-run.
+    abandoned_jobs_rerun: HashSet<String>,
 }
 
 impl CheckReruns {
@@ -254,8 +256,9 @@ impl CheckReruns {
     /// Assess fresh CI against this round's selected Base commit. An
     /// unchanged Repair head consumes its allowance before any re-run
     /// request; any other head is watched, its Abandoned jobs re-run if
-    /// they are its only own failures. Later watches remain allowed, but own failures on a consumed
-    /// head decline the CI fix before another Repair can start.
+    /// they are its only own failures. Later watches remain allowed, but own
+    /// failures on a consumed head decline the CI fix before another Repair
+    /// can start.
     fn assess(
         &mut self,
         outside: &mut impl Outside,
@@ -273,7 +276,7 @@ impl CheckReruns {
             }
             _ => {
                 let watched = outside.watch(head, compared_with)?;
-                Some(self.past_abandoned_jobs(outside, head, compared_with, watched)?)
+                Some(self.rerun_abandoned_jobs_once(outside, head, compared_with, watched)?)
             }
         };
         match ci {
@@ -284,14 +287,12 @@ impl CheckReruns {
             ),
         }
     }
-}
 
-impl CheckReruns {
     /// `ci`, a watch of `head`, or, if it is red only on Abandoned jobs of
     /// the branch's own and `head` has had neither their re-run nor its
     /// Check re-run, what their re-run came to. A refused or unseen re-run
     /// leaves `ci` as it was.
-    fn past_abandoned_jobs(
+    fn rerun_abandoned_jobs_once(
         &mut self,
         outside: &mut impl Outside,
         head: &str,
@@ -301,9 +302,9 @@ impl CheckReruns {
         let Ci::Failed(failed) = &ci else {
             return Ok(ci);
         };
-        if !failed.only_abandoned_jobs_own()
+        if !failed.own_failures_all_abandoned()
             || self.consumed.contains(head)
-            || !self.abandoned_rerun.insert(head.to_string())
+            || !self.abandoned_jobs_rerun.insert(head.to_string())
         {
             return Ok(ci);
         }
@@ -568,7 +569,7 @@ mod tests {
         Failed(&'static [&'static str], &'static [&'static str]),
         /// Red on these Abandoned jobs of the branch's own, and these other
         /// checks of its own.
-        Lost(&'static [&'static str], &'static [&'static str]),
+        Abandoned(&'static [&'static str], &'static [&'static str]),
     }
 
     impl Is {
@@ -604,8 +605,8 @@ mod tests {
                     inherited: checks(inherited),
                     on_base: checks(inherited),
                 }),
-                Is::Lost(lost, own) => Ci::Failed(FailedChecks {
-                    own: [abandoned(lost), checks(own)].concat(),
+                Is::Abandoned(jobs, own) => Ci::Failed(FailedChecks {
+                    own: [abandoned(jobs), checks(own)].concat(),
                     inherited: Vec::new(),
                     on_base: Vec::new(),
                 }),
@@ -1443,7 +1444,7 @@ mod tests {
             Goal::Merged,
             Script {
                 heads: script(["h1"]),
-                watches: script([Is::Lost(&["wsl"], &[])]),
+                watches: script([Is::Abandoned(&["wsl"], &[])]),
                 abandoned_reruns: script([Some(Is::Passed)]),
                 merges: script([None]),
                 ..Script::default()
@@ -1460,12 +1461,12 @@ mod tests {
     #[test]
     fn an_abandoned_job_abandoned_again_or_not_re_run_gets_the_ci_fix_repair_then_its_check_re_run()
     {
-        for rerun in [Some(Is::Lost(&["wsl"], &[])), None] {
+        for rerun in [Some(Is::Abandoned(&["wsl"], &[])), None] {
             let (delivered, did) = deliver(
                 Goal::Merged,
                 Script {
                     heads: script(["h1"]),
-                    watches: script([Is::Lost(&["wsl"], &[])]),
+                    watches: script([Is::Abandoned(&["wsl"], &[])]),
                     abandoned_reruns: script([rerun]),
                     reruns: script([Some(Is::Passed)]),
                     merges: script([None]),
@@ -1503,7 +1504,11 @@ mod tests {
             Goal::Merged,
             Script {
                 heads: script(["h1", "h1", "h2"]),
-                watches: script([Is::Lost(&["wsl"], &[]), Is::Lost(&["wsl"], &[]), Is::Passed]),
+                watches: script([
+                    Is::Abandoned(&["wsl"], &[]),
+                    Is::Abandoned(&["wsl"], &[]),
+                    Is::Passed,
+                ]),
                 abandoned_reruns: script([Some(Is::Passed)]),
                 merges: script([Some("merge refused"), None]),
                 ..Script::default()
@@ -1536,7 +1541,7 @@ mod tests {
             Goal::ReadyForReview,
             Script {
                 heads: script(["h1", "h2"]),
-                watches: script([Is::Lost(&["wsl"], &["test"]), Is::Passed]),
+                watches: script([Is::Abandoned(&["wsl"], &["test"]), Is::Passed]),
                 ..Script::default()
             },
         );

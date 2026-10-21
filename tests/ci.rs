@@ -272,7 +272,7 @@ fn assert_one_repair(scenario: &Scenario, result: &support::RunResult) {
 }
 
 #[test]
-fn a_job_that_lost_its_runner_is_re_run_with_no_repair_and_green_is_success() {
+fn an_abandoned_job_is_re_run_with_no_repair_and_green_is_success() {
     let scenario = Scenario::new();
     // As GitHub ends a job whose runner was lost: failed, with a step still
     // in progress and none failed.
