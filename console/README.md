@@ -78,6 +78,12 @@ theme = "focus-auto" # also focus-light or focus-dark
 For a persistent service behind Caddy, Apache or nginx, see the root README's
 [server installation instructions](../README.md#console-on-a-server).
 
+Each allowed address must contain exactly one `@`, a nonempty local part,
+and a domain containing a dot, with no leading or trailing dot. Whitespace
+is not allowed. Setup trims each comma-separated entry, but rejects empty
+items, including trailing commas, and asks again with the invalid entry named.
+Loading a User config with an invalid entry also fails and names the entry.
+
 Run `thirdshift console password --email you@example.com` in a terminal to set
 the password, then `thirdshift console`. Password entry is hidden and asks
 twice. With exactly one allowed address, `--email` can be omitted. An empty
