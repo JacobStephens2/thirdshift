@@ -617,6 +617,77 @@ gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]
     assert_eq!(state["prs"][0]["isDraft"], false);
 }
 
+#[test]
+fn a_refused_security_review_followed_by_a_repair_reports_the_reviews_session_log() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "{OPENS_PR}\n{}",
+            r#"
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"failure"}]'
+gh fake checks "$(git rev-parse origin/main)" '[{"name":"test","conclusion":"success"}]'
+"#
+        ),
+    );
+    scenario.agent_does_in_session(
+        2,
+        r#"printf '%s\n' 'API Error: [cyber] Private refusal evidence' > "$FAKE_CLAUDE_FINAL_MESSAGE""#,
+    );
+    scenario.agent_does_in_session(
+        3,
+        r#"
+echo fixed > ci-fixed.txt
+git add ci-fixed.txt
+git commit -q -m 'Fix branch CI'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]'
+"#,
+    );
+    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+    let result = scenario.run_with_env(
+        &[
+            &scenario.issue_url(7),
+            "security-review",
+            "merge",
+            "email",
+            "you@example.com",
+        ],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test"),
+        ],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("Security review refused"),
+        "{}",
+        result.stderr
+    );
+    // The Repair ran after the review, so it is the most recent session.
+    assert!(
+        result.stderr.contains("-repair-1.jsonl"),
+        "{}",
+        result.stderr
+    );
+    let reported = result
+        .stderr
+        .lines()
+        .find_map(|line| line.split_once("session log: ").map(|(_, log)| log))
+        .unwrap_or_else(|| panic!("no session log line: {}", result.stderr));
+    assert!(
+        reported.ends_with("-security-review.jsonl"),
+        "{}",
+        result.stderr
+    );
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let text = requests[0].body["text"].as_str().unwrap();
+    assert!(
+        text.contains(&format!("Session log:  {reported}\n")),
+        "{text}"
+    );
+}
+
 // Regression B.
 #[test]
 fn review_regression_b_body_write_failure_preserves_refusal_and_readiness() {
