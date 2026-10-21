@@ -283,8 +283,12 @@ fn spec_url(scenario: &Scenario) -> String {
 /// The issue number each agent session was for, the first Issue URL its
 /// prompt names, in order.
 fn sessions_by_issue(scenario: &Scenario) -> Vec<String> {
-    scenario
-        .claude_calls()
+    issues_of(&scenario.claude_calls())
+}
+
+/// The issue each of `calls` was for, the first Issue URL its prompt names.
+fn issues_of(calls: &[serde_json::Value]) -> Vec<String> {
+    calls
         .iter()
         .map(|call| {
             let prompt = call["prompt"].as_str().unwrap();
@@ -3372,15 +3376,7 @@ fn spec_notification_reports_a_tickets_locally_retained_work() {
 /// The issue number each Codex session was for, as [`sessions_by_issue`]
 /// gives Claude Code's.
 fn codex_sessions_by_issue(scenario: &Scenario) -> Vec<String> {
-    scenario
-        .codex_calls()
-        .iter()
-        .map(|call| {
-            let prompt = call["prompt"].as_str().unwrap();
-            let (_, after) = prompt.split_once("/issues/").unwrap();
-            after.chars().take_while(char::is_ascii_digit).collect()
-        })
-        .collect()
+    issues_of(&scenario.codex_calls())
 }
 
 #[test]
