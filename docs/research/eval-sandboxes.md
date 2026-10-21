@@ -787,6 +787,76 @@ Q3.6 settled file binds only, sharing the host's network and PID namespace.
 - **The line estimates** in §8 come from reading code, not from a prototype.
 - **Unchecked loopback listeners.** The loopback listeners besides the Console, Caddy and the resolver weren't traced to their owners.
 
+## 10. Live checks, 2026-10-21
+
+#1009's checks, as far as they could go without real logins. They ran on the `thirdshift` host with test processes, fake credentials and fresh homes. No real login was bound or read, and nothing was installed. Where a §9 item is answered here, this section says so.
+
+- **Isolation (§2).** Inside bwrap with `--unshare-pid --unshare-net --new-session`, a process:
+  - saw 5 PIDs, against the host's 198;
+  - had no network interface but `lo`;
+  - couldn't reach the Console on 127.0.0.1:8711;
+  - couldn't see `/home/jacob`.
+
+  Confirmed by a sandboxed shell listing `/proc`, `/proc/net/dev` and `/home`, and by `curl` to the Console.
+- **Interruption through the PID namespace (§9).** thirdshift's stop path snapshots `ps -A -o pid=,ppid=,pgid=`, and signals every process group among the Harness's descendants.
+  - **Signals arrive.** Done that way, SIGTERM and SIGINT both reached a trap inside the sandbox. That held with and without `--new-session`. `--new-session` puts the inner process in a group of its own, which the tree walk still finds.
+  - **Nothing outlives it.** SIGKILL to the outer bwrap alone took down every process inside it.
+
+  Confirmed with a stand-in Harness that records the signal it gets.
+- **The relay and the proxy (§3.2).** The setup: a CONNECT proxy outside the sandbox, on a Unix socket bound into it, with `socat` relaying 127.0.0.1:3128 inside to that socket. Through it:
+  - allowed hosts were reached: `api.anthropic.com` answered 405, and `api.openai.com` 401;
+  - GitHub was refused, as not allowed;
+  - an allowlisted `localhost` was refused, because it resolves to `::1`;
+  - a direct connection, without the proxy, had no route at all.
+
+  A Unix socket's path is limited to 108 bytes, so the launcher can't put its socket deep under an Experiment's folder. A short directory, such as one under `/tmp`, works. Confirmed by `curl` and the proxy's log.
+- **Each Harness through `HTTPS_PROXY` (§3.2, §9).** Each ran in that sandbox, with a fresh home and a fake credential, and all six used the proxy:
+
+  | Harness | Hosts it contacted | Notes |
+  |---|---|---|
+  | Claude Code 2.1.307 | `api.anthropic.com` | 401 on the fake token. |
+  | Codex 0.163.0 | `api.openai.com`, `chatgpt.com`, `github.com`, `api.github.com`, `files.openai.com` | The GitHub hosts are its plugin sync at startup. With them and `files.openai.com` refused, it carried on to the API. |
+  | Grok Build 1.0.62 | `api.x.ai` | |
+  | Muse Code | `api.meta.ai` | Only with a key set. Without one, it checks for credentials locally and never reaches the network. |
+  | agy 1.3.3 | `antigravity-unleash.goog`, `play.googleapis.com` | With no login, it opens a Google sign-in and waits 60 seconds, so its API host wasn't reached. A Trial whose agy login is missing waits that long before failing. |
+  | OpenCode 2.0.24 | `opencode.ai`, `models.opencode.ai` | It calls its own local server over HTTP, so it needs `NO_PROXY=127.0.0.1,localhost`. Without that, it looped until it timed out. With no provider configured, it answered on a free model, so a Trial must name its provider. |
+
+  Confirmed by the proxy's log. The hosts used with a real subscription login aren't in it: for Codex's ChatGPT login, `chatgpt.com`, and its refresh, `auth.openai.com`, from Codex's source. agy's API host is also missing.
+- **Web search off (§3.2).** Production sessions keep web search on, since thirdshift passes these switches only to release summaries. For Trials:
+  - **Claude:** `--disallowedTools WebSearch WebFetch`.
+  - **Codex:** `-c web_search="disabled"`.
+  - **Grok:** `--disable-web-search`.
+  - **Muse:** `--disable-web-tools`.
+  - **OpenCode:** `OPENCODE_CONFIG_CONTENT='{"permission":{"webfetch":"deny","websearch":"deny"}}'`, which `opencode debug config` resolves to deny for both.
+  - **agy: still open.** No switch was found in its help or its settings. Its binary carries a `google_search` grounding tool, which runs at Google and so gets past any proxy.
+
+  Confirmed by each CLI's help, thirdshift's adapters, and OpenCode's resolved config.
+- **Memory with a fresh home (§4).** Every Harness kept its state under the fresh home, and none needed the real home to start:
+  - Claude: `~/.claude` and `~/.claude.json`;
+  - Codex: its `CODEX_HOME`, including `memories_1.sqlite`;
+  - Grok: `~/.grok`;
+  - Muse: `~/.local/share/muse`;
+  - agy: `~/.gemini/antigravity-cli`, including `brain` and `implicit`;
+  - OpenCode: `~/.local/share/opencode`, `~/.config/opencode` and `~/.cache/opencode`.
+
+  So a fresh home per Trial starts each Harness with no memory. Claude's `--bare` would also turn auto-memory off, but it skips hooks and CLAUDE.md and accepts only an API key, so it doesn't suit Trials. Confirmed by listing what each left in its home.
+- **A session's memory (§7.2).** A snapshot of the Harness sessions running at the time, from `ps` resident sizes (names only, no command lines):
+
+  | Harness | Memory in use |
+  |---|---|
+  | Claude | about 480 MiB, most likely the session that ran these checks, with a very large context |
+  | Codex | about 200 MiB |
+  | Grok | about 150 MiB |
+  | OpenCode | about 80 MiB |
+
+  6.6 GiB was available, and no build was running. A Trial's memory beside two building Runs is still open.
+- **Harnesses update themselves (Q7.2).** During the day, Claude Code went from 2.1.306 to 2.1.307, and Grok Build from 1.0.50 to 1.0.62. That backs fixing each Harness's binary when an Experiment starts (#1002).
+- **Still open, for a session with the real logins:**
+  - whether each Harness logs in, refreshes and saves its login inside bwrap, with only its login file bound, and Claude with a `claude setup-token` token (#1011);
+  - the hosts each provider needs with a real subscription login;
+  - how to turn agy's web search off;
+  - a Trial's memory beside two building Runs.
+
 ## Sources
 
 thirdshift:
