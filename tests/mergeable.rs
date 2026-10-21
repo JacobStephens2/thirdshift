@@ -1,7 +1,8 @@
 //! Keeping the PR mergeable: once the PR is confirmed, thirdshift merges the
 //! Base branch into the Issue branch and pushes, handing a conflicting merge to
-//! a conflict Repair session first. If the Base branch moves while CI runs, it
-//! merges it again, at most five times.
+//! a conflict Repair session first. If the Base branch moves while CI runs, a
+//! Merge run merges it again, at most five times; a PR left ready for review
+//! that still merges cleanly is left on the head whose CI passed.
 
 mod support;
 
@@ -253,25 +254,64 @@ fn base_moves_during_ci(times: usize, file: &str, content: &str) -> String {
     )
 }
 
-#[test]
-fn merges_a_base_branch_that_moved_while_ci_passed() {
-    let scenario = Scenario::new();
-    // Green CI on the agent's commit; the merge commit after it has none.
-    scenario.agent_does(&format!(
+/// The agent opens the PR with green CI on its commit, and main moves while
+/// that CI is read.
+fn green_ci_while_the_base_branch_moves() -> String {
+    format!(
         "{AGENT_OPENS_PR}\
          gh fake checks \"$(git rev-parse HEAD)\" '[{{\"name\": \"test\", \"conclusion\": \"success\"}}]'\n\
          {}",
         base_moves_during_ci(1, "other.txt", "other")
-    ));
+    )
+}
 
-    let result = scenario.run(&[&scenario.issue_url(7)]);
+#[test]
+fn a_merge_run_merges_a_base_branch_that_moved_while_ci_passed() {
+    let scenario = Scenario::new();
+    // Green CI on the agent's commit; the merge commit after it has none.
+    scenario.agent_does(&green_ci_while_the_base_branch_moves());
+
+    let result = scenario.run(&[&scenario.issue_url(7), "merge"]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert!(
-        result.stderr.contains("CI passed on"),
+        result.stderr.contains("CI passed on")
+            && result
+                .stderr
+                .contains("origin/main moved while CI ran; merging it again"),
         "stderr: {}",
         result.stderr
     );
     assert_eq!(scenario.claude_calls().len(), 1);
-    assert_merged_main_into_issue_7(&scenario);
+    // The Issue branch is gone once merged; main has the merge of main in.
+    assert!(
+        scenario
+            .origin_git(&["log", "--format=%s", "main"])
+            .contains("Merge remote-tracking branch 'origin/main' into issue-7\n")
+    );
+}
+
+#[test]
+fn a_pr_left_for_review_stays_on_green_ci_when_the_moved_base_branch_merges_cleanly() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&green_ci_while_the_base_branch_moves());
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let head = scenario.origin_git(&["rev-parse", "--short=7", "issue-7"]);
+    assert!(
+        result.stderr.contains(&format!(
+            "origin/main moved while CI ran; leaving the PR for review on {}, which merges cleanly",
+            head.trim()
+        )),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(!result.stderr.contains("merging it again"));
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert_eq!(
+        scenario.origin_git(&["log", "--first-parent", "--format=%s", "issue-7"]),
+        "Add feature\nInitial commit\n"
+    );
 }

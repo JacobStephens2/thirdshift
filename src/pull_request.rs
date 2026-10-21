@@ -283,8 +283,9 @@ impl<A: Adapter> PullRequest<A> {
     /// coherent numbered observation. Waiting remains interruptible.
     pub fn ensure_ready_and_mergeable(&mut self) -> Result<()> {
         progress::step("checking the PR is open, ready and mergeable");
-        let (mergeable, url) = self.ready_mergeability()?;
-        match mergeable {
+        let snapshot = self.settled_ready_snapshot()?;
+        let url = &snapshot.pr.url;
+        match snapshot.mergeable {
             Mergeable::Yes => Ok(()),
             Mergeable::No => bail!("PR {url} is not mergeable"),
             Mergeable::Unknown => {
@@ -297,12 +298,12 @@ impl<A: Adapter> PullRequest<A> {
     /// [`Self::ensure_ready_and_mergeable`] polls it. Mergeability GitHub has
     /// not worked out within the grace period is not mergeable.
     pub fn is_mergeable(&mut self) -> Result<bool> {
-        Ok(self.ready_mergeability()?.0 == Mergeable::Yes)
+        Ok(self.settled_ready_snapshot()?.mergeable == Mergeable::Yes)
     }
 
-    /// The mergeability GitHub reports for this open, ready PR, and its URL,
-    /// polled while unknown until the grace period ends.
-    fn ready_mergeability(&mut self) -> Result<(Mergeable, String)> {
+    /// An observation of this open, ready PR, polled while its mergeability
+    /// is unknown until the grace period ends.
+    fn settled_ready_snapshot(&mut self) -> Result<PrSnapshot> {
         let deadline = std::time::Instant::now() + self.adapter.grace_period();
         let mut waiting_line = poll::WaitingLine::new();
         loop {
@@ -318,7 +319,7 @@ impl<A: Adapter> PullRequest<A> {
                     }
                     self.adapter.pause()?;
                 }
-                mergeable => return Ok((mergeable, snapshot.pr.url)),
+                _ => return Ok(snapshot),
             }
         }
     }

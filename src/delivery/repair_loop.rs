@@ -313,9 +313,9 @@ impl<O: Outside> RepairLoop<'_, O> {
     /// CI and then going round again, since the Base branch may have moved
     /// meanwhile. Green or absent CI also goes round again, in a Merge run, if
     /// the Base branch moved while CI ran or Foreign commits arrived. Left
-    /// ready for review, it goes round again for a Base branch that moved only
-    /// if GitHub reports the pull request not mergeable, and otherwise
-    /// returns that head without counting the move.
+    /// ready for review, it returns that head without counting the move if
+    /// GitHub reports the pull request mergeable, and otherwise goes round
+    /// again.
     /// A red check that also fails on the Base branch commit the head last
     /// merged in is an Inherited failure, which no Repair is started for: the
     /// CI-fix Repair is given the branch's own failures, and when there are
@@ -2236,7 +2236,7 @@ mod tests {
     }
 
     #[test]
-    fn a_run_left_ready_for_review_reads_mergeability_in_readiness_and_counts_a_conflict_in_a_round()
+    fn a_run_left_ready_for_review_reads_mergeability_in_readiness_and_counts_an_unmergeable_pr_in_a_round()
      {
         let (delivered, _, stages) = deliver_with_stages(
             Goal::ReadyForReview,
