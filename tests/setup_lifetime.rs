@@ -33,7 +33,12 @@ mod linux {
             let root = TempDir::new().unwrap();
             let output = fs::File::create(root.path().join("output")).unwrap();
             let harness = Command::new(std::env::current_exe().unwrap())
-                .args(["--exact", "linux::fixture_process", "--ignored", "--nocapture"])
+                .args([
+                    "--exact",
+                    "linux::fixture_process",
+                    "--ignored",
+                    "--nocapture",
+                ])
                 .env("SETUP_LIFETIME_MODE", mode)
                 .env("SETUP_LIFETIME_ROOT", root.path())
                 // The supervisor owns this entire temporary subtree even if
@@ -159,7 +164,11 @@ mod linux {
     fn setup_ends_after_fixture_timeout() {
         let mut fixture = Fixture::start("timeout");
         fixture.finish(false);
-        assert!(fixture.output().contains("the terminal command did not exit"));
+        assert!(
+            fixture
+                .output()
+                .contains("the terminal command did not exit")
+        );
     }
 
     #[test]
@@ -167,7 +176,10 @@ mod linux {
         let mut fixture = Fixture::start("sigkill");
         // End only this fixture harness; do not signal setup before checking.
         fixture.harness.kill().unwrap();
-        assert_eq!(fixture.harness.wait().unwrap().signal(), Some(libc::SIGKILL));
+        assert_eq!(
+            fixture.harness.wait().unwrap().signal(),
+            Some(libc::SIGKILL)
+        );
         fixture.assert_setup_gone();
     }
 
@@ -175,7 +187,10 @@ mod linux {
     fn setup_ends_after_sigkill_even_with_an_inherited_pty_master() {
         let mut fixture = Fixture::start("sigkill-inherited-master");
         fixture.harness.kill().unwrap();
-        assert_eq!(fixture.harness.wait().unwrap().signal(), Some(libc::SIGKILL));
+        assert_eq!(
+            fixture.harness.wait().unwrap().signal(),
+            Some(libc::SIGKILL)
+        );
         fixture.assert_setup_gone();
     }
 
@@ -203,7 +218,10 @@ mod linux {
             fs::rename(root.join("ready.tmp"), root.join("ready")).unwrap();
             let deadline = Instant::now() + WAIT_BOUND;
             while !root.join("continue").exists() {
-                assert!(Instant::now() < deadline, "supervisor never released fixture");
+                assert!(
+                    Instant::now() < deadline,
+                    "supervisor never released fixture"
+                );
                 thread::sleep(Duration::from_millis(10));
             }
             assert_ne!(mode, "assertion", "intentional fixture assertion");
