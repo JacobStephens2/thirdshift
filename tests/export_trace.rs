@@ -90,6 +90,21 @@ fn assert_one_trace(spans: &[Span]) {
     }
 }
 
+fn assert_logs_belong_to_trace(logs: &str, spans: &[Span]) {
+    for line in logs.lines() {
+        let request: ExportLogsServiceRequest = serde_json::from_str(line).unwrap();
+        for log in request
+            .resource_logs
+            .into_iter()
+            .flat_map(|resource| resource.scope_logs)
+            .flat_map(|scope| scope.log_records)
+        {
+            assert_eq!(log.trace_id, spans[0].trace_id);
+            assert!(spans.iter().any(|span| span.span_id == log.span_id));
+        }
+    }
+}
+
 #[test]
 fn export_decodes_with_official_types_and_keeps_record_times_and_all_session_logs() {
     let scenario = Scenario::new();
@@ -125,18 +140,7 @@ fn export_decodes_with_official_types_and_keeps_record_times_and_all_session_log
         .collect::<String>();
     assert!(!logs.is_empty());
     assert_eq!(logs, source);
-    for line in logs.lines() {
-        let request: ExportLogsServiceRequest = serde_json::from_str(line).unwrap();
-        for log in request
-            .resource_logs
-            .into_iter()
-            .flat_map(|resource| resource.scope_logs)
-            .flat_map(|scope| scope.log_records)
-        {
-            assert_eq!(log.trace_id, root.trace_id);
-            assert!(spans.iter().any(|span| span.span_id == log.span_id));
-        }
-    }
+    assert_logs_belong_to_trace(&logs, &spans);
     assert_eq!(fs::read_dir(dir).unwrap().count(), 2);
 }
 
@@ -211,16 +215,5 @@ fn a_pickup_commands_dispatched_spec_and_tickets_export_as_one_whole_trace() {
         logs.lines().collect::<HashSet<_>>(),
         source_lines.iter().map(String::as_str).collect()
     );
-    for line in logs.lines() {
-        let request: ExportLogsServiceRequest = serde_json::from_str(line).unwrap();
-        for log in request
-            .resource_logs
-            .into_iter()
-            .flat_map(|resource| resource.scope_logs)
-            .flat_map(|scope| scope.log_records)
-        {
-            assert_eq!(log.trace_id, spans[0].trace_id);
-            assert!(spans.iter().any(|span| span.span_id == log.span_id));
-        }
-    }
+    assert_logs_belong_to_trace(&logs, &spans);
 }
