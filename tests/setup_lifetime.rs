@@ -93,6 +93,12 @@ mod linux {
             self.assert_setup_gone();
         }
 
+        fn kill_harness(&mut self) {
+            self.harness.kill().unwrap();
+            assert_eq!(self.harness.wait().unwrap().signal(), Some(libc::SIGKILL));
+            self.assert_setup_gone();
+        }
+
         fn assert_setup_gone(&mut self) {
             let pid = self.setup.unwrap();
             let deadline = Instant::now() + BOUND;
@@ -175,23 +181,13 @@ mod linux {
     fn setup_ends_after_sigkill_of_its_fixture() {
         let mut fixture = Fixture::start("sigkill");
         // End only this fixture harness; do not signal setup before checking.
-        fixture.harness.kill().unwrap();
-        assert_eq!(
-            fixture.harness.wait().unwrap().signal(),
-            Some(libc::SIGKILL)
-        );
-        fixture.assert_setup_gone();
+        fixture.kill_harness();
     }
 
     #[test]
     fn setup_ends_after_sigkill_even_with_an_inherited_pty_master() {
         let mut fixture = Fixture::start("sigkill-inherited-master");
-        fixture.harness.kill().unwrap();
-        assert_eq!(
-            fixture.harness.wait().unwrap().signal(),
-            Some(libc::SIGKILL)
-        );
-        fixture.assert_setup_gone();
+        fixture.kill_harness();
     }
 
     #[test]
