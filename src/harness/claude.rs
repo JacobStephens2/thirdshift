@@ -69,6 +69,14 @@ impl Adapter for Claude {
     fn interpretation(&self, _worktree: &Path, _prompt: &str) -> Interpretation {
         Interpretation::new(self.name(), Box::new(Stream::claude()))
     }
+
+    fn stream_version<'a>(&self, event: &'a serde_json::Value) -> Option<&'a str> {
+        if event["type"] == "system" && event["subtype"] == "init" {
+            event["claude_code_version"].as_str()
+        } else {
+            None
+        }
+    }
 }
 
 /// The arguments that run a Claude session on its Model and Effort,
