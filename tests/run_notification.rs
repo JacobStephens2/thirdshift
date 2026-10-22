@@ -7,7 +7,9 @@ mod support;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
-use support::resend::{Request, ResendStandIn, assert_one_issue_line, assert_saved_notification};
+use support::resend::{
+    Request, ResendStandIn, assert_one_issue_line, assert_saved_notification, saved_notification,
+};
 use support::{RunResult, Scenario, leaves_running};
 
 const KEY: &str = "re_test_123";
@@ -86,16 +88,7 @@ fn a_run_without_email_saves_its_notification_beside_its_command_log() {
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(result.stdout, format!("{PR_URL}\n"));
     assert!(resend.requests().is_empty());
-    let folder = "home/.thirdshift/logs/acme/widgets/commands/issue";
-    let commands = scenario.log_files(folder, "log");
-    assert_eq!(commands.len(), 1, "{commands:?}");
-    let path = scenario.path(folder).join(&commands[0]);
-    let notification = path.with_extension("notification.txt");
-    let saved = std::fs::read_to_string(&notification).expect("saved Run notification");
-    assert_eq!(
-        scenario.log_files(folder, "txt"),
-        [notification.file_name().unwrap().to_str().unwrap()]
-    );
+    let (path, saved) = saved_notification(&scenario, "issue");
     assert!(
         saved.starts_with(
             "Subject: [thirdshift] acme/widgets#7 Add export button: ready for review\n\n\

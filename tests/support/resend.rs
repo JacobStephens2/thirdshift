@@ -10,21 +10,25 @@ use serde_json::Value;
 
 use super::Scenario;
 
-/// The owning Command saves exactly the subject and body passed to Resend.
-pub fn assert_saved_notification(scenario: &Scenario, kind: &str, request: &Request) {
+/// Read the one notification saved beside the owning Command log.
+pub fn saved_notification(scenario: &Scenario, kind: &str) -> (std::path::PathBuf, String) {
     let folder = format!("home/.thirdshift/logs/acme/widgets/commands/{kind}");
     let commands = scenario.log_files(&folder, "log");
     assert_eq!(commands.len(), 1, "{commands:?}");
-    let path = scenario
-        .path(&folder)
-        .join(&commands[0])
-        .with_extension("notification.txt");
+    let command = scenario.path(&folder).join(&commands[0]);
+    let path = command.with_extension("notification.txt");
     assert_eq!(
         scenario.log_files(&folder, "txt"),
         [path.file_name().unwrap().to_str().unwrap()]
     );
+    (command, std::fs::read_to_string(path).unwrap())
+}
+
+/// The owning Command saves exactly the subject and body passed to Resend.
+pub fn assert_saved_notification(scenario: &Scenario, kind: &str, request: &Request) {
+    let (_, saved) = saved_notification(scenario, kind);
     assert_eq!(
-        std::fs::read_to_string(path).unwrap(),
+        saved,
         format!(
             "Subject: {}\n\n{}",
             request.body["subject"].as_str().unwrap(),
