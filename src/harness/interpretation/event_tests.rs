@@ -19,8 +19,7 @@ fn review_claude_permission_denial_metadata_overrides_prior_tool_error() {
     let events = events.as_array().unwrap();
     let last_end = events
         .iter()
-        .filter(|event| event["type"] == "tool_call_ended" && event["id"] == "deny")
-        .next_back()
+        .rfind(|event| event["type"] == "tool_call_ended" && event["id"] == "deny")
         .unwrap();
     assert_eq!(last_end["outcome"], "denied", "{events:?}");
 }
