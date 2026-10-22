@@ -236,16 +236,6 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
         }
     }
 
-    /// The lowest-numbered Ready issue, if there is one, with a line for
-    /// each issue passed over before it.
-    #[cfg(test)]
-    fn first_ready(self) -> Result<Option<ReadyIssue>> {
-        Ok(match self.first_priority(Settling::Wait)? {
-            Some(PriorityIssue::Ready(ready)) => Some(ready),
-            _ => None,
-        })
-    }
-
     fn first_priority(mut self, settling: Settling) -> Result<Option<PriorityIssue>> {
         self.settling = settling;
         for at in 0..self.candidates.len() {
@@ -679,9 +669,14 @@ mod tests {
         };
         let sink = |line| seen.borrow_mut().push(Seen::Line(line));
         let ready = Search::new(&reads, candidates, now(), TimeDelta::minutes(30), sink)
-            .first_ready()
+            .first_priority(Settling::Wait)
             .unwrap()
-            .map(|ready| (ready.listed.issue.number, ready.is_spec));
+            .map(|priority| {
+                let PriorityIssue::Ready(ready) = priority else {
+                    panic!("a search waiting for settling selected an unsettled issue");
+                };
+                (ready.listed.issue.number, ready.is_spec)
+            });
         (ready, seen.into_inner())
     }
 
