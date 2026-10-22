@@ -26,6 +26,7 @@ pub(super) struct Record<O: Outside> {
     owner: Option<Owner>,
     owner_error: Option<String>,
     logs_dir: Option<PathBuf>,
+    otlp_endpoint: Option<String>,
     child: bool,
     command: CommandKind,
     started: bool,
@@ -76,6 +77,7 @@ impl<O: Outside> Record<O> {
             owner: None,
             owner_error: None,
             logs_dir: None,
+            otlp_endpoint: None,
             child: false,
             command: CommandKind::Issue,
             started: false,
@@ -120,6 +122,7 @@ impl<O: Outside> Record<O> {
 
     pub(super) fn configured(&mut self, config: &UserConfig) {
         self.logs_dir = Some(config.logs_dir.clone());
+        self.otlp_endpoint = config.otlp_endpoint.clone();
         if !config.quiet_skips {
             self.show_held();
         }
@@ -427,6 +430,27 @@ impl<O: Outside> Record<O> {
                 .clone()
                 .unwrap_or_else(|| "Command logging has not allocated an owner".into())
         })
+    }
+
+    pub(super) fn trace_context(&self) -> Option<super::trace::Context> {
+        let owner = self.owner.as_ref()?;
+        let (_, tree) = self.command_record.as_ref()?;
+        let active = tree
+            .dispatched
+            .last()
+            .filter(|record| record.outcome.is_none())
+            .unwrap_or(&tree.command);
+        Some(super::trace::Context::from_record(owner, active))
+    }
+
+    /// Child Runs carry the owning CommandKind, so a Security run's entire
+    /// Session tree stays local even while it dispatches public fixes.
+    pub(super) fn otlp_endpoint(&self) -> Option<String> {
+        if self.command == CommandKind::Secure {
+            None
+        } else {
+            self.otlp_endpoint.clone()
+        }
     }
 
     pub(super) fn print(&mut self, line: &str) {

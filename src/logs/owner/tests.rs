@@ -119,6 +119,20 @@ fn legacy_and_owned_artifacts_share_one_decoder() {
             "7-20261003T120000-0400~ownerA.log",
         ),
         (
+            "7-20261003T120000-0400~ownerA-repair-1-resume.logs.jsonl",
+            "7",
+            Some("ownerA"),
+            Some("repair-1-resume"),
+            "7-20261003T120000-0400~ownerA.log",
+        ),
+        (
+            "7-20261003T120000-0400~ownerA-repair-1-resume.spans.jsonl",
+            "7",
+            Some("ownerA"),
+            Some("repair-1-resume"),
+            "7-20261003T120000-0400~ownerA.log",
+        ),
+        (
             "architect-20261003T120000-0400~ownerB-architecture-review.jsonl",
             "architect",
             Some("ownerB"),

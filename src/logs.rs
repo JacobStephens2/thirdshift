@@ -13,14 +13,18 @@
 
 mod activity;
 mod command_record;
+pub(crate) mod convert;
 mod effects;
+pub mod export;
 pub(crate) mod owner;
 mod process_identity;
 mod reading;
 pub(crate) use reading::catalog;
 mod recording;
+pub(crate) mod session;
 pub mod status;
 pub mod stop;
+pub(crate) mod trace;
 
 use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
@@ -285,6 +289,14 @@ pub fn command_log_path() -> Option<PathBuf> {
 
 pub(crate) fn captured_owner() -> Result<owner::Owner, String> {
     record().captured_owner()
+}
+
+pub(crate) fn trace_context() -> Option<trace::Context> {
+    record().trace_context()
+}
+
+pub(crate) fn otlp_endpoint() -> Option<String> {
+    record().otlp_endpoint()
 }
 
 /// Print `line` on stderr, and keep it in the Command log.

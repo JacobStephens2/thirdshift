@@ -9,6 +9,9 @@ use crate::interrupt;
 
 mod stream;
 pub(super) use stream::Stream;
+pub mod event;
+#[cfg(test)]
+mod event_tests;
 mod models;
 mod security;
 pub use security::SafeguardRefusal;
@@ -22,6 +25,7 @@ pub struct Interpretation {
     retained: Option<Box<dyn Retained>>,
     security: Option<Security>,
     models: models::Models,
+    events: Option<Vec<event::Event>>,
 }
 
 /// Reporting survives ordinary failures; only success supplies Resume facts.
@@ -32,12 +36,24 @@ pub struct Completion {
 
 #[derive(Default)]
 pub struct Report {
+    /// Raw Harness records recovered after exit, in their original encoding.
+    pub retained_records: Vec<RetainedRecord>,
+    /// Normalized timeline captured by `decode`, enriched by retained records.
+    /// Progress-only callers receive only facts recovered at completion.
+    pub events: Vec<event::Event>,
     /// Ordered progress supplied after retained completion.
     pub completion_progress: Vec<String>,
     pub warnings: Vec<String>,
     pub summary: Option<String>,
     /// Models reported by session output or retained records.
     pub models: Vec<String>,
+}
+
+/// A recovered Harness event keeps its raw body paired with the facts decoded
+/// from it, so recording retains the event's clock and call association.
+pub struct RetainedRecord {
+    pub raw: String,
+    pub events: Vec<event::Event>,
 }
 
 impl Report {
@@ -100,6 +116,14 @@ pub(super) trait Decoder: Send {
 pub(super) struct StreamUpdate {
     pub progress: Vec<String>,
     pub evidence: Vec<Evidence>,
+    pub events: Vec<event::Event>,
+}
+
+/// One decoded line. Consumers needing normalized facts use this interface;
+/// progress-only callers keep using `condense`, with no event buffering.
+pub struct Decoded {
+    pub progress: Vec<String>,
+    pub events: Vec<event::Event>,
 }
 
 pub(super) enum Evidence {
@@ -168,11 +192,19 @@ impl Interpretation {
             retained: None,
             security: None,
             models: models::Models::default(),
+            events: None,
         }
     }
 
     pub(super) fn with_retained(mut self, retained: Box<dyn Retained>) -> Self {
         self.retained = Some(retained);
+        self
+    }
+
+    /// Historical replay must not launch a Harness to export today's state.
+    /// Callers can still opt into a local retained reader (Codex patch files).
+    pub(crate) fn without_retained(mut self) -> Self {
+        self.retained = None;
         self
     }
 
@@ -190,9 +222,24 @@ impl Interpretation {
 
     /// Unknown or malformed lines produce no progress, never an error.
     pub fn condense(&mut self, raw: &str) -> Vec<String> {
+        let decoded = self.read(raw);
+        drop(decoded.events);
+        decoded.progress
+    }
+
+    /// Return live facts and capture them for the authoritative completion
+    /// timeline. Retained records refine calls by ID instead of adding calls.
+    pub fn decode(&mut self, raw: &str) -> Decoded {
+        let decoded = self.read(raw);
+        event::reconcile(self.events.get_or_insert_default(), decoded.events.clone());
+        decoded
+    }
+
+    fn read(&mut self, raw: &str) -> Decoded {
         let StreamUpdate {
             mut progress,
             evidence,
+            events,
         } = self.decoder.condense(raw);
         for fact in evidence {
             if let Evidence::ObservedModel { name, .. } = &fact
@@ -206,7 +253,7 @@ impl Interpretation {
                 progress.push(line);
             }
         }
-        progress
+        Decoded { progress, events }
     }
 
     pub fn finish(self, execution: Result<ExitStatus>) -> Completion {
@@ -238,6 +285,7 @@ impl Interpretation {
             return (None, Err(Failure::Execution(error)));
         }
         let mut facts = self.decoder.complete();
+        facts.report.events = self.events.unwrap_or_default();
         facts.report.models = self.models.into_names();
         let refusal = self.security.and_then(|security| security.refusal);
         if refusal.is_some() {

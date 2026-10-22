@@ -2,6 +2,35 @@ use super::*;
 use std::os::unix::process::ExitStatusExt;
 
 #[test]
+fn review_completion_preserves_distinct_claude_child_messages() {
+    use interpretation::event::Event;
+    let mut interpretation = stream(Harness::Claude, "");
+    for line in [
+        r#"{"type":"assistant","parent_tool_use_id":"child","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"Checking."}]}}"#,
+        r#"{"type":"assistant","parent_tool_use_id":"child","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Done."}]}}"#,
+        r#"{"type":"result","parent_tool_use_id":"child","subtype":"success","result":"Done."}"#,
+    ] {
+        interpretation.decode(line);
+    }
+    let events = finish(interpretation).report.unwrap().events;
+    let messages: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Message {
+                role,
+                text,
+                parent_id,
+                ..
+            } if role == "assistant" && parent_id.as_deref() == Some("child") => {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(messages, ["Checking.", "Done."]);
+}
+
+#[test]
 fn a_security_session_can_discuss_the_cyber_marker_without_being_refused() {
     let mut interpretation = stream(Harness::Claude, "").for_security(None);
     interpretation.condense(
@@ -704,6 +733,121 @@ fn with_opencode_export(test: &str, run: impl FnOnce(&Path)) {
 }
 
 #[test]
+fn progress_only_condense_preserves_agy_completion_without_buffering_normalized_events() {
+    use interpretation::event::{Event, Outcome};
+
+    let mut condensed = stream(Harness::Agy, "");
+    let mut decoded = stream(Harness::Agy, "");
+    for line in [
+        r#"{"event":"step_update","step_update":{"conversation_id":"s","step_index":1,"state":"DONE","step_type":"tool","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"cargo test"}}}}"#,
+        r#"{"event":"result","result":{"status":"SUCCESS","response":"Finished."}}"#,
+    ] {
+        assert_eq!(condensed.condense(line), decoded.decode(line).progress);
+    }
+
+    let condensed = finish(condensed);
+    let decoded = finish(decoded);
+    assert!(condensed.outcome.is_ok());
+    assert!(decoded.outcome.is_ok());
+    let condensed_reply = condensed.outcome.unwrap().final_message;
+    let decoded_reply = decoded.outcome.unwrap().final_message;
+    assert_eq!(condensed_reply.as_deref(), Some("Finished."));
+    assert_eq!(condensed_reply, decoded_reply);
+    assert!(condensed.report.unwrap().events.is_empty());
+
+    let events = decoded.report.unwrap().events;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::ToolCallStarted { .. }))
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| matches!(event, Event::ToolCallEnded { .. }))
+            .count(),
+        1
+    );
+    assert!(matches!(
+        (&events[0], &events[1]),
+        (
+            Event::ToolCallStarted { id: start, .. },
+            Event::ToolCallEnded { id: end, outcome: Outcome::Succeeded, .. },
+        ) if start == end
+    ));
+}
+
+#[test]
+fn normalized_opencode_export_recovers_missing_calls_and_enriches_live_calls_in_order() {
+    with_opencode_export(
+        "normalized_opencode_export_recovers_missing_calls_and_enriches_live_calls_in_order",
+        |root| {
+            use interpretation::event::{Event, Usage};
+            std::fs::write(
+                root.join("export.json"),
+                include_str!("../../tests/fixtures/normalized-opencode-export.json"),
+            )
+            .unwrap();
+            let mut interpretation = Harness::OpenCode.adapter().interpretation(root, "");
+            for line in include_str!("../../tests/fixtures/normalized-opencode.jsonl").lines() {
+                interpretation.decode(line);
+            }
+            let completion = finish(interpretation);
+            assert_eq!(
+                completion.outcome.unwrap().final_message.as_deref(),
+                Some("last reply")
+            );
+            let events = completion.report.unwrap().events;
+            let starts: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::ModelCallStarted { id, .. } => Some(id.as_str()),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(starts, ["s:m0", "s:m1", "s:m2"]);
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, Event::ToolCallStarted { .. }))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event, Event::ToolCallEnded { .. }))
+                    .count(),
+                1
+            );
+            let ends: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event {
+                    Event::ModelCallEnded {
+                        usage, cost_usd, ..
+                    } => Some((usage, cost_usd)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(ends.len(), 3);
+            assert_eq!(
+                *ends[2].0,
+                Usage {
+                    input: Some(13),
+                    output: Some(4),
+                    cache_read: Some(2),
+                    cache_write: Some(1),
+                }
+            );
+            assert_eq!(*ends[2].1, Some(0.01));
+            assert!(events.iter().filter(|event| matches!(event, Event::ModelCallEnded { .. })).all(|event| matches!(event, Event::ModelCallEnded { model: Some(model), .. } if model == "p/m")));
+        },
+    );
+}
+
+#[test]
 fn opencode_completion_reports_retained_model_order_and_multiplicity() {
     with_opencode_export(
         "opencode_completion_reports_retained_model_order_and_multiplicity",
@@ -831,4 +975,27 @@ fn retained_completion_reports_stream_fallback_then_authoritative_empty_models_a
             }
         },
     );
+}
+
+#[test]
+fn review_opencode_preserves_all_live_text_parts_without_export() {
+    use interpretation::event::Event;
+    let mut interpretation = stream(Harness::OpenCode, "");
+    for line in [
+        r#"{"type":"step_start","timestamp":1000,"sessionID":"s","part":{"id":"start","messageID":"m"}}"#,
+        r#"{"type":"text","timestamp":1100,"sessionID":"s","part":{"id":"text1","messageID":"m","text":"First part. "}}"#,
+        r#"{"type":"text","timestamp":1200,"sessionID":"s","part":{"id":"text2","messageID":"m","text":"Second part."}}"#,
+        r#"{"type":"step_finish","timestamp":1300,"sessionID":"s","part":{"id":"end","messageID":"m","tokens":{"input":10,"output":4}}}"#,
+    ] {
+        interpretation.decode(line);
+    }
+    let events = finish(interpretation).report.unwrap().events;
+    let text: String = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Message { role, text, .. } if role == "assistant" => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "First part. Second part.");
 }

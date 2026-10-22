@@ -1,0 +1,5 @@
+{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_start","message":{"id":"m1","role":"assistant","model":"claude-opus-4-8","content":[],"usage":{"input_tokens":8,"output_tokens":1,"cache_read_input_tokens":2,"cache_creation_input_tokens":3}}}}
+{"type":"assistant","message":{"id":"m1","role":"assistant","model":"claude-opus-4-8","content":[{"type":"text","text":"Hello."}],"usage":{"input_tokens":8,"output_tokens":1}}}
+{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}}
+{"type":"stream_event","parent_tool_use_id":null,"event":{"type":"message_stop"}}
+{"type":"result","subtype":"success","result":"Hello.","total_cost_usd":0,"usage":{"input_tokens":8,"output_tokens":4,"cache_read_input_tokens":2,"cache_creation_input_tokens":3}}

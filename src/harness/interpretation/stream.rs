@@ -13,8 +13,10 @@ use super::{
     TurnOutcome,
 };
 use crate::progress::{bash, shorten};
+mod events;
 
 pub struct Stream {
+    events: events::Events,
     init: Option<Init>,
     /// Cumulative totals survive later results without a complete pair.
     turns_and_cost: Option<(u64, f64)>,
@@ -58,6 +60,61 @@ struct Grok {
     fallback_id: Option<String>,
     usage: Option<String>,
     cost_known: bool,
+}
+
+fn result_failed(event: &Value) -> bool {
+    event["subtype"] != "success" || event["is_error"] == true
+}
+
+fn assistant_error(event: &Value) -> bool {
+    event["is_api_error_message"] == true
+        || nonempty_text(&event["error"]).is_some()
+        || nonempty_text(&event["api_error"]).is_some()
+}
+
+fn grok_cost(event: &Value) -> Option<f64> {
+    // Grok uses zero as a placeholder for unknown cost.
+    event["total_cost_usd"].as_f64().filter(|cost| *cost > 0.0)
+}
+
+enum TaskState<'a> {
+    Started,
+    Updated(&'a str),
+    Notified(&'a str),
+    Other,
+}
+
+impl<'a> TaskState<'a> {
+    fn read(event: &'a Value) -> Self {
+        match event["subtype"].as_str() {
+            Some("task_started") => Self::Started,
+            Some("task_updated") => event["patch"]["status"]
+                .as_str()
+                .map_or(Self::Other, Self::Updated),
+            Some("task_notification") => {
+                event["status"].as_str().map_or(Self::Other, Self::Notified)
+            }
+            _ => Self::Other,
+        }
+    }
+
+    fn status(&self) -> Option<&str> {
+        match self {
+            Self::Updated(status) | Self::Notified(status) => Some(status),
+            _ => None,
+        }
+    }
+}
+
+fn message_text(event: &Value) -> Option<String> {
+    let text: Vec<_> = event["message"]["content"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|block| block["type"] == "text")
+        .filter_map(|block| nonempty_text(&block["text"]))
+        .collect();
+    (!text.is_empty()).then(|| text.join("\n"))
 }
 
 impl Dialect {
@@ -119,6 +176,7 @@ impl Stream {
 
     fn new(dialect: Dialect) -> Self {
         Self {
+            events: events::Events::default(),
             init: None,
             turns_and_cost: None,
             final_message: None,
@@ -227,7 +285,7 @@ impl Stream {
                 ) {
                     self.turns_and_cost = Some((turns, cost));
                 }
-                let failed = event["subtype"] != "success" || event["is_error"] == true;
+                let failed = result_failed(event);
                 match &mut self.dialect {
                     Dialect::Claude(claude) => {
                         claude.result(event, failed);
@@ -265,6 +323,9 @@ impl Decoder for Stream {
         };
         let evidence = self.dialect.evidence(&event);
         StreamUpdate {
+            events: self
+                .events
+                .decode(&event, matches!(self.dialect, Dialect::Grok(_))),
             progress: self.progress(&event),
             evidence,
         }
@@ -309,10 +370,7 @@ impl Claude {
         if !event["parent_tool_use_id"].is_null() {
             return;
         }
-        self.api_error = (event["is_api_error_message"] == true
-            || nonempty_text(&event["error"]).is_some()
-            || nonempty_text(&event["api_error"]).is_some())
-        .then(|| ClaudeApiError::read(event));
+        self.api_error = assistant_error(event).then(|| ClaudeApiError::read(event));
     }
 
     fn result(&mut self, event: &Value, failed: bool) {
@@ -343,15 +401,14 @@ impl Claude {
         let Some(id) = event["task_id"].as_str() else {
             return;
         };
-        let killed = match event["subtype"].as_str() {
-            Some("task_started") => {
+        let killed = match TaskState::read(event) {
+            TaskState::Started => {
                 if let Some(description) = event["description"].as_str() {
                     self.tasks.insert(id.to_string(), description.to_string());
                 }
                 false
             }
-            Some("task_updated") => event["patch"]["status"] == "killed",
-            Some("task_notification") => event["status"] == "stopped",
+            TaskState::Updated("killed") | TaskState::Notified("stopped") => true,
             _ => false,
         };
         if killed && !self.killed.iter().any(|(killed_id, _)| killed_id == id) {
@@ -369,15 +426,8 @@ impl Claude {
 
 impl ClaudeApiError {
     fn read(event: &Value) -> Self {
-        let text: Vec<_> = event["message"]["content"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter(|block| block["type"] == "text")
-            .filter_map(|block| nonempty_text(&block["text"]))
-            .collect();
         Self {
-            message: (!text.is_empty()).then(|| text.join("\n")),
+            message: message_text(event),
             facts: Self::facts(event),
         }
     }
@@ -435,9 +485,7 @@ impl Grok {
     fn result(&mut self, event: &Value, failed: bool) {
         self.failed = failed;
         // Zero is a placeholder for unknown cost in Messages streams.
-        self.cost_known = event["total_cost_usd"]
-            .as_f64()
-            .is_some_and(|cost| cost > 0.0);
+        self.cost_known = grok_cost(event).is_some();
         let errors: Vec<_> = event["errors"]
             .as_array()
             .into_iter()

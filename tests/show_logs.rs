@@ -559,16 +559,68 @@ fn logs_can_read_sessions_from_activity_and_session_only_history() {
 
 #[test]
 fn show_reads_the_latest_live_event_from_claude_and_codex_session_tails() {
-    for (harness, event) in [
-        (
-            "claude",
-            r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo test"}}]}}"#,
-        ),
-        (
-            "codex",
-            r#"{"type":"item.started","item":{"id":"cmd","type":"command_execution","command":"/bin/bash -lc 'cargo test'","status":"in_progress"}}"#,
-        ),
-    ] {
+    for trace in [false, true] {
+        for (harness, event) in [
+            (
+                "claude",
+                r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo test"}}]}}"#,
+            ),
+            (
+                "codex",
+                r#"{"type":"item.started","item":{"id":"cmd","type":"command_execution","command":"/bin/bash -lc 'cargo test'","status":"in_progress"}}"#,
+            ),
+        ] {
+            let scenario = Scenario::new();
+            scenario.agent_does(&format!(
+                "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\n{OPENS_PR}",
+                scenario.path("started").display(),
+                scenario.path("release").display()
+            ));
+            let held = scenario.run_until(
+                &[&scenario.issue_url(7), "harness", harness],
+                &[],
+                "started",
+            );
+            let status = scenario.run(&["status", "--json"]);
+            let status: Value = serde_json::from_str(&status.stdout).unwrap();
+            let session = status["commands"][0]["session_log"].as_str().unwrap();
+            // Only the tail is relevant; unknown, malformed and incomplete lines
+            // must not hide the last useful event.
+            let contents = format!(
+                "{}\n{event}\n{{\"type\":\"future-event\"}}\nnot json\n{{\"partial\":",
+                "x".repeat(100_000)
+            );
+            let records = std::path::Path::new(session).with_extension("logs.jsonl");
+            if trace {
+                fs::write(&records, support::session_trace::records(&contents)).unwrap();
+                // Stale dual-recorded output must not win over the Session trace.
+                fs::write(session, event.replace("cargo test", "stale command")).unwrap();
+            } else {
+                fs::remove_file(records).unwrap();
+                fs::write(session, contents).unwrap();
+            }
+            let result = scenario.run(&["show", "widgets#7", "--json"]);
+            let text = scenario.run(&["show", "widgets#7"]);
+            fs::write(scenario.path("release"), "").unwrap();
+            let ended = held.finish();
+            assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+            assert_eq!(result.code, Some(0), "{}", result.stderr);
+            let shown: Value = serde_json::from_str(&result.stdout).unwrap();
+            assert_eq!(
+                shown["command"]["latest_event"], "Bash: cargo test",
+                "{harness}: {shown}"
+            );
+            assert!(text.stdout.contains("Bash: cargo test"), "{}", text.stdout);
+            let ended = scenario.run(&["show", "widgets#7", "--json"]);
+            let ended: Value = serde_json::from_str(&ended.stdout).unwrap();
+            assert!(ended["command"]["latest_event"].is_null());
+        }
+    }
+}
+
+#[test]
+fn show_keeps_the_latest_event_when_otlp_escaping_expands_a_record_past_64_kib() {
+    for quotes in [20_000, 80_000] {
         let scenario = Scenario::new();
         scenario.agent_does(&format!(
             "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\n{OPENS_PR}",
@@ -576,20 +628,26 @@ fn show_reads_the_latest_live_event_from_claude_and_codex_session_tails() {
             scenario.path("release").display()
         ));
         let held = scenario.run_until(
-            &[&scenario.issue_url(7), "harness", harness],
+            &[&scenario.issue_url(7), "harness", "codex"],
             &[],
             "started",
         );
         let status = scenario.run(&["status", "--json"]);
         let status: Value = serde_json::from_str(&status.stdout).unwrap();
-        let session = status["commands"][0]["session_log"].as_str().unwrap();
-        // Only the tail is relevant; unknown, malformed and incomplete lines
-        // must not hide the last useful event.
-        let contents = format!(
-            "{}\n{event}\n{{\"type\":\"future-event\"}}\nnot json\n{{\"partial\":",
-            "x".repeat(100_000)
-        );
-        fs::write(session, contents).unwrap();
+        let session = std::path::Path::new(status["commands"][0]["session_log"].as_str().unwrap());
+        let event = serde_json::json!({"type": "item.completed", "item": {
+            "id": "cmd", "type": "command_execution", "command": "cargo test",
+            "aggregated_output": "\"".repeat(quotes), "status": "completed", "exit_code": 0
+        }})
+        .to_string();
+        fs::write(session, format!("{event}\n")).unwrap();
+        let records = support::session_trace::records(&event);
+        if quotes == 20_000 {
+            assert!(event.len() < 64 * 1024);
+        }
+        assert!(records.len() > 64 * 1024);
+        let earlier = support::session_trace::records("Earlier diagnostic\n");
+        fs::write(session.with_extension("logs.jsonl"), earlier + &records).unwrap();
         let result = scenario.run(&["show", "widgets#7", "--json"]);
         let text = scenario.run(&["show", "widgets#7"]);
         fs::write(scenario.path("release"), "").unwrap();
@@ -597,14 +655,8 @@ fn show_reads_the_latest_live_event_from_claude_and_codex_session_tails() {
         assert_eq!(ended.code, Some(0), "{}", ended.stderr);
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         let shown: Value = serde_json::from_str(&result.stdout).unwrap();
-        assert_eq!(
-            shown["command"]["latest_event"], "Bash: cargo test",
-            "{harness}: {shown}"
-        );
+        assert_eq!(shown["command"]["latest_event"], "Bash: cargo test");
         assert!(text.stdout.contains("Bash: cargo test"), "{}", text.stdout);
-        let ended = scenario.run(&["show", "widgets#7", "--json"]);
-        let ended: Value = serde_json::from_str(&ended.stdout).unwrap();
-        assert!(ended["command"]["latest_event"].is_null());
     }
 }
 

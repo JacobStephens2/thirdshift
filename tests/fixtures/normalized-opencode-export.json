@@ -1,0 +1,5 @@
+{"info":{"id":"s","outcome":"succeeded","tokens":{"input":999999},"cost":99},"messages":[
+  {"id":"m0","type":"assistant","model":{"providerID":"p","id":"m"},"time":{"created":800,"completed":900},"content":[],"tokens":{"input":2,"output":1}},
+  {"id":"m1","type":"assistant","model":{"providerID":"p","id":"m"},"time":{"created":1000,"completed":1300},"content":[{"type":"tool","id":"call1","name":"bash","state":{"status":"completed","input":{"command":"cargo test"},"content":[{"type":"text","text":"passed"}]},"time":{"created":1100,"completed":1200}}],"tokens":{"input":91,"output":5,"reasoning":18,"cache":{"read":7424,"write":0}},"cost":0.02},
+  {"id":"m2","type":"assistant","model":{"providerID":"p","id":"m"},"time":{"created":1400,"completed":1600},"content":[{"type":"text","text":"last reply"}],"tokens":{"input":10,"output":4,"cache":{"read":2,"write":1}},"cost":0.01}
+]}

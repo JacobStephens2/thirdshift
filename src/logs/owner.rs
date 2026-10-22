@@ -28,7 +28,7 @@ pub(crate) struct Owner {
 }
 
 impl Owner {
-    fn identity(&self) -> Identity<'_> {
+    pub(super) fn identity(&self) -> Identity<'_> {
         Identity {
             stamp: &self.stamp,
             token: self.token.as_deref(),
@@ -228,7 +228,11 @@ fn parse_stamp(stamp: &str) -> Option<DateTime<FixedOffset>> {
 /// forms. All byte offsets and token syntax live here.
 pub(super) fn decode(path: &Path) -> Option<Decoded<'_>> {
     let name = path.file_name()?.to_str()?;
-    let (stem, session) = if let Some(stem) = name.strip_suffix(".jsonl") {
+    let (stem, session) = if let Some(stem) = name
+        .strip_suffix(".logs.jsonl")
+        .or_else(|| name.strip_suffix(".spans.jsonl"))
+        .or_else(|| name.strip_suffix(".jsonl"))
+    {
         (stem, true)
     } else if let Some(stem) = name.strip_suffix(".log") {
         (stem, false)
@@ -244,7 +248,12 @@ pub(super) fn decode(path: &Path) -> Option<Decoded<'_>> {
     let (subject, rest) = if stem.get(..20).and_then(parse_stamp).is_some() {
         ("", stem)
     } else {
-        stem.split_once('-')?
+        let offset = stem.match_indices('-').find_map(|(offset, _)| {
+            stem.get(offset + 1..offset + 21)
+                .and_then(parse_stamp)
+                .map(|_| offset)
+        })?;
+        (&stem[..offset], &stem[offset + 1..])
     };
     let stamp = rest.get(..20)?;
     parse_stamp(stamp)?;
@@ -274,6 +283,20 @@ pub(super) fn decode(path: &Path) -> Option<Decoded<'_>> {
     })
 }
 
+/// During dual recording the original Session log is the inventory entry.
+pub(super) fn inventory_session(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if name.ends_with(".spans.jsonl") {
+        return false;
+    }
+    if let Some(stem) = name.strip_suffix(".logs.jsonl") {
+        return !path.with_file_name(format!("{stem}.jsonl")).exists();
+    }
+    true
+}
+
 /// Preserve current legacy suffix stripping, including non-stamped fixture
 /// records, while keeping an owned stem's entire token.
 pub(super) fn record_log(path: &Path) -> PathBuf {
@@ -291,7 +314,7 @@ pub(super) fn evidenced_log(session: &Path) -> Option<PathBuf> {
     struct Evidence {
         command_log: Option<PathBuf>,
     }
-    let bytes = fs::read(session.with_extension("models.json")).ok()?;
+    let bytes = fs::read(super::session::original(session).with_extension("models.json")).ok()?;
     serde_json::from_slice::<Evidence>(&bytes).ok()?.command_log
 }
 

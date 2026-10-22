@@ -1,7 +1,6 @@
 //! Shared naming, Session inventory and captured selection ownership.
 
 use std::collections::BTreeSet;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -163,8 +162,13 @@ impl<'a> Observation<'a> {
             Self::Record(command) => {
                 let mut paths = Vec::new();
                 for path in command.record.session_references() {
-                    if !paths.contains(path) {
-                        paths.push(path.clone());
+                    let path = if path.exists() {
+                        path.clone()
+                    } else {
+                        crate::logs::session::path(path)
+                    };
+                    if !paths.contains(&path) {
+                        paths.push(path);
                     }
                 }
                 (
@@ -191,6 +195,7 @@ impl<'a> Observation<'a> {
             for entry in super::entries(log.parent().context("Command log has no directory")?)? {
                 let path = entry.path();
                 if entry.file_type()?.is_file()
+                    && owner::inventory_session(&path)
                     && owner::decode(&path).is_some_and(|decoded| {
                         decoded.session_kind.is_some() && decoded.subject == prefix
                     })
@@ -232,7 +237,7 @@ impl<'a> Observation<'a> {
     }
 }
 
-fn pass_prefix(kind: &str) -> Option<&'static str> {
+pub(in crate::logs) fn pass_prefix(kind: &str) -> Option<&'static str> {
     match kind {
         "Architect run" => Some("architect"),
         "Pickup run" => Some("pickup"),
@@ -367,21 +372,20 @@ fn latest_event(command: &Command) -> Option<String> {
     if command.state != "live" {
         return None;
     }
-    let path = command.record.session_log.as_ref()?;
-    let mut file = std::fs::File::open(path).ok()?;
-    // A show reads at most 64 KiB, independent of the transcript's size.
-    let start = file.metadata().ok()?.len().saturating_sub(64 * 1024);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut bytes = Vec::new();
-    file.take(64 * 1024).read_to_end(&mut bytes).ok()?;
-    let tail = String::from_utf8_lossy(&bytes);
-    let mut lines = tail.lines();
-    if start > 0 {
-        lines.next();
-    }
+    let events = crate::logs::session::tail_events(command.record.session_log.as_ref()?).ok()?;
     let harness = crate::harness::Harness::named(&command.record.harness)?;
+    latest_session_event(&events, harness)
+}
+
+pub(in crate::logs) fn latest_session_event(
+    events: &[String],
+    harness: crate::harness::Harness,
+) -> Option<String> {
     let mut stream = harness.adapter().interpretation(Path::new(""), "");
-    let event = lines.flat_map(|line| stream.condense(line)).last()?;
+    let event = events
+        .iter()
+        .flat_map(|line| stream.condense(line))
+        .last()?;
     let event = event
         .strip_prefix("$ ")
         .map_or_else(|| event.clone(), |command| format!("Bash: {command}"));

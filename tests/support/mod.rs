@@ -42,6 +42,7 @@ pub mod guidance;
 
 pub mod fakes;
 pub mod resend;
+pub mod session_trace;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -1357,6 +1358,13 @@ test -f {root}/{COPY_REPLACED}
         self.entries(relative)
             .into_iter()
             .filter(|name| {
+                // Existing transcript assertions select Session logs. Trace
+                // files are checked explicitly in session_traces.rs.
+                if extension == "jsonl"
+                    && (name.ends_with(".logs.jsonl") || name.ends_with(".spans.jsonl"))
+                {
+                    return false;
+                }
                 Path::new(name)
                     .extension()
                     .is_some_and(|ext| ext == extension)

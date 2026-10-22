@@ -10,6 +10,13 @@ const FIXTURE: &str = "THIRDSHIFT_SESSION_TEST_DIR";
 const WARNING: &str = "warning: the session never loaded thirdshift-implement with its skill tool";
 const USAGE: &str = "42 input tokens (0 cache read, 0 cache write), 7 output tokens (0 reasoning)";
 
+fn cli_script(script: &str) -> String {
+    let script = script.strip_prefix("#!/bin/bash\n").unwrap_or(script);
+    format!(
+        "#!/bin/bash\nif test \"$1\" = --version; then\n    echo 9.8.7\n    exit 0\nfi\n{script}"
+    )
+}
+
 struct Fixture(tempfile::TempDir);
 
 impl Fixture {
@@ -20,9 +27,8 @@ impl Fixture {
         let cli = fixture.path("bin/opencode");
         crate::test_support::write_executable(
             &cli,
-            &format!(
-                r#"#!/bin/bash
-if test "$1" = session; then
+            &cli_script(&format!(
+                r#"if test "$1" = session; then
     echo export >> "$THIRDSHIFT_SESSION_TEST_DIR/calls"
     cat "$THIRDSHIFT_SESSION_TEST_DIR/export.json"
     exit 0
@@ -32,7 +38,7 @@ echo $$ > "$THIRDSHIFT_SESSION_TEST_DIR/pid"
 echo '{{"type":"step_start","sessionID":"s1","part":{{}}}}'
 {script}
 "#
-            ),
+            )),
         );
         // Retained failure and usage must not replace the transport error.
         fs::write(
@@ -345,7 +351,7 @@ fn review_fixture(script: &str) -> Fixture {
     let fixture = Fixture::new("");
     for harness in Harness::ALL {
         let cli = fixture.path(&format!("bin/{}", harness.name()));
-        fs::write(&cli, script).unwrap();
+        fs::write(&cli, cli_script(script)).unwrap();
         fs::set_permissions(cli, fs::Permissions::from_mode(0o755)).unwrap();
     }
     fixture

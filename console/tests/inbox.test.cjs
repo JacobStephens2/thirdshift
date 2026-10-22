@@ -373,74 +373,81 @@ for (const storage of ['blocked', 'malformed']) {
   });
 }
 
-test("heartbeat beats only for server-observed log growth and is flat when Silent", { skip: process.platform !== 'linux' }, async t => {
-  // This fixture borrows the Console's real native process identity. HTTP
-  // coverage uses an actual held Run on both Linux and macOS.
-  const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
-  const start = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
-  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
-  const path = join(dir, '202-fixture.command.json');
-  const log = join(dir, '202-fixture.log');
-  const session = join(home, 'heartbeat-session.log');
-  const fixture = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
-  Object.assign(fixture, { kind: 'Run', process_id: server.pid, process_start: start, outcome: null, ended_at: null, session_log: session });
-  fixture.issue.number = 202;
-  const began = new Date(Date.now() - 20 * 60 * 1000).toISOString();
-  fixture.stages = [{ name: 'implement', began_at: began, session_log: session }];
-  await writeFile(path, JSON.stringify(fixture));
-  await writeFile(log, 'command');
-  await writeFile(session, 'session');
-  try {
-    const page = await pageFor(t);
-    await page.goto(origin);
-    await page.locator('[data-group="working"] > summary').click();
-    const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#202$/ }) });
-    const id = await row.getAttribute('id');
-    await page.waitForFunction(id => document.getElementById(id).querySelector('.state').getAnimations({ subtree: true }).some(a => a.playState === 'running'), id, { timeout: 2000 });
-    await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
-    assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
-    await page.reload();
-    assert.equal(await page.getByRole('button', { name: 'Pause motion', exact: true }).getAttribute('aria-pressed'), 'true');
-    assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
-    await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
-    assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
-    await appendFile(session, ' growth');
-    await page.waitForFunction(id => document.getElementById(id).querySelector('.heartbeat').getAnimations().some(animation => animation.playState === 'running'), id);
-    await page.waitForFunction(id => document.getElementById(id).querySelector('.heartbeat').getAnimations().length === 0, id);
-    for (const family of ['garden', 'factory']) {
-      await writeFile(join(home, '.thirdshift/config.toml'), `[console]\nport = 0\ntheme = "${family}-auto"\n`);
-      await page.waitForFunction(theme => document.documentElement.dataset.theme === theme, `${family}-auto`);
-      assert.notEqual(await page.locator('header').evaluate(header => getComputedStyle(header, '::after').animationName), 'none');
-      await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
-      await appendFile(session, ' paused growth');
-      await page.waitForTimeout(350);
-      assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
-      await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
-      await page.emulateMedia({ reducedMotion: 'reduce' });
-      assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
-      await page.emulateMedia({ reducedMotion: 'no-preference' });
-    }
-    const old = new Date(Date.now() - 20 * 60 * 1000);
-    await utimes(log, old, old);
-    await utimes(session, old, old);
-    await page.waitForFunction(id => document.getElementById(id).dataset.state === 'Silent', id);
-    assert.equal(await row.locator('.state').evaluate(state => getComputedStyle(state).animationIterationCount), '3');
-    assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
-    await appendFile(log, ' more');
-    await page.waitForFunction(id => document.getElementById(id).dataset.logging === 'true', id);
-    assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
-    fixture.outcome = 'merged'; fixture.ended_at = new Date().toISOString();
+for (const trace of [false, true]) {
+  test(`heartbeat watches ${trace ? 'Session trace records' : 'old Session logs'} and is flat when Silent`, { skip: process.platform !== 'linux' }, async t => {
+    // This fixture borrows the Console's real native process identity. HTTP
+    // coverage uses an actual held Run on both Linux and macOS.
+    const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
+    const start = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
+    const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+    const path = join(dir, '202-fixture.command.json');
+    const log = join(dir, '202-fixture.log');
+    const sessionLog = join(home, 'heartbeat-session.jsonl');
+    const session = trace ? join(home, 'heartbeat-session.logs.jsonl') : sessionLog;
+    const event = text => trace ? JSON.stringify({ resourceLogs: [{ scopeLogs: [{ logRecords: [{ body: { stringValue: text } }] }] }] }) + '\n' : text;
+    if (trace) await writeFile(sessionLog, 'Stale Session log');
+    const fixture = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+    Object.assign(fixture, { kind: 'Run', process_id: server.pid, process_start: start, outcome: null, ended_at: null, session_log: sessionLog });
+    fixture.issue.number = 202;
+    const began = new Date(Date.now() - 20 * 60 * 1000).toISOString();
+    fixture.stages = [{ name: 'implement', began_at: began, session_log: sessionLog }];
     await writeFile(path, JSON.stringify(fixture));
-    await page.waitForFunction(() => document.documentElement.dataset.live === 'false');
-    await page.emulateMedia({ reducedMotion: 'no-preference' });
-    assert.equal(await page.evaluate(() => document.getAnimations().length), 0, 'an ended Command must stop the garden and conveyor');
-  } finally {
-    await Promise.all([path, log, session].map(path => rm(path, { force: true })));
-    await writeFile(join(home, '.thirdshift/config.toml'), '[console]\nport = 0\n');
-  }
-});
+    await writeFile(log, 'command');
+    await writeFile(session, event('session'));
+    try {
+      const page = await pageFor(t);
+      await page.goto(origin);
+      await page.locator('[data-group="working"] > summary').click();
+      const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#202$/ }) });
+      const id = await row.getAttribute('id');
+      await page.waitForFunction(id => document.getElementById(id).querySelector('.state').getAnimations({ subtree: true }).some(a => a.playState === 'running'), id, { timeout: 2000 });
+      await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
+      assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
+      await page.reload();
+      assert.equal(await page.getByRole('button', { name: 'Pause motion', exact: true }).getAttribute('aria-pressed'), 'true');
+      assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
+      await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
+      assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
+      await appendFile(session, event(' growth'));
+      await page.waitForFunction(id => document.getElementById(id).querySelector('.heartbeat').getAnimations().some(animation => animation.playState === 'running'), id);
+      await page.waitForFunction(id => document.getElementById(id).querySelector('.heartbeat').getAnimations().length === 0, id);
+      for (const family of ['garden', 'factory']) {
+        await writeFile(join(home, '.thirdshift/config.toml'), `[console]\nport = 0\ntheme = "${family}-auto"\n`);
+        await page.waitForFunction(theme => document.documentElement.dataset.theme === theme, `${family}-auto`);
+        assert.notEqual(await page.locator('header').evaluate(header => getComputedStyle(header, '::after').animationName), 'none');
+        await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
+        await appendFile(session, event(' paused growth'));
+        await page.waitForTimeout(350);
+        assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
+        await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        await page.waitForFunction(() => document.getAnimations().length === 0);
+        assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
+        await page.emulateMedia({ reducedMotion: 'no-preference' });
+      }
+      const old = new Date(Date.now() - 20 * 60 * 1000);
+      await utimes(log, old, old);
+      await utimes(session, old, old);
+      await page.waitForFunction(id => document.getElementById(id).dataset.state === 'Silent', id);
+      assert.equal(await row.locator('.state').evaluate(state => getComputedStyle(state).animationIterationCount), '3');
+      assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
+      await page.emulateMedia({ reducedMotion: 'reduce' });
+      await page.waitForFunction(() => document.getAnimations().length === 0);
+      assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
+      await appendFile(log, ' more');
+      await page.waitForFunction(id => document.getElementById(id).dataset.logging === 'true', id);
+      assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
+      fixture.outcome = 'merged'; fixture.ended_at = new Date().toISOString();
+      await writeFile(path, JSON.stringify(fixture));
+      await page.waitForFunction(() => document.documentElement.dataset.live === 'false');
+      await page.emulateMedia({ reducedMotion: 'no-preference' });
+      assert.equal(await page.evaluate(() => document.getAnimations().length), 0, 'an ended Command must stop the garden and conveyor');
+    } finally {
+      await Promise.all([path, log, session, sessionLog].map(path => rm(path, { force: true })));
+      await writeFile(join(home, '.thirdshift/config.toml'), '[console]\nport = 0\n');
+    }
+  });
+}
 
 test("a push keeps a Pass dispatch selected instead of its parent", async t => {
   const dir = join(home, '.thirdshift/logs/acme/widgets/commands/security');

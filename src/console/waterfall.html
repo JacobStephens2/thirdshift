@@ -16,7 +16,7 @@
     <div class="page-title"><h2>Waterfall</h2><code>thirdshift show &lt;command&gt; --json · thirdshift logs &lt;command&gt;</code></div>
     <nav class="command-chips" aria-label="Choose a Command">{% for choice in view.choices %}<a href="{{ choice.url }}" {% if choice.selected %}aria-current="true"{% endif %}>{{ choice.subject }} · {{ choice.state }}</a>{% endfor %}</nav>
     {% if view.runs.is_empty() %}<p>No Commands yet.</p>{% else %}
-    <p>Shared time axis: {{ view.start }} to {{ view.end }}. Tool intervals run until the next matched call in that Session or the stage boundary; they include waiting and are not measured execution times. Unknown times have no bar.</p>
+    <p>Shared time axis: {{ view.start }} to {{ view.end }}. Session traces use measured tool spans; running calls extend from their start record to now. Old Session logs estimate intervals until the next matched call or stage boundary, including waiting. Unknown durations have no bar.</p>
     {% for run in view.runs %}
     <section class="waterfall-run" data-depth="{{ run.depth }}">
       <div class="command" data-live="{{ run.state == "live" }}" data-command="{{ run.selector }}" data-peek="{{ run.peek_url }}" data-log="{{ run.log_url }}"><h3>{{ run.kind }} · <a class="peek-link" href="{{ run.peek_url }}">{{ run.subject }}</a> · {{ run.state }}</h3><p>{{ run.title }}</p></div>
