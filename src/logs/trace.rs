@@ -30,7 +30,11 @@ pub(crate) struct Context {
 
 impl Context {
     pub(super) fn from_record(owner: &Owner, record: &CommandRecord) -> Self {
-        let mut context = Self::of_owner(owner);
+        Self::of_owner(owner).for_record(record)
+    }
+
+    pub(super) fn for_record(&self, record: &CommandRecord) -> Self {
+        let mut context = self.clone();
         context.repository = record.repository.clone();
         context.run = id(&[
             &context.command.0,

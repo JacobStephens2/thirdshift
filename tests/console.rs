@@ -18,6 +18,9 @@ mod accounts;
 #[path = "console/look.rs"]
 mod look;
 
+#[path = "console/waterfall.rs"]
+mod waterfall;
+
 #[cfg(unix)]
 #[path = "console/cronjobs.rs"]
 mod cronjobs;
