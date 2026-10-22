@@ -108,6 +108,17 @@ impl Console {
             .send()
             .unwrap()
     }
+
+    fn log_link(&self, suffix: &str) -> String {
+        let page = self.get("/logs").text().unwrap();
+        page.split("href=\"")
+            .skip(1)
+            .filter_map(|part| part.split_once('"'))
+            .find(|(_, label)| label.split("</a>").next().unwrap().ends_with(suffix))
+            .unwrap()
+            .0
+            .to_owned()
+    }
 }
 
 impl Drop for Console {
@@ -1123,6 +1134,136 @@ fn session_traces_render_the_same_claude_and_codex_conversations_as_old_logs() {
         fs::remove_file(&path).unwrap();
         assert_eq!(conversation(reader()), old, "trace without old log: {kind}");
     }
+}
+
+#[test]
+fn all_six_harness_session_traces_render_normalized_conversations() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let folder = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    fs::create_dir_all(&folder).unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for (harness, fixture) in [
+        (
+            "claude",
+            include_str!("fixtures/console-claude-trace.jsonl"),
+        ),
+        ("codex", include_str!("fixtures/console-codex-trace.jsonl")),
+        ("agy", include_str!("fixtures/console-agy-trace.jsonl")),
+        ("grok", include_str!("fixtures/console-grok-trace.jsonl")),
+        ("muse", include_str!("fixtures/console-muse-trace.jsonl")),
+        (
+            "opencode",
+            include_str!("fixtures/console-opencode-trace.jsonl"),
+        ),
+    ] {
+        let path = folder.join(format!("7-20261003T120000-0400-{harness}.logs.jsonl"));
+        fs::write(&path, fixture).unwrap();
+        let link = console.log_link(&format!("-{harness}.logs.jsonl"));
+        let html = console.get(&link).text().unwrap();
+        assert!(
+            html.contains("<h3>assistant</h3><pre>Checking widgets.</pre>"),
+            "{harness}: {html}"
+        );
+        assert!(
+            html.contains("<h3>user</h3><pre>Check widgets.</pre>"),
+            "{harness}: {html}"
+        );
+        assert!(html.contains("data-tool=\"Read\""), "{harness}: {html}");
+        assert!(
+            html.contains("<pre class=\"read\">widgets.txt</pre>"),
+            "{harness}: {html}"
+        );
+        assert!(
+            html.contains(
+                "<pre class=\"result\">widget &#60;script&#62;bad()&#60;/script&#62;</pre>"
+            ),
+            "{harness}: {html}"
+        );
+        assert!(
+            html.contains("<pre class=\"unknown-event\">future event &#60;raw&#62;</pre>"),
+            "{harness}: {html}"
+        );
+        assert!(
+            html.contains("<h3>assistant</h3><pre>Widgets are ready.</pre>"),
+            "{harness}: {html}"
+        );
+        assert!(!html.contains("<script>bad()</script>"), "{harness}");
+        assert!(
+            !html.contains("raw body must not replace normalized text"),
+            "{harness}: {html}"
+        );
+        let snapshots = matches!(harness, "muse" | "opencode");
+        assert_eq!(
+            html.matches("class=\"message\"").count(),
+            if snapshots { 4 } else { 3 },
+            "{harness}: {html}"
+        );
+        if snapshots {
+            assert!(!html.contains("<pre>Checking </pre>"), "{harness}: {html}");
+            assert!(
+                html.contains("<pre>Nested widget note.</pre>"),
+                "{harness}: {html}"
+            );
+        }
+        if harness == "codex" {
+            assert!(html.contains("<details class=\"thinking\"><summary>Thinking</summary><pre>Consider a safe edit.</pre></details>"), "{html}");
+        }
+    }
+}
+
+#[test]
+fn normalized_conversation_stream_preserves_raw_only_blocks() {
+    use std::io::Write;
+
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let folder = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("7-20261003T120000-0400-claude.logs.jsonl");
+    let initial = include_str!("fixtures/console-claude-trace.jsonl");
+    fs::write(&path, initial).unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let link = console.log_link("-claude.logs.jsonl");
+    let raw = json!({"type":"assistant","message":{"content":[
+        {"type":"thinking","thinking":"Consider the widget shape."},
+        {"type":"text","text":"raw body must not replace normalized text"},
+        {"type":"future_block","detail":"unknown block stays visible"}
+    ]}})
+    .to_string();
+    let appended = format!(
+        "{}\n",
+        json!({"resourceLogs":[{"scopeLogs":[{"logRecords":[{
+            "body":{"stringValue":raw},
+            "attributes":[{"key":"thirdshift.events","value":{"stringValue":json!([
+                {"type":"message","role":"assistant","text":"Appended normalized reply.","parent_id":null}
+            ]).to_string()}}]
+        }]}]}]})
+    );
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(appended.as_bytes())
+        .unwrap();
+    let response = console.get(&format!("{link}/stream/{}", initial.len()));
+    let events = response.text().unwrap();
+    assert!(events.contains("Appended normalized reply."), "{events}");
+    assert!(events.contains("Consider the widget shape."), "{events}");
+    assert!(events.contains("unknown block stays visible"), "{events}");
+    assert!(
+        !events.contains("raw body must not replace normalized text"),
+        "{events}"
+    );
+    assert!(!events.contains("Widgets are ready."), "{events}");
+    assert!(
+        events.contains(&format!("id: {}", initial.len() + appended.len())),
+        "{events}"
+    );
 }
 
 #[test]

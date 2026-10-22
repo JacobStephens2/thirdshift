@@ -1,11 +1,14 @@
-//! Normalize retained Claude and Codex events into one escaped conversation,
-//! with each `https://` URL a link.
+//! Render normalized Session-trace events, with legacy Claude/Codex support,
+//! as one escaped conversation with each `https://` URL a link.
 use super::filters::{escaped, linked};
+use crate::harness::interpretation::event::Event;
 use crate::logs::catalog::Kind;
+use crate::otlp_jsonl::{AnyValue, LogRecord};
 use serde_json::Value;
+use std::collections::HashMap;
 
 enum Part {
-    Message(String, String),
+    Message(String, String, Option<String>),
     Thinking(String),
     Tool(String, String),
     Plain(String),
@@ -17,7 +20,19 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
     }
     let mut html = String::new();
     let mut tools_open = false;
-    for part in crate::logs::session::events(lines).flat_map(|line| parts(&line)) {
+    let mut parts = Vec::new();
+    let mut messages = HashMap::new();
+    for part in crate::logs::session::records(lines).flat_map(record_parts) {
+        if let Part::Message(_, _, Some(id)) = &part {
+            if let Some(index) = messages.get(id) {
+                parts[*index] = part;
+                continue;
+            }
+            messages.insert(id.clone(), parts.len());
+        }
+        parts.push(part);
+    }
+    for part in parts {
         if matches!(part, Part::Tool(..)) {
             if !tools_open {
                 html.push_str(
@@ -30,8 +45,10 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
             tools_open = false;
         }
         match part {
-            Part::Message(role, text) => html.push_str(&format!(
-                "<article class=\"message\"><h3>{}</h3><pre>{}</pre></article>",
+            Part::Message(role, text, id) => html.push_str(&format!(
+                "<article class=\"message\"{}><h3>{}</h3><pre>{}</pre></article>",
+                id.map(|id| format!(" data-message-id=\"{}\"", escaped(&id)))
+                    .unwrap_or_default(),
                 escaped(&role),
                 linked(&text)
             )),
@@ -56,6 +73,86 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
     html
 }
 
+fn record_parts(record: LogRecord) -> Vec<Part> {
+    let Some(AnyValue::String(raw)) = record.body else {
+        return Vec::new();
+    };
+    let Some(attribute) = record
+        .attributes
+        .iter()
+        .find(|attr| attr.key == "thirdshift.events")
+    else {
+        return parts(&raw);
+    };
+    let Some(AnyValue::String(events)) = &attribute.value else {
+        return vec![Part::Plain(raw)];
+    };
+    let Ok(Value::Array(events)) = serde_json::from_str(events) else {
+        return vec![Part::Plain(raw)];
+    };
+    let envelope = serde_json::from_str::<Value>(&raw).unwrap_or_default();
+    let thinking = matches!(
+        envelope["type"].as_str(),
+        Some("item.started" | "item.updated" | "item.completed")
+    ) && envelope["item"]["type"] == "reasoning";
+    let mut output = Vec::new();
+    for event in events {
+        match serde_json::from_value::<Event>(event) {
+            Ok(Event::Message {
+                id,
+                parent_id,
+                role,
+                text,
+            }) => {
+                output.push(if thinking {
+                    Part::Thinking(text)
+                } else {
+                    Part::Message(
+                        role,
+                        text,
+                        id.map(|id| serde_json::to_string(&(parent_id, id)).unwrap()),
+                    )
+                });
+            }
+            Ok(Event::ToolCallStarted {
+                tool: name, input, ..
+            }) => {
+                output.push(tool(&name, &input));
+            }
+            Ok(Event::ToolCallEnded {
+                tool: name,
+                input,
+                result,
+                ..
+            }) => {
+                let mut part = tool(&name, &input);
+                if let Part::Tool(_, body) = &mut part {
+                    body.push_str(&pre("result", &pretty(&result)));
+                }
+                output.push(part);
+            }
+            Ok(_) => {}
+            Err(_) => output.push(Part::Plain(raw.clone())),
+        }
+    }
+    if output.is_empty() {
+        // Thinking and other raw-only content still use the legacy renderer.
+        parts(&raw)
+    } else {
+        // Messages normalization has no thinking/unknown-block facts. Retain
+        // those blocks alongside normalized content without repeating text or
+        // tools from the raw message envelope.
+        if matches!(envelope["type"].as_str(), Some("assistant" | "user")) {
+            output.extend(
+                parts(&raw)
+                    .into_iter()
+                    .filter(|part| matches!(part, Part::Thinking(_) | Part::Plain(_))),
+            );
+        }
+        output
+    }
+}
+
 fn parts(line: &str) -> Vec<Part> {
     let Ok(event) = serde_json::from_str::<Value>(line) else {
         return vec![Part::Plain(line.into())];
@@ -64,11 +161,13 @@ fn parts(line: &str) -> Vec<Part> {
         Some("assistant" | "user") => {
             let role = text(&event, "type");
             match &event["message"]["content"] {
-                Value::String(content) => vec![Part::Message(role.into(), content.clone())],
+                Value::String(content) => vec![Part::Message(role.into(), content.clone(), None)],
                 Value::Array(blocks) if !blocks.is_empty() => blocks
                     .iter()
                     .map(|block| match block["type"].as_str() {
-                        Some("text") => Part::Message(role.into(), text(block, "text").into()),
+                        Some("text") => {
+                            Part::Message(role.into(), text(block, "text").into(), None)
+                        }
                         Some("thinking") => Part::Thinking(text(block, "thinking").into()),
                         Some("tool_use") => tool(text(block, "name"), &block["input"]),
                         Some("tool_result") => Part::Tool(
@@ -85,7 +184,7 @@ fn parts(line: &str) -> Vec<Part> {
             let item = &event["item"];
             vec![match item["type"].as_str() {
                 Some("agent_message") => {
-                    Part::Message("assistant".into(), text(item, "text").into())
+                    Part::Message("assistant".into(), text(item, "text").into(), None)
                 }
                 Some("reasoning") => Part::Thinking(text(item, "text").into()),
                 Some("command_execution") => tool("Bash", item),
