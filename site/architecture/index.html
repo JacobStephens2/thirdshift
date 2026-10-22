@@ -64,7 +64,7 @@
       <div class="sec-head"><p class="eyebrow">Figure 1 · the whole system</p><h2 id="factory-title">Agents write the code; thirdshift decides when it counts</h2></div>
       <p class="lede">An agent session can do anything your user account can, with nobody there to approve it. So every decision that matters is made outside the session, by thirdshift, before the session starts and after it ends. The <strong>Day shift</strong> is you: you shape the issues and review the pull requests.</p>
       <figure class="arch-fig">
-        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 1, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 652" role="img" aria-labelledby="fig-factory-desc"><title id="fig-factory-desc">The Day shift files issues on GitHub and starts thirdshift, or the operating system’s scheduler starts a Pass. On your machine, thirdshift runs seven deterministic stages: pre-flight checks, the Claim, a Worktree, Delivery, keeping the pull request green, the Self-merge in a Merge run, and cleaning up or failing safely. Inside the Worktree, an agent session on the chosen Harness writes and reviews the code, with Repair sessions when the branch needs work. Every stage that touches GitHub is thirdshift’s, and the pull request goes back to the Day shift for review.</title><defs><marker id="fig-factory-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-factory-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-factory-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-factory-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
+        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 1, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 780" role="img" aria-labelledby="fig-factory-title" aria-describedby="fig-factory-desc"><title id="fig-factory-title">The factory and this machine’s Console</title><desc id="fig-factory-desc">The Day shift files issues on GitHub and starts thirdshift, or the operating system’s scheduler starts a Pass. On your machine, thirdshift runs seven deterministic stages: pre-flight checks, the Claim, a Worktree, Delivery, keeping the pull request green, the Self-merge in a Merge run, and cleaning up or failing safely. Inside the Worktree, an agent session on the chosen Harness writes and reviews the code, with Repair sessions when the branch needs work. The pull request goes back to the Day shift for review. Commands write their records, Session traces and logs on this machine. Its Console reads them into an Inbox with stages and logs; a signed-in account can Stop or Requeue a live Command.</desc><defs><marker id="fig-factory-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-factory-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-factory-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-factory-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
 <rect class="zone" x="10.5" y="40.5" width="210" height="572" rx="4"/>
 <rect class="lbg" x="16" y="47" width="77.3" height="15"/><text class="zl" x="20" y="58.5">DAY SHIFT</text>
 <text class="zs" x="20" y="75">you</text>
@@ -80,7 +80,7 @@
 <text class="bt" x="35" y="526">Review the PR</text>
 <text class="bl" x="35" y="543">or let a Merge run</text>
 <text class="bl" x="35" y="557.5">merge it itself</text>
-<rect class="zone" x="235.5" y="40.5" width="550" height="572" rx="4"/>
+<rect class="zone" x="235.5" y="40.5" width="550" height="720" rx="4"/>
 <rect class="lbg" x="241" y="47" width="100.39999999999999" height="15"/><text class="zl" x="245" y="58.5">YOUR MACHINE</text>
 <text class="zs" x="245" y="75">ideally a VM with nothing from production on it</text>
 <rect class="box" x="255.5" y="85.5" width="240" height="60" rx="3"/>
@@ -180,9 +180,22 @@
 <rect class="lbg" x="423" y="12" width="274" height="16"/><text class="al" x="560" y="24" text-anchor="middle">files issues, marks them ready-for-agent</text>
 <path class="ar ink" d="M955 578V634H115V571" marker-end="url(#fig-factory-ink)"/>
 <rect class="lbg" x="456" y="624" width="208" height="16"/><text class="al" x="560" y="636" text-anchor="middle">pull request, ready for review</text>
+<rect class="box" x="255.5" y="660.5" width="220" height="80" rx="3"/>
+<text class="bt" x="265" y="681">Commands</text>
+<text class="bl" x="265" y="698">Command records,</text>
+<text class="bl" x="265" y="712.5">Session traces and logs</text>
+<rect class="box tool" x="520.5" y="660.5" width="245" height="80" rx="3"/>
+<text class="bt" x="530" y="681">Console</text>
+<text class="bl" x="530" y="698">Inbox · stages and logs</text>
+<text class="bl" x="530" y="712.5">Stop / Requeue (signed in)</text>
+<text class="bl" x="530" y="727">does only what the CLI does</text>
+<path class="ar ink" d="M475 700H518" marker-end="url(#fig-factory-ink)"/>
+<text class="al" x="498" y="691" text-anchor="middle">reads</text>
 </svg></div>
         <figcaption><b>Figure 1</b> The factory. The numbered stages are thirdshift's; only the magenta boxes are agents.</figcaption>
       </figure>
+      <p>The <a href="/docs/#console-installation">Console</a> reads this machine's Commands and opens on its <strong>Inbox</strong>. A signed-in account can <strong>Stop</strong> or Requeue a live Command. It does nothing the CLI can't do and starts no work (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0016-the-console-is-a-long-running-reader.md">ADR-0016</a>).</p>
+      <p>A <strong>Session trace</strong> records each agent session. A Command's whole <strong>Trace</strong> includes its child Runs and stages; export it with <code>thirdshift logs &lt;command&gt; --export &lt;dir&gt;</code>. <a href="/docs/#logs">Logs and Trace export</a>.</p>
       <ol class="arch-stages">
         <li><b>Pre-flight checks</b> stop a Run before anything is created: the Issue URL must match the clone's <code>origin</code>, the issue must be open, and the Base branch must be on <code>origin</code>.</li>
         <li><b>The Claim</b> labels the issue <code>in-progress</code>, so the issue list shows what the factory is working on.</li>
@@ -441,7 +454,7 @@
       <div class="sec-head"><p class="eyebrow">Figure 5 · <code>thirdshift pickup</code>, <code>architect</code>, <code>secure</code></p><h2 id="passes-title">The Passes: the factory finds its own work</h2></div>
       <p class="lede">A <strong>Pass</strong> takes no Issue URL, so your operating system's scheduler can start it; thirdshift never schedules itself. Only one Pass runs on a repository at a time, and a Pass with nothing to do is skipped, not failed. Architect and Security runs wait while a Ready issue is open, so work you shaped goes first.</p>
       <figure class="arch-fig">
-        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 5, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 334" role="img" aria-labelledby="fig-passes-desc"><title id="fig-passes-desc">The operating system’s scheduler starts three kinds of Pass, each taking no Issue URL. A Pickup run sweeps closed issues, respects the Claim limit and runs the lowest-numbered Ready issue. An Architect run reviews the architecture and either publishes a plan, which it builds with a Run or Spec run, or files an idea for the Day shift to triage. A Security run audits the Base branch, runs target code to reproduce what it finds, records each finding privately and, when fixing is allowed, files a fix issue and runs it. Running target code is why the Security run needs an OS sandbox, which is proposed but not built.</title><defs><marker id="fig-passes-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-passes-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-passes-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-passes-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
+        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 5, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 334" role="img" aria-labelledby="fig-passes-title" aria-describedby="fig-passes-desc"><title id="fig-passes-title">The three Passes</title><desc id="fig-passes-desc">The operating system’s scheduler starts three kinds of Pass, each taking no Issue URL. A Pickup run sweeps closed issues, respects the Claim limit and runs the lowest-numbered Ready issue. An Architect run reviews the architecture and either publishes a plan, which it builds with a Run or Spec run, or files an idea for the Day shift to triage. A Security run audits the Base branch, reproduces findings, records each privately and, when fixing is allowed, files a fix issue and runs it. Its target code may run only inside an OS-enforced sandbox, as the Security audit skill requires.</desc><defs><marker id="fig-passes-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-passes-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-passes-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-passes-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
 <path class="vm" d="M2 2H998V326H2Z"/>
 <rect class="lbg" x="10" y="306" width="100.39999999999999" height="15"/><text class="zl" x="14" y="318">YOUR MACHINE</text>
 <rect class="lbg" x="114.39999999999999" y="306" width="423.79999999999995" height="15"/><text class="zs" x="118.39999999999999" y="318">results leave only as GitHub issues, PRs and private advisories</text>
@@ -476,8 +489,7 @@
 <text class="bt" x="640" y="124">Run or Spec run</text>
 <text class="bl" x="640" y="139">Figures 2 to 4</text>
 <path class="ar ink" d="M600 128H628" marker-end="url(#fig-passes-ink)"/>
-<rect class="ring prop" x="160.5" y="214.5" width="240" height="84" rx="5"/>
-<rect class="proptag" x="193" y="206" width="199" height="15"/><text class="tag" x="198" y="217">needs an OS sandbox · proposed</text>
+<rect class="tagbg" x="170" y="206" width="240" height="15"/><text class="tag" x="175" y="217">target code: OS sandbox required</text>
 <rect class="box agent" x="170.5" y="226.5" width="220" height="60" rx="3"/>
 <text class="bt" x="180" y="247">Security run</text>
 <text class="bl" x="180" y="264">audits the Base branch;</text>
@@ -490,13 +502,13 @@
 <text class="bt" x="660" y="247">Security fix</text>
 <text class="bl" x="660" y="264">if allowed: files an</text>
 <text class="bl" x="660" y="278.5">issue and runs it</text>
-<path class="ar ink" d="M400 256H428" marker-end="url(#fig-passes-ink)"/>
+<path class="ar ink" d="M390 256H428" marker-end="url(#fig-passes-ink)"/>
 <path class="ar faint" d="M620 256H648" marker-end="url(#fig-passes-faint)"/>
 <text class="note" x="860" y="248" text-anchor="start">Fencing: on a</text>
 <text class="note" x="860" y="263" text-anchor="start">schedule, with</text>
 <text class="note" x="860" y="278" text-anchor="start">fixing allowed</text>
 </svg></div>
-        <ul class="arch-key"><li class="k-new">new in this workflow</li><li class="k-prop">proposed, not built</li></ul>
+        <ul class="arch-key"><li class="k-new">new in this workflow</li></ul>
         <figcaption><b>Figure 5</b> The Passes. The factory finds Ready issues, architecture plans and vulnerabilities by itself.</figcaption>
       </figure>
     </div>
@@ -505,9 +517,9 @@
   <section class="sec arch-sec" id="containment" aria-labelledby="containment-title">
     <div class="wrap">
       <div class="sec-head"><p class="eyebrow">Figure 6 · from the outside in</p><h2 id="containment-title">Containment: where the boundaries are</h2></div>
-      <p class="lede">thirdshift draws no security boundary around its agents: every session can do what your user account can. So containment comes from where you run it. The boundary that holds is the machine: best a virtual machine with nothing from production on it. An OS sandbox inside it, for the code an agent runs, is proposed but not built.</p>
+      <p class="lede">thirdshift draws no security boundary around its agents: every session can do what your user account can. So containment comes from where you run it. The boundary that holds is the machine: best a virtual machine with nothing from production on it. Security sessions may run target code only inside an OS-enforced sandbox, as the Security audit skill requires. thirdshift ships no sandbox runner of its own yet; other sessions run unsandboxed.</p>
       <figure class="arch-fig">
-        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 6, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 500" role="img" aria-labelledby="fig-containment-desc"><title id="fig-containment-desc">Nested boundaries around an agent session, from the outside in: your machine, ideally a virtual machine with nothing from production on it; your user account, whose permissions and logins every session has; the Worktree, which keeps checkouts apart but is not a security boundary; and, proposed but not built, an OS sandbox inside it for the target code an agent runs. Work leaves the machine only to GitHub and to the model provider.</title><defs><marker id="fig-containment-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-containment-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-containment-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-containment-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
+        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 6, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 500" role="img" aria-labelledby="fig-containment-title" aria-describedby="fig-containment-desc"><title id="fig-containment-title">Containment, Trusted accounts and the sandbox probe</title><desc id="fig-containment-desc">Nested boundaries around an agent session: your machine, ideally a virtual machine with nothing from production on it; your user account, whose permissions and logins every session has; and the Worktree, which keeps checkouts apart but is not a security boundary. Setup probes bubblewrap on Linux when security is enabled, reporting unavailable on macOS. Security target code requires an OS sandbox, but thirdshift’s runner is not shipped; other sessions are unsandboxed. The dotted runner is proposed. Trusted accounts gate Pickup’s authors and ready labels, and which issue comments sessions receive. Work leaves through GitHub and the model provider.</desc><defs><marker id="fig-containment-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-containment-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-containment-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-containment-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
 <rect class="ring vmr" x="10.5" y="30.5" width="640" height="455" rx="5"/>
 <text class="zl" x="22" y="50">YOUR MACHINE</text>
 <text class="zs" x="22" y="66">ideally a VM with nothing from production on it</text>
@@ -522,9 +534,12 @@
 <text class="bl" x="60" y="284">gh, git, Harness:</text>
 <text class="bl" x="60" y="298.5">any session can</text>
 <text class="bl" x="60" y="313">read and use them</text>
-<rect class="box" x="50.5" y="340.5" width="160" height="56" rx="3"/>
-<text class="bt" x="60" y="361">Logs</text>
-<text class="bl" x="60" y="378">sessions, audits</text>
+<rect class="box tool" x="50.5" y="340.5" width="160" height="104" rx="3"/>
+<text class="bt" x="60" y="361">Setup</text>
+<text class="bl" x="60" y="378">Security enabled:</text>
+<text class="bl" x="60" y="392.5">bubblewrap probe</text>
+<text class="bl" x="60" y="407">Linux; unavailable</text>
+<text class="bl" x="60" y="421.5">on macOS</text>
 <rect class="ring soft" x="230.5" y="152.5" width="380" height="300" rx="5"/>
 <text class="zl" x="242" y="172">WORKTREE</text>
 <text class="zs" x="242" y="188">keeps checkouts apart; not a boundary</text>
@@ -534,20 +549,25 @@
 <text class="bl" x="260" y="258.5">(ADR-0013); Claude Code’s auto</text>
 <text class="bl" x="260" y="273">mode screens risky actions</text>
 <rect class="ring prop" x="250.5" y="318.5" width="340" height="116" rx="5"/>
-<text class="zl" x="262" y="338">OS SANDBOX</text>
-<text class="zs" x="262" y="354">bubblewrap + AppArmor, or Podman</text>
-<rect class="proptag" x="414.5" y="310" width="167.5" height="15"/><text class="tag" x="419.5" y="321">proposed · #726 #608 #398</text>
-<text class="note" x="262" y="392" text-anchor="start">target code would run here: builds,</text>
-<text class="note" x="262" y="407" text-anchor="start">tests, proofs of concept, with no</text>
-<text class="note" x="262" y="422" text-anchor="start">network and scratch-only writes</text>
+<text class="zl" x="262" y="338">OS SANDBOX RUNNER</text>
+<text class="zs" x="262" y="354">required for Security target code</text>
+<rect class="proptag" x="434.5" y="310" width="147.5" height="15"/><text class="tag" x="439.5" y="321">not shipped · #726</text>
+<text class="note" x="262" y="392" text-anchor="start">thirdshift ships no runner yet</text>
+<text class="note" x="262" y="407" text-anchor="start">other sessions run unsandboxed</text>
+<text class="note" x="262" y="422" text-anchor="start">#398: sandboxed Codex still open</text>
 <path class="ar agent" d="M330 280V316" marker-end="url(#fig-containment-agent)"/>
-<rect class="lbg" x="342.9" y="289" width="122.19999999999999" height="16"/><text class="al" x="404" y="301" text-anchor="middle">would run code in</text>
+<rect class="lbg" x="342" y="289" width="190" height="16"/><text class="al" x="437" y="301" text-anchor="middle">required for target code</text>
 <path class="ar acc" d="M210 198H230V243H248" marker-end="url(#fig-containment-acc)"/>
 <path class="ar faint" d="M250 262H212" marker-end="url(#fig-containment-faint)"/>
 <rect class="box" x="700.5" y="130.5" width="280" height="74" rx="3"/>
 <text class="bt" x="710" y="151">GitHub</text>
 <text class="bl" x="710" y="168">pushes, PRs, labels, private</text>
 <text class="bl" x="710" y="182.5">advisories: the work leaves here</text>
+<rect class="box tool" x="700.5" y="26.5" width="280" height="80" rx="3"/>
+<text class="bt" x="710" y="47">Trusted accounts</text>
+<text class="bl" x="710" y="64">Pickup: author and ready label</text>
+<text class="bl" x="710" y="78.5">Sessions: only their comments</text>
+<path class="ar acc" d="M840 106V128" marker-end="url(#fig-containment-acc)"/>
 <rect class="box" x="700.5" y="260.5" width="280" height="74" rx="3"/>
 <text class="bt" x="710" y="281">Model provider API</text>
 <text class="bl" x="710" y="298">prompts, and the code quoted</text>
@@ -558,13 +578,15 @@
 <rect class="lbg" x="650.5" y="278" width="43" height="16"/><text class="al" x="672" y="290" text-anchor="middle">HTTPS</text>
 </svg></div>
         <ul class="arch-key"><li class="k-machine">your machine</li><li class="k-user">enforced by the OS</li><li class="k-soft">keeps things apart, not security</li><li class="k-prop">proposed, not built</li></ul>
-        <figcaption><b>Figure 6</b> Containment. Your machine is the boundary that holds; an OS sandbox is the proposed wall inside it.</figcaption>
+        <figcaption><b>Figure 6</b> Containment. Setup's probe is shipped; thirdshift's sandbox runner is proposed. Trusted accounts limit the issue material handed to a session, not what the session can do.</figcaption>
       </figure>
       <dl class="arch-layers">
         <div><dt>Your machine</dt><dd><em class="st-hold">holds · your setup</em> Keep production data, keys and unrelated logins off it, and assume a session can read or change anything on it.</dd></div>
         <div><dt>Your user account</dt><dd><em class="st-part">enforced, but shared</em> It separates thirdshift from other users, not from its own sessions: a session can read the <code>gh</code> and <code>git</code> logins and push with them (<a href="https://github.com/JacobStephens2/thirdshift/issues/691">#691</a>).</dd></div>
         <div><dt>The Worktree</dt><dd><em class="st-none">not a security boundary</em> It keeps your checkout and other Runs apart. Every Harness runs with its own sandbox and approvals off (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0013-every-harness-runs-unattended-and-fully-trusted.md">ADR-0013</a>). Claude Code's auto mode screens risky actions, but enforces no boundary.</dd></div>
-        <div><dt>An OS sandbox</dt><dd><em class="st-prop">proposed</em> A second wall inside the machine, for the code an agent runs: no network, writes only to scratch space, a dummy home directory. On Ubuntu 24.04, bubblewrap needs an AppArmor profile that lets it create user namespaces. Tracked in <a href="https://github.com/JacobStephens2/thirdshift/issues/726">#726</a> (a runner), <a href="https://github.com/JacobStephens2/thirdshift/issues/608">#608</a> (a setup check) and <a href="https://github.com/JacobStephens2/thirdshift/issues/398">#398</a> (sandboxed Codex).</dd></div>
+        <div><dt>Setup's sandbox probe</dt><dd><em class="st-hold">shipped · capability check</em> With <code>security.review</code> or <code>security.fix</code> on, Setup checks this machine's bubblewrap sandbox on Linux: network isolation, a read-only host home and scratch writes with a dummy home directory. On macOS it reports the check unavailable. Passing is a capability check, not isolation for later sessions. <a href="/docs/#user-config">Setup and User config</a>.</dd></div>
+        <div><dt>An OS sandbox</dt><dd><em class="st-prop">required for Security target code · runner not shipped</em> The <a href="/prompts/#skill-thirdshift-security-audit">Security audit skill</a> requires an OS-enforced sandbox before running target code, with network, credential, write and resource isolation. If those controls cannot be enforced, the session must leave execution for validation. thirdshift ships no runner of its own yet (<a href="https://github.com/JacobStephens2/thirdshift/issues/726">#726</a>). Other sessions run unsandboxed; sandboxed Codex sessions remain open work (<a href="https://github.com/JacobStephens2/thirdshift/issues/398">#398</a>, ADR-0013).</dd></div>
+        <div><dt>Trusted accounts</dt><dd><em class="st-part">issue input, not process isolation</em> The repository's owner, organization members and collaborators. A session gets its issue's title, body and only these accounts' comments. Pickup takes only issues a Trusted account wrote and whose latest <code>ready-for-agent</code> label a Trusted account applied, with no later title or body edit by another account. <a href="/docs/#pickup-runs">Pickup's trust checks</a>.</dd></div>
       </dl>
       <p class="arch-next">Next: <a href="/docs/#unattended-sessions">what an unattended session can do</a>, <a href="/how-it-works/">How thirdshift works</a> step by step, or <a href="/prompts/">every prompt and skill</a> the agents get.</p>
     </div>
