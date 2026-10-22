@@ -72,6 +72,10 @@ pub enum Command {
         json: bool,
         owner: Option<String>,
     },
+    LogsExport {
+        command: String,
+        directory: std::path::PathBuf,
+    },
     LogFile {
         id: String,
         follow: bool,
@@ -449,11 +453,20 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 }
                 _ => {}
             }
-            let usage = "usage: thirdshift logs <command> [--session <kind>] [--follow]";
+            let usage = "usage: thirdshift logs <command> [--session <kind>] [--follow] | thirdshift logs <command> --export <dir>";
             let command = args
                 .get(1)
                 .filter(|name| !name.starts_with('-'))
                 .ok_or_else(|| anyhow::anyhow!(usage))?;
+            if let [flag, directory] = &args[2..]
+                && flag == "--export"
+                && !directory.starts_with('-')
+            {
+                return Ok(Command::LogsExport {
+                    command: command.clone(),
+                    directory: directory.into(),
+                });
+            }
             let mut session = None;
             let mut follow = false;
             let mut flags = args[2..].iter();

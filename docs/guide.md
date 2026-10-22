@@ -685,6 +685,28 @@ request left behind.
 
 ### Logs
 
+Export a Command's whole **Trace** for another tool with:
+
+```sh
+thirdshift logs acme/widgets#7 --export ./trace
+```
+
+This writes `spans.jsonl` and `logs.jsonl` in the directory, creating it if
+needed. Both use OpenTelemetry's OTLP JSON Lines format: one export request
+per line, with spans and log records in separate files. The spans include the
+Command, all its child Runs and their stages, using the Command record's times,
+plus every retained Session trace's spans. The log records come from every
+Session trace in that Command. All share one trace ID, and every span's parent
+is included. Naming a child Run exports its whole owning Command too.
+
+The export stays on the machine; nothing is sent anywhere. Existing export
+files are never overwritten. A Command record is required; legacy Session logs
+without OTLP traces contribute no Session records. Missing files, malformed
+requests or missing parent spans fail the export before the output files are
+published. Wait for a live Command to finish before exporting its complete
+Trace; unfinished record intervals retain an unset end time rather than an
+invented completion time.
+
 Everything thirdshift logs goes under `~/.thirdshift/logs/`, or the `logs.dir` set in the [User config](#user-config), in a folder per repository, `<owner>/<repo>/`, named for the GitHub repository rather than your checkout, so a fork and its upstream never share one and every checkout or worktree of a repository logs to the same place. thirdshift creates each folder as it needs it, so a repository's first pass needs nothing made by hand:
 
 ```
