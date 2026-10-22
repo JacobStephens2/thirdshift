@@ -1,7 +1,8 @@
 //! The search for the lowest-numbered Ready issue in a repository, saying
 //! why it passed over each issue labelled `ready-for-agent` before it. A
 //! Pickup run takes the issue it finds; any run can ask whether a repository
-//! has one, against the very same definition.
+//! has one, against the very same definition. An Architect run also waits
+//! for an issue that meets every Ready issue condition except settling.
 
 use anyhow::Result;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -27,13 +28,49 @@ pub struct ReadyIssue {
     pub claim_generation: usize,
 }
 
+/// An issue that goes before an Architect run, lowest number first.
+pub enum PriorityIssue {
+    Ready(ReadyIssue),
+    /// Every other Ready issue condition holds, including a Spec having a
+    /// Startable Ticket. Pickup still cannot take it.
+    Settling(ListedIssue),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Settling {
+    Wait,
+    Include,
+}
+
 /// The lowest-numbered Ready issue in `repo`, the Launch directory
 /// `launch`'s repository, if there is one, with a line on stderr for each
 /// issue labelled `ready-for-agent` passed over before it, with why.
 /// Nothing is changed, on GitHub or in `launch`.
 /// `wait` is the User config's settling window since the latest shaping
-/// event; every pass uses the same Ready issue definition.
+/// event.
 pub fn first(launch: &Git, repo: &Repo, wait: TimeDelta) -> Result<Option<ReadyIssue>> {
+    Ok(match search(launch, repo, wait, Settling::Wait)? {
+        Some(PriorityIssue::Ready(ready)) => Some(ready),
+        _ => None,
+    })
+}
+
+/// The lowest-numbered issue that is Ready or would be Ready once settled.
+/// Only Architect uses this search; Pickup and Security use `first`.
+pub fn before_architect(
+    launch: &Git,
+    repo: &Repo,
+    wait: TimeDelta,
+) -> Result<Option<PriorityIssue>> {
+    search(launch, repo, wait, Settling::Include)
+}
+
+fn search(
+    launch: &Git,
+    repo: &Repo,
+    wait: TimeDelta,
+    settling: Settling,
+) -> Result<Option<PriorityIssue>> {
     let reads = GitHubAndOrigin {
         launch,
         github: GitHub::new(),
@@ -41,7 +78,7 @@ pub fn first(launch: &Git, repo: &Repo, wait: TimeDelta) -> Result<Option<ReadyI
     let candidates = reads
         .github
         .open_issues_labelled(&repo.slug(), READY_FOR_AGENT)?;
-    Search::new(&reads, candidates, Utc::now(), wait, progress::step).first_ready()
+    Search::new(&reads, candidates, Utc::now(), wait, progress::step).first_priority(settling)
 }
 
 /// Recheck only the selected issue after Pickup reserves it on origin. A
@@ -65,7 +102,7 @@ pub fn refresh(launch: &Git, selected: ReadyIssue, wait: TimeDelta) -> Result<Op
         title: current.title.unwrap_or_default(),
         labels: current.labels,
     };
-    match standing_of(&reads, &listed, Utc::now(), wait)? {
+    match standing_of(&reads, &listed, Utc::now(), wait, Settling::Wait)? {
         Standing::Ready {
             is_spec,
             claim_generation,
@@ -172,6 +209,8 @@ struct Search<'a, R, P> {
     /// How long an issue is left after it was last shaped before it is a
     /// Ready issue, so a Spec is not taken while Tickets are attached.
     wait: TimeDelta,
+    /// Whether the search is also for an issue that is only settling.
+    settling: Settling,
     /// Where each line on an issue passed over goes, as soon as it is.
     passed_over: P,
 }
@@ -192,13 +231,23 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
             standings,
             now,
             wait,
+            settling: Settling::Wait,
             passed_over,
         }
     }
 
     /// The lowest-numbered Ready issue, if there is one, with a line for
     /// each issue passed over before it.
-    fn first_ready(mut self) -> Result<Option<ReadyIssue>> {
+    #[cfg(test)]
+    fn first_ready(self) -> Result<Option<ReadyIssue>> {
+        Ok(match self.first_priority(Settling::Wait)? {
+            Some(PriorityIssue::Ready(ready)) => Some(ready),
+            _ => None,
+        })
+    }
+
+    fn first_priority(mut self, settling: Settling) -> Result<Option<PriorityIssue>> {
+        self.settling = settling;
         for at in 0..self.candidates.len() {
             match self.standing(at)? {
                 Standing::Ready {
@@ -206,11 +255,16 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
                     claim_generation,
                 } => {
                     let listed = self.candidates.swap_remove(at);
-                    return Ok(Some(ReadyIssue {
+                    return Ok(Some(PriorityIssue::Ready(ReadyIssue {
                         listed,
                         is_spec,
                         claim_generation,
-                    }));
+                    })));
+                }
+                Standing::PassedOver(Reason::Unsettled(_)) if settling == Settling::Include => {
+                    return Ok(Some(PriorityIssue::Settling(
+                        self.candidates.swap_remove(at),
+                    )));
                 }
                 Standing::PassedOver(reason) => {
                     if let Some(line) = self.line(at, &reason)? {
@@ -227,7 +281,13 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
         if let Some(standing) = &self.standings[at] {
             return Ok(standing.clone());
         }
-        let standing = standing_of(self.reads, &self.candidates[at], self.now, self.wait)?;
+        let standing = standing_of(
+            self.reads,
+            &self.candidates[at],
+            self.now,
+            self.wait,
+            self.settling,
+        )?;
         self.standings[at] = Some(standing.clone());
         Ok(standing)
     }
@@ -361,6 +421,7 @@ fn standing_of(
     candidate: &ListedIssue,
     now: DateTime<Utc>,
     wait: TimeDelta,
+    settling: Settling,
 ) -> Result<Standing> {
     let passed_over = |reason| Ok(Standing::PassedOver(reason));
     if let Some(label) = candidate.labels.unready() {
@@ -396,9 +457,14 @@ fn standing_of(
     if spec_run::all_closed(read.sub_issue_is_open.iter().copied()) {
         return passed_over(Reason::TicketsClosed);
     }
-    if wait > TimeDelta::zero()
-        && let Some(shaped) = read.last_shaped
-        && now - shaped.at < wait
+    let unsettled = read
+        .last_shaped
+        .filter(|shaped| wait > TimeDelta::zero() && now - shaped.at < wait);
+    // Pickup keeps its existing short circuit and passed-over reason.
+    // Architect must check every other condition before treating settling
+    // as the only reason an issue is not Ready.
+    if settling == Settling::Wait
+        && let Some(shaped) = &unsettled
     {
         return passed_over(Reason::Unsettled(shaped.by));
     }
@@ -415,6 +481,9 @@ fn standing_of(
         {
             return passed_over(Reason::NoStartableTicket(tickets));
         }
+    }
+    if let Some(shaped) = unsettled {
+        return passed_over(Reason::Unsettled(shaped.by));
     }
     Ok(Standing::Ready {
         is_spec,

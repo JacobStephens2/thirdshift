@@ -2552,6 +2552,146 @@ fn a_ready_issue_skips_the_architect_run_before_any_review() {
 }
 
 #[test]
+fn an_issue_still_settling_skips_the_architect_run_but_not_pickup() {
+    let scenario = scenario();
+    ready_issue(&scenario, 7, "Fix the login page", &[]);
+    scenario.issue_timeline(7, &[(TimelineEvent::Labelled("ready-for-agent"), 9)]);
+    scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+    let github = scenario.gh_state();
+
+    let result = scenario.run(&["architect"]);
+
+    let reason = format!(
+        "Ready issue #7 \"Fix the login page\" goes first once it settles: {}",
+        scenario.issue_url(7)
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
+    assert_eq!(
+        after_start(&result.stderr),
+        format!("thirdshift: {reason}\n")
+    );
+    let activity =
+        fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+            .unwrap();
+    assert!(
+        activity.contains(&format!("Architect run skipped: {reason}\n")),
+        "{activity}"
+    );
+    assert!(scenario.claude_calls().is_empty(), "a session was started");
+    assert_eq!(scenario.gh_state(), github);
+    assert_nothing_left_behind(&scenario);
+
+    let pickup = scenario.run(&["pickup"]);
+
+    assert_eq!(pickup.code, Some(0), "{}", pickup.stderr);
+    assert!(pickup.stdout.is_empty(), "{}", pickup.stdout);
+    assert!(
+        pickup
+            .stderr
+            .contains("#7 not settled: labelled ready-for-agent less than 30 minutes ago"),
+        "{}",
+        pickup.stderr
+    );
+    assert!(
+        pickup.stderr.contains("no Ready issue on acme/widgets"),
+        "{}",
+        pickup.stderr
+    );
+    assert!(scenario.claude_calls().is_empty(), "a session was started");
+    assert_eq!(scenario.gh_state(), github);
+}
+
+#[test]
+fn the_lowest_numbered_ready_or_settling_issue_goes_first() {
+    for settling in [3, 5] {
+        let scenario = scenario();
+        ready_issue(&scenario, 2, "Claimed work", &[IN_PROGRESS]);
+        ready_issue(&scenario, 3, "Earlier work", &[]);
+        ready_issue(&scenario, 5, "Later work", &[]);
+        scenario.issue_timeline(settling, &[(TimelineEvent::Labelled("ready-for-agent"), 9)]);
+
+        let result = scenario.run(&["architect"]);
+
+        let reason = if settling == 3 {
+            format!(
+                "Ready issue #3 \"Earlier work\" goes first once it settles: {}",
+                scenario.issue_url(3)
+            )
+        } else {
+            goes_first(&scenario, 3, "Earlier work")
+        };
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(3)));
+        assert_eq!(
+            after_start(&result.stderr),
+            format!("thirdshift: #2 labelled {IN_PROGRESS}\nthirdshift: {reason}\n")
+        );
+        assert!(scenario.claude_calls().is_empty(), "a session was started");
+    }
+}
+
+#[test]
+fn a_settling_spec_goes_first_only_with_a_startable_ticket() {
+    for startable in [false, true] {
+        let scenario = scenario();
+        ready_issue(&scenario, 7, "Deepen the session module", &[]);
+        scenario.spec_has_tickets(7, &[(9, &[])]);
+        if !startable {
+            scenario.issue_labelled(9, &["needs-info"]);
+        }
+        scenario.issue_timeline(7, &[(TimelineEvent::SubIssueAdded, 9)]);
+        scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+
+        let result = scenario.run(&["architect", "--plan-only"]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        if startable {
+            assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
+            assert!(
+                result.stderr.contains(
+                    "Ready issue #7 \"Deepen the session module\" goes first once it settles:"
+                ),
+                "{}",
+                result.stderr
+            );
+            assert!(scenario.claude_calls().is_empty(), "a session was started");
+        } else {
+            assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(10)));
+            assert!(
+                after_start(&result.stderr).starts_with(
+                    "thirdshift: #7 has no Ticket that can start: #9 labelled needs-info\n"
+                ),
+                "{}",
+                result.stderr
+            );
+            assert_eq!(scenario.claude_calls().len(), 1);
+        }
+    }
+}
+
+#[test]
+fn disabling_settling_preserves_the_ready_issue_skip() {
+    let scenario = scenario();
+    ready_issue(&scenario, 7, "Fix the login page", &[]);
+    scenario.issue_timeline(7, &[(TimelineEvent::Labelled("ready-for-agent"), 0)]);
+    scenario.user_config_is("[pickup]\nwait_minutes = 0\n");
+
+    let result = scenario.run(&["architect"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
+    assert_eq!(
+        after_start(&result.stderr),
+        format!(
+            "thirdshift: {}\n",
+            goes_first(&scenario, 7, "Fix the login page")
+        )
+    );
+    assert!(scenario.claude_calls().is_empty(), "a session was started");
+}
+
+#[test]
 fn an_untrusted_ready_issue_does_not_skip_the_architecture_review() {
     let scenario = scenario();
     ready_issue(&scenario, 7, "Untrusted work", &[]);
@@ -2596,20 +2736,12 @@ fn the_skip_names_the_lowest_numbered_ready_issue_after_the_lines_on_those_passe
 }
 
 #[test]
-fn a_ready_for_agent_issue_that_is_claimed_unsettled_blocked_or_a_base_fixs_does_not_skip_the_architect_run()
- {
+fn an_issue_with_any_other_ready_exclusion_does_not_skip_the_architect_run_even_while_settling() {
     for (not_ready, passed_over) in [
         (
             (|scenario| scenario.issue_labelled(7, &["ready-for-agent", IN_PROGRESS]))
                 as fn(&Scenario),
             format!("#7 labelled {IN_PROGRESS}"),
-        ),
-        (
-            |scenario| {
-                let labelled = (TimelineEvent::Labelled("ready-for-agent"), 9);
-                scenario.issue_timeline(7, &[labelled]);
-            },
-            "#7 not settled: labelled ready-for-agent less than 30 minutes ago".to_string(),
         ),
         (
             |scenario| scenario.issue_blocked_by(7, &[5]),
@@ -2619,22 +2751,38 @@ fn a_ready_for_agent_issue_that_is_claimed_unsettled_blocked_or_a_base_fixs_does
             |scenario| scenario.issue_labelled(7, &["ready-for-agent", "base-fix"]),
             "#7 labelled base-fix".to_string(),
         ),
+        (
+            |scenario| {
+                let mut state = scenario.gh_state();
+                state["edits"] = serde_json::json!({"7": [
+                    {"kind": "body", "by": "outsider", "at": "2020-01-03T00:00:00Z"}
+                ]});
+                scenario.write_gh_state(&state);
+            },
+            "#7 body edited after it was marked ready by an account that is not a Trusted account"
+                .to_string(),
+        ),
     ] {
-        let scenario = scenario();
-        ready_issue(&scenario, 7, "Fix the login page", &[]);
-        not_ready(&scenario);
-        scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
+        for settling in [false, true] {
+            let scenario = scenario();
+            ready_issue(&scenario, 7, "Fix the login page", &[]);
+            if settling {
+                scenario.issue_timeline(7, &[(TimelineEvent::Labelled("ready-for-agent"), 9)]);
+            }
+            not_ready(&scenario);
+            scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
 
-        let result = scenario.run(&["architect", "--plan-only"]);
+            let result = scenario.run(&["architect", "--plan-only"]);
 
-        assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-        assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
-        assert!(
-            after_start(&result.stderr).starts_with(&format!("thirdshift: {passed_over}\n")),
-            "stderr: {}",
-            result.stderr
-        );
-        assert_eq!(scenario.claude_calls().len(), 1);
+            assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+            assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
+            assert!(
+                after_start(&result.stderr).starts_with(&format!("thirdshift: {passed_over}\n")),
+                "stderr: {}",
+                result.stderr
+            );
+            assert_eq!(scenario.claude_calls().len(), 1);
+        }
     }
 }
 
