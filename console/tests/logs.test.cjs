@@ -173,6 +173,7 @@ for (const storage of ['Session log', 'Session trace', 'Session trace only']) {
       });
       await page.goto(`${origin}/logs`);
       await page.getByRole('link', { name: /Session log/ }).click();
+      await page.waitForFunction(() => window.readerSource);
       const path = await page.locator('#log-content').getAttribute('data-stream');
       await appendFile(log, message('First line after disconnect'));
       await page.evaluate(() => window.readerSource.onerror(new Event('error')));
