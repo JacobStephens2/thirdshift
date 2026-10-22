@@ -11,6 +11,7 @@ enum Part {
     Message(String, String, Option<String>),
     Thinking(String),
     Tool(String, String),
+    CodexEdit(String, String),
     Plain(String),
 }
 
@@ -20,20 +21,26 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
     }
     let mut html = String::new();
     let mut tools_open = false;
-    let mut parts = Vec::new();
+    let mut conversation = Vec::new();
+    let mut edits = HashMap::new();
     let mut messages = HashMap::new();
     for part in crate::logs::session::records(lines).flat_map(record_parts) {
-        if let Part::Message(_, _, Some(id)) = &part {
-            if let Some(index) = messages.get(id) {
-                parts[*index] = part;
+        let snapshots = match &part {
+            Part::Message(_, _, Some(id)) => Some((&mut messages, id)),
+            Part::CodexEdit(id, _) => Some((&mut edits, id)),
+            _ => None,
+        };
+        if let Some((snapshots, id)) = snapshots {
+            if let Some(index) = snapshots.get(id) {
+                conversation[*index] = part;
                 continue;
             }
-            messages.insert(id.clone(), parts.len());
+            snapshots.insert(id.clone(), conversation.len());
         }
-        parts.push(part);
+        conversation.push(part);
     }
-    for part in parts {
-        if matches!(part, Part::Tool(..)) {
+    for part in conversation {
+        if matches!(part, Part::Tool(..) | Part::CodexEdit(..)) {
             if !tools_open {
                 html.push_str(
                     "<details class=\"tool-group\"><summary>Tools</summary><div class=\"tools\">",
@@ -60,6 +67,10 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
                 "<article class=\"tool\" data-tool=\"{}\"><h3>{}</h3>{body}</article>",
                 escaped(&name),
                 escaped(&name)
+            )),
+            Part::CodexEdit(id, body) => html.push_str(&format!(
+                "<article class=\"tool\" data-tool=\"Edit\" data-codex-edit=\"{}\"><h3>Edit</h3>{body}</article>",
+                escaped(&id)
             )),
             Part::Plain(text) => html.push_str(&format!(
                 "<pre class=\"unknown-event\">{}</pre>",
@@ -114,10 +125,31 @@ fn record_parts(record: LogRecord) -> Vec<Part> {
                     )
                 });
             }
+            Ok(Event::ToolCallStarted { id, tool: name, .. })
+                if name == "apply_patch" && envelope["item"]["type"] == "file_change" =>
+            {
+                output.push(codex_edit(&id, &envelope["item"]));
+            }
             Ok(Event::ToolCallStarted {
                 tool: name, input, ..
             }) => {
                 output.push(tool(&name, &input));
+            }
+            Ok(Event::ToolCallEnded {
+                id,
+                tool: name,
+                result,
+                ..
+            }) if name == "apply_patch"
+                && (result["source"] == "codex_session_file"
+                    || envelope["item"]["type"] == "file_change") =>
+            {
+                let record = if result["source"] == "codex_session_file" {
+                    &result
+                } else {
+                    &envelope["item"]
+                };
+                output.push(codex_edit(&id, record));
             }
             Ok(Event::ToolCallEnded {
                 tool: name,
@@ -158,6 +190,12 @@ fn parts(line: &str) -> Vec<Part> {
         return vec![Part::Plain(line.into())];
     };
     match event["type"].as_str() {
+        Some("tool_call_ended")
+            if event["tool"] == "apply_patch"
+                && event["result"]["source"] == "codex_session_file" =>
+        {
+            vec![codex_edit(text(&event, "id"), &event["result"])]
+        }
         Some("assistant" | "user") => {
             let role = text(&event, "type");
             match &event["message"]["content"] {
@@ -188,7 +226,7 @@ fn parts(line: &str) -> Vec<Part> {
                 }
                 Some("reasoning") => Part::Thinking(text(item, "text").into()),
                 Some("command_execution") => tool("Bash", item),
-                Some("file_change") => tool("Edit", item),
+                Some("file_change") => codex_edit(text(item, "id"), item),
                 Some("mcp_tool_call") => tool(text(item, "tool"), item),
                 Some("web_search") => tool("Grep", item),
                 _ => Part::Plain(line.into()),
@@ -196,6 +234,30 @@ fn parts(line: &str) -> Vec<Part> {
         }
         _ => vec![Part::Plain(line.into())],
     }
+}
+
+fn codex_edit(id: &str, record: &Value) -> Part {
+    let body = if record["source"] == "codex_session_file" {
+        let diffs: String = record["changes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|change| {
+                format!(
+                    "{}{}",
+                    pre("path", text(change, "path")),
+                    pre("diff", text(change, "diff"))
+                )
+            })
+            .collect();
+        format!("<p>Codex’s record of this edit</p>{diffs}")
+    } else {
+        format!(
+            "<p>Patch unavailable in this log.</p>{}",
+            pre("fallback", &pretty(record))
+        )
+    };
+    Part::CodexEdit(id.into(), body)
 }
 
 fn tool(name: &str, input: &Value) -> Part {
