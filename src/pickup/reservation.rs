@@ -42,6 +42,7 @@ impl Reservation {
         ])?;
         let pushed = launch.run(&[
             "push",
+            "--no-verify",
             &format!("--force-with-lease={reference}:"),
             "origin",
             &format!("{token}:{reference}"),
@@ -73,6 +74,7 @@ impl Drop for Reservation {
         // Finish after interruption, and never delete another owner's token.
         if let Err(error) = self.launch.run(&[
             "push",
+            "--no-verify",
             &format!("--force-with-lease={}:{}", self.reference, self.token),
             "origin",
             &format!(":{}", self.reference),
