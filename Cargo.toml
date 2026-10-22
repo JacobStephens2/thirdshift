@@ -41,6 +41,7 @@ tokio = { version = "1.53.1", features = ["rt", "net", "time", "sync"] }
 tokio-stream = { version = "0.1.18", features = ["sync"] }
 
 [dev-dependencies]
+stateright = "=0.31.0"
 tower-layer = "0.3.3"
 
 # Line tables keep file and line in the crate's backtraces, and dependencies
