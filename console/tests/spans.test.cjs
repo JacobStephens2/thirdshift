@@ -122,6 +122,17 @@ test('span tree, summary Peek, zoom and keyboard work at laptop and 390 px', asy
     await page.keyboard.press('ArrowRight');
     await page.keyboard.press('Enter');
     assert.equal(await tool.getAttribute('aria-selected'), 'true');
+    if (width === 390) {
+      // Even the last row needs scroll space above the bottom sheet.
+      const last = tree.locator('.span-item[data-kind="tool"]').last();
+      await last.locator(':scope > .span-row').click();
+      await page.waitForFunction(() => {
+        const row = document.querySelector('#span-tree [role="treeitem"][aria-selected="true"] > .span-row').getBoundingClientRect();
+        const sheet = document.getElementById('peek').getBoundingClientRect();
+        const axis = document.getElementById('span-axis').getBoundingClientRect();
+        return row.top >= Math.max(0, axis.bottom) - 1 && row.bottom <= sheet.top + 1;
+      });
+    }
     await page.getByRole('button', { name: 'Command details', exact: true }).click();
     await page.locator('#peek-content .facts, #peek-content dl').first().waitFor();
     assert.match(await page.locator('#peek-content').textContent(), /ticket-99/);

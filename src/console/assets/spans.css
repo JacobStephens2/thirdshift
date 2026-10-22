@@ -54,6 +54,7 @@
 .span-overview { width: 100%; table-layout: fixed; border-collapse: collapse; }
 .span-overview th, .span-overview td { text-align: left; vertical-align: top; overflow-wrap: anywhere; padding: 4px; border-bottom: 1px solid var(--rule); }
 @media (max-width: 760px) {
+  body.peek-open main[data-span-page] { padding-bottom: 65dvh; }
   #span-axis, .span-row { grid-template-columns: minmax(0, 1fr) 7ch; gap: 4px 6px; }
   #span-axis > span { display: none; }
   #span-ticks { grid-column: 1; }
