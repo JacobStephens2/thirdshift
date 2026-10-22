@@ -176,6 +176,12 @@ impl Trace {
         self.record_version(&envelope);
         let own_time = event_time(&envelope);
         let time = own_time.or(self.historical.then_some(observed));
+        if self.historical {
+            self.session.end_time_unix_nano = self
+                .session
+                .end_time_unix_nano
+                .max(time.unwrap_or(observed));
+        }
         let mut attrs = Vec::new();
         if self.historical {
             attrs.push(KeyValue {
@@ -261,6 +267,7 @@ impl Trace {
 
     pub(crate) fn finish_at(&mut self, error: Option<&str>, ended: u64) -> io::Result<()> {
         self.record_version(&Value::Null);
+        let ended = ended.max(self.session.end_time_unix_nano);
         for (key, mut span) in std::mem::take(&mut self.open) {
             span.end_time_unix_nano = ended.max(span.start_time_unix_nano);
             span.status = Some(Status {

@@ -9,12 +9,12 @@ use serde_json::{Value, json};
 
 use crate::harness::Harness;
 use crate::logs::reading::Command;
-use crate::logs::status::waterfall::{self, Call, matching};
+use crate::logs::status::waterfall::{self, PlacedCall, matching};
 use crate::logs::{catalog, owner, session};
 
 pub(super) struct Readings {
     pub conversation: String,
-    waterfall: (Vec<Call>, bool),
+    waterfall: Vec<PlacedCall>,
     show: Option<String>,
     model_evidence: Value,
 }
@@ -38,6 +38,7 @@ impl Readings {
 
 pub(super) fn read(
     path: &Path,
+    identity: &Path,
     command: &Command,
     relays: &[u64],
     harness: Harness,
@@ -50,9 +51,16 @@ pub(super) fn read(
     for raw in session::events(&text) {
         stream.condense(&raw);
     }
+    let (calls, measured) = waterfall::session_calls(path, command, relays, &mut log)?;
     Ok(Readings {
         conversation: crate::console::conversation::render(&text, catalog::Kind::Session),
-        waterfall: waterfall::session_calls(path, command, relays, &mut log)?,
+        waterfall: waterfall::place_calls(
+            identity,
+            command,
+            &calls,
+            measured,
+            Local::now().fixed_offset(),
+        ),
         show: crate::logs::reading::latest_session_event(&session::tail_events(path)?, harness),
         model_evidence: json!({"sidecar":models,"stream_models":stream.observed_models()}),
     })

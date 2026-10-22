@@ -237,7 +237,7 @@ impl<'a> Observation<'a> {
     }
 }
 
-fn pass_prefix(kind: &str) -> Option<&'static str> {
+pub(in crate::logs) fn pass_prefix(kind: &str) -> Option<&'static str> {
     match kind {
         "Architect run" => Some("architect"),
         "Pickup run" => Some("pickup"),

@@ -184,13 +184,9 @@ fn command_for<'a>(commands: &'a [Entry], source: &Path) -> Option<(&'a Command,
                     .as_ref()
                     .map(|i| i.number.to_string())
                     .unwrap_or_else(|| {
-                        match command.record.kind.as_str() {
-                            "Security run" => "secure",
-                            "Architect run" => "architect",
-                            "Pickup run" => "pickup",
-                            _ => "",
-                        }
-                        .into()
+                        super::reading::pass_prefix(&command.record.kind)
+                            .unwrap_or("")
+                            .into()
                     });
                 decoded.subject == subject && owner::session_matches(source, &command.command_log)
             })
@@ -262,7 +258,7 @@ fn convert(root: &Path, source: &Path, snapshot: &Snapshot, session: &mut Sessio
             .to_owned();
         session.inputs.insert(relative, fingerprint(&path)?);
     }
-    let before = readings::read(source, command, &relays, harness, &models)?;
+    let before = readings::read(source, source, command, &relays, harness, &models)?;
     let temporary = tempfile::tempdir_in(source.parent().unwrap())?;
     let output = temporary.path().join(source.file_name().unwrap());
     let choice = Choice {
@@ -300,10 +296,23 @@ fn convert(root: &Path, source: &Path, snapshot: &Snapshot, session: &mut Sessio
         context,
         readings::nanos(decoded.time()),
     )?;
-    let mut stream = harness.adapter().interpretation(Path::new(""), "");
-    if harness != Harness::Codex {
-        stream = stream.without_retained();
-    }
+    let timing = command
+        .record
+        .stage_times(None)
+        .find(|timing| timing.stage.session_log.as_deref() == Some(source));
+    let began = timing
+        .as_ref()
+        .and_then(|t| t.began)
+        .unwrap_or(decoded.time());
+    let until = timing.and_then(|t| t.ended).unwrap_or(ended);
+    let mut stream = if harness == Harness::Codex {
+        crate::harness::codex::historical(began..=until)
+    } else {
+        harness
+            .adapter()
+            .interpretation(Path::new(""), "")
+            .without_retained()
+    };
     let mut cursor = 0;
     let mut estimated = decoded.time();
     let mut seen = Vec::new();
@@ -338,17 +347,14 @@ fn convert(root: &Path, source: &Path, snapshot: &Snapshot, session: &mut Sessio
             let raw = serde_json::to_string(event)?;
             trace.record_at(&raw, std::slice::from_ref(event), readings::nanos(ended))?;
             amendments.push_str(&format!("{raw}\n"));
-            if matches!(event, crate::harness::interpretation::event::Event::ToolCallEnded { result, .. }
-                if result["source"] == "codex_session_file")
-            {
-                session.codex_diffs += 1;
-            }
+            session.codex_diffs += 1;
         }
     }
     trace.finish_at(None, readings::nanos(ended))?;
     drop(trace);
     let after = readings::read(
         &output.with_extension("logs.jsonl"),
+        source,
         command,
         &relays,
         harness,

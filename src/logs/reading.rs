@@ -24,6 +24,7 @@ pub(super) use health::{Health, UsualRange};
 pub(super) use history::Command as HistoricalCommand;
 pub(super) use inbox::{Group, InboxItem};
 pub(in crate::logs) use selection::latest_session_event;
+pub(in crate::logs) use selection::pass_prefix;
 pub(super) use selection::{Detailed, Observation};
 
 pub(super) struct Snapshot {
@@ -64,6 +65,7 @@ impl Snapshot {
                             .flat_map(CommandRecord::session_references)
                         {
                             covered.insert(session.clone());
+                            covered.insert(super::session::path(session));
                         }
                         records.insert(path, tree);
                     }

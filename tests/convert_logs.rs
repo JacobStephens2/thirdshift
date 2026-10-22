@@ -297,3 +297,90 @@ fn removed_tokenless_original_keeps_its_evidenced_command_owner() {
         "{status}"
     );
 }
+
+#[test]
+fn historical_codex_diff_belongs_to_the_original_turn_even_after_a_resume() {
+    let scenario = Scenario::new();
+    let session = fixture(
+        &scenario,
+        "codex",
+        include_str!("fixtures/console-codex.jsonl"),
+    );
+    let native = scenario
+        .path("home/.codex/sessions/2026/10/01/rollout-2026-10-01T12-00-00-made-up-thread.jsonl");
+    fs::create_dir_all(native.parent().unwrap()).unwrap();
+    let original = "--- a/widgets.rs\n+++ b/widgets.rs\n@@ -1 +1 @@\n-old\n+first-turn\n";
+    let later = "--- a/widgets.rs\n+++ b/widgets.rs\n@@ -1 +1 @@\n-first-turn\n+later-resume\n";
+    let mut rows = vec![
+        json!({"type":"session_meta","payload":{"id":"made-up-thread","cwd":"/work/widgets"}}),
+    ];
+    for (time, diff) in [
+        ("2026-10-01T12:00:30Z", original),
+        ("2026-10-02T12:00:30Z", later),
+    ] {
+        rows.push(json!({"timestamp":time,"type":"event_msg","payload":{"type":"task_started"}}));
+        rows.push(json!({"timestamp":time,"type":"event_msg","payload":{"type":"patch_apply_end","success":true,"changes":{
+            "/work/widgets/widgets.rs":{"type":"update","unified_diff":diff,"move_path":null}
+        }}}));
+    }
+    fs::write(
+        native,
+        rows.iter().map(|r| format!("{r}\n")).collect::<String>(),
+    )
+    .unwrap();
+    let result = scenario.run(&["logs", "--convert"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let report = report(&scenario);
+    assert_eq!(report["sessions"][0]["passed"], true, "{report}");
+    let logs = records(&session.with_extension("logs.jsonl"));
+    let diffs: Vec<_> = logs
+        .iter()
+        .filter_map(|r| serde_json::from_str::<Value>(r["body"]["stringValue"].as_str()?).ok())
+        .filter(|e| e["result"]["source"] == "codex_session_file")
+        .map(|e| e["result"]["changes"][0]["diff"].clone())
+        .collect();
+    assert_eq!(diffs, vec![json!(original)]);
+}
+
+#[test]
+fn converts_the_pre_repository_session_layout_and_filename() {
+    let scenario = Scenario::new();
+    let source = scenario
+        .path("home/.thirdshift/logs/sessions/widgets-4-20260801T120000-0400-implement.jsonl");
+    fs::create_dir_all(source.parent().unwrap()).unwrap();
+    fs::write(&source, "{\"type\":\"system\",\"subtype\":\"init\"}\n").unwrap();
+    fs::write(source.with_extension("models.json"), serde_json::to_vec(&json!({"harness":"claude","kind":"implement","requested":null,"effort":null,"observed":[]})).unwrap()).unwrap();
+    let result = scenario.run(&["logs", "--convert"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        source.with_extension("logs.jsonl").exists(),
+        "{}",
+        report(&scenario)
+    );
+    assert_eq!(report(&scenario)["sessions"][0]["passed"], true);
+    assert!(source.exists());
+    let result = scenario.run(&["logs", "--remove-converted"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(!source.exists());
+}
+
+#[test]
+fn historical_session_end_includes_its_timed_events_when_the_command_log_is_missing() {
+    let scenario = Scenario::new();
+    let raw = concat!(
+        "{\"timestamp\":\"2026-10-01T12:00:10Z\",\"type\":\"item.started\",\"item\":{\"id\":\"c1\",\"type\":\"command_execution\",\"command\":\"cargo test\",\"status\":\"in_progress\"}}\n",
+        "{\"timestamp\":\"2026-10-01T12:00:20Z\",\"type\":\"item.completed\",\"item\":{\"id\":\"c1\",\"type\":\"command_execution\",\"command\":\"cargo test\",\"status\":\"completed\",\"exit_code\":0}}\n"
+    );
+    let session = fixture(&scenario, "codex", raw);
+    fs::remove_file(session.parent().unwrap().join(format!("{STAMP}.log"))).unwrap();
+    let result = scenario.run(&["logs", "--convert"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(report(&scenario)["sessions"][0]["passed"], true);
+    let spans: Vec<Value> = fs::read_to_string(session.with_extension("spans.jsonl")).unwrap().lines()
+        .flat_map(|line| serde_json::from_str::<Value>(line).unwrap()["resourceSpans"][0]["scopeSpans"][0]["spans"].as_array().unwrap().clone()).collect();
+    let session_span = spans
+        .iter()
+        .find(|s| s["name"] == "invoke_agent security-audit")
+        .unwrap();
+    assert_eq!(session_span["endTimeUnixNano"], "1790856020000000000");
+}

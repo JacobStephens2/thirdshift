@@ -4,7 +4,10 @@
 //! (`PatchApplyEndEvent`, `FileChange`) and rollout/src/policy.rs.
 use std::collections::BTreeMap;
 use std::fs;
+use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
+
+use chrono::{DateTime, FixedOffset};
 
 use anyhow::Result;
 use serde_json::{Value, json};
@@ -15,6 +18,7 @@ use crate::harness::interpretation::{Facts, Retained};
 pub(super) struct Completion {
     root: Option<PathBuf>,
     worktree: PathBuf,
+    interval: Option<RangeInclusive<DateTime<FixedOffset>>>,
 }
 
 impl Completion {
@@ -26,7 +30,13 @@ impl Completion {
                     std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex"))
                 }),
             worktree: worktree.to_owned(),
+            interval: None,
         }
+    }
+
+    pub(super) fn during(mut self, interval: RangeInclusive<DateTime<FixedOffset>>) -> Self {
+        self.interval = Some(interval);
+        self
     }
 
     fn amendments(&self, facts: &Facts) -> Option<Vec<Event>> {
@@ -48,7 +58,7 @@ impl Completion {
             return None;
         }
         let path = find(&self.root.as_ref()?.join("sessions"), id, 3)?;
-        let native = read(&fs::read_to_string(path).ok()?, id)?;
+        let native = read(&fs::read_to_string(path).ok()?, id, self.interval.as_ref())?;
         let directory = if self.worktree.as_os_str().is_empty() {
             native.directory.as_deref().unwrap_or(&self.worktree)
         } else {
@@ -143,24 +153,48 @@ struct Native {
     patches: Vec<Value>,
 }
 
-fn read(text: &str, id: &str) -> Option<Native> {
+fn read(
+    text: &str,
+    id: &str,
+    interval: Option<&RangeInclusive<DateTime<FixedOffset>>>,
+) -> Option<Native> {
     let mut records = text.lines().filter(|line| !line.trim().is_empty());
     let meta: Value = serde_json::from_str(records.next()?).ok()?;
     if meta["type"] != "session_meta" || meta["payload"]["id"] != id {
         return None;
     }
-    let mut patches = Vec::new();
+    let mut turns = vec![Vec::new()];
     for line in records {
         let record: Value = serde_json::from_str(line).ok()?;
         if record["type"] != "event_msg" {
             continue;
         }
         match record["payload"]["type"].as_str() {
-            Some("task_started" | "turn_started") => patches.clear(),
-            Some("patch_apply_end") => patches.push(record),
+            Some("task_started" | "turn_started") => turns.push(Vec::new()),
+            Some("patch_apply_end") => turns.last_mut()?.push(record),
             _ => {}
         }
     }
+    let patches = if let Some(interval) = interval {
+        // Historical files may contain later Resumes of the same thread.
+        // Recover only an unambiguous turn inside this Session's own interval.
+        let mut candidates = turns.into_iter().filter(|turn| {
+            !turn.is_empty()
+                && turn.iter().all(|patch| {
+                    patch["timestamp"]
+                        .as_str()
+                        .and_then(|t| DateTime::parse_from_rfc3339(t).ok())
+                        .is_some_and(|time| interval.contains(&time))
+                })
+        });
+        let selected = candidates.next()?;
+        if candidates.next().is_some() {
+            return None;
+        }
+        selected
+    } else {
+        turns.pop()?
+    };
     Some(Native {
         directory: meta["payload"]["cwd"]
             .as_str()

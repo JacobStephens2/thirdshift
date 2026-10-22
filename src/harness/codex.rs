@@ -19,6 +19,21 @@ use crate::progress;
 pub struct Codex;
 pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::Codex, &Codex);
 
+/// Replay a historical exec stream with local patch evidence restricted to
+/// its Session interval, rather than the thread's most recent Resume.
+pub(crate) fn historical(
+    interval: std::ops::RangeInclusive<chrono::DateTime<chrono::FixedOffset>>,
+) -> Interpretation {
+    let directory = Path::new("");
+    Interpretation::new(
+        "codex",
+        Box::new(stream::CodexProgress::in_worktree(directory)),
+    )
+    .with_retained(Box::new(
+        patches::Completion::new(directory).during(interval),
+    ))
+}
+
 const FRESH_SUB_AGENTS: &str = "Start fresh sub-agents with `fork_turns: \"none\"`, giving each only its own task and necessary evidence, so the skill's verifiers stay independent.";
 
 impl Adapter for Codex {
