@@ -106,7 +106,7 @@ test('notifications ask on click, survive reload and open the Inbox for a rise',
 
 test('several tabs notify once per rise, including a rise after a fall; off stays off', async t => {
   const context = await contextFor(t);
-  const pages = await Promise.all([context.newPage(), context.newPage()]);
+  const pages = await Promise.all([context.newPage(), context.newPage(), context.newPage()]);
   await Promise.all(pages.map(page => page.goto(origin)));
   await pages[0].getByRole('button', { name: 'Turn notifications on', exact: true }).click();
   for (const page of pages) await page.getByRole('button', { name: 'Turn notifications off', exact: true }).waitFor();

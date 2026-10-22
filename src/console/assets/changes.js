@@ -1,5 +1,26 @@
-// One lifecycle for Command notices, coalesced refreshes and polling recovery.
+// One stream per tab, shared by the page, peek and notification consumers.
+const subscribers = new Set();
+let watcher;
 export function watchCommands(update) {
+  const subscriber = () => update();
+  subscribers.add(subscriber);
+  if (watcher) watcher.refresh();
+  else watcher = watchUpdates(async () => {
+    const results = await Promise.allSettled([...subscribers].map(update => Promise.resolve().then(update)));
+    const failed = results.find(result => result.status === 'rejected');
+    if (failed) throw failed.reason;
+  });
+  return () => {
+    subscribers.delete(subscriber);
+    if (!subscribers.size) {
+      watcher?.stop();
+      watcher = undefined;
+    }
+  };
+}
+
+// Coalesce changes while all subscribers finish, and recover by polling.
+function watchUpdates(update) {
   let active = true, refreshing = false, pending = false, polling, stream;
   function startPolling() {
     if (active) polling ??= setInterval(refresh, 5000);
@@ -27,10 +48,13 @@ export function watchCommands(update) {
       refresh();
     });
   } else { startPolling(); }
-  return () => {
-    active = false;
-    pending = false;
-    stream?.close();
-    clearInterval(polling);
+  return {
+    refresh,
+    stop() {
+      active = false;
+      pending = false;
+      stream?.close();
+      clearInterval(polling);
+    }
   };
 }
