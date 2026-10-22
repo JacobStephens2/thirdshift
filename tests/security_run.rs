@@ -61,6 +61,62 @@ fn security_command_log(scenario: &Scenario) -> String {
 }
 
 #[test]
+fn otlp_never_receives_a_security_runs_sessions_or_nested_ticket_runs() {
+    for spec in [false, true] {
+        let receiver = ResendStandIn::replying(200, "{}");
+        let scenario = Scenario::new();
+        scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+        scenario.user_config_is(&format!(
+            "[otlp]\nendpoint = \"{}/v1/traces\"\n",
+            receiver.url()
+        ));
+        scenario.agent_does_in_session(
+            1,
+            &audit_script(&json!([finding("otlp-private")]).to_string()),
+        );
+        scenario.agent_does_in_session(
+            2,
+            &reproduction_script(if spec {
+                "reproduced high spec"
+            } else {
+                "reproduced high single"
+            }),
+        );
+        let record = "https://github.com/acme/widgets/security/advisories/GHSA-test-test-0001";
+        scenario.agent_does_in_session(
+            3,
+            &if spec {
+                stage_spec(record)
+            } else {
+                stage_fix("GHSA-test-test-0001")
+            },
+        );
+        if spec {
+            scenario.agent_does_for(9, &implement_spec_ticket(9, 8));
+            scenario.agent_does_for(10, &implement_spec_ticket(10, 8));
+        } else {
+            scenario.agent_does_for(8, implement_fix());
+        }
+        let result = scenario.run(&["secure", "security-fix", "parallel", "1"]);
+        assert_eq!(result.code, Some(0), "spec={spec}: {}", result.stderr);
+        let local_traces = scenario
+            .entries("home/.thirdshift/logs/acme/widgets/commands/secure")
+            .into_iter()
+            .filter(|name| name.ends_with(".spans.jsonl"))
+            .count();
+        assert!(
+            local_traces >= 4,
+            "Security sessions were not exercised: {local_traces}"
+        );
+        assert!(
+            receiver.requests().is_empty(),
+            "Security spans were exported: {:?}",
+            receiver.requests()
+        );
+    }
+}
+
+#[test]
 fn a_claude_cyber_refusal_fails_the_security_audit_with_its_cause() {
     let scenario = Scenario::new();
     scenario.agent_does(

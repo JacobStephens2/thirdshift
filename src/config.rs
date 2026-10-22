@@ -35,6 +35,8 @@ pub struct UserConfig {
     /// each repository's in `<owner>/<repo>/`, by default
     /// `~/.thirdshift/logs`.
     pub logs_dir: PathBuf,
+    /// `otlp.endpoint`: optional full OTLP/HTTP traces URL; blank disables export.
+    pub otlp_endpoint: Option<String>,
     /// `logs.waiting_line_minutes`: time between unchanged waiting lines,
     /// by default five minutes.
     pub waiting_line_interval: Duration,
@@ -113,6 +115,7 @@ impl UserConfig {
             base_fix: false,
             launch_pull: false,
             logs_dir: home.join(".thirdshift/logs"),
+            otlp_endpoint: None,
             waiting_line_interval: Duration::from_secs(5 * 60),
             silent_interval: Duration::from_secs(10 * 60),
             inbox_days: 7,
@@ -156,6 +159,7 @@ impl UserConfig {
                     | "base"
                     | "launch"
                     | "logs"
+                    | "otlp"
                     | "inbox"
                     | "activity"
                     | "email"
@@ -185,6 +189,13 @@ impl UserConfig {
                         ),
                     },
                     ("logs", "dir", _) => bail!("logs.dir must be a string in {file}"),
+                    ("otlp", "endpoint", Value::String(endpoint)) => {
+                        let endpoint = endpoint.trim();
+                        config.otlp_endpoint = (!endpoint.is_empty()).then(|| endpoint.to_string());
+                    }
+                    ("otlp", "endpoint", _) => {
+                        bail!("otlp.endpoint must be a quoted URL, or blank, in {file}")
+                    }
                     ("logs", "waiting_line_minutes", value) => {
                         config.waiting_line_interval =
                             minutes(value, "logs.waiting_line_minutes", &file)?;
@@ -843,6 +854,9 @@ from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, whi
 dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner>/<repo>/; default ~/.thirdshift/logs
 waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
 
+[otlp]
+endpoint = ""   # optional OTLP/HTTP traces URL, including /v1/traces; default blank (off); Security runs never export
+
 [inbox]
 days = 7             # days to keep ended problems and Resolved; default 7
 silent_minutes = 10   # minutes without growth in either log before a Run is Silent; default 10
@@ -1031,6 +1045,7 @@ mod tests {
                 "email.from",
                 "logs.dir",
                 "logs.waiting_line_minutes",
+                "otlp.endpoint",
                 "inbox.days",
                 "inbox.silent_minutes",
                 "console.address",

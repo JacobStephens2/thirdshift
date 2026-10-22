@@ -295,6 +295,10 @@ pub(crate) fn trace_context() -> Option<trace::Context> {
     record().trace_context()
 }
 
+pub(crate) fn otlp_endpoint() -> Option<String> {
+    record().otlp_endpoint()
+}
+
 /// Print `line` on stderr, and keep it in the Command log.
 pub fn eprint(line: &str) {
     record().eprint(line);
