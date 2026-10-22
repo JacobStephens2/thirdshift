@@ -42,12 +42,12 @@ async function observe(previous, currentGeneration) {
     let shared;
     try { shared = JSON.parse(localStorage.getItem(snapshot)); } catch { /* reset malformed history */ }
     const current = { count: rows.length, ids: rows.map(row => row.id) };
-    const notified = shared?.count > current.count || (shared?.count === current.count && shared?.notified === true);
-    const notify = previous && current.count > previous.count && !notified;
+    const handled = shared?.count > current.count || (shared?.count === current.count && shared?.handled === true);
+    const notify = previous && current.count > previous.count && !handled;
     // Loading a tab establishes its own baseline without consuming a rise
     // another open tab has yet to see. A fall is consumed too, so a delayed tab
     // cannot mistake it for a rise from its older baseline.
-    localStorage.setItem(snapshot, JSON.stringify({ count: current.count, notified: notified || !!notify }));
+    localStorage.setItem(snapshot, JSON.stringify({ count: current.count, handled: handled || !!notify }));
     if (!notify) return current;
     const added = rows.filter(row => !previous.ids.includes(row.id));
     const newest = (added.length ? added : rows).sort((a, b) => Number(b.dataset.occurredMs) - Number(a.dataset.occurredMs))[0];
