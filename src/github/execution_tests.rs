@@ -974,7 +974,8 @@ fn cancellation_during_a_ci_check_read_starts_no_further_request() {
                 std::process::id()
             ));
             let started = Instant::now();
-            let error = crate::ci::watch(&issue(), "abc", None, &mut || Ok(()))
+            let error = crate::ci::Watch::new(&issue())
+                .assess("abc", None, &mut || Ok(()))
                 .err()
                 .unwrap();
 

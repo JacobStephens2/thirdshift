@@ -208,6 +208,9 @@ A **Self-merge** blocked by a required review, or a merge it tried that failed w
 **Declined CI fix**:
 A CI-fix **Repair** that found nothing on the branch to fix, for example because the failure is not the branch's but was not recognised as an **Inherited failure**, since the **Base branch** commit had no finished result for that check: once the Repair ends and the **Base branch** is merged in again, the head of the **Issue branch** is still the commit whose CI just failed. That head gets its one **Check re-run** for the **Delivery**; if its own checks are red again, or they cannot be re-run, the **Run** is a **Failed run** with the cause `CI red on <short sha> and the Repair found nothing to fix on the branch`, rather than spending its remaining Repairs. Own checks found red on that head in any later round, including after a refused **Self-merge**, fail with the same cause without another CI-fix Repair or Check re-run. Inherited-only failures keep their usual handling, and a different head may receive its own CI-fix Repair and Check re-run.
 
+**CI watch**:
+Observing CI on a full **Issue branch** head against its selected **Base branch** commit, including eligible **Abandoned job** re-runs and **Check re-runs**, with allowances remembered across one **Delivery**. CI watch reports CI outcomes or a **Declined CI fix** and starts neither **Repairs** nor **Base fixes**.
+
 **Check re-run**:
 The [one re-run](docs/guide.md#check-re-run-allowance) of a branch's own failed checks allowed per head commit within a **Delivery**, after a CI-fix **Repair** leaves that head unchanged and before a **Declined CI fix**. It gives a transient CI failure one chance to pass without another Repair. It is separate from the re-run of **Abandoned jobs**, which comes before any Repair.
 _Avoid_: retry, re-trigger, CI re-run
