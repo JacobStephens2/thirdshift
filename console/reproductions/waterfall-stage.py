@@ -1,4 +1,4 @@
-import json, os, pathlib, re, subprocess, tempfile, urllib.request
+import json, os, pathlib, subprocess, tempfile, urllib.request
 
 binary = pathlib.Path(__file__).resolve().parents[2] / 'target/debug/thirdshift'
 with tempfile.TemporaryDirectory(prefix='827-spec-') as temp:
@@ -19,9 +19,9 @@ with tempfile.TemporaryDirectory(prefix='827-spec-') as temp:
     server = subprocess.Popen([str(binary),'console','--no-sign-in'],env={**os.environ,'HOME':str(home)},stdout=subprocess.PIPE,text=True)
     try:
         origin = server.stdout.readline().strip()
-        html = urllib.request.urlopen(origin+'/waterfall?command=widgets%237').read().decode()
-        stages = html.split('<li class="waterfall-stage">')[1:]
-        assigned = [re.search(r'<h4>([^<]*)</h4>',stage).group(1) for stage in stages if 'class="waterfall-tool"' in stage]
+        tree = json.load(urllib.request.urlopen(origin+'/spans?command=widgets%237'))
+        spans = {span['id']: span for span in tree['spans']}
+        assigned = [spans[span['parent_id']]['name'] for span in tree['spans'] if span['kind'] == 'tool']
         print('Stage containing implement tool:',assigned,flush=True)
         assert assigned == ['implement'], 'Session tool must nest under implement; whole-second clock incorrectly puts it in previous Setup stage'
     finally:

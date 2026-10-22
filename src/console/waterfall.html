@@ -6,34 +6,27 @@
   <title>Waterfall · {{ page.hostname }} · thirdshift</title>
   <link rel="icon" href="data:,">
   <link rel="stylesheet" href="/assets/console.css">
+  <link rel="stylesheet" href="/assets/spans.css">
   <script src="/assets/vendor/idiomorph-0.7.4.min.js" defer></script>
   <script src="/assets/console.js" type="module"></script>
 </head>
 <body>
   {% include "console/header.html" %}
   {% include "console/nav.html" %}
-  <main data-time-page>
-    <div class="page-title"><h2>Waterfall</h2><code>thirdshift show &lt;command&gt; --json · thirdshift logs &lt;command&gt;</code></div>
+  <main data-time-page data-span-page>
+    <div class="page-title"><h2>Waterfall</h2><code>thirdshift show &lt;command&gt; --spans --json · thirdshift logs &lt;command&gt;</code></div>
     <nav class="command-chips" aria-label="Choose a Command">{% for choice in view.choices %}<a href="{{ choice.url }}" {% if choice.selected %}aria-current="true"{% endif %}>{{ choice.subject }} · {{ choice.state }}</a>{% endfor %}</nav>
-    {% if view.runs.is_empty() %}<p>No Commands yet.</p>{% else %}
-    <p>Shared time axis: {{ view.start }} to {{ view.end }}. Session traces use measured tool spans; running calls extend from their start record to now. Old Session logs estimate intervals until the next matched call or stage boundary, including waiting. Unknown durations have no bar.</p>
-    {% for run in view.runs %}
-    <section class="waterfall-run" data-depth="{{ run.depth }}">
-      <div class="command" data-live="{{ run.state == "live" }}" data-command="{{ run.selector }}" data-peek="{{ run.peek_url }}" data-log="{{ run.log_url }}"><h3>{{ run.kind }} · <a class="peek-link" href="{{ run.peek_url }}">{{ run.subject }}</a> · {{ run.state }}</h3><p>{{ run.title }}</p></div>
-      <svg class="timeline" width="100%" height="20" aria-label="Run interval"><svg x="{{ run.span.left }}%" width="{{ run.span.width }}%" height="20"><rect width="100%" height="20"/></svg></svg>
-      <p>{{ run.span.start }} · {{ run.span.text }}</p>
-      {% if run.stages.is_empty() %}<p>No stage times retained.</p>{% endif %}
-      <ol class="waterfall-stages">{% for stage in run.stages %}
-        <li class="waterfall-stage{% if run.state == "live" && loop.last %} running-stage{% endif %}"><h4>{{ stage.name }}</h4><p>{{ stage.span.start }} · {{ stage.span.text }}</p>
-          <svg class="timeline" width="100%" height="20" aria-label="Stage interval"><svg x="{{ stage.span.left }}%" width="{{ stage.span.width }}%" height="20"><rect width="100%" height="20"/></svg></svg>
-          <ol>{% for tool in stage.tools %}<li class="waterfall-tool" data-start="{{ tool.span.start }}" data-seconds="{{ tool.span.seconds }}"><a href="{{ tool.url }}">{{ tool.label }}</a><p>{{ tool.span.start }} · {{ tool.span.text }}</p>
-            <svg class="timeline" width="100%" height="16" aria-label="Tool interval"><svg x="{{ tool.span.left }}%" width="{{ tool.span.width }}%" height="16"><rect width="100%" height="16"/></svg></svg>
-          </li>{% endfor %}</ol>
-        </li>
-      {% endfor %}</ol>
-    </section>
-    {% endfor %}
+    {% if view.tree.spans.is_empty() %}<p>No Commands yet.</p>{% else %}
+    <p>One shared time axis. <span class="span-estimated">*</span> marks estimated times. Running calls extend to now.</p>
+    <details id="slowest-calls" open><summary>Slowest calls</summary><ol></ol></details>
+    <div class="span-controls" aria-label="Expand span tree">
+      <span>Expand to</span><button type="button" data-expand="run">Runs</button><button type="button" data-expand="stage">Stages</button><button type="button" data-expand="sess">Sessions</button><button type="button" data-expand="all">Every call</button>
+    </div>
+    <div id="span-axis"><div id="span-zoom" hidden></div><span>Span</span><span>Time</span><div id="span-ticks"></div></div>
+    <div id="span-tree" role="tree" aria-label="Command spans"></div>
+    <p id="span-status" role="status"></p>
     {% endif %}
+    <script type="application/json" id="span-data">{{ data|safe }}</script>
   </main>
   {% include "console/chrome.html" %}
 </body>

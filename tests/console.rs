@@ -24,6 +24,9 @@ mod codex_patches;
 #[path = "console/waterfall.rs"]
 mod waterfall;
 
+#[path = "console/spans.rs"]
+mod spans;
+
 #[cfg(unix)]
 #[path = "console/cronjobs.rs"]
 mod cronjobs;
@@ -163,6 +166,22 @@ fn write_record(home: &Path, number: u64, record: &Value) {
         serde_json::to_vec(record).unwrap(),
     )
     .unwrap();
+}
+
+fn span_tree(console: &Console, command: &str) -> Value {
+    console
+        .get(&format!("/spans?command={command}"))
+        .json()
+        .unwrap()
+}
+
+fn tool_spans(tree: &Value) -> Vec<&Value> {
+    tree["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|span| span["kind"] == "tool")
+        .collect()
 }
 
 #[test]
@@ -352,18 +371,20 @@ fn waterfall_matches_claude_calls_to_command_times_and_keeps_unmatched_calls() {
         .text()
         .unwrap();
     assert!(html.contains("<h2>Waterfall</h2>"), "{html}");
-    assert_eq!(
-        html.matches("class=\"waterfall-tool\"").count(),
-        3,
-        "{html}"
-    );
+    let tree = span_tree(&console, "widgets%237");
+    let tools = tool_spans(&tree);
+    assert_eq!(tools.len(), 3);
+    assert_eq!(tools[0]["start"], 1790899195000.0);
+    assert_eq!(tools[0]["duration_ms"], 10000.0);
+    assert_eq!(tools[2]["start"], 1790899205000.0);
+    assert_eq!(tools[2]["duration_ms"], 5000.0);
     assert!(
-        html.contains("data-start=\"2026-10-01T23:59:55+00:00\" data-seconds=\"10\""),
-        "{html}"
+        tools[1]["name"]
+            .as_str()
+            .unwrap()
+            .contains("Read missing.rs")
     );
-    assert!(html.contains("data-start=\"2026-10-02T00:00:05+00:00\" data-seconds=\"5\""));
-    assert!(html.contains("Read missing.rs"));
-    assert!(html.contains("Time unknown"));
+    assert!(tools[1]["start"].is_null());
     let show = Command::new(binary)
         .args(["show", "widgets#7", "--json"])
         .env("HOME", home.path())
@@ -371,7 +392,14 @@ fn waterfall_matches_claude_calls_to_command_times_and_keeps_unmatched_calls() {
         .unwrap();
     assert!(show.status.success());
     let detail: Value = serde_json::from_slice(&show.stdout).unwrap();
-    assert!(html.contains(detail["command"]["stages"][0]["began_at"].as_str().unwrap()));
+    assert_eq!(
+        tree["spans"][1]["start"],
+        chrono::DateTime::parse_from_rfc3339(
+            detail["command"]["stages"][0]["began_at"].as_str().unwrap()
+        )
+        .unwrap()
+        .timestamp_millis() as f64
+    );
     let logs = Command::new(binary)
         .args(["logs", "widgets#7"])
         .env("HOME", home.path())
@@ -431,25 +459,24 @@ fn waterfall_nests_ticket_runs_and_matches_codex_items_once_in_their_scope() {
         .get("/waterfall?command=widgets%237")
         .text()
         .unwrap();
-    assert!(html.contains("data-depth=\"1\""), "{html}");
     assert!(html.contains("acme/widgets#99"));
-    assert_eq!(
-        html.matches("class=\"waterfall-tool\"").count(),
-        3,
-        "{html}"
-    );
-    let tool_stage = html
-        .split("<li class=\"waterfall-stage\">")
-        .find(|stage| stage.contains("data-start=\"2026-10-01T12:00:15+00:00\""))
+    let tree = span_tree(&console, "widgets%237");
+    let tools = tool_spans(&tree);
+    assert_eq!(tools.len(), 3);
+    let stage = tree["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|span| span["name"] == "implement")
         .unwrap();
-    assert!(tool_stage.contains("<h4>implement</h4>"), "{tool_stage}");
-    for (start, seconds) in [("15", 5), ("20", 10), ("30", 10)] {
-        assert!(
-            html.contains(&format!(
-                "data-start=\"2026-10-01T12:00:{start}+00:00\" data-seconds=\"{seconds}\""
-            )),
-            "{html}"
-        );
+    for (tool, (start, duration)) in
+        tools
+            .iter()
+            .zip([(15000.0, 5000.0), (20000.0, 10000.0), (30000.0, 10000.0)])
+    {
+        assert_eq!(tool["parent_id"], stage["id"]);
+        assert_eq!(tool["start"], 1790856000000.0 + start);
+        assert_eq!(tool["duration_ms"], duration);
     }
     let output = Command::new(binary)
         .args(["show", "widgets#7", "--json"])
@@ -460,15 +487,11 @@ fn waterfall_nests_ticket_runs_and_matches_codex_items_once_in_their_scope() {
     let show: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(show["command"]["children"][0]["issue"]["number"], 99);
     assert_eq!(console.get("/?page=4").status(), 200);
-    let single = console
-        .get("/waterfall?command=widgets%2399")
-        .text()
-        .unwrap();
-    assert_eq!(single.matches("class=\"waterfall-tool\"").count(), 3);
-    assert!(
-        single.contains("data-start=\"2026-10-01T12:00:15+00:00\" data-seconds=\"5\""),
-        "{single}"
-    );
+    let single = span_tree(&console, "widgets%2399");
+    let tools = tool_spans(&single);
+    assert_eq!(tools.len(), 3);
+    assert_eq!(tools[0]["start"], 1790856015000.0);
+    assert_eq!(tools[0]["duration_ms"], 5000.0);
 }
 
 #[test]

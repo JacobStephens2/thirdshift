@@ -251,6 +251,29 @@ while ! test -f "$HOME/release"; do sleep 0.01; done
             assert!(std::time::Instant::now() < deadline, "live log never grew");
             std::thread::sleep(std::time::Duration::from_millis(10));
         };
+        let shown = scenario.run(&["show", "widgets#7", "--spans", "--json"]);
+        assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+        let tree: Value = serde_json::from_str(&shown.stdout).unwrap();
+        let session = tree["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|span| span["kind"] == "sess")
+            .unwrap();
+        assert!(
+            session["input"]
+                .as_str()
+                .is_some_and(|prompt| prompt.contains("Closes #7")),
+            "live Session must retain its prompt: {session}"
+        );
+        let model = tree["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|span| span["kind"] == "model")
+            .unwrap();
+        assert_eq!(model["status"], "running");
+        let live_id = model["id"].clone();
         if signal == "KILL" {
             run.kill();
             // A hard-killed owner cannot clean up its child. Let this exact
@@ -273,6 +296,10 @@ while ! test -f "$HOME/release"; do sleep 0.01; done
             let spans = spans(&path);
             assert_eq!(spans.len(), 2, "{spans:?}");
             assert!(spans.iter().all(|span| span["status"]["code"] == 2));
+            assert!(
+                spans.iter().any(|span| span["spanId"] == live_id),
+                "the live reader and recorder must share call identity"
+            );
         }
     }
 }

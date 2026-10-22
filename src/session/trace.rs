@@ -11,11 +11,12 @@ use serde_json::Value;
 use crate::harness::Choice;
 use crate::harness::interpretation::event::{Event, Outcome};
 use crate::harness::version::Version;
-use crate::logs::trace::{Context, id};
+use crate::logs::trace::{Context, SpanKind, id};
 use crate::otlp_jsonl::*;
 
 mod attributes;
-use attributes::{attribute, event_attributes};
+use attributes::attribute;
+pub(crate) use attributes::{Call, event_attributes};
 mod export;
 use export::Export;
 
@@ -29,6 +30,7 @@ pub(crate) struct Trace {
     resource: Resource,
     version: Option<Version>,
     historical: bool,
+    metadata_logged: bool,
     context: Context,
     session: Span,
     open: BTreeMap<String, Span>,
@@ -86,6 +88,7 @@ impl Trace {
             },
             version: Some(Version::new(choice.harness.adapter(), command_log, command)),
             historical: false,
+            metadata_logged: false,
             context,
             session: Span {
                 span_id: Some(session_id),
@@ -183,6 +186,23 @@ impl Trace {
                 .max(time.unwrap_or(observed));
         }
         let mut attrs = Vec::new();
+        // The Session span is written on exit. Retain its prompt and start in
+        // the first event too, so a live Peek can show them without repeating
+        // the prompt in every resource envelope.
+        if !self.metadata_logged && !self.historical {
+            attrs.extend(
+                self.session
+                    .attributes
+                    .iter()
+                    .filter(|attr| attr.key == "thirdshift.session.prompt")
+                    .cloned(),
+            );
+            attrs.push(attribute(
+                "thirdshift.session.start_time_unix_nano",
+                self.session.start_time_unix_nano,
+            ));
+        }
+        self.metadata_logged = true;
         if self.historical {
             attrs.push(KeyValue {
                 key: "thirdshift.migration.original".into(),
@@ -304,81 +324,61 @@ impl Trace {
 
     fn apply(&mut self, event: &Event, time: u64, estimated: bool) -> io::Result<Option<SpanId>> {
         use Event::*;
-        let (kind, call, parent, completion) = match event {
-            ModelCallStarted { id, parent_id, .. } => ("model", id, parent_id.as_deref(), None),
-            ModelCallEnded {
-                id,
-                parent_id,
-                outcome,
+        let Some(fact) = Call::of(event) else {
+            if let Usage {
+                scope: crate::harness::interpretation::event::UsageScope::Model,
+                model,
                 ..
-            } => ("model", id, parent_id.as_deref(), Some(*outcome)),
-            ToolCallStarted { id, parent_id, .. } => ("tool", id, parent_id.as_deref(), None),
-            ToolCallEnded {
-                id,
-                parent_id,
-                outcome,
-                ..
-            } => ("tool", id, parent_id.as_deref(), Some(*outcome)),
-            TurnStarted { id } => ("turn", id, None, None),
-            TurnEnded { id, outcome, .. } => ("turn", id, None, Some(*outcome)),
-            SubagentStarted { id, parent_id, .. } => ("agent", id, parent_id.as_deref(), None),
-            SubagentEnded { id, outcome, .. } => ("agent", id, None, Some(*outcome)),
-            _ => {
-                if let Usage {
-                    scope: crate::harness::interpretation::event::UsageScope::Model,
-                    model,
-                    ..
-                } = event
-                {
-                    self.model_usage.insert(
-                        model.as_deref().unwrap_or("").into(),
-                        serde_json::to_value(event).unwrap(),
-                    );
-                    set(
-                        &mut self.session.attributes,
-                        attribute(
-                            "thirdshift.model_usage",
-                            serde_json::to_string(&self.model_usage).unwrap(),
-                        ),
-                    );
-                } else {
-                    for attr in event_attributes(event, self.input_excludes_cache) {
-                        set(&mut self.session.attributes, attr);
-                    }
+            } = event
+            {
+                self.model_usage.insert(
+                    model.as_deref().unwrap_or("").into(),
+                    serde_json::to_value(event).unwrap(),
+                );
+                set(
+                    &mut self.session.attributes,
+                    attribute(
+                        "thirdshift.model_usage",
+                        serde_json::to_string(&self.model_usage).unwrap(),
+                    ),
+                );
+            } else {
+                for attr in event_attributes(event, self.input_excludes_cache) {
+                    set(&mut self.session.attributes, attr);
                 }
-                let (call, parent) = match event {
-                    Message { id, parent_id, .. } => (id.as_deref(), parent_id.as_deref()),
-                    Error { parent_id, .. } => (None, parent_id.as_deref()),
-                    _ => (None, None),
-                };
-                return Ok(call
-                    .and_then(|id| self.locations.get(id).map(|(_, span)| *span))
-                    .or_else(|| {
-                        if matches!(event, Message { .. }) {
-                            self.model_scopes.get(&parent.map(str::to_owned)).copied()
-                        } else {
-                            None
-                        }
-                    })
-                    .or_else(|| {
-                        parent.and_then(|id| self.locations.get(id).map(|(_, span)| *span))
-                    }));
             }
+            let (call, parent) = match event {
+                Message { id, parent_id, .. } => (id.as_deref(), parent_id.as_deref()),
+                Error { parent_id, .. } => (None, parent_id.as_deref()),
+                _ => (None, None),
+            };
+            return Ok(call
+                .and_then(|id| self.locations.get(id).map(|(_, span)| *span))
+                .or_else(|| {
+                    if matches!(event, Message { .. }) {
+                        self.model_scopes.get(&parent.map(str::to_owned)).copied()
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| parent.and_then(|id| self.locations.get(id).map(|(_, span)| *span))));
         };
-        let key = if kind == "agent" && completion.is_some() {
+        let (kind, call, parent, completion) = (fact.kind, fact.id, fact.parent, fact.completion);
+        let key = if kind == SpanKind::Agent && completion.is_some() {
             self.locations.get(call).map(|(key, _)| key.clone())
         } else {
             None
         }
-        .unwrap_or_else(|| serde_json::to_string(&(kind, parent, call)).unwrap());
+        .unwrap_or_else(|| fact.key());
         let span_id = id(&[&self.session.span_id.unwrap().0, key.as_bytes()]);
-        if kind == "model" {
+        if kind == SpanKind::Model {
             self.model_scopes.insert(parent.map(str::to_owned), span_id);
         }
         let parent_span = parent
             .and_then(|parent| self.locations.get(parent).map(|(_, span)| *span))
             .or(self.session.span_id);
-        self.locations.insert(call.clone(), (key.clone(), span_id));
+        self.locations
+            .insert(call.to_owned(), (key.clone(), span_id));
         let mut attrs = event_attributes(event, self.input_excludes_cache);
         if estimated {
             attrs.push(KeyValue {
@@ -410,7 +410,7 @@ impl Trace {
                 }
                 _ => format!("{kind} {call}"),
             },
-            kind: if kind == "model" { 3 } else { 1 },
+            kind: if kind == SpanKind::Model { 3 } else { 1 },
             start_time_unix_nano: time,
             ..Default::default()
         });

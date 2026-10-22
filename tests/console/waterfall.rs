@@ -32,14 +32,9 @@ fn converted_session_keeps_its_waterfall_stage_and_duration_after_cleanup() {
     fs::write(&session, "{\"type\":\"item.completed\",\"item\":{\"id\":\"c1\",\"type\":\"command_execution\",\"command\":\"cargo test\",\"status\":\"completed\",\"exit_code\":0}}\n").unwrap();
     fs::write(dir.join("7-fixture.log"), "thirdshift: 12:00:00 starting\nthirdshift: 12:00:05 implement: $ cargo test\nthirdshift: 12:01:00 finished\n").unwrap();
     let console = start_console(home.path(), &value);
-    let before = console
-        .get("/waterfall?command=widgets%237")
-        .text()
-        .unwrap();
-    assert!(
-        before.contains("data-start=\"2026-10-01T12:00:05+00:00\" data-seconds=\"0.5\""),
-        "{before}"
-    );
+    let before = span_tree(&console, "widgets%237");
+    assert_eq!(tool_spans(&before)[0]["start"], 1790856005000.0);
+    assert_eq!(tool_spans(&before)[0]["duration_ms"], 500.0);
     for flag in ["--convert", "--remove-converted"] {
         let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
             .args(["logs", flag])
@@ -49,11 +44,10 @@ fn converted_session_keeps_its_waterfall_stage_and_duration_after_cleanup() {
         assert!(output.status.success(), "{output:?}");
     }
     assert!(!session.exists());
-    let after = console
-        .get("/waterfall?command=widgets%237")
-        .text()
-        .unwrap();
-    assert_eq!(after.replace(".logs.jsonl", ".jsonl"), before);
+    let after = span_tree(&console, "widgets%237");
+    assert_eq!(tool_spans(&after)[0]["start"], 1790856005000.0);
+    assert_eq!(tool_spans(&after)[0]["duration_ms"], 500.0);
+    assert_eq!(tool_spans(&after)[0]["estimated"], true);
 }
 
 #[test]
@@ -74,21 +68,19 @@ fn waterfall_reads_start_records_without_spans_and_ignores_an_unfinished_tail() 
     )
     .unwrap();
     let console = start_console(home.path(), &value);
-    let response = console.get("/waterfall?command=widgets%237");
+    let response = console.get("/spans?command=widgets%237");
     assert_eq!(response.status(), 200);
-    let html = response.text().unwrap();
+    let tree: Value = response.json().unwrap();
+    let tools = tool_spans(&tree);
+    assert_eq!(tools.len(), 4);
     assert_eq!(
-        html.matches("class=\"waterfall-tool\"").count(),
-        4,
-        "{html}"
-    );
-    assert_eq!(
-        html.matches("data-start=\"2026-10-01T12:00:15+00:00\" data-seconds=\"\"")
+        tools
+            .iter()
+            .filter(|span| span["start"] == 1790856015000.0 && span["duration_ms"].is_null())
             .count(),
-        2,
-        "{html}"
+        2
     );
-    assert!(!html.contains("wrong"), "{html}");
+    assert!(!tree.to_string().contains("wrong"));
 }
 
 #[test]
@@ -111,28 +103,32 @@ fn waterfall_running_tools_use_start_records_and_keep_scopes_distinct() {
         { "name": "repair", "began_at": "2026-10-01T12:00:20.100+00:00", "session_log": session }
     ]);
     let console = start_console(home.path(), &value);
-    let html = console
-        .get("/waterfall?command=widgets%237")
-        .text()
+    let tree = span_tree(&console, "widgets%237");
+    let tools = tool_spans(&tree);
+    assert_eq!(tools.len(), 4);
+    for start in [1790856020125.0, 1790856021250.0] {
+        let tool = tools.iter().find(|span| span["start"] == start).unwrap();
+        assert!(tool["duration_ms"].is_null());
+    }
+    let tool = tools
+        .iter()
+        .find(|span| span["start"] == 1790856015250.0)
         .unwrap();
-    assert_eq!(
-        html.matches("class=\"waterfall-tool\"").count(),
-        4,
-        "{html}"
-    );
-    let repair = html.split("<h4>repair</h4>").nth(1).unwrap();
-    assert!(
-        repair.contains("data-start=\"2026-10-01T12:00:20.125+00:00\" data-seconds=\"\""),
-        "{html}"
-    );
-    assert!(
-        repair.contains("data-start=\"2026-10-01T12:00:21.250+00:00\" data-seconds=\"\""),
-        "{html}"
-    );
-    assert!(
-        html.contains("data-start=\"2026-10-01T12:00:15.250+00:00\" data-seconds=\"3.5\""),
-        "{html}"
-    );
+    assert_eq!(tool["duration_ms"], 3500.0);
+    // The reused Session and all calls stay under the first naming stage.
+    let session = tree["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|span| span["kind"] == "sess")
+        .unwrap();
+    let stage = tree["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|span| span["name"] == "implement")
+        .unwrap();
+    assert_eq!(session["parent_id"], stage["id"]);
 }
 
 #[test]
@@ -152,24 +148,22 @@ fn waterfall_uses_session_trace_spans_instead_of_command_log_guesses() {
     fs::write(dir.join("7-fixture.log"), "thirdshift: 12:00:00 starting\nthirdshift: 12:00:15 implement: $ first <unsafe>\nthirdshift: 12:00:30 implement: $ second\nthirdshift: 12:01:00 finished\n").unwrap();
     value["harness"] = json!("muse");
     let console = start_console(home.path(), &value);
-    let html = console
-        .get("/waterfall?command=widgets%237")
-        .text()
+    let tree = span_tree(&console, "widgets%237");
+    let tools = tool_spans(&tree);
+    assert_eq!(tools.len(), 2);
+    let first = tools
+        .iter()
+        .find(|span| span["id"] == "0000000000000001")
         .unwrap();
-    assert_eq!(
-        html.matches("class=\"waterfall-tool\"").count(),
-        2,
-        "{html}"
-    );
-    assert!(
-        html.contains("data-start=\"2026-10-01T12:00:15.250+00:00\" data-seconds=\"3.5\""),
-        "{html}"
-    );
-    assert!(
-        html.contains("data-start=\"2026-10-01T12:00:16.500+00:00\" data-seconds=\"0.625\""),
-        "{html}"
-    );
-    assert!(html.contains("first &#60;unsafe&#62;"), "{html}");
+    let second = tools
+        .iter()
+        .find(|span| span["id"] == "0000000000000002")
+        .unwrap();
+    assert_eq!(first["start"], 1790856015250.0);
+    assert_eq!(first["duration_ms"], 3500.0);
+    assert_eq!(second["start"], 1790856016500.0);
+    assert_eq!(second["duration_ms"], 625.0);
+    assert!(first["name"].as_str().unwrap().contains("first <unsafe>"));
 
     // A sub-millisecond span must retain its duration rather than round to zero.
     let mut spans: Value =
@@ -181,12 +175,11 @@ fn waterfall_uses_session_trace_spans_instead_of_command_log_guesses() {
         serde_json::to_vec(&spans).unwrap(),
     )
     .unwrap();
-    let html = console
-        .get("/waterfall?command=widgets%237")
-        .text()
+    let tree = span_tree(&console, "widgets%237");
+    let tools = tool_spans(&tree);
+    let second = tools
+        .iter()
+        .find(|span| span["id"] == "0000000000000002")
         .unwrap();
-    assert!(
-        html.contains("data-start=\"2026-10-01T12:00:16.500+00:00\" data-seconds=\"0.0005\""),
-        "{html}"
-    );
+    assert_eq!(second["duration_ms"], 0.5);
 }

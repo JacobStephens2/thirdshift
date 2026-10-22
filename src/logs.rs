@@ -22,6 +22,7 @@ mod reading;
 pub(crate) use reading::catalog;
 mod recording;
 pub(crate) mod session;
+pub(crate) mod spans;
 pub mod status;
 pub mod stop;
 pub(crate) mod trace;
