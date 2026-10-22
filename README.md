@@ -43,6 +43,7 @@ Use `thirdshift help` for the command reference, or read [Run behavior](docs/gui
 | Architecture improvements | [Architect run](docs/guide.md#architect-runs): reviews, publishes a plan and builds it |
 | An issue marked ready | [Pickup run](docs/guide.md#pickup-runs): takes the lowest-numbered Ready issue |
 | A security audit | [Security run](docs/guide.md#security-runs): records findings privately; can fix one reproduced finding |
+| One skill | [Standalone skills](docs/guide.md#standalone-skills): `thirdshift skill <skill> [issue <issue>]` |
 
 The operating system schedules Architect, Pickup and Security runs. See [scheduling](docs/guide.md#on-a-schedule), [Weeding](docs/guide.md#weeding) and [Fencing](docs/guide.md#fencing).
 

@@ -153,6 +153,40 @@ impl Checkout {
 
     /// Drop is best effort, including while another panic is unwinding.
     pub(super) fn cleanup(&self, launch: &Git, kept: bool) {
+        self.cleanup_checked(launch, kept, &|| Ok(()));
+    }
+
+    /// A standalone skill owns no automatic publication step. Retain local
+    /// work, rechecking under the disposal locks before every removal attempt.
+    pub(super) fn cleanup_skill(&self, launch: &Git) {
+        self.cleanup_checked(launch, false, &|| {
+            let git = Git::new(self.path()).completion();
+            let entries = git.run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?;
+            if super::index_hides_tracked_work(&entries)
+                || !git
+                    .run(&[
+                        "-c",
+                        "core.fsmonitor=false",
+                        "status",
+                        "--porcelain",
+                        "--untracked-files=all",
+                        "--ignore-submodules=none",
+                    ])?
+                    .is_empty()
+            {
+                bail!("the skill worktree has uncommitted changes");
+            }
+            if !git
+                .run(&["rev-list", "--max-count=1", "HEAD", "--not", "--remotes"])?
+                .is_empty()
+            {
+                bail!("the skill worktree has unpushed commits");
+            }
+            Ok(())
+        });
+    }
+
+    fn cleanup_checked(&self, launch: &Git, kept: bool, evidence: &dyn Fn() -> Result<()>) {
         let launch = launch.completion();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if kept {
@@ -163,7 +197,7 @@ impl Checkout {
                 Some(branch) => format!("cleaning up the worktree and local branch {branch}"),
                 None => "cleaning up the worktree".to_string(),
             });
-            if let Err(error) = self.remove(&launch) {
+            if let Err(error) = self.remove(&launch, evidence) {
                 self.retain(&launch, &format!("{error:#}"), false);
             }
         }));
@@ -207,10 +241,10 @@ impl Checkout {
         ));
     }
 
-    fn remove(&self, launch: &Git) -> Result<()> {
+    fn remove(&self, launch: &Git, evidence: &dyn Fn() -> Result<()>) -> Result<()> {
         self.verify_repository(launch)?;
         let _lock = lock_launch(launch).context("cannot establish cleanup worktree lock")?;
-        self.remove_locked(launch, || Ok(()))
+        self.remove_locked(launch, evidence)
     }
 
     /// Stale recovery already holds the worktree lock. Its durable evidence

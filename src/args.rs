@@ -85,6 +85,10 @@ pub enum Command {
     },
     /// Internal interface for scripts/release.sh: prompt on stdin.
     ReleaseSummary,
+    Skill {
+        name: String,
+        issue: Option<IssueInput>,
+    },
     /// `email-test`, with the address it was given, if any.
     EmailTest(Option<String>),
     Architect(ArchitectArgs),
@@ -533,6 +537,19 @@ pub fn parse(args: &[String]) -> Result<Command> {
             return match &args[1..] {
                 [] => Ok(Command::ReleaseSummary),
                 [extra, ..] => bail!("unexpected argument after --release-summary: {extra}"),
+            };
+        }
+        Some("skill") => {
+            return match &args[1..] {
+                [name] => Ok(Command::Skill {
+                    name: name.clone(),
+                    issue: None,
+                }),
+                [name, keyword, issue] if keyword == "issue" => Ok(Command::Skill {
+                    name: name.clone(),
+                    issue: Some(IssueInput::parse(issue)?),
+                }),
+                _ => bail!("usage: thirdshift skill <skill> [issue <issue>]"),
             };
         }
         Some("setup") => {
