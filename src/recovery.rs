@@ -2,12 +2,15 @@
 
 use std::path::PathBuf;
 
+use crate::harness::Harness;
+
 // Shared by rendering and child Run accounting: one owner for the line protocol.
 const STOPPED: &str = "Stopped at: ";
 const PROGRESS: &str = "Progress: ";
 const PRESERVED: &str = "Preserved: ";
 const BEFORE_RETRYING: &str = "Before retrying: ";
 const RECOVERY: &str = "Recovery: ";
+const SECURITY_REVIEW: &str = "Security review will use ";
 const LAUNCH: &str = "Run from the Launch directory ";
 const CONTINUING: &str = "Continuing reuses ";
 const RETRY: &str = "Retry starts work ";
@@ -82,6 +85,7 @@ pub struct Recovery {
     /// independently of any later delivery failure.
     tickets: Option<(TicketProgress, bool)>,
     continuation: Option<Continuation>,
+    security_review_harness: Option<Harness>,
     /// Factory-reported retention facts from child Runs, including their paths.
     local_child_work: Vec<String>,
 }
@@ -94,6 +98,7 @@ impl Recovery {
             worktree: None,
             tickets: None,
             continuation: None,
+            security_review_harness: None,
             local_child_work: Vec::new(),
         }
     }
@@ -132,6 +137,12 @@ impl Recovery {
         self.local_child_work.extend(work);
     }
 
+    /// The Security review's Harness when `security.harness` chose one
+    /// different from the Run's; the Recovery command still names the Run's.
+    pub fn add_security_review_harness(&mut self, harness: Harness) {
+        self.security_review_harness = Some(harness);
+    }
+
     /// Literal lines shared by terminal, Activity and Run notification output.
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![format!("{STOPPED}{}", self.stage.name())];
@@ -165,6 +176,12 @@ impl Recovery {
             lines.push(format!("{BEFORE_RETRYING}inspect and publish the retained work, reconcile with origin without forcing, then free the Issue branch and Worktree acquisition path. Do not discard local work."));
         }
         lines.push(format!("{RECOVERY}{}", context.command));
+        if let Some(harness) = self.security_review_harness {
+            lines.push(format!(
+                "{SECURITY_REVIEW}{}, chosen by security.harness in the User config.",
+                harness.name()
+            ));
+        }
         lines.push(format!(
             "{LAUNCH}{} with Base branch {} checked out (the command cannot encode the Base branch). Retry when the failure's cause is resolved.",
             context.launch.display(), context.base
@@ -195,6 +212,7 @@ impl Recovery {
             PRESERVED,
             BEFORE_RETRYING,
             RECOVERY,
+            SECURITY_REVIEW,
             LAUNCH,
             CONTINUING,
             RETRY,

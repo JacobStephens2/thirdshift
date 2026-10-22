@@ -59,6 +59,151 @@ fn assert_old_finding_stays_private(body: &str, result: &support::RunResult) {
 }
 
 #[test]
+fn a_failed_security_review_names_its_harness_and_first_diagnostic_line() {
+    const DIAGNOSTIC: &str = "\n  Not signed in. To authenticate without a browser, run:  \n  grok login --device-code\n";
+    for (errors, result, exit) in [
+        (json!([DIAGNOSTIC]), json!("ignored result text"), 1),
+        (json!([]), json!(DIAGNOSTIC), 0),
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is("[harness]\ndefault = 'codex'\n[security]\nharness = 'grok'\n");
+        let event = json!({
+            "type": "result",
+            "subtype": "error_during_execution",
+            "errors": errors,
+            "result": result
+        });
+        scenario.agent_does_for(
+            7,
+            &format!(
+                r#"
+if [ -n "${{FAKE_GROK_RESULT:-}}" ]; then
+    printf '%s\n' '{event}' > "$FAKE_GROK_RESULT"
+    exit {exit}
+else
+    {OPENS_PR}
+fi
+"#
+            ),
+        );
+        let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+        let result = scenario.run_with_env(
+            &[
+                &scenario.issue_url(7),
+                "security-review",
+                "merge",
+                "email",
+                "you@example.com",
+            ],
+            &[
+                ("THIRDSHIFT_RESEND_URL", resend.url()),
+                ("RESEND_API_KEY", "re_test"),
+            ],
+        );
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        let cause = "Security review on grok failed: Not signed in. To authenticate without a browser, run:";
+        assert!(
+            result.stderr.contains(&format!("thirdshift: {cause}\n")),
+            "{}",
+            result.stderr
+        );
+        let state = scenario.gh_state();
+        let body = state["prs"][0]["body"].as_str().unwrap();
+        assert!(
+            body.contains("- Security review on grok failed; see Session log\n"),
+            "{body}"
+        );
+        assert!(!body.contains("Not signed in."), "{body}");
+        assert!(!body.contains("grok login --device-code"), "{body}");
+        assert!(!body.contains("ignored result text"), "{body}");
+        let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
+        let review_log = logs
+            .iter()
+            .find(|name| name.ends_with("-security-review.jsonl"))
+            .unwrap();
+        let transcript = std::fs::read_to_string(scenario.path(&format!(
+            "home/.thirdshift/logs/acme/widgets/commands/issue/{review_log}"
+        )))
+        .unwrap();
+        assert!(
+            transcript.contains("grok login --device-code"),
+            "{transcript}"
+        );
+        let activity = std::fs::read_to_string(
+            scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"),
+        )
+        .unwrap();
+        assert!(
+            activity.contains(&format!("failed: {cause}; Stopped at:")),
+            "{activity}"
+        );
+        let requests = resend.requests();
+        assert_eq!(requests.len(), 1);
+        let email = requests[0].body["text"].as_str().unwrap();
+        assert!(
+            email.contains(&format!("Cause:        {cause}\n")),
+            "{email}"
+        );
+        let status = scenario.run(&["status", "--json"]);
+        assert_eq!(status.code, Some(0), "{}", status.stderr);
+        let status: serde_json::Value = serde_json::from_str(&status.stdout).unwrap();
+        assert_eq!(status["commands"][0]["cause"], cause, "{status}");
+    }
+}
+
+#[test]
+fn security_review_failures_without_a_diagnostic_keep_the_generic_cause() {
+    for script in [
+        "exit 1",
+        r#"printf '%s\n' '{"type":"result","subtype":"error_during_execution","errors":[" \n "],"result":""}' > "$FAKE_GROK_RESULT""#,
+        r#"printf '%s\n' '{"type":"result","subtype":"success","errors":["retried warning"],"result":"not a valid final line"}' > "$FAKE_GROK_RESULT""#,
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is("[harness]\ndefault = 'grok'\n");
+        scenario.agent_does_in_session(1, OPENS_PR);
+        scenario.agent_does_in_session(2, script);
+        let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        let cause = "Security review incomplete: session failed, ended early or omitted a valid final line; see Session log";
+        assert!(
+            result.stderr.contains(&format!("thirdshift: {cause}\n")),
+            "{}",
+            result.stderr
+        );
+        let state = scenario.gh_state();
+        let body = state["prs"][0]["body"].as_str().unwrap();
+        assert!(body.contains(&format!("- {cause}\n")), "{body}");
+        assert!(
+            !result.stderr.contains("Security review will use"),
+            "{}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
+fn a_failed_review_keeps_private_result_text_out_of_its_public_pr() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[harness]\ndefault = 'grok'\n");
+    scenario.agent_does_in_session(1, OPENS_PR);
+    scenario.agent_does_in_session(
+        2,
+        r#"
+printf '%s\n' 'Pre-existing Base-branch vulnerability: Private old vulnerability evidence.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+exit 1
+"#,
+    );
+    let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let body = state["prs"][0]["body"].as_str().unwrap();
+    assert!(
+        !body.contains("Private old vulnerability evidence."),
+        "private failed-result text reached the public PR: {body}"
+    );
+}
+
+#[test]
 fn explicit_incomplete_review_surfaces_its_reason_and_records_old_findings_privately() {
     for old in [json!([]), json!([old_finding()])] {
         let scenario = Scenario::new();
@@ -1337,6 +1482,11 @@ fi
         .to_string();
     // It names the Command's Harness, which must not move the review.
     assert!(recovery.ends_with(" harness codex"), "{recovery}");
+    assert!(
+        first.stderr.lines().any(|line| line == "thirdshift: Security review will use claude, chosen by security.harness in the User config."),
+        "{}",
+        first.stderr
+    );
     let words: Vec<&str> = recovery.split_whitespace().collect();
 
     let second = scenario.run(&words);
