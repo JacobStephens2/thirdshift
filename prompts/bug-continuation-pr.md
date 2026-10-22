@@ -7,8 +7,8 @@ Diagnoses a bug before continuing its open pull request. A not reproduced ending
 ```
 /thirdshift-diagnosing-bugs <Issue URL>
 Use the `thirdshift-diagnosing-bugs` skill before changing code.
-If reproduced, write and run a regression test that fails for the reported reason before fixing it, then follow the implementation prompt below.
-If not reproduced, follow the skill's triage comment and needs-info ending instead of the implementation and PR steps below. Open no PR and merge nothing. End with exactly `Bug not reproduced: <comment URL>` on the final line after the comment and labels are confirmed.
+Follow the skill to one of its two endings. Its not reproduced ending replaces the implementation steps below.
+Completion lines (the final message's last line): reproduced: `Bug reproduced: fixed`; not reproduced: `Bug not reproduced: <comment URL>`.
 
 Implementation after reproduction:
 /thirdshift-implement <Issue URL>

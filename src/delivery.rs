@@ -208,15 +208,18 @@ struct Route<'a> {
     harness: &'a Choice,
 }
 
-/// Accept only an explicit final line naming a comment on this Run's issue.
-/// Malformed handoffs fail instead of falling through to publication.
+/// Read one of the two explicit diagnosis completion lines. Missing or
+/// malformed handoffs fail instead of falling through to publication.
 fn not_reproduced(issue: &IssueUrl, final_message: Option<&str>) -> Result<Option<String>> {
-    let Some(url) = final_message
+    let line = final_message
         .and_then(|message| message.trim_end().lines().last())
-        .and_then(|line| line.strip_prefix(prompt::BUG_NOT_REPRODUCED_LINE))
-    else {
+        .unwrap_or("");
+    if line == prompt::BUG_REPRODUCED_LINE {
         return Ok(None);
-    };
+    }
+    let url = line
+        .strip_prefix(prompt::BUG_NOT_REPRODUCED_LINE)
+        .context("bug diagnosis ended without a reproduced or not reproduced completion line")?;
     let prefix = format!("{}#issuecomment-", issue.url.trim_end_matches('/'));
     anyhow::ensure!(
         url.strip_prefix(&prefix).is_some_and(|id| {
@@ -575,9 +578,7 @@ impl Outside for InWorktree<'_> {
     }
 
     fn session(&mut self, kind: Kind, prompt: &str) -> Result<Option<String>> {
-        let final_message =
-            self.sessions
-                .run_to_final_message(crate::session::Purpose::Ordinary, kind, prompt)?;
+        let final_message = self.sessions.run(kind, prompt)?;
         self.pull_request.ensure_actionable(false)?;
         Ok(final_message)
     }

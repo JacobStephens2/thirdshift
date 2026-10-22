@@ -25,7 +25,7 @@ Remove one input or step at a time, rerunning the loop, until every remaining el
 
 Before changing production code, turn the reproduction into a regression test at a seam that exercises the actual reported pattern. Run it and capture its failure for that reason. If no suitable seam can exercise the bug unattended, record that limitation through the not reproduced ending instead of guessing at a fix.
 
-Make the smallest fix, watch the same test pass, then rerun the original reproduction and the repository's affected checks. Keep the regression test. Remove temporary instrumentation and throwaway artifacts. Continue the Session prompt's implementation, review, commit and PR steps. In the PR's Evidence, show the exact command and its failing-before and passing-after results, and explain the confirmed cause.
+Make the smallest fix, watch the same test pass, then rerun the original reproduction and the repository's affected checks. Keep the regression test. Remove temporary instrumentation and throwaway artifacts. Continue the Session prompt's implementation, review, commit and PR steps. In the PR's Evidence, show the exact command and its failing-before and passing-after results, and explain the confirmed cause. End the final message with the Session prompt's reproduced completion line only after those steps succeed.
 
 ## Not reproduced: needs information, no PR
 
@@ -43,10 +43,6 @@ Leave production code unchanged and remove exploratory changes. Comment on this 
 
 Write the comment to a temporary file and publish with `gh issue comment <issue URL> --body-file <file>`. Keep the returned comment URL. Ensure the repository has the `needs-info` label, then use `gh issue edit <issue URL> --remove-label ready-for-agent --add-label needs-info`, preserving other labels. Read back the labels to confirm `needs-info` is present and `ready-for-agent` absent. thirdshift ends its own Claim.
 
-Once the comment and label change both succeed, end without committing, pushing, opening a PR or merging. Override the Session prompt's remaining implementation and PR steps. End the final message with exactly this line, using this issue's actual comment URL:
-
-```text
-Bug not reproduced: <comment URL>
-```
+Once the comment and label change both succeed, end without committing, pushing, opening a PR or merging. Override the Session prompt's remaining implementation and PR steps. End the final message with the Session prompt's not reproduced completion line, using this issue's actual comment URL.
 
 If publishing the comment or changing the labels fails, report that operational failure and omit the final line. The Run must not claim a successful handoff without both.

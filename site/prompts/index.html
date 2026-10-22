@@ -196,8 +196,8 @@ You run headless: nobody is watching, and ending your turn ends the session. Run
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
         <pre class="job-text"><code>/thirdshift-diagnosing-bugs <mark class="ph">&lt;Issue URL&gt;</mark>
 Use the `thirdshift-diagnosing-bugs` skill before changing code.
-If reproduced, write and run a regression test that fails for the reported reason before fixing it, then follow the implementation prompt below.
-If not reproduced, follow the skill's triage comment and needs-info ending instead of the implementation and PR steps below. Open no PR and merge nothing. End with exactly `Bug not reproduced: &lt;comment URL&gt;` on the final line after the comment and labels are confirmed.
+Follow the skill to one of its two endings. Its not reproduced ending replaces the implementation steps below.
+Completion lines (the final message's last line): reproduced: `Bug reproduced: fixed`; not reproduced: `Bug not reproduced: &lt;comment URL&gt;`.
 
 Implementation after reproduction:
 /thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
@@ -226,8 +226,8 @@ You run headless: nobody is watching, and ending your turn ends the session. Run
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
         <pre class="job-text"><code>/thirdshift-diagnosing-bugs <mark class="ph">&lt;Issue URL&gt;</mark>
 Use the `thirdshift-diagnosing-bugs` skill before changing code.
-If reproduced, write and run a regression test that fails for the reported reason before fixing it, then follow the implementation prompt below.
-If not reproduced, follow the skill's triage comment and needs-info ending instead of the implementation and PR steps below. Open no PR and merge nothing. End with exactly `Bug not reproduced: &lt;comment URL&gt;` on the final line after the comment and labels are confirmed.
+Follow the skill to one of its two endings. Its not reproduced ending replaces the implementation steps below.
+Completion lines (the final message's last line): reproduced: `Bug reproduced: fixed`; not reproduced: `Bug not reproduced: &lt;comment URL&gt;`.
 
 Implementation after reproduction:
 /thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
@@ -266,8 +266,8 @@ You run headless: nobody is watching, and ending your turn ends the session. Run
         <p class="sent-by">Sent by <a href="/#unit-2">2 · M · Implement</a></p>
         <pre class="job-text"><code>/thirdshift-diagnosing-bugs <mark class="ph">&lt;Issue URL&gt;</mark>
 Use the `thirdshift-diagnosing-bugs` skill before changing code.
-If reproduced, write and run a regression test that fails for the reported reason before fixing it, then follow the implementation prompt below.
-If not reproduced, follow the skill's triage comment and needs-info ending instead of the implementation and PR steps below. Open no PR and merge nothing. End with exactly `Bug not reproduced: &lt;comment URL&gt;` on the final line after the comment and labels are confirmed.
+Follow the skill to one of its two endings. Its not reproduced ending replaces the implementation steps below.
+Completion lines (the final message's last line): reproduced: `Bug reproduced: fixed`; not reproduced: `Bug not reproduced: &lt;comment URL&gt;`.
 
 Implementation after reproduction:
 /thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
@@ -1007,7 +1007,7 @@ Remove one input or step at a time, rerunning the loop, until every remaining el
 
 Before changing production code, turn the reproduction into a regression test at a seam that exercises the actual reported pattern. Run it and capture its failure for that reason. If no suitable seam can exercise the bug unattended, record that limitation through the not reproduced ending instead of guessing at a fix.
 
-Make the smallest fix, watch the same test pass, then rerun the original reproduction and the repository's affected checks. Keep the regression test. Remove temporary instrumentation and throwaway artifacts. Continue the Session prompt's implementation, review, commit and PR steps. In the PR's Evidence, show the exact command and its failing-before and passing-after results, and explain the confirmed cause.
+Make the smallest fix, watch the same test pass, then rerun the original reproduction and the repository's affected checks. Keep the regression test. Remove temporary instrumentation and throwaway artifacts. Continue the Session prompt's implementation, review, commit and PR steps. In the PR's Evidence, show the exact command and its failing-before and passing-after results, and explain the confirmed cause. End the final message with the Session prompt's reproduced completion line only after those steps succeed.
 
 ## Not reproduced: needs information, no PR
 
@@ -1025,11 +1025,7 @@ Leave production code unchanged and remove exploratory changes. Comment on this 
 
 Write the comment to a temporary file and publish with `gh issue comment &lt;issue URL&gt; --body-file &lt;file&gt;`. Keep the returned comment URL. Ensure the repository has the `needs-info` label, then use `gh issue edit &lt;issue URL&gt; --remove-label ready-for-agent --add-label needs-info`, preserving other labels. Read back the labels to confirm `needs-info` is present and `ready-for-agent` absent. thirdshift ends its own Claim.
 
-Once the comment and label change both succeed, end without committing, pushing, opening a PR or merging. Override the Session prompt's remaining implementation and PR steps. End the final message with exactly this line, using this issue's actual comment URL:
-
-```text
-Bug not reproduced: &lt;comment URL&gt;
-```
+Once the comment and label change both succeed, end without committing, pushing, opening a PR or merging. Override the Session prompt's remaining implementation and PR steps. End the final message with the Session prompt's not reproduced completion line, using this issue's actual comment URL.
 
 If publishing the comment or changing the labels fails, report that operational failure and omit the final line. The Run must not claim a successful handoff without both.
 </code></pre>

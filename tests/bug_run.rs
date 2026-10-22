@@ -11,6 +11,7 @@ echo feature > feature.txt
 git add feature.txt
 git commit -q -m 'Fix bug'
 gh pr create --base main --head issue-7 --title 'Fix bug' --body 'Closes #7'
+echo 'Bug reproduced: fixed' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#;
 
 #[test]
