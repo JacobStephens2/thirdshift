@@ -113,6 +113,41 @@ fn converts_all_six_harnesses_with_round_trip_report_and_no_duplicates() {
 }
 
 #[test]
+fn conversion_retries_a_kept_session_with_large_trailing_results() {
+    let scenario = Scenario::new();
+    let earlier = json!({"type": "result", "subtype": "success", "result": "x".repeat(100_000)});
+    let tool = json!({"type": "assistant", "message": {"content": [{
+        "type": "tool_use", "id": "call-1", "name": "Bash", "input": {"command": "cargo test"}
+    }]}});
+    let result = json!({"type": "result", "subtype": "success", "result": "\"".repeat(2_000)});
+    let raw = format!("{earlier}\n{tool}\n{}", format!("{result}\n").repeat(12));
+    let session = fixture(&scenario, "claude", &raw);
+    let root = scenario.path("home/.thirdshift/logs");
+    // A failed conversion keeps its original and receipt, without publishing
+    // the temporary trace. A later run must retry it with the fixed readers.
+    fs::write(
+        root.join("session-trace-conversion.json"),
+        serde_json::to_vec(&json!({"version": 1, "sessions": [{
+            "source": session.strip_prefix(&root).unwrap(), "passed": false,
+            "readers": {"show": false}, "codex_diffs": 0,
+            "error": "round-trip reader difference", "inputs": {}
+        }]}))
+        .unwrap(),
+    )
+    .unwrap();
+    let result = scenario.run(&["logs", "--convert"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let report = report(&scenario);
+    assert_eq!(report["sessions"].as_array().unwrap().len(), 1, "{report}");
+    let entry = &report["sessions"][0];
+    assert_eq!(entry["passed"], true, "{entry}");
+    for reader in ["conversation", "waterfall", "show", "model_evidence"] {
+        assert_eq!(entry["readers"][reader], true, "{entry}");
+    }
+    assert_eq!(fs::read_to_string(session).unwrap(), raw);
+}
+
+#[test]
 fn cleanup_removes_only_passed_unchanged_originals() {
     let scenario = Scenario::new();
     let raw = include_str!("fixtures/console-claude.jsonl");
