@@ -311,6 +311,9 @@ fn body(
         if let Some(title) = review.title {
             text += &format!("Description:  {title}\n");
         }
+        if let Some(strength) = review.strength {
+            text += &format!("Strength:     {strength}\n");
+        }
         if review.dispatched.is_some() {
             text += &format!("Dispatched:   {}\n", account.outcome);
         }
@@ -544,6 +547,7 @@ mod tests {
         let account = Account {
             review: Some(Review {
                 title: None,
+                strength: Some("Strong"),
                 line: format!("plan published: {PLAN}"),
                 dispatched: Some(PLAN),
             }),
@@ -558,6 +562,7 @@ mod tests {
                      Command:      Architect run\n\
                      Repository:   acme/widgets\n\
                      Review:       plan published: {PLAN}\n\
+                     Strength:     Strong\n\
                      Dispatched:   merged\n\
                      Pull request: {PR}\n\
                      Session log:  {LOG}\n\
@@ -580,6 +585,7 @@ mod tests {
             log: None,
             review: Some(Review {
                 title: None,
+                strength: Some("not reported"),
                 line: format!("idea filed: {PLAN}"),
                 dispatched: None,
             }),
@@ -596,6 +602,7 @@ mod tests {
                      Command:      Architect run\n\
                      Repository:   acme/widgets\n\
                      Review:       idea filed: {PLAN}\n\
+                     Strength:     not reported\n\
                      Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
@@ -611,6 +618,7 @@ mod tests {
             log: Some(Path::new(LOG)),
             review: Some(Review {
                 title: None,
+                strength: None,
                 line: "failed".to_string(),
                 dispatched: None,
             }),

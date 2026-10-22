@@ -19,6 +19,8 @@ If it is not Strong, file it as one issue labelled `needs-triage`, unless an ope
 
 Do not commit or push anything. You may edit files here to check an idea: the worktree is thrown away when you finish. A change the plan needs to GLOSSARY.md or an ADR is a Ticket's work, not yours.
 
+Immediately before the final issue line, report the top recommendation's rating on a line of its own: `Recommendation strength: Strong`, `Recommendation strength: Worth exploring` or `Recommendation strength: Speculative`. Use its rating from this review, including when an open issue already covers it.
+
 End your final message with one of these lines, as its last line, with the issue's full URL and nothing else on the line:
 Architecture review plan: <URL of the Spec or the single Ticket you published>
 Architecture review idea: <URL of the issue you filed>

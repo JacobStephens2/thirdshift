@@ -212,6 +212,8 @@ pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> S
 pub const PLAN_LINE: &str = "Architecture review plan: ";
 pub const IDEA_LINE: &str = "Architecture review idea: ";
 pub const ALREADY_FILED_LINE: &str = "Architecture review already filed: ";
+/// The recommendation rating on the line before the final issue line.
+pub const STRENGTH_LINE: &str = "Recommendation strength: ";
 
 /// The Architecture review prompt, for an Architect run's worktree at the
 /// head of the Base branch `base` on origin, pointed at `focus` if the
@@ -234,6 +236,8 @@ pub fn architecture_review(base: &str, focus: Option<&str>) -> String {
          If it is not Strong, file it as one issue labelled `{NEEDS_TRIAGE}`, unless an open issue already covers it.\n\
          \n\
          Do not commit or push anything. You may edit files here to check an idea: the worktree is thrown away when you finish. A change the plan needs to GLOSSARY.md or an ADR is a Ticket's work, not yours.\n\
+         \n\
+         Immediately before the final issue line, report the top recommendation's rating on a line of its own: `{STRENGTH_LINE}Strong`, `{STRENGTH_LINE}Worth exploring` or `{STRENGTH_LINE}Speculative`. Use its rating from this review, including when an open issue already covers it.\n\
          \n\
          End your final message with one of these lines, as its last line, with the issue's full URL and nothing else on the line:\n\
          {PLAN_LINE}<URL of the Spec or the single Ticket you published>\n\
