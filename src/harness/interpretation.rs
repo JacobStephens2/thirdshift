@@ -36,6 +36,8 @@ pub struct Completion {
 
 #[derive(Default)]
 pub struct Report {
+    /// Raw Harness records recovered after exit, in their original encoding.
+    pub retained_records: Vec<RetainedRecord>,
     /// Normalized timeline captured by `decode`, enriched by retained records.
     /// Progress-only callers receive only facts recovered at completion.
     pub events: Vec<event::Event>,
@@ -45,6 +47,13 @@ pub struct Report {
     pub summary: Option<String>,
     /// Models reported by session output or retained records.
     pub models: Vec<String>,
+}
+
+/// A recovered Harness event keeps its raw body paired with the facts decoded
+/// from it, so recording retains the event's clock and call association.
+pub struct RetainedRecord {
+    pub raw: String,
+    pub events: Vec<event::Event>,
 }
 
 impl Report {
@@ -213,13 +222,6 @@ impl Interpretation {
 
     /// Return live facts and capture them for the authoritative completion
     /// timeline. Retained records refine calls by ID instead of adding calls.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "normalized consumers opt in; Session log uses condense"
-        )
-    )]
     pub fn decode(&mut self, raw: &str) -> Decoded {
         let decoded = self.read(raw);
         event::reconcile(self.events.get_or_insert_default(), decoded.events.clone());

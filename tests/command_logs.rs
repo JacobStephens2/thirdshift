@@ -56,7 +56,12 @@ fn logs_in(scenario: &Scenario, folder: &str) -> Vec<String> {
     };
     let mut names: Vec<String> = entries
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
-        .filter(|name| !name.ends_with(".command.json") && !name.ends_with(".child.json"))
+        .filter(|name| {
+            !name.ends_with(".command.json")
+                && !name.ends_with(".child.json")
+                && !name.ends_with(".logs.jsonl")
+                && !name.ends_with(".spans.jsonl")
+        })
         .collect();
     names.sort();
     names
@@ -465,4 +470,24 @@ gh fake checks "$(git rev-parse origin/main)" '[{"name": "test", "conclusion": "
         "{:?}",
         scenario.log_files(&format!("{LOGS}/commands/issue"), "jsonl")
     );
+    let mut trace_ids = std::collections::HashSet::new();
+    let mut sessions = 0;
+    for entry in fs::read_dir(path.parent().unwrap()).unwrap() {
+        let path = entry.unwrap().path();
+        if !path.to_string_lossy().ends_with(".spans.jsonl") {
+            continue;
+        }
+        sessions += 1;
+        for line in fs::read_to_string(path).unwrap().lines() {
+            let request: serde_json::Value = serde_json::from_str(line).unwrap();
+            for span in request["resourceSpans"][0]["scopeSpans"][0]["spans"]
+                .as_array()
+                .unwrap()
+            {
+                trace_ids.insert(span["traceId"].as_str().unwrap().to_owned());
+            }
+        }
+    }
+    assert!(sessions >= 2);
+    assert_eq!(trace_ids.len(), 1);
 }

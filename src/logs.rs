@@ -21,6 +21,7 @@ pub(crate) use reading::catalog;
 mod recording;
 pub mod status;
 pub mod stop;
+pub(crate) mod trace;
 
 use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
@@ -285,6 +286,10 @@ pub fn command_log_path() -> Option<PathBuf> {
 
 pub(crate) fn captured_owner() -> Result<owner::Owner, String> {
     record().captured_owner()
+}
+
+pub(crate) fn trace_context() -> Option<trace::Context> {
+    record().trace_context()
 }
 
 /// Print `line` on stderr, and keep it in the Command log.

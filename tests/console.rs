@@ -825,6 +825,13 @@ fn logs_inventory_matches_cli_and_reads_current_layout_only() {
     .unwrap();
     fs::write(folder.join("7-20261003T120000-0400-implement.jsonl"),
         "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"Hello <reader> (https://github.com/acme/widgets/issues/7)\"}}\n").unwrap();
+    for suffix in ["logs", "spans"] {
+        fs::write(
+            folder.join(format!("7-20261003T120000-0400-implement.{suffix}.jsonl")),
+            "{}\n",
+        )
+        .unwrap();
+    }
     let old = home.path().join(".thirdshift/logs/acme/widgets/sessions");
     fs::create_dir_all(&old).unwrap();
     fs::write(old.join("7-20261003T120000-0400-implement.jsonl"), "old\n").unwrap();

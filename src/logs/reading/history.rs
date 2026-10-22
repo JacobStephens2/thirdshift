@@ -284,6 +284,9 @@ fn sessions(
                 continue;
             }
             let path = entry.path();
+            if !owner::inventory_session(&path) {
+                continue;
+            }
             let Some(decoded) =
                 owner::decode(&path).filter(|decoded| decoded.session_kind.is_some())
             else {
