@@ -16,6 +16,8 @@ use crate::otlp_jsonl::*;
 
 mod attributes;
 use attributes::{attribute, event_attributes};
+mod export;
+use export::Export;
 
 // Pin the development conventions rather than silently following latest.
 const SCHEMA: &str = "https://opentelemetry.io/schemas/1.44.0";
@@ -23,6 +25,7 @@ const SCHEMA: &str = "https://opentelemetry.io/schemas/1.44.0";
 pub(super) struct Trace {
     logs: Writer<File, Logs>,
     spans: Writer<File, Spans>,
+    export: Option<Export>,
     resource: Resource,
     version: Version,
     context: Context,
@@ -71,6 +74,7 @@ impl Trace {
         Ok(Self {
             logs: Writer::new(File::create(log.with_extension("logs.jsonl"))?),
             spans: Writer::new(File::create(log.with_extension("spans.jsonl"))?),
+            export: crate::logs::otlp_endpoint().and_then(Export::start),
             resource: Resource {
                 attributes: {
                     let mut resource = attrs.clone();
@@ -357,7 +361,11 @@ impl Trace {
 
     fn write_span(&mut self, span: Span) -> io::Result<()> {
         let request = self.request(span);
-        self.spans.write(&request)
+        self.spans.write(&request)?;
+        if let Some(export) = &self.export {
+            export.send(request);
+        }
+        Ok(())
     }
 
     fn request(&self, span: Span) -> Spans {

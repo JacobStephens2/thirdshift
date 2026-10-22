@@ -406,6 +406,9 @@ from = &quot;thirdshift@your-verified-domain.com&quot;  # the sender; onboarding
 dir = &quot;~/elsewhere/logs&quot;   # the root of the logs, instead of ~/.thirdshift/logs
 waiting_line_minutes = 5  # repeat unchanged CI watch and Self-merge waiting lines
 
+[otlp]
+endpoint = &quot;http://localhost:4318/v1/traces&quot;   # also send ended spans to a local viewer
+
 [activity]
 quiet_skips = true   # a skipped Pass prints nothing
 
@@ -435,6 +438,7 @@ effort = &quot;&quot;
 model = &quot;gemini-3.8-flash&quot;
 effort = &quot;medium&quot;
 </code></pre>
+<p><code>otlp.endpoint</code> is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in <code>/v1/traces</code>) to receive each Session&#39;s ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session&#39;s stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. A Security run exports none of its sessions, including child Runs.</p>
 <p><code>thirdshift setup</code> writes this file for you, listing every setting at its default so the file itself shows what can be changed:</p>
 <pre><code class="language-toml">[merge]
 always = false   # every Run is a Merge run, without the merge word; default false
@@ -453,6 +457,9 @@ from = &quot;onboarding@resend.dev&quot;  # the sender; default onboarding@resen
 [logs]
 dir = &quot;~/.thirdshift/logs&quot;   # the root of the logs, each repository&#39;s in &lt;owner&gt;/&lt;repo&gt;/; default ~/.thirdshift/logs
 waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
+
+[otlp]
+endpoint = &quot;&quot;   # optional OTLP/HTTP traces URL, including /v1/traces; default blank (off); Security runs never export
 
 [inbox]
 days = 7             # days to keep ended problems and Resolved; default 7
