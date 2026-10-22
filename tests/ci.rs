@@ -374,6 +374,37 @@ fn a_ci_fix_repair_that_makes_no_commit_gets_one_check_re_run_and_green_is_succe
     scenario.assert_cleaned_up("issue-7");
 }
 
+#[test]
+fn a_refused_self_merge_keeps_the_consumed_check_rerun_for_the_delivery() {
+    let scenario = Scenario::new();
+    let failed = format!("[{}]", actions_failure("test", 900, 1, RERUN_PASSES));
+    // Merge hooks run in the Launch directory, whose HEAD is the Base branch.
+    let red_again = checks_on_head(&failed)
+        .replace("rev-parse HEAD", "rev-parse origin/issue-7")
+        .replace('\'', "'\\''");
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}{}gh fake on-merge 1 '{red_again}'\n\
+         gh fake refuse-merges 1 'merge refused'\n",
+        checks_on_head(&failed)
+    ));
+    scenario.agent_does_in_session(2, "true\n");
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_declined_ci_fix(&scenario, &result, &["900"]);
+    assert_eq!(scenario.gh_calls_of("pr", "merge").len(), 1);
+    assert!(
+        result.stderr.contains("the merge failed:"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("Stopped at: CI watch"),
+        "{}",
+        result.stderr
+    );
+}
+
 /// Assert that the Run ended as a Declined CI fix with no Check re-run asked
 /// for, or with only `requests`. Returns the head whose CI it watched.
 fn assert_declined_ci_fix(

@@ -5,9 +5,10 @@
 //! poll module and the progress lines; `InMemory`, in tests, from a script,
 //! recording each re-run request and progress line.
 
+use std::collections::HashSet;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 
 use crate::github::{ActionsJob, Check, Conclusion, GitHub, JobRun};
 use crate::issue::IssueUrl;
@@ -27,7 +28,7 @@ pub enum Ci {
 
 impl Ci {
     /// Whether it is red on a check that is the branch's own to fix.
-    pub fn has_own_failures(&self) -> bool {
+    fn has_own_failures(&self) -> bool {
         matches!(self, Ci::Failed(failed) if !failed.own.is_empty())
     }
 }
@@ -50,7 +51,7 @@ pub struct FailedChecks {
 impl FailedChecks {
     /// Whether the branch's own failures, at least one, are all Abandoned
     /// jobs, whatever the Inherited failures are.
-    pub fn own_failures_all_abandoned(&self) -> bool {
+    fn own_failures_all_abandoned(&self) -> bool {
         !self.own.is_empty()
             && self
                 .own
@@ -59,71 +60,106 @@ impl FailedChecks {
     }
 }
 
-/// Wait up to the grace period for any check or status on `sha`, then watch
-/// them until they have all finished. Checks that failed are compared, by
-/// name, with the checks on `base_commit` as they stand: the Base branch's CI
-/// is never waited for or triggered, and no log text is read. With no
-/// `base_commit`, as in a Base fix, every check that failed is the branch's
-/// own. `actionable` gates each GitHub observation before and after it.
-pub fn watch(
-    issue: &IssueUrl,
-    sha: &str,
-    base_commit: Option<&str>,
-    actionable: &mut dyn FnMut() -> Result<()>,
-) -> Result<Ci> {
-    watch_through(&mut OnGitHub { issue, actionable }, sha, base_commit)
+/// CI watch for one issue's complete Delivery. A new Delivery, including a
+/// Continuation, starts a new watch; rounds, Base fixes and refused
+/// Self-merges keep this one and its full-head re-run allowances.
+pub struct Watch<'a> {
+    issue: &'a IssueUrl,
+    handed_to_repair: Option<(String, FailedChecks)>,
+    consumed: HashSet<String>,
+    abandoned_jobs_rerun: HashSet<String>,
 }
 
-/// The Check re-run of `sha`: ask GitHub to re-run the branch's own checks
-/// in `failed`, once for each GitHub Actions workflow run they belong to,
-/// then watch CI on `sha` again, from the new attempt on: it waits up to
-/// the grace period for every re-run check name to have a check run not
-/// listed just before the request, including Inherited failures sharing a
-/// successfully requested workflow run. Each must stay listed until it
-/// finishes, so a missing check or an earlier attempt cannot establish green
-/// CI. A refused request is reported, then all current checks on the same
-/// head are watched: a Repair may already
-/// have re-run them. No workflow run is re-run for an Inherited failure.
-///
-/// `None` if there is no re-run to watch, each for a reason told in a
-/// progress line: one of those checks is no GitHub Actions job, so nothing
-/// is asked for, since the commit could not go green; or no new attempt
-/// appeared for a successful request. A checks-read error or a listing
-/// that disappears while watching is an error, never green or absent CI.
-pub fn rerun(
-    issue: &IssueUrl,
-    sha: &str,
-    base_commit: Option<&str>,
-    failed: &FailedChecks,
-    actionable: &mut dyn FnMut() -> Result<()>,
-) -> Result<Option<Ci>> {
-    rerun_through(
-        &mut OnGitHub { issue, actionable },
-        sha,
-        base_commit,
-        failed,
-    )
-}
+impl<'a> Watch<'a> {
+    pub fn new(issue: &'a IssueUrl) -> Self {
+        Self {
+            issue,
+            handed_to_repair: None,
+            consumed: HashSet::new(),
+            abandoned_jobs_rerun: HashSet::new(),
+        }
+    }
 
-/// The re-run of `sha`'s Abandoned jobs, when every one of the branch's
-/// own failures in `failed` is one: ask GitHub to re-run the failed jobs of
-/// their workflow runs, then watch CI on `sha` from the new attempt on, with
-/// the same guard against the attempt before as the Check re-run's. `None`
-/// if a request was refused or no new attempt appeared within the grace
-/// period, each told in a progress line, so that red CI is taken as it was.
-pub fn rerun_abandoned(
-    issue: &IssueUrl,
-    sha: &str,
-    base_commit: Option<&str>,
-    failed: &FailedChecks,
-    actionable: &mut dyn FnMut() -> Result<()>,
-) -> Result<Option<Ci>> {
-    rerun_abandoned_through(
-        &mut OnGitHub { issue, actionable },
-        sha,
-        base_commit,
-        failed,
-    )
+    /// Record the full head and failed checks handed to a CI-fix Repair,
+    /// only after the session and its pull request postcheck succeeded.
+    /// Keep them until assessment, after the next successful Base merge,
+    /// even if conflict Repairs intervene.
+    pub fn after_repair(&mut self, head: String, failed: FailedChecks) {
+        self.handed_to_repair = Some((head, failed));
+    }
+
+    /// Observe CI against this assessment's selected Base commit, including
+    /// eligible Abandoned job re-runs and Check re-runs. With no Base commit
+    /// every failure is the branch's own. An unchanged CI-fix Repair head
+    /// consumes its Check re-run before I/O; later own failures on that head
+    /// fail as the same Declined CI fix. Other heads are observed afresh.
+    /// `actionable` is borrowed only for this assessment and gates GitHub
+    /// observations before and after each read.
+    pub fn assess(
+        &mut self,
+        head: &str,
+        base_commit: Option<&str>,
+        actionable: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<Ci> {
+        self.assess_through(
+            &mut OnGitHub {
+                issue: self.issue,
+                actionable,
+            },
+            head,
+            base_commit,
+        )
+    }
+
+    fn assess_through(
+        &mut self,
+        outside: &mut impl Outside,
+        head: &str,
+        base_commit: Option<&str>,
+    ) -> Result<Ci> {
+        let unchanged = self
+            .handed_to_repair
+            .take()
+            .filter(|(handed, _)| handed == head);
+        let ci = match unchanged {
+            Some((_, failed)) if self.consumed.insert(head.to_string()) => {
+                rerun_through(outside, head, base_commit, &failed)?
+            }
+            _ => {
+                let watched = watch_through(outside, head, base_commit)?;
+                Some(self.rerun_abandoned_jobs_once(outside, head, base_commit, watched)?)
+            }
+        };
+        match ci {
+            Some(ci) if !(self.consumed.contains(head) && ci.has_own_failures()) => Ok(ci),
+            _ => bail!(
+                "CI red on {} and the Repair found nothing to fix on the branch",
+                short(head)
+            ),
+        }
+    }
+
+    /// A refused or unseen Abandoned job re-run retains the original red
+    /// assessment. Its separate allowance is spent before the request, and
+    /// is never available after a Check re-run has been consumed.
+    fn rerun_abandoned_jobs_once(
+        &mut self,
+        outside: &mut impl Outside,
+        head: &str,
+        base_commit: Option<&str>,
+        ci: Ci,
+    ) -> Result<Ci> {
+        let Ci::Failed(failed) = &ci else {
+            return Ok(ci);
+        };
+        if !failed.own_failures_all_abandoned()
+            || self.consumed.contains(head)
+            || !self.abandoned_jobs_rerun.insert(head.to_string())
+        {
+            return Ok(ci);
+        }
+        Ok(rerun_abandoned_through(outside, head, base_commit, failed)?.unwrap_or(ci))
+    }
 }
 
 /// What the CI watch reads of GitHub and asks of it, how it waits, and
@@ -240,7 +276,7 @@ fn read_checks(outside: &mut impl Outside, sha: &str) -> Result<Vec<Check>> {
     unreachable!("the third attempt returns success or exhaustion")
 }
 
-/// [`watch`], through `outside`.
+/// Wait for checks to appear, then observe them to completion.
 fn watch_through(outside: &mut impl Outside, sha: &str, base_commit: Option<&str>) -> Result<Ci> {
     let (grace, deadline) = outside.start_grace();
     let short = short(sha);
@@ -260,7 +296,9 @@ fn watch_through(outside: &mut impl Outside, sha: &str, base_commit: Option<&str
     watch_to_end(outside, sha, base_commit, None)
 }
 
-/// [`rerun`], through `outside`.
+/// Request the Check re-run, observing fresh checks even after refusal.
+/// Successful requests require new attempts; non-Actions checks or unseen
+/// attempts return `None`, and read errors cannot establish green CI.
 fn rerun_through(
     outside: &mut impl Outside,
     sha: &str,
@@ -287,7 +325,8 @@ fn rerun_through(
     watch_new_attempts(outside, sha, base_commit, &rerun_checks)
 }
 
-/// [`rerun_abandoned`], through `outside`.
+/// Request the Abandoned job re-run with the Check re-run's attempt guard,
+/// returning `None` after any refusal or if no new attempt appears.
 fn rerun_abandoned_through(
     outside: &mut impl Outside,
     sha: &str,
@@ -813,6 +852,251 @@ mod tests {
 
     const HEAD: &str = "abcdef0123456789";
     const BASE: &str = "0123456789abcdef";
+
+    #[test]
+    fn assessment_re_runs_an_unchanged_ci_fix_head_from_a_new_attempt() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let mut watch = Watch::new(&issue);
+        let old = job(red("test"), 1, 900);
+        let new = job(green("test"), 2, 900);
+        let mut github = InMemory::new().listing(
+            HEAD,
+            vec![vec![old.clone()], vec![old.clone()], vec![old], vec![new]],
+        );
+
+        let failed = failed_of(watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap());
+        assert!(github.reruns.is_empty());
+        watch.after_repair(HEAD.to_string(), failed);
+
+        assert!(matches!(
+            watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap(),
+            Ci::Passed
+        ));
+        assert_eq!(github.reruns, [900]);
+        assert_eq!(github.reads_of(HEAD), 5);
+    }
+
+    #[test]
+    fn a_consumed_head_is_reassessed_against_the_current_base_after_another_head() {
+        for outcome in ["own", "green", "inherited"] {
+            let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+            let mut watch = Watch::new(&issue);
+            let old = job(red("test"), 1, 900);
+            let new = job(green("test"), 2, 900);
+            let revisited = if outcome == "green" {
+                new.clone()
+            } else {
+                job(red("test"), 3, 900)
+            };
+            let mut github = InMemory::new()
+                .listing(
+                    HEAD,
+                    vec![
+                        vec![old.clone()],
+                        vec![old.clone()],
+                        vec![old],
+                        vec![new.clone()],
+                        vec![new],
+                        vec![revisited],
+                    ],
+                )
+                .listing("other-head", vec![vec![green("test")]])
+                .listing(BASE, vec![vec![green("test")]])
+                .listing(
+                    "current-base",
+                    vec![if outcome == "inherited" {
+                        vec![red("test")]
+                    } else {
+                        vec![green("test")]
+                    }],
+                )
+                // Even an Abandoned job cannot receive a re-run after consumption.
+                .job_run(3, abandoned_job_run());
+            let failed = failed_of(watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap());
+            watch.after_repair(HEAD.to_string(), failed);
+            assert!(matches!(
+                watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap(),
+                Ci::Passed
+            ));
+            assert!(matches!(
+                watch
+                    .assess_through(&mut github, "other-head", None)
+                    .unwrap(),
+                Ci::Passed
+            ));
+
+            let result = watch.assess_through(&mut github, HEAD, Some("current-base"));
+
+            match outcome {
+                "own" => assert_eq!(
+                    result.err().unwrap().to_string(),
+                    "CI red on abcdef0 and the Repair found nothing to fix on the branch"
+                ),
+                "green" => assert!(matches!(result.unwrap(), Ci::Passed)),
+                _ => {
+                    let failed = failed_of(result.unwrap());
+                    assert!(failed.own.is_empty());
+                    assert_eq!(listed(&failed.inherited), ["test: https://head/test"]);
+                    assert_eq!(listed(&failed.on_base), ["test: https://head/test"]);
+                }
+            }
+            assert_eq!(github.reruns, [900]);
+            assert_eq!(github.reads_of(HEAD), 7);
+            assert_eq!(
+                github.reads_of("current-base"),
+                usize::from(outcome != "green")
+            );
+        }
+    }
+
+    #[test]
+    fn distinct_full_heads_with_one_short_prefix_each_get_both_allowances_in_each_delivery() {
+        let first = "0123456789abcdef0123456789abcdef00000001";
+        let second = "0123456789abcdef0123456789abcdef00000002";
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        for _delivery in 0..2 {
+            let mut watch = Watch::new(&issue);
+            let mut github = InMemory::new();
+            for (head, workflow) in [(first, 900), (second, 901)] {
+                let old = job(red("wsl"), 1, workflow);
+                let red_again = job(red("wsl"), 2, workflow);
+                let passed = job(green("wsl"), 3, workflow);
+                github = github
+                    .listing(
+                        head,
+                        vec![
+                            vec![old.clone()],
+                            vec![old.clone()],
+                            vec![old],
+                            vec![red_again.clone()],
+                            vec![red_again.clone()],
+                            vec![red_again],
+                            vec![passed],
+                        ],
+                    )
+                    .job_run(1, abandoned_job_run())
+                    .job_run(2, abandoned_job_run());
+
+                let failed = failed_of(watch.assess_through(&mut github, head, None).unwrap());
+                assert_eq!(failed.own[0].job.unwrap().check_run, 2);
+                watch.after_repair(head.to_string(), failed);
+                assert!(matches!(
+                    watch.assess_through(&mut github, head, None).unwrap(),
+                    Ci::Passed
+                ));
+            }
+            assert_eq!(github.reruns, [900, 900, 901, 901]);
+        }
+    }
+
+    #[test]
+    fn a_changed_full_head_discards_the_pending_repair_without_consuming_either_heads_check_rerun()
+    {
+        let first = "0123456789abcdef0123456789abcdef00000001";
+        let second = "0123456789abcdef0123456789abcdef00000002";
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let mut watch = Watch::new(&issue);
+        let mut github = InMemory::new()
+            .listing(first, vec![vec![job(red("test"), 1, 900)]])
+            .listing(second, vec![vec![job(red("lint"), 2, 901)]]);
+        let failed = failed_of(watch.assess_through(&mut github, first, None).unwrap());
+        watch.after_repair(first.to_string(), failed);
+
+        let failed = failed_of(watch.assess_through(&mut github, second, None).unwrap());
+        assert_eq!(listed(&failed.own), ["lint: https://head/lint"]);
+        // Returning to the old head must not use the now stale Repair fact.
+        let failed = failed_of(watch.assess_through(&mut github, first, None).unwrap());
+        assert_eq!(listed(&failed.own), ["test: https://head/test"]);
+        assert!(github.reruns.is_empty());
+    }
+
+    #[test]
+    fn both_allowances_are_consumed_before_request_preparation_can_fail() {
+        for abandoned in [false, true] {
+            let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+            let mut watch = Watch::new(&issue);
+            let old = job(red("wsl"), 1, 900);
+            let mut github = InMemory::new()
+                .listing(HEAD, vec![vec![old.clone()]])
+                .error_on(HEAD, 3, "cannot read checks before request");
+            if abandoned {
+                github = github.job_run(1, abandoned_job_run());
+            } else {
+                let failed = failed_of(watch.assess_through(&mut github, HEAD, None).unwrap());
+                watch.after_repair(HEAD.to_string(), failed);
+            }
+            let error = watch.assess_through(&mut github, HEAD, None).err().unwrap();
+            assert_eq!(error.to_string(), "cannot read checks before request");
+            assert!(github.reruns.is_empty());
+
+            let mut github = InMemory::new()
+                .listing(HEAD, vec![vec![old]])
+                .job_run(1, abandoned_job_run());
+            let result = watch.assess_through(&mut github, HEAD, None);
+            if abandoned {
+                assert_eq!(
+                    listed(&failed_of(result.unwrap()).own),
+                    ["wsl: https://head/wsl"]
+                );
+            } else {
+                assert_eq!(
+                    result.err().unwrap().to_string(),
+                    "CI red on abcdef0 and the Repair found nothing to fix on the branch"
+                );
+            }
+            assert!(github.reruns.is_empty());
+        }
+    }
+
+    #[test]
+    fn check_rerun_red_or_impossible_declines_but_inherited_only_does_not() {
+        for outcome in ["own", "non-actions", "missing", "inherited"] {
+            let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+            let mut watch = Watch::new(&issue);
+            let old = if outcome == "non-actions" {
+                red("test")
+            } else {
+                job(red("test"), 1, 900)
+            };
+            let new = if outcome == "missing" {
+                old.clone()
+            } else {
+                job(red("test"), 2, 900)
+            };
+            let mut github = InMemory::new()
+                .listing(
+                    HEAD,
+                    vec![vec![old.clone()], vec![old.clone()], vec![old], vec![new]],
+                )
+                .listing(
+                    BASE,
+                    vec![
+                        vec![],
+                        if outcome == "inherited" {
+                            vec![red("test")]
+                        } else {
+                            vec![]
+                        },
+                    ],
+                );
+            let failed = failed_of(watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap());
+            watch.after_repair(HEAD.to_string(), failed);
+
+            let result = watch.assess_through(&mut github, HEAD, Some(BASE));
+
+            if outcome == "inherited" {
+                let failed = failed_of(result.unwrap());
+                assert!(failed.own.is_empty());
+                assert_eq!(listed(&failed.inherited), ["test: https://head/test"]);
+            } else {
+                assert_eq!(
+                    result.err().unwrap().to_string(),
+                    "CI red on abcdef0 and the Repair found nothing to fix on the branch"
+                );
+            }
+            assert_eq!(github.reruns.len(), usize::from(outcome != "non-actions"));
+        }
+    }
 
     fn check(name: &str, conclusion: Conclusion, url: &str) -> Check {
         Check {
@@ -1910,83 +2194,149 @@ mod tests {
         );
     }
 
-    /// `check` as the Abandoned job whose check run is `check_run`, of the
-    /// workflow run `workflow_run`.
-    fn abandoned_job(check: Check, check_run: u64, workflow_run: u64) -> Check {
-        let mut check = job(check, check_run, workflow_run);
-        check.job.as_mut().unwrap().abandoned = true;
-        check
-    }
-
     #[test]
-    fn abandoned_jobs_are_re_run_and_watched_from_their_new_attempt() {
-        let old = abandoned_job(red("custom-release-smoke / wsl"), 1, 900);
-        let failed = FailedChecks {
-            own: vec![old.clone()],
-            inherited: vec![],
-            on_base: vec![],
-        };
+    fn assessment_re_runs_abandoned_jobs_from_new_attempts_and_remembers_a_revisited_head() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let mut watch = Watch::new(&issue);
+        let old = job(red("custom-release-smoke / wsl"), 1, 900);
         let new = job(green("custom-release-smoke / wsl"), 2, 900);
-        let mut github = InMemory::new().listing(
-            HEAD,
-            // GitHub lists the old attempt a moment after the request.
-            vec![vec![old.clone()], vec![old], vec![new]],
-        );
+        let mut github = InMemory::new()
+            .listing(
+                HEAD,
+                vec![
+                    vec![old.clone()],
+                    vec![old.clone()],
+                    vec![old.clone()],
+                    vec![old.clone()],
+                    vec![new.clone()],
+                    vec![new],
+                    vec![old],
+                ],
+            )
+            .listing("another-head", vec![vec![green("test")]])
+            .job_run(1, abandoned_job_run());
 
-        let ci = rerun_abandoned_through(&mut github, HEAD, Some(BASE), &failed).unwrap();
-
-        assert!(matches!(ci, Some(Ci::Passed)));
-        assert_eq!(github.reruns, [900]);
+        assert!(matches!(
+            watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap(),
+            Ci::Passed
+        ));
+        assert!(matches!(
+            watch
+                .assess_through(&mut github, "another-head", None)
+                .unwrap(),
+            Ci::Passed
+        ));
+        let failed = failed_of(watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap());
         assert_eq!(
-            github.steps,
-            [
-                "custom-release-smoke / wsl lost its runner on abcdef0; re-running it",
-                "CI passed on abcdef0",
-            ]
+            listed(&failed.own),
+            ["custom-release-smoke / wsl: https://head/custom-release-smoke / wsl"]
         );
+        assert_eq!(github.reruns, [900]);
+        assert!(github.steps.contains(
+            &"custom-release-smoke / wsl lost its runner on abcdef0; re-running it".to_string()
+        ));
     }
 
     #[test]
-    fn a_refused_or_unseen_re_run_of_abandoned_jobs_leaves_nothing_to_watch() {
-        let old = abandoned_job(red("wsl"), 1, 900);
-        let failed = FailedChecks {
-            own: vec![old.clone(), abandoned_job(red("mac"), 3, 901)],
-            inherited: vec![],
-            on_base: vec![],
-        };
+    fn a_refused_or_unseen_abandoned_rerun_retains_the_original_red_assessment() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        for refused in [false, true] {
+            let mut watch = Watch::new(&issue);
+            let old = vec![job(red("wsl"), 1, 900), job(red("mac"), 3, 901)];
+            let new = vec![job(green("wsl"), 2, 900), job(green("mac"), 4, 901)];
+            let mut github = InMemory::new()
+                .listing(
+                    HEAD,
+                    if refused {
+                        vec![old.clone(), old.clone(), old, new]
+                    } else {
+                        vec![old]
+                    },
+                )
+                .job_run(1, abandoned_job_run())
+                .job_run(3, abandoned_job_run());
+            if refused {
+                github = github.refusing(901);
+            }
+
+            let failed = failed_of(watch.assess_through(&mut github, HEAD, None).unwrap());
+
+            assert_eq!(
+                listed(&failed.own),
+                ["wsl: https://head/wsl", "mac: https://head/mac"]
+            );
+            assert_eq!(failed.own[0].job.unwrap().check_run, 1);
+            assert_eq!(github.reruns, [900, 901]);
+            if refused {
+                assert_eq!(
+                    github.reads_of(HEAD),
+                    3,
+                    "refusal must retain the original assessment despite green checks now being available"
+                );
+                assert!(matches!(
+                    watch.assess_through(&mut github, HEAD, None).unwrap(),
+                    Ci::Passed
+                ));
+            } else {
+                assert_eq!(
+                    github.steps.last().map(String::as_str),
+                    Some("no re-run appeared on abcdef0 within 60s")
+                );
+                assert_eq!(
+                    listed(&failed_of(watch.assess_through(&mut github, HEAD, None).unwrap()).own),
+                    ["wsl: https://head/wsl", "mac: https://head/mac"]
+                );
+            }
+            assert_eq!(github.reruns, [900, 901]);
+        }
+    }
+
+    #[test]
+    fn a_refused_check_rerun_uses_fresh_observations_after_a_completed_repair() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let mut watch = Watch::new(&issue);
+        let old = job(red("test"), 1, 900);
         let mut github = InMemory::new()
-            .listing(HEAD, vec![failed.own.clone()])
-            .refusing(901);
+            .listing(
+                HEAD,
+                vec![
+                    vec![old.clone()],
+                    vec![old.clone()],
+                    vec![old],
+                    vec![job(green("test"), 2, 900)],
+                ],
+            )
+            .refusing(900);
+        let failed = failed_of(watch.assess_through(&mut github, HEAD, None).unwrap());
+        watch.after_repair(HEAD.to_string(), failed);
 
-        let ci = rerun_abandoned_through(&mut github, HEAD, None, &failed).unwrap();
+        assert!(matches!(
+            watch.assess_through(&mut github, HEAD, None).unwrap(),
+            Ci::Passed
+        ));
+        assert_eq!(github.reruns, [900]);
+        assert_eq!(github.reads_of(HEAD), 4);
+    }
 
-        assert!(ci.is_none());
-        assert_eq!(github.reruns, [900, 901]);
-        assert_eq!(github.reads_of(HEAD), 1);
+    #[test]
+    fn mixed_own_failures_are_assessed_without_an_abandoned_job_rerun() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let mut watch = Watch::new(&issue);
+        let mut github = InMemory::new()
+            .listing(
+                HEAD,
+                vec![vec![job(red("wsl"), 1, 900), job(red("test"), 2, 901)]],
+            )
+            .job_run(1, abandoned_job_run());
+
+        let failed = failed_of(watch.assess_through(&mut github, HEAD, None).unwrap());
+
         assert_eq!(
-            github.steps,
-            [
-                "wsl, mac lost their runners on abcdef0; re-running them",
-                "the failed checks on abcdef0 were not re-run: \
-                 gh: HTTP 403: workflow run 901 cannot be re-run",
-            ]
+            listed(&failed.own),
+            ["wsl: https://head/wsl", "test: https://head/test"]
         );
-
-        let mut github = InMemory::new().listing(HEAD, vec![vec![old]]);
-        let failed = FailedChecks {
-            own: failed.own[..1].to_vec(),
-            inherited: vec![],
-            on_base: vec![],
-        };
-        assert!(
-            rerun_abandoned_through(&mut github, HEAD, None, &failed)
-                .unwrap()
-                .is_none()
-        );
-        assert_eq!(
-            github.steps.last().map(String::as_str),
-            Some("no re-run appeared on abcdef0 within 60s")
-        );
+        assert!(github.reruns.is_empty());
+        assert_eq!(github.job_reads, [1, 2]);
     }
 
     #[test]

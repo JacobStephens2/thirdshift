@@ -5,8 +5,6 @@
 //! Repair sessions, the Base fix and the pull request only through
 //! [`Outside`].
 
-use std::collections::HashSet;
-
 use anyhow::{Result, bail};
 
 use crate::pull_request::MergeAttempt;
@@ -68,25 +66,12 @@ pub(super) trait Outside {
     /// Foreign commits between them, without merging.
     fn new_commits_on_origin(&mut self) -> Result<ForeignCommits>;
 
-    /// Watch CI on `head`, comparing its failed checks with those on
-    /// `base_commit`, if given.
-    fn watch(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci>;
-    /// The Check re-run of `head`, after a CI-fix Repair given `failed` left
-    /// it unchanged: `None` if there is none to watch.
-    fn rerun(
-        &mut self,
-        head: &str,
-        base_commit: Option<&str>,
-        failed: &FailedChecks,
-    ) -> Result<Option<Ci>>;
-    /// The re-run of `head`'s Abandoned jobs, every one of the branch's own
-    /// failures in `failed`: `None` if it was refused or never appeared.
-    fn rerun_abandoned(
-        &mut self,
-        head: &str,
-        base_commit: Option<&str>,
-        failed: &FailedChecks,
-    ) -> Result<Option<Ci>>;
+    /// Assess CI on `head` against the selected Base commit, remembering
+    /// re-run allowances for this Delivery inside CI watch.
+    fn assess_ci(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci>;
+    /// Tell CI watch that the CI-fix Repair given these failures on this
+    /// full head completed, including its pull request postcheck.
+    fn ci_fix_completed(&mut self, head: String, failed: FailedChecks);
 
     /// Start the Repair session of `kind`, as in `Kind::Repair(1)`, for
     /// `repair`.
@@ -129,7 +114,6 @@ pub(super) fn take_to_goal(outside: &mut impl Outside, base: &str, goal: Goal) -
         base,
         goal,
         budgets: Budgets::default(),
-        check_reruns: CheckReruns::default(),
     };
     let mut watched = repair_loop.rounds()?;
     loop {
@@ -233,93 +217,12 @@ enum Round {
     NothingToFix,
 }
 
-/// Check re-run and Abandoned job re-run decisions for one complete
-/// Delivery, including rounds after a refused Self-merge. CI observation and
-/// attempt reconciliation stay with `Outside`; the pending Repair facts and
-/// the full head IDs whose allowances are consumed stay here.
-#[derive(Default)]
-struct CheckReruns {
-    handed_to_repair: Option<(String, FailedChecks)>,
-    /// The heads whose Check re-run allowance is consumed.
-    consumed: HashSet<String>,
-    /// The heads whose Abandoned jobs have had their one re-run.
-    abandoned_jobs_rerun: HashSet<String>,
-}
-
-impl CheckReruns {
-    /// Record the head and failed checks handed to a successfully completed
-    /// CI-fix Repair, before its effects are observed in the next round.
-    fn after_repair(&mut self, head: String, failed: FailedChecks) {
-        self.handed_to_repair = Some((head, failed));
-    }
-
-    /// Assess fresh CI against this round's selected Base commit. An
-    /// unchanged Repair head consumes its allowance before any re-run
-    /// request; any other head is watched, its Abandoned jobs re-run if
-    /// they are its only own failures. Later watches remain allowed, but own
-    /// failures on a consumed head decline the CI fix before another Repair
-    /// can start.
-    fn assess(
-        &mut self,
-        outside: &mut impl Outside,
-        head: &str,
-        compared_with: Option<&str>,
-    ) -> Result<Ci> {
-        let unchanged = self
-            .handed_to_repair
-            .take()
-            .filter(|(handed, _)| handed == head);
-        outside.stage(Stage::CiWatch);
-        let ci = match unchanged {
-            Some((_, failed)) if self.consumed.insert(head.to_string()) => {
-                outside.rerun(head, compared_with, &failed)?
-            }
-            _ => {
-                let watched = outside.watch(head, compared_with)?;
-                Some(self.rerun_abandoned_jobs_once(outside, head, compared_with, watched)?)
-            }
-        };
-        match ci {
-            Some(ci) if !(self.consumed.contains(head) && ci.has_own_failures()) => Ok(ci),
-            _ => bail!(
-                "CI red on {} and the Repair found nothing to fix on the branch",
-                ci::short(head)
-            ),
-        }
-    }
-
-    /// `ci`, a watch of `head`, or, if it is red only on Abandoned jobs of
-    /// the branch's own and `head` has had neither their re-run nor its
-    /// Check re-run, what their re-run came to. A refused or unseen re-run
-    /// leaves `ci` as it was.
-    fn rerun_abandoned_jobs_once(
-        &mut self,
-        outside: &mut impl Outside,
-        head: &str,
-        compared_with: Option<&str>,
-        ci: Ci,
-    ) -> Result<Ci> {
-        let Ci::Failed(failed) = &ci else {
-            return Ok(ci);
-        };
-        if !failed.own_failures_all_abandoned()
-            || self.consumed.contains(head)
-            || !self.abandoned_jobs_rerun.insert(head.to_string())
-        {
-            return Ok(ci);
-        }
-        let rerun = outside.rerun_abandoned(head, compared_with, failed)?;
-        Ok(rerun.unwrap_or(ci))
-    }
-}
-
 /// Keeps the PR mergeable and its CI green, within the Delivery's budgets.
 struct RepairLoop<'a, O> {
     outside: &'a mut O,
     base: &'a str,
     goal: Goal,
     budgets: Budgets,
-    check_reruns: CheckReruns,
 }
 
 impl<O: Outside> RepairLoop<'_, O> {
@@ -364,20 +267,10 @@ impl<O: Outside> RepairLoop<'_, O> {
     /// as a Base move, and otherwise once its Base fix has returned, or fails
     /// with the Base fix's cause. A Run that sees no Inherited failures
     /// compares with no Base branch commit.
-    /// A head whose own failures are all Abandoned jobs first has them
-    /// re-run, once per head for the complete Delivery, before any CI-fix
-    /// Repair; their re-run's CI is taken as from any watch, and a refused or
-    /// unseen re-run leaves the red CI first watched to its CI-fix Repair.
-    /// If, after a CI-fix Repair and the Base branch merged again, the head
-    /// is still the one whose CI failed, it gets its Check re-run instead of
-    /// a watch, once per head for the complete Delivery, whatever the Repair
-    /// concluded. CI then
-    /// green, or red only on Inherited failures, is taken as from any watch.
+    /// CI watch owns observation and re-run policy across all rounds. The
+    /// loop reports only successfully completed CI-fix Repairs to it.
     /// Returns the head commit whose CI was last watched and found green or
-    /// absent. Fails with a Declined CI fix if that Check re-run leaves a
-    /// check of the branch's own red, or there can be none. Later own failures
-    /// on that consumed head also decline, without another CI-fix Repair.
-    /// Fails once a Repair
+    /// absent. Fails if assessment reports a Declined CI fix, or a Repair
     /// beyond `MAX_REPAIRS`, or a round beyond `MAX_UPSTREAM_MOVES`, would be
     /// needed.
     fn rounds(&mut self) -> Result<String> {
@@ -402,9 +295,8 @@ impl<O: Outside> RepairLoop<'_, O> {
                 .outside
                 .sees_inherited_failures()
                 .then_some(base_commit.as_str());
-            let ci = self
-                .check_reruns
-                .assess(self.outside, &head, compared_with)?;
+            self.outside.stage(Stage::CiWatch);
+            let ci = self.outside.assess_ci(&head, compared_with)?;
             match ci {
                 Ci::Absent | Ci::Passed => {
                     if self.outside.base_branch_moved()? {
@@ -448,7 +340,7 @@ impl<O: Outside> RepairLoop<'_, O> {
                         continue;
                     }
                     self.repair("CI red", Repair::CiFix(&failed))?;
-                    self.check_reruns.after_repair(head, failed);
+                    self.outside.ci_fix_completed(head, failed);
                 }
             }
         }
@@ -516,7 +408,7 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
-    use crate::github::{ActionsJob, Check, Conclusion};
+    use crate::github::{Check, Conclusion};
 
     /// What the Repair loop did outside itself, in the order it did it.
     #[derive(Debug, Clone, PartialEq, Eq)]
@@ -529,11 +421,9 @@ mod tests {
         CheckMerged(&'static str),
         Push,
         /// Watched CI on this head, compared with this Base branch commit.
-        Watch(String, Option<String>),
-        /// Gave this head its Check re-run of these checks of its own.
-        Rerun(String, Option<String>, Vec<String>),
-        /// Re-ran these Abandoned jobs of this head's own.
-        RerunAbandoned(String, Option<String>, Vec<String>),
+        Assess(String, Option<String>),
+        /// Reported a completed CI-fix Repair of this full head.
+        CiFixCompleted(String, Vec<String>, Vec<String>),
         /// Started the Repair session of this kind for this Repair.
         Repair(Kind, Started),
         /// Took the Base fix for these Inherited failures, at this Base
@@ -567,9 +457,6 @@ mod tests {
         /// Red on these checks of the branch's own, and these Inherited
         /// failures.
         Failed(&'static [&'static str], &'static [&'static str]),
-        /// Red on these Abandoned jobs of the branch's own, and these other
-        /// checks of its own.
-        Abandoned(&'static [&'static str], &'static [&'static str]),
     }
 
     impl Is {
@@ -586,17 +473,6 @@ mod tests {
                     })
                     .collect()
             };
-            let abandoned = |names: &[&str]| -> Vec<Check> {
-                let mut checks = checks(names);
-                for check in &mut checks {
-                    check.job = Some(ActionsJob {
-                        check_run: 1,
-                        workflow_run: 900,
-                        abandoned: true,
-                    });
-                }
-                checks
-            };
             match self {
                 Is::Absent => Ci::Absent,
                 Is::Passed => Ci::Passed,
@@ -604,11 +480,6 @@ mod tests {
                     own: checks(own),
                     inherited: checks(inherited),
                     on_base: checks(inherited),
-                }),
-                Is::Abandoned(jobs, own) => Ci::Failed(FailedChecks {
-                    own: [abandoned(jobs), checks(own)].concat(),
-                    inherited: Vec::new(),
-                    on_base: Vec::new(),
                 }),
             }
         }
@@ -633,9 +504,8 @@ mod tests {
         /// mergeable.
         mergeable: VecDeque<bool>,
         new_commits: VecDeque<ForeignCommits>,
-        watches: VecDeque<Is>,
-        reruns: VecDeque<Option<Is>>,
-        abandoned_reruns: VecDeque<Option<Is>>,
+        assessments: VecDeque<Is>,
+        assessment_errors: VecDeque<Option<&'static str>>,
         /// For each Base fix, the cause it fails with, if it does.
         base_fixes: VecDeque<Option<&'static str>>,
         /// For each merge, the error it fails with, if it does.
@@ -644,7 +514,7 @@ mod tests {
         /// The error a merge of the Base branch fails with, if it does.
         base_merge_error: Option<&'static str>,
         /// The error a watch of CI fails with, if it does.
-        watch_error: Option<&'static str>,
+        assessment_error: Option<&'static str>,
         /// The error a Repair session fails with, if it does.
         repair_error: Option<&'static str>,
         sees_no_inherited_failures: bool,
@@ -755,48 +625,33 @@ mod tests {
                 .unwrap_or_else(|| ForeignCommits::fixture("h1", &[])))
         }
 
-        fn watch(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
+        fn assess_ci(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
+            assert_eq!(self.stages.last(), Some(&Stage::CiWatch));
             self.did
-                .push(Did::Watch(head.to_string(), base_commit.map(String::from)));
-            if let Some(error) = self.script.watch_error {
+                .push(Did::Assess(head.to_string(), base_commit.map(String::from)));
+            if let Some(error) = self
+                .script
+                .assessment_errors
+                .pop_front()
+                .flatten()
+                .or(self.script.assessment_error)
+            {
                 bail!(error);
             }
-            let is = self.script.watches.pop_front().expect("no watch scripted");
-            Ok(is.ci())
-        }
-
-        fn rerun(
-            &mut self,
-            head: &str,
-            base_commit: Option<&str>,
-            failed: &FailedChecks,
-        ) -> Result<Option<Ci>> {
-            self.did.push(Did::Rerun(
-                head.to_string(),
-                base_commit.map(String::from),
-                names(&failed.own),
-            ));
-            let is = self.script.reruns.pop_front().expect("no re-run scripted");
-            Ok(is.map(|is| is.ci()))
-        }
-
-        fn rerun_abandoned(
-            &mut self,
-            head: &str,
-            base_commit: Option<&str>,
-            failed: &FailedChecks,
-        ) -> Result<Option<Ci>> {
-            self.did.push(Did::RerunAbandoned(
-                head.to_string(),
-                base_commit.map(String::from),
-                names(&failed.own),
-            ));
-            let is = self
+            Ok(self
                 .script
-                .abandoned_reruns
+                .assessments
                 .pop_front()
-                .expect("no re-run of Abandoned jobs scripted");
-            Ok(is.map(|is| is.ci()))
+                .expect("no assessment scripted")
+                .ci())
+        }
+
+        fn ci_fix_completed(&mut self, head: String, failed: FailedChecks) {
+            self.did.push(Did::CiFixCompleted(
+                head,
+                names(&failed.own),
+                names(&failed.inherited),
+            ));
         }
 
         fn repair(&mut self, kind: Kind, repair: Repair) -> Result<()> {
@@ -896,8 +751,8 @@ mod tests {
     }
 
     /// A watch of CI on `head`, compared with the Base branch commit `b1`.
-    fn watch(head: &str) -> Did {
-        Did::Watch(head.to_string(), Some("b1".to_string()))
+    fn assessment(head: &str) -> Did {
+        Did::Assess(head.to_string(), Some("b1".to_string()))
     }
 
     /// The numbered Repair session `n` for `started`.
@@ -914,7 +769,7 @@ mod tests {
 
     /// A round from the merge of the Base branch to the watch of `head`.
     fn round(head: &str) -> [Did; 3] {
-        [Did::MergeBase, Did::Push, watch(head)]
+        [Did::MergeBase, Did::Push, assessment(head)]
     }
 
     /// The Self-merge of `head`, after the PR check.
@@ -936,22 +791,13 @@ mod tests {
             .collect()
     }
 
-    /// The Check re-run decisions observed through the adapter.
-    fn check_reruns(did: &[Did]) -> Vec<Did> {
-        did.iter()
-            .filter(|did| matches!(did, Did::Rerun(..)))
-            .cloned()
-            .collect()
-    }
-
-    /// The failures handed to CI-fix Repairs through the adapter.
-    fn ci_fix_repairs(did: &[Did]) -> Vec<Started> {
-        did.iter()
-            .filter_map(|did| match did {
-                Did::Repair(_, started @ Started::CiFix(..)) => Some(started.clone()),
-                _ => None,
-            })
-            .collect()
+    /// The completed CI-fix Repair notification with its original facts.
+    fn completed(head: &str, own: &[&str], inherited: &[&str]) -> Did {
+        Did::CiFixCompleted(
+            head.to_string(),
+            own.iter().map(|name| name.to_string()).collect(),
+            inherited.iter().map(|name| name.to_string()).collect(),
+        )
     }
 
     /// The cause `delivered` failed with, every context included.
@@ -966,7 +812,7 @@ mod tests {
                 Goal::Merged,
                 Script {
                     heads: script(["h1"]),
-                    watches: script([is]),
+                    assessments: script([is]),
                     merges: script([None]),
                     ..Script::default()
                 },
@@ -987,7 +833,7 @@ mod tests {
                     ForeignCommits::fixture("h1", &["f1"]),
                     ForeignCommits::fixture("h1", &["f1"]),
                 ]),
-                watches: script([Is::Passed]),
+                assessments: script([Is::Passed]),
                 ..Script::default()
             },
         );
@@ -1003,7 +849,7 @@ mod tests {
             Script {
                 heads: script(["h1"]),
                 base_conflicts: script([true]),
-                watches: script([Is::Passed]),
+                assessments: script([Is::Passed]),
                 ..Script::default()
             },
         );
@@ -1031,7 +877,7 @@ mod tests {
             Goal::ReadyForReview,
             Script {
                 heads: script(["h1", "h2"]),
-                watches: script([Is::Failed(&["test"], &["lint"]), Is::Passed]),
+                assessments: script([Is::Failed(&["test"], &["lint"]), Is::Passed]),
                 ..Script::default()
             },
         );
@@ -1045,6 +891,7 @@ mod tests {
                     line("Inherited failures (also failing on main at b1): lint"),
                     line("CI red; starting Repair 1 of 5"),
                     repair(1, ci_fix(&["test"], &["lint"])),
+                    completed("h1", &["test"], &["lint"]),
                 ],
                 &round("h2"),
                 &[Did::CheckPr],
@@ -1053,510 +900,158 @@ mod tests {
         );
     }
 
-    /// What the loop does up to the Check re-run of `h1`, after a CI-fix
-    /// Repair given its failed `test` left it unchanged.
-    fn up_to_the_rerun() -> Vec<Did> {
-        [
-            &round("h1")[..],
-            &[
-                line("CI red; starting Repair 1 of 5"),
-                repair(1, ci_fix(&["test"], &[])),
-                Did::MergeBase,
-                Did::Push,
-                Did::Rerun(
-                    "h1".to_string(),
-                    Some("b1".to_string()),
-                    vec!["test".to_string()],
-                ),
-            ],
-        ]
-        .concat()
-    }
-
     #[test]
-    fn an_unchanged_head_after_a_ci_fix_repair_gets_its_check_re_run_and_green_reaches_the_goal() {
-        let (delivered, did) = deliver(
-            Goal::Merged,
-            Script {
-                heads: script(["h1"]),
-                watches: script([Is::Failed(&["test"], &[])]),
-                reruns: script([Some(Is::Passed)]),
-                merges: script([None]),
-                ..Script::default()
-            },
-        );
-
-        delivered.unwrap();
-        assert_eq!(did, [up_to_the_rerun(), merge("h1").into()].concat());
-    }
-
-    #[test]
-    fn own_failures_after_a_refused_self_merge_do_not_refresh_a_heads_check_re_run() {
-        let (delivered, did) = deliver(
-            Goal::Merged,
-            Script {
-                heads: script(["h1"]),
-                base_commits: script(["b1", "b2", "rewound-base"]),
-                watches: script([Is::Failed(&["test"], &[]), Is::Failed(&["test"], &[])]),
-                reruns: script([Some(Is::Passed), Some(Is::Passed)]),
-                merges: script([Some("refused"), None]),
-                ..Script::default()
-            },
-        );
-
-        assert_eq!(
-            check_reruns(&did).len(),
-            1,
-            "a refused Self-merge must not grant another Check re-run: {did:?}"
-        );
-        assert_eq!(ci_fix_repairs(&did).len(), 1);
-        let error = delivered.unwrap_err();
-        assert!(!error.is::<PolicyRefusal>(), "{error:#}");
-        assert_eq!(
-            error.to_string(),
-            "CI red on h1 and the Repair found nothing to fix on the branch"
-        );
-        assert!(did.contains(&Did::Rerun(
-            "h1".to_string(),
-            Some("b2".to_string()),
-            vec!["test".to_string()]
-        )));
-        assert!(did.contains(&Did::Watch(
-            "h1".to_string(),
-            Some("rewound-base".to_string())
-        )));
-        assert_eq!(
-            did.iter()
-                .filter(|did| matches!(did, Did::Merge(_)))
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn own_failures_after_an_inherited_only_re_run_and_base_fix_decline_without_another_repair() {
+    fn assessment_after_a_ci_fix_waits_for_a_successful_base_merge_despite_conflict_repairs() {
         let (delivered, did) = deliver(
             Goal::ReadyForReview,
             Script {
-                heads: script(["h1"]),
-                base_commits: script(["b1", "b2", "b3"]),
-                watches: script([Is::Failed(&["test"], &[]), Is::Failed(&["test"], &[])]),
-                reruns: script([Some(Is::Failed(&[], &["lint"]))]),
+                heads: script(["full-head-before-repair", "full-head-after-conflict"]),
+                base_commits: script(["b1", "selected-after-conflict"]),
+                base_conflicts: script([false, true, false]),
+                assessments: script([Is::Failed(&["test"], &[]), Is::Passed]),
                 ..Script::default()
             },
         );
-
-        assert_eq!(
-            cause(delivered),
-            "CI red on h1 and the Repair found nothing to fix on the branch"
-        );
-        assert_eq!(check_reruns(&did).len(), 1);
-        assert_eq!(ci_fix_repairs(&did).len(), 1);
-        assert!(did.contains(&Did::Rerun(
-            "h1".to_string(),
-            Some("b2".to_string()),
-            vec!["test".to_string()]
-        )));
-        assert!(did.contains(&Did::BaseFix("b2".to_string(), vec!["lint".to_string()])));
-        assert!(did.contains(&Did::Watch("h1".to_string(), Some("b3".to_string()))));
-        assert!(!did.contains(&Did::CheckPr));
-    }
-
-    #[test]
-    fn an_upstream_move_with_an_unchanged_head_does_not_refresh_its_check_re_run() {
-        let (delivered, did) = deliver(
-            Goal::ReadyForReview,
-            Script {
-                heads: script(["h1"]),
-                base_commits: script(["b1", "b2", "b3"]),
-                base_moved: script([true]),
-                // The PR conflicts with the moved Base branch.
-                mergeable: script([false]),
-                watches: script([Is::Failed(&["test"], &[]), Is::Failed(&["test"], &[])]),
-                reruns: script([Some(Is::Passed)]),
-                ..Script::default()
-            },
-        );
-
-        assert_eq!(
-            cause(delivered),
-            "CI red on h1 and the Repair found nothing to fix on the branch"
-        );
-        assert_eq!(check_reruns(&did).len(), 1);
-        assert_eq!(ci_fix_repairs(&did).len(), 1);
-        assert!(did.contains(&Did::Rerun(
-            "h1".to_string(),
-            Some("b2".to_string()),
-            vec!["test".to_string()]
-        )));
-        assert!(did.contains(&Did::Watch("h1".to_string(), Some("b3".to_string()))));
-        assert!(lines(&did).contains(&"origin/main moved while CI ran; merging it again"));
-        assert!(!did.contains(&Did::CheckPr));
-    }
-
-    #[test]
-    fn returning_to_a_consumed_head_after_visiting_another_head_declines_its_own_failures() {
-        let (delivered, did) = deliver(
-            Goal::ReadyForReview,
-            Script {
-                heads: script(["h1", "h1", "h2", "h1"]),
-                base_commits: script(["b1", "b2", "b3", "b4"]),
-                base_moved: script([true, false]),
-                // The PR conflicts with the moved Base branch.
-                mergeable: script([false]),
-                watches: script([
-                    Is::Failed(&["test"], &[]),
-                    Is::Failed(&[], &["lint"]),
-                    Is::Failed(&["test"], &[]),
-                ]),
-                reruns: script([Some(Is::Passed)]),
-                ..Script::default()
-            },
-        );
-
-        assert_eq!(
-            cause(delivered),
-            "CI red on h1 and the Repair found nothing to fix on the branch"
-        );
-        assert_eq!(check_reruns(&did).len(), 1);
-        assert_eq!(ci_fix_repairs(&did).len(), 1);
-        assert!(did.contains(&Did::Rerun(
-            "h1".to_string(),
-            Some("b2".to_string()),
-            vec!["test".to_string()]
-        )));
-        assert!(did.contains(&Did::Watch("h2".to_string(), Some("b3".to_string()))));
-        assert!(did.contains(&Did::BaseFix("b3".to_string(), vec!["lint".to_string()])));
-        assert!(did.contains(&Did::Watch("h1".to_string(), Some("b4".to_string()))));
-        assert!(!did.contains(&Did::CheckPr));
-    }
-
-    #[test]
-    fn distinct_full_heads_with_the_same_short_display_each_get_one_check_re_run() {
-        let first = "0123456789abcdef0123456789abcdef00000001";
-        let second = "0123456789abcdef0123456789abcdef00000002";
-        let (delivered, did) = deliver(
-            Goal::ReadyForReview,
-            Script {
-                heads: script([first, first, second, second]),
-                base_commits: script(["b1", "b2", "b3", "b4"]),
-                base_moved: script([true, false]),
-                // The PR conflicts with the moved Base branch.
-                mergeable: script([false]),
-                watches: script([Is::Failed(&["test"], &[]), Is::Failed(&["lint"], &[])]),
-                reruns: script([Some(Is::Passed), Some(Is::Passed)]),
-                ..Script::default()
-            },
-        );
-
-        delivered.unwrap();
-        assert_eq!(
-            check_reruns(&did),
-            [
-                Did::Rerun(
-                    first.to_string(),
-                    Some("b2".to_string()),
-                    vec!["test".to_string()]
-                ),
-                Did::Rerun(
-                    second.to_string(),
-                    Some("b4".to_string()),
-                    vec!["lint".to_string()]
-                ),
-            ]
-        );
-        assert_eq!(
-            ci_fix_repairs(&did),
-            [ci_fix(&["test"], &[]), ci_fix(&["lint"], &[])]
-        );
-        assert!(did.contains(&Did::Watch(first.to_string(), Some("b1".to_string()))));
-        assert!(did.contains(&Did::Watch(second.to_string(), Some("b3".to_string()))));
-        assert!(did.contains(&Did::CheckPr));
-    }
-
-    #[test]
-    fn a_repair_advancing_the_full_head_with_the_same_short_display_gets_an_ordinary_watch() {
-        let first = "0123456789abcdef0123456789abcdef00000001";
-        let second = "0123456789abcdef0123456789abcdef00000002";
-        let (delivered, did) = deliver(
-            Goal::ReadyForReview,
-            Script {
-                heads: script([first, second]),
-                base_commits: script(["b1", "b2"]),
-                watches: script([Is::Failed(&["test"], &[]), Is::Passed]),
-                ..Script::default()
-            },
-        );
-
-        delivered.unwrap();
-        assert!(!did.iter().any(|did| matches!(did, Did::Rerun(..))));
-        assert_eq!(ci_fix_repairs(&did).len(), 1);
-        assert!(did.contains(&Did::Watch(first.to_string(), Some("b1".to_string()))));
-        assert!(did.contains(&Did::Watch(second.to_string(), Some("b2".to_string()))));
-    }
-
-    #[test]
-    fn an_inherited_only_watch_on_a_consumed_head_still_takes_a_base_fix_and_watches_afresh() {
-        let (delivered, did) = deliver(
-            Goal::ReadyForReview,
-            Script {
-                heads: script(["h1"]),
-                base_commits: script(["b1", "b2", "rewound-base", "b3"]),
-                base_moved: script([true, false]),
-                // The PR conflicts with the moved Base branch.
-                mergeable: script([false]),
-                watches: script([
-                    Is::Failed(&["test"], &[]),
-                    Is::Failed(&[], &["lint"]),
-                    Is::Passed,
-                ]),
-                reruns: script([Some(Is::Passed)]),
-                ..Script::default()
-            },
-        );
-
-        delivered.unwrap();
-        assert_eq!(check_reruns(&did).len(), 1);
-        assert_eq!(ci_fix_repairs(&did).len(), 1);
-        assert!(did.contains(&Did::Watch(
-            "h1".to_string(),
-            Some("rewound-base".to_string())
-        )));
-        assert!(did.contains(&Did::BaseFix(
-            "rewound-base".to_string(),
-            vec!["lint".to_string()]
-        )));
-        assert!(did.contains(&Did::Watch("h1".to_string(), Some("b3".to_string()))));
-    }
-
-    #[test]
-    fn separately_started_deliveries_have_fresh_allowances_for_the_same_head() {
-        for _ in 0..2 {
-            let (delivered, did) = deliver(
-                Goal::ReadyForReview,
-                Script {
-                    heads: script(["h1"]),
-                    watches: script([Is::Failed(&["test"], &[])]),
-                    reruns: script([Some(Is::Passed)]),
-                    ..Script::default()
-                },
-            );
-
-            delivered.unwrap();
-            assert_eq!(check_reruns(&did).len(), 1);
-            assert_eq!(ci_fix_repairs(&did).len(), 1);
-            assert!(did.contains(&Did::Rerun(
-                "h1".to_string(),
-                Some("b1".to_string()),
-                vec!["test".to_string()]
-            )));
-        }
-    }
-
-    #[test]
-    fn watch_and_check_re_run_use_the_commit_returned_by_their_base_merge() {
-        for rerun_base in ["sampled-base", "rewound-base"] {
-            let (delivered, did) = deliver(
-                Goal::ReadyForReview,
-                Script {
-                    heads: script(["unchanged-head"]),
-                    base_commits: script(["sampled-base", rerun_base]),
-                    watches: script([Is::Failed(&["test"], &[])]),
-                    reruns: script([Some(Is::Passed)]),
-                    ..Script::default()
-                },
-            );
-
-            delivered.unwrap();
-            assert!(did.contains(&Did::Watch(
-                "unchanged-head".to_string(),
-                Some("sampled-base".to_string())
-            )));
-            assert!(did.contains(&Did::Rerun(
-                "unchanged-head".to_string(),
-                Some(rerun_base.to_string()),
-                vec!["test".to_string()]
-            )));
-        }
-    }
-
-    #[test]
-    fn a_check_re_run_red_only_on_inherited_failures_is_taken_as_from_any_watch() {
-        let (delivered, did) = deliver(
-            Goal::ReadyForReview,
-            Script {
-                heads: script(["h1"]),
-                watches: script([Is::Failed(&["test"], &[]), Is::Passed]),
-                reruns: script([Some(Is::Failed(&[], &["lint"]))]),
-                ..Script::default()
-            },
-        );
-
         delivered.unwrap();
         assert_eq!(
             did,
             [
-                up_to_the_rerun(),
+                round("full-head-before-repair").to_vec(),
                 vec![
-                    line("Inherited failures (also failing on main at b1): lint"),
-                    Did::BaseFix("b1".to_string(), vec!["lint".to_string()]),
-                ],
-                round("h1").into(),
-                vec![Did::CheckPr],
+                    line("CI red; starting Repair 1 of 5"),
+                    repair(1, ci_fix(&["test"], &[])),
+                    completed("full-head-before-repair", &["test"], &[]),
+                    Did::MergeBase,
+                    line("conflict; starting Repair 2 of 5"),
+                    repair(2, Started::Conflict(Upstream::BaseBranch)),
+                    Did::CheckMerged("origin/main"),
+                    Did::MergeBase,
+                    Did::Push,
+                    Did::Assess(
+                        "full-head-after-conflict".to_string(),
+                        Some("selected-after-conflict".to_string())
+                    ),
+                    Did::CheckPr,
+                ]
             ]
             .concat()
         );
     }
 
     #[test]
-    fn a_check_re_run_red_on_its_own_checks_or_impossible_is_a_declined_ci_fix() {
-        for rerun in [Some(Is::Failed(&["test"], &[])), None] {
-            let (delivered, did) = deliver(
-                Goal::Merged,
-                Script {
-                    heads: script(["h1"]),
-                    watches: script([Is::Failed(&["test"], &[])]),
-                    reruns: script([rerun]),
-                    ..Script::default()
-                },
-            );
-
-            assert_eq!(
-                cause(delivered),
-                "CI red on h1 and the Repair found nothing to fix on the branch"
-            );
-            assert_eq!(did, up_to_the_rerun());
-        }
-    }
-
-    /// The re-run of `h1`'s Abandoned job `wsl`, compared with `b1`.
-    fn rerun_abandoned_wsl() -> Did {
-        Did::RerunAbandoned(
-            "h1".to_string(),
-            Some("b1".to_string()),
-            vec!["wsl".to_string()],
-        )
-    }
-
-    #[test]
-    fn an_abandoned_job_alone_is_re_run_with_no_repair_and_green_reaches_the_goal() {
-        let (delivered, did) = deliver(
-            Goal::Merged,
+    fn a_failed_ci_fix_never_notifies_ci_watch() {
+        let (delivered, did, stages) = deliver_with_stages(
+            Goal::ReadyForReview,
             Script {
                 heads: script(["h1"]),
-                watches: script([Is::Abandoned(&["wsl"], &[])]),
-                abandoned_reruns: script([Some(Is::Passed)]),
-                merges: script([None]),
+                assessments: script([Is::Failed(&["test"], &[])]),
+                repair_error: Some("CI-fix session or PR postcheck failed"),
                 ..Script::default()
             },
         );
-
-        delivered.unwrap();
+        assert_eq!(cause(delivered), "CI-fix session or PR postcheck failed");
         assert_eq!(
             did,
-            [&round("h1")[..], &[rerun_abandoned_wsl()], &merge("h1"),].concat()
+            [
+                round("h1").to_vec(),
+                vec![
+                    line("CI red; starting Repair 1 of 5"),
+                    repair(1, ci_fix(&["test"], &[]))
+                ]
+            ]
+            .concat()
         );
+        assert_eq!(stages.last(), Some(&Stage::RepairSession));
     }
 
     #[test]
-    fn an_abandoned_job_abandoned_again_or_not_re_run_gets_the_ci_fix_repair_then_its_check_re_run()
-    {
-        for rerun in [Some(Is::Abandoned(&["wsl"], &[])), None] {
+    fn a_declined_ci_fix_from_assessment_stops_in_ci_watch_without_another_repair() {
+        let (delivered, did, stages) = deliver_with_stages(
+            Goal::ReadyForReview,
+            Script {
+                heads: script(["h1"]),
+                assessments: script([Is::Failed(&["test"], &[])]),
+                assessment_errors: script([
+                    None,
+                    Some("CI red on h1 and the Repair found nothing to fix on the branch"),
+                ]),
+                ..Script::default()
+            },
+        );
+        assert_eq!(
+            cause(delivered),
+            "CI red on h1 and the Repair found nothing to fix on the branch"
+        );
+        assert_eq!(
+            did,
+            [
+                round("h1").to_vec(),
+                vec![
+                    line("CI red; starting Repair 1 of 5"),
+                    repair(1, ci_fix(&["test"], &[])),
+                    completed("h1", &["test"], &[])
+                ],
+                round("h1").to_vec()
+            ]
+            .concat()
+        );
+        assert_eq!(stages.last(), Some(&Stage::CiWatch));
+    }
+
+    #[test]
+    fn each_assessment_uses_the_commit_returned_by_its_base_merge() {
+        for next_base in ["sampled-base", "rewound-base"] {
             let (delivered, did) = deliver(
-                Goal::Merged,
+                Goal::ReadyForReview,
                 Script {
                     heads: script(["h1"]),
-                    watches: script([Is::Abandoned(&["wsl"], &[])]),
-                    abandoned_reruns: script([rerun]),
-                    reruns: script([Some(Is::Passed)]),
-                    merges: script([None]),
+                    base_commits: script(["sampled-base", next_base]),
+                    assessments: script([Is::Failed(&["test"], &[]), Is::Passed]),
                     ..Script::default()
                 },
             );
-
             delivered.unwrap();
+            let assessments: Vec<_> = did
+                .iter()
+                .filter(|did| matches!(did, Did::Assess(..)))
+                .cloned()
+                .collect();
             assert_eq!(
-                did,
+                assessments,
                 [
-                    &round("h1")[..],
-                    &[
-                        rerun_abandoned_wsl(),
-                        line("CI red; starting Repair 1 of 5"),
-                        repair(1, ci_fix(&["wsl"], &[])),
-                        Did::MergeBase,
-                        Did::Push,
-                        Did::Rerun(
-                            "h1".to_string(),
-                            Some("b1".to_string()),
-                            vec!["wsl".to_string()],
-                        ),
-                    ],
-                    &merge("h1"),
+                    Did::Assess("h1".to_string(), Some("sampled-base".to_string())),
+                    Did::Assess("h1".to_string(), Some(next_base.to_string()))
                 ]
-                .concat()
             );
         }
     }
 
     #[test]
-    fn a_head_whose_abandoned_jobs_were_re_run_gets_no_second_re_run_after_a_refused_merge() {
+    fn a_refused_self_merge_reassesses_ci_before_another_repair() {
         let (delivered, did) = deliver(
             Goal::Merged,
             Script {
                 heads: script(["h1", "h1", "h2"]),
-                watches: script([
-                    Is::Abandoned(&["wsl"], &[]),
-                    Is::Abandoned(&["wsl"], &[]),
-                    Is::Passed,
-                ]),
-                abandoned_reruns: script([Some(Is::Passed)]),
+                assessments: script([Is::Passed, Is::Failed(&["test"], &[]), Is::Passed]),
                 merges: script([Some("merge refused"), None]),
                 ..Script::default()
             },
         );
-
         delivered.unwrap();
         assert_eq!(
             did,
             [
-                &round("h1")[..],
-                &[rerun_abandoned_wsl()],
-                &merge("h1"),
-                &[line("the merge failed: merge refused")],
-                &round("h1"),
-                &[
+                round("h1").to_vec(),
+                merge("h1").to_vec(),
+                vec![line("the merge failed: merge refused")],
+                round("h1").to_vec(),
+                vec![
                     line("CI red; starting Repair 1 of 5"),
-                    repair(1, ci_fix(&["wsl"], &[])),
+                    repair(1, ci_fix(&["test"], &[])),
+                    completed("h1", &["test"], &[])
                 ],
-                &round("h2"),
-                &merge("h2"),
-            ]
-            .concat()
-        );
-    }
-
-    #[test]
-    fn abandoned_jobs_beside_ordinary_own_failures_get_the_ci_fix_repair_as_any_red_ci() {
-        let (delivered, did) = deliver(
-            Goal::ReadyForReview,
-            Script {
-                heads: script(["h1", "h2"]),
-                watches: script([Is::Abandoned(&["wsl"], &["test"]), Is::Passed]),
-                ..Script::default()
-            },
-        );
-
-        delivered.unwrap();
-        assert_eq!(
-            did,
-            [
-                &round("h1")[..],
-                &[
-                    line("CI red; starting Repair 1 of 5"),
-                    repair(1, ci_fix(&["wsl", "test"], &[])),
-                ],
-                &round("h2"),
-                &[Did::CheckPr],
+                round("h2").to_vec(),
+                merge("h2").to_vec()
             ]
             .concat()
         );
@@ -1582,7 +1077,7 @@ mod tests {
                 heads: script(["h1", "h2"]),
                 base_commits: script(["b1", "b2"]),
                 base_moved: script([true]),
-                watches: script([Is::Failed(&[], &["test"]), Is::Passed]),
+                assessments: script([Is::Failed(&[], &["test"]), Is::Passed]),
                 ..Script::default()
             },
         );
@@ -1596,7 +1091,7 @@ mod tests {
                     line("origin/main moved while CI ran; merging it again"),
                     Did::MergeBase,
                     Did::Push,
-                    Did::Watch("h2".to_string(), Some("b2".to_string())),
+                    Did::Assess("h2".to_string(), Some("b2".to_string())),
                     Did::CheckPr,
                 ],
             ]
@@ -1610,7 +1105,7 @@ mod tests {
             Goal::ReadyForReview,
             Script {
                 heads: script(["h1"]),
-                watches: script([Is::Failed(&[], &["test"]), Is::Passed]),
+                assessments: script([Is::Failed(&[], &["test"]), Is::Passed]),
                 ..Script::default()
             },
         );
@@ -1635,7 +1130,7 @@ mod tests {
             Goal::Merged,
             Script {
                 heads: script(["h1"]),
-                watches: script([Is::Failed(&[], &["test"])]),
+                assessments: script([Is::Failed(&[], &["test"])]),
                 base_fixes: script([Some(fails)]),
                 ..Script::default()
             },
@@ -1653,12 +1148,12 @@ mod tests {
     }
 
     #[test]
-    fn a_run_that_sees_no_inherited_failures_watches_ci_with_no_base_branch_commit() {
+    fn a_run_that_sees_no_inherited_failures_assesses_ci_with_no_base_branch_commit() {
         let (delivered, did) = deliver(
             Goal::ReadyForReview,
             Script {
                 heads: script(["h1"]),
-                watches: script([Is::Passed]),
+                assessments: script([Is::Passed]),
                 sees_no_inherited_failures: true,
                 ..Script::default()
             },
@@ -1670,7 +1165,7 @@ mod tests {
             [
                 Did::MergeBase,
                 Did::Push,
-                Did::Watch("h1".to_string(), None),
+                Did::Assess("h1".to_string(), None),
                 Did::CheckPr
             ]
         );
@@ -1683,7 +1178,7 @@ mod tests {
             Script {
                 heads: script(["h1", "h2"]),
                 base_moved: script([true]),
-                watches: script([Is::Passed, Is::Passed]),
+                assessments: script([Is::Passed, Is::Passed]),
                 merges: script([None]),
                 ..Script::default()
             },
@@ -1710,7 +1205,7 @@ mod tests {
                 Script {
                     heads: script(["h1234567890", "h2"]),
                     base_moved: script([true]),
-                    watches: script([is]),
+                    assessments: script([is]),
                     ..Script::default()
                 },
             );
@@ -1719,7 +1214,7 @@ mod tests {
             assert_eq!(
                 did,
                 [
-                    &[Did::MergeBase, Did::Push, watch("h1234567890")][..],
+                    &[Did::MergeBase, Did::Push, assessment("h1234567890")][..],
                     &[
                         Did::ReadMergeable,
                         line(
@@ -1743,7 +1238,7 @@ mod tests {
                 base_moved: script([true]),
                 base_conflicts: script([false, true]),
                 mergeable: script([false]),
-                watches: script([Is::Passed, Is::Passed]),
+                assessments: script([Is::Passed, Is::Passed]),
                 ..Script::default()
             },
         );
@@ -1793,7 +1288,7 @@ mod tests {
                         ForeignCommits::fixture(&format!("h{}", n - 1), &[&format!("f{n}")])
                     })),
                     tree_matches: script([Ok(true), Ok(true), Ok(true), Ok(true), Ok(false)]),
-                    watches: script([Is::Passed]),
+                    assessments: script([Is::Passed]),
                     merges: script([None]),
                     ..Script::default()
                 },
@@ -1853,7 +1348,7 @@ mod tests {
         assert_eq!(cause(delivered), "cannot compare trees");
         assert!(
             !did.iter()
-                .any(|did| matches!(did, Did::Merge(..) | Did::Watch(..) | Did::Repair(..)))
+                .any(|did| matches!(did, Did::Merge(..) | Did::Assess(..) | Did::Repair(..)))
         );
     }
 
@@ -1885,7 +1380,7 @@ mod tests {
                     ForeignCommits::fixture("h1", &["f1", "f2"]),
                     ForeignCommits::fixture("h2", &["f3"]),
                 ]),
-                watches: script([Is::Passed]),
+                assessments: script([Is::Passed]),
                 merges: script([None]),
                 ..Script::default()
             },
@@ -1919,7 +1414,7 @@ mod tests {
                 heads: script(["f1"]),
                 new_commits: script([ForeignCommits::fixture("own", &["f1"])]),
                 tree_matches: script([Ok(true)]),
-                watches: script([Is::Passed]),
+                assessments: script([Is::Passed]),
                 merges: script([None]),
                 ..Script::default()
             },
@@ -1944,7 +1439,7 @@ mod tests {
                     ForeignCommits::fixture("f2", &["f3"]),
                 ]),
                 tree_matches: script([Ok(false), Ok(true), Ok(false)]),
-                watches: script([Is::Passed]),
+                assessments: script([Is::Passed]),
                 merges: script([None]),
                 ..Script::default()
             },
@@ -1975,7 +1470,7 @@ mod tests {
                 new_commits: script([ForeignCommits::fixture("own", &["f1"])]),
                 new_commit_conflicts: script([true]),
                 tree_matches: script([Ok(true)]),
-                watches: script([Is::Passed]),
+                assessments: script([Is::Passed]),
                 merges: script([None]),
                 ..Script::default()
             },
@@ -1998,7 +1493,7 @@ mod tests {
             Goal::Merged,
             Script {
                 heads: script(["h1", "h2", "h3", "h4", "h5", "h6"]),
-                watches: script(
+                assessments: script(
                     (0..5)
                         .map(|_| Is::Failed(&["test"], &[]))
                         .chain([Is::Passed]),
@@ -2039,7 +1534,7 @@ mod tests {
                     ForeignCommits::fixture("h1", &["f1"]),
                     ForeignCommits::fixture("h1", &["f1"]),
                 ]),
-                watches: script([Is::Passed, Is::Passed]),
+                assessments: script([Is::Passed, Is::Passed]),
                 merges: script([None]),
                 ..Script::default()
             },
@@ -2066,7 +1561,7 @@ mod tests {
                 heads: script(["h2"]),
                 new_commits: script([ForeignCommits::fixture("h1", &["f1"])]),
                 new_commit_conflicts: script([true]),
-                watches: script([Is::Passed]),
+                assessments: script([Is::Passed]),
                 merges: script([None]),
                 ..Script::default()
             },
@@ -2101,7 +1596,7 @@ mod tests {
                 heads: script(["h1", "h2", "h3", "h4"]),
                 new_commits: script([ForeignCommits::fixture("h0", &["f1"])]),
                 base_conflicts: script([true]),
-                watches: script([
+                assessments: script([
                     Is::Failed(&["test"], &[]),
                     Is::Failed(&["test"], &[]),
                     Is::Failed(&["test"], &[]),
@@ -2124,7 +1619,7 @@ mod tests {
                 "CI red; starting Repair 5 of 5",
             ]
         );
-        assert_eq!(did.last(), Some(&watch("h4")));
+        assert_eq!(did.last(), Some(&assessment("h4")));
     }
 
     #[test]
@@ -2135,7 +1630,7 @@ mod tests {
                 heads: script(["h1"]),
                 new_commits: script([ForeignCommits::fixture("h0", &["f1"])]),
                 base_moved: script([true; 5]),
-                watches: script((0..5).map(|_| Is::Passed)),
+                assessments: script((0..5).map(|_| Is::Passed)),
                 ..Script::default()
             },
         );
@@ -2190,7 +1685,7 @@ mod tests {
             Goal::Merged,
             Script {
                 heads: script(["h1", "h2", "h3", "h4", "h5"]),
-                watches: script((0..5).map(|_| Is::Failed(&["test"], &[]))),
+                assessments: script((0..5).map(|_| Is::Failed(&["test"], &[]))),
                 new_commits: script(
                     (0..5)
                         .map(|_| ForeignCommits::fixture("own", &[]))
@@ -2217,7 +1712,7 @@ mod tests {
             Goal::Merged,
             Script {
                 heads: script(["h1"]),
-                watches: script([Is::Passed]),
+                assessments: script([Is::Passed]),
                 merge_gate_error: Some("PR targets develop, not main"),
                 ..Script::default()
             },
@@ -2227,7 +1722,7 @@ mod tests {
         assert!(!error.is::<PolicyRefusal>());
         assert_eq!(
             did.iter()
-                .filter(|call| matches!(call, Did::Watch(..)))
+                .filter(|call| matches!(call, Did::Assess(..)))
                 .count(),
             1
         );
@@ -2244,7 +1739,7 @@ mod tests {
             Script {
                 heads: script(["h1", "h2"]),
                 base_moved: script([false, true, false]),
-                watches: script([Is::Passed, Is::Passed]),
+                assessments: script([Is::Passed, Is::Passed]),
                 merges: script([Some("Base branch was modified"), None]),
                 ..Script::default()
             },
@@ -2275,7 +1770,7 @@ mod tests {
                 heads: script(["h1", "h2"]),
                 // Still after CI, then moved since the merge was tried.
                 base_moved: script([false, true].repeat(6)),
-                watches: script((0..6).map(|_| Is::Passed)),
+                assessments: script((0..6).map(|_| Is::Passed)),
                 merges: script((0..6).map(|_| Some("Base branch was modified"))),
                 ..Script::default()
             },
@@ -2308,7 +1803,7 @@ mod tests {
             Goal::Merged,
             Script {
                 heads: script(["h1"]),
-                watches: script([Is::Passed, Is::Passed]),
+                assessments: script([Is::Passed, Is::Passed]),
                 merges: script([Some("refused by a ruleset")]),
                 ..Script::default()
             },
@@ -2336,7 +1831,7 @@ mod tests {
             Script {
                 heads: script(["h1"]),
                 base_conflicts: script([false, true]),
-                watches: script([Is::Passed, Is::Passed]),
+                assessments: script([Is::Passed, Is::Passed]),
                 merges: script([Some("not mergeable"), None]),
                 ..Script::default()
             },
@@ -2361,7 +1856,7 @@ mod tests {
             Goal::Merged,
             Script {
                 heads: script(["h1"]),
-                watches: script([Is::Passed]),
+                assessments: script([Is::Passed]),
                 interrupted: true,
                 ..Script::default()
             },
@@ -2463,7 +1958,7 @@ mod tests {
                 heads: script(["h1"]),
                 base_moved: script([true; MAX_UPSTREAM_MOVES + 1]),
                 mergeable: script([false; MAX_UPSTREAM_MOVES + 1]),
-                watches: script((0..=MAX_UPSTREAM_MOVES).map(|_| Is::Passed)),
+                assessments: script((0..=MAX_UPSTREAM_MOVES).map(|_| Is::Passed)),
                 ..Script::default()
             },
         );
@@ -2489,7 +1984,7 @@ mod tests {
                 Goal::ReadyForReview,
                 Script {
                     heads: script(["h1"]),
-                    watch_error: Some("gh run list failed"),
+                    assessment_error: Some("gh run list failed"),
                     ..Script::default()
                 },
             ),
@@ -2541,7 +2036,7 @@ mod tests {
             Goal::Merged,
             Script {
                 heads: script(["h1"]),
-                watches: script([Is::Passed, Is::Passed]),
+                assessments: script([Is::Passed, Is::Passed]),
                 merges: script([Some("refused by a ruleset")]),
                 ..Script::default()
             },
@@ -2570,7 +2065,7 @@ mod tests {
             Goal::ReadyForReview,
             Script {
                 heads: script(["h1"]),
-                watches: script([Is::Failed(&[], &["lint"]), Is::Passed]),
+                assessments: script([Is::Failed(&[], &["lint"]), Is::Passed]),
                 base_fixes: script([None]),
                 ..Script::default()
             },

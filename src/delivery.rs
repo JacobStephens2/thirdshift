@@ -577,6 +577,7 @@ impl Outside for InWorktree<'_> {
             child_asks: self.child_asks,
             sessions: self.sessions,
             pull_request: self.pull_request,
+            ci_watch: ci::Watch::new(self.issue),
         };
         repair_loop::take_to_goal(&mut outside, self.base, goal)
     }
@@ -669,6 +670,7 @@ struct RunOutside<'a> {
     child_asks: &'a ChildAsks,
     sessions: &'a Sessions<'a>,
     pull_request: &'a mut PullRequest,
+    ci_watch: ci::Watch<'a>,
 }
 
 impl repair_loop::Outside for RunOutside<'_> {
@@ -714,32 +716,14 @@ impl repair_loop::Outside for RunOutside<'_> {
         self.worktree.new_commits_on_origin()
     }
 
-    fn watch(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
-        ci::watch(self.issue, head, base_commit, &mut || {
+    fn assess_ci(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
+        self.ci_watch.assess(head, base_commit, &mut || {
             self.pull_request.ensure_actionable(true)
         })
     }
 
-    fn rerun(
-        &mut self,
-        head: &str,
-        base_commit: Option<&str>,
-        failed: &FailedChecks,
-    ) -> Result<Option<Ci>> {
-        ci::rerun(self.issue, head, base_commit, failed, &mut || {
-            self.pull_request.ensure_actionable(true)
-        })
-    }
-
-    fn rerun_abandoned(
-        &mut self,
-        head: &str,
-        base_commit: Option<&str>,
-        failed: &FailedChecks,
-    ) -> Result<Option<Ci>> {
-        ci::rerun_abandoned(self.issue, head, base_commit, failed, &mut || {
-            self.pull_request.ensure_actionable(true)
-        })
+    fn ci_fix_completed(&mut self, head: String, failed: FailedChecks) {
+        self.ci_watch.after_repair(head, failed);
     }
 
     fn repair(&mut self, kind: Kind, repair: Repair) -> Result<()> {
