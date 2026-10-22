@@ -25,6 +25,7 @@ pub(crate) struct Section {
 pub(crate) struct Row {
     pub id: String,
     pub started_ms: i64,
+    pub occurred_ms: i64,
     pub live: bool,
     pub logging: bool,
     pub log_growth: String,
@@ -160,6 +161,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                     command.repository, command.kind, command.started_at
                 )),
                 started_ms: timestamp(&command.started_at),
+                occurred_ms: timestamp(command.ended_at.as_deref().unwrap_or(&command.started_at)),
                 live: false,
                 logging: false,
                 log_growth: String::new(),
@@ -310,6 +312,7 @@ fn row(
             facts.started_at
         )),
         started_ms: timestamp(&facts.started_at),
+        occurred_ms: timestamp(facts.ended_at.as_deref().unwrap_or(&facts.started_at)),
         live,
         logging: live && !matches!(command.health, Some(Health::Silent { .. })),
         log_growth: format!(
