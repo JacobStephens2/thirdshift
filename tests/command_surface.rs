@@ -86,7 +86,7 @@ fn help_is_a_compact_reference_with_a_link_to_the_details() {
         "help should fit in a short reference, got {} lines",
         help.lines().count()
     );
-    assert!(help.contains("https://github.com/JacobStephens2/thirdshift#readme"));
+    assert_eq!(help.lines().last(), Some("  https://thirdshift.app/docs/"));
     for detail in [
         "[harness.claude]",
         "[pickup]",
@@ -554,7 +554,7 @@ fn help_lists_shared_options_and_the_context_needed_to_use_them() {
         "~/.thirdshift/config.toml",
         "thirdshift setup",
         "User config",
-        "README",
+        "manual",
     ] {
         assert!(help.contains(context), "help lacks {context:?}: {help}");
     }
