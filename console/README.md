@@ -170,17 +170,25 @@ time tests check scale in all windows, child selection, live ordering and 390 px
 Waterfall chooses one retained Command with live, died and ended chips, keeping
 its exact selection in `command=`. Runs, stages and tool calls share one axis,
 including a Spec run's Ticket Runs. It pairs with `show --json` and `logs`:
-stage intervals come from the Command record, and Claude/Codex tool summaries
-match their scoped `HH:MM:SS` Command-log lines in order, across midnight.
-Each tool interval extends to the next matched call in its Session or its stage
-boundary. These include waiting; they are not measured tool execution times.
-Unmatched calls stay visible with “Time unknown” and no bar. Session links open
-their retained evidence. The Waterfall browser test checks selection, scale,
-unknown times, escaping and phone layout; Rust checks matching and CLI parity.
+stage intervals come from the Command record. For a Session trace, each tool
+interval uses its span's start and end, including overlapping calls and fractions
+of a second. A running call uses its start record and extends to the current time
+while its Command is live. A call left open in an ended or died Command retains
+its start with “Time unknown” for its duration.
+Only sessions with an old Session log and no Session trace use Claude/Codex tool
+summaries matched to scoped `HH:MM:SS` Command-log lines in order, across midnight.
+Those estimated intervals extend to the next matched call or stage boundary and
+include waiting. Unmatched legacy calls stay visible with “Time unknown” and no
+bar. Session links open their retained evidence. The Waterfall browser test checks
+selection, span times, running calls, scale, unknown times, escaping and phone
+layout; Rust checks trace timing, legacy matching and CLI parity.
 The retained Spec-review checks are `python3 console/reproductions/waterfall-fractional.py`
 and `python3 console/reproductions/waterfall-stage.py` from the repo root after a build.
 The Rust router test walks the registered routes and checks their CLI pairs.
 The fractional Run/stage boundaries also run in the Rust integration tests.
+The retained Session-trace regression is
+`python3 console/reproductions/waterfall-trace-axis.py`; it checks that completed
+tool spans still draw bars after a Command dies without recording its end.
 
 `j` / `k` select headings and visible rows, wrapping at either end. `Space`
 folds a heading or toggles a row's peek; `Enter` opens that row's full Command

@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use chrono::{Duration, NaiveTime, TimeZone};
 use serde_json::Value;
 
-use super::{Time, time};
+use super::{Call, Time, time};
 use crate::harness::Harness;
 use crate::logs::owner;
 use crate::logs::reading::Command;
@@ -19,10 +19,6 @@ struct Line {
 }
 pub(super) struct Log {
     lines: Vec<Line>,
-}
-pub(super) struct Call {
-    pub label: String,
-    pub start: Option<Time>,
 }
 
 fn read(path: &Path) -> Result<String> {
@@ -181,7 +177,11 @@ pub(super) fn calls(
                 line.used = true;
                 line.time
             });
-            calls.push(Call { label, start });
+            calls.push(Call {
+                label,
+                start,
+                end: None,
+            });
         }
     }
     Ok(calls)
