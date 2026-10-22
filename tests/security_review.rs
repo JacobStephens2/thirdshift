@@ -237,6 +237,27 @@ fi
 }
 
 #[test]
+fn an_agy_review_after_a_reported_turn_is_not_retried() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[harness]\ndefault = 'codex'\n[security]\nharness = 'agy'\n");
+    scenario.agent_does_for(7, &format!(r#"
+if [ -n "${{FAKE_AGY_RESULT:-}}" ]; then
+    printf '%s\n' '{{"event":"result","result":{{"conversation_id":"s","status":"ERROR","response":"","error":"Harness failed.","num_turns":1,"usage":{{"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"thinking_tokens":0,"total_tokens":0}}}}}}' > "$FAKE_AGY_RESULT"
+    exit 1
+fi
+{}
+"#, reviewed_on_any_harness(OPENS_PR)));
+    let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        !result.stderr.contains("warning: Security review"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.codex_calls().len(), 1);
+}
+
+#[test]
 fn a_failed_default_review_is_not_retried_again() {
     let scenario = Scenario::new();
     scenario.user_config_is("[harness]\ndefault = 'codex'\n[security]\nharness = 'grok'\n");

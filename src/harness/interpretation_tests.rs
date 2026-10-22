@@ -2,6 +2,20 @@ use super::*;
 use std::os::unix::process::ExitStatusExt;
 
 #[test]
+fn review_agy_failure_after_a_reported_turn_is_not_a_startup_failure() {
+    let mut interpretation = stream(Harness::Agy, "");
+    interpretation.condense(r#"{"event":"result","result":{"conversation_id":"s","status":"ERROR","response":"","error":"Harness failed.","num_turns":1,"usage":{"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"thinking_tokens":0,"total_tokens":0}}}"#);
+    let error = finish(interpretation).outcome.unwrap_err();
+    let failure = error
+        .downcast_ref::<interpretation::SessionFailure>()
+        .unwrap();
+    assert!(
+        !failure.before_first_turn,
+        "Agy already reported a completed turn"
+    );
+}
+
+#[test]
 fn a_failed_harness_result_distinguishes_startup_errors_from_observed_work() {
     for harness in [Harness::Claude, Harness::Grok] {
         for (prefix, startup) in [

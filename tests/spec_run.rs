@@ -557,13 +557,16 @@ git commit -q -m 'Fix reproduced Security finding'
     let result = scenario.run(&[&spec_url(&scenario), "security-review", "merge"]);
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
-    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20", "20"]);
+    assert_eq!(
+        sessions_by_issue(&scenario),
+        ["21", "21", "22", "22", "20", "20"]
+    );
     let calls = scenario.claude_calls();
     assert_contains(
-        calls[2]["prompt"].as_str().unwrap(),
+        calls[4]["prompt"].as_str().unwrap(),
         "/thirdshift-code-review main",
     );
-    let prompt = calls[3]["prompt"].as_str().unwrap();
+    let prompt = calls[5]["prompt"].as_str().unwrap();
     assert_contains(prompt, "guidance mode");
     assert_contains(prompt, "Do not delegate auditors");
     assert_contains(prompt, "https://github.com/acme/widgets/issues/20");
@@ -574,7 +577,7 @@ git commit -q -m 'Fix reproduced Security finding'
             base_commit.trim()
         ),
     );
-    assert_eq!(calls[3]["branch"], "issue-20");
+    assert_eq!(calls[5]["branch"], "issue-20");
     assert_eq!(spec_pr(&scenario)["state"], "MERGED");
     for file in [
         "first.txt",
@@ -590,7 +593,7 @@ git commit -q -m 'Fix reproduced Security finding'
     let reviewed = result.stderr.find("spec-review: session ended").unwrap();
     let security = result
         .stderr
-        .find("security-review: session started")
+        .rfind("security-review: session started")
         .unwrap();
     assert!(reviewed < security, "{}", result.stderr);
 }
@@ -636,7 +639,7 @@ fn security_review_on_a_spec_obeys_config_and_command_overrides() {
         assert_eq!(
             sessions_by_issue(&scenario),
             if enabled {
-                vec!["21", "22", "20", "20"]
+                vec!["21", "21", "22", "22", "20", "20"]
             } else {
                 vec!["21", "22", "20"]
             }
@@ -680,7 +683,10 @@ fn security_findings_refusals_and_incomplete_reviews_hold_only_the_spec_self_mer
                 result.stderr
             );
             assert_contains(&result.stderr, cause);
-            assert_eq!(sessions_by_issue(&scenario), ["21", "22", "20", "20"]);
+            assert_eq!(
+                sessions_by_issue(&scenario),
+                ["21", "21", "22", "22", "20", "20"]
+            );
             let pr = spec_pr(&scenario);
             assert_eq!(pr["state"], "OPEN");
             assert_eq!(pr["isDraft"], false);
@@ -1280,7 +1286,7 @@ gh pr create --base issue-20 --head issue-{fix} --title "Fix CI" --body "Closes 
 }
 
 #[test]
-fn a_base_fix_a_tickets_run_starts_runs_the_security_review_its_ticket_skips() {
+fn a_base_fix_and_its_ticket_both_run_the_security_review() {
     let scenario = spec_whose_ticket_inherits_a_failure();
     base_fix_lands_on_the_spec_branch(&scenario, 22);
     scenario.agent_does_for_in_session(22, 2, &security_review_script(&[]));
@@ -1289,11 +1295,14 @@ fn a_base_fix_a_tickets_run_starts_runs_the_security_review_its_ticket_skips() {
     let result = scenario.run(&[&spec_url(&scenario), "base-fix", "security-review"]);
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
-    assert_eq!(sessions_by_issue(&scenario), ["21", "22", "22", "20", "20"]);
+    assert_eq!(
+        sessions_by_issue(&scenario),
+        ["21", "21", "22", "22", "20", "20"]
+    );
     let calls = scenario.claude_calls();
-    assert_eq!(calls[2]["branch"], "issue-22");
+    assert_eq!(calls[3]["branch"], "issue-22");
     assert_contains(
-        calls[2]["prompt"].as_str().unwrap(),
+        calls[3]["prompt"].as_str().unwrap(),
         "branch issue-22 against Base branch issue-20",
     );
     assert_eq!(pr_from(&scenario, "issue-22").unwrap()["state"], "MERGED");
@@ -3488,10 +3497,12 @@ fi
                 .is_some_and(|p| p.contains("/issues/"))
         })
         .collect();
-    assert_eq!(calls.len(), 1, "{calls:?}");
-    assert_contains(calls[0]["prompt"].as_str().unwrap(), "guidance mode");
-    assert_eq!(calls[0]["branch"], "issue-20");
-    let args: Vec<_> = calls[0]["argv"]
+    assert_eq!(calls.len(), 3, "{calls:?}");
+    for (call, branch) in calls.iter().zip(["issue-21", "issue-22", "issue-20"]) {
+        assert_contains(call["prompt"].as_str().unwrap(), "guidance mode");
+        assert_eq!(call["branch"], branch);
+    }
+    let args: Vec<_> = calls[2]["argv"]
         .as_array()
         .unwrap()
         .iter()

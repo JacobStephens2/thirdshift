@@ -180,7 +180,7 @@ fn run(
         directory: &directory,
         issue,
         goal: asks.goal,
-        security_review: child_asks.runs_security_review(started_by.child()),
+        security_review: child_asks.security_review,
         child_asks: &child_asks,
         base_fix,
         logs: Logs::of_run(issue),

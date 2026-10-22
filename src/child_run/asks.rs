@@ -1,7 +1,6 @@
 //! What every child Run a Run starts is asked, whichever kind it is: built
 //! once in the Run, after its Harness check, and handed on unchanged.
 
-use super::Kind;
 use crate::asks::Asks;
 use crate::harness::Choice;
 
@@ -21,9 +20,7 @@ pub struct ChildAsks {
     pub security_review_default: Option<Choice>,
     /// Whether a Security run may fix reproduced findings.
     pub security_fix: bool,
-    /// Whether the Command asked for a Security review: its own ask, before
-    /// any Run of a kind that runs none drops it. See
-    /// [`ChildAsks::runs_security_review`].
+    /// Whether the Command asked for a Security review, for every child Run too.
     pub security_review: bool,
 }
 
@@ -39,41 +36,6 @@ impl ChildAsks {
             security_review_default: asks.security_review_default.clone(),
             security_fix: asks.security_fix,
             security_review: asks.security_review,
-        }
-    }
-
-    /// Every Run, including a Ticket or Base fix, follows its Command's ask.
-    pub fn runs_security_review(&self, _child: Option<&Kind>) -> bool {
-        self.security_review
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn asked(security_review: bool) -> ChildAsks {
-        ChildAsks {
-            security_review,
-            ..ChildAsks::default()
-        }
-    }
-
-    #[test]
-    fn every_child_runs_the_security_review_the_command_asked_for() {
-        let ticket = Kind::Ticket {
-            spec_branch: "issue-20".to_string(),
-        };
-        let base_fix = Kind::BaseFix {
-            base: "main".to_string(),
-        };
-        for (child, when_asked) in [(None, true), (Some(&ticket), true), (Some(&base_fix), true)] {
-            assert_eq!(
-                asked(true).runs_security_review(child),
-                when_asked,
-                "{child:?}"
-            );
-            assert!(!asked(false).runs_security_review(child), "{child:?}");
         }
     }
 }
