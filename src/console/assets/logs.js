@@ -30,6 +30,16 @@ function append(batch) {
     for (const group of fragment.content.querySelectorAll('.tool-group')) {
       if (!group.querySelector('.tools').children.length) group.remove();
     }
+    for (const message of fragment.content.querySelectorAll('.message[data-message-id]')) {
+      const current = [...content.querySelectorAll('.message[data-message-id]')]
+        .find(node => node.dataset.messageId === message.dataset.messageId);
+      if (current) {
+        // Normalized messages with stable IDs are cumulative snapshots. Keep
+        // the existing article while replacing its escaped text and role.
+        current.replaceChildren(...message.childNodes);
+        message.remove();
+      }
+    }
     const last = content.lastElementChild;
     const first = fragment.content.firstElementChild;
     // A tool sequence crossing a stream batch remains one folded group. Existing

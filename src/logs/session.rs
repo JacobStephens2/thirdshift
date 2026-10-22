@@ -1,9 +1,9 @@
-//! Resolve a Session's readable file and unwrap its retained raw Harness events.
+//! Resolve a Session's readable file and retain its records or raw Harness events.
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use crate::otlp_jsonl::{AnyValue, Logs, Reader};
+use crate::otlp_jsonl::{AnyValue, LogRecord, Logs, Reader};
 
 /// Command records may still name the old Session log during the transition.
 pub(crate) fn path(log: &Path) -> PathBuf {
@@ -66,6 +66,15 @@ pub(crate) fn tail_events(log: &Path) -> io::Result<Vec<String>> {
 /// A request can contain several resources, scopes and records. Keep their file
 /// order, and preserve old logs and malformed diagnostics for the renderer.
 pub(crate) fn events(lines: &str) -> impl Iterator<Item = String> + '_ {
+    records(lines).filter_map(|record| match record.body {
+        Some(AnyValue::String(raw)) => Some(raw),
+        _ => None,
+    })
+}
+
+/// Keep normalized attributes available to readers that understand them. Old
+/// logs and malformed diagnostics become records containing only their raw body.
+pub(crate) fn records(lines: &str) -> impl Iterator<Item = LogRecord> + '_ {
     lines.lines().flat_map(|line| {
         let is_trace = serde_json::from_str::<serde_json::Value>(line)
             .is_ok_and(|value| value.get("resourceLogs").is_some());
@@ -75,12 +84,11 @@ pub(crate) fn events(lines: &str) -> impl Iterator<Item = String> + '_ {
                 .into_iter()
                 .flat_map(|resource| resource.scope_logs)
                 .flat_map(|scope| scope.log_records)
-                .filter_map(|record| match record.body {
-                    Some(AnyValue::String(raw)) => Some(raw),
-                    _ => None,
-                })
                 .collect();
         }
-        vec![line.to_owned()]
+        vec![LogRecord {
+            body: Some(AnyValue::String(line.to_owned())),
+            ..Default::default()
+        }]
     })
 }
