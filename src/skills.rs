@@ -2,12 +2,13 @@
 //! per Command and linked into each worktree its sessions run in, where the
 //! Harness finds project skills (ADR-0012).
 
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use include_dir::{Dir, include_dir};
 use tempfile::TempDir;
 
@@ -23,6 +24,64 @@ mod tests;
 /// The Factory skills, as they are written out and the Prompts and skills
 /// page shows them, each in its `thirdshift-<skill>` directory.
 pub static SKILLS: Dir = include_dir!("$CARGO_MANIFEST_DIR/skills");
+
+/// A skill resolved by name, with the instructions the session must read.
+pub struct Skill {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+enum Source {
+    Factory,
+    Repository(PathBuf),
+}
+
+/// Resolve exact names across Factory and repository skills before trying
+/// a Factory shorthand. Only the committed worktree is searched.
+pub fn find(worktree: &Path, name: &str) -> Result<Skill> {
+    let mut available = BTreeMap::new();
+    for dir in SKILLS.dirs() {
+        available.insert(dir.path().to_string_lossy().into_owned(), Source::Factory);
+    }
+    for folder in [".agents/skills", ".claude/skills"] {
+        let entries = match fs::read_dir(worktree.join(folder)) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(error).with_context(|| format!("could not list {folder}")),
+        };
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path().join("SKILL.md");
+            if path.is_file() {
+                let name = entry.file_name().into_string().map_err(|_| {
+                    anyhow::anyhow!(
+                        "skill directory name is not UTF-8: {}",
+                        entry.path().display()
+                    )
+                })?;
+                available.entry(name).or_insert(Source::Repository(path));
+            }
+        }
+    }
+    let selected = available.get_key_value(name).or_else(|| {
+        available
+            .get_key_value(&format!("thirdshift-{name}"))
+            .filter(|(_, source)| matches!(source, Source::Factory))
+    });
+    if let Some((name, source)) = selected {
+        return Ok(Skill {
+            path: match source {
+                Source::Factory => written_out()?.join(name).join("SKILL.md"),
+                Source::Repository(path) => path.clone(),
+            },
+            name: name.clone(),
+        });
+    }
+    bail!(
+        "unknown skill {name:?}; available skills: {}",
+        available.keys().cloned().collect::<Vec<_>>().join(", ")
+    )
+}
 
 /// The temp directory the Command wrote the Factory skills out to, once it
 /// has.

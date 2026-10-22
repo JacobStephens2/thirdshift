@@ -21,6 +21,8 @@ mod acquisition_tests;
 #[cfg(test)]
 mod cleanup_tests;
 mod ownership;
+mod skill;
+pub use skill::SkillWorktree;
 #[cfg(test)]
 mod preservation_tests;
 #[cfg(test)]

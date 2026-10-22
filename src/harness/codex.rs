@@ -95,7 +95,7 @@ impl Adapter for Codex {
         );
         invocation
     }
-    fn check(&self, choice: &mut Choice) -> Result<()> {
+    fn check(&self, choice: &mut Choice, _probe: super::Probe) -> Result<()> {
         check_model_and_effort(choice)
     }
     /// Unlike a session (ADR-0012), the summary reads contributor-editable PR

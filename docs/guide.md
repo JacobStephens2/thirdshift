@@ -392,6 +392,7 @@ thirdshift pickup                   # take the lowest-numbered Ready issue in th
 thirdshift pickup base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
 thirdshift secure                   # audit the Base branch and record findings privately (see Security runs)
 thirdshift secure base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
+thirdshift skill <skill> [issue <issue>]   # run one skill headlessly and print its final message
 thirdshift email-test [<address>]   # send a test email through Resend (see Email)
 thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
 thirdshift update                   # update to the latest release (see Updating)
@@ -404,6 +405,33 @@ thirdshift help                     # print a compact command and option referen
 `version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr. `architect` follows it too: stdout carries the pull request's URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with `--plan-only`, or its idea when the review published no plan. A skipped Architect run prints nothing there when [another is still running](#one-at-a-time), the URL of each Architect plan that is [still open](#one-architect-plan-at-a-time), the URL of each [Architect idea waiting for triage](#an-architect-idea-waits-for-triage), and the URL of the [Ready issue that goes first](#a-ready-issue-goes-first). `pickup` follows it as well: stdout carries the pull request's URL of the run it dispatches, and nothing when the [Pickup run](#pickup-runs) is skipped. So does `secure`: stdout carries the pull request's URL of a fix it dispatches, and nothing otherwise.
 
 Uncommitted changes in your clone are fine: the Run works in its own worktree from `origin`, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Run stops.
+
+### Standalone skills
+
+Run one skill without starting a Run:
+
+```sh
+thirdshift skill to-spec issue 42
+thirdshift skill thirdshift-code-review
+thirdshift skill my-repository-skill
+```
+
+The command uses the User config's default Harness, Model and Effort. It first
+looks for the exact name among the Factory skills and the repository's committed
+`.agents/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md` files. If none
+matches, it tries the Factory skill `thirdshift-<name>`. An unknown name lists the
+available skills and starts no session. The optional issue is an Issue URL or a
+positive number resolved from `origin`.
+
+The session runs in a temporary worktree at the head of the checked-out branch,
+with the Factory skills available. Uncommitted changes in your checkout stay out
+of it. Your checkout stays untouched. The final message goes to stdout; progress,
+failure causes and the path of any retained worktree go to stderr. A completed
+session exits `0`; a failed or incomplete session exits non-zero.
+
+The worktree is kept when it has uncommitted changes, commits absent from all
+remote-tracking branches, or uncertain ownership. Otherwise it is removed. No
+Command record, Console entry or Session log is created for a standalone skill.
 
 ### User config
 

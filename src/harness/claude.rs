@@ -48,8 +48,11 @@ impl Adapter for Claude {
             stdin: None,
         }
     }
-    fn check(&self, choice: &mut Choice) -> Result<()> {
-        test_call(choice)
+    fn check(&self, choice: &mut Choice, probe: super::Probe) -> Result<()> {
+        match probe {
+            super::Probe::Allow => test_call(choice),
+            super::Probe::Skip => Ok(()),
+        }
     }
     fn summary(&self, choice: &Choice, prompt: &str, _prompt_file: &Path) -> Invocation {
         let mut invocation = self.session(choice, None, prompt);

@@ -41,6 +41,7 @@ mod run_ending;
 mod security;
 mod session;
 mod setup;
+mod skill;
 mod skills;
 mod spec_run;
 mod terminal;
@@ -78,6 +79,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift pickup base <branch>                Use <branch> as the Base branch
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
+       thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
        thirdshift status [--all] [--json]             List this machine's Commands
@@ -124,7 +126,6 @@ Pass commands: architect, pickup, secure (no Issue URL).
   base <branch>                      Use an origin branch, whatever is checked out
   --plan-only                        architect only; stops before dispatching a Run
 With --plan-only, only base, email and no-email apply.
-
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting.
 For workflow details, settings, Harness setup, email, logs and scheduling, see the README:
   https://github.com/JacobStephens2/thirdshift#readme
@@ -248,6 +249,7 @@ fn main() -> ExitCode {
             };
         }
         Ok(Command::ReleaseSummary) => return release_summary(),
+        Ok(Command::Skill { name, issue }) => return printed(skill::run(&name, issue)),
         Ok(Command::EmailTest(to)) => {
             return outcome(
                 UserConfig::load().and_then(|config| email::send_test(to, &config.email)),

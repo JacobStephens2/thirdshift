@@ -57,11 +57,14 @@ impl Adapter for Muse {
         args.push(self.skill_loading().prompt(prompt));
         Invocation { args, stdin: None }
     }
-    fn check(&self, choice: &mut Choice) -> Result<()> {
-        let settled = check_model_and_effort(&ModelAndEffort {
-            model: choice.model.clone(),
-            effort: choice.effort.clone(),
-        })?;
+    fn check(&self, choice: &mut Choice, probe: super::Probe) -> Result<()> {
+        let settled = check_model_and_effort(
+            &ModelAndEffort {
+                model: choice.model.clone(),
+                effort: choice.effort.clone(),
+            },
+            probe,
+        )?;
         choice.model = settled.model;
         choice.effort = settled.effort;
         Ok(())
@@ -112,7 +115,7 @@ impl Adapter for Muse {
                     continue;
                 }
             };
-            match check_model_and_effort(&chosen) {
+            match check_model_and_effort(&chosen, super::Probe::Allow) {
                 Ok(settled) => return Ok(Some(settled)),
                 Err(error) => {
                     crate::interrupt::check()?;
@@ -139,8 +142,12 @@ fn data_dir() -> Option<PathBuf> {
 }
 
 /// The same check used by a Command and Setup: validate Effort first, then
-/// use the cached catalog, falling back to a minimal call only without it.
-pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<ModelAndEffort> {
+/// use the cached catalog, falling back to a minimal call only without it
+/// and when probing is allowed.
+pub fn check_model_and_effort(
+    chosen: &ModelAndEffort,
+    probe: super::Probe,
+) -> Result<ModelAndEffort> {
     let mut settled = ModelAndEffort {
         model: chosen.model.clone(),
         effort: catalog::settle_effort(chosen.effort.as_deref())?,
@@ -149,7 +156,7 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<ModelAndEffort>
         if let Some(catalog) = catalog::Catalog::read()? {
             crate::progress::step("checking the Model against Muse's cached catalog");
             settled.model = Some(catalog.settle_model(model)?);
-        } else {
+        } else if probe == super::Probe::Allow {
             let choice = Choice {
                 harness: Harness::Muse,
                 model: settled.model.clone(),
