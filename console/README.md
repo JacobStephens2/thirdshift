@@ -129,6 +129,21 @@ reconnects. The heartbeat only beats for observed log growth, stays flat while
 Silent and respects reduced motion. The tab counts Needs you and its favicon
 marks urgent items (Slow alone is not urgent).
 
+Choose **Turn notifications on** in the Console header and allow the browser's
+permission prompt. This browser remembers the choice for this Console address;
+the same button turns it off across its open tabs. Keep a Console tab open
+(a pinned tab works): a rise in Needs you shows one browser notification with
+the count, machine and newest arriving item. Clicking it focuses the tab and
+opens the Inbox. Opening or reloading a tab never notifies for existing items,
+and several tabs share one notification per rise. Notifications work from the
+other Console pages too.
+
+Notifications require HTTPS (or localhost), browser notification support,
+permission, browser storage and Web Locks for coordination between tabs. The
+control explains when these are unavailable; if permission is blocked, change
+it in the browser's site settings. There are no notifications with all Console
+tabs closed, and no service worker, Web Push or subscription to set up.
+
 Folds and the last-look time stay in this browser. Commands started since the
 previous visit are marked new, including those arriving while the page is open.
 Missing or malformed storage hides nothing. Replacing the installed binary
