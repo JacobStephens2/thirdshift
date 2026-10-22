@@ -2,6 +2,7 @@
 
 mod catalog;
 mod events;
+mod patches;
 pub(crate) mod stream;
 pub use catalog::Catalog;
 
@@ -134,6 +135,7 @@ impl Adapter for Codex {
             self.name(),
             Box::new(stream::CodexProgress::in_worktree(worktree)),
         )
+        .with_retained(Box::new(patches::Completion::new(worktree)))
     }
 }
 

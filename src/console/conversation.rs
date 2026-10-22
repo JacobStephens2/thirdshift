@@ -3,11 +3,13 @@
 use super::filters::{escaped, linked};
 use crate::logs::catalog::Kind;
 use serde_json::Value;
+use std::collections::HashMap;
 
 enum Part {
     Message(String, String),
     Thinking(String),
     Tool(String, String),
+    CodexEdit(String, String),
     Plain(String),
 }
 
@@ -17,8 +19,20 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
     }
     let mut html = String::new();
     let mut tools_open = false;
+    let mut conversation = Vec::new();
+    let mut edits = HashMap::new();
     for part in crate::logs::session::events(lines).flat_map(|line| parts(&line)) {
-        if matches!(part, Part::Tool(..)) {
+        if let Part::CodexEdit(id, _) = &part {
+            if let Some(index) = edits.get(id) {
+                conversation[*index] = part;
+                continue;
+            }
+            edits.insert(id.clone(), conversation.len());
+        }
+        conversation.push(part);
+    }
+    for part in conversation {
+        if matches!(part, Part::Tool(..) | Part::CodexEdit(..)) {
             if !tools_open {
                 html.push_str(
                     "<details class=\"tool-group\"><summary>Tools</summary><div class=\"tools\">",
@@ -44,6 +58,10 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
                 escaped(&name),
                 escaped(&name)
             )),
+            Part::CodexEdit(id, body) => html.push_str(&format!(
+                "<article class=\"tool\" data-tool=\"Edit\" data-codex-edit=\"{}\"><h3>Edit</h3>{body}</article>",
+                escaped(&id)
+            )),
             Part::Plain(text) => html.push_str(&format!(
                 "<pre class=\"unknown-event\">{}</pre>",
                 linked(&text)
@@ -61,6 +79,12 @@ fn parts(line: &str) -> Vec<Part> {
         return vec![Part::Plain(line.into())];
     };
     match event["type"].as_str() {
+        Some("tool_call_ended")
+            if event["tool"] == "apply_patch"
+                && event["result"]["source"] == "codex_session_file" =>
+        {
+            vec![codex_edit(text(&event, "id"), &event["result"])]
+        }
         Some("assistant" | "user") => {
             let role = text(&event, "type");
             match &event["message"]["content"] {
@@ -89,7 +113,7 @@ fn parts(line: &str) -> Vec<Part> {
                 }
                 Some("reasoning") => Part::Thinking(text(item, "text").into()),
                 Some("command_execution") => tool("Bash", item),
-                Some("file_change") => tool("Edit", item),
+                Some("file_change") => codex_edit(text(item, "id"), item),
                 Some("mcp_tool_call") => tool(text(item, "tool"), item),
                 Some("web_search") => tool("Grep", item),
                 _ => Part::Plain(line.into()),
@@ -97,6 +121,30 @@ fn parts(line: &str) -> Vec<Part> {
         }
         _ => vec![Part::Plain(line.into())],
     }
+}
+
+fn codex_edit(id: &str, record: &Value) -> Part {
+    let body = if record["source"] == "codex_session_file" {
+        let diffs: String = record["changes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|change| {
+                format!(
+                    "{}{}",
+                    pre("path", text(change, "path")),
+                    pre("diff", text(change, "diff"))
+                )
+            })
+            .collect();
+        format!("<p>Codex’s record of this edit</p>{diffs}")
+    } else {
+        format!(
+            "<p>Patch unavailable in this log.</p>{}",
+            pre("fallback", &pretty(record))
+        )
+    };
+    Part::CodexEdit(id.into(), body)
 }
 
 fn tool(name: &str, input: &Value) -> Part {

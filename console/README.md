@@ -238,9 +238,13 @@ outcome, `issue_branches` and `pull_requests` as one JSON object.
 On Linux after a build, `python3 console/reproductions/session-stop.py` checks that
 a live Session reader's Details link reaches its exact Command's Stop.
 
-Claude Edit events include old/new text and show unified diff excerpts. Codex
-`file_change` events retain only file paths and change kinds, so the reader
-shows their plain fallback and says the patch is unavailable. The Spec-review
-reproduction, `python3 console/reproductions/codex-edit-diff.py` from the repo
-root, preserves the unmet Codex diff expectation; it currently fails. Capturing
-patch evidence for Codex requires a separate retention decision.
+Claude Edit events include old/new text and show unified diff excerpts. For Codex,
+thirdshift reads the thread's native session file after exit, under
+`$CODEX_HOME/sessions` (default `~/.codex/sessions`). When the current turn's edits
+match the stream in order and file path, the Session trace keeps each patch as
+Codex's record of the edit. The reader replaces its placeholder with that diff,
+including in an open live reader. Shell edits and missing, unreadable, changed-format
+or mismatched session files keep the fallback. The format is unpublished, so this
+evidence is optional and never changes a Run's outcome.
+Run `cargo test --test console codex_patches` for the fake-Codex regression and
+`node --test console/tests/logs.test.cjs` for the live-reader checks after building.

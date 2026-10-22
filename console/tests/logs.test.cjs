@@ -119,6 +119,35 @@ for (const storage of ['Session log', 'Session trace', 'Session trace only']) {
       assert.deepEqual(errors, []);
     });
 
+    test("native Codex patches replace the edit fallback in a live reader", { skip: process.platform !== "linux" }, async t => {
+      await appendFile(log, '\n');
+      record.outcome = null;
+      record.ended_at = null;
+      await writeFile(recordPath, JSON.stringify(record));
+      await appendFile(log, encode({ type: 'item.completed', item: {
+        id: 'patch-live', type: 'file_change', status: 'completed',
+        changes: [{ path: 'widgets.rs', kind: 'update' }]
+      }}));
+      const page = await browser.newPage();
+      t.after(() => page.close());
+      await page.goto(`${origin}/logs`);
+      await page.getByRole('link', { name: /Session log/ }).click();
+      await page.getByText('Patch unavailable in this log.', { exact: true }).waitFor({ state: 'attached' });
+      await appendFile(log, encode({ type: 'tool_call_ended', id: 'patch-live', tool: 'apply_patch',
+        result: { source: 'codex_session_file', changes: [{ path: 'widgets.rs', kind: 'update',
+          diff: '--- a/widgets.rs\n+++ b/widgets.rs\n@@ -1 +1 @@\n-old\n+<script>new()</script>\n'
+        }] }, amended: true
+      }));
+      await page.getByText('Codex’s record of this edit', { exact: true }).waitFor({ state: 'attached' });
+      assert.equal(await page.getByText('Patch unavailable in this log.', { exact: true }).count(), 0);
+      assert.equal(await page.locator('[data-codex-edit="patch-live"]').count(), 1);
+      assert.match(await page.locator('[data-codex-edit="patch-live"] .diff').textContent(), /-old\n\+<script>new\(\)<\/script>/);
+      assert.equal(await page.locator('#log-content script').count(), 0);
+      await page.reload();
+      assert.equal(await page.locator('[data-codex-edit="patch-live"]').count(), 1);
+      assert.equal(await page.getByText('Patch unavailable in this log.', { exact: true }).count(), 0);
+    });
+
     test("Session log polls appended lines when EventSource is unavailable", { skip: process.platform !== "linux" }, async t => {
       await appendFile(log, "\n"); // Finish the preceding test's unterminated final event.
       record.outcome = null;

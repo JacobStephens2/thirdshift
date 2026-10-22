@@ -17,6 +17,19 @@ function append(batch) {
   if (batch.offset > Number(content.dataset.offset)) {
     const fragment = document.createElement("template");
     fragment.innerHTML = batch.html;
+    // Retained Codex evidence arrives after the streamed file_change item.
+    // Refine that edit in place so an open reader loses its placeholder too.
+    for (const edit of fragment.content.querySelectorAll('[data-codex-edit]')) {
+      const previous = [...content.querySelectorAll('[data-codex-edit]')]
+        .find(node => node.dataset.codexEdit === edit.dataset.codexEdit);
+      if (previous) {
+        previous.replaceChildren(...edit.childNodes);
+        edit.remove();
+      }
+    }
+    for (const group of fragment.content.querySelectorAll('.tool-group')) {
+      if (!group.querySelector('.tools').children.length) group.remove();
+    }
     const last = content.lastElementChild;
     const first = fragment.content.firstElementChild;
     // A tool sequence crossing a stream batch remains one folded group. Existing

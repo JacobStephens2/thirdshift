@@ -18,6 +18,9 @@ mod accounts;
 #[path = "console/look.rs"]
 mod look;
 
+#[path = "console/codex_patches.rs"]
+mod codex_patches;
+
 #[cfg(unix)]
 #[path = "console/cronjobs.rs"]
 mod cronjobs;
