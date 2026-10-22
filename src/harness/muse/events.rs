@@ -130,11 +130,7 @@ impl Events {
                 .collect();
         }
         if kind == "run.output.delta" {
-            let id = self
-                .last_model
-                .get(scope)
-                .cloned()
-                .unwrap_or_else(|| format!("{scope}:reply"));
+            let id = self.reply_id(scope);
             let text = self.text.entry(id.clone()).or_default();
             text.push_str(payload["text"].as_str().unwrap_or(""));
             return vec![Event::Message {
@@ -217,13 +213,16 @@ impl Events {
         }
     }
 
+    fn reply_id(&self, scope: &str) -> String {
+        self.last_model
+            .get(scope)
+            .cloned()
+            .unwrap_or_else(|| format!("{scope}:reply"))
+    }
+
     fn terminal(&self, scope: &str, status: &str, payload: &Value) -> Vec<Event> {
         if status == "completed" {
-            let id = self
-                .last_model
-                .get(scope)
-                .cloned()
-                .unwrap_or_else(|| format!("{scope}:reply"));
+            let id = self.reply_id(scope);
             return payload["text"]
                 .as_str()
                 .filter(|_| !self.text.contains_key(&id))
