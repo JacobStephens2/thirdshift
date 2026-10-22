@@ -1,6 +1,6 @@
 [package]
 name = "thirdshift"
-version = "0.13.4"
+version = "0.13.5"
 edition = "2024"
 description = "Turn a GitHub issue into a ready-for-review pull request, unattended"
 license = "MIT"
@@ -43,6 +43,7 @@ tokio-stream = { version = "0.1.18", features = ["sync"] }
 
 [dev-dependencies]
 opentelemetry-proto = { version = "0.33.0", default-features = false, features = ["gen-tonic-messages", "logs", "trace", "with-serde"] }
+stateright = "=0.31.0"
 tower-layer = "0.3.3"
 
 # Line tables keep file and line in the crate's backtraces, and dependencies

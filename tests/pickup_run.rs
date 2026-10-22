@@ -18,7 +18,7 @@ mod support;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
-use support::resend::{ResendStandIn, assert_one_issue_line};
+use support::resend::{ResendStandIn, assert_one_issue_line, assert_saved_notification};
 use support::{HeldRun, REPO, RunResult, Scenario, TimelineEvent, before_command_log};
 
 /// The label of an issue a Pickup run may take.
@@ -123,6 +123,26 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
     assert_eq!(
         scenario.origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup"]),
         ""
+    );
+}
+
+#[test]
+fn a_rejecting_pre_push_hook_does_not_block_reserving_or_releasing_a_ready_issue() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.launch_has_rejecting_pre_push_hook();
+    scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+
+    let result = scenario.run(&["pickup"]);
+
+    let pr = pr_from(&scenario, "issue-7");
+    assert_ended_with_pr(&result, &pr, "ready for review");
+    assert_eq!(scenario.claude_calls().len(), 1, "{}", result.stderr);
+    assert_eq!(
+        scenario.origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup"]),
+        "",
+        "{}",
+        result.stderr
     );
 }
 
@@ -1428,6 +1448,12 @@ fn a_pass_that_took_an_issue_sends_one_notification_when_asked() {
     // Exactly one: the dispatched run sends none of its own.
     assert_eq!(requests.len(), 1, "{requests:?}");
     assert_eq!(requests[0].body["to"], "config@example.com");
+    assert_saved_notification(&scenario, "pickup", &requests[0]);
+    assert!(
+        !scenario
+            .path("home/.thirdshift/logs/acme/widgets/commands/issue")
+            .exists()
+    );
 }
 
 #[test]
@@ -1624,6 +1650,11 @@ fn a_pass_skipped_for_having_no_ready_issue_sends_no_notification() {
 
     assert_skipped(&scenario, &result, NO_READY_ISSUE);
     assert!(resend.requests().is_empty());
+    assert!(
+        !scenario
+            .path("home/.thirdshift/logs/acme/widgets/commands")
+            .exists()
+    );
 }
 
 /// Start a Pickup run that takes #7, made a Ready issue here, and holds the
@@ -1787,6 +1818,38 @@ fn claimed_issues(scenario: &Scenario, issues: &[u32]) {
 }
 
 #[test]
+fn a_claim_limit_skip_names_every_holder_lowest_first_without_extra_github_requests() {
+    let scenario = Scenario::new();
+    claimed_issues(&scenario, &[953, 924, 936]);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(
+        scenario.gh_calls(),
+        ["closed", "open"].map(|state| vec![
+            "issue",
+            "list",
+            "--state",
+            state,
+            "--repo",
+            "acme/widgets",
+            "--label",
+            "in-progress",
+            "--json",
+            "url,title,labels",
+            "--limit",
+            "1000",
+        ])
+    );
+    assert_skipped(
+        &scenario,
+        &result,
+        "thirdshift: at the Claim limit on acme/widgets: #924, #936 and #953 are labelled \
+         in-progress, pickup.limit is 3\n",
+    );
+}
+
+#[test]
 fn a_pass_skipped_for_the_claim_limit_sends_no_notification() {
     let scenario = ready_ticket();
     claimed_issues(&scenario, &[1, 2, 3]);
@@ -1798,7 +1861,7 @@ fn a_pass_skipped_for_the_claim_limit_sends_no_notification() {
     assert_skipped(
         &scenario,
         &result,
-        "thirdshift: at the Claim limit on acme/widgets: 3 open issue(s) labelled in-progress, \
+        "thirdshift: at the Claim limit on acme/widgets: #1, #2 and #3 are labelled in-progress, \
          pickup.limit is 3\n",
     );
     assert!(resend.requests().is_empty());
@@ -1825,7 +1888,7 @@ fn pickup_limit_in_the_user_config_raises_and_lowers_the_claim_limit() {
     assert_skipped(
         &scenario,
         &result,
-        "thirdshift: at the Claim limit on acme/widgets: 1 open issue(s) labelled in-progress, \
+        "thirdshift: at the Claim limit on acme/widgets: #1 is labelled in-progress, \
          pickup.limit is 1\n",
     );
 }

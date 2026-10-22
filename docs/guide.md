@@ -269,6 +269,12 @@ If you use Rust, you can install it from crates.io instead:
 cargo install thirdshift
 ```
 
+### Console installation
+
+On Linux, `thirdshift console install` prints a script to read and run with sudo; `--output install-console.sh` saves it instead. For Caddy or Apache (Debian's `apache2` or Red Hat's `httpd`), the script first checks the configured Console address through the system resolver with `getent hosts`. If the name doesn't resolve, it exits before writing files, enabling services or restarting anything, and asks you to add an A or AAAA record pointing at this server and run the script again. It doesn't check whether the address points at this machine. Once the name resolves, installation continues with the Console's systemd service, proxy site and HTTPS certificate.
+
+With neither proxy, the script installs a localhost-only service and prints an SSH tunnel command, without checking an address. See the [Console setup instructions](../README.md#console-on-a-server) for settings and proxy prerequisites.
+
 ### Updating
 
 ```sh
@@ -302,6 +308,8 @@ The user account that runs thirdshift needs:
 ### Unattended sessions
 
 Sessions run headless with the full permissions of that user account, including `sudo` if the user has it, and nobody is there to approve anything. On Claude Code they run in auto mode (`claude -p --permission-mode auto`): its classifier checks each action and may block ones it judges risky, such as destructive commands or actions outside the task. A blocked action the agent can't work around can end the Run as a Failed run. The other Harnesses run with approvals and their sandbox turned off ([ADR-0013](adr/0013-every-harness-runs-unattended-and-fully-trusted.md)), so no approval step or sandbox stands between an action and the account.
+
+Every factory session on Claude Code, Repairs, reviews and Resumes included, also passes `--settings '{"attribution":{"commit":"","pr":""}}'`. These per-session settings override the user's and repository's attribution settings, hiding Claude Code's commit trailer and pull request attribution. The pull request keeps thirdshift's `Built with` line as its only attribution; nothing replaces the commit trailer. Claude Code run by hand keeps its own settings. The release-summary invocation, which runs with tools disabled, keeps its existing arguments.
 
 `claude -p` exits as soon as the agent ends its turn, killing any background task it started. So every prompt tells the agent to run long commands, such as tests, in the foreground, and to stop any background task it no longer needs, with the `TaskStop` tool, before it ends its turn. If a session still ends with background work running, thirdshift takes it as work the session was waiting on and gives it a **Resume**: it continues that same session once (`claude -p --resume`), asking the agent to re-run the work in the foreground and finish. If the Resume ends the same way, the work may have been abandoned, such as a hung test run the agent could not stop: thirdshift says which task was killed and carries on, so the pull request check, CI and the rest decide how the Run ends. If the Run then fails, its cause names the killed task ahead of what failed.
 
@@ -766,6 +774,8 @@ The folder already names the repository, so no file name repeats it. `audits/` a
 
 Session logs share the owning command's folder, stamp and owner token: a Pickup run's dispatched Run logs in `commands/pickup/`, an Architect run's in `commands/architect/`, and a Security run's in `commands/secure/`. Tickets and nested Base fixes inherit that same ownership too.
 
+When a Command that produces a [Run notification](#run-notifications) ends, its subject and body are saved beside its Command log as `<Command log stem>.notification.txt`, whether or not email is enabled. For example, `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.log` has `7-20261003T120000-0400~aB3cD4eF5gH6iJ7k.notification.txt` beside it. The file starts with `Subject: <subject>`, then a blank line and the exact plain-text email body. A Pickup run writes one for the issue it took, and a Spec run writes one covering its Tickets; dispatched Runs, Ticket Runs and Base fixes write none of their own. A skipped Pass writes none. A failed write produces a `warning:` line and leaves the outcome unchanged. These files are not included in `thirdshift logs` or the Console's log inventory.
+
 A Resume is logged as its session's kind plus `-resume`, e.g. `implement-resume.jsonl`.
 
 A **Command log** is everything one command printed, stderr and stdout in the order printed, while the terminal still shows all of it. Its folder is the command typed: `thirdshift <Issue URL>`, a Run or a Spec run, in `issue/`, `thirdshift pickup` in `pickup/`, named for the issue it took, and `thirdshift architect` in `architect/`. A Spec run's covers its Tickets' Runs, a Run's covers its [Base fix](#base-fix), and a Pass's covers the Spec run or Run it dispatched: none of those keeps one of its own. So `ls -t ~/.thirdshift/logs/acme/widgets/commands/pickup/*.log | head` lists the recent passes on acme/widgets that took an issue. A command keeps its Command log once it starts work: a Pass skipped before doing any work keeps none, nor does a Run that fails before it starts work, as on the [Origin match](#what-a-run-does), and `setup`, `email-test`, `update`, `version` and `help` never keep one. Lines printed before the Command log's name is known, such as a Pickup run's lines on the issues it [passed over](#why-an-issue-was-passed-over) before it took one, are written first, and once it is created a progress line says `logging this command to <path>`. A Command log that can't be written produces one `warning:` line on stderr. A failure confined to the Command log leaves the outcome, stdout and exit code unchanged; if the shared folder also prevents writing a Session log, the Run fails before starting that session.
@@ -1178,7 +1188,7 @@ A Pickup run takes nothing while the repository is at its **Claim limit**: as ma
 
 - The count is every open issue labelled `in-progress` in the repository, whoever started it: a Run you started by hand counts as one a Pickup run dispatched does. Closed issues don't count.
 - `pickup.limit` in the [User config](#user-config) sets the limit, a whole number from 1 up, by default 3. Raise it on a machine where you review quickly; `limit = 1` takes one issue at a time. There is no command-line flag for it.
-- At or over the limit, the pass is skipped: exit `0`, stdout empty, and the reason on stderr with the count and the limit, such as `at the Claim limit on acme/widgets: 3 open issue(s) labelled in-progress, pickup.limit is 3`. No Ready issue is looked for, and no session is started.
+- At or over the limit, the pass is skipped: exit `0`, stdout empty, and the reason on stderr names every holding issue, lowest number first, along with the limit, such as `at the Claim limit on acme/widgets: #924, #936 and #953 are labelled in-progress, pickup.limit is 3`. No Ready issue is looked for, and no session is started.
 - An issue leaves the count when it is closed, as merging its pull request does, or when you take its `in-progress` label off.
 - If the issues can't be counted, the pass stops with exit `1` and `gh`'s error.
 

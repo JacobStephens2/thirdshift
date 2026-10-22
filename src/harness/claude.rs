@@ -5,7 +5,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result, bail};
 
-use super::adapter::{Adapter, Invocation, SkillLoading};
+use super::adapter::{Adapter, Invocation, SkillLoading, without};
 use super::interpretation::{Interpretation, Stream};
 use super::settings::{Terminal, ask_setting};
 use super::{Choice, Harness, ModelAndEffort, Settings, said};
@@ -13,6 +13,8 @@ use crate::progress;
 
 pub struct Claude;
 pub const REGISTRATION: (Harness, &dyn Adapter) = (Harness::Claude, &Claude);
+
+const ATTRIBUTION_SETTINGS: &str = r#"{"attribution":{"commit":"","pr":""}}"#;
 
 impl Adapter for Claude {
     fn name(&self) -> &'static str {
@@ -51,6 +53,7 @@ impl Adapter for Claude {
     }
     fn summary(&self, choice: &Choice, prompt: &str, _prompt_file: &Path) -> Invocation {
         let mut invocation = self.session(choice, None, prompt);
+        invocation.args = without(invocation.args, &["--settings", ATTRIBUTION_SETTINGS]);
         invocation.args.pop();
         invocation.stdin = Some(prompt.to_string());
         invocation.args.splice(
@@ -93,14 +96,21 @@ pub fn model_args(choice: &Choice) -> Vec<&str> {
 }
 
 /// The arguments every session runs `claude` with: headless in auto mode,
-/// on the Model and Effort `harness` sets, if any, streaming JSON. With
-/// `resume`, the session with that id continues. The prompt comes last.
+/// on the Model and Effort `harness` sets, if any, streaming JSON, with
+/// Claude Code's commit and PR attribution hidden. With `resume`, the session
+/// with that id continues. The prompt comes last.
 pub fn claude_args<'a>(
     harness: &'a Choice,
     resume: Option<&'a str>,
     prompt: &'a str,
 ) -> Vec<&'a str> {
-    let mut args = vec!["-p", "--permission-mode", "auto"];
+    let mut args = vec![
+        "-p",
+        "--permission-mode",
+        "auto",
+        "--settings",
+        ATTRIBUTION_SETTINGS,
+    ];
     args.extend(model_args(harness));
     args.extend(["--output-format", "stream-json", "--verbose"]);
     if let Some(session_id) = resume {
@@ -169,6 +179,54 @@ fn ask_claude(outside: &mut dyn Terminal, current: &ModelAndEffort) -> Result<Mo
             Err(error) => {
                 crate::interrupt::check()?;
                 outside.say(format!("{error:#}"));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn release_summaries_keep_their_existing_arguments() {
+        let invocation = Claude.summary(&Choice::default(), "summarize", Path::new("unused"));
+        assert_eq!(
+            invocation.args,
+            [
+                "-p",
+                "--tools",
+                "",
+                "--strict-mcp-config",
+                "--permission-mode",
+                "auto",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+            ]
+        );
+        assert_eq!(invocation.stdin.as_deref(), Some("summarize"));
+    }
+
+    #[test]
+    fn factory_sessions_and_resumes_hide_claudes_commit_and_pr_attribution() {
+        let choice = Choice::default();
+        for resume in [None, Some("session-id")] {
+            for invocation in [
+                Claude.session(&choice, resume, "implement or repair"),
+                Claude.code_review_session(&choice, resume, "review"),
+                Claude.security_session(&choice, resume, "security review", false),
+            ] {
+                let settings = invocation
+                    .args
+                    .windows(2)
+                    .find(|pair| pair[0] == "--settings")
+                    .expect("every factory session must pass attribution settings");
+                let settings: serde_json::Value = serde_json::from_str(&settings[1]).unwrap();
+                assert_eq!(
+                    settings["attribution"],
+                    serde_json::json!({"commit": "", "pr": ""})
+                );
             }
         }
     }

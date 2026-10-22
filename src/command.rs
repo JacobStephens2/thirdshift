@@ -110,11 +110,13 @@ pub fn start(
     // First, so no interrupt can end the command once its notification is
     // checked.
     interrupt::install().map_err(|error| failure(&error))?;
-    let notification = match ask(&config) {
-        NotificationAsk::Send(to) => {
-            Some(RunNotification::new(to, &config.email, about).map_err(|error| failure(&error))?)
-        }
-        NotificationAsk::Skip => None,
+    let notification = if started.is_some() {
+        Some(
+            RunNotification::new(ask(&config), &config.email, about)
+                .map_err(|error| failure(&error))?,
+        )
+    } else {
+        None
     };
     Ok((
         config,
@@ -144,8 +146,8 @@ impl Started {
 
     /// Finish the command that ended as `ending`: remove the Factory skills
     /// it wrote out for its sessions, if it did, write the Activity log's
-    /// end line, show how it ended, then send its Run notification, if it
-    /// asked for one. A skipped pass only shows how it ended: its skip is
+    /// end line, show how it ended, then save its Run notification and
+    /// email it if asked. A skipped pass only shows how it ended: its skip is
     /// recorded where it was decided, and it sends no notification. Returns
     /// its exit code.
     pub fn finish(self, ending: Ending) -> ExitCode {
@@ -167,7 +169,7 @@ impl Started {
         };
         let code = account.show(elapsed);
         if let Some(notification) = self.notification {
-            notification.send(&account);
+            notification.finish(&account);
         }
         code
     }

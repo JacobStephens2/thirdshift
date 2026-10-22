@@ -52,3 +52,57 @@ Measure local full-suite time with `/usr/bin/time -p cargo nextest run` (or
 wall time and whether compilation was included in the PR's evidence. Timings
 depend on host load and build cache; compare them with CI execution time rather
 than CI queue delay.
+
+## Setup PTY child lifetime
+
+`Scenario::run_terminal` kills and reaps its immediate child when it returns or
+unwinds, and bounds prompt and exit waits. Both PTY descriptors are close-on-exec;
+the child gets a new session and controlling terminal so interruption and
+terminal-restoration tests exercise normal terminal behavior.
+
+On Linux the fixture also arms `PR_SET_PDEATHSIG` with SIGKILL before exec, and
+checks the parent PID after arming it to close the parent-exit race. The child
+ends when its spawning test thread dies, including SIGKILL of the test process,
+even if another process retains a PTY master. This covers the immediate terminal
+child, not descendants it may start. Production commands are unchanged. See
+the [Linux parent-death signal contract](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html).
+
+`cargo test --test setup_lifetime` runs real setup children in separate fixture
+processes for successful completion, assertion unwinding, an exit timeout,
+SIGKILL, and SIGKILL with an inherited PTY master held open. The supervisor uses
+Linux's [subreaper facility](https://man7.org/linux/man-pages/man2/PR_SET_CHILD_SUBREAPER.2const.html)
+to adopt and reap exact recorded orphan PIDs. It owns the fixtures' temporary
+subtrees and cleans up its recorded children even on a failed assertion.
+
+macOS retains Drop cleanup and terminal hangup when the last master closes. It
+has no Linux parent-death signal or subreaper facility: the abrupt-death guarantee
+with a retained master is Linux-only, and the lifecycle supervisor test is
+explicitly skipped on macOS with that platform limit. Existing setup interruption
+and terminal-restoration tests still run there.
+
+## Release fixture child lifetime
+
+Linux release-script and script-function tests use `FixtureChild` from the same
+child-lifetime helper. Each command has a 120-second wait bound, with stdout and
+stderr included in a timeout panic. File-backed input and output keep inherited
+descriptors and large input from blocking that wait.
+
+A dedicated guardian process acts as a Linux subreaper for each command. Normal
+completion, timeout and assertion unwinding kill and reap its owned descendants,
+including release-summary Harnesses that start new process groups. If SIGKILL
+ends the fixture harness, EOF on the guardian's private, close-on-exec stdin pipe
+requests the same cleanup before the guardian exits. The immediate command also
+uses the setup helper's Linux parent-death signal. Cleanup names only unreaped
+children of that guardian; git maintenance remains disabled in these fixtures.
+
+`cargo test --test release lifetime::` runs the full release script with a focused
+fake `gh`. Missing and pending runs at both CI and release-workflow waits trigger
+a 500ms fixture deadline; an outer supervisor allows five seconds for the fixture
+to fail with captured diagnostics. Separate cases cover successful completion,
+assertion unwinding and SIGKILL of the fixture harness. The supervisor adopts and
+reaps recorded script, guardian and descendant PIDs. A hung summary Harness is
+also covered on timeout and SIGKILL. Fixture setup and its
+supervisor handshake use the shared 120-second readiness bound.
+
+Release-script tests remain Linux-only. These deadlines belong to tests;
+production release polling still has no overall timeout and resumes on rerun.

@@ -11,11 +11,18 @@
 
 mod support;
 
+#[cfg(target_os = "linux")]
+#[path = "release/lifetime.rs"]
+mod lifetime;
+
 use std::fs;
+#[cfg(not(target_os = "linux"))]
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+#[cfg(not(target_os = "linux"))]
+use std::process::Stdio;
+use std::process::{Command, Output};
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
@@ -479,13 +486,14 @@ impl Release {
     /// runs it with, then runs the bash `code`, which sets what the earlier
     /// steps would have and calls its functions.
     fn with_functions(&self, code: &str) -> Output {
-        self.command(Path::new("bash"), &self.maintainer())
-            .arg("-c")
-            .arg(format!("source \"$1\"\n{code}"))
-            .arg("bash")
-            .arg(manifest_dir().join("scripts/release.sh"))
-            .output()
-            .expect("could not run bash")
+        with_input(
+            self.command(Path::new("bash"), &self.maintainer())
+                .arg("-c")
+                .arg(format!("source \"$1\"\n{code}"))
+                .arg("bash")
+                .arg(manifest_dir().join("scripts/release.sh")),
+            "",
+        )
     }
 
     /// Runs the Release notes script for `tag` in the maintainer's clone,
@@ -493,13 +501,14 @@ impl Release {
     /// instructions.
     fn run_notes_script(&self, tag: &str) -> Output {
         git(&self.maintainer(), &["fetch", "-q", "--tags", "origin"]);
-        self.command(
-            &manifest_dir().join("scripts/release-notes.sh"),
-            &self.maintainer(),
+        with_input(
+            self.command(
+                &manifest_dir().join("scripts/release-notes.sh"),
+                &self.maintainer(),
+            )
+            .args([tag, INSTALL_NOTES]),
+            "",
         )
-        .args([tag, INSTALL_NOTES])
-        .output()
-        .expect("could not run release-notes.sh")
     }
 
     /// GitHub's generated notes for `tag`, from the fake `gh`.
@@ -659,6 +668,12 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+#[cfg(target_os = "linux")]
+fn with_input(command: &mut Command, input: &str) -> Output {
+    support::child_lifetime::FixtureChild::spawn(command, input).wait(support::WAIT_BOUND)
+}
+
+#[cfg(not(target_os = "linux"))]
 fn with_input(command: &mut Command, input: &str) -> Output {
     let mut child = command
         .stdin(Stdio::piped())
@@ -680,14 +695,15 @@ fn stdout(output: &Output) -> String {
 /// step go here, and one case of each through the whole script.
 fn with_functions_of(script: &str, code: &str) -> Output {
     let dir = TempDir::new().unwrap();
-    isolated(&mut Command::new("bash"))
-        .arg("-c")
-        .arg(format!("source \"$1\"\n{code}"))
-        .arg("bash")
-        .arg(manifest_dir().join("scripts").join(script))
-        .current_dir(dir.path())
-        .output()
-        .expect("could not run bash")
+    with_input(
+        isolated(&mut Command::new("bash"))
+            .arg("-c")
+            .arg(format!("source \"$1\"\n{code}"))
+            .arg("bash")
+            .arg(manifest_dir().join("scripts").join(script))
+            .current_dir(dir.path()),
+        "",
+    )
 }
 
 /// A release workflow run that failed in the Rocky Linux smoke check.

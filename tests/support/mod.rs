@@ -110,6 +110,8 @@ const COPY_IN_USE: &str = "copy-in-use";
 const COPY_REPLACED: &str = "copy-replaced";
 
 pub mod check;
+#[cfg(target_os = "linux")]
+pub mod child_lifetime;
 
 pub struct Scenario {
     /// Deletes the temp root when the scenario is dropped.
@@ -136,6 +138,7 @@ pub enum TerminalInput<'a> {
     Line(&'a str),
     Bytes(&'a [u8]),
     Signal(libc::c_int),
+    Inspect(&'a dyn Fn(u32)),
 }
 
 pub struct TerminalStep<'a> {
@@ -162,6 +165,14 @@ impl<'a> TerminalStep<'a> {
         Self {
             wait: TerminalWait::Prompt(prompt),
             input: TerminalInput::Signal(signal),
+        }
+    }
+
+    /// Inspect the fixture-owned child's lifetime once it reaches a prompt.
+    pub fn inspect(prompt: &'a str, inspect: &'a dyn Fn(u32)) -> Self {
+        Self {
+            wait: TerminalWait::Prompt(prompt),
+            input: TerminalInput::Inspect(inspect),
         }
     }
 
@@ -658,6 +669,17 @@ test -f {root}/{COPY_REPLACED}
         env: &[(&str, &str)],
         steps: &[TerminalStep],
     ) -> TerminalResult {
+        self.run_terminal_bounded(args, env, steps, WAIT_BOUND)
+    }
+
+    /// Drive a terminal with a shorter wait bound for lifecycle regressions.
+    pub fn run_terminal_bounded(
+        &self,
+        args: &[&str],
+        env: &[(&str, &str)],
+        steps: &[TerminalStep],
+        wait_bound: Duration,
+    ) -> TerminalResult {
         use std::io::{Read, Write};
         use std::os::fd::{FromRawFd, OwnedFd};
         use std::os::unix::process::CommandExt;
@@ -693,6 +715,8 @@ test -f {root}/{COPY_REPLACED}
             .stdin(Stdio::from(slave.try_clone().unwrap()))
             .stderr(Stdio::from(slave))
             .stdout(Stdio::piped());
+        #[cfg(target_os = "linux")]
+        child_lifetime::kill_with_parent(&mut command);
         // The terminal becomes the child's controlling terminal, so Ctrl-C
         // on it sends SIGINT, as in a shell.
         unsafe {
@@ -736,7 +760,7 @@ test -f {root}/{COPY_REPLACED}
                 TerminalWait::Prompt(prompt) => format!("the terminal never showed {prompt:?}"),
                 TerminalWait::CheckReady => "the check never started".to_string(),
             };
-            let deadline = Instant::now() + WAIT_BOUND;
+            let deadline = Instant::now() + wait_bound;
             loop {
                 // Once the Run has exited, the terminal is read to its end
                 // before it is searched, so nothing the Run showed is missed.
@@ -774,6 +798,7 @@ test -f {root}/{COPY_REPLACED}
                 std::thread::sleep(Duration::from_millis(10));
             }
             match step.input {
+                TerminalInput::Inspect(inspect) => inspect(child.id()),
                 TerminalInput::Signal(signal) => {
                     // SAFETY: signal only this test's exact running child.
                     assert_eq!(unsafe { libc::kill(child.id() as _, signal) }, 0);
@@ -784,7 +809,7 @@ test -f {root}/{COPY_REPLACED}
                 }
             }
         }
-        let deadline = Instant::now() + WAIT_BOUND;
+        let deadline = Instant::now() + wait_bound;
         let status = loop {
             if let Some(status) = child.try_wait().unwrap() {
                 break status;

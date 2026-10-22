@@ -1,5 +1,5 @@
-//! The Run notification: one email when a Run, a Spec run or a Pass ends,
-//! whatever its outcome, unless the Pass was skipped,
+//! The Run notification: saved beside the Command log when a Run, a Spec
+//! run or a Pass ends, unless the Pass was skipped, and optionally emailed
 //! through the same checks and the same send as `email-test`.
 
 use std::path::Path;
@@ -18,39 +18,14 @@ use crate::logs;
 use crate::progress;
 use crate::run_ending::Account;
 
-/// What a Run or a Pass asks about its Run
-/// notification, by its command or, without `email` or `no-email`, by the
-/// User config.
+/// Whether a Run or a Pass emails its Run notification, by its command or,
+/// without `email` or `no-email`, by the User config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NotificationAsk {
     /// Send one, to this address, else to `email.to`.
     Send(Option<String>),
-    /// Send none.
+    /// Save it without emailing it.
     Skip,
-}
-
-/// A Run notification's checks, passed, and when they were made: what every
-/// run that asks for one holds from before any work until it ends.
-struct Checked {
-    resend: Resend,
-    started: Instant,
-    started_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl Checked {
-    /// The checks of a Run notification sent to `to`, else to `email.to`,
-    /// for a run starting now. Fails with the same checks as `email-test`: an
-    /// address is known and a Resend API key is found.
-    fn new(to: Option<String>, settings: &EmailSettings) -> Result<Self> {
-        let started = Instant::now();
-        let started_at = chrono::Utc::now();
-        let resend = Resend::new(to, settings)?;
-        Ok(Checked {
-            resend,
-            started,
-            started_at,
-        })
-    }
 }
 
 /// What a Run notification is about, as a command starts.
@@ -97,24 +72,32 @@ impl Subject {
     }
 }
 
-/// A Run notification, checked and waiting for its command to end.
+/// A Run notification waiting for its command to end, with email checked
+/// when requested.
 pub struct RunNotification {
-    checked: Checked,
+    resend: Option<Resend>,
+    started: Instant,
+    started_at: chrono::DateTime<chrono::Utc>,
     subject: Subject,
     /// The command's configured Harness, Model and Effort, once known.
     configured: Option<String>,
 }
 
 impl RunNotification {
-    /// The Run notification for a command about `about` starting now, sent
-    /// to `to`, else to `email.to`. Fails, before any work, with the same
-    /// checks as `email-test`: an address is known and a Resend API key is
-    /// found. Once they pass, it reads a Run's issue title and kind now, while someone
+    /// The Run notification for a command about `about` starting now. If
+    /// `ask` requests email, checks it before any work, as `email-test` does:
+    /// an address is known and a Resend API key is found. Reads a Run's
+    /// issue title and kind now, while someone
     /// may be watching, rather than after the Run, when a hung `gh` could
     /// keep the notification from ever going; and an Architect run's
     /// repository.
-    pub fn new(to: Option<String>, settings: &EmailSettings, about: About) -> Result<Self> {
-        let checked = Checked::new(to, settings)?;
+    pub fn new(ask: NotificationAsk, settings: &EmailSettings, about: About) -> Result<Self> {
+        let started = Instant::now();
+        let started_at = chrono::Utc::now();
+        let resend = match ask {
+            NotificationAsk::Send(to) => Some(Resend::new(to, settings)?),
+            NotificationAsk::Skip => None,
+        };
         let subject = match about {
             About::Issue(issue) => Subject::Issue {
                 issue: issue.clone(),
@@ -135,7 +118,9 @@ impl RunNotification {
             About::SecurityRun => Subject::SecurityRun(launch::repo().ok()),
         };
         Ok(RunNotification {
-            checked,
+            resend,
+            started,
+            started_at,
             subject,
             configured: None,
         })
@@ -159,12 +144,12 @@ impl RunNotification {
         self.configured = Some(format!("{harness} (configured)"));
     }
 
-    /// Send the one notification for the command that ended as `account`
-    /// tells. A Pickup run that took no issue has nothing to tell, and sends
-    /// none, as a skipped pass, which has no account, does not either. A
-    /// failed send is only a warning: it never changes the command's
-    /// outcome.
-    pub fn send(self, account: &Account) {
+    /// Save the one notification for the command that ended as `account`
+    /// tells, and email it if asked. A Pickup run that took no issue has
+    /// nothing to tell, as a skipped pass, which has no account, does not
+    /// either. A failed write or send is only a warning: it never changes
+    /// the command's outcome.
+    pub fn finish(self, account: &Account) {
         let Some(subject) = subject_line(&self.subject, account.outcome) else {
             return;
         };
@@ -176,12 +161,12 @@ impl RunNotification {
             self.configured.as_deref(),
             command_log.as_deref(),
             host.as_deref().unwrap_or("unknown host"),
-            self.checked.started.elapsed(),
+            self.started.elapsed(),
         );
         if account.pre_audit_failure.is_some() {
             text += &format!(
                 "Started (UTC): {}\nDiagnostics:  Check this command's stderr on {} at that time (or the scheduler's captured stderr, if scheduled).\n",
-                self.checked.started_at.format("%Y-%m-%d %H:%M:%S UTC"),
+                self.started_at.format("%Y-%m-%d %H:%M:%S UTC"),
                 host.as_deref().unwrap_or("unknown host"),
             );
         }
@@ -193,7 +178,18 @@ impl RunNotification {
                 text += &format!("{line}\n");
             }
         }
-        if let Err(error) = self.checked.resend.send(&subject, &text) {
+        if let Some(log) = command_log {
+            let path = log.with_extension("notification.txt");
+            if let Err(error) = std::fs::write(&path, format!("Subject: {subject}\n\n{text}")) {
+                progress::step(format_args!(
+                    "warning: could not save the Run notification to {}: {error}",
+                    path.display()
+                ));
+            }
+        }
+        if let Some(resend) = self.resend
+            && let Err(error) = resend.send(&subject, &text)
+        {
             progress::step(format_args!(
                 "warning: could not send the Run notification: {error:#}"
             ));

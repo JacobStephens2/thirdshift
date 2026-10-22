@@ -186,7 +186,8 @@ fn a_run_keeps_a_command_log_of_everything_it_printed_and_its_session_logs_share
         [
             format!("7-{identity_fragment}-implement.jsonl"),
             format!("7-{identity_fragment}-implement.models.json"),
-            path.file_name().unwrap().to_str().unwrap().to_string()
+            path.file_name().unwrap().to_str().unwrap().to_string(),
+            format!("7-{identity_fragment}.notification.txt"),
         ]
     );
     assert_eq!(logs_in(&scenario, ""), ["activity.log", "commands"]);
@@ -252,7 +253,8 @@ fn a_pickup_run_that_takes_an_issue_keeps_a_command_log_from_its_first_line() {
         [
             format!("7-{identity_fragment}-implement.jsonl"),
             format!("7-{identity_fragment}-implement.models.json"),
-            path.file_name().unwrap().to_str().unwrap().to_string()
+            path.file_name().unwrap().to_str().unwrap().to_string(),
+            format!("7-{identity_fragment}.notification.txt"),
         ]
     );
 }
@@ -275,6 +277,7 @@ fn a_pickup_spec_keeps_its_tickets_session_logs_beside_its_command_log() {
             format!("20-{identity_fragment}-spec-review.jsonl"),
             format!("20-{identity_fragment}-spec-review.models.json"),
             path.file_name().unwrap().to_str().unwrap().to_string(),
+            format!("20-{identity_fragment}.notification.txt"),
             format!("21-{identity_fragment}-implement.jsonl"),
             format!("21-{identity_fragment}-implement.models.json"),
             format!("22-{identity_fragment}-implement.jsonl"),
