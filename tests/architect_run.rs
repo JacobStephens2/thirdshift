@@ -1443,7 +1443,7 @@ fn plan_only_sends_one_notification_naming_the_plan() {
     );
     assert!(
         text.starts_with(&format!(
-            "Result:       plan published\nCommand:      Architect run\nRepository:   acme/widgets\nReview:       plan published: {PLAN_URL}\nDescription:  Deepen the session module\n"
+            "Result:       plan published\nCommand:      Architect run\nRepository:   acme/widgets\nReview:       plan published: {PLAN_URL}\nDescription:  Deepen the session module\nStrength:     Strong\n"
         )),
         "{text}"
     );
@@ -1457,7 +1457,7 @@ fn a_review_that_files_an_idea_sends_one_notification_naming_the_idea() {
     scenario.agent_does(
         r#"
 url=$(gh issue create --title "Deepen the session module" --body "The idea" --label needs-triage)
-printf 'Architecture review idea: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+printf 'Recommendation strength: Worth exploring\nArchitecture review idea: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#,
     );
     let resend = ResendStandIn::replying(200, ACCEPTED);
@@ -1476,7 +1476,7 @@ printf 'Architecture review idea: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
     );
     assert!(
         text.starts_with(&format!(
-            "Result:       idea filed\nCommand:      Architect run\nRepository:   acme/widgets\nReview:       idea filed: {PLAN_URL}\nDescription:  Deepen the session module\n"
+            "Result:       idea filed\nCommand:      Architect run\nRepository:   acme/widgets\nReview:       idea filed: {PLAN_URL}\nDescription:  Deepen the session module\nStrength:     Worth exploring\n"
         )),
         "{text}"
     );
@@ -1506,10 +1506,47 @@ fn a_review_whose_idea_is_already_filed_sends_one_notification_naming_that_issue
     );
     assert!(
         text.starts_with(&format!(
-            "Result:       idea already filed\nCommand:      Architect run\nRepository:   acme/widgets\nReview:       idea already filed: {url}\nDescription:  Issue 7\n"
+            "Result:       idea already filed\nCommand:      Architect run\nRepository:   acme/widgets\nReview:       idea already filed: {url}\nDescription:  Issue 7\nStrength:     not reported\n"
         )),
         "{text}"
     );
+}
+
+#[test]
+fn idea_notifications_include_the_reviewed_strength_without_guessing_missing_ratings() {
+    for report in ["idea", "already filed"] {
+        for (metadata, expected) in [
+            ("Recommendation strength: Strong\n", "Strong"),
+            (
+                "Recommendation strength: Worth exploring\n",
+                "Worth exploring",
+            ),
+            ("Recommendation strength: Speculative\n", "Speculative"),
+            ("", "not reported"),
+            ("Recommendation strength: unknown\n", "not reported"),
+        ] {
+            let scenario = scenario();
+            let url = scenario.issue_url(7);
+            scenario.agent_does(&ends_with(&format!(
+                "{metadata}Architecture review {report}: {url}"
+            )));
+            let resend = ResendStandIn::replying(200, ACCEPTED);
+
+            let result = run_with_resend(
+                &scenario,
+                &resend,
+                &["architect", "--email", "me@example.com"],
+            );
+
+            assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+            let (_, text) = the_one_notification(&resend);
+            assert!(
+                text.contains(&format!("\nStrength:     {expected}\n")),
+                "{report}, {metadata:?}: {text}"
+            );
+            assert!(!text.contains("Dispatched:"), "{text}");
+        }
+    }
 }
 
 #[test]
@@ -1574,6 +1611,7 @@ fn email_always_sends_one_notification_for_the_review_and_the_run_it_dispatched(
              Repository:   acme/widgets\n\
              Review:       plan published: {PLAN_URL}\n\
              Description:  Deepen the session module\n\
+             Strength:     Strong\n\
              Dispatched:   ready for review\n\
              Pull request: {PR_URL}\n"
         )),
@@ -1602,6 +1640,7 @@ fn the_one_notification_says_what_became_of_the_dispatched_runs_base_fix() {
              Repository:   acme/widgets\n\
              Review:       plan published: {PLAN_URL}\n\
              Description:  Deepen the session module\n\
+             Strength:     Strong\n\
              Dispatched:   ready for review\n\
              Pull request: {PR_URL}\n\
              Base fix:     https://github.com/acme/widgets/issues/9 merged\n"
@@ -1629,6 +1668,7 @@ fn a_dispatched_spec_run_sends_no_notification_of_its_own_and_its_tickets_are_in
              Repository:   acme/widgets\n\
              Review:       plan published: {PLAN_URL}\n\
              Description:  Deepen the session module\n\
+             Strength:     Strong\n\
              Dispatched:   merged\n\
              Pull request: {}\n",
             spec_pr["url"].as_str().unwrap()
@@ -1665,6 +1705,7 @@ fn a_dispatched_run_that_fails_sends_one_notification_with_its_outcome_and_cause
              Repository:   acme/widgets\n\
              Review:       plan published: {PLAN_URL}\n\
              Description:  Deepen the session module\n\
+             Strength:     Strong\n\
              Dispatched:   failed\n\
              Pull request: {PR_URL}\n\
              Cause:        claude exited 3\n"
@@ -1787,6 +1828,7 @@ fn a_dispatched_spec_run_that_fails_sends_one_notification_with_each_tickets_out
              Repository:   acme/widgets\n\
              Review:       plan published: {PLAN_URL}\n\
              Description:  Deepen the session module\n\
+             Strength:     Strong\n\
              Dispatched:   failed\n"
         )),
         "{text}"

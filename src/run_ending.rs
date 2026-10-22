@@ -146,6 +146,8 @@ pub struct Account<'a> {
 pub struct Review<'a> {
     /// The title of the issue the review ended on, if known.
     pub title: Option<&'a str>,
+    /// The recommendation's strength; absent when the review failed.
+    pub strength: Option<&'static str>,
     /// How it ended, with the issue it ended on, as in `plan published:
     /// <url>`; else `failed` or `interrupted`.
     pub line: String,
@@ -278,6 +280,7 @@ impl<'a> Account<'a> {
         Account {
             review: Some(Review {
                 title: review.as_ref().ok().and_then(Reviewed::title),
+                strength: review.as_ref().ok().map(Reviewed::strength),
                 line,
                 dispatched,
             }),
@@ -698,6 +701,7 @@ mod tests {
             Account {
                 review: Some(Review {
                     title: None,
+                    strength: Some("Strong"),
                     line: format!("plan published: {PLAN}"),
                     dispatched: Some(PLAN),
                 }),
@@ -713,6 +717,7 @@ mod tests {
             Account {
                 review: Some(Review {
                     title: None,
+                    strength: Some("Strong"),
                     line: format!("plan published: {PLAN}"),
                     dispatched: Some(PLAN),
                 }),
@@ -731,12 +736,12 @@ mod tests {
                 format!("plan {PLAN} is ready for an agent"),
             ),
             (
-                Reviewed::IdeaFiled(issue(), None),
+                Reviewed::IdeaFiled(issue(), None, None),
                 "idea filed",
                 format!("no Strong candidate: the Architecture review filed the idea {PLAN}"),
             ),
             (
-                Reviewed::AlreadyFiled(issue(), None),
+                Reviewed::AlreadyFiled(issue(), None, None),
                 "idea already filed",
                 format!(
                     "no Strong candidate: {PLAN} already covers the Architecture review's \
@@ -761,6 +766,11 @@ mod tests {
                     ticket_lines: &[],
                     review: Some(Review {
                         title: None,
+                        strength: Some(if outcome == "plan published" {
+                            "Strong"
+                        } else {
+                            "not reported"
+                        }),
                         line: format!("{outcome}: {PLAN}"),
                         dispatched: None,
                     }),
@@ -787,6 +797,7 @@ mod tests {
                 outcome: "review failed",
                 review: Some(Review {
                     title: None,
+                    strength: None,
                     line: "failed".to_string(),
                     dispatched: None,
                 }),
@@ -804,6 +815,7 @@ mod tests {
                 interrupted: true,
                 review: Some(Review {
                     title: None,
+                    strength: None,
                     line: "interrupted".to_string(),
                     dispatched: None,
                 }),
@@ -902,6 +914,7 @@ mod tests {
         let review = |dispatched| {
             Some(Review {
                 title: None,
+                strength: Some("Strong"),
                 line: format!("plan published: {PLAN}"),
                 dispatched,
             })

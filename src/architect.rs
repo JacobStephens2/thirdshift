@@ -144,13 +144,58 @@ pub enum Reviewed {
     PlanReady(IssueUrl, Option<String>),
     /// The review found no Strong candidate, and filed its top
     /// recommendation as this issue.
-    IdeaFiled(IssueUrl, Option<String>),
+    IdeaFiled(IssueUrl, Option<String>, Option<Strength>),
     /// The review found no Strong candidate, and filed nothing: this open
     /// issue already covers its top recommendation.
-    AlreadyFiled(IssueUrl, Option<String>),
+    AlreadyFiled(IssueUrl, Option<String>, Option<Strength>),
+}
+
+/// The Architecture review's rating of its top recommendation.
+#[derive(Debug, Clone, Copy)]
+pub enum Strength {
+    Strong,
+    WorthExploring,
+    Speculative,
+}
+
+impl Strength {
+    /// Read the metadata line immediately before the final issue line.
+    /// Older or malformed output leaves the rating unknown.
+    fn read(final_message: &str) -> Option<Self> {
+        let line = final_message
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .rev()
+            .nth(1)?;
+        match line.strip_prefix(prompt::STRENGTH_LINE)? {
+            "Strong" => Some(Self::Strong),
+            "Worth exploring" => Some(Self::WorthExploring),
+            "Speculative" => Some(Self::Speculative),
+            _ => None,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Strong => "Strong",
+            Self::WorthExploring => "Worth exploring",
+            Self::Speculative => "Speculative",
+        }
+    }
 }
 
 impl Reviewed {
+    /// The top recommendation's strength, as the Run notification says it.
+    pub fn strength(&self) -> &'static str {
+        match self {
+            Self::PlanReady(..) => "Strong",
+            Self::IdeaFiled(_, _, strength) | Self::AlreadyFiled(_, _, strength) => {
+                strength.map(Strength::as_str).unwrap_or("not reported")
+            }
+        }
+    }
+
     /// How the Architecture review ended, as the Architect run's Run
     /// notification says it.
     pub fn review(&self) -> &'static str {
@@ -165,8 +210,8 @@ impl Reviewed {
     pub fn url(&self) -> &str {
         match self {
             Self::PlanReady(issue, _)
-            | Self::IdeaFiled(issue, _)
-            | Self::AlreadyFiled(issue, _) => &issue.url,
+            | Self::IdeaFiled(issue, _, _)
+            | Self::AlreadyFiled(issue, _, _) => &issue.url,
         }
     }
 
@@ -174,8 +219,8 @@ impl Reviewed {
     pub fn title(&self) -> Option<&str> {
         match self {
             Self::PlanReady(_, title)
-            | Self::IdeaFiled(_, title)
-            | Self::AlreadyFiled(_, title) => title.as_deref(),
+            | Self::IdeaFiled(_, title, _)
+            | Self::AlreadyFiled(_, title, _) => title.as_deref(),
         }
     }
 }
@@ -449,11 +494,13 @@ fn conclude(
         }
         Some(Report::Idea(idea)) => {
             let title = label_idea(outside, &idea)?;
-            Ok(Reviewed::IdeaFiled(idea, title))
+            let strength = final_message.and_then(Strength::read);
+            Ok(Reviewed::IdeaFiled(idea, title, strength))
         }
         Some(Report::AlreadyFiled(issue)) => {
             let title = label_idea(outside, &issue)?;
-            Ok(Reviewed::AlreadyFiled(issue, title))
+            let strength = final_message.and_then(Strength::read);
+            Ok(Reviewed::AlreadyFiled(issue, title, strength))
         }
         None => bail!("the Architecture review ended without the final line its prompt asks for"),
     }

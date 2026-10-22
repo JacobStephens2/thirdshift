@@ -128,4 +128,4 @@ Unless the scan surfaced no candidate at all, end your final message with the on
 - the idea issue, when you filed one;
 - the open issue that already covers the top recommendation, when you filed nothing.
 
-thirdshift reads only that line, so everything else you want read belongs in the issue.
+Include any recommendation metadata the Session prompt asks for before that final line. Keep the full candidate card in the issue.
