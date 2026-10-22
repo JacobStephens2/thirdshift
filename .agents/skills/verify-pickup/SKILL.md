@@ -48,7 +48,7 @@ This skill authorizes verification edits only. Product fixes need their own task
 
 ## Coverage and sync
 
-Last confirmed source commit: `25ec54bc6d8e7c16d4bed1d49fafec2294f61747`.
+Last confirmed source commit: `4d4756b102af44e1fedd1fc625a61ff1d4364fe7`.
 The model describes these functions, including their ordering:
 
 | Source | Covered functions / requests |
