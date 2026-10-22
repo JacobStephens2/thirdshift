@@ -119,8 +119,10 @@ fn conversion_retries_a_kept_session_with_large_trailing_results() {
     let tool = json!({"type": "assistant", "message": {"content": [{
         "type": "tool_use", "id": "call-1", "name": "Bash", "input": {"command": "cargo test"}
     }]}});
-    let result = json!({"type": "result", "subtype": "success", "result": "\"".repeat(2_000)});
-    let raw = format!("{earlier}\n{tool}\n{}", format!("{result}\n").repeat(12));
+    let raw = format!(
+        "{earlier}\n{tool}\n{}",
+        support::session_trace::large_result_tail()
+    );
     let session = fixture(&scenario, "claude", &raw);
     let root = scenario.path("home/.thirdshift/logs");
     // A failed conversion keeps its original and receipt, without publishing

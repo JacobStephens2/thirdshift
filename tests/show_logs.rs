@@ -675,15 +675,12 @@ fn show_keeps_the_last_tool_call_after_large_session_trace_results() {
     let records = session.with_extension("logs.jsonl");
     fs::remove_file(&records).unwrap();
     let tool = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo test"}}]}}"#;
-    let result = serde_json::json!({
-        "type": "result", "subtype": "success", "result": "\"".repeat(2_000)
-    });
     // Enough trailing results to fill the encoded window, while the tool call
     // remains well inside the old raw window after a long Session's history.
     let contents = format!(
         "{}\n{tool}\n{}",
         "older diagnostic\n".repeat(20_000),
-        format!("{result}\n").repeat(12)
+        support::session_trace::large_result_tail()
     );
     fs::write(session, &contents).unwrap();
     let raw = scenario.run(&["show", "widgets#7", "--json"]);
