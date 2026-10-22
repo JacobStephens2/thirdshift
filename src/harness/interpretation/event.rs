@@ -5,7 +5,7 @@
 
 use serde::Serialize;
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -46,6 +46,9 @@ pub enum Event {
         input: Value,
         result: Value,
         outcome: Outcome,
+        /// Late authoritative metadata can refine a prior end. Consumers update
+        /// that call's outcome without counting another call or moving its end.
+        amended: bool,
     },
     Message {
         role: String,
@@ -216,7 +219,7 @@ impl Agents {
 /// at completion, while repeated snapshots never become extra calls.
 #[derive(Default)]
 pub(in crate::harness) struct Tools {
-    seen: HashSet<(Option<String>, String)>,
+    ended: HashMap<(Option<String>, String), Outcome>,
     running: Vec<Tool>,
 }
 
@@ -236,6 +239,7 @@ impl Tool {
             input: self.input,
             result,
             outcome,
+            amended: false,
         }
     }
 }
@@ -248,15 +252,16 @@ impl Tools {
         tool: String,
         input: Value,
     ) -> Option<Event> {
-        if !self.seen.insert((parent_id.clone(), id.into())) {
-            if let Some(call) = self
-                .running
-                .iter_mut()
-                .find(|call| call.parent_id == parent_id && call.id == id)
-            {
-                call.input = input;
-                call.name = tool;
-            }
+        if self.ended.contains_key(&(parent_id.clone(), id.into())) {
+            return None;
+        }
+        if let Some(call) = self
+            .running
+            .iter_mut()
+            .find(|call| call.parent_id == parent_id && call.id == id)
+        {
+            call.input = input;
+            call.name = tool;
             return None;
         }
         self.running.push(Tool {
@@ -285,7 +290,40 @@ impl Tools {
             .iter()
             .position(|call| call.parent_id == parent_id && call.id == id)?;
         let call = self.running.remove(index);
+        self.ended.insert((parent_id, id.into()), outcome);
         Some(call.end(result, outcome))
+    }
+
+    pub(in crate::harness) fn deny(
+        &mut self,
+        id: &str,
+        parent_id: Option<String>,
+        tool: String,
+        input: Value,
+        result: Value,
+    ) -> Vec<Event> {
+        let key = (parent_id.clone(), id.into());
+        if let Some(previous) = self.ended.get_mut(&key) {
+            if *previous == Outcome::Denied {
+                return Vec::new();
+            }
+            *previous = Outcome::Denied;
+            return vec![Event::ToolCallEnded {
+                id: id.into(),
+                parent_id,
+                tool,
+                input,
+                result,
+                outcome: Outcome::Denied,
+                amended: true,
+            }];
+        }
+        let mut output: Vec<_> = self
+            .start(id, parent_id.clone(), tool, input)
+            .into_iter()
+            .collect();
+        output.extend(self.end(id, parent_id, result, Outcome::Denied));
+        output
     }
 
     pub(in crate::harness) fn stop(&mut self, outcome: Outcome) -> Vec<Event> {
@@ -305,6 +343,8 @@ impl Tools {
         for call in std::mem::take(&mut self.running) {
             if matches(&call) {
                 let id = call.id.clone();
+                self.ended
+                    .insert((call.parent_id.clone(), id.clone()), outcome);
                 output.push(call.end(Value::Null, outcome));
                 output.push(Event::WorkEnded { id, outcome });
             } else {

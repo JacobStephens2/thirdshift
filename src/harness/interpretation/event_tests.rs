@@ -2,7 +2,62 @@ use crate::harness::{Harness, interpretation_tests::stream};
 use serde_json::{Value, json};
 
 #[test]
-#[ignore = "Codex exec has no per-request boundaries; requires a Spec #700 decision (see PR Unaddressed findings)"]
+fn review_claude_permission_denial_metadata_overrides_prior_tool_error() {
+    use serde_json::json;
+
+    let mut decoder =
+        crate::harness::interpretation_tests::stream(crate::harness::Harness::Claude, "");
+    let mut events = Vec::new();
+    for record in [
+        json!({"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"deny","name":"Bash","input":{"command":"git push"}}]}}),
+        json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"deny","content":"Tool use rejected by policy.","is_error":true}]}}),
+        json!({"type":"result","subtype":"success","is_error":false,"permission_denials":[{"tool_use_id":"deny","tool_name":"Bash","tool_input":{"command":"git push"}}]}),
+    ] {
+        events.extend(decoder.decode(&record.to_string()).events);
+    }
+    let events = serde_json::to_value(events).unwrap();
+    let events = events.as_array().unwrap();
+    let last_end = events
+        .iter()
+        .filter(|event| event["type"] == "tool_call_ended" && event["id"] == "deny")
+        .next_back()
+        .unwrap();
+    assert_eq!(last_end["outcome"], "denied", "{events:?}");
+}
+
+#[test]
+fn late_denial_metadata_amends_the_same_call_once() {
+    let denial = json!({"type":"result","subtype":"success","permission_denials":[{"tool_use_id":"deny","tool_name":"Bash","tool_input":{"command":"git push"}}]});
+    let events = decoded(
+        Harness::Claude,
+        [
+            json!({"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"deny","name":"Bash","input":{"command":"git push"}}]}}),
+            json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"deny","content":"opaque failure","is_error":true}]}}),
+            denial.clone(),
+            denial,
+        ],
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event["type"] == "tool_call_started")
+            .count(),
+        1
+    );
+    let ends: Vec<_> = events
+        .iter()
+        .filter(|event| event["type"] == "tool_call_ended")
+        .collect();
+    assert_eq!(ends.len(), 2);
+    assert_eq!(ends[0]["outcome"], "failed");
+    assert_eq!(ends[0]["amended"], false);
+    assert_eq!(ends[1]["id"], "deny");
+    assert_eq!(ends[1]["outcome"], "denied");
+    assert_eq!(ends[1]["amended"], true);
+}
+
+#[test]
+#[ignore = "Codex exec has no per-request boundaries; Spec decision: https://github.com/JacobStephens2/thirdshift/issues/1047"]
 fn review_codex_fixture_contains_model_call_lifecycles() {
     let mut decoder =
         crate::harness::interpretation_tests::stream(crate::harness::Harness::Codex, "");
@@ -454,7 +509,7 @@ fn claude_normalizes_calls_messages_and_reported_usage_without_changing_progress
             {"type":"message","role":"assistant","text":"Checking.","parent_id":null},
             {"type":"tool_call_started","id":"t1","parent_id":null,"tool":"Bash","input":{"command":"cargo check"}},
             {"type":"model_call_ended","id":"m1","parent_id":null,"model":"claude-opus-4-8","usage":{"input":8,"output":4,"cache_read":2,"cache_write":3},"cost_usd":null,"outcome":"succeeded"},
-            {"type":"tool_call_ended","id":"t1","parent_id":null,"tool":"Bash","input":{"command":"cargo check"},"result":"ok","outcome":"succeeded"},
+        {"type":"tool_call_ended","id":"t1","parent_id":null,"tool":"Bash","input":{"command":"cargo check"},"result":"ok","outcome":"succeeded","amended":false},
             {"type":"model_call_started","id":"m2","parent_id":null,"model":"claude-opus-4-8"},
             {"type":"message","role":"assistant","text":"Done.","parent_id":null},
             {"type":"model_call_ended","id":"m2","parent_id":null,"model":"claude-opus-4-8","usage":{"input":12,"output":2,"cache_read":null,"cache_write":null},"cost_usd":null,"outcome":"succeeded"},

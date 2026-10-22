@@ -408,17 +408,12 @@ impl Events {
             if let (Some(id), Some(tool)) =
                 (denial["tool_use_id"].as_str(), denial["tool_name"].as_str())
             {
-                output.extend(self.tools.start(
+                output.extend(self.tools.deny(
                     id,
                     parent_id.clone(),
                     tool.into(),
                     denial["tool_input"].clone(),
-                ));
-                output.extend(self.tools.end(
-                    id,
-                    parent_id.clone(),
                     denial.clone(),
-                    Outcome::Denied,
                 ));
                 self.end_agent(id, Outcome::Denied, denial.clone(), output);
             }
