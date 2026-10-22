@@ -56,10 +56,16 @@ enum Protocol {
     UnconditionalCreate,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Promise {
+    Dispatch,
+    ClaimedDispatch,
+}
+
 struct Pickup {
     hosts: usize,
     protocol: Protocol,
-    claimed_only: bool,
+    promise: Promise,
 }
 
 /// Each request action maps to one external read/write. Local control and
@@ -273,14 +279,13 @@ impl Model for Pickup {
 
     fn properties(&self) -> Vec<Property<Self>> {
         let mut properties = vec![Property::<Self>::always(
-            if self.claimed_only {
-                CLAIM_SAFETY
-            } else {
-                DISPATCH_SAFETY
+            match self.promise {
+                Promise::Dispatch => DISPATCH_SAFETY,
+                Promise::ClaimedDispatch => CLAIM_SAFETY,
             },
-            |model, state| unique_generation(state, model.claimed_only),
+            |model, state| unique_generation(state, model.promise),
         )];
-        if self.protocol == Protocol::Current && self.claimed_only {
+        if self.protocol == Protocol::Current && self.promise == Promise::ClaimedDispatch {
             // Reachability checks guard against a vacuous safety pass from
             // accidentally removing recovery, requeue or competing hosts.
             properties.extend([
@@ -312,7 +317,8 @@ impl Model for Pickup {
     }
 }
 
-fn unique_generation(state: &State, claimed_only: bool) -> bool {
+fn unique_generation(state: &State, promise: Promise) -> bool {
+    let claimed_only = promise == Promise::ClaimedDispatch;
     for (h, host) in state.hosts.iter().enumerate() {
         if !host.dispatched || (claimed_only && !host.claim_completed) {
             continue;
@@ -328,17 +334,17 @@ fn unique_generation(state: &State, claimed_only: bool) -> bool {
     true
 }
 
-fn check(protocol: Protocol, claimed_only: bool) -> impl Checker<Pickup> {
+fn check(protocol: Protocol, promise: Promise) -> impl Checker<Pickup> {
     let checker = Pickup {
         hosts: 3,
         protocol,
-        claimed_only,
+        promise,
     }
     .checker()
     .spawn_bfs()
     .join();
     eprintln!(
-        "{protocol:?}, claimed_only={claimed_only}: {} unique states",
+        "{protocol:?}, {promise:?}: {} unique states",
         checker.unique_state_count()
     );
     checker
@@ -346,13 +352,13 @@ fn check(protocol: Protocol, claimed_only: bool) -> impl Checker<Pickup> {
 
 #[test]
 fn pickup_claimed_dispatch_safety() {
-    let checker = check(Protocol::Current, true);
+    let checker = check(Protocol::Current, Promise::ClaimedDispatch);
     checker.assert_properties();
 }
 
 #[test]
 fn current_protocol_reports_pre_claim_dispatch_counterexample() {
-    let checker = check(Protocol::Current, false);
+    let checker = check(Protocol::Current, Promise::Dispatch);
     let path = checker.assert_any_discovery(DISPATCH_SAFETY);
     eprintln!("KNOWN FINDING: the literal dispatch property fails: {path}");
     assert!(
@@ -364,7 +370,7 @@ fn current_protocol_reports_pre_claim_dispatch_counterexample() {
 
 #[test]
 fn removing_claim_count_recheck_is_detected() {
-    let checker = check(Protocol::WithoutClaimCount, true);
+    let checker = check(Protocol::WithoutClaimCount, Promise::ClaimedDispatch);
     let path = checker.assert_any_discovery(CLAIM_SAFETY);
     eprintln!("Claim-count mutation counterexample: {path}");
     assert!(path.into_vec().iter().any(|(s, action)| matches!(action,
@@ -373,7 +379,7 @@ fn removing_claim_count_recheck_is_detected() {
 
 #[test]
 fn removing_empty_create_lease_is_detected() {
-    let checker = check(Protocol::UnconditionalCreate, true);
+    let checker = check(Protocol::UnconditionalCreate, Promise::ClaimedDispatch);
     let path = checker.assert_any_discovery(CLAIM_SAFETY);
     eprintln!("Empty-lease mutation counterexample: {path}");
     assert!(path.into_vec().iter().any(|(s, action)| matches!(action,
@@ -385,12 +391,12 @@ fn removing_empty_create_lease_is_detected() {
 #[test]
 #[ignore = "known pre-Claim dispatch finding; run explicitly to see the failure"]
 fn assert_requested_property() {
-    let (protocol, claimed_only) = match std::env::var("PICKUP_MODEL_VARIANT").as_deref() {
-        Ok("no-claim-count") => (Protocol::WithoutClaimCount, true),
-        Ok("no-empty-lease") => (Protocol::UnconditionalCreate, true),
+    let (protocol, promise) = match std::env::var("PICKUP_MODEL_VARIANT").as_deref() {
+        Ok("no-claim-count") => (Protocol::WithoutClaimCount, Promise::ClaimedDispatch),
+        Ok("no-empty-lease") => (Protocol::UnconditionalCreate, Promise::ClaimedDispatch),
         Ok(value) => panic!("unknown PICKUP_MODEL_VARIANT: {value}"),
-        Err(std::env::VarError::NotPresent) => (Protocol::Current, false),
+        Err(std::env::VarError::NotPresent) => (Protocol::Current, Promise::Dispatch),
         Err(error) => panic!("invalid PICKUP_MODEL_VARIANT: {error}"),
     };
-    check(protocol, claimed_only).assert_properties();
+    check(protocol, promise).assert_properties();
 }
