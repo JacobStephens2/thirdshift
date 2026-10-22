@@ -169,8 +169,10 @@ fn run(
                 issue.number
             )),
         }
-        asks.harness
-            .check_with_security_review(asks.security_review_harness.as_mut())?;
+        asks.harness.check_with_security_review(
+            &mut asks.security_review_harness,
+            asks.security_review_default.as_mut(),
+        )?;
     }
     let asks = &*asks;
     let child_asks = ChildAsks::of(asks);
@@ -798,6 +800,7 @@ mod tests {
     fn asks() -> Asks {
         Asks {
             security_review_harness: None,
+            security_review_default: None,
             security_fix: false,
             security_review: false,
             goal: Goal::ReadyForReview,

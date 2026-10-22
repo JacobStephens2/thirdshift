@@ -27,6 +27,7 @@ pub struct Interpretation {
     security: Option<Security>,
     models: models::Models,
     events: Option<Vec<event::Event>>,
+    work_started: bool,
 }
 
 /// Reporting survives ordinary failures; only success supplies Resume facts.
@@ -128,6 +129,7 @@ pub struct Decoded {
 }
 
 pub(super) enum Evidence {
+    WorkStarted,
     ObservedModel { name: String, scope: ModelScope },
     RequestedModelFallback,
     SafeguardRefusal(SafeguardRefusal),
@@ -150,6 +152,7 @@ enum Failure {
         status: ExitStatus,
         diagnostic: Option<String>,
         refusal: Option<SafeguardRefusal>,
+        before_first_turn: bool,
     },
 }
 
@@ -159,6 +162,8 @@ enum Failure {
 pub struct SessionFailure {
     pub harness: &'static str,
     pub diagnostic: Option<String>,
+    /// No completed turn, tokens, assistant work or tool calls were observed.
+    pub before_first_turn: bool,
     status: ExitStatus,
 }
 
@@ -193,11 +198,13 @@ impl Failure {
                 status,
                 diagnostic,
                 refusal,
+                before_first_turn,
             } => {
                 let error = anyhow::Error::new(SessionFailure {
                     harness: cli,
                     diagnostic,
                     status,
+                    before_first_turn,
                 });
                 match refusal {
                     Some(refusal) => error.context(refusal),
@@ -217,6 +224,7 @@ impl Interpretation {
             security: None,
             models: models::Models::default(),
             events: None,
+            work_started: false,
         }
     }
 
@@ -265,7 +273,11 @@ impl Interpretation {
             evidence,
             events,
         } = self.decoder.condense(raw);
+        self.work_started |= events.iter().any(work_started);
         for fact in evidence {
+            if matches!(fact, Evidence::WorkStarted) {
+                self.work_started = true;
+            }
             if let Evidence::ObservedModel { name, .. } = &fact
                 && !self.models.include(name)
             {
@@ -330,11 +342,35 @@ impl Interpretation {
                         status,
                         diagnostic: facts.diagnostic,
                         refusal,
+                        before_first_turn: !self.work_started
+                            && !facts.report.events.iter().any(work_started),
                     })
                 } else {
                     Ok(facts.ended)
                 }
             });
         (Some(facts.report), outcome)
+    }
+}
+
+fn work_started(event: &event::Event) -> bool {
+    use event::{Event, Outcome};
+    let tokens = |usage: &event::Usage| {
+        [
+            usage.input,
+            usage.output,
+            usage.cache_read,
+            usage.cache_write,
+        ]
+        .into_iter()
+        .flatten()
+        .any(|count| count > 0)
+    };
+    match event {
+        Event::ToolCallStarted { .. } | Event::ToolCallEnded { .. } => true,
+        Event::Message { role, text, .. } => role == "assistant" && !text.trim().is_empty(),
+        Event::TurnEnded { usage, outcome, .. } => *outcome == Outcome::Succeeded || tokens(usage),
+        Event::ModelCallEnded { usage, .. } | Event::Usage { usage, .. } => tokens(usage),
+        _ => false,
     }
 }

@@ -17,6 +17,8 @@ pub struct ChildAsks {
     /// [`ChildAsks::harness`], if anything, as the Command's checks settled
     /// it.
     pub security_review_harness: Option<Choice>,
+    /// The Command's configured default, preserved for review fallback.
+    pub security_review_default: Option<Choice>,
     /// Whether a Security run may fix reproduced findings.
     pub security_fix: bool,
     /// Whether the Command asked for a Security review: its own ask, before
@@ -34,17 +36,15 @@ impl ChildAsks {
         ChildAsks {
             harness: asks.harness.clone(),
             security_review_harness: asks.security_review_harness.clone(),
+            security_review_default: asks.security_review_default.clone(),
             security_fix: asks.security_fix,
             security_review: asks.security_review,
         }
     }
 
-    /// Whether a Run that is the child Run `child`, if it is one, runs its
-    /// own Security review. A Ticket's Run runs none: its Spec run reviews
-    /// the Spec PR instead. A Base fix runs one when the Command asked for
-    /// one, whichever Run started it.
-    pub fn runs_security_review(&self, child: Option<&Kind>) -> bool {
-        self.security_review && !matches!(child, Some(Kind::Ticket { .. }))
+    /// Every Run, including a Ticket or Base fix, follows its Command's ask.
+    pub fn runs_security_review(&self, _child: Option<&Kind>) -> bool {
+        self.security_review
     }
 }
 
@@ -60,18 +60,14 @@ mod tests {
     }
 
     #[test]
-    fn only_a_ticket_s_run_skips_the_security_review_the_command_asked_for() {
+    fn every_child_runs_the_security_review_the_command_asked_for() {
         let ticket = Kind::Ticket {
             spec_branch: "issue-20".to_string(),
         };
         let base_fix = Kind::BaseFix {
             base: "main".to_string(),
         };
-        for (child, when_asked) in [
-            (None, true),
-            (Some(&ticket), false),
-            (Some(&base_fix), true),
-        ] {
+        for (child, when_asked) in [(None, true), (Some(&ticket), true), (Some(&base_fix), true)] {
             assert_eq!(
                 asked(true).runs_security_review(child),
                 when_asked,

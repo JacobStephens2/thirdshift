@@ -61,6 +61,8 @@ pub struct Asks {
     /// What its Security review, and its child Runs', run on instead of
     /// [`Asks::harness`], if anything: see [`Flags::security_review_harness`].
     pub security_review_harness: Option<Choice>,
+    /// The configured default Harness to use if the Security review cannot start.
+    pub security_review_default: Option<Choice>,
 }
 
 impl Asks {
@@ -93,6 +95,9 @@ impl Asks {
             security_review: flags.security_review(config),
             launch_pull: config.launch_pull,
             security_review_harness: flags.security_review_harness(config, &harness),
+            security_review_default: flags
+                .security_review(config)
+                .then(|| Choice::of(&harness::Asked::default(), &config.harness)),
             harness,
         }
     }
@@ -116,6 +121,7 @@ impl Asks {
             launch_pull: false,
             harness: given.asks.harness.clone(),
             security_review_harness: given.asks.security_review_harness.clone(),
+            security_review_default: given.asks.security_review_default.clone(),
         }
     }
 
@@ -364,6 +370,7 @@ mod tests {
             asks,
             Asks {
                 security_review_harness: None,
+                security_review_default: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::ReadyForReview,
@@ -385,6 +392,7 @@ mod tests {
             asks,
             Asks {
                 security_review_harness: None,
+                security_review_default: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::Merged,
@@ -414,6 +422,7 @@ mod tests {
             asks,
             Asks {
                 security_review_harness: None,
+                security_review_default: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::ReadyForReview,
@@ -441,6 +450,7 @@ mod tests {
             asks,
             Asks {
                 security_review_harness: None,
+                security_review_default: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::Merged,
@@ -542,6 +552,7 @@ mod tests {
             asks,
             Asks {
                 security_review_harness: None,
+                security_review_default: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::Merged,
@@ -561,6 +572,7 @@ mod tests {
             asks,
             Asks {
                 security_review_harness: None,
+                security_review_default: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::Merged,
@@ -582,6 +594,7 @@ mod tests {
             asks,
             Asks {
                 security_review_harness: None,
+                security_review_default: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::Merged,
@@ -601,6 +614,7 @@ mod tests {
             asks,
             Asks {
                 security_review_harness: None,
+                security_review_default: None,
                 security_fix: false,
                 security_review: false,
                 goal: Goal::Merged,

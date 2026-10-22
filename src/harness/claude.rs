@@ -49,6 +49,7 @@ impl Adapter for Claude {
         }
     }
     fn check(&self, choice: &mut Choice) -> Result<()> {
+        super::check_sign_in(self, &["auth", "status"])?;
         test_call(choice)
     }
     fn summary(&self, choice: &Choice, prompt: &str, _prompt_file: &Path) -> Invocation {

@@ -101,6 +101,9 @@ const ALLOW_BASE_FIX: &str = "--allow-base-fix";
 /// The hidden arguments that give a child Run [`ChildAsks::security_review`]
 /// and [`ChildAsks::security_fix`].
 const SECURITY_REVIEW: &str = "--run-security-review";
+const SECURITY_REVIEW_DEFAULT: &str = "--security-review-default";
+const SECURITY_REVIEW_DEFAULT_MODEL: &str = "--security-review-default-model";
+const SECURITY_REVIEW_DEFAULT_EFFORT: &str = "--security-review-default-effort";
 const ALLOW_SECURITY_FIX: &str = "--allow-security-fix";
 
 /// The hidden argument followed by the command that starts the Spec run
@@ -156,6 +159,15 @@ impl Given {
         if self.asks.security_review {
             args.push(SECURITY_REVIEW);
         }
+        if let Some(default) = &self.asks.security_review_default {
+            args.extend([SECURITY_REVIEW_DEFAULT, default.harness.name()]);
+            if let Some(model) = &default.model {
+                args.extend([SECURITY_REVIEW_DEFAULT_MODEL, model]);
+            }
+            if let Some(effort) = &default.effort {
+                args.extend([SECURITY_REVIEW_DEFAULT_EFFORT, effort]);
+            }
+        }
         let harness = &self.asks.harness;
         args.extend([SESSIONS_HARNESS, harness.harness.name()]);
         if let Some(model) = &harness.model {
@@ -194,6 +206,9 @@ pub struct Reader {
     security_review_harness: Option<Harness>,
     security_review_model: Option<String>,
     security_review_effort: Option<String>,
+    security_review_default: Option<Harness>,
+    security_review_default_model: Option<String>,
+    security_review_default_effort: Option<String>,
 }
 
 impl Reader {
@@ -257,9 +272,11 @@ impl Reader {
                     }
                 });
             }
-            SESSIONS_HARNESS | SECURITY_REVIEW_HARNESS => {
+            SESSIONS_HARNESS | SECURITY_REVIEW_HARNESS | SECURITY_REVIEW_DEFAULT => {
                 let given = if arg == SESSIONS_HARNESS {
                     &mut self.harness
+                } else if arg == SECURITY_REVIEW_DEFAULT {
+                    &mut self.security_review_default
                 } else {
                     &mut self.security_review_harness
                 };
@@ -276,6 +293,14 @@ impl Reader {
             SECURITY_REVIEW_EFFORT => {
                 not_yet_given(&self.security_review_effort, arg)?;
                 self.security_review_effort = Some(value("Effort")?);
+            }
+            SECURITY_REVIEW_DEFAULT_MODEL => {
+                not_yet_given(&self.security_review_default_model, arg)?;
+                self.security_review_default_model = Some(value("Model")?);
+            }
+            SECURITY_REVIEW_DEFAULT_EFFORT => {
+                not_yet_given(&self.security_review_default_effort, arg)?;
+                self.security_review_default_effort = Some(value("Effort")?);
             }
             SESSIONS_MODEL => {
                 not_yet_given(&self.model, arg)?;
@@ -306,6 +331,9 @@ impl Reader {
                 || self.security_review_harness.is_some()
                 || self.security_review_model.is_some()
                 || self.security_review_effort.is_some()
+                || self.security_review_default.is_some()
+                || self.security_review_default_model.is_some()
+                || self.security_review_default_effort.is_some()
             {
                 bail!(
                     "only a child Run is given {STAMP}, {ALLOW_BASE_FIX}, {OFFER_BASE_FIX}, \
@@ -331,6 +359,20 @@ impl Reader {
             // whose checks it passed.
             chosen_by: ChosenBy::SecurityConfig,
         });
+        if self.security_review_default.is_none()
+            && (self.security_review_default_model.is_some()
+                || self.security_review_default_effort.is_some())
+        {
+            bail!(
+                "{SECURITY_REVIEW_DEFAULT_MODEL} and {SECURITY_REVIEW_DEFAULT_EFFORT} need {SECURITY_REVIEW_DEFAULT}"
+            );
+        }
+        let security_review_default = self.security_review_default.map(|harness| Choice {
+            harness,
+            model: self.security_review_default_model,
+            effort: self.security_review_default_effort,
+            chosen_by: ChosenBy::UserConfig,
+        });
         let stamp = self.stamp.with_context(|| format!("missing {STAMP}"))?;
         let harness = self
             .harness
@@ -352,6 +394,7 @@ impl Reader {
                     chosen_by: ChosenBy::Command,
                 },
                 security_review_harness,
+                security_review_default,
                 security_fix: self.security_fix,
                 security_review: self.security_review,
             },
@@ -884,6 +927,7 @@ mod tests {
                     asks: ChildAsks {
                         harness: harness.clone(),
                         security_review_harness: security_review_harness.clone(),
+                        security_review_default: None,
                         security_fix,
                         security_review,
                     },

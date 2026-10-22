@@ -18,11 +18,16 @@ const SPEC_TITLE: &str = "Widgets, all of them";
 fn agent_lands(ticket: u32, file: &str) -> String {
     format!(
         r#"
+if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'guidance mode'; then
+{review}
+exit 0
+fi
 echo "{ticket}" > {file}
 git add {file}
 git commit -q -m "Ticket {ticket}"
 gh pr create --base issue-{SPEC} --head issue-{ticket} --title "Ticket {ticket}" --body "Closes #{ticket}"
-"#
+"#,
+        review = security_review_script(&[])
     )
 }
 
@@ -40,6 +45,64 @@ fn linear_spec() -> Scenario {
         &format!("test -f first.txt\n{}", agent_lands(22, "second.txt")),
     );
     scenario
+}
+
+#[test]
+fn an_unusable_security_harness_falls_back_for_every_ticket_and_the_spec_pr() {
+    let scenario = linear_spec();
+    scenario.user_config_is(
+        "[harness]\ndefault = 'codex'\n[security]\nharness = 'claude'\nreview = true\n",
+    );
+    for issue in [21, 22, SPEC] {
+        scenario.agent_does_for_in_session(issue, 2, &security_review_script(&[]));
+    }
+    let result = scenario.run_with_env(
+        &[&spec_url(&scenario), "merge"],
+        &[("FAKE_CLAUDE_SIGNED_OUT", "1")],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("warning: Security review on claude can't be used (claude is not signed in:"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("reviewing on codex, the default Harness")
+    );
+    let reviews: Vec<_> = scenario
+        .codex_calls()
+        .into_iter()
+        .filter(|call| {
+            call["prompt"]
+                .as_str()
+                .is_some_and(|prompt| prompt.contains("guidance mode"))
+        })
+        .map(|call| call["branch"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(reviews, ["issue-21", "issue-22", "issue-20"]);
+    assert_eq!(spec_pr(&scenario)["state"], "MERGED");
+}
+
+#[test]
+fn unusable_review_and_default_harnesses_stop_a_spec_before_any_ticket() {
+    let scenario = linear_spec();
+    scenario.user_config_is(
+        "[harness]\ndefault = 'claude'\n[security]\nharness = 'codex'\nreview = true\n",
+    );
+    let result = scenario.run_with_env(
+        &["harness", "grok", &spec_url(&scenario)],
+        &[
+            ("FAKE_CLAUDE_SIGNED_OUT", "1"),
+            ("FAKE_CODEX_SIGNED_OUT", "1"),
+        ],
+    );
+    scenario.assert_rejected_before_any_work(&result, "claude is not signed in");
+    assert!(scenario.codex_calls().is_empty());
+    assert!(sessions_by_issue(&scenario).is_empty());
 }
 
 #[test]
