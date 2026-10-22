@@ -22,6 +22,8 @@ pub enum Ci {
     /// counts as passing.
     Absent,
     Passed,
+    /// Only cancelled checks were red, and origin now has a different head.
+    Superseded,
     /// Red, with the checks that failed.
     Failed(FailedChecks),
 }
@@ -91,8 +93,9 @@ impl<'a> Watch<'a> {
     /// Observe CI against this assessment's selected Base commit, including
     /// eligible Abandoned job re-runs and Check re-runs. With no Base commit
     /// every failure is the branch's own. An unchanged CI-fix Repair head
-    /// consumes its Check re-run before I/O; later own failures on that head
-    /// fail as the same Declined CI fix. Other heads are observed afresh.
+    /// consumes its Check re-run before requesting it, unless a moved origin
+    /// superseded its cancellations; later own failures on that head fail as
+    /// the same Declined CI fix. Other heads are observed afresh.
     /// `actionable` is borrowed only for this assessment and gates GitHub
     /// observations before and after each read.
     pub fn assess(
@@ -100,11 +103,13 @@ impl<'a> Watch<'a> {
         head: &str,
         base_commit: Option<&str>,
         actionable: &mut dyn FnMut() -> Result<()>,
+        head_moved: &mut dyn FnMut(&str) -> Result<bool>,
     ) -> Result<Ci> {
         self.assess_through(
             &mut OnGitHub {
                 issue: self.issue,
                 actionable,
+                head_moved,
             },
             head,
             base_commit,
@@ -117,10 +122,20 @@ impl<'a> Watch<'a> {
         head: &str,
         base_commit: Option<&str>,
     ) -> Result<Ci> {
-        let unchanged = self
+        let mut unchanged = self
             .handed_to_repair
             .take()
             .filter(|(handed, _)| handed == head);
+        // Another writer may push after this round's reconciliation. Read
+        // current CI before spending an unchanged Repair's re-run allowance.
+        if unchanged.is_some() && outside.head_moved(head)? {
+            match watch_to_end(outside, head, base_commit, None)? {
+                Ci::Failed(failed) if !failed.own.is_empty() => {
+                    unchanged = Some((head.to_string(), failed));
+                }
+                ci => return Ok(ci),
+            }
+        }
         let ci = match unchanged {
             Some((_, failed)) if self.consumed.insert(head.to_string()) => {
                 rerun_through(outside, head, base_commit, &failed)?
@@ -169,6 +184,8 @@ trait Outside {
     type Deadline;
     /// The checks and statuses on the commit `sha`.
     fn checks_on(&mut self, sha: &str) -> Result<Vec<Check>>;
+    /// Whether the Issue branch on origin no longer points at `sha`.
+    fn head_moved(&mut self, sha: &str) -> Result<bool>;
     /// The GitHub Actions job whose check run is `check_run`, with its
     /// steps, or why it could not be read. Fails only if the Run is not to
     /// go on.
@@ -195,6 +212,7 @@ trait Outside {
 struct OnGitHub<'a> {
     issue: &'a IssueUrl,
     actionable: &'a mut dyn FnMut() -> Result<()>,
+    head_moved: &'a mut dyn FnMut(&str) -> Result<bool>,
 }
 
 impl Outside for OnGitHub<'_> {
@@ -213,6 +231,13 @@ impl Outside for OnGitHub<'_> {
         Interruption::Ordinary.check()?;
         (self.actionable)()?;
         Ok(job_run)
+    }
+
+    fn head_moved(&mut self, sha: &str) -> Result<bool> {
+        (self.actionable)()?;
+        let moved = (self.head_moved)(sha)?;
+        (self.actionable)()?;
+        Ok(moved)
     }
 
     fn rerun_failed_jobs(&mut self, workflow_run: u64) -> Result<()> {
@@ -445,6 +470,17 @@ impl RerunChecks<'_> {
     }
 
     fn check_is_listed(&self, expected: &Check, checks: &[Check]) -> bool {
+        // checks_on lists only the latest run of each workflow. Its jobs
+        // replace the old run's requirements, even if job names changed.
+        if expected.workflow_run.is_some_and(|old| {
+            checks.iter().any(|check| {
+                check
+                    .workflow_run
+                    .is_some_and(|new| new.workflow_id == old.workflow_id && new.id != old.id)
+            })
+        }) {
+            return true;
+        }
         checks.iter().any(|check| {
             check.name == expected.name
                 && (!self.is_requested(expected)
@@ -485,10 +521,21 @@ fn watch_to_end(
         }
         Ok(None)
     })?;
-    let failed: Vec<Check> = checks.into_iter().filter(is_failed).collect();
+    let mut failed: Vec<Check> = checks.into_iter().filter(is_failed).collect();
     if failed.is_empty() {
         outside.step(format!("CI passed on {short}"));
         return Ok(Ci::Passed);
+    }
+    if failed
+        .iter()
+        .any(|check| check.conclusion == Conclusion::Cancelled)
+        && outside.head_moved(sha)?
+    {
+        failed.retain(|check| check.conclusion != Conclusion::Cancelled);
+        if failed.is_empty() {
+            outside.step(format!("CI on {short} was superseded by a newer push"));
+            return Ok(Ci::Superseded);
+        }
     }
     outside.step(format!("CI failed on {short}: {}", check_names(&failed)));
     let on_base = match base_commit {
@@ -687,6 +734,7 @@ mod in_memory {
         pauses: usize,
         job_runs: Vec<(u64, JobRun)>,
         failing_job_reads: Vec<u64>,
+        head_moved: bool,
         /// The check run of each job read, in order.
         pub job_reads: Vec<u64>,
         /// The commit of each read, in order.
@@ -711,6 +759,7 @@ mod in_memory {
                 pauses: 0,
                 job_runs: Vec::new(),
                 failing_job_reads: Vec::new(),
+                head_moved: false,
                 job_reads: Vec::new(),
                 reads: Vec::new(),
                 reruns: Vec::new(),
@@ -722,6 +771,11 @@ mod in_memory {
         /// Script the reads of `sha` to take `listings` in turn.
         pub fn listing(mut self, sha: &str, listings: Vec<Vec<Check>>) -> Self {
             self.listings.push((sha.to_string(), listings));
+            self
+        }
+
+        pub fn moved_head(mut self) -> Self {
+            self.head_moved = true;
             self
         }
 
@@ -810,6 +864,10 @@ mod in_memory {
             )))
         }
 
+        fn head_moved(&mut self, _: &str) -> Result<bool> {
+            Ok(self.head_moved)
+        }
+
         fn rerun_failed_jobs(&mut self, workflow_run: u64) -> Result<()> {
             self.reruns.push(workflow_run);
             if self.refused.contains(&workflow_run) {
@@ -849,9 +907,195 @@ mod in_memory {
 mod tests {
     use super::in_memory::InMemory;
     use super::*;
+    use crate::github::WorkflowRun;
 
     const HEAD: &str = "abcdef0123456789";
     const BASE: &str = "0123456789abcdef";
+
+    #[test]
+    fn spec_regression_queued_replacement_workflow_outlives_check_rerun_grace() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let mut old = job(red("test"), 1, 900);
+        old.workflow_run = Some(WorkflowRun {
+            id: 900,
+            workflow_id: 10,
+        });
+        let mut latest = job(green("renamed-test"), 2, 901);
+        latest.workflow_run = Some(WorkflowRun {
+            id: 901,
+            workflow_id: 10,
+        });
+        let mut queued = check(
+            "CI",
+            Conclusion::Unfinished,
+            "https://github.com/acme/widgets/actions/runs/901",
+        );
+        assert!(queued.job.is_none());
+        queued.workflow_run = latest.workflow_run;
+        let mut watch = Watch::new(&issue);
+        watch.after_repair(
+            HEAD.to_string(),
+            FailedChecks {
+                own: vec![old.clone()],
+                inherited: Vec::new(),
+                on_base: Vec::new(),
+            },
+        );
+        // The workflow-run listing knows that 901 supersedes 900, but
+        // checks_on's placeholder keeps its identity before jobs exist.
+        // Waiting for a runner can exceed the Check re-run attempt grace.
+        let mut github = InMemory::new().listing(
+            HEAD,
+            vec![
+                vec![old],
+                vec![queued.clone()],
+                vec![queued.clone()],
+                vec![queued.clone()],
+                vec![queued],
+                vec![latest],
+            ],
+        );
+
+        let ci = watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap();
+
+        assert!(matches!(ci, Ci::Passed));
+        assert_eq!(github.reruns, [900]);
+    }
+
+    #[test]
+    fn spec_regression_moved_cancelled_head_after_repair_spends_no_check_rerun() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let cancelled = job(
+            check("test", Conclusion::Cancelled, "https://head/test"),
+            1,
+            900,
+        );
+        let mut watch = Watch::new(&issue);
+        // This cancellation was a valid failure before origin moved. The
+        // CI-fix Repair completed without changing HEAD; origin moves before
+        // the next assessment starts.
+        watch.after_repair(
+            HEAD.to_string(),
+            FailedChecks {
+                own: vec![cancelled.clone()],
+                inherited: Vec::new(),
+                on_base: Vec::new(),
+            },
+        );
+        let mut github = InMemory::new()
+            .moved_head()
+            .listing(HEAD, vec![vec![cancelled]]);
+
+        let result = watch.assess_through(&mut github, HEAD, Some(BASE));
+
+        assert!(
+            github.reruns.is_empty(),
+            "unexpected re-runs: {:?}",
+            github.reruns
+        );
+        assert!(!watch.consumed.contains(HEAD));
+        assert!(matches!(result.unwrap(), Ci::Superseded));
+    }
+
+    #[test]
+    fn spec_regression_latest_workflow_run_can_supersede_an_active_check_rerun() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let mut old = job(red("test"), 1, 900);
+        old.workflow_run = Some(WorkflowRun {
+            id: 900,
+            workflow_id: 10,
+        });
+        let mut latest = job(green("test"), 2, 901);
+        latest.workflow_run = Some(WorkflowRun {
+            id: 901,
+            workflow_id: 10,
+        });
+        let mut watch = Watch::new(&issue);
+        watch.after_repair(
+            HEAD.to_string(),
+            FailedChecks {
+                own: vec![old.clone()],
+                inherited: Vec::new(),
+                on_base: Vec::new(),
+            },
+        );
+        // Run 901 starts after the re-run request for 900. checks_on now
+        // removes all of run 900's checks and returns only latest's success.
+        let mut github = InMemory::new().listing(HEAD, vec![vec![old], vec![latest]]);
+
+        let ci = watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap();
+
+        assert!(matches!(ci, Ci::Passed));
+        assert_eq!(github.reruns, [900]);
+    }
+
+    #[test]
+    fn synthetic_latest_workflow_success_supersedes_an_active_check_rerun() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let mut old = job(red("test"), 1, 900);
+        old.workflow_run = Some(WorkflowRun {
+            id: 900,
+            workflow_id: 10,
+        });
+        // exclude_superseded_runs emits this shape when run 901 completed
+        // successfully but its jobs were absent from the preceding read.
+        let mut latest = check(
+            "CI",
+            Conclusion::Success,
+            "https://github.com/acme/widgets/actions/runs/901",
+        );
+        assert!(latest.job.is_none());
+        latest.workflow_run = Some(WorkflowRun {
+            id: 901,
+            workflow_id: 10,
+        });
+        let mut watch = Watch::new(&issue);
+        watch.after_repair(
+            HEAD.to_string(),
+            FailedChecks {
+                own: vec![old.clone()],
+                inherited: Vec::new(),
+                on_base: Vec::new(),
+            },
+        );
+        let mut github = InMemory::new().listing(HEAD, vec![vec![old], vec![latest]]);
+
+        let ci = watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap();
+
+        assert!(matches!(ci, Ci::Passed));
+        assert_eq!(github.reruns, [900]);
+    }
+
+    #[test]
+    fn a_moved_head_supersedes_only_cancelled_checks_and_spends_no_rerun() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let cancelled = job(
+            check("test", Conclusion::Cancelled, "https://head/test"),
+            1,
+            900,
+        );
+        let mut watch = Watch::new(&issue);
+        let mut github = InMemory::new()
+            .moved_head()
+            .listing(HEAD, vec![vec![cancelled.clone()]]);
+        assert!(matches!(
+            watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap(),
+            Ci::Superseded
+        ));
+        assert!(github.reruns.is_empty());
+
+        let mut github = InMemory::new()
+            .moved_head()
+            .listing(HEAD, vec![vec![cancelled.clone(), red("lint")]]);
+        let failed = failed_of(watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap());
+        assert_eq!(listed(&failed.own), ["lint: https://head/lint"]);
+        assert!(github.reruns.is_empty());
+
+        let mut github = InMemory::new().listing(HEAD, vec![vec![cancelled]]);
+        let failed = failed_of(watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap());
+        assert_eq!(listed(&failed.own), ["test: https://head/test"]);
+        assert!(github.reruns.is_empty());
+    }
 
     #[test]
     fn assessment_re_runs_an_unchanged_ci_fix_head_from_a_new_attempt() {
@@ -1104,6 +1348,7 @@ mod tests {
             conclusion,
             url: Some(url.to_string()),
             job: None,
+            workflow_run: None,
         }
     }
 
@@ -1147,6 +1392,7 @@ mod tests {
             Ci::Failed(failed) => failed,
             Ci::Absent => panic!("CI was Absent, not Failed"),
             Ci::Passed => panic!("CI Passed, not Failed"),
+            Ci::Superseded => panic!("CI was Superseded, not Failed"),
         }
     }
 
@@ -1619,6 +1865,7 @@ mod tests {
                     Reading::Failed
                 }
                 Ci::Absent => panic!("CI was Absent with {conclusion:?} on the head"),
+                Ci::Superseded => panic!("the Issue branch has not moved"),
             };
             assert_eq!(read, reading, "{conclusion:?} on the head");
         }

@@ -717,9 +717,12 @@ impl repair_loop::Outside for RunOutside<'_> {
     }
 
     fn assess_ci(&mut self, head: &str, base_commit: Option<&str>) -> Result<Ci> {
-        self.ci_watch.assess(head, base_commit, &mut || {
-            self.pull_request.ensure_actionable(true)
-        })
+        self.ci_watch.assess(
+            head,
+            base_commit,
+            &mut || self.pull_request.ensure_actionable(true),
+            &mut |watched| Ok(self.worktree.new_commits_on_origin()?.origin_head() != watched),
+        )
     }
 
     fn ci_fix_completed(&mut self, head: String, failed: FailedChecks) {

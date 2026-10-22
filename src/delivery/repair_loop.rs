@@ -275,10 +275,11 @@ impl<O: Outside> RepairLoop<'_, O> {
     /// needed.
     fn rounds(&mut self) -> Result<String> {
         let base = self.base;
+        let mut issue_move_counted = false;
         loop {
             self.outside.stage(Stage::RepairLoopRound);
             if self.goal == Goal::Merged {
-                self.take_in_foreign_commits()?;
+                self.take_in_foreign_commits(std::mem::take(&mut issue_move_counted))?;
             }
             let base_commit = match self.outside.merge_base_branch()? {
                 Merge::Clean { commit } => commit,
@@ -298,6 +299,10 @@ impl<O: Outside> RepairLoop<'_, O> {
             self.outside.stage(Stage::CiWatch);
             let ci = self.outside.assess_ci(&head, compared_with)?;
             match ci {
+                Ci::Superseded => {
+                    self.budgets.count_upstream_move("Issue branch on origin")?;
+                    issue_move_counted = true;
+                }
                 Ci::Absent | Ci::Passed => {
                     if self.outside.base_branch_moved()? {
                         // Green CI on a head that merges cleanly is enough
@@ -353,7 +358,7 @@ impl<O: Outside> RepairLoop<'_, O> {
     /// before the merge. An identical tree needs no new review. Goes round
     /// again until origin has nothing new, since more may land during either
     /// Repair, and the push after them would be rejected.
-    fn take_in_foreign_commits(&mut self) -> Result<()> {
+    fn take_in_foreign_commits(&mut self, mut first_move_counted: bool) -> Result<()> {
         loop {
             let foreign = self.outside.new_commits_on_origin()?;
             if foreign.commits().is_empty() {
@@ -361,7 +366,11 @@ impl<O: Outside> RepairLoop<'_, O> {
             }
             let upstream = foreign.upstream().to_string();
             let own_head = foreign.local_head().to_string();
-            let line = self.budgets.count_foreign_commits(&upstream)?;
+            let line = if std::mem::take(&mut first_move_counted) {
+                format!("{upstream} has new commits; merging them in")
+            } else {
+                self.budgets.count_foreign_commits(&upstream)?
+            };
             self.outside.progress(line);
             for sha in foreign.commits() {
                 self.outside
@@ -454,6 +463,7 @@ mod tests {
     enum Is {
         Absent,
         Passed,
+        Superseded,
         /// Red on these checks of the branch's own, and these Inherited
         /// failures.
         Failed(&'static [&'static str], &'static [&'static str]),
@@ -470,12 +480,14 @@ mod tests {
                         conclusion: Conclusion::Failure,
                         url: None,
                         job: None,
+                        workflow_run: None,
                     })
                     .collect()
             };
             match self {
                 Is::Absent => Ci::Absent,
                 Is::Passed => Ci::Passed,
+                Is::Superseded => Ci::Superseded,
                 Is::Failed(own, inherited) => Ci::Failed(FailedChecks {
                     own: checks(own),
                     inherited: checks(inherited),
@@ -1885,6 +1897,44 @@ mod tests {
             assert_eq!(error.to_string(), format!("repairs exhausted: {cause}"));
         }
         assert_eq!(budgets.repairs, MAX_REPAIRS);
+    }
+
+    #[test]
+    fn superseded_heads_count_once_per_upstream_move_without_ci_fix_repairs() {
+        for moves in [MAX_UPSTREAM_MOVES, MAX_UPSTREAM_MOVES + 1] {
+            let mut assessments: VecDeque<_> = (0..moves).map(|_| Is::Superseded).collect();
+            assessments.push_back(Is::Passed);
+            let mut new_commits = VecDeque::from([ForeignCommits::fixture("h1", &[])]);
+            for _ in 0..moves {
+                new_commits.push_back(ForeignCommits::fixture("h1", &["h2"]));
+                new_commits.push_back(ForeignCommits::fixture("h2", &[]));
+            }
+            let (delivered, did) = deliver(
+                Goal::Merged,
+                Script {
+                    heads: script(["h1"]),
+                    assessments,
+                    new_commits,
+                    tree_matches: (0..moves).map(|_| Ok(true)).collect(),
+                    merges: script([None]),
+                    ..Script::default()
+                },
+            );
+            if moves == MAX_UPSTREAM_MOVES {
+                assert!(delivered.is_ok(), "{delivered:?}");
+                assert!(did.contains(&Did::Merge("h1".into())));
+            } else {
+                assert_eq!(
+                    cause(delivered),
+                    "Issue branch on origin kept moving: merged it again 5 times"
+                );
+                assert!(!did.iter().any(|did| matches!(did, Did::Merge(_))));
+            }
+            assert!(
+                !did.iter()
+                    .any(|did| matches!(did, Did::Repair(..) | Did::CiFixCompleted(..)))
+            );
+        }
     }
 
     #[test]

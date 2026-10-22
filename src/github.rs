@@ -1,6 +1,7 @@
 //! Asking GitHub, through `gh`, about issues, pull requests and the signed-in
 //! user.
 
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::process::{Command, Output};
 use std::time::Duration;
@@ -781,9 +782,9 @@ impl GitHub {
         ])
     }
 
-    /// Every check run and commit status on commit `sha`, each with its
-    /// conclusion as GitHub named it. Of the check runs sharing a name, as
-    /// the attempts of a re-run job do, only the latest is here.
+    /// Current check runs and commit statuses on `sha`, with conclusions as
+    /// GitHub named them. Only the newest run of each Actions workflow counts;
+    /// GitHub itself selects the latest check runs within a run's attempts.
     pub fn checks_on(&self, issue: &IssueUrl, sha: &str) -> Result<Vec<Check>> {
         let commit = format!("repos/{}/commits/{sha}", issue.repo_slug());
         // CI retries the complete observation, not its individual requests.
@@ -813,6 +814,7 @@ impl GitHub {
                     .to_string(),
                 conclusion,
                 job: ActionsJob::of(run["id"].as_u64(), run["details_url"].as_str()),
+                workflow_run: None,
                 url: url(&run["details_url"]).or_else(|| url(&run["html_url"])),
             });
         }
@@ -828,9 +830,121 @@ impl GitHub {
                 conclusion,
                 url: url(&status["target_url"]),
                 job: None,
+                workflow_run: None,
             });
         }
+        if checks.iter().any(|check| check.job.is_some()) {
+            self.exclude_superseded_runs(issue, sha, &mut checks)?;
+        }
         Ok(checks)
+    }
+
+    /// Ignore checks of earlier workflow runs on this same commit, including
+    /// jobs whose names the newest run no longer uses. A re-run keeps its run
+    /// id and creation time, so its attempts are never superseded here.
+    fn exclude_superseded_runs(
+        &self,
+        issue: &IssueUrl,
+        sha: &str,
+        checks: &mut Vec<Check>,
+    ) -> Result<()> {
+        #[derive(serde::Deserialize)]
+        struct ListedRun {
+            id: u64,
+            workflow_id: u64,
+            created_at: String,
+            status: Option<String>,
+            conclusion: Option<String>,
+            name: Option<String>,
+            html_url: Option<String>,
+        }
+        let path = format!(
+            "repos/{}/actions/runs?head_sha={sha}&per_page=100",
+            issue.repo_slug()
+        );
+        let runs = self.gh_api_items_once(&path, "workflow_runs")?;
+        let runs: Vec<ListedRun> = runs
+            .into_iter()
+            .map(serde_json::from_value)
+            .collect::<Result<_, _>>()
+            .context(CommandFailure::InvalidResponse(
+                "unreadable workflow run".into(),
+            ))?;
+        let mut latest = HashMap::new();
+        for run in &runs {
+            let created = DateTime::parse_from_rfc3339(&run.created_at).context(
+                CommandFailure::InvalidResponse("unreadable workflow creation time".into()),
+            )?;
+            let candidate = (created, run.id);
+            let selected = latest.entry(run.workflow_id).or_insert(candidate);
+            *selected = (*selected).max(candidate);
+        }
+        let superseded: HashSet<_> = runs
+            .iter()
+            .filter(|run| latest[&run.workflow_id].1 != run.id)
+            .map(|run| run.id)
+            .collect();
+        checks.retain(|check| {
+            check
+                .job
+                .is_none_or(|job| !superseded.contains(&job.workflow_run))
+        });
+        for check in checks.iter_mut() {
+            if let Some(job) = check.job {
+                check.workflow_run =
+                    runs.iter()
+                        .find(|run| run.id == job.workflow_run)
+                        .map(|run| WorkflowRun {
+                            id: run.id,
+                            workflow_id: run.workflow_id,
+                        });
+            }
+        }
+        // The two reads are separate observations. A new run may have none of
+        // its jobs yet, or only jobs that already finished while a later one
+        // has not been created. Until the run has completed, that gap must
+        // stay pending: the older run's checks are already gone, and a
+        // listing of only finished successes is CI passed.
+        for run in &runs {
+            if latest[&run.workflow_id].1 != run.id {
+                continue;
+            }
+            let mut saw_job = false;
+            let mut every_job_passed = true;
+            for check in checks.iter() {
+                if check.job.is_some_and(|job| job.workflow_run == run.id) {
+                    saw_job = true;
+                    every_job_passed &= matches!(
+                        check.conclusion,
+                        Conclusion::Success | Conclusion::Neutral | Conclusion::Skipped
+                    );
+                }
+            }
+            // A present status other than completed is still running. An
+            // absent one leaves the jobs to speak: GitHub sends a status.
+            let open = matches!(run.status.as_deref(), Some(status) if status != "completed");
+            if saw_job && (!open || !every_job_passed) {
+                continue;
+            }
+            checks.push(Check {
+                name: run
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("workflow {}", run.workflow_id)),
+                conclusion: if run.status.as_deref() == Some("completed") {
+                    Conclusion::of_check_run(run.conclusion.as_deref())
+                } else {
+                    Conclusion::Unfinished
+                },
+                url: run.html_url.clone(),
+                job: None,
+                workflow_run: Some(WorkflowRun {
+                    id: run.id,
+                    workflow_id: run.workflow_id,
+                }),
+            });
+        }
+        Ok(())
     }
 
     /// The GitHub Actions job whose check run is `check_run`, as the jobs
@@ -1393,6 +1507,15 @@ pub struct Check {
     /// The GitHub Actions job it is, if it is one. No other check can be
     /// re-run: not a commit status, nor a check run of another app.
     pub job: Option<ActionsJob>,
+    /// Workflow identity, including for a run whose jobs are not listed yet.
+    pub workflow_run: Option<WorkflowRun>,
+}
+
+/// A run's identity within its workflow. A new attempt keeps both ids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkflowRun {
+    pub id: u64,
+    pub workflow_id: u64,
 }
 
 /// A job of a GitHub Actions workflow run, as one of its attempts ran it.

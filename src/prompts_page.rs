@@ -119,6 +119,7 @@ fn prompts() -> Vec<Prompt> {
         conclusion: Conclusion::Failure,
         url: Some(CHECK_URL.to_string()),
         job: None,
+        workflow_run: None,
     };
     let failed = FailedChecks {
         own: vec![check(CHECK)],

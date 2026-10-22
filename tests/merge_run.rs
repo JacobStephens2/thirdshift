@@ -724,6 +724,53 @@ fn a_tree_identical_foreign_commit_is_merged_without_a_review_repair() {
 }
 
 #[test]
+fn cancelled_ci_after_a_foreign_push_is_superseded_without_a_ci_fix_or_check_rerun() {
+    let scenario = Scenario::new();
+    let cancelled = r#"[{"name":"test","conclusion":"cancelled","url":"https://github.com/acme/widgets/actions/runs/900/job/1","rerun":{"conclusion":"success"}}]"#;
+    let green = r#"[{"name":"test","conclusion":"success"}]"#;
+    scenario.agent_does_in_session(1, &format!(
+        "{AGENT_OPENS_PR}gh fake checks \"$(git rev-parse HEAD)\" '{cancelled}'\n{}",
+        on_ci_read(1, &format!(
+            "{}\ngh fake checks \"$(git ls-remote origin refs/heads/issue-7 | cut -f1)\" '{green}'\n",
+            someone_pushes_to_issue_7("late.txt", "late", "Late commit")
+        ))
+    ));
+
+    let result = scenario.run(&["merge", &scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("was superseded by a newer push"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("CI red; starting Repair"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.gh_calls_of("run", "rerun").is_empty());
+    let calls = scenario.claude_calls();
+    assert_eq!(
+        calls.len(),
+        2,
+        "only implementation and Foreign commit review: {}",
+        result.stderr
+    );
+    let late = sha_of(&scenario, "main", "Late commit");
+    assert_review_repair_from(&calls[1]["prompt"], &parent_of(&scenario, &late));
+    assert!(
+        result
+            .stderr
+            .contains(&format!("CI passed on {}", &late[..7])),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(assert_issue_7_merged_into(&scenario, "main"), late);
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
 fn a_foreign_commit_pushed_during_ci_is_merged_in_reviewed_then_merged() {
     let scenario = Scenario::new();
     scenario.agent_does_in_session(

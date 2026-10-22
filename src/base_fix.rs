@@ -859,6 +859,7 @@ mod tests {
             conclusion: Conclusion::Failure,
             url: url.map(String::from),
             job: None,
+            workflow_run: None,
         }
     }
 

@@ -85,7 +85,9 @@
 //! from `target_commitish` and not from `previous_tag_name`. `<repo>` may be
 //! gh's `{owner}/{repo}` placeholder, here and in the commit endpoints.
 //! `gh api repos/<repo>/actions/runs?head_sha=<sha>` answers with the workflow
-//! runs on <sha>: its check runs, read as the check-runs endpoint reads them.
+//! runs on <sha>: `.workflow_runs[]` reads REST-shaped metadata from `runs`
+//! (with `headSha` and `databaseId` as for `gh fake run`); the release script's
+//! line query reads its check runs as the check-runs endpoint reads them.
 //! `gh api repos/<repo>/commits/<sha>/pulls` answers with the PRs <sha>
 //! belongs to, as GitHub does: those merged as <sha> and those whose head is
 //! <sha>.
@@ -1423,6 +1425,16 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
 
     let (items, field) = match endpoint {
         Endpoint::Runs => {
+            if jq == Some(".workflow_runs[]") {
+                for run in state.get("runs").map(Json::items).unwrap_or_default() {
+                    if run.get("headSha").and_then(Json::as_str) == Some(sha) {
+                        let mut run = run.clone();
+                        run.set("id", run.at("databaseId").clone());
+                        println!("{run}");
+                    }
+                }
+                return;
+            }
             if jq != Some(WORKFLOW_RUN_LINES) {
                 unsupported_jq(jq);
             }
