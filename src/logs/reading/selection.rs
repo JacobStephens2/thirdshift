@@ -1,7 +1,6 @@
 //! Shared naming, Session inventory and captured selection ownership.
 
 use std::collections::BTreeSet;
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -368,21 +367,13 @@ fn latest_event(command: &Command) -> Option<String> {
     if command.state != "live" {
         return None;
     }
-    let path = command.record.session_log.as_ref()?;
-    let mut file = std::fs::File::open(path).ok()?;
-    // A show reads at most 64 KiB, independent of the transcript's size.
-    let start = file.metadata().ok()?.len().saturating_sub(64 * 1024);
-    file.seek(SeekFrom::Start(start)).ok()?;
-    let mut bytes = Vec::new();
-    file.take(64 * 1024).read_to_end(&mut bytes).ok()?;
-    let tail = String::from_utf8_lossy(&bytes);
-    let mut lines = tail.lines();
-    if start > 0 {
-        lines.next();
-    }
+    let events = crate::logs::session::tail_events(command.record.session_log.as_ref()?).ok()?;
     let harness = crate::harness::Harness::named(&command.record.harness)?;
     let mut stream = harness.adapter().interpretation(Path::new(""), "");
-    let event = lines.flat_map(|line| stream.condense(line)).last()?;
+    let event = events
+        .iter()
+        .flat_map(|line| stream.condense(line))
+        .last()?;
     let event = event
         .strip_prefix("$ ")
         .map_or_else(|| event.clone(), |command| format!("Bash: {command}"));

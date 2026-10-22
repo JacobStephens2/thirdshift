@@ -17,7 +17,7 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
     }
     let mut html = String::new();
     let mut tools_open = false;
-    for part in lines.lines().flat_map(parts) {
+    for part in crate::logs::session::events(lines).flat_map(|line| parts(&line)) {
         if matches!(part, Part::Tool(..)) {
             if !tools_open {
                 html.push_str(
