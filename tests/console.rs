@@ -105,6 +105,17 @@ impl Console {
             .send()
             .unwrap()
     }
+
+    fn log_link(&self, suffix: &str) -> String {
+        let page = self.get("/logs").text().unwrap();
+        page.split("href=\"")
+            .skip(1)
+            .filter_map(|part| part.split_once('"'))
+            .find(|(_, label)| label.split("</a>").next().unwrap().ends_with(suffix))
+            .unwrap()
+            .0
+            .to_owned()
+    }
 }
 
 impl Drop for Console {
@@ -1147,21 +1158,8 @@ fn all_six_harness_session_traces_render_normalized_conversations() {
     ] {
         let path = folder.join(format!("7-20261003T120000-0400-{harness}.logs.jsonl"));
         fs::write(&path, fixture).unwrap();
-        let page = console.get("/logs").text().unwrap();
-        let link = page
-            .split("href=\"")
-            .skip(1)
-            .filter_map(|part| part.split_once('"'))
-            .find(|(_, label)| {
-                label
-                    .split("</a>")
-                    .next()
-                    .unwrap()
-                    .ends_with(&format!("-{harness}.logs.jsonl"))
-            })
-            .unwrap()
-            .0;
-        let html = console.get(link).text().unwrap();
+        let link = console.log_link(&format!("-{harness}.logs.jsonl"));
+        let html = console.get(&link).text().unwrap();
         assert!(
             html.contains("<h3>assistant</h3><pre>Checking widgets.</pre>"),
             "{harness}: {html}"
@@ -1194,6 +1192,22 @@ fn all_six_harness_session_traces_render_normalized_conversations() {
             !html.contains("raw body must not replace normalized text"),
             "{harness}: {html}"
         );
+        let snapshots = matches!(harness, "muse" | "opencode");
+        assert_eq!(
+            html.matches("class=\"message\"").count(),
+            if snapshots { 4 } else { 3 },
+            "{harness}: {html}"
+        );
+        if snapshots {
+            assert!(!html.contains("<pre>Checking </pre>"), "{harness}: {html}");
+            assert!(
+                html.contains("<pre>Nested widget note.</pre>"),
+                "{harness}: {html}"
+            );
+        }
+        if harness == "codex" {
+            assert!(html.contains("<details class=\"thinking\"><summary>Thinking</summary><pre>Consider a safe edit.</pre></details>"), "{html}");
+        }
     }
 }
 
@@ -1211,20 +1225,7 @@ fn normalized_conversation_stream_preserves_raw_only_blocks() {
     let initial = include_str!("fixtures/console-claude-trace.jsonl");
     fs::write(&path, initial).unwrap();
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
-    let page = console.get("/logs").text().unwrap();
-    let link = page
-        .split("href=\"")
-        .skip(1)
-        .filter_map(|part| part.split_once('"'))
-        .find(|(_, label)| {
-            label
-                .split("</a>")
-                .next()
-                .unwrap()
-                .ends_with("-claude.logs.jsonl")
-        })
-        .unwrap()
-        .0;
+    let link = console.log_link("-claude.logs.jsonl");
     let raw = json!({"type":"assistant","message":{"content":[
         {"type":"thinking","thinking":"Consider the widget shape."},
         {"type":"text","text":"raw body must not replace normalized text"},

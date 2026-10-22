@@ -197,6 +197,34 @@ for (const storage of ['Session log', 'Session trace', 'Session trace only']) {
         'Recovered SSE plus an older overlapping poll must append each Session line once');
     });
 
+    test('stable normalized messages update across stream batches and reload', { skip: process.platform !== 'linux' || storage === 'Session log' }, async t => {
+      record.outcome = null;
+      record.ended_at = null;
+      await writeFile(recordPath, JSON.stringify(record));
+      const snapshot = text => JSON.stringify({ resourceLogs: [{ scopeLogs: [{ logRecords: [{
+        body: { stringValue: 'retained raw snapshot' },
+        attributes: [{ key: 'thirdshift.events', value: { stringValue: JSON.stringify([
+          { type: 'message', id: 'streamed-reply', parent_id: null, role: 'assistant', text }
+        ]) } }]
+      }] }] }] }) + '\n';
+      await appendFile(log, snapshot('Snapshot first'));
+      const context = await browser.newContext();
+      t.after(() => context.close());
+      const page = await context.newPage();
+      await page.goto(`${origin}/logs`);
+      await page.getByRole('link', { name: /Session log/ }).click();
+      const original = await page.getByText('Snapshot first', { exact: true }).locator('..').elementHandle();
+      await appendFile(log, snapshot('Snapshot first complete'));
+      await page.getByText('Snapshot first complete', { exact: true }).waitFor();
+      assert.equal(await page.getByText('Snapshot first', { exact: true }).count(), 0);
+      assert.equal(await page.locator('.message[data-message-id]').count(), 1);
+      assert.equal(await original.evaluate(node => node === document.querySelector('.message[data-message-id]')), true);
+      await page.reload();
+      assert.equal(await page.getByText('Snapshot first', { exact: true }).count(), 0);
+      assert.equal(await page.getByText('Snapshot first complete', { exact: true }).count(), 1);
+      assert.equal(await page.locator('.message[data-message-id]').count(), 1);
+    });
+
     test('SSE recovery does not repeat polled lines', { skip: process.platform !== 'linux' }, async t => {
       const context = await browser.newContext();
       t.after(() => context.close());
