@@ -291,6 +291,59 @@ On top of these come the file rules from §1.5: one object per line, either `Tra
    - Read a fixture file with `start_at: beginning`, and with `max_log_size` above the longest line. The default is 1 MiB, and longer lines are split. Write the data back out with the `file` exporter and diff. #3763's author did exactly this.
    - In CI this means downloading `otelcol-contrib`. On GitHub's runners, nothing is sent from this host.
 
+#### One-time Collector check for #982 (2026-10-21)
+
+**Result: passed.** `src/otlp_jsonl.rs` wrote two log export requests to
+`input.logs.jsonl` and two span export requests to `input.spans.jsonl`.
+The official `otelcol-contrib` **0.163.2**, Linux amd64, read both files with
+`otlp_json_file` and re-exported them through `file`. Parsing each output line
+with Python's `json.loads` and comparing the resulting lists with the inputs
+gave identical JSON values for all four requests. The Collector exited 0 after
+SIGTERM. No network exporter was configured.
+
+Inputs include resources, scopes, IDs, nanosecond times, severity, event name,
+body, all seven attribute types (nested arrays/maps included), bytes, a negative
+64-bit integer, a span parent, kind, status and an event. Special double values
+are checked separately against ProtoJSON literals: the Rust official protocol
+types at 0.33.1 still cannot deserialize their string representation (§4.2).
+
+The retained [Collector configuration](../../src/otlp_jsonl/fixtures/collector.yaml)
+uses separate signal pipelines, `start_at: beginning`, an 8 MiB line limit and
+`include_file_name: false`. The initial comparison exposed the receiver's default
+`log.file.name` enrichment on both signals; disabling it made the comparison
+exact without discarding output attributes.
+
+To reproduce, download the [0.163.2 Linux amd64 release](https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v0.163.2/otelcol-contrib_0.163.2_linux_amd64.tar.gz),
+then run from the repository root:
+
+```sh
+export OTLP_JSONL_CHECK_DIR="$(mktemp -d)"
+cargo test --bin thirdshift otlp_jsonl::tests::collector_input_files_roundtrip_through_disk
+otelcol-contrib --config src/otlp_jsonl/fixtures/collector.yaml
+# Once both output files have two lines, stop the Collector with SIGTERM.
+python3 - <<'PY'
+import json, os
+from pathlib import Path
+directory = Path(os.environ['OTLP_JSONL_CHECK_DIR'])
+for signal in ('logs', 'spans'):
+    before = [json.loads(line) for line in (directory / f'input.{signal}.jsonl').read_text().splitlines()]
+    after = [json.loads(line) for line in (directory / f'output.{signal}.jsonl').read_text().splitlines()]
+    assert len(before) == len(after) == 2
+    assert before == after
+    print(f'{signal}: 2 export requests; identical JSON values')
+PY
+```
+
+The live check used the same source and tests compiled in a temporary standalone
+crate with only serde and serde_json at run time, also proving the module has no
+thirdshift dependencies. The repository's own targeted test command above checks
+the same module and creates the same files. The final standalone run passed all
+13 codec tests, including review regressions for precise finite doubles and
+quoted/unquoted decimal integers. The Collector comparison was repeated after
+those fixes with the same passing result. serde_json's existing `float_roundtrip`
+and `arbitrary_precision` features preserve those numbers; neither adds a crate
+to the run-time dependency tree.
+
 ### 4.5 MSRV and CI
 
 - **MSRV.** serde 1.0.229 declares Rust 1.56, and serde_json 1.0.151 declares 1.71, on crates.io. So a crate that depends only on serde and serde_json can declare `rust-version = "1.71"` or later.
