@@ -1,7 +1,8 @@
-//! Normalize retained Claude and Codex events into one escaped conversation,
-//! with each `https://` URL a link.
+//! Render normalized Session-trace events, with legacy Claude/Codex support,
+//! as one escaped conversation with each `https://` URL a link.
 use super::filters::{escaped, linked};
 use crate::logs::catalog::Kind;
+use crate::otlp_jsonl::{AnyValue, LogRecord};
 use serde_json::Value;
 
 enum Part {
@@ -17,7 +18,7 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
     }
     let mut html = String::new();
     let mut tools_open = false;
-    for part in crate::logs::session::events(lines).flat_map(|line| parts(&line)) {
+    for part in crate::logs::session::records(lines).flat_map(record_parts) {
         if matches!(part, Part::Tool(..)) {
             if !tools_open {
                 html.push_str(
@@ -54,6 +55,68 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
         html.push_str("</div></details>");
     }
     html
+}
+
+fn record_parts(record: LogRecord) -> Vec<Part> {
+    let Some(AnyValue::String(raw)) = record.body else {
+        return Vec::new();
+    };
+    let Some(attribute) = record
+        .attributes
+        .iter()
+        .find(|attr| attr.key == "thirdshift.events")
+    else {
+        return parts(&raw);
+    };
+    let Some(AnyValue::String(events)) = &attribute.value else {
+        return vec![Part::Plain(raw)];
+    };
+    let Ok(Value::Array(events)) = serde_json::from_str(events) else {
+        return vec![Part::Plain(raw)];
+    };
+    let mut output = Vec::new();
+    for event in events {
+        match event["type"].as_str() {
+            Some("message") if event["role"].is_string() && event["text"].is_string() => {
+                output.push(Part::Message(
+                    text(&event, "role").into(),
+                    text(&event, "text").into(),
+                ));
+            }
+            Some("tool_call_started" | "tool_call_ended") if event["tool"].is_string() => {
+                let mut part = tool(text(&event, "tool"), &event["input"]);
+                if event["type"] == "tool_call_ended"
+                    && let Part::Tool(_, body) = &mut part
+                {
+                    body.push_str(&pre("result", &pretty(&event["result"])));
+                }
+                output.push(part);
+            }
+            Some(
+                "model_call_started" | "model_call_ended" | "turn_started" | "turn_ended" | "usage"
+                | "error" | "work_ended" | "subagent_started" | "subagent_ended",
+            ) => {}
+            _ => output.push(Part::Plain(raw.clone())),
+        }
+    }
+    if output.is_empty() {
+        // Thinking and other raw-only content still use the legacy renderer.
+        parts(&raw)
+    } else {
+        // Messages normalization has no thinking/unknown-block facts. Retain
+        // those blocks alongside normalized content without repeating text or
+        // tools from the raw message envelope.
+        if serde_json::from_str::<Value>(&raw)
+            .is_ok_and(|event| matches!(event["type"].as_str(), Some("assistant" | "user")))
+        {
+            output.extend(
+                parts(&raw)
+                    .into_iter()
+                    .filter(|part| matches!(part, Part::Thinking(_) | Part::Plain(_))),
+            );
+        }
+        output
+    }
 }
 
 fn parts(line: &str) -> Vec<Part> {
