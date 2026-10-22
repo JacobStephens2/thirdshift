@@ -111,8 +111,8 @@ function openPeek(node) {
   document.body.classList.add('peek-open');
   peekContent.innerHTML = PEEK[state.details](node);
   peekContent.querySelectorAll('[data-goto]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); const n = byId.get(a.dataset.goto); reveal(n); select(n); }));
-  peekContent.querySelectorAll('[data-fit]').forEach(b => b.addEventListener('click', () => { fit(byId.get(b.dataset.fit) || node); openPeek(node); }));
-  peekContent.querySelectorAll('[data-unzoom]').forEach(b => b.addEventListener('click', () => { unzoom(); openPeek(node); }));
+  peekContent.querySelectorAll('[data-fit]').forEach(b => b.addEventListener('click', () => { fit(byId.get(b.dataset.fit) || node); openPeek(node); showRow(node.id); }));
+  peekContent.querySelectorAll('[data-unzoom]').forEach(b => b.addEventListener('click', () => { unzoom(); openPeek(node); showRow(node.id); }));
   peekContent.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', () => { navigator.clipboard?.writeText(b.dataset.copy); b.textContent = 'Copied'; }));
   peekContent.querySelectorAll('.pd-tabs button').forEach(b => b.addEventListener('click', () => {
     peekContent.querySelectorAll('.pd-tabs button').forEach(x => x.setAttribute('aria-selected', x === b));
@@ -209,6 +209,15 @@ const PEEK = {
 // ---------- variants ----------
 const host = document.querySelector('#variant-root');
 let fit = () => {}, reveal = () => {}, unzoom = () => {};
+// A and E: centre a row in what's left visible between the sticky axis
+// header and, on a phone, the Peek's bottom sheet.
+function showRow(id) {
+  const row = host.querySelector(`.ta-row[data-id="${CSS.escape(id)}"]`), axis = host.querySelector('.ta-axis');
+  if (!row || !axis) return;
+  const top = axis.offsetHeight, sheet = !peek.hidden && getComputedStyle(peek).position === 'fixed';
+  const bottom = sheet ? peek.getBoundingClientRect().top : innerHeight, box = row.getBoundingClientRect();
+  scrollBy(0, box.top - (top + Math.max(0, (bottom - top - box.height) / 2)));
+}
 
 // A: one indented tree with a timeline column on a shared axis (MLflow's trace view).
 const A = { expanded: new Set(), axis: null };
@@ -239,8 +248,7 @@ function variantA(slow = false) {
       <div class="ta-label" style="padding-left:${Math.min(n.depth, 12) * (innerWidth < 760 ? 8 : 14)}px">${n.children.length ? `<button type="button" class="ta-twist" data-twist tabindex="-1">${A.expanded.has(n.id) ? '▾' : '▸'}</button>` : '<span class="ta-twist"></span>'}${tag(n)} <span class="name" title="${esc(n.name)}">${esc(n.name)}</span> ${n.status === 'error' ? `<span class="st-error" title="${esc(n.statusMessage || 'error')}">✕</span>` : n.status === 'running' ? '<span class="st-running" title="running">●</span>' : ''}${ranks(n)}${n.children.length && !A.expanded.has(n.id) && n.rollup.errors && n.status !== 'error' ? ` <span class="st-error rollup">${n.rollup.errors} err</span>` : ''}</div>
       <span class="rollup ta-dur">${dur(length(n))}${n.estimated ? '*' : ''}</span>${bar(n, axis, rank.has(n) ? 'slow' : '')}</li>`).join('')}</ul>`;
   host.querySelectorAll('[data-slow]').forEach(li => li.addEventListener('click', () => {
-    const n = byId.get(li.dataset.slow); reveal(n); select(n);
-    host.querySelector(`.ta-row[data-id="${CSS.escape(n.id)}"]`)?.scrollIntoView({ block: 'center' });
+    const n = byId.get(li.dataset.slow); reveal(n); select(n); showRow(n.id);
   }));
   host.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => {
     const order = ['command', 'run', 'stage', 'session'];
@@ -250,6 +258,8 @@ function variantA(slow = false) {
     if (upTo !== Infinity) (function walk(n) { if (n.kind === 'run' || n.kind === 'command') A.expanded.add(n.id); n.children.forEach(walk); })(r);
     render();
   }));
+  // Rows scrolled into view stop below the sticky axis and zoom banner.
+  host.style.setProperty('--ta-axis-h', `${host.querySelector('.ta-axis').offsetHeight + 8}px`);
   unzoom = () => { A.axis = null; A.fitNode = null; render(); };
   host.querySelectorAll('[data-unfit]').forEach(b => b.addEventListener('click', () => { unzoom(); if (selected && !peek.hidden) openPeek(selected); }));
   const tree = host.querySelector('.ta-tree');
@@ -279,7 +289,7 @@ function variantA(slow = false) {
     }
     A.fitNode = n;
     ancestors(n).forEach(a => A.expanded.add(a.id)); A.expanded.add(n.id); render();
-    host.querySelector(`.ta-row[data-id="${CSS.escape(n.id)}"]`)?.scrollIntoView({ block: 'start' });
+    showRow(n.id);
   };
   reveal = n => { ancestors(n).forEach(a => A.expanded.add(a.id)); render(); };
 }

@@ -41,7 +41,7 @@ body.proto-phone-host > :not(#proto-bar):not(#proto-frame) { display: none !impo
 .ta-ticks { position: relative; height: 14px; }
 .ta-ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
 .ta-tree { list-style: none; margin: 0; padding: 0; }
-.ta-row { display: grid; grid-template-columns: minmax(0, 2fr) 7ch minmax(0, 3fr); gap: 8px; align-items: center; padding: 2px 0; cursor: pointer; border-bottom: 1px solid color-mix(in srgb, var(--rule) 40%, transparent); }
+.ta-row { scroll-margin-top: var(--ta-axis-h, 0px); display: grid; grid-template-columns: minmax(0, 2fr) 7ch minmax(0, 3fr); gap: 8px; align-items: center; padding: 2px 0; cursor: pointer; border-bottom: 1px solid color-mix(in srgb, var(--rule) 40%, transparent); }
 .ta-row:hover { background: var(--panel); }
 .ta-label { display: flex; align-items: center; gap: 4px; min-width: 0; white-space: nowrap; }
 .ta-label .name { overflow: hidden; text-overflow: ellipsis; }
@@ -135,3 +135,4 @@ body.proto-phone-host > :not(#proto-bar):not(#proto-frame) { display: none !impo
 /* A/E zoom: always visible in the sticky axis header, rows outside the zoom dimmed */
 .ta-zoom { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 8px; margin-bottom: 4px; font: 13px var(--font-body); color: var(--text); background: color-mix(in srgb, var(--look) 18%, var(--panel)); border: 1px solid var(--look); border-radius: var(--radius); }
 .ta-row.outside { opacity: .45; }
+.ta-zoom b { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
