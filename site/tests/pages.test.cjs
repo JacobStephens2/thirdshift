@@ -187,6 +187,29 @@ test("the homepage links to the shared Markdown manual without JavaScript", asyn
   }
 });
 
+test("hand-written pages link directly to unique manual sections", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  const fragments = new Set();
+  for (const path of ["/", "/how-it-works/", "/architecture/"]) {
+    await page.goto(`${origin}${path}`);
+    for (const href of await page.locator("a[href]").evaluateAll(nodes => nodes.map(node => node.getAttribute("href")))) {
+      const link = new URL(href, page.url());
+      assert.equal(link.hostname === "github.com" &&
+        /^\/JacobStephens2\/thirdshift\/?$/.test(link.pathname) && Boolean(link.hash), false,
+      `${path}: README section link ${href}`);
+      if (link.origin === origin && link.pathname === "/docs/" && link.hash) {
+        fragments.add(decodeURIComponent(link.hash.slice(1)));
+      }
+    }
+  }
+  assert.ok(fragments.size > 0, "pages link to manual sections");
+  await page.goto(`${origin}/docs/`);
+  for (const fragment of fragments) {
+    assert.equal(await page.locator("[id]").evaluateAll((nodes, id) =>
+      nodes.filter(node => node.id === id).length, fragment), 1, fragment);
+  }
+});
+
 test("the homepage leads to a guide that teaches the process in order", async (t) => {
   const page = await pageForTest(t);
   await page.goto(`${origin}/`);
@@ -307,7 +330,8 @@ test("the architecture page shows six captioned, described figures, each reachab
     assert.match(await figure.locator("figcaption").textContent(), new RegExp(`^Figure ${index + 1} `));
     // Each drawing names its own description, so a screen reader hears the figure in words.
     const svg = figure.locator("svg");
-    const description = await svg.evaluate(node => document.getElementById(node.getAttribute("aria-labelledby"))?.textContent ?? "");
+    const description = await svg.evaluate(node => document.getElementById(
+      node.getAttribute("aria-describedby") ?? node.getAttribute("aria-labelledby"))?.textContent ?? "");
     assert.ok(description.length > 100, `figure ${index + 1} has a description`);
   }
   const ids = await page.locator("svg [id]").evaluateAll(nodes => nodes.map(node => node.id));
@@ -334,6 +358,25 @@ for (const width of [320, 390, 768, 1280]) {
     const svgWidth = await page.locator("main svg").first().evaluate(node => node.getBoundingClientRect().width);
     assert.ok(svgWidth >= Math.min(720, width - 80), `figure is ${svgWidth}px wide`);
   });
+}
+
+for (const width of [320, 390, 1280]) {
+  for (const javaScriptEnabled of [false, true]) {
+    test(`hand-written pages fit ${width}px (JavaScript: ${javaScriptEnabled})`, async (t) => {
+      const page = await pageForTest(t, {
+        javaScriptEnabled,
+        reducedMotion: "reduce",
+        viewport: { width, height: 900 },
+      });
+      for (const path of ["/", "/how-it-works/", "/architecture/"]) {
+        await page.goto(`${origin}${path}`);
+        if (path === "/how-it-works/") {
+          for (const heading of await page.locator("main h2").all()) await heading.click();
+        }
+        await assertFits(page, "main, pre, .misprint, .guide-node, .arch-fig, .arch-layers", path);
+      }
+    });
+  }
 }
 
 // The videos page's entries, in order.

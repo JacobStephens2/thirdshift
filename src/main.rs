@@ -126,8 +126,8 @@ Pass commands: architect, pickup, secure (no Issue URL).
 With --plan-only, only base, email and no-email apply.
 
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting.
-For workflow details, settings, Harness setup, email, logs and scheduling, see the README:
-  https://github.com/JacobStephens2/thirdshift#readme
+For workflow details, settings, Harness setup, email, logs and scheduling, see the manual:
+  https://thirdshift.app/docs/
 ";
 
 fn main() -> ExitCode {
