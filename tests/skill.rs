@@ -281,3 +281,79 @@ fn malformed_skill_commands_are_rejected_before_starting_a_session() {
     }
     assert!(scenario.claude_calls().is_empty());
 }
+
+#[test]
+fn standalone_skill_uses_exactly_one_session_with_a_configured_claude_model() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "[harness]\n\
+         default = 'claude'\n\
+         [harness.claude]\n\
+         model = 'claude-opus-5-5'\n\
+         effort = 'high'\n",
+    );
+    scenario.agent_does(
+        "if [ -n \"${FAKE_CLAUDE_FINAL_MESSAGE:-}\" ]; then\n\
+             printf 'Done.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n\
+         else\n\
+             printf 'OK'\n\
+         fi",
+    );
+
+    let result = scenario.run(&["skill", "to-spec"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "Done.\n");
+
+    let calls: Vec<(String, String)> = scenario
+        .claude_calls()
+        .into_iter()
+        .map(|call| {
+            (
+                call["prompt"].as_str().unwrap().to_owned(),
+                call["cwd"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        calls.len(),
+        1,
+        "expected one skill session; observed (prompt, cwd): {calls:?}"
+    );
+}
+
+#[test]
+fn muse_and_opencode_run_the_skill_without_model_probe_sessions() {
+    for (harness, model) in [
+        ("muse", "muse-spark-1.3"),
+        ("opencode", "anthropic/claude-opus-5-5"),
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(&format!(
+            "[harness]\ndefault = '{harness}'\n[harness.{harness}]\nmodel = '{model}'\neffort = 'high'\n"
+        ));
+        scenario.agent_does("printf 'Done.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+
+        let result = scenario.run(&["skill", "to-spec"]);
+
+        assert_eq!(result.code, Some(0), "{harness}: {}", result.stderr);
+        assert_eq!(result.stdout, "Done.\n");
+        let calls: Vec<serde_json::Value> = serde_json::from_str(
+            &fs::read_to_string(scenario.path(&format!("{harness}-calls.json"))).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(calls.len(), 1, "{harness}: {calls:?}");
+        assert!(
+            calls[0]["prompt"]
+                .as_str()
+                .unwrap()
+                .contains("thirdshift-to-spec")
+        );
+        assert!(
+            !scenario
+                .path(&format!("{harness}-calls.checks.json"))
+                .exists()
+        );
+    }
+}

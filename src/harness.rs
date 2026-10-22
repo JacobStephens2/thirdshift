@@ -28,7 +28,7 @@ mod skill_load;
 mod summary;
 pub(crate) mod version;
 
-pub use adapter::Adapter;
+pub use adapter::{Adapter, Probe};
 pub use summary::write as write_summary;
 
 /// The headless agent CLI a Command's sessions run on.
@@ -241,6 +241,16 @@ impl Choice {
     /// Model and Effort through its adapter's catalog or minimal test call.
     /// Each failure says what to change.
     pub fn check(&mut self) -> Result<()> {
+        self.check_with_probe(Probe::Allow)
+    }
+
+    /// Settle catalog-backed choices without starting a trial session.
+    /// Invalid remote Models fail in the actual session instead.
+    pub fn check_without_probe(&mut self) -> Result<()> {
+        self.check_with_probe(Probe::Skip)
+    }
+
+    fn check_with_probe(&mut self, probe: Probe) -> Result<()> {
         let adapter = self.harness.adapter();
         let cli = adapter.name();
         if !on_path(cli) {
@@ -250,7 +260,7 @@ impl Choice {
                 self.chosen_by
             );
         }
-        adapter.check(self)
+        adapter.check(self, probe)
     }
 
     /// [`Choice::check`] this, a Command's, then `security_review`, what its

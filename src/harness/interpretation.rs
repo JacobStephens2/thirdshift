@@ -2,7 +2,7 @@
 
 use std::process::{ExitStatus, Output};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 
 use super::said;
 use crate::interrupt;
@@ -77,6 +77,19 @@ pub struct Ended {
 impl Ended {
     pub fn killed_work(&self) -> Vec<&str> {
         self.killed.iter().map(String::as_str).collect()
+    }
+
+    /// One-shot callers require completed work and nonblank final text.
+    pub fn require_final_message(self, label: &str) -> Result<String> {
+        if !self.killed.is_empty() {
+            bail!(
+                "{label} ended with unfinished background work: {}",
+                self.killed.join("; ")
+            );
+        }
+        self.final_message
+            .filter(|text| !text.trim().is_empty())
+            .with_context(|| format!("{label} ended without a final message"))
     }
 }
 

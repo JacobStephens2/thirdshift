@@ -69,11 +69,14 @@ impl Adapter for OpenCode {
     fn summary_environment(&self) -> &'static [(&'static str, &'static str)] {
         &[("OPENCODE_CONFIG_CONTENT", r#"{"permission":{"*":"deny"}}"#)]
     }
-    fn check(&self, choice: &mut Choice) -> Result<()> {
-        check_model_and_effort(&ModelAndEffort {
-            model: choice.model.clone(),
-            effort: choice.effort.clone(),
-        })
+    fn check(&self, choice: &mut Choice, probe: super::Probe) -> Result<()> {
+        check_model_and_effort(
+            &ModelAndEffort {
+                model: choice.model.clone(),
+                effort: choice.effort.clone(),
+            },
+            probe,
+        )
     }
     fn ask_settings(
         &self,
@@ -95,7 +98,7 @@ impl Adapter for OpenCode {
                     current.effort.as_deref(),
                 )?,
             };
-            match check_model_and_effort(&chosen) {
+            match check_model_and_effort(&chosen, super::Probe::Allow) {
                 Ok(()) => return Ok(Some(chosen)),
                 Err(error) => {
                     crate::interrupt::check()?;
@@ -116,11 +119,14 @@ impl Adapter for OpenCode {
     }
 }
 
-/// Setup and Commands make the same minimal call: there is no free catalog
-/// without the shared service, and an invalid route fails before a model turn.
-pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<()> {
+/// Setup and Commands may make a minimal call: there is no free catalog
+/// without the shared service. Standalone skills defer it to their only turn.
+pub fn check_model_and_effort(chosen: &ModelAndEffort, probe: super::Probe) -> Result<()> {
     if chosen.effort.is_some() && chosen.model.is_none() {
         bail!("the OpenCode Effort needs a Model: set model <provider>/<model> too");
+    }
+    if probe == super::Probe::Skip {
+        return Ok(());
     }
     let choice = Choice {
         harness: Harness::OpenCode,

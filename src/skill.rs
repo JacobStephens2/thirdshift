@@ -3,7 +3,7 @@
 use std::io::{BufRead, BufReader};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::Result;
 
 use crate::config::UserConfig;
 use crate::git::Git;
@@ -20,7 +20,7 @@ pub fn run(name: &str, issue: Option<IssueInput>) -> Result<String> {
     let result = (|| {
         let skill = skills::find(worktree.path(), name)?;
         let mut choice = Choice::of(&Asked::default(), &config.harness);
-        choice.check()?;
+        choice.check_without_probe()?;
         let adapter = choice.harness.adapter();
         skills::link_into(worktree.path(), adapter)?;
         adapter.link_instruction_fallback(worktree.path())?;
@@ -47,16 +47,7 @@ pub fn run(name: &str, issue: Option<IssueInput>) -> Result<String> {
             },
         )?;
         let ended = executed.state.finish(executed.execution).outcome?;
-        if !ended.killed.is_empty() {
-            bail!(
-                "the skill session ended with unfinished background work: {}",
-                ended.killed.join("; ")
-            );
-        }
-        ended
-            .final_message
-            .filter(|text| !text.trim().is_empty())
-            .context("the skill session ended without a final message")
+        ended.require_final_message("the skill session")
     })();
     skills::remove_written();
     result

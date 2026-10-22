@@ -320,7 +320,9 @@ fn a_transport_failure_preserves_recovered_usage_and_warnings_ahead_of_turn_fail
 fn an_interrupted_opencode_check_export_returns_interrupted_without_refusal_context() {
     if std::env::var_os("THIRDSHIFT_TEST_CHECK_EXPORT_INTERRUPT").is_some() {
         crate::interrupt::install().unwrap();
-        let error = opencode::check_model_and_effort(&ModelAndEffort::default()).unwrap_err();
+        let error =
+            opencode::check_model_and_effort(&ModelAndEffort::default(), super::Probe::Allow)
+                .unwrap_err();
         assert_eq!(format!("{error:#}"), "interrupted");
         return;
     }

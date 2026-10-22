@@ -65,7 +65,7 @@ impl Adapter for Grok {
         args.extend(["-p".to_string(), self.skill_loading().prompt(prompt)]);
         Invocation { args, stdin: None }
     }
-    fn check(&self, choice: &mut Choice) -> Result<()> {
+    fn check(&self, choice: &mut Choice, _probe: super::Probe) -> Result<()> {
         crate::progress::step("checking the Model and Effort against grok models");
         let settled = Catalog::read()?.settle(choice.model.as_deref(), choice.effort.as_deref())?;
         choice.model = settled.model;
