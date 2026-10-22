@@ -97,7 +97,7 @@ test('Waterfall draws overlapping Session-trace spans and running start records'
     assert.equal(spans[2].start, Date.parse('2026-10-01T12:00:20.125+00:00'));
     assert.equal(spans[2].duration_ms, null);
     assert.match(await tools.nth(2).textContent(), /Time unknown/);
-    assert.equal(await page.locator('main script, main unsafe').count(), 0);
+    assert.equal(await page.locator('main script:not([type="application/json"]), main unsafe').count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     if (process.platform === 'linux') {
       await page.goto(`${origin}/waterfall?command=widgets%239`);
@@ -166,7 +166,7 @@ test('Waterfall chips, nested scale and unknown tools work at desktop and 390 px
     assert.equal(track.x, stageTrack.x);
     assert.equal(track.x, toolTrack.x);
     assert.equal(track.width, toolTrack.width);
-    assert.equal(await page.locator('main script, main unsafe').count(), 0);
+    assert.equal(await page.locator('main script:not([type="application/json"]), main unsafe').count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await child.locator(':scope > .span-row').click();
     await page.getByRole('button', { name: 'Command details', exact: true }).click();

@@ -12,14 +12,14 @@ use serde_json::Value;
 
 use super::reading::{Command, Entry, Observation, Snapshot};
 use super::status::{inspect, waterfall};
-use super::trace::{Context, id};
+use super::trace::{Context, SpanKind, id};
 use crate::config::UserConfig;
 
 #[derive(Clone, Serialize)]
 pub(crate) struct Span {
     pub id: String,
     pub parent_id: Option<String>,
-    pub kind: String,
+    pub kind: SpanKind,
     pub name: String,
     pub start: Option<f64>,
     pub end: Option<f64>,
@@ -84,6 +84,97 @@ impl Tree {
             .find(|span| span.id == selected)
             .with_context(|| format!("span {selected} is not in this Command"))
     }
+
+    /// A Session repeats its children's usage. Prefer a retained total at each
+    /// level, falling back to children only for measurements it does not carry.
+    fn roll_up(&mut self) {
+        let indices: BTreeMap<_, _> = self
+            .spans
+            .iter()
+            .enumerate()
+            .map(|(index, span)| (span.id.clone(), index))
+            .collect();
+        let mut children = vec![Vec::new(); self.spans.len()];
+        for (index, span) in self.spans.iter().enumerate() {
+            if let Some(parent) = span.parent_id.as_ref().and_then(|id| indices.get(id)) {
+                children[*parent].push(index);
+            }
+        }
+        for field in [
+            "gen_ai.usage.input_tokens",
+            "gen_ai.usage.output_tokens",
+            "thirdshift.usage.cache_read_tokens",
+            "thirdshift.usage.cache_write_tokens",
+            "thirdshift.cost.usd",
+        ] {
+            let mut totals = vec![None; self.spans.len()];
+            let mut visited = BTreeSet::new();
+            for index in 0..self.spans.len() {
+                metric(
+                    index,
+                    field,
+                    &self.spans,
+                    &children,
+                    &mut totals,
+                    &mut visited,
+                );
+            }
+            for (span, total) in self.spans.iter_mut().zip(totals) {
+                if let Some(total) = total {
+                    span.attributes.entry(field.into()).or_insert(total);
+                }
+            }
+        }
+    }
+}
+
+fn metric(
+    index: usize,
+    field: &str,
+    spans: &[Span],
+    children: &[Vec<usize>],
+    totals: &mut [Option<Value>],
+    visited: &mut BTreeSet<usize>,
+) -> Option<Value> {
+    if !visited.insert(index) {
+        return totals[index].clone();
+    }
+    if let Some(value) = spans[index]
+        .attributes
+        .get(field)
+        .filter(|value| !value.is_null())
+    {
+        totals[index] = Some(value.clone());
+        return Some(value.clone());
+    }
+    let values: Vec<_> = children[index]
+        .iter()
+        .filter_map(|child| metric(*child, field, spans, children, totals, visited))
+        .collect();
+    let total = if field == "thirdshift.cost.usd" {
+        values
+            .iter()
+            .filter_map(|value| {
+                value
+                    .as_f64()
+                    .or_else(|| value.as_str()?.parse::<f64>().ok())
+            })
+            .filter(|value| value.is_finite())
+            .reduce(|a, b| a + b)
+            .map(Value::from)
+    } else {
+        values
+            .iter()
+            .filter_map(|value| {
+                value
+                    .as_u64()
+                    .or_else(|| value.as_str()?.parse::<u64>().ok())
+            })
+            .reduce(u64::saturating_add)
+            .map(Value::from)
+    };
+    totals[index] = total.clone();
+    total
 }
 
 pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
@@ -121,7 +212,11 @@ pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
             let choice = Observation::Record(command).selector().unwrap_or_default();
             Choice {
                 subject: subject(command),
-                state: state(command),
+                state: command
+                    .record
+                    .outcome
+                    .clone()
+                    .unwrap_or_else(|| command.state.into()),
                 url: inspect::url("/waterfall", &choice, None),
                 selected: choice == selector,
             }
@@ -134,7 +229,13 @@ pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
     };
     if let (Some(command), Some(owner)) = (selected, owner) {
         let context = Context::of_session(&owner.command_log);
-        let root = record_span(command, hex(context.command), None, "cmd", &tree.command);
+        let root = record_span(
+            command,
+            hex(context.command),
+            None,
+            SpanKind::Cmd,
+            &tree.command,
+        );
         tree.spans.push(root);
         let mut builder = Builder {
             context,
@@ -150,6 +251,7 @@ pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
         relay_path(owner, command, &mut relays);
         builder.record(command, hex(builder.context.command), &relays)?;
     }
+    tree.roll_up();
     Ok(View { choices, tree })
 }
 
@@ -170,7 +272,7 @@ impl Builder<'_> {
             command,
             run_id.clone(),
             Some(parent),
-            "run",
+            SpanKind::Run,
             &selector,
         ));
         let stages: Vec<_> = command.record.stage_times(None).collect();
@@ -179,7 +281,7 @@ impl Builder<'_> {
                 command,
                 hex(context.stage_id(timing.stage)),
                 Some(run_id.clone()),
-                "stage",
+                SpanKind::Stage,
                 &selector,
             );
             span.name = timing.stage.name.clone();
@@ -217,7 +319,13 @@ impl Builder<'_> {
                 || run_id.clone(),
                 |timing| hex(context.stage_id(timing.stage)),
             );
-            let mut template = record_span(command, String::new(), Some(parent), "sess", &selector);
+            let mut template = record_span(
+                command,
+                String::new(),
+                Some(parent),
+                SpanKind::Sess,
+                &selector,
+            );
             template.start = stage
                 .and_then(|timing| timing.began)
                 .map(|time| time.timestamp_millis() as f64)
@@ -232,7 +340,7 @@ impl Builder<'_> {
                     let (calls, measured) =
                         waterfall::session_calls(&path, command, relays, &mut self.log)?;
                     let placed = waterfall::place_calls(&path, command, &calls, measured, self.now);
-                    for span in spans.iter_mut().filter(|span| span.kind == "tool") {
+                    for span in spans.iter_mut().filter(|span| span.kind == SpanKind::Tool) {
                         let call = span
                             .attributes
                             .get("gen_ai.tool.call.id")
@@ -274,7 +382,7 @@ impl Builder<'_> {
                         .stage
                         .map(|index| hex(context.stage_id(stages[index].stage)))
                         .or(Some(run_id.clone()));
-                    span.kind = "tool".into();
+                    span.kind = SpanKind::Tool;
                     span.name = call.label;
                     span.start = call.start.map(|time| time.timestamp_millis() as f64);
                     span.end = call.end.map(|time| time.timestamp_millis() as f64);
@@ -316,7 +424,7 @@ fn record_span(
     command: &Command,
     id: String,
     parent_id: Option<String>,
-    kind: &str,
+    kind: SpanKind,
     selector: &str,
 ) -> Span {
     let start = time(&command.record.started_at).map(|time| time as f64);
@@ -329,7 +437,7 @@ fn record_span(
     Span {
         id,
         parent_id,
-        kind: kind.into(),
+        kind,
         name: format!(
             "{} · {}{}",
             command.record.kind,

@@ -185,8 +185,8 @@ export function initSpanTree({ openCommand, openDetails }) {
     const span = nodes.get(detail); if (!span) return;
     openDetails();
     const folds = new Map([...content.querySelectorAll('details')].map(node => [node.dataset.detailSection, node.open]));
-    const sameSpan = content.dataset.spanId === span.id, scroll = sameSpan ? peek.scrollTop : 0;
-    content.dataset.spanId = span.id;
+    const sameSpan = content.dataset.detailSpanId === span.id, scroll = sameSpan ? peek.scrollTop : 0;
+    content.dataset.detailSpanId = span.id;
     const card = el('article', 'span-card'), path = el('nav', 'span-path'); path.setAttribute('aria-label', 'Span ancestors');
     for (const parent of ancestors(span)) {
       const link = el('a', '', parent.name); link.href = `#span-${parent.id}`;
@@ -288,11 +288,14 @@ export function initSpanTree({ openCommand, openDetails }) {
   const timer = setInterval(() => { if (data.spans.some(span => span.status === 'running')) render(); }, 1000);
   window.addEventListener('pagehide', () => clearInterval(timer), { once: true });
   return {
-    closeDetails() { detail = null; delete content.dataset.spanId; },
-    async refresh() {
-      const response = await fetch(`/spans?${new URLSearchParams({ command: data.command })}`, { cache: 'no-store' });
-      if (!response.ok) throw new Error('Span tree unavailable');
-      data = await response.json(); index(); render();
+    closeDetails() { detail = null; delete content.dataset.detailSpanId; },
+    update(document) {
+      const next = JSON.parse(document.getElementById('span-data').textContent);
+      const chips = document.querySelector('.command-chips');
+      tree.closest('main').querySelector('.command-chips').replaceChildren(...chips.childNodes);
+      const changed = JSON.stringify(next.spans) !== JSON.stringify(data.spans);
+      data = next;
+      if (changed) { index(); render(); }
     }
   };
 }

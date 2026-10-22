@@ -1,5 +1,35 @@
 //! Deterministic Trace ancestry. No second copy of Command or stage times.
+use serde::Serialize;
 use sha2::{Digest, Sha256};
+
+/// The eight kinds in a Command's trace, including record-derived ancestors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum SpanKind {
+    Cmd,
+    Run,
+    Stage,
+    Sess,
+    Model,
+    Turn,
+    Tool,
+    Agent,
+}
+
+impl std::fmt::Display for SpanKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Cmd => "cmd",
+            Self::Run => "run",
+            Self::Stage => "stage",
+            Self::Sess => "sess",
+            Self::Model => "model",
+            Self::Turn => "turn",
+            Self::Tool => "tool",
+            Self::Agent => "agent",
+        })
+    }
+}
 
 use super::{
     command_record::{CommandRecord, Stage},

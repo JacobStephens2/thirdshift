@@ -7,6 +7,13 @@ const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('playwright');
+const reproduceReviewFinding = require('../reproductions/span-tree-review.cjs');
+
+for (const mode of ['empty', 'chips', 'totals']) {
+  test(`Spec regression: ${mode}`, { skip: process.platform !== 'linux' }, async () => {
+    await reproduceReviewFinding(mode);
+  });
+}
 
 let home, server, exited, browser, origin, folder, recordPath, session;
 const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift');

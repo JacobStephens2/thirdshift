@@ -121,8 +121,16 @@ function morphTimePage(html) {
 
 async function refresh() {
   if (observesCommands) {
-    if (spanTree) await spanTree.refresh();
-    else {
+    if (timePage?.matches('[data-span-page]')) {
+      const response = await fetch(location.href, { cache: 'no-store' });
+      if (!response.ok) throw new Error('Span tree unavailable');
+      const html = await response.text();
+      if (spanTree) spanTree.update(new DOMParser().parseFromString(html, 'text/html'));
+      else {
+        morphTimePage(html);
+        spanTree = initializeSpanTree();
+      }
+    } else {
       const response = await fetch(timePage ? location.href : '/', { cache: "no-store" });
       if (!response.ok) throw new Error("Inbox unavailable");
       const html = await response.text();
@@ -153,7 +161,7 @@ let selected = null;
 let peekCommand = null;
 let pendingPeek = null;
 
-spanTree = initSpanTree({
+function initializeSpanTree() { return initSpanTree({
   openDetails() {
     peekCommand = null;
     pendingPeek?.abort();
@@ -163,7 +171,8 @@ spanTree = initSpanTree({
     peekCommand = null;
     togglePeek({ dataset: { command: span.command, peek: span.command_url } });
   }
-});
+}); }
+spanTree = initializeSpanTree();
 
 function select(element, { scroll = true } = {}) {
   selected?.classList.remove('is-selected');

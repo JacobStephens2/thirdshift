@@ -6,8 +6,10 @@ use anyhow::{Context as _, Result};
 use serde_json::Value;
 
 use super::{Span, duration, hex};
-use crate::logs::trace::{Context, id};
+use crate::harness::interpretation::event::{Event, Outcome, UsageScope};
+use crate::logs::trace::{Context, SpanKind, id};
 use crate::otlp_jsonl::{AnyValue, KeyValue, Logs, Spans};
+use crate::session::trace::{Call, event_attributes};
 
 pub(super) fn read(path: &Path, context: &Context, template: &Span) -> Result<Option<Vec<Span>>> {
     let original = crate::logs::session::original(path);
@@ -43,7 +45,7 @@ pub(super) fn read(path: &Path, context: &Context, template: &Span) -> Result<Op
                     ])
                 }));
                 span.parent_id = raw.parent_span_id.map(hex);
-                span.kind = kind(&attrs).into();
+                span.kind = kind(&attrs);
                 span.name = raw.name;
                 span.start = millis(raw.start_time_unix_nano);
                 span.end = millis(raw.end_time_unix_nano);
@@ -74,7 +76,7 @@ pub(super) fn read(path: &Path, context: &Context, template: &Span) -> Result<Op
     }
     let session_id = completed
         .iter()
-        .find(|span| span.kind == "sess")
+        .find(|span| span.kind == SpanKind::Sess)
         .map(|span| span.id.clone())
         .unwrap_or_else(|| {
             hex(id(&[
@@ -87,7 +89,7 @@ pub(super) fn read(path: &Path, context: &Context, template: &Span) -> Result<Op
         serde_json::from_value(Value::String(session_id.clone()))?;
     let mut session = completed
         .iter()
-        .find(|span| span.kind == "sess")
+        .find(|span| span.kind == SpanKind::Sess)
         .cloned()
         .unwrap_or_else(|| {
             let mut session = template.clone();
@@ -134,6 +136,14 @@ pub(super) fn read(path: &Path, context: &Context, template: &Span) -> Result<Op
                 .flat_map(|scope| scope.log_records)
             {
                 let attrs = attributes(&record.attributes);
+                for key in [
+                    "thirdshift.session.prompt",
+                    "thirdshift.session.start_time_unix_nano",
+                ] {
+                    if let Some(value) = attrs.get(key) {
+                        session.attributes.insert(key.into(), value.clone());
+                    }
+                }
                 let start = millis(record.time_unix_nano)
                     .or_else(|| millis(record.observed_time_unix_nano));
                 first_record = match (first_record, start) {
@@ -146,20 +156,32 @@ pub(super) fn read(path: &Path, context: &Context, template: &Span) -> Result<Op
                 let events: Vec<Value> =
                     serde_json::from_str(events).context("invalid Session-trace events")?;
                 for event in events {
-                    let event_type = event["type"].as_str().unwrap_or_default();
-                    let call_kind = match event_type {
-                        "tool_call_started" | "tool_call_ended" => "tool",
-                        "model_call_started" | "model_call_ended" => "model",
-                        "turn_started" | "turn_ended" => "turn",
-                        "subagent_started" | "subagent_ended" => "agent",
-                        _ => continue,
-                    };
-                    let Some(call) = event["id"].as_str() else {
+                    let Ok(event) = serde_json::from_value::<Event>(event) else {
                         continue;
                     };
-                    let parent = event["parent_id"].as_str();
-                    let key = serde_json::to_string(&(call_kind, parent, call))?;
-                    let call_id = if call_kind == "agent" && event_type.ends_with("_ended") {
+                    let excludes_cache = matches!(
+                        resource_attrs
+                            .get("thirdshift.harness")
+                            .and_then(Value::as_str),
+                        Some("claude" | "grok")
+                    );
+                    let own_attrs = attributes(&event_attributes(&event, excludes_cache));
+                    let Some(fact) = Call::of(&event) else {
+                        if matches!(
+                            event,
+                            Event::Usage {
+                                scope: UsageScope::Session,
+                                ..
+                            }
+                        ) {
+                            session.attributes.extend(own_attrs);
+                        }
+                        continue;
+                    };
+                    let (call_kind, call, parent, completion) =
+                        (fact.kind, fact.id, fact.parent, fact.completion);
+                    let key = fact.key();
+                    let call_id = if call_kind == SpanKind::Agent && completion.is_some() {
                         locations
                             .get(call)
                             .cloned()
@@ -178,7 +200,7 @@ pub(super) fn read(path: &Path, context: &Context, template: &Span) -> Result<Op
                         let mut span = template.clone();
                         span.id = call_id;
                         span.parent_id = Some(parent_id);
-                        span.kind = call_kind.into();
+                        span.kind = call_kind;
                         span.name = format!("{call_kind} {call}");
                         span.start = start;
                         span.end = None;
@@ -193,45 +215,19 @@ pub(super) fn read(path: &Path, context: &Context, template: &Span) -> Result<Op
                         span.attributes.clear();
                         span
                     });
-                    let mut own_attrs = resource_attrs.clone();
-                    own_attrs.insert("thirdshift.type".into(), Value::String(event_type.into()));
-                    for (key, value) in event.as_object().into_iter().flatten() {
-                        if !value.is_null() {
-                            own_attrs.insert(format!("thirdshift.{key}"), value.clone());
-                        }
-                    }
-                    if call_kind == "tool" {
-                        own_attrs.insert("gen_ai.tool.name".into(), event["tool"].clone());
-                        if !event["input"].is_null() {
-                            own_attrs.insert(
-                                "gen_ai.tool.call.arguments".into(),
-                                event["input"].clone(),
-                            );
-                        }
-                        if !event["result"].is_null() {
-                            own_attrs
-                                .insert("gen_ai.tool.call.result".into(), event["result"].clone());
-                        }
-                    }
-                    if event["model"].is_string() {
-                        own_attrs.insert("gen_ai.response.model".into(), event["model"].clone());
-                    }
+                    let mut call_attrs = resource_attrs.clone();
+                    call_attrs.extend(own_attrs);
                     if attrs.get("thirdshift.time.estimated") == Some(&Value::Bool(true)) {
-                        own_attrs.insert("thirdshift.time.estimated".into(), Value::Bool(true));
+                        call_attrs.insert("thirdshift.time.estimated".into(), Value::Bool(true));
                     }
-                    span.attributes.extend(own_attrs.clone());
+                    span.attributes.extend(call_attrs);
                     apply_attributes(span, span.attributes.clone());
-                    if event_type.ends_with("_ended") {
+                    if let Some(outcome) = completion {
                         span.end = span.end.or(start);
                         span.duration_ms = duration(span.start, span.end);
-                        if event["outcome"] != "succeeded" {
+                        if outcome != Outcome::Succeeded {
                             span.status = "error".into();
-                            span.error = Some(
-                                event["outcome"]
-                                    .as_str()
-                                    .unwrap_or("call did not end")
-                                    .into(),
-                            );
+                            span.error = Some(format!("{outcome:?}"));
                         } else {
                             span.status = "ok".into();
                         }
@@ -240,12 +236,23 @@ pub(super) fn read(path: &Path, context: &Context, template: &Span) -> Result<Op
             }
         }
     }
-    if !completed.iter().any(|span| span.kind == "sess") {
-        session.start = first_record.or(session.start);
+    if !completed.iter().any(|span| span.kind == SpanKind::Sess) {
+        session.start = session
+            .attributes
+            .get("thirdshift.session.start_time_unix_nano")
+            .and_then(Value::as_str)
+            .and_then(|value| value.parse().ok())
+            .and_then(millis)
+            .or(first_record)
+            .or(session.start);
         session.duration_ms = duration(session.start, session.end);
+        resource_attrs.extend(session.attributes.clone());
         apply_attributes(&mut session, resource_attrs);
     }
-    for mut span in completed.into_iter().filter(|span| span.kind != "sess") {
+    for mut span in completed
+        .into_iter()
+        .filter(|span| span.kind != SpanKind::Sess)
+    {
         if span.parent_id.is_none() {
             span.parent_id = Some(session_id.clone());
         }
@@ -279,19 +286,19 @@ pub(super) fn read(path: &Path, context: &Context, template: &Span) -> Result<Op
     Ok(Some(spans))
 }
 
-fn kind(attrs: &BTreeMap<String, Value>) -> &'static str {
+fn kind(attrs: &BTreeMap<String, Value>) -> SpanKind {
     match attrs.get("gen_ai.operation.name").and_then(Value::as_str) {
-        Some("invoke_agent") => "sess",
-        Some("execute_tool") => "tool",
-        Some("chat") => "model",
+        Some("invoke_agent") => SpanKind::Sess,
+        Some("execute_tool") => SpanKind::Tool,
+        Some("chat") => SpanKind::Model,
         _ => match attrs
             .get("thirdshift.type")
             .and_then(Value::as_str)
             .unwrap_or_default()
         {
-            value if value.starts_with("subagent_") => "agent",
-            value if value.starts_with("turn_") => "turn",
-            _ => "model",
+            value if value.starts_with("subagent_") => SpanKind::Agent,
+            value if value.starts_with("turn_") => SpanKind::Turn,
+            _ => SpanKind::Model,
         },
     }
 }
@@ -306,7 +313,7 @@ fn apply_attributes(span: &mut Span, attrs: BTreeMap<String, Value>) {
         .or_else(|| text(&attrs, "thirdshift.description"));
     span.output =
         text(&attrs, "gen_ai.tool.call.result").or_else(|| text(&attrs, "thirdshift.result"));
-    if span.kind == "tool"
+    if span.kind == SpanKind::Tool
         && let Some(tool) = text(&attrs, "gen_ai.tool.name")
     {
         span.name = format!(
