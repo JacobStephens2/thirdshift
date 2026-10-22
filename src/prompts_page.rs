@@ -404,7 +404,18 @@ fn render() -> String {
 /// resumes with, with the page's placeholders.
 fn command(resume: Option<&str>) -> String {
     let harness = Choice::default();
-    format!("claude {}", claude_args(&harness, resume, PROMPT).join(" "))
+    let args: Vec<_> = claude_args(&harness, resume, PROMPT)
+        .into_iter()
+        .map(|arg| {
+            // Keep inline settings JSON intact when copied into a shell.
+            if arg.starts_with('{') {
+                format!("'{arg}'")
+            } else {
+                arg.to_string()
+            }
+        })
+        .collect();
+    format!("claude {}", args.join(" "))
 }
 
 /// The `codex` command line a session on a Model and Effort starts with,
@@ -638,6 +649,34 @@ mod tests {
     /// check them.
     fn updating() -> bool {
         std::env::var_os("UPDATE_PROMPTS").is_some()
+    }
+
+    #[test]
+    fn prompts_page_claude_commands_preserve_attribution_settings_as_one_shell_argument() {
+        for resume in [None, Some(SESSION_ID)] {
+            let command = command(resume)
+                .replace(PROMPT, "prompt")
+                .replace(SESSION_ID, "session-id");
+            let output = std::process::Command::new("bash")
+                .args([
+                    "-c",
+                    &format!("claude() {{ printf '%s\\n' \"$@\"; }}; {command}"),
+                ])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            let stdout = String::from_utf8(output.stdout).unwrap();
+            let args: Vec<_> = stdout.lines().collect();
+            let settings = args
+                .windows(2)
+                .find(|pair| pair[0] == "--settings")
+                .expect("the documented command must pass attribution settings");
+            let settings: serde_json::Value = serde_json::from_str(settings[1]).unwrap();
+            assert_eq!(
+                settings,
+                serde_json::json!({"attribution": {"commit": "", "pr": ""}})
+            );
+        }
     }
 
     /// The golden-file test: the page carries the fragment as rendered now.
