@@ -384,3 +384,33 @@ fn historical_session_end_includes_its_timed_events_when_the_command_log_is_miss
         .unwrap();
     assert_eq!(session_span["endTimeUnixNano"], "1790856020000000000");
 }
+
+#[test]
+fn timestamped_codex_patches_are_recovered_without_command_evidence() {
+    let scenario = Scenario::new();
+    let raw = concat!(
+        "{\"timestamp\":\"2026-10-01T12:00:00Z\",\"type\":\"thread.started\",\"thread_id\":\"made-up-thread\"}\n",
+        "{\"timestamp\":\"2026-10-01T12:00:40Z\",\"type\":\"item.completed\",\"item\":{\"id\":\"f1\",\"type\":\"file_change\",\"changes\":[{\"path\":\"widgets.rs\",\"kind\":\"update\"}],\"status\":\"completed\"}}\n"
+    );
+    let session = fixture(&scenario, "codex", raw);
+    fs::remove_file(session.with_extension("models.json")).unwrap();
+    fs::remove_file(session.parent().unwrap().join(format!("{STAMP}.log"))).unwrap();
+    let native = scenario
+        .path("home/.codex/sessions/2026/10/01/rollout-2026-10-01T12-00-00-made-up-thread.jsonl");
+    fs::create_dir_all(native.parent().unwrap()).unwrap();
+    let diff = "--- a/widgets.rs\n+++ b/widgets.rs\n@@ -1 +1 @@\n-old\n+new\n";
+    fs::write(native, format!("{}\n{}\n", json!({"type":"session_meta","payload":{"id":"made-up-thread","cwd":"/work/widgets"}}),
+        json!({"timestamp":"2026-10-01T12:00:40Z","type":"event_msg","payload":{"type":"patch_apply_end","success":true,"changes":{
+            "/work/widgets/widgets.rs":{"type":"update","unified_diff":diff,"move_path":null}
+        }}}))).unwrap();
+    let result = scenario.run(&["logs", "--convert"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let report = report(&scenario);
+    assert_eq!(report["sessions"][0]["passed"], true, "{report}");
+    assert_eq!(report["sessions"][0]["codex_diffs"], 1, "{report}");
+    assert!(
+        fs::read_to_string(session.with_extension("logs.jsonl"))
+            .unwrap()
+            .contains("codex_session_file")
+    );
+}

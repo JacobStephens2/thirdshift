@@ -500,7 +500,7 @@ fn now() -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-fn event_time(event: &Value) -> Option<u64> {
+pub(crate) fn event_time(event: &Value) -> Option<u64> {
     for key in ["timestamp", "recorded_at", "time"] {
         let value = &event[key];
         if let Some(text) = value.as_str()

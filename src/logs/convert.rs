@@ -238,12 +238,25 @@ fn convert(root: &Path, source: &Path, snapshot: &Snapshot, session: &mut Sessio
     let (command, relays) = retained.unwrap_or((&fallback, Vec::new()));
     let mut command_log =
         super::status::waterfall::matching::Log::read(&command.command_log, decoded.time())?;
+    let event_end = original
+        .lines()
+        .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+        .filter_map(|event| crate::session::trace::event_time(&event))
+        .max()
+        .and_then(|nanos| {
+            chrono::DateTime::from_timestamp(
+                (nanos / 1_000_000_000) as i64,
+                (nanos % 1_000_000_000) as u32,
+            )
+        })
+        .map(|time| time.fixed_offset());
     let ended = command
         .record
         .ended_at
         .as_deref()
         .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
         .or_else(|| command_log.last_time())
+        .max(event_end)
         .unwrap_or(decoded.time());
     for path in [
         source.to_owned(),
@@ -304,7 +317,10 @@ fn convert(root: &Path, source: &Path, snapshot: &Snapshot, session: &mut Sessio
         .as_ref()
         .and_then(|t| t.began)
         .unwrap_or(decoded.time());
-    let until = timing.and_then(|t| t.ended).unwrap_or(ended);
+    let until = timing
+        .and_then(|t| t.ended)
+        .unwrap_or(ended)
+        .max(event_end.unwrap_or(decoded.time()));
     let mut stream = if harness == Harness::Codex {
         crate::harness::codex::historical(began..=until)
     } else {
