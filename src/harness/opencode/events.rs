@@ -1,5 +1,7 @@
 //! OpenCode step/message IDs identify model calls; tool IDs survive export.
-use crate::harness::interpretation::event::{Event, Kind, Usage, denied, interrupted, nanos};
+use crate::harness::interpretation::event::{
+    Agents, Event, Outcome, Tools, Usage, denied, interrupted,
+};
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 
@@ -10,6 +12,8 @@ pub(super) struct Events {
     next: usize,
     started: HashSet<String>,
     ended: HashSet<String>,
+    tools: Tools,
+    agents: Agents,
     text: HashMap<String, Vec<(String, String)>>,
 }
 
@@ -28,18 +32,13 @@ impl Events {
                 .map(String::from)
                 .unwrap_or_else(|| format!("message:{index}"));
             let id = format!("{session}:{message_id}");
-            let start = nanos(&message["time"]["created"], 1_000_000);
-            let end = nanos(&message["time"]["completed"], 1_000_000);
             if message["type"] == "user" {
                 if let Some(text) = message["text"].as_str() {
-                    events.push(Event::new(
-                        id,
-                        start,
-                        Kind::Message {
-                            role: "user".into(),
-                            text: text.into(),
-                        },
-                    ));
+                    events.push(Event::Message {
+                        role: "user".into(),
+                        text: text.into(),
+                        parent_id: None,
+                    });
                 }
                 continue;
             }
@@ -52,13 +51,7 @@ impl Events {
                     |provider| format!("{provider}/{model}"),
                 )
             });
-            events.push(Event::new(
-                &id,
-                start,
-                Kind::ModelStarted {
-                    model: model.clone(),
-                },
-            ));
+            events.push(model_start(&id, model.clone()));
             let mut text = String::new();
             for part in message["content"].as_array().into_iter().flatten() {
                 if part["type"] == "tool"
@@ -72,8 +65,6 @@ impl Events {
                         &format!("{session}:tool:{call_id}"),
                         part["name"].as_str().unwrap_or("tool"),
                         &state,
-                        nanos(&part["time"]["created"], 1_000_000),
-                        nanos(&part["time"]["completed"], 1_000_000),
                     ));
                 }
                 if part["type"] == "text" {
@@ -81,54 +72,31 @@ impl Events {
                 }
             }
             if !text.is_empty() {
-                events.push(Event::new(
-                    format!("{id}:message"),
-                    end,
-                    Kind::Message {
-                        role: "assistant".into(),
-                        text,
-                    },
-                ));
+                events.push(Event::Message {
+                    role: "assistant".into(),
+                    text,
+                    parent_id: Some(id.clone()),
+                });
             }
-            let mut event = Event::new(
+            let error = super::error_text(&message["error"]);
+            events.push(model_end(
                 &id,
-                end,
-                Kind::ModelEnded {
-                    model,
-                    usage: usage(message),
-                    failed: !message["error"].is_null(),
-                },
-            );
-            event.duration_nanos = start
-                .zip(end)
-                .and_then(|(start, end)| end.checked_sub(start));
-            events.push(event);
-            if let Some(message) = super::error_text(&message["error"]) {
-                events.push(Event::error(&id, end, message));
-                if interrupted(message) {
-                    events.push(Event::new(
-                        &id,
-                        end,
-                        Kind::Killed {
-                            description: message.into(),
-                        },
-                    ));
-                }
+                model,
+                message,
+                error.map_or(Outcome::Succeeded, failure_outcome),
+            ));
+            if let Some(error) = error {
+                events.extend(errors(&id, error, message["error"].clone()));
             }
         }
         if export["info"]["outcome"] == "failed" {
             let message = super::error_text(&export["info"]["error"])
                 .unwrap_or("OpenCode's exported outcome is failed");
-            events.push(Event::error(format!("{session}:outcome"), None, message));
-            if interrupted(message) {
-                events.push(Event::new(
-                    format!("{session}:outcome"),
-                    None,
-                    Kind::Killed {
-                        description: message.into(),
-                    },
-                ));
-            }
+            events.extend(errors(
+                &format!("{session}:outcome"),
+                message,
+                export["info"]["error"].clone(),
+            ));
         }
         events
     }
@@ -138,7 +106,6 @@ impl Events {
             self.session = id.into();
         }
         let part = &event["part"];
-        let time = nanos(&event["timestamp"], 1_000_000);
         if let Some(id) = part["messageID"].as_str() {
             self.current = id.into();
         }
@@ -150,7 +117,7 @@ impl Events {
                 }
                 let id = format!("{}:{}", self.session, self.current);
                 if self.started.insert(id.clone()) {
-                    vec![Event::new(id, time, Kind::ModelStarted { model: None })]
+                    vec![model_start(&id, None)]
                 } else {
                     Vec::new()
                 }
@@ -159,18 +126,10 @@ impl Events {
                 let id = format!("{}:{}", self.session, self.current);
                 let mut events = Vec::new();
                 if self.started.insert(id.clone()) {
-                    events.push(Event::new(&id, None, Kind::ModelStarted { model: None }));
+                    events.push(model_start(&id, None));
                 }
                 if self.ended.insert(id.clone()) {
-                    events.push(Event::new(
-                        id,
-                        time,
-                        Kind::ModelEnded {
-                            model: None,
-                            usage: usage(part),
-                            failed: false,
-                        },
-                    ));
+                    events.push(model_end(&id, None, part, Outcome::Succeeded));
                 }
                 events
             }
@@ -186,15 +145,13 @@ impl Events {
                     &format!("{}:tool:{id}", self.session),
                     part["tool"].as_str().unwrap_or("tool"),
                     &part["state"],
-                    nanos(&part["state"]["time"]["start"], 1_000_000),
-                    nanos(&part["state"]["time"]["end"], 1_000_000).or(time),
                 )
             }
             Some("text") => {
                 let Some(text) = part["text"].as_str() else {
                     return Vec::new();
                 };
-                let id = format!("{}:{}:message", self.session, self.current);
+                let id = format!("{}:{}", self.session, self.current);
                 let parts = self.text.entry(id.clone()).or_default();
                 let part_id = part["id"].as_str().unwrap_or("");
                 if let Some((_, previous)) = parts.iter_mut().find(|(id, _)| id == part_id) {
@@ -202,14 +159,11 @@ impl Events {
                 } else {
                     parts.push((part_id.into(), text.into()));
                 }
-                vec![Event::new(
-                    id,
-                    time,
-                    Kind::Message {
-                        role: "assistant".into(),
-                        text: parts.iter().map(|(_, text)| text.as_str()).collect(),
-                    },
-                )]
+                vec![Event::Message {
+                    role: "assistant".into(),
+                    text: parts.iter().map(|(_, text)| text.as_str()).collect(),
+                    parent_id: Some(id),
+                }]
             }
             Some("error") => {
                 self.next += 1;
@@ -220,15 +174,10 @@ impl Events {
                     error["type"].as_str().unwrap_or("error"),
                     super::error_text(error).unwrap_or("OpenCode's turn failed")
                 );
-                let mut events = vec![Event::error(&id, time, &message)];
+                let mut events = errors(&id, &message, error.clone());
                 if interrupted(&message) {
-                    events.push(Event::new(
-                        id,
-                        time,
-                        Kind::Killed {
-                            description: message,
-                        },
-                    ));
+                    events.extend(self.tools.stop(Outcome::Interrupted));
+                    events.extend(self.agents.stop(Outcome::Interrupted));
                 }
                 events
             }
@@ -236,85 +185,108 @@ impl Events {
         }
     }
 
-    fn tool(
-        &mut self,
-        id: &str,
-        name: &str,
-        state: &Value,
-        start: Option<u64>,
-        end: Option<u64>,
-    ) -> Vec<Event> {
+    fn tool(&mut self, id: &str, name: &str, state: &Value) -> Vec<Event> {
         let mut events = Vec::new();
-        if self.started.insert(id.into()) {
-            events.push(Event::new(
-                id,
-                start,
-                Kind::ToolStarted {
-                    name: name.into(),
-                    input: state["input"].clone(),
-                },
-            ));
-        }
-        if name == "task" && self.started.insert(format!("{id}:agent")) {
-            events.push(Event::new(
-                format!("{id}:agent"),
-                start,
-                Kind::AgentStarted {
-                    name: state["input"]["subagent_type"]
-                        .as_str()
-                        .unwrap_or("task")
-                        .into(),
-                },
-            ));
-        }
         let status = state["status"].as_str().unwrap_or("");
-        if matches!(
+        let terminal = matches!(
             status,
             "completed" | "error" | "failed" | "cancelled" | "canceled"
-        ) && self.ended.insert(id.into())
-        {
-            let failed = status != "completed";
-            let result = if failed {
-                state["error"].clone()
-            } else {
-                state["output"].clone()
-            };
-            let mut event = Event::new(
+        );
+        let failed = status != "completed";
+        let result = if failed {
+            &state["error"]
+        } else {
+            &state["output"]
+        };
+        let outcome = if !failed {
+            Outcome::Succeeded
+        } else if matches!(status, "cancelled" | "canceled") {
+            Outcome::Interrupted
+        } else if denied(result) {
+            Outcome::Denied
+        } else {
+            failure_outcome(result.as_str().unwrap_or(status))
+        };
+        if terminal && outcome == Outcome::Denied {
+            events.extend(self.tools.deny(
                 id,
-                end,
-                Kind::ToolEnded {
-                    result,
-                    failed,
-                    denied: denied(&state["error"]),
-                },
+                None,
+                name.into(),
+                state["input"].clone(),
+                result.clone(),
+            ));
+        } else {
+            events.extend(
+                self.tools
+                    .start(id, None, name.into(), state["input"].clone()),
             );
-            event.duration_nanos = start
-                .zip(end)
-                .and_then(|(start, end)| end.checked_sub(start));
-            events.push(event);
+        }
+        let agent = format!("{id}:agent");
+        if name == "task" {
+            events.extend(self.agents.start(
+                &agent,
+                Some(id.into()),
+                state["input"]["subagent_type"].as_str().map(String::from),
+            ));
+        }
+        if terminal && self.ended.insert(id.into()) {
+            if outcome != Outcome::Denied {
+                events.extend(self.tools.end(id, None, result.clone(), outcome));
+            }
             if failed {
                 let reason = state["error"].as_str().unwrap_or(status);
-                events.push(Event::error(id, end, reason));
-                if matches!(status, "cancelled" | "canceled") || interrupted(reason) {
-                    events.push(Event::new(
-                        id,
-                        end,
-                        Kind::Killed {
-                            description: reason.into(),
-                        },
-                    ));
+                events.push(Event::error(id, reason, state.clone()));
+                if outcome == Outcome::Interrupted {
+                    events.push(Event::WorkEnded {
+                        id: id.into(),
+                        outcome,
+                    });
                 }
             }
             if name == "task" {
-                events.push(Event::new(
-                    format!("{id}:agent"),
-                    end,
-                    Kind::AgentEnded { failed },
-                ));
+                events.extend(self.agents.end(&agent, outcome, result.clone()));
             }
         }
         events
     }
+}
+
+fn model_start(id: &str, model: Option<String>) -> Event {
+    Event::ModelCallStarted {
+        id: id.into(),
+        parent_id: None,
+        model,
+    }
+}
+
+fn model_end(id: &str, model: Option<String>, message: &Value, outcome: Outcome) -> Event {
+    Event::ModelCallEnded {
+        id: id.into(),
+        parent_id: None,
+        model,
+        usage: usage(message),
+        cost_usd: message["cost"].as_f64(),
+        outcome,
+    }
+}
+
+fn failure_outcome(message: &str) -> Outcome {
+    if interrupted(message) {
+        Outcome::Interrupted
+    } else {
+        Outcome::Failed
+    }
+}
+
+fn errors(id: &str, message: &str, details: Value) -> Vec<Event> {
+    let mut events = vec![Event::error(id, message, details)];
+    if interrupted(message) {
+        events.push(Event::WorkEnded {
+            id: id.into(),
+            outcome: Outcome::Interrupted,
+        });
+    }
+    events
 }
 
 fn usage(message: &Value) -> Usage {
@@ -331,7 +303,5 @@ fn usage(message: &Value) -> Usage {
             .map(|output| output + reasoning.unwrap_or(0)),
         cache_read: read,
         cache_write: write,
-        reasoning,
-        cost: message["cost"].as_f64(),
     }
 }

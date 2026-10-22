@@ -1,5 +1,5 @@
 //! Muse task IDs bridge lifecycle edges and the later call/result records.
-use crate::harness::interpretation::event::{Event, Kind, Usage, denied, nanos};
+use crate::harness::interpretation::event::{Event, Outcome, Usage, denied, interrupted};
 use serde_json::Value;
 use std::collections::HashMap;
 
@@ -15,11 +15,10 @@ pub(super) struct Events {
 
 struct Task {
     kind: TaskKind,
-    start: Option<u64>,
     started: bool,
+    ended: bool,
     output: Value,
     input: Value,
-    denied: bool,
 }
 
 enum TaskKind {
@@ -32,51 +31,65 @@ impl Task {
     fn new(kind: TaskKind) -> Self {
         Self {
             kind,
-            start: None,
             started: false,
+            ended: false,
             input: Value::Null,
             output: Value::Null,
-            denied: false,
         }
     }
 
-    fn start(&mut self, id: &str, time: Option<u64>, model: Option<String>) -> Event {
-        if !self.started {
-            self.start = time;
-            self.started = true;
+    fn start(&mut self, id: &str, model: Option<String>) -> Option<Event> {
+        if self.started {
+            return None;
         }
-        Event::new(
-            id,
-            self.start,
-            match &self.kind {
-                TaskKind::Model => Kind::ModelStarted { model },
-                TaskKind::Tool(name) => Kind::ToolStarted {
-                    name: name.clone(),
-                    input: self.input.clone(),
-                },
-                TaskKind::Agent(name) => Kind::AgentStarted { name: name.clone() },
+        self.started = true;
+        Some(match &self.kind {
+            TaskKind::Model => Event::ModelCallStarted {
+                id: id.into(),
+                parent_id: None,
+                model,
             },
-        )
+            TaskKind::Tool(tool) => Event::ToolCallStarted {
+                id: id.into(),
+                parent_id: None,
+                tool: tool.clone(),
+                input: self.input.clone(),
+            },
+            TaskKind::Agent(name) => Event::SubagentStarted {
+                id: id.into(),
+                parent_id: None,
+                description: Some(name.clone()),
+            },
+        })
     }
 
-    fn end(&self, id: &str, time: Option<u64>, model: Option<String>, failed: bool) -> Event {
-        Event::new(
-            id,
-            time,
-            match &self.kind {
-                TaskKind::Model => Kind::ModelEnded {
-                    model,
-                    usage: Usage::default(),
-                    failed,
-                },
-                TaskKind::Tool(_) => Kind::ToolEnded {
-                    result: self.output.clone(),
-                    failed,
-                    denied: self.denied,
-                },
-                TaskKind::Agent(_) => Kind::AgentEnded { failed },
+    fn end(&mut self, id: &str, model: Option<String>, outcome: Outcome) -> Event {
+        let amended = self.ended;
+        self.ended = true;
+        match &self.kind {
+            TaskKind::Model => Event::ModelCallEnded {
+                id: id.into(),
+                parent_id: None,
+                model,
+                usage: Usage::default(),
+                cost_usd: None,
+                outcome,
             },
-        )
+            TaskKind::Tool(tool) => Event::ToolCallEnded {
+                id: id.into(),
+                parent_id: None,
+                tool: tool.clone(),
+                input: self.input.clone(),
+                result: self.output.clone(),
+                outcome,
+                amended,
+            },
+            TaskKind::Agent(_) => Event::SubagentEnded {
+                id: id.into(),
+                outcome,
+                result: self.output.clone(),
+            },
+        }
     }
 }
 
@@ -88,7 +101,6 @@ impl Events {
             .or_else(|| payload["command_id"].as_str())
             .or_else(|| event["stream"]["id"].as_str())
             .unwrap_or("");
-        let time = nanos(&event["recorded_at"], 1000);
         let kind = event["payload_type"].as_str().unwrap_or("");
         if kind == "run.model.configured" {
             if let Some(model) = payload["model_id"].as_str() {
@@ -97,34 +109,21 @@ impl Events {
             return Vec::new();
         }
         if let Some(kind) = kind.strip_prefix("task.lifecycle.") {
-            return self.lifecycle(scope, kind, &payload["event"], time);
+            return self.lifecycle(scope, kind, &payload["event"]);
         }
         if kind == "tool.result" {
-            return self.result(scope, payload, time);
+            return self.result(scope, payload);
         }
-        if matches!(
-            kind,
-            "run.terminal.failed" | "run.terminal.cancelled" | "run.terminal.interrupted"
-        ) {
-            return terminal(
-                scope,
-                kind.strip_prefix("run.terminal.").unwrap(),
-                payload,
-                time,
-            );
+        if let Some(status) = kind.strip_prefix("run.terminal.") {
+            return terminal(scope, status, payload);
         }
-        if kind == "turn.input.user" {
-            return payload["prompt"]
+        if kind == "turn.input.received" {
+            return payload["text"]
                 .as_str()
-                .map(|text| {
-                    Event::new(
-                        event["id"].as_str().unwrap_or(scope),
-                        time,
-                        Kind::Message {
-                            role: "user".into(),
-                            text: text.into(),
-                        },
-                    )
+                .map(|text| Event::Message {
+                    role: "user".into(),
+                    text: text.into(),
+                    parent_id: None,
                 })
                 .into_iter()
                 .collect();
@@ -137,14 +136,11 @@ impl Events {
                 .unwrap_or_else(|| format!("{scope}:reply"));
             let text = self.text.entry(id.clone()).or_default();
             text.push_str(payload["text"].as_str().unwrap_or(""));
-            return vec![Event::new(
-                format!("{id}:message"),
-                time,
-                Kind::Message {
-                    role: "assistant".into(),
-                    text: text.clone(),
-                },
-            )];
+            return vec![Event::Message {
+                role: "assistant".into(),
+                text: text.clone(),
+                parent_id: Some(id),
+            }];
         }
         Vec::new()
     }
@@ -156,50 +152,45 @@ impl Events {
             .or_else(|| record["stream"]["id"].as_str())
             .unwrap_or("");
         let event = &payload["event"];
-        let time = nanos(&record["recorded_at"], 1000);
         match event["kind"].as_str().unwrap_or("") {
-            "terminal" => terminal(scope, event["terminal"].as_str().unwrap_or(""), event, time),
+            "terminal" => terminal(scope, event["terminal"].as_str().unwrap_or(""), event),
             "model_completed" => {
                 let mut events = Vec::new();
-                let id = self.last_model.get(scope).cloned().unwrap_or_else(|| {
-                    self.recovered_calls += 1;
-                    format!("{scope}:model:{}", self.recovered_calls)
-                });
+                let id = self
+                    .last_model
+                    .get(scope)
+                    .filter(|id| self.tasks.contains_key(*id))
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        self.recovered_calls += 1;
+                        format!("{scope}:model:{}", self.recovered_calls)
+                    });
                 let model = event["model"]
                     .as_str()
                     .map(String::from)
                     .or_else(|| self.models.get(scope).cloned());
                 if !self.tasks.contains_key(&id) {
-                    let start = time
-                        .zip(nanos(&event["duration_ms"], 1_000_000))
-                        .and_then(|(end, duration)| end.checked_sub(duration));
-                    events.push(Event::new(
-                        &id,
-                        start,
-                        Kind::ModelStarted {
-                            model: model.clone(),
-                        },
-                    ));
+                    events.push(Event::ModelCallStarted {
+                        id: id.clone(),
+                        parent_id: None,
+                        model: model.clone(),
+                    });
                 }
+                self.last_model.insert(scope.into(), id.clone());
                 let usage = &event["usage"];
-                let mut end = Event::new(
-                    &id,
-                    time,
-                    Kind::ModelEnded {
-                        model,
-                        usage: Usage {
-                            input: usage["input_tokens"].as_u64(),
-                            output: usage["output_tokens"].as_u64(),
-                            cache_read: usage["cached_tokens"].as_u64(),
-                            cache_write: usage["cache_write_tokens"].as_u64(),
-                            reasoning: usage["reasoning_tokens"].as_u64(),
-                            cost: event["cost"].as_f64(),
-                        },
-                        failed: false,
+                events.push(Event::ModelCallEnded {
+                    id,
+                    parent_id: None,
+                    model,
+                    usage: Usage {
+                        input: usage["input_tokens"].as_u64(),
+                        output: usage["output_tokens"].as_u64(),
+                        cache_read: usage["cached_tokens"].as_u64(),
+                        cache_write: usage["cache_write_tokens"].as_u64(),
                     },
-                );
-                end.duration_nanos = nanos(&event["duration_ms"], 1_000_000);
-                events.push(end);
+                    cost_usd: event["cost"].as_f64(),
+                    outcome: Outcome::Succeeded,
+                });
                 events
             }
             "assistant_message_committed" => {
@@ -211,30 +202,19 @@ impl Events {
                 });
                 event["text"]
                     .as_str()
-                    .map(|text| {
-                        Event::new(
-                            format!("{id}:message"),
-                            time,
-                            Kind::Message {
-                                role: "assistant".into(),
-                                text: text.into(),
-                            },
-                        )
+                    .map(|text| Event::Message {
+                        role: "assistant".into(),
+                        text: text.into(),
+                        parent_id: Some(id),
                     })
                     .into_iter()
                     .collect()
             }
-            kind => self.lifecycle(scope, kind, event, time),
+            kind => self.lifecycle(scope, kind, event),
         }
     }
 
-    fn lifecycle(
-        &mut self,
-        scope: &str,
-        kind: &str,
-        event: &Value,
-        time: Option<u64>,
-    ) -> Vec<Event> {
+    fn lifecycle(&mut self, scope: &str, kind: &str, event: &Value) -> Vec<Event> {
         let Some(task_id) = event["task_id"].as_str() else {
             return Vec::new();
         };
@@ -267,7 +247,7 @@ impl Events {
             self.last_model.insert(scope.into(), id.clone());
         }
         match kind {
-            "started" => vec![task.start(&id, time, model)],
+            "started" => task.start(&id, model).into_iter().collect(),
             "output" => {
                 if let Some(chunk) = event["chunk"].as_str() {
                     let mut text = task.output.as_str().unwrap_or("").to_string();
@@ -277,27 +257,29 @@ impl Events {
                 Vec::new()
             }
             "completed" | "failed" | "cancelled" => {
-                let mut events = Vec::new();
-                if !task.started {
-                    events.push(task.start(&id, None, model.clone()));
+                if task.ended {
+                    return Vec::new();
                 }
+                let mut events: Vec<_> = task.start(&id, model.clone()).into_iter().collect();
                 let reason = event["reason"].as_str().unwrap_or(kind);
-                task.denied = denied(&event["reason"]);
+                let outcome = if kind == "completed" {
+                    Outcome::Succeeded
+                } else if kind == "cancelled" {
+                    Outcome::Interrupted
+                } else if denied(&event["reason"]) {
+                    Outcome::Denied
+                } else {
+                    Outcome::Failed
+                };
                 if kind != "completed" {
                     task.output = Value::String(reason.into());
                 }
-                events.push(task.end(&id, time, model, kind != "completed"));
+                events.push(task.end(&id, model, outcome));
                 if kind != "completed" {
-                    events.push(Event::error(&id, time, reason));
+                    events.push(Event::error(&id, reason, event.clone()));
                 }
                 if kind == "cancelled" {
-                    events.push(Event::new(
-                        id,
-                        time,
-                        Kind::Killed {
-                            description: reason.into(),
-                        },
-                    ));
+                    events.push(Event::WorkEnded { id, outcome });
                 }
                 events
             }
@@ -305,7 +287,7 @@ impl Events {
         }
     }
 
-    fn result(&mut self, scope: &str, payload: &Value, time: Option<u64>) -> Vec<Event> {
+    fn result(&mut self, scope: &str, payload: &Value) -> Vec<Event> {
         let Some(call_id) = payload["call_id"].as_str() else {
             return Vec::new();
         };
@@ -324,37 +306,35 @@ impl Events {
             .and_then(|text| serde_json::from_str::<Value>(text).ok())
             && let Some(command) = text.get("command")
         {
-            task.input = serde_json::json!({"command":command});
+            task.input = serde_json::json!({"command": command});
         }
         task.output = result;
-        task.denied = denied(&payload["correlation_facts"]["outcome"]);
-        vec![
-            task.start(&id, time, None),
-            task.end(
-                &id,
-                time,
-                None,
-                payload["correlation_facts"]["outcome"] != "success",
-            ),
-        ]
+        let reported = &payload["correlation_facts"]["outcome"];
+        let outcome = if denied(reported) {
+            Outcome::Denied
+        } else if reported == "success" {
+            Outcome::Succeeded
+        } else {
+            Outcome::Failed
+        };
+        let mut events: Vec<_> = task.start(&id, None).into_iter().collect();
+        events.push(task.end(&id, None, outcome));
+        events
     }
 }
 
-fn terminal(scope: &str, status: &str, payload: &Value, time: Option<u64>) -> Vec<Event> {
+fn terminal(scope: &str, status: &str, payload: &Value) -> Vec<Event> {
     if !matches!(status, "failed" | "cancelled" | "interrupted") {
         return Vec::new();
     }
     let reason = payload["reason"].as_str().unwrap_or("Muse's turn failed");
     let id = format!("{scope}:terminal");
-    let mut events = vec![Event::error(&id, time, reason)];
-    if status != "failed" || crate::harness::interpretation::event::interrupted(reason) {
-        events.push(Event::new(
+    let mut events = vec![Event::error(&id, reason, payload.clone())];
+    if status != "failed" || interrupted(reason) {
+        events.push(Event::WorkEnded {
             id,
-            time,
-            Kind::Killed {
-                description: reason.into(),
-            },
-        ));
+            outcome: Outcome::Interrupted,
+        });
     }
     events
 }

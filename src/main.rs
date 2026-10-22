@@ -23,6 +23,7 @@ mod labels;
 mod launch;
 mod logs;
 mod notification;
+mod otlp_jsonl;
 mod pass;
 mod pickup;
 mod poll;

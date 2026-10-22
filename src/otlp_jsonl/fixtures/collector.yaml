@@ -1,0 +1,33 @@
+# Local-only interoperability check. Point OTLP_JSONL_CHECK_DIR at the files
+# emitted by the collector_input_files_roundtrip_through_disk test.
+receivers:
+  otlp_json_file/logs:
+    include: ["${env:OTLP_JSONL_CHECK_DIR}/input.logs.jsonl"]
+    start_at: beginning
+    poll_interval: 100ms
+    max_log_size: 8MiB
+    include_file_name: false
+  otlp_json_file/spans:
+    include: ["${env:OTLP_JSONL_CHECK_DIR}/input.spans.jsonl"]
+    start_at: beginning
+    poll_interval: 100ms
+    max_log_size: 8MiB
+    include_file_name: false
+exporters:
+  file/logs:
+    path: "${env:OTLP_JSONL_CHECK_DIR}/output.logs.jsonl"
+    flush_interval: 100ms
+  file/spans:
+    path: "${env:OTLP_JSONL_CHECK_DIR}/output.spans.jsonl"
+    flush_interval: 100ms
+service:
+  telemetry:
+    metrics:
+      level: none
+  pipelines:
+    logs:
+      receivers: [otlp_json_file/logs]
+      exporters: [file/logs]
+    traces:
+      receivers: [otlp_json_file/spans]
+      exporters: [file/spans]

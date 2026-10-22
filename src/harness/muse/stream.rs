@@ -164,39 +164,47 @@ mod tests {
 
     #[test]
     fn normalized_muse_lifecycle_edges_are_ordered_and_tool_results_enrich_the_same_call() {
-        use crate::harness::interpretation::event::Kind;
+        use crate::harness::interpretation::event::{Event, Outcome};
         let mut stream = stream(Harness::Muse, "");
         for line in include_str!("../../../tests/fixtures/normalized-muse.jsonl").lines() {
-            stream.condense(line);
+            stream.decode(line);
         }
         let events = finish(stream).report.unwrap().events;
         assert_eq!(events.len(), 4);
         assert_eq!(
             events
                 .iter()
-                .map(|event| event.id.as_str())
+                .filter_map(|event| match event {
+                    Event::ModelCallStarted { id, .. }
+                    | Event::ModelCallEnded { id, .. }
+                    | Event::ToolCallStarted { id, .. }
+                    | Event::ToolCallEnded { id, .. } => Some(id.as_str()),
+                    _ => None,
+                })
                 .collect::<Vec<_>>(),
             ["r:m1", "r:m1", "r:t1", "r:t1"]
         );
         assert!(
-            matches!(&events[0].kind, Kind::ModelStarted { model: Some(model) } if model == "muse-spark-1.3")
+            matches!(&events[0], Event::ModelCallStarted { model: Some(model), .. } if model == "muse-spark-1.3")
         );
         assert!(matches!(
-            events[1].kind,
-            Kind::ModelEnded { failed: false, .. }
+            events[1],
+            Event::ModelCallEnded {
+                outcome: Outcome::Succeeded,
+                ..
+            }
         ));
         assert!(
-            matches!(&events[2].kind, Kind::ToolStarted { name, input } if name == "bash" && input["command"] == "cargo test")
+            matches!(&events[2], Event::ToolCallStarted { tool, input, .. } if tool == "bash" && input["command"] == "cargo test")
         );
         assert!(
-            matches!(&events[3].kind, Kind::ToolEnded { result, failed: false, denied: false } if result.as_str().unwrap().contains("done"))
+            matches!(&events[3], Event::ToolCallEnded { result, outcome: Outcome::Succeeded, .. } if result.as_str().unwrap().contains("done"))
         );
-        assert_eq!(events[2].time_unix_nanos, Some(7_000_000));
     }
 
     #[test]
     fn normalized_muse_denials_limits_killed_tasks_and_agents_keep_their_outcomes() {
-        use crate::harness::interpretation::event::{ErrorKind, Kind};
+        use crate::harness::interpretation::event::{ErrorKind, Event, Outcome};
         let mut stream = stream(Harness::Muse, "");
         for (kind, event) in [
             (
@@ -220,50 +228,50 @@ mod tests {
             ("started", json!({"task_id":"a"})),
             ("completed", json!({"task_id":"a"})),
         ] {
-            stream.condense(&json!({"stream":{"kind":"session","id":"s"},"payload_type":format!("task.lifecycle.{kind}"),"payload":{"event":event}}).to_string());
+            stream.decode(&json!({"stream":{"kind":"session","id":"s"},"payload_type":format!("task.lifecycle.{kind}"),"payload":{"event":event}}).to_string());
         }
-        stream.condense(
+        stream.decode(
             r#"{"payload_type":"run.terminal.failed","payload":{"reason":"usage limit exceeded"}}"#,
         );
         let events = finish(stream).report.unwrap().events;
         assert!(events.iter().any(|event| matches!(
-            event.kind,
-            Kind::Error {
+            event,
+            Event::Error {
                 kind: ErrorKind::RateLimit,
                 ..
             }
         )));
         assert!(events.iter().any(|event| matches!(
-            event.kind,
-            Kind::Error {
+            event,
+            Event::Error {
                 kind: ErrorKind::UsageLimit,
                 ..
             }
         )));
-        assert!(events.iter().any(|event| event.id == "s:d"
-            && matches!(
-                event.kind,
-                Kind::ToolEnded {
-                    failed: true,
-                    denied: true,
-                    ..
-                }
-            )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::ToolCallEnded {
+                id,
+                outcome: Outcome::Denied,
+                ..
+            } if id == "s:d"
+        )));
+        assert!(events.iter().any(|event| matches!(event, Event::WorkEnded {
+                    id,
+                    outcome: Outcome::Killed | Outcome::Interrupted,
+                } if id == "s:t")));
         assert!(
             events
                 .iter()
-                .any(|event| event.id == "s:t" && matches!(event.kind, Kind::Killed { .. }))
+                .any(|event| matches!(event, Event::SubagentStarted { .. }))
         );
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event.kind, Kind::AgentStarted { .. }))
-        );
-        assert!(
-            events
-                .iter()
-                .any(|event| matches!(event.kind, Kind::AgentEnded { failed: false }))
-        );
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::SubagentEnded {
+                outcome: Outcome::Succeeded,
+                ..
+            }
+        )));
     }
 
     #[test]

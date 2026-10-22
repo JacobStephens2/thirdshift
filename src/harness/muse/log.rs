@@ -159,9 +159,48 @@ pub(in crate::harness) fn recording_interpretation(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::harness::interpretation::event::{Kind, Usage};
+    use crate::harness::interpretation::event::{Event, Outcome, Usage};
     use serde_json::json;
     use std::os::unix::process::ExitStatusExt;
+
+    #[test]
+    fn retained_only_model_completions_remain_distinct_calls_without_task_envelopes() {
+        let records = [10, 20].map(|input| {
+            json!({
+                "stream":{"kind":"session","id":"s"},
+                "payload":{
+                    "kind":"run","run_id":"r",
+                    "event":{"kind":"model_completed","usage":{"input_tokens":input}}
+                }
+            })
+        });
+        let text = records
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        let log = SessionLog::parse(&text, "s").unwrap();
+        let starts: Vec<_> = log
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                Event::ModelCallStarted { id, .. } => Some(id.as_str()),
+                _ => None,
+            })
+            .collect();
+        let ends: Vec<_> = log
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                Event::ModelCallEnded { id, usage, .. } => Some((id.as_str(), usage.input)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(starts.len(), 2);
+        assert_ne!(starts[0], starts[1]);
+        assert_eq!(ends.len(), 2);
+        assert_eq!(ends, [(starts[0], Some(10)), (starts[1], Some(20))]);
+    }
 
     #[test]
     fn review_muse_retained_task_envelopes_enrich_the_live_model_call() {
@@ -202,7 +241,7 @@ mod tests {
             Box::new(super::super::stream::MuseProgress::default()),
         );
         for line in include_str!("../../../tests/fixtures/normalized-muse.jsonl").lines() {
-            interpretation.condense(line);
+            interpretation.decode(line);
         }
         let events = interpretation
             .finish(Ok(std::process::ExitStatus::from_raw(0)))
@@ -211,16 +250,17 @@ mod tests {
             .events;
         let model_ends: Vec<_> = events
             .iter()
-            .filter(|event| matches!(event.kind, Kind::ModelEnded { .. }))
+            .filter(|event| matches!(event, Event::ModelCallEnded { .. }))
             .collect();
         assert_eq!(
             model_ends.len(),
             1,
             "one real model call must remain one call: {model_ends:?}"
         );
-        assert_eq!(model_ends[0].id, "r:m1");
-        assert!(matches!(&model_ends[0].kind, Kind::ModelEnded { usage, .. }
-            if usage.input == Some(100) && usage.output == Some(12)));
+        assert!(
+            matches!(model_ends[0], Event::ModelCallEnded { id, usage, .. }
+            if id == "r:m1" && usage.input == Some(100) && usage.output == Some(12))
+        );
     }
 
     #[test]
@@ -238,8 +278,8 @@ mod tests {
         let log = SessionLog::parse(&record.to_string(), "s").unwrap();
         assert!(
             log.events.iter().any(|event| matches!(
-                &event.kind,
-                Kind::Error { kind: ErrorKind::UsageLimit, message } if message == "quota exceeded"
+                event,
+                Event::Error { kind: ErrorKind::UsageLimit, message, .. } if message == "quota exceeded"
             )),
             "retained terminal error is absent: {:?}",
             log.events
@@ -275,7 +315,7 @@ mod tests {
             Box::new(super::super::stream::MuseProgress::default()),
         );
         for line in include_str!("../../../tests/fixtures/normalized-muse.jsonl").lines() {
-            interpretation.condense(line);
+            interpretation.decode(line);
         }
         let events = interpretation
             .finish(Ok(std::process::ExitStatus::from_raw(0)))
@@ -284,27 +324,29 @@ mod tests {
             .events;
         let ends: Vec<_> = events
             .iter()
-            .filter(|event| matches!(event.kind, Kind::ModelEnded { .. }))
+            .filter(|event| matches!(event, Event::ModelCallEnded { .. }))
             .collect();
         assert_eq!(ends.len(), 1);
-        assert_eq!(ends[0].id, "r:m1");
         assert_eq!(
-            ends[0].kind,
-            Kind::ModelEnded {
+            *ends[0],
+            Event::ModelCallEnded {
+                id: "r:m1".into(),
+                parent_id: None,
                 model: Some("muse-spark-1.3".into()),
                 usage: Usage {
                     input: Some(100),
                     output: Some(12),
                     cache_read: Some(80),
                     cache_write: Some(5),
-                    reasoning: Some(2),
-                    cost: None
                 },
-                failed: false
+                cost_usd: None,
+                outcome: Outcome::Succeeded,
             }
         );
-        assert!(events.iter().any(
-            |event| matches!(&event.kind, Kind::Message { text, .. } if text == "retained reply")
-        ));
+        assert!(
+            events.iter().any(
+                |event| matches!(event, Event::Message { text, .. } if text == "retained reply")
+            )
+        );
     }
 }

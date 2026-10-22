@@ -7,9 +7,11 @@ use anyhow::{Result, anyhow};
 use super::said;
 use crate::interrupt;
 
-pub mod event;
 mod stream;
 pub(super) use stream::Stream;
+pub mod event;
+#[cfg(test)]
+mod event_tests;
 mod models;
 mod security;
 pub use security::SafeguardRefusal;
@@ -23,7 +25,7 @@ pub struct Interpretation {
     retained: Option<Box<dyn Retained>>,
     security: Option<Security>,
     models: models::Models,
-    events: Vec<event::Event>,
+    events: Option<Vec<event::Event>>,
 }
 
 /// Reporting survives ordinary failures; only success supplies Resume facts.
@@ -34,7 +36,8 @@ pub struct Completion {
 
 #[derive(Default)]
 pub struct Report {
-    /// Complete normalized timeline, enriched by readable retained records.
+    /// Normalized timeline captured by `decode`, enriched by retained records.
+    /// Progress-only callers receive only facts recovered at completion.
     pub events: Vec<event::Event>,
     /// Ordered progress supplied after retained completion.
     pub completion_progress: Vec<String>,
@@ -107,6 +110,13 @@ pub(super) struct StreamUpdate {
     pub events: Vec<event::Event>,
 }
 
+/// One decoded line. Consumers needing normalized facts use this interface;
+/// progress-only callers keep using `condense`, with no event buffering.
+pub struct Decoded {
+    pub progress: Vec<String>,
+    pub events: Vec<event::Event>,
+}
+
 pub(super) enum Evidence {
     ObservedModel { name: String, scope: ModelScope },
     RequestedModelFallback,
@@ -173,7 +183,7 @@ impl Interpretation {
             retained: None,
             security: None,
             models: models::Models::default(),
-            events: Vec::new(),
+            events: None,
         }
     }
 
@@ -196,17 +206,32 @@ impl Interpretation {
 
     /// Unknown or malformed lines produce no progress, never an error.
     pub fn condense(&mut self, raw: &str) -> Vec<String> {
-        self.decode(raw).0
+        let decoded = self.read(raw);
+        drop(decoded.events);
+        decoded.progress
     }
 
-    /// Progress and normalized facts from one line, before the next arrives.
-    pub fn decode(&mut self, raw: &str) -> (Vec<String>, Vec<event::Event>) {
+    /// Return live facts and capture them for the authoritative completion
+    /// timeline. Retained records refine calls by ID instead of adding calls.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "normalized consumers opt in; Session log uses condense"
+        )
+    )]
+    pub fn decode(&mut self, raw: &str) -> Decoded {
+        let decoded = self.read(raw);
+        event::reconcile(self.events.get_or_insert_default(), decoded.events.clone());
+        decoded
+    }
+
+    fn read(&mut self, raw: &str) -> Decoded {
         let StreamUpdate {
             mut progress,
             evidence,
             events,
         } = self.decoder.condense(raw);
-        event::reconcile(&mut self.events, events.clone());
         for fact in evidence {
             if let Evidence::ObservedModel { name, .. } = &fact
                 && !self.models.include(name)
@@ -219,7 +244,7 @@ impl Interpretation {
                 progress.push(line);
             }
         }
-        (progress, events)
+        Decoded { progress, events }
     }
 
     pub fn finish(self, execution: Result<ExitStatus>) -> Completion {
@@ -251,7 +276,7 @@ impl Interpretation {
             return (None, Err(Failure::Execution(error)));
         }
         let mut facts = self.decoder.complete();
-        facts.report.events = self.events;
+        facts.report.events = self.events.unwrap_or_default();
         facts.report.models = self.models.into_names();
         let refusal = self.security.and_then(|security| security.refusal);
         if refusal.is_some() {
