@@ -1,5 +1,6 @@
 //! A Command tree on one time axis, derived from show facts and retained logs.
 mod matching;
+mod trace;
 
 use anyhow::Result;
 use chrono::{DateTime, FixedOffset, Local};
@@ -48,6 +49,12 @@ pub(crate) struct Tool {
     pub url: String,
 }
 
+struct Call {
+    label: String,
+    start: Option<Time>,
+    end: Option<Time>,
+}
+
 pub(crate) struct Span {
     pub start: String,
     pub seconds: String,
@@ -64,10 +71,10 @@ struct Axis {
 impl Axis {
     fn span(&self, start: Option<Time>, end: Option<Time>) -> Span {
         let seconds = start.zip(end).and_then(|(start, end)| {
-            let millis = (end - start).num_milliseconds();
-            (millis >= 0).then_some(millis as f64 / 1000.0)
+            let seconds = (end - start).as_seconds_f64();
+            (seconds >= 0.0).then_some(seconds)
         });
-        let scale = 100.0 / (self.end - self.start).num_milliseconds().max(1) as f64;
+        let scale = 100.0 / (self.end - self.start).as_seconds_f64().max(f64::EPSILON);
         Span {
             start: start.map(|time| time.to_rfc3339()).unwrap_or_default(),
             seconds: seconds.map(|n| n.to_string()).unwrap_or_default(),
@@ -75,7 +82,7 @@ impl Axis {
                 .map(|n| crate::progress::duration(std::time::Duration::from_secs_f64(n)))
                 .unwrap_or_else(|| "Time unknown".into()),
             left: start
-                .map(|time| (time - self.start).num_milliseconds() as f64 * scale)
+                .map(|time| (time - self.start).as_seconds_f64() * scale)
                 .unwrap_or(0.0)
                 .clamp(0.0, 100.0),
             width: start
@@ -83,8 +90,8 @@ impl Axis {
                 .filter(|_| seconds.is_some())
                 .map(|(start, end)| {
                     (end.min(self.end) - start.max(self.start))
-                        .num_milliseconds()
-                        .max(0) as f64
+                        .as_seconds_f64()
+                        .max(0.0)
                         * scale
                 })
                 .unwrap_or(0.0)
@@ -164,42 +171,55 @@ fn collect(
         })
         .collect();
     for session in Observation::Record(command).sessions()? {
-        let calls = matching::calls(&session, command, relays, log)?;
+        let traced = trace::calls(&session)?;
+        let measured = traced.is_some();
+        let calls = match traced {
+            Some(calls) => calls,
+            None => matching::calls(&session, command, relays, log)?,
+        };
         for (index, call) in calls.iter().enumerate() {
-            let stage = call
-                .start
-                .and_then(|start| {
-                    // A log timestamp denotes its whole second. Prefer an
-                    // explicit Session reference among compatible intervals,
-                    // especially when a transition retains fractional time.
+            let stage = if measured {
+                call.start.and_then(|start| {
                     intervals.iter().position(|timing| {
-                        timing.stage.session_log.as_ref() == Some(&session)
-                            && timing
-                                .began
-                                .is_some_and(|began| start.timestamp() >= began.timestamp())
-                            && timing
-                                .ended
-                                .is_none_or(|end| start.timestamp() <= end.timestamp())
+                        timing.began.is_some_and(|began| start >= began)
+                            && timing.ended.is_none_or(|end| start < end)
                     })
                 })
-                .or_else(|| {
-                    call.start.and_then(|start| {
+            } else {
+                call.start
+                    .and_then(|start| {
+                        // A log timestamp denotes its whole second. Prefer an
+                        // explicit Session reference among compatible intervals,
+                        // especially when a transition retains fractional time.
                         intervals.iter().position(|timing| {
-                            timing
-                                .began
-                                .is_some_and(|began| start.timestamp() >= began.timestamp())
+                            timing.stage.session_log.as_ref() == Some(&session)
+                                && timing
+                                    .began
+                                    .is_some_and(|began| start.timestamp() >= began.timestamp())
                                 && timing
                                     .ended
-                                    .is_none_or(|end| start.timestamp() < end.timestamp())
+                                    .is_none_or(|end| start.timestamp() <= end.timestamp())
                         })
                     })
-                })
-                .or_else(|| {
-                    record
-                        .stages
-                        .iter()
-                        .position(|stage| stage.session_log.as_ref() == Some(&session))
-                });
+                    .or_else(|| {
+                        call.start.and_then(|start| {
+                            intervals.iter().position(|timing| {
+                                timing
+                                    .began
+                                    .is_some_and(|began| start.timestamp() >= began.timestamp())
+                                    && timing
+                                        .ended
+                                        .is_none_or(|end| start.timestamp() < end.timestamp())
+                            })
+                        })
+                    })
+            }
+            .or_else(|| {
+                record
+                    .stages
+                    .iter()
+                    .position(|stage| stage.session_log.as_ref() == Some(&session))
+            });
             let stage_index = stage.unwrap_or_else(|| {
                 if stages.len() == intervals.len() {
                     stages.push(Stage {
@@ -212,9 +232,14 @@ fn collect(
             });
             let boundary = stage.and_then(|stage| intervals[stage].ended);
             let next = calls[index + 1..].iter().find_map(|call| call.start);
-            let end = match (next, boundary) {
-                (Some(next), Some(boundary)) => Some(next.min(boundary)),
-                (next, boundary) => next.or(boundary),
+            let end = if measured {
+                call.end
+                    .or_else(|| (command.state == "live").then_some(now))
+            } else {
+                match (next, boundary) {
+                    (Some(next), Some(boundary)) => Some(next.min(boundary)),
+                    (next, boundary) => next.or(boundary),
+                }
             };
             stages[stage_index].tools.push(Tool {
                 label: call.label.clone(),

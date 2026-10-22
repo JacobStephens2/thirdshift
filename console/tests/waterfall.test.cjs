@@ -38,11 +38,29 @@ before(async () => {
     stages: [{ name: 'implement', began_at: '2026-10-01T12:00:10+00:00', session_log: session }]
   }));
   await writeFile(join(folder, '7-fixture.log'), 'thirdshift: 12:00:00 starting\nthirdshift: 12:00:15 #99: implement: $ first <unsafe>\nthirdshift: 12:00:30 #99: implement: $ last\nthirdshift: 12:01:00 finished\n');
+  const traceSession = join(folder, '10-20261001T120000+0000-implement.logs.jsonl');
+  await writeFile(traceSession, await readFile(resolve(__dirname, '../../tests/fixtures/waterfall-logs.jsonl')));
+  await writeFile(traceSession.replace('.logs.jsonl', '.spans.jsonl'), await readFile(resolve(__dirname, '../../tests/fixtures/waterfall-spans.jsonl')));
+  await writeFile(join(folder, '10-fixture.command.json'), JSON.stringify({
+    ...record, kind: 'Run', name: 'trace-10', harness: 'muse', issue: { ...record.issue, number: 10 },
+    session_log: traceSession,
+    stages: [{ name: 'implement', began_at: record.started_at, session_log: traceSession }]
+  }));
+  const liveStart = new Date(Date.now() - 10000).toISOString();
+  const liveSession = join(folder, '9-20261001T120000+0000-implement.logs.jsonl');
+  await writeFile(liveSession, JSON.stringify({ resourceLogs: [{ scopeLogs: [{ logRecords: [{
+    observedTimeUnixNano: `${BigInt(Date.parse(liveStart)) * 1000000n}`,
+    attributes: [{ key: 'thirdshift.events', value: { stringValue: JSON.stringify([
+      { type: 'tool_call_started', id: 'live', parent_id: null, tool: 'Bash', input: { command: 'still running' } }
+    ]) } }]
+  }] }] }] }) + '\n');
   for (const number of [8, 9]) {
     await writeFile(join(folder, `${number}-fixture.command.json`), JSON.stringify({
       ...record, kind: 'Run', name: `run-${number}`, issue: { ...record.issue, number },
       process_id: number === 9 ? process.pid : 0, process_start: number === 9 ? processStart : 'gone',
-      outcome: null, ended_at: null
+      outcome: null, ended_at: null,
+      ...(number === 9 ? { started_at: liveStart, session_log: liveSession,
+        stages: [{ name: 'implement', began_at: liveStart, session_log: liveSession }] } : {})
     }));
   }
   server = spawn(process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift'), ['console', '--no-sign-in'], { env: { ...process.env, HOME: home }, stdio: ['ignore', 'pipe', 'inherit'] });
@@ -51,6 +69,44 @@ before(async () => {
   try { [origin] = await once(lines, 'line', { signal: AbortSignal.timeout(10000) }); }
   finally { lines.close(); }
   browser = await chromium.launch({ headless: true });
+});
+
+test('Waterfall draws overlapping Session-trace spans and running start records', async t => {
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  const page = await context.newPage();
+  for (const width of [1200, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto(`${origin}/waterfall?command=widgets%2310`);
+    const tools = page.locator('.waterfall-tool');
+    assert.equal(await tools.count(), 4);
+    assert.equal(await tools.nth(0).getAttribute('data-start'), '2026-10-01T12:00:15.250+00:00');
+    assert.equal(await tools.nth(0).getAttribute('data-seconds'), '3.5');
+    assert.equal(await tools.nth(1).getAttribute('data-start'), '2026-10-01T12:00:16.500+00:00');
+    assert.equal(await tools.nth(1).getAttribute('data-seconds'), '0.625');
+    const track = await tools.nth(0).locator('.timeline').boundingBox();
+    const first = await tools.nth(0).locator('.timeline rect').boundingBox();
+    const second = await tools.nth(1).locator('.timeline rect').boundingBox();
+    assert.ok(Math.abs(first.width - track.width * 3.5 / 60) <= 1.01);
+    assert.ok(Math.abs(second.width - track.width * 0.625 / 60) <= 1.01);
+    assert.ok(Math.abs((first.x - track.x) / track.width - 15.25 / 60) < 0.002);
+    assert.ok(first.x + first.width > second.x);
+    assert.equal(await tools.nth(2).getAttribute('data-start'), '2026-10-01T12:00:20.125+00:00');
+    assert.equal(await tools.nth(2).getAttribute('data-seconds'), '');
+    assert.match(await tools.nth(2).textContent(), /Time unknown/);
+    assert.equal(await page.locator('main script, main unsafe').count(), 0);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    if (process.platform === 'linux') {
+      await page.goto(`${origin}/waterfall?command=widgets%239`);
+      const running = page.locator('.waterfall-tool');
+      assert.equal(await running.count(), 1);
+      assert.match(await running.textContent(), /still running/);
+      assert.ok(Date.parse(await running.getAttribute('data-start')) > Date.now() - 120000);
+      const seconds = Number(await running.getAttribute('data-seconds'));
+      assert.ok(seconds >= 10 && seconds < 120, `${seconds} seconds`);
+      assert.ok((await running.locator('.timeline rect').boundingBox()).width > 0);
+    }
+  }
 });
 after(async () => {
   await browser?.close();
