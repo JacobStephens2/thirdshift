@@ -55,6 +55,7 @@ export function initSpanTree({ openCommand, openDetails }) {
     return path;
   }
   function index() {
+    tree.dataset.live = String(data.spans.some(span => span.status === 'running'));
     nodes = new Map(data.spans.map(span => [span.id, span]));
     children = new Map(); roots = [];
     for (const span of data.spans) {

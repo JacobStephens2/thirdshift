@@ -130,6 +130,8 @@ async function refresh() {
         morphTimePage(html);
         spanTree = initializeSpanTree();
       }
+      activity();
+      loadLook();
     } else {
       const response = await fetch(timePage ? location.href : '/', { cache: "no-store" });
       if (!response.ok) throw new Error("Inbox unavailable");
@@ -173,6 +175,7 @@ function initializeSpanTree() { return initSpanTree({
   }
 }); }
 spanTree = initializeSpanTree();
+activity();
 
 function select(element, { scroll = true } = {}) {
   selected?.classList.remove('is-selected');
