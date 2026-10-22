@@ -1,44 +1,11 @@
 //! Tool timing from normalized Session traces, independent of Harness protocols.
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
 
 use super::{Call, Time};
-use crate::otlp_jsonl::{AnyValue, KeyValue, Logs, Reader, Request, Spans};
+use crate::otlp_jsonl::{AnyValue, KeyValue, Logs, Spans};
 use anyhow::{Context, Result};
 use serde_json::Value;
-
-fn read<R: Request>(path: &Path) -> Result<Option<Vec<R>>> {
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error).with_context(|| format!("can't read {}", path.display())),
-    };
-    let mut reader = Reader::new(bytes.as_slice()).peekable();
-    let mut requests = Vec::new();
-    while let Some(result) = reader.next() {
-        match result {
-            Ok(request) => requests.push(request),
-            // A concurrent append may expose only part of the final line.
-            // Complete malformed lines must still report their read error.
-            Err(error)
-                if !bytes.ends_with(b"\n")
-                    && reader.peek().is_none()
-                    && error
-                        .get_ref()
-                        .and_then(|error| error.downcast_ref::<serde_json::Error>())
-                        .is_some_and(serde_json::Error::is_eof) =>
-            {
-                break;
-            }
-            Err(error) => {
-                return Err(error)
-                    .with_context(|| format!("can't read Session trace {}", path.display()));
-            }
-        }
-    }
-    Ok(Some(requests))
-}
 
 fn attribute<'a>(attrs: &'a [KeyValue], key: &str) -> Option<&'a str> {
     attrs.iter().find_map(|attr| {
@@ -66,8 +33,9 @@ fn timestamp(nanos: u64) -> Option<Time> {
 
 pub(super) fn calls(session: &Path) -> Result<Option<Vec<Call>>> {
     let session = crate::logs::session::original(session);
-    let spans = read::<Spans>(&session.with_extension("spans.jsonl"))?;
-    let logs = read::<Logs>(&session.with_extension("logs.jsonl"))?;
+    let spans =
+        crate::logs::session::read_requests::<Spans>(&session.with_extension("spans.jsonl"))?;
+    let logs = crate::logs::session::read_requests::<Logs>(&session.with_extension("logs.jsonl"))?;
     // Historical conversions retain the old Waterfall's scoped Command-log
     // estimates. Their spans are useful to exporters, but aren't measurements.
     if spans.as_ref().is_some_and(|requests| {
@@ -118,8 +86,9 @@ pub(super) fn calls(session: &Path) -> Result<Option<Vec<Call>>> {
             None => tool.to_owned(),
         };
         calls.insert(
-            key,
+            key.clone(),
             Call {
+                identity: Some(key.clone()),
                 label,
                 start: timestamp(span.start_time_unix_nano),
                 end: timestamp(span.end_time_unix_nano),
@@ -152,6 +121,10 @@ pub(super) fn calls(session: &Path) -> Result<Option<Vec<Call>>> {
             // A span is authoritative. Record span IDs alone cannot identify
             // every call: one Harness event may start several tools at once.
             calls.entry(key).or_insert_with(|| Call {
+                identity: Some((
+                    event["parent_id"].as_str().map(str::to_owned),
+                    id.to_owned(),
+                )),
                 label: format!(
                     "{} {}",
                     event["tool"].as_str().unwrap_or("Tool"),

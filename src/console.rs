@@ -66,6 +66,7 @@ enum View {
     CronJobs,
     Inbox,
     Inspect,
+    Spans,
     Log,
     Changes,
     Logs,
@@ -172,11 +173,21 @@ const PAGES: &[PageRoute] = &[
     PageRoute {
         path: "/waterfall",
         cli: &[
+            "thirdshift show widgets#7 --spans --json",
             "thirdshift show widgets#7 --json",
             "thirdshift logs widgets#7",
         ],
         method: Method::GET,
         view: View::Inbox,
+    },
+    PageRoute {
+        path: "/spans",
+        cli: &[
+            "thirdshift show widgets#7 --spans --json",
+            "thirdshift show widgets#7 --span id --json",
+        ],
+        method: Method::GET,
+        view: View::Spans,
     },
     PageRoute {
         path: "/lanes",
@@ -350,6 +361,7 @@ fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Route
             (View::CronJobs, Method::GET) => get(cronjobs::show),
             (View::Inbox, Method::GET) => get(move |query| inbox(cli, path, query)),
             (View::Inspect, Method::GET) => get(inspect),
+            (View::Spans, Method::GET) => get(waterfall::data),
             (View::Log, Method::GET) => get(log),
             (View::Changes, Method::GET) => get(live::events),
             (View::Logs, Method::GET) => get(logs::index),

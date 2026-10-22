@@ -3,7 +3,40 @@ use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
-use crate::otlp_jsonl::{AnyValue, LogRecord, Logs, Reader};
+use crate::otlp_jsonl::{AnyValue, LogRecord, Logs, Reader, Request};
+
+/// A live append may expose only part of its last request. Completed malformed
+/// lines remain errors; readers retry an incomplete final request on refresh.
+pub(in crate::logs) fn read_requests<R: Request>(path: &Path) -> anyhow::Result<Option<Vec<R>>> {
+    use anyhow::Context;
+    let bytes = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).with_context(|| format!("can't read {}", path.display())),
+    };
+    let mut reader = Reader::new(bytes.as_slice()).peekable();
+    let mut requests = Vec::new();
+    while let Some(result) = reader.next() {
+        match result {
+            Ok(request) => requests.push(request),
+            Err(error)
+                if !bytes.ends_with(b"\n")
+                    && reader.peek().is_none()
+                    && error
+                        .get_ref()
+                        .and_then(|error| error.downcast_ref::<serde_json::Error>())
+                        .is_some_and(serde_json::Error::is_eof) =>
+            {
+                break;
+            }
+            Err(error) => {
+                return Err(error)
+                    .with_context(|| format!("can't read Session trace {}", path.display()));
+            }
+        }
+    }
+    Ok(Some(requests))
+}
 
 /// Command records may still name the old Session log during the transition.
 pub(crate) fn path(log: &Path) -> PathBuf {

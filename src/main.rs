@@ -92,6 +92,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console theme export <name>        Export a Theme as JSON
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift show <command> [--json]             Show one Command in full
+       thirdshift show <command> --spans [--json]     Show its span tree; --span <id> selects details
        thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
        thirdshift logs [--command <id>] [--json]      List this machine's logs
        thirdshift logs --file <id> [--follow]         Read a log; --convert / --remove-converted migrate old Sessions
@@ -197,6 +198,16 @@ fn main() -> ExitCode {
             json,
         }) => {
             return match logs::stop::stop(&command, requeue, json) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::Spans {
+            command,
+            span,
+            json,
+        }) => {
+            return match logs::spans::show(&command, span.as_deref(), json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };

@@ -160,7 +160,20 @@ pub(super) fn calls(
     let mut calls = Vec::new();
     let mut cursor = 0;
     for raw in crate::logs::session::events(&text) {
-        let labels = stream.condense(&raw);
+        let facts = stream.decode(&raw);
+        let identities: Vec<_> = facts
+            .events
+            .iter()
+            .filter_map(|event| match event {
+                crate::harness::interpretation::event::Event::ToolCallStarted {
+                    id,
+                    parent_id,
+                    ..
+                } => Some((parent_id.clone(), id.clone())),
+                _ => None,
+            })
+            .collect();
+        let labels = facts.progress;
         let Ok(event) = serde_json::from_str::<Value>(&raw) else {
             continue;
         };
@@ -190,6 +203,7 @@ pub(super) fn calls(
             let file = event["item"]["changes"][label_index]["path"].as_str();
             let start = log.estimate(&label, file, kind, relays, (began, ended), &mut cursor);
             calls.push(Call {
+                identity: identities.get(label_index).cloned(),
                 label,
                 start,
                 end: None,

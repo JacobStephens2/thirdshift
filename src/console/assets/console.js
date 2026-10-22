@@ -1,5 +1,7 @@
 import { activity, loadLook, motionAllowed } from './look.js';
 import { watchCommands } from './changes.js';
+import { initSpanTree } from './spans.js';
+let spanTree;
 
 // Browser preferences are conveniences; malformed or unavailable storage hides nothing.
 function stored(key, fallback) {
@@ -119,11 +121,14 @@ function morphTimePage(html) {
 
 async function refresh() {
   if (observesCommands) {
-    const response = await fetch(timePage ? location.href : '/', { cache: "no-store" });
-    if (!response.ok) throw new Error("Inbox unavailable");
-    const html = await response.text();
-    if (timePage) morphTimePage(html);
-    else morph(html);
+    if (spanTree) await spanTree.refresh();
+    else {
+      const response = await fetch(timePage ? location.href : '/', { cache: "no-store" });
+      if (!response.ok) throw new Error("Inbox unavailable");
+      const html = await response.text();
+      if (timePage) morphTimePage(html);
+      else morph(html);
+    }
   }
   await refreshPeek();
 }
@@ -148,6 +153,18 @@ let selected = null;
 let peekCommand = null;
 let pendingPeek = null;
 
+spanTree = initSpanTree({
+  openDetails() {
+    peekCommand = null;
+    pendingPeek?.abort();
+    pendingPeek = null;
+  },
+  openCommand: span => {
+    peekCommand = null;
+    togglePeek({ dataset: { command: span.command, peek: span.command_url } });
+  }
+});
+
 function select(element, { scroll = true } = {}) {
   selected?.classList.remove('is-selected');
   selected?.removeAttribute('aria-current');
@@ -158,6 +175,7 @@ function select(element, { scroll = true } = {}) {
 }
 
 function closePeek() {
+  spanTree?.closeDetails();
   stopPeekUpdates();
   pendingPeek?.abort();
   pendingPeek = null;

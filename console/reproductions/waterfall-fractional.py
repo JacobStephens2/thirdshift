@@ -1,4 +1,4 @@
-import json, os, pathlib, re, subprocess, tempfile, urllib.request
+import json, os, pathlib, subprocess, tempfile, urllib.request
 
 binary = pathlib.Path(__file__).resolve().parents[2] / 'target/debug/thirdshift'
 with tempfile.TemporaryDirectory(prefix='827-spec-') as temp:
@@ -19,10 +19,10 @@ with tempfile.TemporaryDirectory(prefix='827-spec-') as temp:
     server = subprocess.Popen([str(binary),'console','--no-sign-in'],env={**os.environ,'HOME':str(home)},stdout=subprocess.PIPE,text=True)
     try:
         origin = server.stdout.readline().strip()
-        html = urllib.request.urlopen(origin+'/waterfall?command=widgets%237').read().decode()
-        tools = re.findall(r'<li class="waterfall-tool" data-start="([^"]*)" data-seconds="([^"]*)"',html)
+        tree = json.load(urllib.request.urlopen(origin+'/spans?command=widgets%237'))
+        tools = [span for span in tree['spans'] if span['kind'] == 'tool']
         print('Rendered tool timing:',tools,flush=True)
-        assert len(tools)==1 and tools[0][0]=='2026-10-01T12:00:00+00:00', 'The existing matching Command-log line must time this call; fractional record start incorrectly rejects it'
+        assert len(tools)==1 and tools[0]['start']==1790856000000, 'The existing matching Command-log line must time this call; fractional record start incorrectly rejects it'
     finally:
         server.terminate()
         server.wait(timeout=10)
