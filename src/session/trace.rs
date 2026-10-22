@@ -150,6 +150,7 @@ impl Trace {
             None,
         )?;
         trace.version = None;
+        trace.export = None;
         trace.historical = true;
         trace
             .resource
