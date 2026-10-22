@@ -26,6 +26,7 @@ pub(crate) mod process;
 pub(crate) mod settings;
 mod skill_load;
 mod summary;
+pub(crate) mod version;
 
 pub use adapter::Adapter;
 pub use summary::write as write_summary;
