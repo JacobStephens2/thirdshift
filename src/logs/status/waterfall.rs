@@ -277,6 +277,24 @@ fn collect(
     Ok(())
 }
 
+fn last_trace_time(command: &Command) -> Result<Option<Time>> {
+    let mut last = None;
+    for session in Observation::Record(command).sessions()? {
+        if let Some(calls) = trace::calls(&session)? {
+            last = last.max(
+                calls
+                    .iter()
+                    .filter_map(|call| call.end.or(call.start))
+                    .max(),
+            );
+        }
+    }
+    for child in command.dispatched.iter().chain(&command.children) {
+        last = last.max(last_trace_time(child)?);
+    }
+    Ok(last)
+}
+
 pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
     let now = Local::now();
     let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
@@ -333,15 +351,22 @@ pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
             &owner.command_log,
             time(&owner.record.started_at).unwrap_or(start),
         )?;
-        let end = command
+        let known_end = command
             .record
             .ended_at
             .as_deref()
             .and_then(time)
-            .or_else(|| (command.state == "live").then_some(now.fixed_offset()))
-            .or_else(|| log.last_time())
-            .unwrap_or(start)
-            .max(start);
+            .or_else(|| (command.state == "live").then_some(now.fixed_offset()));
+        let end = match known_end {
+            Some(end) => end,
+            // A dead owner could not record its end or print another progress
+            // line, but its Session traces still retain completed tool spans.
+            None => log
+                .last_time()
+                .max(last_trace_time(command)?)
+                .unwrap_or(start),
+        }
+        .max(start);
         let axis = Axis { start, end };
         view.start = start.to_rfc3339();
         view.end = end.to_rfc3339();

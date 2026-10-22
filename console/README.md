@@ -186,6 +186,9 @@ The retained Spec-review checks are `python3 console/reproductions/waterfall-fra
 and `python3 console/reproductions/waterfall-stage.py` from the repo root after a build.
 The Rust router test walks the registered routes and checks their CLI pairs.
 The fractional Run/stage boundaries also run in the Rust integration tests.
+The retained Session-trace regression is
+`python3 console/reproductions/waterfall-trace-axis.py`; it checks that completed
+tool spans still draw bars after a Command dies without recording its end.
 
 `j` / `k` select headings and visible rows, wrapping at either end. `Space`
 folds a heading or toggles a row's peek; `Enter` opens that row's full Command

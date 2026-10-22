@@ -107,6 +107,19 @@ test('Waterfall draws overlapping Session-trace spans and running start records'
       assert.ok((await running.locator('.timeline rect').boundingBox()).width > 0);
     }
   }
+  const recordPath = join(home, '.thirdshift/logs/acme/widgets/commands/issue/10-fixture.command.json');
+  const died = JSON.parse(await readFile(recordPath, 'utf8'));
+  died.outcome = null;
+  died.ended_at = null;
+  await writeFile(recordPath, JSON.stringify(died));
+  for (const width of [1200, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto(`${origin}/waterfall?command=widgets%2310`);
+    assert.match(await page.locator('.waterfall-run h3').textContent(), /died/);
+    for (const index of [0, 1]) {
+      assert.ok((await page.locator('.waterfall-tool .timeline rect').nth(index).boundingBox()).width > 0);
+    }
+  }
 });
 after(async () => {
   await browser?.close();

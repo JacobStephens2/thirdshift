@@ -1,14 +1,29 @@
 use super::*;
 
+fn retained_command(home: &Path, session: &Path) -> Value {
+    configure(home);
+    let mut value = record(home, 7, Some("merged"), 0);
+    value["started_at"] = json!("2026-10-01T12:00:00+00:00");
+    value["ended_at"] = json!("2026-10-01T12:01:00+00:00");
+    value["stages"] =
+        json!([{ "name": "implement", "began_at": value["started_at"], "session_log": session }]);
+    value["session_log"] = json!(session);
+    value
+}
+
+fn start_console(home: &Path, value: &Value) -> Console {
+    write_record(home, 7, value);
+    Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home)
+}
+
 #[test]
 fn waterfall_reads_start_records_without_spans_and_ignores_an_unfinished_tail() {
     let home = tempfile::tempdir().unwrap();
-    configure(home.path());
-    let mut value = record(home.path(), 7, Some("merged"), 0);
     let dir = home
         .path()
         .join(".thirdshift/logs/acme/widgets/commands/issue");
     let session = dir.join("7-20261001T120000+0000-implement.jsonl");
+    let value = retained_command(home.path(), &session);
     fs::write(&session, "{\"type\":\"item.completed\",\"item\":{\"id\":\"legacy\",\"type\":\"command_execution\",\"command\":\"wrong\",\"status\":\"completed\"}}\n").unwrap();
     fs::write(
         session.with_extension("logs.jsonl"),
@@ -18,13 +33,7 @@ fn waterfall_reads_start_records_without_spans_and_ignores_an_unfinished_tail() 
         ),
     )
     .unwrap();
-    value["started_at"] = json!("2026-10-01T12:00:00+00:00");
-    value["ended_at"] = json!("2026-10-01T12:01:00+00:00");
-    value["stages"] =
-        json!([{ "name": "implement", "began_at": value["started_at"], "session_log": session }]);
-    value["session_log"] = json!(session);
-    write_record(home.path(), 7, &value);
-    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let console = start_console(home.path(), &value);
     let response = console.get("/waterfall?command=widgets%237");
     assert_eq!(response.status(), 200);
     let html = response.text().unwrap();
@@ -45,12 +54,11 @@ fn waterfall_reads_start_records_without_spans_and_ignores_an_unfinished_tail() 
 #[test]
 fn waterfall_running_tools_use_start_records_and_keep_scopes_distinct() {
     let home = tempfile::tempdir().unwrap();
-    configure(home.path());
-    let mut value = record(home.path(), 7, Some("merged"), 0);
     let dir = home
         .path()
         .join(".thirdshift/logs/acme/widgets/commands/issue");
     let session = dir.join("7-20261001T120000+0000-implement.logs.jsonl");
+    let mut value = retained_command(home.path(), &session);
     fs::write(&session, include_str!("../fixtures/waterfall-logs.jsonl")).unwrap();
     fs::write(
         dir.join("7-20261001T120000+0000-implement.spans.jsonl"),
@@ -58,15 +66,11 @@ fn waterfall_running_tools_use_start_records_and_keep_scopes_distinct() {
     )
     .unwrap();
     value["harness"] = json!("opencode");
-    value["started_at"] = json!("2026-10-01T12:00:00+00:00");
-    value["ended_at"] = json!("2026-10-01T12:01:00+00:00");
     value["stages"] = json!([
         { "name": "implement", "began_at": value["started_at"], "session_log": session },
         { "name": "repair", "began_at": "2026-10-01T12:00:20.100+00:00", "session_log": session }
     ]);
-    value["session_log"] = json!(session);
-    write_record(home.path(), 7, &value);
-    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let console = start_console(home.path(), &value);
     let html = console
         .get("/waterfall?command=widgets%237")
         .text()
@@ -94,12 +98,11 @@ fn waterfall_running_tools_use_start_records_and_keep_scopes_distinct() {
 #[test]
 fn waterfall_uses_session_trace_spans_instead_of_command_log_guesses() {
     let home = tempfile::tempdir().unwrap();
-    configure(home.path());
-    let mut value = record(home.path(), 7, Some("merged"), 0);
     let dir = home
         .path()
         .join(".thirdshift/logs/acme/widgets/commands/issue");
     let session = dir.join("7-20261001T120000+0000-implement.jsonl");
+    let mut value = retained_command(home.path(), &session);
     fs::write(&session, "").unwrap();
     fs::write(
         session.with_extension("spans.jsonl"),
@@ -108,13 +111,7 @@ fn waterfall_uses_session_trace_spans_instead_of_command_log_guesses() {
     .unwrap();
     fs::write(dir.join("7-fixture.log"), "thirdshift: 12:00:00 starting\nthirdshift: 12:00:15 implement: $ first <unsafe>\nthirdshift: 12:00:30 implement: $ second\nthirdshift: 12:01:00 finished\n").unwrap();
     value["harness"] = json!("muse");
-    value["started_at"] = json!("2026-10-01T12:00:00+00:00");
-    value["ended_at"] = json!("2026-10-01T12:01:00+00:00");
-    value["stages"] =
-        json!([{ "name": "implement", "began_at": value["started_at"], "session_log": session }]);
-    value["session_log"] = json!(session);
-    write_record(home.path(), 7, &value);
-    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let console = start_console(home.path(), &value);
     let html = console
         .get("/waterfall?command=widgets%237")
         .text()

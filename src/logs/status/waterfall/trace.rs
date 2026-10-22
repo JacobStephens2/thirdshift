@@ -82,7 +82,6 @@ pub(super) fn calls(session: &Path) -> Result<Option<Vec<Call>>> {
     for span in spans
         .into_iter()
         .flatten()
-        .into_iter()
         .flat_map(|request| request.resource_spans)
         .flat_map(|resource| resource.scope_spans)
         .flat_map(|scope| scope.spans)
