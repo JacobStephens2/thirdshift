@@ -315,3 +315,43 @@ test('Account and Console log tabs keep notifications available', async t => {
     await rm(join(records, '14.command.json'), { force: true });
   }
 });
+
+test('the Inbox keeps updating when an in-flight notification request is turned off', async t => {
+  const context = await contextFor(t);
+  const page = await context.newPage();
+  await page.goto(origin);
+  await page.getByRole('button', { name: 'Turn notifications on', exact: true }).click();
+  await page.getByRole('button', { name: 'Turn notifications off', exact: true }).waitFor();
+  await page.waitForTimeout(1200);
+  let release, held;
+  const gate = new Promise(resolve => { release = resolve; });
+  const blocked = new Promise(resolve => { held = resolve; });
+  const delayed = await context.newPage();
+  // History only fetches the Inbox for notifications, so this holds that
+  // observation's cross-tab lock without delaying the visible Inbox's fetch.
+  await delayed.route(`${origin}/`, async route => {
+    held();
+    await gate;
+    await route.continue();
+  });
+  try {
+    await delayed.goto(`${origin}/?page=history`);
+    let deadline;
+    try {
+      await Promise.race([blocked, new Promise((_, reject) => {
+        deadline = setTimeout(() => reject(new Error('Notification request did not start')), 5000);
+      })]);
+    } finally { clearTimeout(deadline); }
+    await item(15);
+    await count(page, 2);
+    await page.getByRole('button', { name: 'Turn notifications off', exact: true }).click();
+    await page.getByRole('button', { name: 'Turn notifications on', exact: true }).waitFor();
+    await item(16);
+    await page.waitForFunction(() => document.title === '3 need you · thirdshift Console', null, { timeout: 6000 });
+    assert.equal(await page.evaluate(() => notices.length), 0);
+  } finally {
+    release();
+    await rm(join(records, '15.command.json'), { force: true });
+    await rm(join(records, '16.command.json'), { force: true });
+  }
+});

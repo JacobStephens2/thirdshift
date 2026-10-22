@@ -1,30 +1,28 @@
 // One stream per tab, shared by the page, peek and notification consumers.
 const subscribers = new Set();
-let watcher;
-export function watchCommands(update) {
-  const subscriber = () => update();
-  subscribers.add(subscriber);
-  if (watcher) watcher.refresh();
-  else watcher = watchUpdates(async () => {
-    const results = await Promise.allSettled([...subscribers].map(update => Promise.resolve().then(update)));
-    const failed = results.find(result => result.status === 'rejected');
-    if (failed) throw failed.reason;
-  });
-  return () => {
-    subscribers.delete(subscriber);
-    if (!subscribers.size) {
-      watcher?.stop();
-      watcher = undefined;
-    }
-  };
+let polling, stream;
+function refreshAll() {
+  for (const refresh of subscribers) refresh();
+}
+function startPolling() {
+  if (subscribers.size) polling ??= setInterval(refreshAll, 5000);
+}
+function startUpdates() {
+  if (typeof EventSource === 'function') {
+    stream = new EventSource('/events');
+    stream.addEventListener('commands', refreshAll);
+    stream.addEventListener('error', startPolling);
+    stream.addEventListener('open', () => {
+      clearInterval(polling);
+      polling = undefined;
+      refreshAll();
+    });
+  } else { startPolling(); }
 }
 
-// Coalesce changes while all subscribers finish, and recover by polling.
-function watchUpdates(update) {
-  let active = true, refreshing = false, pending = false, polling, stream;
-  function startPolling() {
-    if (active) polling ??= setInterval(refresh, 5000);
-  }
+export function watchCommands(update) {
+  // Each subscriber coalesces its own work; a slow one never gates the others.
+  let active = true, refreshing = false, pending = false;
   async function refresh() {
     if (!active) return;
     pending = true;
@@ -38,23 +36,18 @@ function watchUpdates(update) {
     } catch { startPolling(); }
     finally { refreshing = false; }
   }
-  if (typeof EventSource === 'function') {
-    stream = new EventSource('/events');
-    stream.addEventListener('commands', refresh);
-    stream.addEventListener('error', startPolling);
-    stream.addEventListener('open', () => {
+  subscribers.add(refresh);
+  if (subscribers.size === 1) startUpdates();
+  else refresh();
+  return () => {
+    active = false;
+    pending = false;
+    subscribers.delete(refresh);
+    if (!subscribers.size) {
+      stream?.close();
+      stream = undefined;
       clearInterval(polling);
       polling = undefined;
-      refresh();
-    });
-  } else { startPolling(); }
-  return {
-    refresh,
-    stop() {
-      active = false;
-      pending = false;
-      stream?.close();
-      clearInterval(polling);
     }
   };
 }
