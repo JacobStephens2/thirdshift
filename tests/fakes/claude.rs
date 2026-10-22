@@ -258,6 +258,10 @@ pub fn main(argv: Vec<String>) {
     let init = object([
         ("type", string("system")),
         ("subtype", string("init")),
+        (
+            "claude_code_version",
+            string(std::env::var("FAKE_CLAUDE_STREAM_VERSION").unwrap_or("9.8.7".into())),
+        ),
         ("cwd", string(cwd)),
         ("session_id", string(format!("fake-session-{session}"))),
     ]);

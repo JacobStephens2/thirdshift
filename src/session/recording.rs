@@ -112,6 +112,7 @@ impl Recording {
             input.prompt,
             context,
             command,
+            self.command_log(),
         )?));
         let streaming_trace = Arc::clone(&trace);
         let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());

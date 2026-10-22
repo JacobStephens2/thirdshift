@@ -21,6 +21,9 @@ mod look;
 #[path = "console/codex_patches.rs"]
 mod codex_patches;
 
+#[path = "console/waterfall.rs"]
+mod waterfall;
+
 #[cfg(unix)]
 #[path = "console/cronjobs.rs"]
 mod cronjobs;

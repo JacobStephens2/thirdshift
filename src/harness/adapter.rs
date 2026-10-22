@@ -65,6 +65,12 @@ pub trait Adapter: Sync {
     ) -> Result<Option<ModelAndEffort>>;
     fn interpretation(&self, worktree: &Path, prompt: &str) -> Interpretation;
 
+    /// The CLI's own version metadata, where its stream reports it.
+    /// Other event fields named `version` may describe tools or documents.
+    fn stream_version<'a>(&self, _event: &'a serde_json::Value) -> Option<&'a str> {
+        None
+    }
+
     /// Stop the session and its descendants, including commands that made
     /// their own process group or session, with this Harness's stop signals.
     fn stop(&self, child: &mut Child) {
