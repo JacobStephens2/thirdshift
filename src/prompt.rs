@@ -171,6 +171,23 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
     )
 }
 
+/// The last line of a bug implement session that handed reproduction back
+/// to the reporter, followed by the triage comment's URL.
+pub const BUG_NOT_REPRODUCED_LINE: &str = "Bug not reproduced: ";
+
+/// Diagnose first on a bug Run, retaining its fresh or Continuation facts
+/// and its implementation steps for the reproduced ending only.
+pub fn diagnosing_bugs(issue: &IssueUrl, implementation: &str) -> String {
+    format!(
+        "/thirdshift-diagnosing-bugs {url}\n\
+         Use the `thirdshift-diagnosing-bugs` skill before changing code.\n\
+         If reproduced, write and run a regression test that fails for the reported reason before fixing it, then follow the implementation prompt below.\n\
+         If not reproduced, follow the skill's triage comment and needs-info ending instead of the implementation and PR steps below. Open no PR and merge nothing. End with exactly `{BUG_NOT_REPRODUCED_LINE}<comment URL>` on the final line after the comment and labels are confirmed.\n\n\
+         Implementation after reproduction:\n{implementation}",
+        url = issue.url,
+    )
+}
+
 /// The Spec review prompt, for the Spec branch `branch` of `spec` once every
 /// Ticket has landed on it, with the draft Spec PR `pr_url` into `base`.
 pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> String {

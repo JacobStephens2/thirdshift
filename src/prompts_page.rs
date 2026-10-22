@@ -161,6 +161,33 @@ fn prompts() -> Vec<Prompt> {
             text: prompt::spec_review(&spec, BASE, SPEC_BRANCH, PR_URL),
         },
         Prompt {
+            id: "prompt-bug-fresh",
+            title: "Bug Run, fresh",
+            when: "Starts the implement session on an issue labelled bug: diagnose before changing code, then implement only if reproduced. Security fixes and Base fixes keep their own flow.",
+            sender: Units(&[IMPLEMENT]),
+            text: prompt::diagnosing_bugs(&issue, &prompt::fresh(&issue, BASE, BRANCH)),
+        },
+        Prompt {
+            id: "prompt-bug-continuation",
+            title: "Bug Run, Continuation without a pull request",
+            when: "Diagnoses a bug in a Continuation with no pull request before changing code. A not reproduced ending hands the issue back for information without a PR.",
+            sender: Units(&[IMPLEMENT]),
+            text: prompt::diagnosing_bugs(
+                &issue,
+                &prompt::continuation(&issue, BASE, BRANCH, None),
+            ),
+        },
+        Prompt {
+            id: "prompt-bug-continuation-pr",
+            title: "Bug Run, Continuation with an open pull request",
+            when: "Diagnoses a bug before continuing its open pull request. A not reproduced ending leaves the existing PR unmerged and hands the issue back for information.",
+            sender: Units(&[IMPLEMENT]),
+            text: prompt::diagnosing_bugs(
+                &issue,
+                &prompt::continuation(&issue, BASE, BRANCH, Some(PR_URL)),
+            ),
+        },
+        Prompt {
             id: "prompt-architecture-review",
             title: "Architecture review",
             when: "Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none.",
@@ -372,7 +399,7 @@ fn fence(text: &str) -> String {
 /// when, if not always; or the Architecture review, which is no unit of a Run.
 fn skill_used_by(skill: &str) -> String {
     match skill {
-        "thirdshift-implement" | "thirdshift-tdd" => unit_links(&[IMPLEMENT]),
+        "thirdshift-implement" | "thirdshift-tdd" | "thirdshift-diagnosing-bugs" => unit_links(&[IMPLEMENT]),
         "thirdshift-code-review" | "thirdshift-pr" => unit_links(&[REVIEW]),
         "thirdshift-resolving-merge-conflicts" => {
             format!("{}, in a Repair", unit_links(&[FINISH]))
@@ -724,6 +751,9 @@ mod tests {
                 "prompt-fresh"
                     | "prompt-continuation"
                     | "prompt-continuation-pr"
+                    | "prompt-bug-fresh"
+                    | "prompt-bug-continuation"
+                    | "prompt-bug-continuation-pr"
                     | "prompt-spec-review"
                     | "prompt-architecture-review"
                     | "prompt-security-review"

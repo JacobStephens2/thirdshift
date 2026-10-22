@@ -271,8 +271,10 @@ fn a_command_record_write_failure_warns_once_and_keeps_the_outcome() {
     memory.0.lock().unwrap().record_write_fails = false;
     let ended = crate::run::Ended {
         outcome: Ok(crate::run::Reached {
-            pr_url: "https://github.com/acme/widgets/pull/1".into(),
-            goal: crate::run::Goal::ReadyForReview,
+            resolution: crate::run::Resolution::PullRequest {
+                url: "https://github.com/acme/widgets/pull/1".into(),
+                goal: crate::run::Goal::ReadyForReview,
+            },
             log: None,
             ticket_lines: Vec::new(),
         }),

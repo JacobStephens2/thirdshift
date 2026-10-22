@@ -56,7 +56,7 @@ The model describes these functions, including their ordering:
 | `src/pickup.rs` | `run`, `run_through`: reserve → refresh → dispatch; reservation lifetime |
 | `src/pickup/reservation.rs` | `Reservation::take`, `Drop::drop`: empty create lease, owner-token release |
 | `src/ready.rs` | `first`, `Search::first_ready`, `standing_of`, `refresh`: Ready reads and Claim-count comparison |
-| `src/claim.rs` | `make`, `Claimed::label_in_progress`, `Claimed::end`, `put_labels_back_unless_on_origin`, `release_labels` |
+| `src/claim.rs` | `make`, `Claimed::label_in_progress`, `Claimed::end`, `put_labels_back_unless_on_origin`, `release_labels`, `Claim::needs_info` |
 | `src/github.rs` | `open_issues_labelled`, `issue`, `candidate`, `ClaimHistory::after`, `issue_labels`, `set_labels` |
 | `src/labels.rs` | `Edit::apply`, `request`: whole-label PUT; existing Claim is accepted |
 | `src/pass.rs`, `src/run.rs` | `LaunchAndGitHub::dispatch`, `start`, `make_claim`, `end_claim`: dispatch before Claim; both Run kinds share it |

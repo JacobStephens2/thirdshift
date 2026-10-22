@@ -320,6 +320,10 @@ fn body(
     }
     if let Some(pr_url) = account.pr_url {
         text += &format!("Pull request: {pr_url}\n");
+    } else if account.outcome == "bug not reproduced" {
+        for url in &account.urls {
+            text += &format!("Triage notes: {url}\n");
+        }
     }
     // Security failure causes can quote private verifier work or Harness
     // diagnostics. Only fixed operational and safeguard categories are safe to send.

@@ -108,6 +108,7 @@ impl TicketBoard {
                 let state = match self.standings.get(&ticket.issue.identity()) {
                     Some(Standing::Running) => TicketState::Running,
                     _ if !ticket.is_open => TicketState::Merged,
+                    Some(Standing::Ended(Ended::NotReproduced { .. })) => TicketState::NotStarted,
                     Some(Standing::Ended(_)) => TicketState::Failed,
                     _ if !ticket.open_blockers.is_empty() => TicketState::Waiting,
                     _ => TicketState::NotStarted,
@@ -252,6 +253,9 @@ impl TicketBoard {
             return landed.unwrap_or_else(|| "done".to_string());
         }
         match self.standings.get(&identity) {
+            Some(Standing::Ended(Ended::NotReproduced { comment_url })) => {
+                return format!("bug not reproduced: {comment_url}");
+            }
             Some(Standing::Running) => return "running".to_string(),
             Some(Standing::Ended(Ended::Interrupted { .. })) => return "interrupted".to_string(),
             Some(Standing::Ended(Ended::Failed { cause, .. })) => {
