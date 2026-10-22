@@ -2,7 +2,7 @@
 
 The question: **what should the span tree that grows out of the Waterfall, and a span's details in the Peek panel, look like at phone and laptop widths?** The answer goes on #996. This folder never merges to main.
 
-Four tree layouts (`?variant=`) × three Peek layouts (`?details=`), on a copy of the Waterfall page that uses the Console's real `console.css`. The data comes from real Session traces:
+Five tree layouts (`?variant=`) × three Peek layouts (`?details=`), on a copy of the Waterfall page that uses the Console's real `console.css`. The data comes from real Session traces:
 
 | Key | Tree layout |
 | --- | --- |
@@ -10,6 +10,7 @@ Four tree layouts (`?variant=`) × three Peek layouts (`?details=`), on a copy o
 | B | Drill-down list: one level at a time, with a breadcrumb, the time axis rescaled to the focus, and sorting by slowest |
 | C | Flame chart: the whole Command as stacked blocks; zoom into any block |
 | D | Waterfall grown in place: today's Waterfall, with sessions and their calls folded inside each stage |
+| E | Tree + slowest calls: A, with the ten slowest tool and model calls in the timeline's scope listed above the tree and ranked in it |
 
 | Key | Peek layout |
 | --- | --- |
