@@ -17,6 +17,46 @@ fn start_console(home: &Path, value: &Value) -> Console {
 }
 
 #[test]
+fn converted_session_keeps_its_waterfall_stage_and_duration_after_cleanup() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    let session = dir.join("7-20261001T120000+0000-implement.jsonl");
+    let mut value = retained_command(home.path(), &session);
+    value["harness"] = json!("codex");
+    value["stages"] = json!([
+        {"name":"implement","began_at":value["started_at"],"session_log":session},
+        {"name":"review","began_at":"2026-10-01T12:00:05.500Z","session_log":null}
+    ]);
+    fs::write(&session, "{\"type\":\"item.completed\",\"item\":{\"id\":\"c1\",\"type\":\"command_execution\",\"command\":\"cargo test\",\"status\":\"completed\",\"exit_code\":0}}\n").unwrap();
+    fs::write(dir.join("7-fixture.log"), "thirdshift: 12:00:00 starting\nthirdshift: 12:00:05 implement: $ cargo test\nthirdshift: 12:01:00 finished\n").unwrap();
+    let console = start_console(home.path(), &value);
+    let before = console
+        .get("/waterfall?command=widgets%237")
+        .text()
+        .unwrap();
+    assert!(
+        before.contains("data-start=\"2026-10-01T12:00:05+00:00\" data-seconds=\"0.5\""),
+        "{before}"
+    );
+    for flag in ["--convert", "--remove-converted"] {
+        let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+            .args(["logs", flag])
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+    }
+    assert!(!session.exists());
+    let after = console
+        .get("/waterfall?command=widgets%237")
+        .text()
+        .unwrap();
+    assert_eq!(after.replace(".logs.jsonl", ".jsonl"), before);
+}
+
+#[test]
 fn waterfall_reads_start_records_without_spans_and_ignores_an_unfinished_tail() {
     let home = tempfile::tempdir().unwrap();
     let dir = home

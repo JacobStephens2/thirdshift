@@ -24,6 +24,18 @@ fn is_trace(path: &Path) -> bool {
         .ends_with(b".logs.jsonl")
 }
 
+/// Sidecars keep the original Session stem after its raw log is removed.
+pub(crate) fn original(path: &Path) -> PathBuf {
+    let name = path.file_name().unwrap_or_default().to_string_lossy();
+    match name
+        .strip_suffix(".logs.jsonl")
+        .or_else(|| name.strip_suffix(".spans.jsonl"))
+    {
+        Some(stem) => path.with_file_name(format!("{stem}.jsonl")),
+        None => path.to_owned(),
+    }
+}
+
 /// Read a recent window, extending it to the start of the first OTLP request.
 /// One encoded request can exceed the old raw-event budget just from escaping.
 /// Work depends on that request's size rather than the entire Session trace.

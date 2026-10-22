@@ -248,7 +248,12 @@ pub(super) fn decode(path: &Path) -> Option<Decoded<'_>> {
     let (subject, rest) = if stem.get(..20).and_then(parse_stamp).is_some() {
         ("", stem)
     } else {
-        stem.split_once('-')?
+        let offset = stem.match_indices('-').find_map(|(offset, _)| {
+            stem.get(offset + 1..offset + 21)
+                .and_then(parse_stamp)
+                .map(|_| offset)
+        })?;
+        (&stem[..offset], &stem[offset + 1..])
     };
     let stamp = rest.get(..20)?;
     parse_stamp(stamp)?;
@@ -309,7 +314,7 @@ pub(super) fn evidenced_log(session: &Path) -> Option<PathBuf> {
     struct Evidence {
         command_log: Option<PathBuf>,
     }
-    let bytes = fs::read(session.with_extension("models.json")).ok()?;
+    let bytes = fs::read(super::session::original(session).with_extension("models.json")).ok()?;
     serde_json::from_slice::<Evidence>(&bytes).ok()?.command_log
 }
 

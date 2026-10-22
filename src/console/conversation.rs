@@ -15,7 +15,7 @@ enum Part {
     Plain(String),
 }
 
-pub(super) fn render(lines: &str, kind: Kind) -> String {
+pub(crate) fn render(lines: &str, kind: Kind) -> String {
     if matches!(kind, Kind::Command) {
         return format!("<pre class=\"command-output\">{}</pre>", linked(lines));
     }
@@ -88,6 +88,15 @@ fn record_parts(record: LogRecord) -> Vec<Part> {
     let Some(AnyValue::String(raw)) = record.body else {
         return Vec::new();
     };
+    // Backfilled Sessions retain the presentation of their original events.
+    // Normalized facts remain available for export and retained amendments.
+    if record
+        .attributes
+        .iter()
+        .any(|attr| attr.key == "thirdshift.migration.original")
+    {
+        return parts(&raw);
+    }
     let Some(attribute) = record
         .attributes
         .iter()
