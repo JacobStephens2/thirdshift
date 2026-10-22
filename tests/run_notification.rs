@@ -7,7 +7,7 @@ mod support;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 
-use support::resend::{Request, ResendStandIn, assert_one_issue_line};
+use support::resend::{Request, ResendStandIn, assert_one_issue_line, assert_saved_notification};
 use support::{RunResult, Scenario, leaves_running};
 
 const KEY: &str = "re_test_123";
@@ -72,6 +72,42 @@ fn hostname() -> String {
 
 fn assert_contains(text: &str, part: &str) {
     assert!(text.contains(part), "expected {part:?} in: {text}");
+}
+
+#[test]
+fn a_run_without_email_saves_its_notification_beside_its_command_log() {
+    let scenario = Scenario::new();
+    scenario.issue_titled(7, "Add export button");
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(&scenario, &resend, &[&scenario.issue_url(7)], None);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    assert!(resend.requests().is_empty());
+    let folder = "home/.thirdshift/logs/acme/widgets/commands/issue";
+    let commands = scenario.log_files(folder, "log");
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    let path = scenario.path(folder).join(&commands[0]);
+    let notification = path.with_extension("notification.txt");
+    let saved = std::fs::read_to_string(&notification).expect("saved Run notification");
+    assert_eq!(
+        scenario.log_files(folder, "txt"),
+        [notification.file_name().unwrap().to_str().unwrap()]
+    );
+    assert!(
+        saved.starts_with(
+            "Subject: [thirdshift] acme/widgets#7 Add export button: ready for review\n\n\
+         Result:       ready for review\n\
+         Issue:        https://github.com/acme/widgets/issues/7\n"
+        ),
+        "{saved}"
+    );
+    assert_contains(&saved, "\nCommand:      Run\n");
+    assert_contains(&saved, PR_URL);
+    assert_contains(&saved, path.to_str().unwrap());
+    assert_contains(&saved, "\nSession models:\n");
 }
 
 #[test]
@@ -512,6 +548,7 @@ fn a_run_ready_for_review_sends_one_notification_to_the_address_given() {
         subject(&request),
         "[thirdshift] acme/widgets#7 Add export button: ready for review"
     );
+    assert_saved_notification(&scenario, "issue", &request);
     let text = text(&request);
     assert!(
         text.starts_with("Result:       ready for review\nIssue:        https://github.com/acme/widgets/issues/7\n"),
@@ -842,6 +879,40 @@ fn a_failed_send_after_a_failed_run_is_a_warning_that_keeps_its_exit_code() {
     assert_eq!(result.stdout, "");
     assert_eq!(resend.requests().len(), 1);
     assert_contains(the_warning(&result), "upstream exploded");
+    assert_saved_notification(&scenario, "issue", &the_one_request(&resend));
+}
+
+#[test]
+fn an_unwritable_notification_folder_warns_without_changing_the_outcome_or_email() {
+    for (agent, expected_code, expected_stdout) in [
+        (AGENT_OPENS_PR, 0, format!("{PR_URL}\n")),
+        ("exit 3\n", 1, String::new()),
+    ] {
+        let scenario = Scenario::new();
+        let relative = "home/.thirdshift/logs/acme/widgets/commands/issue";
+        let folder = scenario.path(relative);
+        scenario.agent_does(&format!("chmod 500 '{}'\n{agent}", folder.display()));
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+
+        let result = run(
+            &scenario,
+            &resend,
+            &[&scenario.issue_url(7), "email", "me@example.com"],
+            Some(KEY),
+        );
+        // Restore the folder so the Scenario can remove it, including if an assertion fails.
+        std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).unwrap();
+
+        assert_eq!(result.code, Some(expected_code), "{}", result.stderr);
+        assert_eq!(result.stdout, expected_stdout);
+        assert_contains(
+            &result.stderr,
+            "warning: could not save the Run notification to ",
+        );
+        assert_contains(&result.stderr, ".notification.txt: Permission denied");
+        assert!(scenario.log_files(relative, "txt").is_empty());
+        the_one_request(&resend);
+    }
 }
 
 /// The first line of the Run's stderr that is a warning.

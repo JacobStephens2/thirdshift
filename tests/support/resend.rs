@@ -8,6 +8,31 @@ use std::sync::{Arc, Mutex};
 
 use serde_json::Value;
 
+use super::Scenario;
+
+/// The owning Command saves exactly the subject and body passed to Resend.
+pub fn assert_saved_notification(scenario: &Scenario, kind: &str, request: &Request) {
+    let folder = format!("home/.thirdshift/logs/acme/widgets/commands/{kind}");
+    let commands = scenario.log_files(&folder, "log");
+    assert_eq!(commands.len(), 1, "{commands:?}");
+    let path = scenario
+        .path(&folder)
+        .join(&commands[0])
+        .with_extension("notification.txt");
+    assert_eq!(
+        scenario.log_files(&folder, "txt"),
+        [path.file_name().unwrap().to_str().unwrap()]
+    );
+    assert_eq!(
+        std::fs::read_to_string(path).unwrap(),
+        format!(
+            "Subject: {}\n\n{}",
+            request.body["subject"].as_str().unwrap(),
+            request.body["text"].as_str().unwrap()
+        )
+    );
+}
+
 /// One request the stand-in received.
 #[derive(Debug, Clone)]
 pub struct Request {

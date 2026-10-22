@@ -9,7 +9,7 @@
 mod support;
 
 use support::Scenario;
-use support::resend::ResendStandIn;
+use support::resend::{ResendStandIn, assert_saved_notification};
 
 /// The agent adds feature.txt and opens the PR for #7, with `test` red on its
 /// head and on `main`'s tip.
@@ -221,6 +221,7 @@ fn the_base_fix_repairs_the_check_as_its_own_and_only_the_run_sends_a_notificati
         text.contains(&format!("Base fix:     {BASE_FIX_URL} merged\n")),
         "text: {text}"
     );
+    assert_saved_notification(&scenario, "issue", &requests[0]);
 }
 
 #[test]
