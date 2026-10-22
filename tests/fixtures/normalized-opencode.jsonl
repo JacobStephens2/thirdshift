@@ -1,0 +1,5 @@
+{"type":"step_start","timestamp":1000,"sessionID":"s","part":{"id":"step1","messageID":"m1","type":"step-start"}}
+{"type":"tool_use","timestamp":1200,"sessionID":"s","part":{"partID":"part1","messageID":"m1","type":"tool","id":"call1","tool":"bash","state":{"status":"completed","input":{"command":"cargo test"},"output":"passed","time":{"start":1100,"end":1200}}}}
+{"type":"step_finish","timestamp":1300,"sessionID":"s","part":{"id":"finish1","messageID":"m1","type":"step-finish","cost":0.02,"tokens":{"input":91,"output":5,"reasoning":18,"cache":{"read":7424,"write":0}}}}
+{"type":"step_start","timestamp":1400,"sessionID":"s","part":{"id":"step2","messageID":"m2","type":"step-start"}}
+{"type":"text","timestamp":1500,"sessionID":"s","part":{"id":"text2","messageID":"m2","text":"last reply"}}

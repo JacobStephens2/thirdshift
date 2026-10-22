@@ -51,6 +51,10 @@ pub enum Event {
         amended: bool,
     },
     Message {
+        /// Stable message identity when reported. Snapshots with this ID refine
+        /// the same message; parent_id is only its causal scope.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
         role: String,
         text: String,
         parent_id: Option<String>,
@@ -160,6 +164,186 @@ impl ErrorKind {
             Self::Other
         }
     }
+}
+
+impl Event {
+    pub(in crate::harness) fn error(parent_id: &str, message: &str, details: Value) -> Self {
+        Self::Error {
+            kind: ErrorKind::from_text(message),
+            message: message.into(),
+            parent_id: Some(parent_id.into()),
+            details,
+        }
+    }
+
+    fn same_fact(&self, other: &Self) -> bool {
+        use Event::*;
+        match (self, other) {
+            (
+                ModelCallStarted {
+                    id: a,
+                    parent_id: x,
+                    ..
+                },
+                ModelCallStarted {
+                    id: b,
+                    parent_id: y,
+                    ..
+                },
+            )
+            | (
+                ModelCallEnded {
+                    id: a,
+                    parent_id: x,
+                    ..
+                },
+                ModelCallEnded {
+                    id: b,
+                    parent_id: y,
+                    ..
+                },
+            )
+            | (
+                ToolCallStarted {
+                    id: a,
+                    parent_id: x,
+                    ..
+                },
+                ToolCallStarted {
+                    id: b,
+                    parent_id: y,
+                    ..
+                },
+            )
+            | (
+                ToolCallEnded {
+                    id: a,
+                    parent_id: x,
+                    ..
+                },
+                ToolCallEnded {
+                    id: b,
+                    parent_id: y,
+                    ..
+                },
+            ) => a == b && x == y,
+            (SubagentStarted { id: a, .. }, SubagentStarted { id: b, .. })
+            | (SubagentEnded { id: a, .. }, SubagentEnded { id: b, .. })
+            | (WorkEnded { id: a, .. }, WorkEnded { id: b, .. }) => a == b,
+            (
+                Message {
+                    id: Some(a),
+                    parent_id: x,
+                    ..
+                },
+                Message {
+                    id: Some(b),
+                    parent_id: y,
+                    ..
+                },
+            ) => a == b && x == y,
+            (Message { .. }, Message { .. }) => false,
+            _ => self == other,
+        }
+    }
+
+    fn enrich(&mut self, newer: Self) {
+        match (self, newer) {
+            (Self::ModelCallStarted { model, .. }, Self::ModelCallStarted { model: new, .. }) => {
+                *model = new.or_else(|| model.take())
+            }
+            (
+                Self::ModelCallEnded {
+                    model,
+                    usage,
+                    cost_usd,
+                    outcome,
+                    ..
+                },
+                Self::ModelCallEnded {
+                    model: new_model,
+                    usage: new_usage,
+                    cost_usd: new_cost,
+                    outcome: new_outcome,
+                    ..
+                },
+            ) => {
+                *model = new_model.or_else(|| model.take());
+                usage.merge(new_usage);
+                *cost_usd = new_cost.or(*cost_usd);
+                *outcome = new_outcome;
+            }
+            (Self::ToolCallStarted { input, .. }, Self::ToolCallStarted { input: new, .. }) => {
+                if !new.is_null() {
+                    *input = new;
+                }
+            }
+            (
+                Self::ToolCallEnded {
+                    input,
+                    result,
+                    outcome,
+                    amended,
+                    ..
+                },
+                Self::ToolCallEnded {
+                    input: new_input,
+                    result: new_result,
+                    outcome: new_outcome,
+                    amended: new_amended,
+                    ..
+                },
+            ) => {
+                if !new_input.is_null() {
+                    *input = new_input;
+                }
+                if !new_result.is_null() {
+                    *result = new_result;
+                }
+                *outcome = new_outcome;
+                *amended = new_amended;
+            }
+            (old, new) => *old = new,
+        }
+    }
+}
+
+/// Retained records refine matching live phases in place. Missing phases keep
+/// their record order, anchored to the next known call when no predecessor is
+/// known. This is an authoritative timeline, not another stream of call ends.
+pub(in crate::harness) fn reconcile(live: &mut Vec<Event>, retained: Vec<Event>) {
+    let mut cursor = None;
+    for (position, event) in retained.iter().cloned().enumerate() {
+        if let Event::ToolCallEnded { id, parent_id, input, .. } = &event
+            && !input.is_null()
+            && let Some(Event::ToolCallStarted { input: previous, .. }) = live.iter_mut().find(|old| matches!(old, Event::ToolCallStarted { id: call, parent_id: scope, .. } if call == id && scope == parent_id)) {
+                *previous = input.clone();
+            }
+        if let Some(index) = live.iter().position(|old| old.same_fact(&event)) {
+            live[index].enrich(event);
+            cursor = Some(index + 1);
+        } else {
+            let index = cursor.unwrap_or_else(|| {
+                retained[position + 1..]
+                    .iter()
+                    .find_map(|next| live.iter().position(|old| old.same_fact(next)))
+                    .unwrap_or(live.len())
+            });
+            live.insert(index, event);
+            cursor = Some(index + 1);
+        }
+    }
+}
+
+pub(in crate::harness) fn denied(error: &Value) -> bool {
+    error.to_string().to_ascii_lowercase().contains("denied")
+}
+
+pub(in crate::harness) fn interrupted(message: &str) -> bool {
+    let message = message.to_ascii_lowercase();
+    ["interrupt", "killed", "cancelled", "canceled"]
+        .iter()
+        .any(|word| message.contains(word))
 }
 
 /// Each sub-agent may appear in several tool snapshots or task notifications.

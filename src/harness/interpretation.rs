@@ -25,6 +25,7 @@ pub struct Interpretation {
     retained: Option<Box<dyn Retained>>,
     security: Option<Security>,
     models: models::Models,
+    events: Option<Vec<event::Event>>,
 }
 
 /// Reporting survives ordinary failures; only success supplies Resume facts.
@@ -35,6 +36,9 @@ pub struct Completion {
 
 #[derive(Default)]
 pub struct Report {
+    /// Normalized timeline captured by `decode`, enriched by retained records.
+    /// Progress-only callers receive only facts recovered at completion.
+    pub events: Vec<event::Event>,
     /// Ordered progress supplied after retained completion.
     pub completion_progress: Vec<String>,
     pub warnings: Vec<String>,
@@ -179,6 +183,7 @@ impl Interpretation {
             retained: None,
             security: None,
             models: models::Models::default(),
+            events: None,
         }
     }
 
@@ -201,12 +206,27 @@ impl Interpretation {
 
     /// Unknown or malformed lines produce no progress, never an error.
     pub fn condense(&mut self, raw: &str) -> Vec<String> {
-        let decoded = self.decode(raw);
+        let decoded = self.read(raw);
         drop(decoded.events);
         decoded.progress
     }
 
+    /// Return live facts and capture them for the authoritative completion
+    /// timeline. Retained records refine calls by ID instead of adding calls.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "normalized consumers opt in; Session log uses condense"
+        )
+    )]
     pub fn decode(&mut self, raw: &str) -> Decoded {
+        let decoded = self.read(raw);
+        event::reconcile(self.events.get_or_insert_default(), decoded.events.clone());
+        decoded
+    }
+
+    fn read(&mut self, raw: &str) -> Decoded {
         let StreamUpdate {
             mut progress,
             evidence,
@@ -256,6 +276,7 @@ impl Interpretation {
             return (None, Err(Failure::Execution(error)));
         }
         let mut facts = self.decoder.complete();
+        facts.report.events = self.events.unwrap_or_default();
         facts.report.models = self.models.into_names();
         let refusal = self.security.and_then(|security| security.refusal);
         if refusal.is_some() {

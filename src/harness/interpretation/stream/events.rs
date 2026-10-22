@@ -79,6 +79,7 @@ impl Events {
                         .is_none_or(|last| last != text)
                     {
                         output.push(Event::Message {
+                            id: None,
                             role: "assistant".into(),
                             text: text.into(),
                             parent_id: parent_id.clone(),
@@ -179,6 +180,7 @@ impl Events {
         let role = message["role"].as_str().unwrap_or(default_role);
         let mut text = |text: &str| {
             output.push(Event::Message {
+                id: None,
                 role: role.into(),
                 text: text.into(),
                 parent_id: parent_id.clone(),
@@ -199,6 +201,7 @@ impl Events {
                                 .push_str(text);
                         }
                         output.push(Event::Message {
+                            id: None,
                             role: role.into(),
                             text: text.into(),
                             parent_id: parent_id.clone(),

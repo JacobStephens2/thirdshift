@@ -12,6 +12,7 @@ pub struct AgyProgress {
     session_id: Option<String>,
     tools: HashSet<u64>,
     result: Option<Value>,
+    events: super::events::Events,
 }
 
 impl AgyProgress {
@@ -89,9 +90,9 @@ impl Decoder for AgyProgress {
             });
         }
         StreamUpdate {
+            events: self.events.decode(&event),
             progress: self.progress(&event),
             evidence,
-            ..StreamUpdate::default()
         }
     }
 
@@ -143,6 +144,29 @@ impl AgyProgress {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn review_agy_terminal_result_does_not_repeat_streamed_text() {
+        use crate::harness::interpretation::event::Event;
+        let mut interpretation = stream(Harness::Agy, "");
+        for line in [
+            r#"{"event":"init","conversation_id":"c","init":{"model":"gemini"}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"c","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"First part. "}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"c","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"Second part.","usage":{"input_tokens":10,"output_tokens":4}}}"#,
+            r#"{"event":"result","result":{"status":"SUCCESS","response":"First part. Second part."}}"#,
+        ] {
+            interpretation.decode(line);
+        }
+        let events = finish(interpretation).report.unwrap().events;
+        let text: String = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Message { role, text, .. } if role == "assistant" => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "First part. Second part.");
+    }
     use crate::harness::{
         Harness,
         interpretation_tests::{finish, stream},
@@ -151,6 +175,133 @@ mod tests {
     const INIT: &str = r#"{"event":"init","conversation_id":"recorded-conversation","init":{"cwd":"/work/widgets","permission_mode":"always-proceed"}}"#;
     const TOOL: &str = r#"{"event":"step_update","step_update":{"step_index":2,"state":"ACTIVE","step_type":"tool","tool_name":"run_command","tool_info":{"name":"run_command","parameters":{"CommandLine":"cargo test"}}}}"#;
     const RESULT: &str = r#"{"event":"result","result":{"conversation_id":"recorded-conversation","status":"SUCCESS","response":"Final reply only.","num_turns":2,"usage":{"input_tokens":12518,"output_tokens":29,"thinking_tokens":28,"cache_read_tokens":200,"total_tokens":12547}}}"#;
+
+    #[test]
+    fn normalized_agy_steps_keep_both_edges_and_ignore_repeated_updates() {
+        use crate::harness::interpretation::event::{Event, Outcome};
+        let mut stream = stream(Harness::Agy, "");
+        for line in [INIT, TOOL, TOOL, &TOOL.replace("ACTIVE", "DONE"), RESULT] {
+            stream.decode(line);
+        }
+        let events = finish(stream).report.unwrap().events;
+        assert!(
+            matches!(&events[0], Event::ToolCallStarted { tool, input, .. }
+            if tool == "run_command" && input["CommandLine"] == "cargo test")
+        );
+        assert!(matches!(
+            &events[1],
+            Event::ToolCallEnded {
+                outcome: Outcome::Succeeded,
+                ..
+            }
+        ));
+        assert!(matches!(
+            (&events[0], &events[1]),
+            (Event::ToolCallStarted { id: start, .. }, Event::ToolCallEnded { id: end, .. })
+                if start == end
+        ));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, Event::ToolCallStarted { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn normalized_agy_done_only_model_steps_include_checkpoint_usage_without_counting_totals_twice()
+    {
+        use crate::harness::interpretation::event::{Event, Outcome, Usage};
+        let mut stream = stream(Harness::Agy, "");
+        for line in [
+            r#"{"event":"init","conversation_id":"c","init":{"model":"gemini"}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"c","step_index":3,"state":"DONE","step_type":"agent_response","text_delta":"OK","duration_seconds":1.5,"usage":{"input_tokens":100,"output_tokens":12,"thinking_tokens":2,"cache_read_tokens":80}}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"c","step_index":4,"state":"DONE","step_type":"checkpoint","usage":{"input_tokens":10,"output_tokens":2}}}"#,
+            r#"{"event":"result","result":{"status":"SUCCESS","response":"OK","usage":{"input_tokens":110,"output_tokens":14}}}"#,
+        ] {
+            stream.decode(line);
+        }
+        let events = finish(stream).report.unwrap().events;
+        let calls: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::ModelCallEnded {
+                    id,
+                    model,
+                    usage,
+                    outcome: Outcome::Succeeded,
+                    ..
+                } => Some((id.as_str(), model.as_deref(), usage.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            calls,
+            [
+                (
+                    "c:3",
+                    Some("gemini"),
+                    Usage {
+                        input: Some(100),
+                        output: Some(12),
+                        cache_read: Some(80),
+                        ..Usage::default()
+                    }
+                ),
+                (
+                    "c:4",
+                    Some("gemini"),
+                    Usage {
+                        input: Some(10),
+                        output: Some(2),
+                        ..Usage::default()
+                    }
+                ),
+            ]
+        );
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, Event::ModelCallStarted { .. }))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn normalized_agy_denials_limits_and_interruptions_keep_their_evidence() {
+        use crate::harness::interpretation::event::{ErrorKind, Event, Outcome};
+        let mut stream = stream(Harness::Agy, "");
+        stream.decode(r#"{"event":"step_update","step_update":{"step_index":1,"state":"DONE","step_type":"tool","tool_name":"write_to_file","tool_info":{"parameters":{"TargetFile":"a"},"error":{"type":"permission_denied","message":"denied"}}}}"#);
+        stream.decode(r#"{"event":"result","result":{"status":"ERROR","error":"usage limit exceeded; interrupted"}}"#);
+        let events = stream
+            .finish(Ok(std::process::ExitStatus::default()))
+            .report
+            .unwrap()
+            .events;
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::ToolCallEnded {
+                outcome: Outcome::Denied,
+                ..
+            }
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::Error {
+                kind: ErrorKind::UsageLimit,
+                ..
+            }
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::WorkEnded {
+                outcome: Outcome::Killed | Outcome::Interrupted,
+                ..
+            }
+        )));
+    }
 
     #[test]
     fn recorded_events_give_progress_id_final_reply_and_cumulative_usage() {
