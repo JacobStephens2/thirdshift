@@ -109,7 +109,11 @@ fi
         );
         let state = scenario.gh_state();
         let body = state["prs"][0]["body"].as_str().unwrap();
-        assert!(body.contains(&format!("- {cause}\n")), "{body}");
+        assert!(
+            body.contains("- Security review on grok failed; see Session log\n"),
+            "{body}"
+        );
+        assert!(!body.contains("Not signed in."), "{body}");
         assert!(!body.contains("grok login --device-code"), "{body}");
         assert!(!body.contains("ignored result text"), "{body}");
         let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
@@ -175,6 +179,28 @@ fn security_review_failures_without_a_diagnostic_keep_the_generic_cause() {
             result.stderr
         );
     }
+}
+
+#[test]
+fn a_failed_review_keeps_private_result_text_out_of_its_public_pr() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[harness]\ndefault = 'grok'\n");
+    scenario.agent_does_in_session(1, OPENS_PR);
+    scenario.agent_does_in_session(
+        2,
+        r#"
+printf '%s\n' 'Pre-existing Base-branch vulnerability: Private old vulnerability evidence.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+exit 1
+"#,
+    );
+    let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let body = state["prs"][0]["body"].as_str().unwrap();
+    assert!(
+        !body.contains("Private old vulnerability evidence."),
+        "private failed-result text reached the public PR: {body}"
+    );
 }
 
 #[test]

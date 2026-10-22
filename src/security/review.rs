@@ -176,6 +176,10 @@ pub(crate) struct Outcome {
 enum Ended {
     Complete(Review),
     Incomplete(String),
+    HarnessFailed {
+        harness: &'static str,
+        diagnostic: String,
+    },
 }
 
 impl Outcome {
@@ -184,25 +188,25 @@ impl Outcome {
     pub fn of(result: Result<Review>, log: Option<PathBuf>) -> Self {
         let ended = match result {
             Ok(review) => Ended::Complete(review),
-            Err(error) => Ended::Incomplete(
+            Err(error) => {
                 if let Some(refusal) = error.downcast_ref::<SafeguardRefusal>() {
-                    format!("Security review refused: {refusal}")
+                    Ended::Incomplete(format!("Security review refused: {refusal}"))
                 } else if let Some(incomplete) = error.downcast_ref::<Incomplete>() {
-                    format!("Security review incomplete: {incomplete}")
+                    Ended::Incomplete(format!("Security review incomplete: {incomplete}"))
                 } else if let Some(failure) = error.downcast_ref::<SessionFailure>()
                     && let Some(diagnostic) = failure
                         .diagnostic
                         .as_deref()
                         .and_then(|text| text.lines().map(str::trim).find(|line| !line.is_empty()))
                 {
-                    format!(
-                        "Security review on {} failed: {diagnostic}",
-                        failure.harness
-                    )
+                    Ended::HarnessFailed {
+                        harness: failure.harness,
+                        diagnostic: diagnostic.to_string(),
+                    }
                 } else {
-                    "Security review incomplete: session failed, ended early or omitted a valid final line; see Session log".to_string()
-                },
-            ),
+                    Ended::Incomplete("Security review incomplete: session failed, ended early or omitted a valid final line; see Session log".to_string())
+                }
+            }
         };
         Self { ended, log }
     }
@@ -216,6 +220,10 @@ impl Outcome {
                 review.findings.join("; ")
             ),
             Ended::Incomplete(reason) => reason.clone(),
+            Ended::HarnessFailed {
+                harness,
+                diagnostic,
+            } => format!("Security review on {harness} failed: {diagnostic}"),
         };
         Some(Hold {
             reason,
@@ -234,6 +242,11 @@ impl Outcome {
                 .map(|title| format!("- {title}\n"))
                 .collect(),
             Ended::Incomplete(reason) => format!("- {reason}\n"),
+            // A failed result's diagnostic may be partial assistant output
+            // with pre-existing vulnerability evidence. Keep it out of the PR.
+            Ended::HarnessFailed { harness, .. } => {
+                format!("- Security review on {harness} failed; see Session log\n")
+            }
         }
     }
 }
