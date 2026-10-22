@@ -56,7 +56,9 @@ impl Fixture {
             );
             thread::sleep(Duration::from_millis(10));
         }
-        fixture.owned = ["script", "descendant", "group"]
+        // The guardian reaps its descendants before exiting. Observe it
+        // first so SIGKILL cleanup can finish before checking child PIDs.
+        fixture.owned = ["guardian", "script", "descendant"]
             .map(|name| {
                 fs::read_to_string(fixture.root.path().join(name))
                     .unwrap()
@@ -180,6 +182,16 @@ fn pending_release_workflows_fail_with_captured_output_within_five_seconds() {
     assert_timeout("pending-release");
 }
 
+#[test]
+fn release_summary_harness_ends_after_timeout() {
+    assert_timeout("summary-timeout");
+}
+
+#[test]
+fn release_summary_harness_ends_after_fixture_sigkill() {
+    Fixture::start("summary-sigkill").kill_harness();
+}
+
 fn assert_timeout(mode: &str) {
     let mut fixture = Fixture::start(mode);
     fixture.finish(false);
@@ -190,10 +202,17 @@ fn assert_timeout(mode: &str) {
         "script stdout",
         "stderr:",
         "script stderr",
-        "release: waiting for",
     ] {
         assert!(output.contains(expected), "{mode}: {output}");
     }
+    assert!(
+        output.contains(if mode.starts_with("summary-") {
+            "writing the release summary"
+        } else {
+            "release: waiting for"
+        }),
+        "{output}"
+    );
 }
 
 #[test]
@@ -220,6 +239,17 @@ fn fixture_process() {
     let mode = std::env::var("RELEASE_LIFETIME_MODE").unwrap();
     let release = Release::new();
     release.ci_reports(GREEN);
+    if mode.starts_with("summary-") {
+        // This Harness is started by the real release-summary driver in a
+        // new process group. Keep the reviewer's timeout reproduction here.
+        release.agent_runs(
+            r#"
+echo $$ > "$RELEASE_LIFETIME_ROOT/descendant"
+touch "$RELEASE_LIFETIME_ROOT/ready"
+exec sleep 86400
+"#,
+        );
+    }
     let gh = release.bin().join("gh");
     let real_gh = fs::read_link(&gh).unwrap();
     fs::remove_file(&gh).unwrap();
@@ -263,8 +293,7 @@ esac
         .arg(
             r#"
 echo $$ > "$RELEASE_LIFETIME_ROOT/script"
-read -r pid comm state parent group rest < /proc/$$/stat
-echo "$group" > "$RELEASE_LIFETIME_ROOT/group"
+echo "$PPID" > "$RELEASE_LIFETIME_ROOT/guardian"
 echo 'script stdout'
 echo 'script stderr' >&2
 exec "$1" 0.2.0

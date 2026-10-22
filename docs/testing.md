@@ -87,19 +87,21 @@ child-lifetime helper. Each command has a 120-second wait bound, with stdout and
 stderr included in a timeout panic. File-backed input and output keep inherited
 descriptors and large input from blocking that wait.
 
-A guardian holds a private process group for each command. Normal completion,
-timeout and assertion unwinding kill that group and reap the immediate command
-and guardian. If SIGKILL ends the fixture harness, EOF on the guardian's private,
-close-on-exec stdin pipe makes it kill its group, including itself. The command
-also uses the setup helper's Linux parent-death signal. Cleanup names only the
-owned group; git maintenance remains disabled in these isolated fixtures.
+A dedicated guardian process acts as a Linux subreaper for each command. Normal
+completion, timeout and assertion unwinding kill and reap its owned descendants,
+including release-summary Harnesses that start new process groups. If SIGKILL
+ends the fixture harness, EOF on the guardian's private, close-on-exec stdin pipe
+requests the same cleanup before the guardian exits. The immediate command also
+uses the setup helper's Linux parent-death signal. Cleanup names only unreaped
+children of that guardian; git maintenance remains disabled in these fixtures.
 
 `cargo test --test release lifetime::` runs the full release script with a focused
 fake `gh`. Missing and pending runs at both CI and release-workflow waits trigger
 a 500ms fixture deadline; an outer supervisor allows five seconds for the fixture
 to fail with captured diagnostics. Separate cases cover successful completion,
 assertion unwinding and SIGKILL of the fixture harness. The supervisor adopts and
-reaps recorded script, guardian and descendant PIDs. Fixture setup and its
+reaps recorded script, guardian and descendant PIDs. A hung summary Harness is
+also covered on timeout and SIGKILL. Fixture setup and its
 supervisor handshake use the shared 120-second readiness bound.
 
 Release-script tests remain Linux-only. These deadlines belong to tests;
