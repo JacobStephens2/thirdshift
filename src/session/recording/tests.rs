@@ -30,7 +30,7 @@ impl Fixture {
             name,
             choice,
             Command::new("/bin/sh").args(["-c", script]),
-            None,
+            Input::default(),
             &self.log(name),
             choice
                 .harness
@@ -41,6 +41,98 @@ impl Fixture {
 }
 
 const MODEL: &str = r#"{"type":"assistant","message":{"model":"reported-model","content":[]}}"#;
+
+#[test]
+fn all_harnesses_write_otlp_session_traces_beside_unchanged_logs() {
+    use crate::otlp_jsonl::{Logs, Reader, Spans};
+    use opentelemetry_proto::tonic::collector::{
+        logs::v1::ExportLogsServiceRequest, trace::v1::ExportTraceServiceRequest,
+    };
+    for harness in Harness::ALL {
+        let fixture = Fixture::new();
+        let protocol = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "tests/fixtures/normalized-{}.jsonl",
+            harness.name()
+        ));
+        let raw = fs::read_to_string(&protocol).unwrap();
+        let choice = Choice {
+            harness,
+            ..Choice::default()
+        };
+        let log = fixture.log("implement");
+        let _ = fixture.recording.run(
+            "implement",
+            &choice,
+            Command::new("cat").arg(&protocol),
+            Input {
+                prompt: "session prompt",
+                ..Default::default()
+            },
+            &log,
+            harness
+                .adapter()
+                .interpretation(fixture.root.path(), "session prompt"),
+        );
+        assert_eq!(fs::read_to_string(&log).unwrap(), raw);
+        let logs = fs::read_to_string(log.with_extension("logs.jsonl")).unwrap();
+        let spans = fs::read_to_string(log.with_extension("spans.jsonl")).unwrap();
+        let requests: Vec<_> = Reader::<_, Logs>::new(logs.as_bytes())
+            .collect::<std::io::Result<_>>()
+            .unwrap();
+        assert!(requests.len() >= raw.lines().count());
+        for (request, raw) in requests.iter().zip(raw.lines()) {
+            let record = &request.resource_logs[0].scope_logs[0].log_records[0];
+            assert_eq!(
+                record.body,
+                Some(crate::otlp_jsonl::AnyValue::String(raw.into()))
+            );
+            assert!(record.trace_id.is_some());
+            assert!(record.span_id.is_some());
+            assert!(record.observed_time_unix_nano > 0);
+        }
+        for line in logs.lines() {
+            // Official AnyValue flattens its oneof: parse the arbitrary-precision
+            // JSON numbers into Value first, as in the writer's protocol tests.
+            let official: ExportLogsServiceRequest =
+                serde_json::from_value(serde_json::from_str::<serde_json::Value>(line).unwrap())
+                    .unwrap();
+            assert_eq!(official.resource_logs[0].scope_logs[0].log_records.len(), 1);
+        }
+        let requests: Vec<_> = Reader::<_, Spans>::new(spans.as_bytes())
+            .collect::<std::io::Result<_>>()
+            .unwrap();
+        assert!(!requests.is_empty());
+        if harness == Harness::Claude {
+            let model = requests
+                .iter()
+                .flat_map(|r| &r.resource_spans)
+                .flat_map(|r| &r.scope_spans)
+                .flat_map(|s| &s.spans)
+                .find(|span| {
+                    span.attributes.iter().any(|attr| {
+                        attr.key == "gen_ai.operation.name"
+                            && attr.value
+                                == Some(crate::otlp_jsonl::AnyValue::String("chat".into()))
+                    })
+                })
+                .unwrap();
+            assert!(
+                model
+                    .attributes
+                    .iter()
+                    .any(|attr| attr.key == "gen_ai.usage.input_tokens"
+                        && attr.value == Some(crate::otlp_jsonl::AnyValue::Int(13))),
+                "cached tokens are part of GenAI input usage: {model:?}"
+            );
+        }
+        for line in spans.lines() {
+            let official: ExportTraceServiceRequest =
+                serde_json::from_value(serde_json::from_str::<serde_json::Value>(line).unwrap())
+                    .unwrap();
+            assert!(!official.resource_spans[0].scope_spans[0].spans.is_empty());
+        }
+    }
+}
 
 #[test]
 fn execution_failure_keeps_observed_models_for_the_owning_command() {
@@ -60,6 +152,33 @@ fn execution_failure_keeps_observed_models_for_the_owning_command() {
 }
 
 const INIT: &str = r#"{"type":"system","subtype":"init","session_id":"s1"}"#;
+
+#[test]
+fn late_permission_metadata_refines_one_ended_span() {
+    let fixture = Fixture::new();
+    fixture.run("implement", r#"
+echo '{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"deny","name":"Bash","input":{"command":"git push"}}]}}'
+echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"deny","content":"opaque failure","is_error":true}]}}'
+echo '{"type":"result","subtype":"success","permission_denials":[{"tool_use_id":"deny","tool_name":"Bash","tool_input":{"command":"git push"}}]}'
+"#, &Choice::default()).unwrap();
+    let bytes = fs::read(fixture.log("implement").with_extension("spans.jsonl")).unwrap();
+    let tools: Vec<_> =
+        crate::otlp_jsonl::Reader::<_, crate::otlp_jsonl::Spans>::new(bytes.as_slice())
+            .flat_map(|request| request.unwrap().resource_spans)
+            .flat_map(|resource| resource.scope_spans)
+            .flat_map(|scope| scope.spans)
+            .filter(|span| span.name == "execute_tool Bash")
+            .collect();
+    assert_eq!(tools.len(), 1);
+    assert!(
+        tools[0]
+            .attributes
+            .iter()
+            .any(|attr| attr.key == "thirdshift.outcome"
+                && attr.value == Some(crate::otlp_jsonl::AnyValue::String("denied".into()))),
+        "{tools:?}"
+    );
+}
 
 #[test]
 fn retained_models_replace_stream_evidence_including_an_empty_authoritative_set() {
@@ -87,7 +206,7 @@ fn retained_models_replace_stream_evidence_including_an_empty_authoritative_set(
                 "implement",
                 &choice,
                 Command::new("/bin/sh").args(["-c", &format!("echo '{INIT}'; echo '{MODEL}'")]),
-                None,
+                Input::default(),
                 &fixture.log("implement"),
                 crate::harness::interpretation_tests::recording_interpretation(
                     fixture.root.path(),
@@ -96,6 +215,18 @@ fn retained_models_replace_stream_evidence_including_an_empty_authoritative_set(
             )
             .unwrap();
         assert!(ended.killed.is_empty());
+        let trace =
+            fs::read_to_string(fixture.log("implement").with_extension("logs.jsonl")).unwrap();
+        assert!(
+            crate::otlp_jsonl::Reader::<_, crate::otlp_jsonl::Logs>::new(trace.as_bytes())
+                .map(
+                    |request| request.unwrap().resource_logs[0].scope_logs[0].log_records[0]
+                        .body
+                        .clone()
+                )
+                .any(|body| body == Some(crate::otlp_jsonl::AnyValue::String(retained.into()))),
+            "retained Harness event must survive as a raw body"
+        );
         assert_eq!(
             fixture.recording.notification_lines(),
             [format!(
@@ -156,7 +287,7 @@ sleep 1
                     "implement",
                     &Choice::default(),
                     Command::new("/bin/sh").args(["-c", &format!("echo '{INIT}'; echo '{MODEL}'")]),
-                    None,
+                    Input::default(),
                     &log,
                     crate::harness::interpretation_tests::recording_interpretation(
                         root,
@@ -200,7 +331,7 @@ echo '{"info":{"outcome":"completed"},"messages":[{"type":"assistant","model":{"
                     "implement",
                     &Choice::default(),
                     Command::new("/bin/sh").args(["-c", &format!("echo '{INIT}'; echo '{MODEL}'")]),
-                    None,
+                    Input::default(),
                     &log,
                     crate::harness::interpretation_tests::recording_interpretation(
                         root,
@@ -258,7 +389,7 @@ fn reader_failure_keeps_models_consumed_before_the_log_failed() {
             "implement",
             &Choice::default(),
             Command::new("/bin/sh").args(["-c", &script]),
-            None,
+            Input::default(),
             &log,
             Harness::Claude
                 .adapter()
@@ -382,7 +513,7 @@ fn absent_ownership_removes_stale_child_environment_and_records_no_other_command
             "implement",
             &Choice::default(),
             Command::new("/bin/sh").args(["-c", &format!("echo '{MODEL}'")]),
-            None,
+            Input::default(),
             &fixture.log("implement"),
             Harness::Claude
                 .adapter()
@@ -412,7 +543,7 @@ fn nested_children_keep_the_exact_owning_command() {
                 "implement",
                 &Choice::default(),
                 Command::new("/bin/sh").args(["-c", &format!("echo '{MODEL}'")]),
-                None,
+                Input::default(),
                 &recording
                     .session_path(root, &depth.to_string(), "implement")
                     .unwrap(),
@@ -485,7 +616,7 @@ fn interrupted_stream_survives_process_owners_suppression_of_recovered_state() {
                         "-c",
                         &format!("echo '{MODEL}'; kill -INT \"$PPID\"; sleep 5"),
                     ]),
-                    None,
+                    Input::default(),
                     &root.join("7-20261003T120000-0400-implement.jsonl"),
                     Harness::Claude.adapter().interpretation(root, ""),
                 )
@@ -510,7 +641,7 @@ fn startup_failure_keeps_its_cause_without_writing_evidence() {
             "implement",
             &Choice::default(),
             &mut Command::new(fixture.root.path().join("missing-cli")),
-            None,
+            Input::default(),
             &fixture.log("implement"),
             Harness::Claude
                 .adapter()
@@ -545,7 +676,7 @@ fn completion_progress_comes_from_interpretation_without_duplicate_live_lines() 
                 "retained",
                 &Choice::default(),
                 Command::new("/bin/sh").args(["-c", &format!("echo '{INIT}'; echo '{MODEL}'")]),
-                None,
+                Input::default(),
                 &fixture.log("retained"),
                 crate::harness::interpretation_tests::recording_interpretation(
                     fixture.root.path(),
@@ -560,7 +691,7 @@ fn completion_progress_comes_from_interpretation_without_duplicate_live_lines() 
                 "empty",
                 &Choice::default(),
                 Command::new("/bin/sh").args(["-c", &format!("echo '{INIT}'; echo '{MODEL}'")]),
-                None,
+                Input::default(),
                 &fixture.log("empty"),
                 crate::harness::interpretation_tests::recording_interpretation(
                     fixture.root.path(),
@@ -574,7 +705,7 @@ fn completion_progress_comes_from_interpretation_without_duplicate_live_lines() 
                 "live",
                 &Choice::default(),
                 Command::new("/bin/sh").args(["-c", &format!("echo '{MODEL}'; echo '{MODEL}'")]),
-                None,
+                Input::default(),
                 &fixture.log("live"),
                 Harness::Claude
                     .adapter()

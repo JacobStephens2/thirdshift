@@ -1,0 +1,6 @@
+{"event":"init","conversation_id":"s","init":{"model":"gemini-test"}}
+{"event":"step_update","step_update":{"step_index":1,"step_type":"agent_response","state":"ACTIVE"}}
+{"event":"step_update","step_update":{"step_index":1,"step_type":"agent_response","state":"DONE","usage":{"input_tokens":8,"output_tokens":4}}}
+{"event":"step_update","step_update":{"step_index":2,"step_type":"tool","state":"ACTIVE","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"cargo test"}}}}
+{"event":"step_update","step_update":{"step_index":2,"step_type":"tool","state":"DONE","tool_name":"run_command","tool_info":{"parameters":{"CommandLine":"cargo test"},"output":"done"}}}
+{"event":"result","result":{"status":"SUCCESS","response":"Done."}}

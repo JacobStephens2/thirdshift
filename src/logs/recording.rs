@@ -429,6 +429,17 @@ impl<O: Outside> Record<O> {
         })
     }
 
+    pub(super) fn trace_context(&self) -> Option<super::trace::Context> {
+        let owner = self.owner.as_ref()?;
+        let (_, tree) = self.command_record.as_ref()?;
+        let active = tree
+            .dispatched
+            .last()
+            .filter(|record| record.outcome.is_none())
+            .unwrap_or(&tree.command);
+        Some(super::trace::Context::from_record(owner, active))
+    }
+
     pub(super) fn print(&mut self, line: &str) {
         self.output(Stream::Stdout, line.to_string());
     }

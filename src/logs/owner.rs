@@ -28,7 +28,7 @@ pub(crate) struct Owner {
 }
 
 impl Owner {
-    fn identity(&self) -> Identity<'_> {
+    pub(super) fn identity(&self) -> Identity<'_> {
         Identity {
             stamp: &self.stamp,
             token: self.token.as_deref(),
@@ -228,7 +228,11 @@ fn parse_stamp(stamp: &str) -> Option<DateTime<FixedOffset>> {
 /// forms. All byte offsets and token syntax live here.
 pub(super) fn decode(path: &Path) -> Option<Decoded<'_>> {
     let name = path.file_name()?.to_str()?;
-    let (stem, session) = if let Some(stem) = name.strip_suffix(".jsonl") {
+    let (stem, session) = if let Some(stem) = name
+        .strip_suffix(".logs.jsonl")
+        .or_else(|| name.strip_suffix(".spans.jsonl"))
+        .or_else(|| name.strip_suffix(".jsonl"))
+    {
         (stem, true)
     } else if let Some(stem) = name.strip_suffix(".log") {
         (stem, false)
@@ -272,6 +276,20 @@ pub(super) fn decode(path: &Path) -> Option<Decoded<'_>> {
         identity: Identity { stamp, token },
         session_kind,
     })
+}
+
+/// During dual recording the original Session log is the inventory entry.
+pub(super) fn inventory_session(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+    if name.ends_with(".spans.jsonl") {
+        return false;
+    }
+    if let Some(stem) = name.strip_suffix(".logs.jsonl") {
+        return !path.with_file_name(format!("{stem}.jsonl")).exists();
+    }
+    true
 }
 
 /// Preserve current legacy suffix stripping, including non-stamped fixture

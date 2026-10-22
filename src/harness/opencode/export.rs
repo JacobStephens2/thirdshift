@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(in crate::harness) struct SessionExport {
+    raw: String,
     events: Vec<crate::harness::interpretation::event::Event>,
     pub(in crate::harness) message: Option<String>,
     pub(in crate::harness) summary: Option<String>,
@@ -64,6 +65,7 @@ impl SessionExport {
             .as_array()
             .ok_or_else(|| anyhow!("no messages in OpenCode session export"))?;
         let mut result = Self {
+            raw: text.into(),
             events: super::events::Events::export(&export, session_id),
             message: None,
             summary: None,
@@ -145,6 +147,7 @@ impl Retained for Completion {
             && let Some(export) = read(&self.worktree, id)?
         {
             facts.ended.final_message = export.message;
+            facts.report.retained_records.push(export.raw);
             facts.report.summary = export.summary;
             facts.report.models = export.models;
             crate::harness::interpretation::event::reconcile(

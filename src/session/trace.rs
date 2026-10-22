@@ -1,0 +1,396 @@
+//! A Session trace owns streaming logs and ended spans. The transcript stays
+//! beside it until the readers switch. No Harness protocol parsing lives here
+//! beyond envelope metadata (event name, clock and reported version).
+use std::collections::BTreeMap;
+use std::fs::File;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use serde_json::Value;
+
+use crate::harness::Choice;
+use crate::harness::interpretation::event::{Event, Outcome};
+use crate::logs::trace::{Context, id};
+use crate::otlp_jsonl::*;
+
+mod attributes;
+use attributes::{attribute, event_attributes};
+
+// Pin the development conventions rather than silently following latest.
+const SCHEMA: &str = "https://opentelemetry.io/schemas/1.44.0";
+
+pub(super) struct Trace {
+    logs: Writer<File, Logs>,
+    spans: Writer<File, Spans>,
+    resource: Resource,
+    context: Context,
+    session: Span,
+    open: BTreeMap<String, Span>,
+    ended: BTreeMap<String, Span>,
+    spans_path: PathBuf,
+    seen: Vec<Event>,
+    locations: BTreeMap<String, (String, SpanId)>,
+    input_excludes_cache: bool,
+}
+
+impl Trace {
+    pub fn create(
+        log: &Path,
+        kind: &str,
+        choice: &Choice,
+        prompt: &str,
+        context: Context,
+        command: &std::process::Command,
+    ) -> io::Result<Self> {
+        let started = now();
+        let session_id = id(&[
+            &context.trace.0,
+            b"session",
+            log.as_os_str().as_encoded_bytes(),
+        ]);
+        let mut attrs = vec![
+            attribute("service.name", "thirdshift"),
+            attribute("service.version", env!("CARGO_PKG_VERSION")),
+            attribute("thirdshift.harness", choice.harness.name()),
+            attribute("thirdshift.session.kind", kind),
+            attribute("thirdshift.repository", &context.repository),
+            attribute("thirdshift.command.identity", &context.identity),
+            attribute("thirdshift.gen_ai.conventions.version", "1.44.0"),
+        ];
+        if let Some(model) = &choice.model {
+            attrs.push(attribute("gen_ai.request.model", model));
+        }
+        if let Some(effort) = &choice.effort {
+            attrs.push(attribute("thirdshift.request.effort", effort));
+        }
+        Ok(Self {
+            logs: Writer::new(File::create(log.with_extension("logs.jsonl"))?),
+            spans: Writer::new(File::create(log.with_extension("spans.jsonl"))?),
+            resource: Resource {
+                attributes: attrs.clone(),
+                ..Default::default()
+            },
+            context,
+            session: Span {
+                span_id: Some(session_id),
+                name: format!("invoke_agent {kind}"),
+                kind: 1,
+                start_time_unix_nano: started,
+                attributes: {
+                    attrs.push(attribute("gen_ai.operation.name", "invoke_agent"));
+                    attrs.push(attribute("thirdshift.session.prompt", prompt));
+                    attrs.push(attribute(
+                        "thirdshift.harness.arguments",
+                        serde_json::to_string(
+                            &command
+                                .get_args()
+                                .map(|arg| arg.to_string_lossy())
+                                .collect::<Vec<_>>(),
+                        )
+                        .unwrap(),
+                    ));
+                    if let Some(dir) = command.get_current_dir() {
+                        attrs.push(attribute("thirdshift.harness.directory", dir.display()));
+                    }
+                    attrs
+                },
+                ..Default::default()
+            },
+            open: BTreeMap::new(),
+            ended: BTreeMap::new(),
+            spans_path: log.with_extension("spans.jsonl"),
+            seen: Vec::new(),
+            locations: BTreeMap::new(),
+            input_excludes_cache: matches!(
+                choice.harness,
+                crate::harness::Harness::Claude | crate::harness::Harness::Grok
+            ),
+        })
+    }
+
+    pub fn record(&mut self, raw: &str, events: &[Event]) -> io::Result<()> {
+        let observed = now();
+        let envelope: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
+        if let Some(version) = envelope["claude_code_version"]
+            .as_str()
+            .or_else(|| envelope["version"].as_str())
+        {
+            set(
+                &mut self.resource.attributes,
+                attribute("thirdshift.harness.version", version),
+            );
+        }
+        let time = event_time(&envelope);
+        let mut attrs = Vec::new();
+        let mut span_id = self.session.span_id;
+        for event in events {
+            span_id = self.apply(event, time.unwrap_or(observed))?.or(span_id);
+            for attr in event_attributes(event, self.input_excludes_cache) {
+                set(&mut attrs, attr);
+            }
+            self.seen.push(event.clone());
+        }
+        // Multiple normalized facts can describe one raw Harness event. Keep
+        // them together in exactly one log record, without dropping the raw body.
+        if !events.is_empty() {
+            attrs.push(attribute(
+                "thirdshift.events",
+                serde_json::to_string(events).unwrap(),
+            ));
+        }
+        let name = ["type", "event", "payload_type"]
+            .iter()
+            .find_map(|key| envelope[*key].as_str())
+            .unwrap_or("output");
+        self.logs.write(&Logs {
+            resource_logs: vec![ResourceLogs {
+                resource: Some(self.resource.clone()),
+                schema_url: SCHEMA.into(),
+                scope_logs: vec![ScopeLogs {
+                    scope: Some(scope()),
+                    schema_url: SCHEMA.into(),
+                    log_records: vec![LogRecord {
+                        time_unix_nano: time.unwrap_or_default(),
+                        observed_time_unix_nano: observed,
+                        body: Some(AnyValue::String(raw.trim_end_matches(['\r', '\n']).into())),
+                        event_name: name.into(),
+                        trace_id: Some(self.context.trace),
+                        span_id,
+                        attributes: attrs,
+                        ..Default::default()
+                    }],
+                }],
+            }],
+        })
+    }
+
+    /// Completion may add retained calls, usage or authoritative amendments.
+    /// Preserve those facts as logs, never invent a second ended call span.
+    pub fn reconcile(&mut self, events: &[Event]) -> io::Result<()> {
+        for event in events {
+            if !self.seen.contains(event) {
+                let raw = serde_json::to_string(event)?;
+                self.record(&raw, std::slice::from_ref(event))?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn finish(&mut self, error: Option<&str>) -> io::Result<()> {
+        let ended = now();
+        for (key, mut span) in std::mem::take(&mut self.open) {
+            span.end_time_unix_nano = ended.max(span.start_time_unix_nano);
+            span.status = Some(Status {
+                code: 2,
+                message: error.unwrap_or("call did not end").into(),
+            });
+            self.ended.insert(key, span.clone());
+            self.write_span(span)?;
+        }
+        let mut session = self.session.clone();
+        session.trace_id = Some(self.context.trace);
+        session.parent_span_id = Some(self.context.stage);
+        session.end_time_unix_nano = ended.max(session.start_time_unix_nano);
+        session.status = Some(Status {
+            code: if error.is_some() { 2 } else { 1 },
+            message: error.unwrap_or("").into(),
+        });
+        self.ended.insert("session".into(), session.clone());
+        self.write_span(session)?;
+        // Calls are flushed when they end. Retained facts and late permission
+        // metadata refine the same span. Atomically retain one final version
+        // per ID, preserving the already-flushed file if rewriting fails.
+        let mut file = tempfile::NamedTempFile::new_in(self.spans_path.parent().unwrap())?;
+        let mut spans: Vec<_> = self.ended.values().collect();
+        spans.sort_by_key(|span| span.end_time_unix_nano);
+        let mut writer = Writer::new(file.as_file_mut());
+        for span in spans {
+            writer.write(&self.request(span.clone()))?;
+        }
+        file.persist(&self.spans_path)
+            .map_err(|error| error.error)?;
+        Ok(())
+    }
+
+    fn apply(&mut self, event: &Event, time: u64) -> io::Result<Option<SpanId>> {
+        use Event::*;
+        let (kind, call, parent, start, end, outcome) = match event {
+            ModelCallStarted { id, parent_id, .. } => (
+                "model",
+                id,
+                parent_id.as_deref(),
+                true,
+                false,
+                Outcome::Succeeded,
+            ),
+            ModelCallEnded {
+                id,
+                parent_id,
+                outcome,
+                ..
+            } => ("model", id, parent_id.as_deref(), false, true, *outcome),
+            ToolCallStarted { id, parent_id, .. } => (
+                "tool",
+                id,
+                parent_id.as_deref(),
+                true,
+                false,
+                Outcome::Succeeded,
+            ),
+            ToolCallEnded {
+                id,
+                parent_id,
+                outcome,
+                ..
+            } => ("tool", id, parent_id.as_deref(), false, true, *outcome),
+            TurnStarted { id } => ("turn", id, None, true, false, Outcome::Succeeded),
+            TurnEnded { id, outcome, .. } => ("turn", id, None, false, true, *outcome),
+            SubagentStarted { id, parent_id, .. } => (
+                "agent",
+                id,
+                parent_id.as_deref(),
+                true,
+                false,
+                Outcome::Succeeded,
+            ),
+            SubagentEnded { id, outcome, .. } => ("agent", id, None, false, true, *outcome),
+            _ => {
+                for attr in event_attributes(event, self.input_excludes_cache) {
+                    set(&mut self.session.attributes, attr);
+                }
+                let (call, parent) = match event {
+                    Message { id, parent_id, .. } => (id.as_deref(), parent_id.as_deref()),
+                    Error { parent_id, .. } => (None, parent_id.as_deref()),
+                    _ => (None, None),
+                };
+                return Ok(call
+                    .or(parent)
+                    .and_then(|id| self.locations.get(id).map(|(_, span)| *span))
+                    .or(self.session.span_id));
+            }
+        };
+        let key = if kind == "agent" && end {
+            self.locations.get(call).map(|(key, _)| key.clone())
+        } else {
+            None
+        }
+        .unwrap_or_else(|| serde_json::to_string(&(kind, parent, call)).unwrap());
+        let span_id = id(&[&self.session.span_id.unwrap().0, key.as_bytes()]);
+        let parent_span = parent
+            .and_then(|parent| self.locations.get(parent).map(|(_, span)| *span))
+            .or(self.session.span_id);
+        self.locations.insert(call.clone(), (key.clone(), span_id));
+        let attrs = event_attributes(event, self.input_excludes_cache);
+        if let Some(span) = self.ended.get_mut(&key) {
+            for attr in attrs {
+                set(&mut span.attributes, attr);
+            }
+            if end {
+                span.status = Some(status(outcome));
+            }
+            return Ok(Some(span_id));
+        }
+        let mut attrs = attrs;
+        for attr in &self.session.attributes {
+            if attr.key == "gen_ai.request.model" {
+                attrs.push(attr.clone());
+            }
+        }
+        let span = self.open.entry(key.clone()).or_insert_with(|| Span {
+            trace_id: Some(self.context.trace),
+            span_id: Some(span_id),
+            parent_span_id: parent_span,
+            name: match event {
+                ToolCallStarted { tool, .. } | ToolCallEnded { tool, .. } => {
+                    format!("execute_tool {tool}")
+                }
+                _ => format!("{kind} {call}"),
+            },
+            kind: if kind == "model" { 3 } else { 1 },
+            start_time_unix_nano: time,
+            ..Default::default()
+        });
+        for attr in attrs {
+            set(&mut span.attributes, attr);
+        }
+        if end {
+            let mut span = self.open.remove(&key).unwrap();
+            span.end_time_unix_nano = time.max(span.start_time_unix_nano);
+            span.status = Some(status(outcome));
+            self.ended.insert(key, span.clone());
+            self.write_span(span)?;
+        } else if !start {
+            unreachable!();
+        }
+        Ok(Some(span_id))
+    }
+
+    fn write_span(&mut self, span: Span) -> io::Result<()> {
+        let request = self.request(span);
+        self.spans.write(&request)
+    }
+
+    fn request(&self, span: Span) -> Spans {
+        Spans {
+            resource_spans: vec![ResourceSpans {
+                resource: Some(self.resource.clone()),
+                schema_url: SCHEMA.into(),
+                scope_spans: vec![ScopeSpans {
+                    scope: Some(scope()),
+                    schema_url: SCHEMA.into(),
+                    spans: vec![span],
+                }],
+            }],
+        }
+    }
+}
+
+fn status(outcome: Outcome) -> Status {
+    Status {
+        code: if outcome == Outcome::Succeeded { 1 } else { 2 },
+        message: format!("{outcome:?}"),
+    }
+}
+
+fn set(attrs: &mut Vec<KeyValue>, attr: KeyValue) {
+    if let Some(old) = attrs.iter_mut().find(|old| old.key == attr.key) {
+        *old = attr;
+    } else {
+        attrs.push(attr);
+    }
+}
+
+fn scope() -> Scope {
+    Scope {
+        name: "thirdshift.session".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+        ..Default::default()
+    }
+}
+
+fn now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos()
+        .try_into()
+        .unwrap_or(u64::MAX)
+}
+
+fn event_time(event: &Value) -> Option<u64> {
+    for key in ["timestamp", "recorded_at", "time"] {
+        let value = &event[key];
+        if let Some(text) = value.as_str()
+            && let Ok(time) = chrono::DateTime::parse_from_rfc3339(text)
+        {
+            return time
+                .timestamp_nanos_opt()
+                .and_then(|time| time.try_into().ok());
+        }
+        // Muse recorded_at and OpenCode timestamp are Unix milliseconds.
+        if let Some(ms) = value.as_u64() {
+            return ms.checked_mul(1_000_000);
+        }
+    }
+    None
+}

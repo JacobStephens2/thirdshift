@@ -124,6 +124,7 @@ pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<
                 for entry in entries(&folder)? {
                     let path = entry.path();
                     if !entry.file_type()?.is_file()
+                        || !owner::inventory_session(&path)
                         || !matches!(
                             path.extension().and_then(|ext| ext.to_str()),
                             Some("log" | "jsonl")

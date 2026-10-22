@@ -6,6 +6,7 @@ use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
@@ -20,6 +21,13 @@ use crate::{logs, progress};
 #[derive(Clone)]
 pub struct Recording {
     owner: std::result::Result<Owner, String>,
+}
+
+/// The Session prompt and the Harness-specific way it receives input.
+#[derive(Default)]
+pub struct Input<'a> {
+    pub prompt: &'a str,
+    pub stdin: Option<&'a str>,
 }
 
 impl Recording {
@@ -82,7 +90,7 @@ impl Recording {
         kind: &str,
         choice: &Choice,
         command: &mut Command,
-        input: Option<&str>,
+        input: Input<'_>,
         log: &Path,
         stream: Interpretation,
     ) -> Result<Ended> {
@@ -94,12 +102,35 @@ impl Recording {
         let mut log_file =
             File::create(log).with_context(|| format!("could not create {}", log.display()))?;
         let started = Instant::now();
+        let context = logs::trace_context()
+            .or_else(|| self.owner.as_ref().ok().map(logs::trace::Context::of_owner))
+            .unwrap_or_else(|| logs::trace::Context::of_session(log));
+        let trace = Arc::new(Mutex::new(super::trace::Trace::create(
+            log,
+            kind,
+            choice,
+            input.prompt,
+            context,
+            command,
+        )?));
+        let streaming_trace = Arc::clone(&trace);
         let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());
         let choice_owned = choice.clone();
         let recording = self.clone();
-        let executed =
-            process::streaming(adapter, command, input, stream, move |output, stream| {
-                let followed = follow(&kind_owned, output, &mut log_file, &log_owned, stream);
+        let executed = process::streaming(
+            adapter,
+            command,
+            input.stdin,
+            stream,
+            move |output, stream| {
+                let followed = follow(
+                    &kind_owned,
+                    output,
+                    &mut log_file,
+                    &log_owned,
+                    stream,
+                    &streaming_trace,
+                );
                 // The process owner joins this reader before returning, including
                 // on interruption, when it deliberately suppresses state recovery.
                 recording.keep(
@@ -109,9 +140,35 @@ impl Recording {
                     stream.observed_models(),
                 );
                 followed
-            })?;
+            },
+        );
+
+        let executed = match executed {
+            Ok(executed) => executed,
+            Err(error) => {
+                trace.lock().unwrap().finish(Some(&format!("{error:#}")))?;
+                return Err(error);
+            }
+        };
 
         let completion = executed.state.finish(executed.execution);
+        {
+            let mut trace = trace.lock().unwrap();
+            if let Some(report) = &completion.report {
+                for raw in &report.retained_records {
+                    trace.record(raw, &[])?;
+                }
+                trace.reconcile(&report.events)?;
+            }
+            trace.finish(
+                completion
+                    .outcome
+                    .as_ref()
+                    .err()
+                    .map(|error| error.to_string())
+                    .as_deref(),
+            )?;
+        }
         if let Some(report) = completion.report {
             self.keep(kind, log, choice, report.models.clone());
             for line in report.completion_progress {
@@ -236,6 +293,7 @@ fn follow(
     log_file: &mut File,
     log: &Path,
     progress: &mut Interpretation,
+    trace: &Mutex<super::trace::Trace>,
 ) -> Result<()> {
     let mut stream = BufReader::new(stream);
     let mut line = Vec::new();
@@ -251,7 +309,10 @@ fn follow(
         log_file
             .write_all(&line)
             .with_context(|| format!("could not write {}", log.display()))?;
-        for condensed in progress.condense(&String::from_utf8_lossy(&line)) {
+        let raw = String::from_utf8_lossy(&line);
+        let decoded = progress.decode(&raw);
+        trace.lock().unwrap().record(&raw, &decoded.events)?;
+        for condensed in decoded.progress {
             progress::step(format_args!("{kind}: {condensed}"));
         }
     }

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Default)]
 pub(in crate::harness) struct SessionLog {
+    raw: Vec<String>,
     pub(in crate::harness) events: Vec<crate::harness::interpretation::event::Event>,
     pub(in crate::harness) message: Option<String>,
     pub(in crate::harness) models: Vec<String>,
@@ -29,20 +30,21 @@ impl SessionLog {
             let record: Value = serde_json::from_str(line)?;
             if let Some(children) = record["children"].as_array() {
                 for child in children {
-                    let record: Value =
-                        serde_json::from_str(child["record_json"].as_str().unwrap_or(""))?;
-                    log.record(&record, session_id);
+                    let raw = child["record_json"].as_str().unwrap_or("");
+                    let record: Value = serde_json::from_str(raw)?;
+                    log.record(&record, raw, session_id);
                 }
             } else {
-                log.record(&record, session_id);
+                log.record(&record, line, session_id);
             }
         }
         Ok(log)
     }
-    fn record(&mut self, record: &Value, session_id: &str) {
+    fn record(&mut self, record: &Value, raw: &str, session_id: &str) {
         if record["stream"]["id"].as_str() != Some(session_id) {
             return;
         }
+        self.raw.push(raw.into());
         if matches!(record["payload"]["kind"].as_str(), Some("run" | "task")) {
             crate::harness::interpretation::event::reconcile(
                 &mut self.events,
@@ -136,6 +138,7 @@ impl Retained for Completion {
             .and_then(|(root, id)| read(root, id))
         {
             facts.report.summary = log.summary();
+            facts.report.retained_records = log.raw;
             if log.message.is_some() {
                 facts.ended.final_message = log.message;
             }

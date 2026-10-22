@@ -191,6 +191,7 @@ impl<'a> Observation<'a> {
             for entry in super::entries(log.parent().context("Command log has no directory")?)? {
                 let path = entry.path();
                 if entry.file_type()?.is_file()
+                    && owner::inventory_session(&path)
                     && owner::decode(&path).is_some_and(|decoded| {
                         decoded.session_kind.is_some() && decoded.subject == prefix
                     })

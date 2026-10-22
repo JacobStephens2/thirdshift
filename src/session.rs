@@ -27,6 +27,7 @@ use crate::skills;
 pub mod kind;
 pub mod recording;
 mod review_reports;
+mod trace;
 use review_reports::ReviewReports;
 
 pub use kind::{Kind, Logged};
@@ -433,7 +434,10 @@ impl Outside for OnMachine {
             label,
             harness,
             &mut command,
-            invocation.stdin.as_deref(),
+            recording::Input {
+                prompt,
+                stdin: invocation.stdin.as_deref(),
+            },
             log,
             interpretation,
         );
@@ -587,7 +591,7 @@ mod tests {
                 "implement", &Choice::default(),
                 Command::new("/bin/sh").args(["-c", &format!(
                     "echo '{{\"type\":\"assistant\",\"message\":{{\"model\":\"{marker}-model\",\"content\":[]}}}}'"
-                )]), None, &log,
+                )]), recording::Input::default(), &log,
                 crate::harness::Harness::Claude.adapter().interpretation(root.path(), ""),
             ).unwrap();
             let reports = ReviewReports::new(root.path()).unwrap();

@@ -3067,6 +3067,24 @@ fn a_completed_security_audit_sends_one_notification_when_asked() {
     let result =
         scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
     assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let folder = scenario.path("home/.thirdshift/logs/acme/widgets/commands/secure");
+    let traces: Vec<_> = fs::read_dir(&folder)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.to_string_lossy().ends_with(".logs.jsonl"))
+        .collect();
+    assert_eq!(traces.len(), 1);
+    for line in fs::read_to_string(&traces[0]).unwrap().lines() {
+        let request: Value = serde_json::from_str(line).unwrap();
+        assert!(request["resourceLogs"].is_array());
+    }
+    assert!(fs::read_dir(&folder).unwrap().any(|entry| {
+        entry
+            .unwrap()
+            .path()
+            .to_string_lossy()
+            .ends_with(".spans.jsonl")
+    }));
     let status = scenario.run(&["status", "--json"]);
     assert_eq!(status.code, Some(0), "{}", status.stderr);
     let status: Value = serde_json::from_str(&status.stdout).unwrap();
