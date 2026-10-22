@@ -28,7 +28,7 @@ use crate::labels::{Edit, Label};
 use crate::launch::{BaseBranch, LaunchDirectory};
 use crate::logs::{self, Pass, Work};
 use crate::progress;
-use crate::ready::{self, ReadyIssue};
+use crate::ready::{self, PriorityIssue, ReadyIssue};
 use crate::run::{self, Ended, StartedBy};
 use crate::session::{Kind, Logs, Purpose, Sessions};
 use crate::worktree::ReviewWorktree;
@@ -71,6 +71,9 @@ pub trait Outside {
     /// The repository's lowest-numbered Ready issue, if it has one, by the
     /// Ready issue search, with its lines on the issues passed over.
     fn ready_issue(&mut self) -> Result<Option<ReadyIssue>>;
+    /// The lowest-numbered issue that goes before an Architect run: Ready
+    /// or meeting every Ready issue condition except settling.
+    fn before_architect(&mut self) -> Result<Option<PriorityIssue>>;
     /// Hand on the progress line `line`.
     fn step(&mut self, line: String);
     /// Record that `pass` was skipped for `reason`.
@@ -184,6 +187,10 @@ impl Outside for LaunchAndGitHub<'_> {
 
     fn ready_issue(&mut self) -> Result<Option<ReadyIssue>> {
         ready::first(self.launch.git(), self.repo, self.config.pickup_wait)
+    }
+
+    fn before_architect(&mut self) -> Result<Option<PriorityIssue>> {
+        ready::before_architect(self.launch.git(), self.repo, self.config.pickup_wait)
     }
 
     fn step(&mut self, line: String) {
@@ -719,6 +726,10 @@ mod in_memory {
                 is_spec,
                 claim_generation: 0,
             }))
+        }
+
+        fn before_architect(&mut self) -> Result<Option<super::PriorityIssue>> {
+            Ok(self.ready_issue()?.map(super::PriorityIssue::Ready))
         }
 
         fn step(&mut self, line: String) {

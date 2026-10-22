@@ -14,7 +14,8 @@
 //! retries or dispatches an Architect plan that is already there. And so is
 //! one that finds an Architect idea there waiting for triage: the factory has
 //! run out of Strong ideas until the Day shift decides on it. And so, last,
-//! is one that finds a Ready issue there, by the Pickup run's own search:
+//! is one that finds a Ready issue there, or one that meets every Ready
+//! issue condition except settling:
 //! work a human shaped goes first.
 
 use std::fmt;
@@ -33,7 +34,7 @@ use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::logs::{self, Pass, Work};
 use crate::pass::{Dispatch, LaunchAndGitHub, Outside};
 use crate::prompt;
-use crate::ready::ReadyIssue;
+use crate::ready::{PriorityIssue, ReadyIssue};
 use crate::run::Ended;
 
 /// The label thirdshift marks an Architect plan with, which a later Architect
@@ -78,6 +79,8 @@ pub enum Skipped {
     IdeasWaiting(Vec<ListedIssue>),
     /// This Ready issue, the lowest-numbered on this repository, goes first.
     ReadyIssue(ListedIssue),
+    /// This issue meets every Ready issue condition except settling.
+    SettlingIssue(ListedIssue),
 }
 
 impl Skipped {
@@ -92,7 +95,9 @@ impl Skipped {
                 .iter()
                 .map(|listed| listed.issue.url.as_str())
                 .collect(),
-            Self::ReadyIssue(listed) => vec![listed.issue.url.as_str()],
+            Self::ReadyIssue(listed) | Self::SettlingIssue(listed) => {
+                vec![listed.issue.url.as_str()]
+            }
         }
     }
 }
@@ -116,6 +121,11 @@ impl fmt::Display for Skipped {
             Self::ReadyIssue(ListedIssue { issue, title, .. }) => write!(
                 f,
                 "Ready issue #{} \"{title}\" goes first: {}",
+                issue.number, issue.url
+            ),
+            Self::SettlingIssue(ListedIssue { issue, title, .. }) => write!(
+                f,
+                "Ready issue #{} \"{title}\" goes first once it settles: {}",
                 issue.number, issue.url
             ),
         }
@@ -422,8 +432,9 @@ enum Decision {
 
 /// The gates of an Architect run, reaching its repository through `outside`: a
 /// skip for the open Architect plans, if it has any, then for the
-/// Architect ideas still labelled `needs-triage`, then for its Ready issue,
-/// by the Pickup run's own search. No gate is read once one skips.
+/// Architect ideas still labelled `needs-triage`, then for its lowest-numbered
+/// issue that is Ready or would be Ready once settled. No gate is read once
+/// one skips.
 fn gates(outside: &mut impl Outside) -> Result<Decision> {
     let open_plans = outside.open_issues(ARCHITECT_PLAN)?;
     if !open_plans.is_empty() {
@@ -437,8 +448,11 @@ fn gates(outside: &mut impl Outside) -> Result<Decision> {
     if !waiting.is_empty() {
         return Ok(Decision::Skip(Skipped::IdeasWaiting(waiting)));
     }
-    Ok(match outside.ready_issue()? {
-        Some(ReadyIssue { listed, .. }) => Decision::Skip(Skipped::ReadyIssue(listed)),
+    Ok(match outside.before_architect()? {
+        Some(PriorityIssue::Ready(ReadyIssue { listed, .. })) => {
+            Decision::Skip(Skipped::ReadyIssue(listed))
+        }
+        Some(PriorityIssue::Settling(listed)) => Decision::Skip(Skipped::SettlingIssue(listed)),
         None => Decision::GoAhead,
     })
 }

@@ -2680,6 +2680,30 @@ fn a_ready_issue_skips_before_any_session_and_keeps_only_the_activity_log() {
 }
 
 #[test]
+fn a_settling_issue_does_not_skip_the_security_audit() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.issue_timeline(
+        7,
+        &[(support::TimelineEvent::Labelled("ready-for-agent"), 9)],
+    );
+    scenario.agent_does(&audit_script("[]"));
+
+    let result = scenario.run(&["secure"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(result.stdout.is_empty(), "{}", result.stdout);
+    assert!(
+        result
+            .stderr
+            .contains("#7 not settled: labelled ready-for-agent less than 30 minutes ago"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
 fn an_untrusted_ready_label_does_not_skip_the_security_audit() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["ready-for-agent"]);

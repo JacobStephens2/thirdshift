@@ -103,7 +103,7 @@ One invocation of the factory on a **Spec**'s **Issue URL**: it works through th
 _Avoid_: batch run, spec implementation
 
 **Architect run**:
-One invocation of the factory with no **Issue URL**: an **Architecture review** of the **Base branch**, then, unless asked to stop there, a **Spec run** or a **Run** on the **Architect plan** it published. One pass per invocation. It is skipped, doing nothing, when another **Pass** on the same repository is still running on the machine, its Spec run or Run included, when an earlier Architect plan is still open, when an **Architect idea** is waiting for triage, or when the repository has a **Ready issue**, so that work a human shaped goes first. Skipped is not a failure, and sends no **Run notification**, so that it can be started every few minutes and so follow the last one as soon as its plan is merged.
+One invocation of the factory with no **Issue URL**: an **Architecture review** of the **Base branch**, then, unless asked to stop there, a **Spec run** or a **Run** on the **Architect plan** it published. One pass per invocation. It is skipped, doing nothing, when another **Pass** on the same repository is still running on the machine, its Spec run or Run included, when an earlier Architect plan is still open, when an **Architect idea** is waiting for triage, or when the repository has a **Ready issue** or an issue that meets every Ready issue condition except settling, including a **Spec** having a **Startable Ticket**, so that work a human shaped goes first. Skipped is not a failure, and sends no **Run notification**, so that it can be started every few minutes and so follow the last one as soon as its plan is merged.
 _Avoid_: improve run, architecture run
 
 **Pickup run**:
