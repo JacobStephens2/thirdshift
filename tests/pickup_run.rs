@@ -127,6 +127,26 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
 }
 
 #[test]
+fn a_rejecting_pre_push_hook_does_not_block_reserving_or_releasing_a_ready_issue() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.launch_has_rejecting_pre_push_hook();
+    scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+
+    let result = scenario.run(&["pickup"]);
+
+    let pr = pr_from(&scenario, "issue-7");
+    assert_ended_with_pr(&result, &pr, "ready for review");
+    assert_eq!(scenario.claude_calls().len(), 1, "{}", result.stderr);
+    assert_eq!(
+        scenario.origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup"]),
+        "",
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
 fn two_machines_racing_for_a_ready_issue_start_exactly_one_run() {
     for race in [
         PickupRace::Issue,
