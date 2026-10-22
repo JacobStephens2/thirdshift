@@ -150,11 +150,12 @@ fn a_local_branch_added_after_selection_fails_acquisition_and_ends_the_claim() {
             scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
         }
         let mut state = scenario.gh_state();
-        // The preflight issue read installs a callback for the Claim's read,
-        // which happens after selection. This deterministically changes the
-        // branch before acquisition without changing the Run's ordering.
-        state["on_issue_view"]["7"] =
-            serde_json::json!("gh fake on-issue-view 7 'bash \"$FAKE_GH_STATE.after-selection\"'");
+        // The Claim's labels read happens after selection. Target that read
+        // so earlier notification or preflight reads cannot move the race.
+        state["on_issue_view"]["7"] = serde_json::json!({
+            "fields": "labels",
+            "script": "bash \"$FAKE_GH_STATE.after-selection\""
+        });
         scenario.write_gh_state(&state);
         std::fs::write(
             scenario.path("gh-state.json.after-selection"),
@@ -245,14 +246,14 @@ fn selection_asks_github_once_for_the_pr_history() {
     let result = scenario.run(&[&scenario.issue_url(7)]);
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
 
-    // Selection ends when the Claim begins, at the second `issue view`.
-    // Trust and sub-issue reads do not change the PR history guarantee.
+    // Selection ends at the Claim's labels read. Earlier notification,
+    // trust and sub-issue reads do not change the PR history guarantee.
     let calls = scenario.gh_calls();
     let history: Vec<_> = calls
         .iter()
-        .enumerate()
-        .take_while(|(at, argv)| *at == 0 || argv[..2] != ["issue", "view"])
-        .map(|(_, argv)| argv)
+        .take_while(|argv| {
+            !(argv[..2] == ["issue", "view"] && argv.windows(2).any(|w| w == ["--json", "labels"]))
+        })
         .filter(|argv| argv[..2] == ["pr", "list"])
         .collect();
     assert_eq!(history.len(), 1, "gh calls: {calls:?}");

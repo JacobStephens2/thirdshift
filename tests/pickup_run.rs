@@ -18,7 +18,7 @@ mod support;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 
-use support::resend::{ResendStandIn, assert_one_issue_line};
+use support::resend::{ResendStandIn, assert_one_issue_line, assert_saved_notification};
 use support::{HeldRun, REPO, RunResult, Scenario, TimelineEvent, before_command_log};
 
 /// The label of an issue a Pickup run may take.
@@ -1428,6 +1428,12 @@ fn a_pass_that_took_an_issue_sends_one_notification_when_asked() {
     // Exactly one: the dispatched run sends none of its own.
     assert_eq!(requests.len(), 1, "{requests:?}");
     assert_eq!(requests[0].body["to"], "config@example.com");
+    assert_saved_notification(&scenario, "pickup", &requests[0]);
+    assert!(
+        !scenario
+            .path("home/.thirdshift/logs/acme/widgets/commands/issue")
+            .exists()
+    );
 }
 
 #[test]
@@ -1624,6 +1630,11 @@ fn a_pass_skipped_for_having_no_ready_issue_sends_no_notification() {
 
     assert_skipped(&scenario, &result, NO_READY_ISSUE);
     assert!(resend.requests().is_empty());
+    assert!(
+        !scenario
+            .path("home/.thirdshift/logs/acme/widgets/commands")
+            .exists()
+    );
 }
 
 /// Start a Pickup run that takes #7, made a Ready issue here, and holds the

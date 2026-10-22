@@ -823,6 +823,11 @@ fn logs_inventory_matches_cli_and_reads_current_layout_only() {
         "Command <output> https://github.com/acme/widgets/pull/9\n",
     )
     .unwrap();
+    fs::write(
+        folder.join("7-20261003T120000-0400.notification.txt"),
+        "Subject: saved notification\n\nResult: ready for review\n",
+    )
+    .unwrap();
     fs::write(folder.join("7-20261003T120000-0400-implement.jsonl"),
         "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"Hello <reader> (https://github.com/acme/widgets/issues/7)\"}}\n").unwrap();
     let old = home.path().join(".thirdshift/logs/acme/widgets/sessions");
@@ -845,6 +850,7 @@ fn logs_inventory_matches_cli_and_reads_current_layout_only() {
     assert_eq!(logs.len(), 2);
     let page = console.get("/logs").text().unwrap();
     assert!(page.contains("thirdshift logs"));
+    assert!(!page.contains("notification.txt"));
     for log in logs {
         let url = format!("/logs/{}", log["id"].as_str().unwrap());
         assert!(page.contains(&url));

@@ -7,7 +7,7 @@
 
 mod support;
 
-use support::resend::{ResendStandIn, assert_one_issue_line};
+use support::resend::{ResendStandIn, assert_one_issue_line, assert_saved_notification};
 use support::{Scenario, WAIT_BOUND, leaves_running};
 
 const SPEC: u32 = 20;
@@ -895,6 +895,7 @@ fn ticket_runs_send_no_run_notification() {
         requests[0].body["subject"].as_str().unwrap(),
         "acme/widgets#20",
     );
+    assert_saved_notification(&scenario, "issue", &requests[0]);
 }
 
 #[test]

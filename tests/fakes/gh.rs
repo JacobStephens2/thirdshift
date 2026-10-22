@@ -29,7 +29,7 @@
 //!  "runs"?: [{"databaseId", "url", "branch", "workflow", "event", "headSha", "status",
 //!             "conclusion", "jobs"?, "hidden_polls"?, "pending_polls"?}],
 //!  "on_ci_read"?: {"times", "script", "seen"},
-//!  "on_issue_view"?: {"<number>": "<script>"},
+//!  "on_issue_view"?: {"<number>": "<script>" | {"fields": "<--json fields>", "script": "<script>"}},
 //!  "on_merge"?: {"times", "script"},
 //!  "refuse_merges"?: {"times", "error"},
 //!  "after_merge"?: "<script>",
@@ -932,7 +932,7 @@ fn issue_label_delete(state: &mut Json, args: &[&str]) {
 /// After the issue's `on-issue-view` script, if it has one still to run.
 fn issue_view(state: &mut Json, positional: &[String], flags: &Flags) {
     let n = &positional[0];
-    run_issue_view_hook(state, n);
+    run_issue_view_hook(state, n, flag(flags, "json").unwrap_or_default());
     let Some(issue_state) = state.at("issues").get(n) else {
         unknown_issue(n)
     };
@@ -2222,8 +2222,9 @@ fn run_ci_read_hook(state: &mut Json, sha: &str) {
 
 /// Run the `on-issue-view` script of issue `n`, if it has one that has not
 /// yet run, e.g. to close the issue as thirdshift waits on it. Leaves `state`
-/// as the script left it.
-fn run_issue_view_hook(state: &mut Json, n: &str) {
+/// as the script left it. An object hook limits it to matching `--json`
+/// fields, so an unrelated title or state read does not consume it.
+fn run_issue_view_hook(state: &mut Json, n: &str, fields: &str) {
     let Some(hook) = state
         .get_mut("on_issue_view")
         .and_then(|hooks| hooks.get_mut(n))
@@ -2231,7 +2232,13 @@ fn run_issue_view_hook(state: &mut Json, n: &str) {
     else {
         return;
     };
-    let script = hook.str().to_owned();
+    if hook
+        .get("fields")
+        .is_some_and(|wanted| wanted.str() != fields)
+    {
+        return;
+    }
+    let script = hook.get("script").unwrap_or(hook).str().to_owned();
     *hook = Null;
     save(state);
     unlock();
