@@ -213,9 +213,11 @@ reads an exact listed file and accepts `--follow`.
 `thirdshift logs --command <id> --json` selects the same Command and child Run
 logs as its Console link; the inventory's `owners` field lists those exact IDs.
 
-Command logs are plain text. Claude and Codex Session logs are conversations
-with folded tool groups, collapsed thinking, Bash, Edit, Read and Grep views,
-and plain output for unfamiliar events. A live reader uses its own SSE stream
+Command logs are plain text. Session traces from all six Harnesses render their
+normalized messages, tool calls and results as conversations with folded tool
+groups and Bash, Edit, Read and Grep views. Unfamiliar events stay visible as
+plain raw lines. Older Claude and Codex Session logs retain their conversation
+rendering and collapsed thinking. A live reader uses its own SSE stream
 to append escaped HTML from a byte offset. Reconnecting resumes from the last
 event's byte offset; incomplete live lines wait until their newline arrives.
 The Follow newest line checkbox lets you read back while the Session grows.
