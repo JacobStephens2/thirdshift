@@ -2,7 +2,7 @@
 // over real Session traces. No tests, no persistence; state lives in the URL.
 const F = window.FIXTURE;
 const NOW = F.now;
-const VARIANTS = { A: 'Tree + timeline', B: 'Drill-down list', C: 'Flame chart', D: 'Waterfall grown in place' };
+const VARIANTS = { A: 'Tree + timeline', B: 'Drill-down list', C: 'Flame chart', D: 'Waterfall grown in place', E: 'Tree + slowest calls' };
 const DETAILS = { 1: 'Tabs', 2: 'Facts list', 3: 'Summary card' };
 const params = new URLSearchParams(location.search);
 const state = {
@@ -202,18 +202,35 @@ let fit = () => {}, reveal = () => {};
 
 // A: one indented tree with a timeline column on a shared axis (MLflow's trace view).
 const A = { expanded: new Set(), axis: null };
-function variantA() {
+function variantA(slow = false) {
   const r = root();
   if (!A.seeded) { A.seeded = true; (function seed(n) { if (['command', 'run', 'stage'].includes(n.kind)) { A.expanded.add(n.id); n.children.forEach(seed); } })(r); }
   const axis = A.axis || axisOf(r);
   const rows = [];
   (function walk(n) { rows.push(n); if (A.expanded.has(n.id)) n.children.forEach(walk); })(r);
+  // E: rank the slowest model and tool calls inside the timeline's scope.
+  const rank = new Map(), contains = new Map();
+  let slowest = [];
+  if (slow) {
+    const scope = A.fitNode && A.fitNode.command === command() ? A.fitNode : r, leaves = [];
+    // A Codex turn spans its tool calls, so it would crowd them out.
+    (function walk(n) { if (n.kind === 'tool' || n.kind === 'model') leaves.push(n); n.children.forEach(walk); })(scope);
+    slowest = leaves.sort((a, b) => length(b) - length(a)).slice(0, 10);
+    slowest.forEach((n, i) => { rank.set(n, i + 1); ancestors(n).forEach(a => contains.set(a, [...(contains.get(a) || []), i + 1])); });
+  }
+  const where = n => { const s = ancestors(n).find(a => a.kind === 'session'), run = [...ancestors(n)].reverse().find(a => a.kind === 'run'); return [run && run.name.replace(/^.*#/, '#'), s && `${s.name} session`].filter(Boolean).join(' · '); };
+  const ranks = n => rank.has(n) ? ` <span class="slow-rank">#${rank.get(n)}</span>` : !A.expanded.has(n.id) && contains.has(n) ? ` <span class="slow-hint" title="Contains slowest calls ${contains.get(n).map(x => '#' + x).join(', ')}">▸ ${contains.get(n).slice(0, 3).map(x => '#' + x).join(' ')}${contains.get(n).length > 3 ? ' …' : ''}</span>` : '';
   host.innerHTML = `<div class="toolbar"><span>Expand to</span>${['run', 'stage', 'session', 'every call'].map(l => `<button type="button" data-level="${l}">${l === 'run' ? 'Runs' : l === 'stage' ? 'stages' : l === 'session' ? 'sessions' : l}</button>`).join('')}
       <span class="dim">·</span><span>Timeline: ${A.axis ? `<b>${esc(A.fitName)}</b> <button type="button" data-unfit>Whole Command</button>` : '<b>whole Command</b>'}</span></div>${legend()}
+    ${slow ? `<details class="slow-list" open><summary>Slowest calls ${A.axis ? `in ${esc(A.fitName)}` : 'in this Command'}</summary><ol>${slowest.map(n => `<li data-slow="${esc(n.id)}" class="${n === selected ? 'is-selected' : ''}"><span class="slow-rank">#${rank.get(n)}</span> ${tag(n)} <span class="name" title="${esc(n.name)}">${esc(n.name)}</span> <b class="rollup">${dur(length(n))}${n.estimated ? '*' : ''}</b> <span class="rollup">${Math.round(length(n) / Math.max(length(n.parent), 1) * 100)}% of its ${KIND[n.parent.kind].toLowerCase()} · ${esc(where(n))}</span>${n.status === 'running' ? ' <span class="st-running">running</span>' : ''}</li>`).join('')}</ol></details>` : ''}
     <div class="ta-axis"><span>Span</span><span class="ta-dur">Time</span><div class="ta-ticks">${ticks(axis, innerWidth < 760 ? 3 : 5)}</div></div>
     <ul class="ta-tree" role="tree" tabindex="0" aria-label="Span tree">${rows.map(n => `<li class="ta-row" role="treeitem" data-id="${esc(n.id)}" aria-level="${n.depth + 1}" ${n.children.length ? `aria-expanded="${A.expanded.has(n.id)}"` : ''}>
-      <div class="ta-label" style="padding-left:${Math.min(n.depth, 12) * (innerWidth < 760 ? 8 : 14)}px">${n.children.length ? `<button type="button" class="ta-twist" data-twist tabindex="-1">${A.expanded.has(n.id) ? '▾' : '▸'}</button>` : '<span class="ta-twist"></span>'}${tag(n)} <span class="name" title="${esc(n.name)}">${esc(n.name)}</span> ${statusText(n)}${n.children.length && !A.expanded.has(n.id) && n.rollup.errors && n.status !== 'error' ? ` <span class="st-error rollup">${n.rollup.errors} err</span>` : ''}</div>
-      <span class="rollup ta-dur">${dur(length(n))}${n.estimated ? '*' : ''}</span>${bar(n, axis)}</li>`).join('')}</ul>`;
+      <div class="ta-label" style="padding-left:${Math.min(n.depth, 12) * (innerWidth < 760 ? 8 : 14)}px">${n.children.length ? `<button type="button" class="ta-twist" data-twist tabindex="-1">${A.expanded.has(n.id) ? '▾' : '▸'}</button>` : '<span class="ta-twist"></span>'}${tag(n)} <span class="name" title="${esc(n.name)}">${esc(n.name)}</span> ${n.status === 'error' ? `<span class="st-error" title="${esc(n.statusMessage || 'error')}">✕</span>` : n.status === 'running' ? '<span class="st-running" title="running">●</span>' : ''}${ranks(n)}${n.children.length && !A.expanded.has(n.id) && n.rollup.errors && n.status !== 'error' ? ` <span class="st-error rollup">${n.rollup.errors} err</span>` : ''}</div>
+      <span class="rollup ta-dur">${dur(length(n))}${n.estimated ? '*' : ''}</span>${bar(n, axis, rank.has(n) ? 'slow' : '')}</li>`).join('')}</ul>`;
+  host.querySelectorAll('[data-slow]').forEach(li => li.addEventListener('click', () => {
+    const n = byId.get(li.dataset.slow); reveal(n); select(n);
+    host.querySelector(`.ta-row[data-id="${CSS.escape(n.id)}"]`)?.scrollIntoView({ block: 'center' });
+  }));
   host.querySelectorAll('[data-level]').forEach(b => b.addEventListener('click', () => {
     const order = ['command', 'run', 'stage', 'session'];
     const upTo = b.dataset.level === 'every call' ? Infinity : order.indexOf(b.dataset.level);
@@ -222,7 +239,7 @@ function variantA() {
     if (upTo !== Infinity) (function walk(n) { if (n.kind === 'run' || n.kind === 'command') A.expanded.add(n.id); n.children.forEach(walk); })(r);
     render();
   }));
-  host.querySelector('[data-unfit]')?.addEventListener('click', () => { A.axis = null; render(); });
+  host.querySelector('[data-unfit]')?.addEventListener('click', () => { A.axis = null; A.fitNode = null; render(); });
   const tree = host.querySelector('.ta-tree');
   tree.addEventListener('click', e => {
     const row = e.target.closest('.ta-row'); if (!row) return;
@@ -240,7 +257,7 @@ function variantA() {
     else if ((e.key === 'Enter' || e.key === ' ') && selected) { e.preventDefault(); openPeek(selected); }
   });
   function toggle(n) { A.expanded.has(n.id) ? A.expanded.delete(n.id) : A.expanded.add(n.id); render(); tree.focus?.(); }
-  fit = n => { A.axis = axisOf(n); A.fitName = `${TAG[n.kind]} ${n.name.slice(0, 40)}`; render(); };
+  fit = n => { A.axis = axisOf(n); A.fitNode = n; A.fitName = `${TAG[n.kind]} ${n.name.slice(0, 40)}`; render(); };
   reveal = n => { ancestors(n).forEach(a => A.expanded.add(a.id)); render(); };
 }
 
@@ -354,7 +371,7 @@ function chipName(c) {
   (function walk(n) { if (!run && n.kind === 'run') run = n; n.children.forEach(walk); })(c.tree);
   return run ? `${run.name.replace(/ · .*#/, ' #')}` : c.subject;
 }
-const RENDER = { A: variantA, B: variantB, C: variantC, D: variantD };
+const RENDER = { A: () => variantA(), B: variantB, C: variantC, D: variantD, E: () => variantA(true) };
 function render() {
   document.querySelector('#chips').innerHTML = F.commands.map((c, i) => `<a href="#" data-command="${i}" ${i === state.command ? 'aria-current="true"' : ''}>${esc(chipName(c))} · ${esc(c.tree.status === 'running' ? 'live' : c.tree.attrs.outcome || c.tree.status)}</a>`).join('');
   document.querySelector('#page-cli').textContent = `thirdshift show <command> --json · thirdshift logs <command> --spans --json (proposed)`;
@@ -370,7 +387,7 @@ function labels() {
 }
 document.querySelector('#chips').addEventListener('click', e => {
   const a = e.target.closest('[data-command]'); if (!a) return;
-  e.preventDefault(); state.command = +a.dataset.command; selected = null; closePeek(); A.seeded = false; A.expanded.clear(); A.axis = null; B.focus = null; C.zoom = null; sync();
+  e.preventDefault(); state.command = +a.dataset.command; selected = null; closePeek(); A.seeded = false; A.expanded.clear(); A.axis = null; A.fitNode = null; B.focus = null; C.zoom = null; sync();
 });
 function url() {
   const p = new URLSearchParams({ variant: state.variant, details: state.details, command: state.command });
