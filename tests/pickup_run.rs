@@ -1798,6 +1798,38 @@ fn claimed_issues(scenario: &Scenario, issues: &[u32]) {
 }
 
 #[test]
+fn a_claim_limit_skip_names_every_holder_lowest_first_without_extra_github_requests() {
+    let scenario = Scenario::new();
+    claimed_issues(&scenario, &[953, 924, 936]);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_eq!(
+        scenario.gh_calls(),
+        ["closed", "open"].map(|state| vec![
+            "issue",
+            "list",
+            "--state",
+            state,
+            "--repo",
+            "acme/widgets",
+            "--label",
+            "in-progress",
+            "--json",
+            "url,title,labels",
+            "--limit",
+            "1000",
+        ])
+    );
+    assert_skipped(
+        &scenario,
+        &result,
+        "thirdshift: at the Claim limit on acme/widgets: #924, #936 and #953 are labelled \
+         in-progress, pickup.limit is 3\n",
+    );
+}
+
+#[test]
 fn a_pass_skipped_for_the_claim_limit_sends_no_notification() {
     let scenario = ready_ticket();
     claimed_issues(&scenario, &[1, 2, 3]);
@@ -1809,7 +1841,7 @@ fn a_pass_skipped_for_the_claim_limit_sends_no_notification() {
     assert_skipped(
         &scenario,
         &result,
-        "thirdshift: at the Claim limit on acme/widgets: 3 open issue(s) labelled in-progress, \
+        "thirdshift: at the Claim limit on acme/widgets: #1, #2 and #3 are labelled in-progress, \
          pickup.limit is 3\n",
     );
     assert!(resend.requests().is_empty());
@@ -1836,7 +1868,7 @@ fn pickup_limit_in_the_user_config_raises_and_lowers_the_claim_limit() {
     assert_skipped(
         &scenario,
         &result,
-        "thirdshift: at the Claim limit on acme/widgets: 1 open issue(s) labelled in-progress, \
+        "thirdshift: at the Claim limit on acme/widgets: #1 is labelled in-progress, \
          pickup.limit is 1\n",
     );
 }

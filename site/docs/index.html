@@ -957,7 +957,7 @@ thirdshift pickup base main no-merge   # run it on main, whatever branch the clo
 <ul>
 <li>The count is every open issue labelled <code>in-progress</code> in the repository, whoever started it: a Run you started by hand counts as one a Pickup run dispatched does. Closed issues don&#39;t count.</li>
 <li><code>pickup.limit</code> in the <a href="#user-config">User config</a> sets the limit, a whole number from 1 up, by default 3. Raise it on a machine where you review quickly; <code>limit = 1</code> takes one issue at a time. There is no command-line flag for it.</li>
-<li>At or over the limit, the pass is skipped: exit <code>0</code>, stdout empty, and the reason on stderr with the count and the limit, such as <code>at the Claim limit on acme/widgets: 3 open issue(s) labelled in-progress, pickup.limit is 3</code>. No Ready issue is looked for, and no session is started.</li>
+<li>At or over the limit, the pass is skipped: exit <code>0</code>, stdout empty, and the reason on stderr names every holding issue, lowest number first, along with the limit, such as <code>at the Claim limit on acme/widgets: #924, #936 and #953 are labelled in-progress, pickup.limit is 3</code>. No Ready issue is looked for, and no session is started.</li>
 <li>An issue leaves the count when it is closed, as merging its pull request does, or when you take its <code>in-progress</code> label off.</li>
 <li>If the issues can&#39;t be counted, the pass stops with exit <code>1</code> and <code>gh</code>&#39;s error.</li>
 </ul>

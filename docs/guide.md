@@ -1123,7 +1123,7 @@ A Pickup run takes nothing while the repository is at its **Claim limit**: as ma
 
 - The count is every open issue labelled `in-progress` in the repository, whoever started it: a Run you started by hand counts as one a Pickup run dispatched does. Closed issues don't count.
 - `pickup.limit` in the [User config](#user-config) sets the limit, a whole number from 1 up, by default 3. Raise it on a machine where you review quickly; `limit = 1` takes one issue at a time. There is no command-line flag for it.
-- At or over the limit, the pass is skipped: exit `0`, stdout empty, and the reason on stderr with the count and the limit, such as `at the Claim limit on acme/widgets: 3 open issue(s) labelled in-progress, pickup.limit is 3`. No Ready issue is looked for, and no session is started.
+- At or over the limit, the pass is skipped: exit `0`, stdout empty, and the reason on stderr names every holding issue, lowest number first, along with the limit, such as `at the Claim limit on acme/widgets: #924, #936 and #953 are labelled in-progress, pickup.limit is 3`. No Ready issue is looked for, and no session is started.
 - An issue leaves the count when it is closed, as merging its pull request does, or when you take its `in-progress` label off.
 - If the issues can't be counted, the pass stops with exit `1` and `gh`'s error.
 

@@ -52,11 +52,12 @@ pub enum Skipped {
     /// Another Pass on this repository is still
     /// running on this machine, the Spec run or Run it dispatched included.
     AlreadyRunning(AlreadyRunning),
-    /// The repository is at its Claim limit: `claimed` open issues carry a
-    /// Claim, and `limit` or more stop a Pickup run from taking another.
+    /// The repository is at its Claim limit: `claimed` lists the open
+    /// issues carrying a Claim, lowest number first, and `limit` or more
+    /// stop a Pickup run from taking another.
     AtClaimLimit {
         repo: Repo,
-        claimed: usize,
+        claimed: Vec<u64>,
         limit: NonZeroUsize,
     },
     /// The repository has no Ready issue.
@@ -73,13 +74,25 @@ impl fmt::Display for Skipped {
                 repo,
                 claimed,
                 limit,
-            } => write!(
-                f,
-                "at the Claim limit on {}: {claimed} open issue(s) labelled {}, \
-                 pickup.limit is {limit}",
-                repo.slug(),
-                claim::IN_PROGRESS
-            ),
+            } => {
+                write!(f, "at the Claim limit on {}: ", repo.slug())?;
+                for (index, number) in claimed.iter().enumerate() {
+                    let separator = if index == 0 {
+                        ""
+                    } else if index == claimed.len() - 1 {
+                        " and "
+                    } else {
+                        ", "
+                    };
+                    write!(f, "{separator}#{number}")?;
+                }
+                let verb = if claimed.len() == 1 { "is" } else { "are" };
+                write!(
+                    f,
+                    " {verb} labelled {}, pickup.limit is {limit}",
+                    claim::IN_PROGRESS
+                )
+            }
             Self::NoReadyIssue(repo) => write!(f, "no Ready issue on {}", repo.slug()),
             Self::IssueUnavailable(issue) => write!(
                 f,
@@ -224,8 +237,13 @@ enum Decision {
 /// none. No gate is read once one skips.
 fn gates(outside: &mut impl Outside, repo: &Repo, limit: NonZeroUsize) -> Result<Decision> {
     sweep(outside);
-    let claimed = outside.open_issues(claim::IN_PROGRESS)?.len();
-    if claimed >= limit.get() {
+    let mut claimed: Vec<_> = outside
+        .open_issues(claim::IN_PROGRESS)?
+        .into_iter()
+        .map(|listed| listed.issue.number)
+        .collect();
+    if claimed.len() >= limit.get() {
+        claimed.sort_unstable();
         return Ok(Decision::Skip(Skipped::AtClaimLimit {
             repo: repo.clone(),
             claimed,
@@ -446,7 +464,7 @@ mod tests {
         assert_eq!(
             decided,
             Err(
-                "at the Claim limit on acme/widgets: 2 open issue(s) labelled in-progress, \
+                "at the Claim limit on acme/widgets: #4 and #5 are labelled in-progress, \
                  pickup.limit is 2"
                     .to_string()
             )
@@ -455,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn over_the_claim_limit_the_pass_is_skipped_naming_the_count() {
+    fn over_the_claim_limit_the_pass_is_skipped_naming_every_holder() {
         let repo = InMemory::default()
             .issue(4, true, &["in-progress"])
             .issue(5, true, &["in-progress"])
@@ -467,7 +485,7 @@ mod tests {
         assert_eq!(
             decided,
             Err(
-                "at the Claim limit on acme/widgets: 3 open issue(s) labelled in-progress, \
+                "at the Claim limit on acme/widgets: #4, #5 and #6 are labelled in-progress, \
                  pickup.limit is 2"
                     .to_string()
             )
@@ -548,7 +566,7 @@ mod tests {
                 CLOSED,
                 CLAIMED,
                 Call::Skipped(
-                    "at the Claim limit on acme/widgets: 3 open issue(s) labelled in-progress, \
+                    "at the Claim limit on acme/widgets: #4, #5 and #6 are labelled in-progress, \
                      pickup.limit is 3"
                         .to_string()
                 ),

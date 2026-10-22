@@ -216,6 +216,49 @@ fn the_first_skip_on_a_repository_creates_its_folder_and_repeated_skips_write_on
 }
 
 #[test]
+fn a_claim_limit_skip_is_recorded_again_only_when_its_holders_change() {
+    let scenario = Scenario::new();
+    for number in [6, 4, 5] {
+        scenario.issue_is(number, "OPEN");
+        scenario.issue_labelled(number, &["in-progress"]);
+    }
+
+    for _ in 0..2 {
+        let result = run_in_zone(&scenario, &["pickup"]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+    }
+    // Keep the count unchanged while handing the Claim on #4 back.
+    scenario.issue_labelled(4, &[]);
+    scenario.issue_is(8, "OPEN");
+    scenario.issue_labelled(8, &["in-progress"]);
+    for _ in 0..2 {
+        let result = run_in_zone(&scenario, &["pickup"]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+    }
+
+    assert_eq!(
+        activity(&scenario),
+        [
+            "Pickup run skipped: at the Claim limit on acme/widgets: #4, #5 and #6 are \
+             labelled in-progress, pickup.limit is 3",
+            "Pickup run skipped: at the Claim limit on acme/widgets: #5, #6 and #8 are \
+             labelled in-progress, pickup.limit is 3",
+        ]
+    );
+    let result = scenario.run(&["status", "--json"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let status: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(
+        status["idle_passes"],
+        serde_json::json!([{
+            "repository": "acme/widgets",
+            "kind": "Pickup run",
+            "reason": "at the Claim limit on acme/widgets: #5, #6 and #8 are labelled in-progress, pickup.limit is 3",
+        }])
+    );
+}
+
+#[test]
 fn a_skip_because_another_pass_is_running_is_recorded_like_any_other() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7);
