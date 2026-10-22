@@ -1556,7 +1556,12 @@ fn an_unusable_security_harness_falls_back_at_preflight_to_the_defaults_model_an
     // Claude refuses the test call on its Model.
     scenario.agent_does("echo \"There's an issue with the selected model.\"\nexit 1\n");
     let result = scenario.run(&[
-        &scenario.issue_url(7), "security-review", "model", "gpt-5.5", "effort", "medium",
+        &scenario.issue_url(7),
+        "security-review",
+        "model",
+        "gpt-5.5",
+        "effort",
+        "medium",
     ]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert!(

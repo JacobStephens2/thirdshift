@@ -5,18 +5,38 @@ use std::os::unix::process::ExitStatusExt;
 fn a_failed_harness_result_distinguishes_startup_errors_from_observed_work() {
     for harness in [Harness::Claude, Harness::Grok] {
         for (prefix, startup) in [
-            (r#"{"type":"system","subtype":"init","session_id":"s"}"#, true),
-            (r#"{"type":"result","subtype":"success","num_turns":1}"#, false),
-            (r#"{"type":"result","subtype":"success","usage":{"input_tokens":1}}"#, false),
-            (r#"{"type":"result","subtype":"success","usage":{"cache_read_input_tokens":1}}"#, false),
-            (r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Checking."}]}}"#, false),
-            (r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"true"}}]}}"#, false),
+            (
+                r#"{"type":"system","subtype":"init","session_id":"s"}"#,
+                true,
+            ),
+            (
+                r#"{"type":"result","subtype":"success","num_turns":1}"#,
+                false,
+            ),
+            (
+                r#"{"type":"result","subtype":"success","usage":{"input_tokens":1}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"result","subtype":"success","usage":{"cache_read_input_tokens":1}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Checking."}]}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"true"}}]}}"#,
+                false,
+            ),
         ] {
             let mut interpretation = stream(harness, "");
             interpretation.condense(prefix);
             interpretation.condense(r#"{"type":"result","subtype":"error_during_execution","num_turns":0,"usage":{"input_tokens":0,"output_tokens":0},"errors":["Harness failed."]}"#);
             let error = finish(interpretation).outcome.unwrap_err();
-            let failure = error.downcast_ref::<interpretation::SessionFailure>().unwrap();
+            let failure = error
+                .downcast_ref::<interpretation::SessionFailure>()
+                .unwrap();
             assert_eq!(failure.before_first_turn, startup, "{harness:?}: {prefix}");
         }
     }
