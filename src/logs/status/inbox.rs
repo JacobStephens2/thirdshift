@@ -315,7 +315,13 @@ fn row(
         log_growth: format!(
             "{}:{}",
             log_length(Some(log)),
-            log_length(facts.session_log.as_deref())
+            log_length(
+                facts
+                    .session_log
+                    .as_deref()
+                    .map(crate::logs::session::path)
+                    .as_deref()
+            )
         ),
         selector: Observation::Record(command).selector().unwrap_or_default(),
         logs_url: logs_url(&command.record_path, root),

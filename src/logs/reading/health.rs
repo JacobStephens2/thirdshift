@@ -184,7 +184,12 @@ pub(super) fn observe(
             // A newly entered stage cannot already be Silent. Missing logs use
             // its start time, rather than inventing activity at read time.
             let mut quiet = stage.age_seconds as u64;
-            for path in std::iter::once(log).chain(command.record.session_log.as_deref()) {
+            let session = command
+                .record
+                .session_log
+                .as_deref()
+                .map(crate::logs::session::path);
+            for path in std::iter::once(log).chain(session.as_deref()) {
                 if let Ok(modified) = std::fs::metadata(path).and_then(|file| file.modified()) {
                     quiet = quiet.min(
                         now.signed_duration_since(DateTime::<Local>::from(modified))
