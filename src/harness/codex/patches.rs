@@ -114,27 +114,22 @@ impl Retained for Completion {
 /// search unrelated homes; ambiguous matching files supply no evidence.
 fn find(root: &Path, id: &str, depth: usize) -> Option<PathBuf> {
     let mut found = None;
-    for entry in fs::read_dir(root).ok()?.filter_map(Result::ok) {
-        let kind = entry.file_type().ok()?;
-        let path = entry.path();
-        let candidate = if kind.is_dir() && depth > 0 {
-            find(&path, id, depth - 1)
-        } else if kind.is_file()
-            && entry.file_name().to_str()?.starts_with("rollout-")
-            && entry
-                .file_name()
-                .to_str()?
-                .ends_with(&format!("-{id}.jsonl"))
-        {
-            Some(path)
-        } else {
-            None
-        };
-        if let Some(candidate) = candidate {
-            if found.is_some() {
-                return None;
+    let suffix = format!("-{id}.jsonl");
+    let mut pending = vec![(root.to_owned(), depth)];
+    while let Some((folder, depth)) = pending.pop() {
+        for entry in fs::read_dir(folder).ok()?.filter_map(Result::ok) {
+            let kind = entry.file_type().ok()?;
+            if kind.is_dir() && depth > 0 {
+                pending.push((entry.path(), depth - 1));
+            } else if kind.is_file()
+                && entry.file_name().to_str()?.starts_with("rollout-")
+                && entry.file_name().to_str()?.ends_with(&suffix)
+            {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some(entry.path());
             }
-            found = Some(candidate);
         }
     }
     found

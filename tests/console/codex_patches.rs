@@ -181,7 +181,10 @@ fn mismatched_or_unavailable_native_files_leave_every_edit_unchanged() {
                 json!({"other.rs":{"type":"update","unified_diff":SECOND}}),
             ])),
         ),
-        ("wrong count", native_setup(&native(&[a.clone()]))),
+        (
+            "wrong count",
+            native_setup(&native(std::slice::from_ref(&a))),
+        ),
         (
             "wrong thread",
             native_setup(&valid.replace("fake-thread-1", "another-thread")),
@@ -280,4 +283,26 @@ fn a_custom_codex_home_supplies_only_the_latest_turn_and_matches_absolute_paths(
     assert_eq!(amended.len(), 1);
     assert_eq!(amended[0]["result"]["changes"][0]["diff"], SECOND);
     assert!(!scenario.path("home/.codex").exists());
+}
+
+#[test]
+fn ambiguous_native_files_in_different_date_folders_supply_no_diff() {
+    let scenario = support::Scenario::new();
+    let retained = native(&[json!({"widgets.rs":{"type":"update","unified_diff":FIRST}})]);
+    let setup = format!(
+        r#"{}
+mkdir -p "$HOME/.codex/sessions/2026/10/22"
+cp "$HOME/.codex/sessions/2026/10/21/rollout-2026-10-21T12-00-00-fake-thread-1.jsonl" "$HOME/.codex/sessions/2026/10/22/rollout-first-fake-thread-1.jsonl"
+cp "$HOME/.codex/sessions/2026/10/21/rollout-2026-10-21T12-00-00-fake-thread-1.jsonl" "$HOME/.codex/sessions/2026/10/22/rollout-second-fake-thread-1.jsonl"
+"#,
+        native_setup(&retained)
+    );
+    run_with_setup(
+        &scenario,
+        &setup,
+        &[json!([{"path":"widgets.rs","kind":"update"}])],
+        &[],
+    );
+    assert!(amendments(&trace(&scenario)).is_empty());
+    assert!(page(&scenario).contains("Patch unavailable in this log."));
 }
