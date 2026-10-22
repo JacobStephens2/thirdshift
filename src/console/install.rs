@@ -72,11 +72,20 @@ pub fn install() -> Result<String> {
     let mode = if proxy.is_none() { " --no-sign-in" } else { "" };
     let environment = unit_word(&format!("HOME={}", path_text(&home)?))?;
     let executable = unit_word(path_text(&binary)?)?;
+    let mut preflight = String::new();
     let (site, finish) = if let Some(proxy) = proxy {
         let host = config.console.hostname()?;
         ensure!(
             !config.console.allowed_emails.is_empty(),
             "set console.allowed_emails before installing a public Console"
+        );
+        preflight = format!(
+            r#"if ! getent hosts '{host}' >/dev/null 2>&1; then
+    printf '%s\n' '{host} has no DNS record. Add an A or AAAA record pointing at this server, then run this script again.' >&2
+    exit 1
+fi
+
+"#
         );
         match proxy {
             Proxy::Caddy => (
@@ -99,7 +108,7 @@ pub fn install() -> Result<String> {
 # Read this script, then run it with sudo sh.
 set -eu
 
-cat > /etc/systemd/system/thirdshift-console.service <<'THIRDSHIFT_UNIT'
+{preflight}cat > /etc/systemd/system/thirdshift-console.service <<'THIRDSHIFT_UNIT'
 [Unit]
 Description=thirdshift Console
 After=network.target

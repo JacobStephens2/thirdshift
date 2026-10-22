@@ -269,6 +269,12 @@ If you use Rust, you can install it from crates.io instead:
 cargo install thirdshift
 ```
 
+### Console installation
+
+On Linux, `thirdshift console install` prints a script to read and run with sudo; `--output install-console.sh` saves it instead. For Caddy or Apache (Debian's `apache2` or Red Hat's `httpd`), the script first checks the configured Console address through the system resolver with `getent hosts`. If the name doesn't resolve, it exits before writing files, enabling services or restarting anything, and asks you to add an A or AAAA record pointing at this server and run the script again. It doesn't check whether the address points at this machine. Once the name resolves, installation continues with the Console's systemd service, proxy site and HTTPS certificate.
+
+With neither proxy, the script installs a localhost-only service and prints an SSH tunnel command, without checking an address. See the [Console setup instructions](../README.md#console-on-a-server) for settings and proxy prerequisites.
+
 ### Updating
 
 ```sh

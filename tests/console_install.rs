@@ -77,6 +77,134 @@ impl Machine {
         );
         script
     }
+
+    fn run_script(&self, script: &str) -> Output {
+        // Run the whole printed script without touching the host's /etc or services.
+        let script = script.replace("/etc/", &format!("{}/", self.path("etc").display()));
+        let path = self.path("run-install.sh");
+        fs::write(&path, script).unwrap();
+        fs::create_dir_all(self.path("etc/systemd/system")).unwrap();
+        for tool in ["cat", "mkdir", "grep"] {
+            std::os::unix::fs::symlink(
+                format!("/usr/bin/{tool}"),
+                self.path(&format!("bin/{tool}")),
+            )
+            .unwrap();
+        }
+        for tool in [
+            "systemctl",
+            "caddy",
+            "apache2ctl",
+            "httpd",
+            "a2enmod",
+            "a2ensite",
+            "certbot",
+        ] {
+            self.tool(tool, "printf '%s\\n' \"$0 $*\" >> actions");
+        }
+        Command::new("/bin/sh")
+            .arg(path)
+            .current_dir(self.root.path())
+            .env("PATH", self.path("bin"))
+            .output()
+            .unwrap()
+    }
+}
+
+#[test]
+fn unresolved_console_address_stops_proxy_installation_before_any_changes() {
+    for proxy in ["caddy", "apache2ctl", "httpd"] {
+        let machine = Machine::new();
+        machine.tool(proxy, "exit 0");
+        machine.tool("systemctl", "exit 1");
+        machine.configure("https://missing.example.invalid", 9123);
+        let script = machine.script();
+        machine.tool(
+            "getent",
+            "printf '%s\\n' \"$*\" > lookup\nprintf 'resolver noise\\n'\nexit 2",
+        );
+
+        let output = machine.run_script(&script);
+
+        assert!(!output.status.success(), "{proxy} installed without DNS");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stderr),
+            "missing.example.invalid has no DNS record. Add an A or AAAA record pointing at this server, then run this script again.\n",
+            "{proxy}"
+        );
+        assert!(output.stdout.is_empty(), "{proxy}: {output:?}");
+        assert_eq!(
+            fs::read_to_string(machine.path("lookup")).unwrap(),
+            "hosts missing.example.invalid\n"
+        );
+        assert!(!machine.path("actions").exists(), "{proxy} ran a command");
+        assert_eq!(
+            fs::read_dir(machine.path("etc/systemd/system"))
+                .unwrap()
+                .count(),
+            0,
+            "{proxy} wrote the unit"
+        );
+        for directory in ["etc/caddy", "etc/apache2", "etc/httpd"] {
+            assert!(!machine.path(directory).exists(), "{proxy} wrote its site");
+        }
+    }
+}
+
+#[test]
+fn resolving_console_address_continues_proxy_installation() {
+    for (proxy, service, site) in [
+        ("caddy", "caddy", "etc/caddy/sites/thirdshift-console.caddy"),
+        (
+            "apache2ctl",
+            "apache2",
+            "etc/apache2/sites-available/thirdshift-console.conf",
+        ),
+        ("httpd", "httpd", "etc/httpd/conf.d/thirdshift-console.conf"),
+    ] {
+        for address in ["203.0.113.10", "2001:db8::10"] {
+            let machine = Machine::new();
+            machine.tool(proxy, "exit 0");
+            machine.tool("systemctl", "exit 1");
+            machine.configure("https://ready.example.test/", 9123);
+            let script = machine.script();
+            machine.tool(
+                "getent",
+                &format!(
+                    "printf '%s\\n' \"$*\" > lookup\nprintf '{address} ready.example.test\\n'"
+                ),
+            );
+            fs::create_dir_all(machine.path("etc/caddy")).unwrap();
+            fs::write(machine.path("etc/caddy/Caddyfile"), "# Existing sites\n").unwrap();
+
+            let output = machine.run_script(&script);
+
+            assert!(output.status.success(), "{proxy}, {address}: {output:?}");
+            assert!(output.stdout.is_empty(), "{proxy}, {address}: {output:?}");
+            assert!(output.stderr.is_empty(), "{proxy}, {address}: {output:?}");
+            assert_eq!(
+                fs::read_to_string(machine.path("lookup")).unwrap(),
+                "hosts ready.example.test\n"
+            );
+            assert!(
+                machine
+                    .path("etc/systemd/system/thirdshift-console.service")
+                    .is_file()
+            );
+            assert!(machine.path(site).is_file());
+            let actions = fs::read_to_string(machine.path("actions")).unwrap();
+            assert!(
+                actions.contains(&format!("systemctl restart {service}\n")),
+                "{actions}"
+            );
+            if proxy != "caddy" {
+                assert!(
+                    actions.contains("certbot --apache -d ready.example.test\n"),
+                    "{actions}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -165,6 +293,7 @@ fn without_a_proxy_the_service_and_ssh_tunnel_work_without_an_address_or_account
     assert!(script.contains("ssh -N -L 9123:127.0.0.1:9123"), "{script}");
     assert!(script.contains("http://localhost:9123"), "{script}");
     assert!(!script.contains("certbot"), "{script}");
+    assert!(!script.contains("getent"), "{script}");
     assert!(!script.contains("/etc/caddy"), "{script}");
     assert!(!script.contains("/etc/apache2"), "{script}");
 }
