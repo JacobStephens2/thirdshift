@@ -197,6 +197,7 @@ impl Decoder for CodexProgress {
             evidence.push(Evidence::SafeguardRefusal(SafeguardRefusal::CodexCyber));
         }
         StreamUpdate {
+            events: Vec::new(),
             progress: self.progress(&event),
             evidence,
         }

@@ -1,4 +1,5 @@
 //! OpenCode: private standalone sessions, stdin prompts and an authoritative export.
+mod events;
 pub(super) mod export;
 mod stream;
 

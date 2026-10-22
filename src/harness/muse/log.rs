@@ -8,9 +8,11 @@ use std::path::{Path, PathBuf};
 
 #[derive(Default)]
 pub(in crate::harness) struct SessionLog {
+    pub(in crate::harness) events: Vec<crate::harness::interpretation::event::Event>,
     pub(in crate::harness) message: Option<String>,
     pub(in crate::harness) models: Vec<String>,
     tokens: Option<Tokens>,
+    decoder: super::events::Events,
 }
 
 #[derive(Default)]
@@ -43,6 +45,10 @@ impl SessionLog {
             return;
         }
         let event = &record["payload"]["event"];
+        crate::harness::interpretation::event::reconcile(
+            &mut self.events,
+            self.decoder.record(record),
+        );
         match event["kind"].as_str() {
             Some("assistant_message_committed") => {
                 self.message = event["text"].as_str().map(String::from);
@@ -130,6 +136,7 @@ impl Retained for Completion {
                 facts.ended.final_message = log.message;
             }
             facts.report.models = log.models;
+            crate::harness::interpretation::event::reconcile(&mut facts.report.events, log.events);
         }
         facts.report.set_model_progress();
         Ok(())
@@ -143,4 +150,69 @@ pub(in crate::harness) fn recording_interpretation(
 ) -> crate::harness::interpretation::Interpretation {
     crate::harness::interpretation::Interpretation::new("claude", decoder)
         .with_retained(Box::new(Completion::new(Some(root.to_path_buf()))))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::harness::interpretation::event::{Kind, Usage};
+    use serde_json::json;
+    use std::os::unix::process::ExitStatusExt;
+
+    #[test]
+    fn normalized_muse_retained_transactions_enrich_live_calls_without_duplicating_usage() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("sessions/2026/10/06/s");
+        fs::create_dir_all(&folder).unwrap();
+        let record = |event| json!({"stream":{"id":"s"},"recorded_at":4000,"payload":{"kind":"run","run_id":"r","event":event}});
+        let records = [
+            record(json!({"kind":"proposed","task_id":"m1","task_kind":"model.meta.response"})),
+            record(json!({"kind":"started","task_id":"m1"})),
+            record(
+                json!({"kind":"model_completed","model":"muse-spark-1.3","duration_ms":10,"usage":{"input_tokens":100,"output_tokens":12,"cached_tokens":80,"cache_write_tokens":5,"reasoning_tokens":2}}),
+            ),
+            record(json!({"kind":"completed","task_id":"m1"})),
+            record(
+                json!({"kind":"assistant_message_committed","message_id":"reply","text":"retained reply"}),
+            ),
+            json!({"stream":{"id":"foreign"},"payload":{"kind":"run","event":{"kind":"model_completed","usage":{"input_tokens":999999}}}}),
+        ];
+        fs::write(folder.join("session.jsonl"), json!({"children":records.iter().map(|record| json!({"record_json":record.to_string()})).collect::<Vec<_>>()} ).to_string()).unwrap();
+        let mut interpretation = recording_interpretation(
+            root.path(),
+            Box::new(super::super::stream::MuseProgress::default()),
+        );
+        for line in include_str!("../../../tests/fixtures/normalized-muse.jsonl").lines() {
+            interpretation.condense(line);
+        }
+        let events = interpretation
+            .finish(Ok(std::process::ExitStatus::from_raw(0)))
+            .report
+            .unwrap()
+            .events;
+        let ends: Vec<_> = events
+            .iter()
+            .filter(|event| matches!(event.kind, Kind::ModelEnded { .. }))
+            .collect();
+        assert_eq!(ends.len(), 1);
+        assert_eq!(ends[0].id, "r:m1");
+        assert_eq!(
+            ends[0].kind,
+            Kind::ModelEnded {
+                model: Some("muse-spark-1.3".into()),
+                usage: Usage {
+                    input: Some(100),
+                    output: Some(12),
+                    cache_read: Some(80),
+                    cache_write: Some(5),
+                    reasoning: Some(2),
+                    cost: None
+                },
+                failed: false
+            }
+        );
+        assert!(events.iter().any(
+            |event| matches!(&event.kind, Kind::Message { text, .. } if text == "retained reply")
+        ));
+    }
 }

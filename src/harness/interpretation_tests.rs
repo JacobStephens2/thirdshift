@@ -704,6 +704,71 @@ fn with_opencode_export(test: &str, run: impl FnOnce(&Path)) {
 }
 
 #[test]
+fn normalized_opencode_export_recovers_missing_calls_and_enriches_live_calls_in_order() {
+    with_opencode_export(
+        "normalized_opencode_export_recovers_missing_calls_and_enriches_live_calls_in_order",
+        |root| {
+            use interpretation::event::{Kind, Usage};
+            std::fs::write(
+                root.join("export.json"),
+                include_str!("../../tests/fixtures/normalized-opencode-export.json"),
+            )
+            .unwrap();
+            let mut interpretation = Harness::OpenCode.adapter().interpretation(root, "");
+            for line in include_str!("../../tests/fixtures/normalized-opencode.jsonl").lines() {
+                interpretation.condense(line);
+            }
+            let completion = finish(interpretation);
+            assert_eq!(
+                completion.outcome.unwrap().final_message.as_deref(),
+                Some("last reply")
+            );
+            let events = completion.report.unwrap().events;
+            let starts: Vec<_> = events
+                .iter()
+                .filter(|event| matches!(event.kind, Kind::ModelStarted { .. }))
+                .map(|event| event.id.as_str())
+                .collect();
+            assert_eq!(starts, ["s:m0", "s:m1", "s:m2"]);
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event.kind, Kind::ToolStarted { .. }))
+                    .count(),
+                1
+            );
+            assert_eq!(
+                events
+                    .iter()
+                    .filter(|event| matches!(event.kind, Kind::ToolEnded { .. }))
+                    .count(),
+                1
+            );
+            let ends: Vec<_> = events
+                .iter()
+                .filter_map(|event| match &event.kind {
+                    Kind::ModelEnded { usage, .. } => Some(usage),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(ends.len(), 3);
+            assert_eq!(
+                *ends[2],
+                Usage {
+                    input: Some(13),
+                    output: Some(4),
+                    cache_read: Some(2),
+                    cache_write: Some(1),
+                    cost: Some(0.01),
+                    ..Usage::default()
+                }
+            );
+            assert!(events.iter().filter(|event| matches!(event.kind, Kind::ModelEnded { .. })).all(|event| matches!(&event.kind, Kind::ModelEnded { model: Some(model), .. } if model == "p/m")));
+        },
+    );
+}
+
+#[test]
 fn opencode_completion_reports_retained_model_order_and_multiplicity() {
     with_opencode_export(
         "opencode_completion_reports_retained_model_order_and_multiplicity",

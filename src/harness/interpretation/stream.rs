@@ -267,6 +267,7 @@ impl Decoder for Stream {
         StreamUpdate {
             progress: self.progress(&event),
             evidence,
+            events: Vec::new(),
         }
     }
 
