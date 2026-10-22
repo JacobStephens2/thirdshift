@@ -1,0 +1,36 @@
+<!doctype html>
+<!-- PROTOTYPE (#995), throwaway. Four span-tree layouts (?variant=A–D) and three
+     Peek layouts (?details=1–3) on a copy of the Waterfall page, over real
+     Session traces from fixture.js. Not served by the Console; see README.md. -->
+<html lang="en" data-theme="focus-auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Span tree prototype · thirdshift</title>
+  <link rel="stylesheet" href="/assets/console.css">
+  <link rel="stylesheet" href="prototype.css">
+  <script src="fixture.js"></script>
+  <script src="prototype.js" defer></script>
+</head>
+<body>
+  <header><p class="brand">thirdshift / Console</p><h1>thirdshift</h1></header>
+  <nav aria-label="Pages"><a href="#">1 Inbox</a><a href="#">2 Lanes</a><a href="#">3 Stages</a><a href="#" aria-current="page">4 Waterfall</a><a href="#">5 History</a><a href="#">6 Logs</a><a href="#">7 Security</a><a href="#">8 Cron jobs</a><a href="#">Console log</a><a href="#">Account</a></nav>
+  <main data-time-page>
+    <div class="page-title"><h2>Waterfall</h2><code id="page-cli">thirdshift show &lt;command&gt; --json · thirdshift logs &lt;command&gt;</code></div>
+    <nav class="command-chips" aria-label="Choose a Command" id="chips"></nav>
+    <div id="variant-root"></div>
+  </main>
+  <aside id="peek" hidden aria-label="Peek"><button type="button" data-close-peek>Close details (Esc)</button><div id="peek-content" aria-live="polite"></div></aside>
+  <div id="proto-bar" role="toolbar" aria-label="Prototype switcher (not part of the design)">
+    <button type="button" data-step="variant" data-dir="-1" aria-label="Previous tree layout">←</button>
+    <span id="proto-variant"></span>
+    <button type="button" data-step="variant" data-dir="1" aria-label="Next tree layout">→</button>
+    <span class="proto-sep"></span>
+    <button type="button" data-step="details" data-dir="-1" aria-label="Previous details layout">‹</button>
+    <span id="proto-details"></span>
+    <button type="button" data-step="details" data-dir="1" aria-label="Next details layout">›</button>
+    <span class="proto-sep"></span>
+    <button type="button" id="proto-phone" aria-pressed="false">390 px</button>
+  </div>
+</body>
+</html>
