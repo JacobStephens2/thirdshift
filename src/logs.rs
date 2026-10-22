@@ -13,6 +13,7 @@
 
 mod activity;
 mod command_record;
+pub(crate) mod convert;
 mod effects;
 pub mod export;
 pub(crate) mod owner;

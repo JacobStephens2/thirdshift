@@ -94,7 +94,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift show <command> [--json]             Show one Command in full
        thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
        thirdshift logs [--command <id>] [--json]      List this machine's logs
-       thirdshift logs --file <id> [--follow]         Read an exact listed log
+       thirdshift logs --file <id> [--follow]         Read a log; --convert / --remove-converted migrate old Sessions
        thirdshift logs <command> [--session <kind>] [--follow]  Read a log; --export <dir> writes its whole Trace
        thirdshift update                              Update to the latest release
        thirdshift version                             Print the version
@@ -203,6 +203,12 @@ fn main() -> ExitCode {
         }
         Ok(Command::Show { command, json }) => {
             return match logs::status::inspect::show(&command, json) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::LogsConvert { remove }) => {
+            return match logs::convert::run(remove) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };

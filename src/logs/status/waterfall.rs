@@ -1,5 +1,5 @@
 //! A Command tree on one time axis, derived from show facts and retained logs.
-mod matching;
+pub(in crate::logs) mod matching;
 mod trace;
 
 use anyhow::Result;
@@ -49,10 +49,23 @@ pub(crate) struct Tool {
     pub url: String,
 }
 
-struct Call {
-    label: String,
-    start: Option<Time>,
-    end: Option<Time>,
+#[derive(PartialEq)]
+pub(in crate::logs) struct Call {
+    pub(in crate::logs) label: String,
+    pub(in crate::logs) start: Option<Time>,
+    pub(in crate::logs) end: Option<Time>,
+}
+
+pub(in crate::logs) fn session_calls(
+    session: &std::path::Path,
+    command: &Command,
+    relays: &[u64],
+    log: &mut matching::Log,
+) -> Result<(Vec<Call>, bool)> {
+    Ok(match trace::calls(session)? {
+        Some(calls) => (calls, true),
+        None => (matching::calls(session, command, relays, log)?, false),
+    })
 }
 
 pub(crate) struct Span {
@@ -171,12 +184,7 @@ fn collect(
         })
         .collect();
     for session in Observation::Record(command).sessions()? {
-        let traced = trace::calls(&session)?;
-        let measured = traced.is_some();
-        let calls = match traced {
-            Some(calls) => calls,
-            None => matching::calls(&session, command, relays, log)?,
-        };
+        let (calls, measured) = session_calls(&session, command, relays, log)?;
         for (index, call) in calls.iter().enumerate() {
             let stage = if measured {
                 call.start.and_then(|start| {

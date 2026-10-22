@@ -48,13 +48,18 @@ impl Completion {
             return None;
         }
         let path = find(&self.root.as_ref()?.join("sessions"), id, 3)?;
-        let patches = read(&fs::read_to_string(path).ok()?, id)?;
-        if edits.len() != patches.len() {
+        let native = read(&fs::read_to_string(path).ok()?, id)?;
+        let directory = if self.worktree.as_os_str().is_empty() {
+            native.directory.as_deref().unwrap_or(&self.worktree)
+        } else {
+            &self.worktree
+        };
+        if edits.len() != native.patches.len() {
             return None;
         }
         edits
             .into_iter()
-            .zip(patches)
+            .zip(native.patches)
             .map(|(event, patch)| {
                 let Event::ToolCallEnded { input, .. } = event else {
                     return None;
@@ -66,13 +71,13 @@ impl Completion {
                 }
                 let native: BTreeMap<_, _> = native
                     .iter()
-                    .map(|(path, change)| (self.absolute(path), change))
+                    .map(|(path, change)| (directory.join(path), change))
                     .collect();
                 let mut diffs = Vec::new();
                 let mut matched = BTreeMap::new();
                 for change in changes {
                     let path = change["path"].as_str()?;
-                    let absolute = self.absolute(path);
+                    let absolute = directory.join(path);
                     let retained = native.get(&absolute)?;
                     if change["kind"].as_str()? != retained["type"].as_str()?
                         || matched.insert(absolute, ()).is_some()
@@ -94,10 +99,6 @@ impl Completion {
                 Some(amended)
             })
             .collect()
-    }
-
-    fn absolute(&self, path: &str) -> PathBuf {
-        self.worktree.join(path)
     }
 }
 
@@ -137,7 +138,12 @@ fn find(root: &Path, id: &str, depth: usize) -> Option<PathBuf> {
 
 /// A Resume shares its thread's file with earlier turns. Only the latest
 /// turn can amend this process's streamed edits; never search ahead by path.
-fn read(text: &str, id: &str) -> Option<Vec<Value>> {
+struct Native {
+    directory: Option<PathBuf>,
+    patches: Vec<Value>,
+}
+
+fn read(text: &str, id: &str) -> Option<Native> {
     let mut records = text.lines().filter(|line| !line.trim().is_empty());
     let meta: Value = serde_json::from_str(records.next()?).ok()?;
     if meta["type"] != "session_meta" || meta["payload"]["id"] != id {
@@ -155,7 +161,13 @@ fn read(text: &str, id: &str) -> Option<Vec<Value>> {
             _ => {}
         }
     }
-    Some(patches)
+    Some(Native {
+        directory: meta["payload"]["cwd"]
+            .as_str()
+            .map(PathBuf::from)
+            .filter(|path| path.is_absolute()),
+        patches,
+    })
 }
 
 fn diff(path: &str, change: &Value) -> Option<String> {

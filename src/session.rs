@@ -27,7 +27,7 @@ use crate::skills;
 pub mod kind;
 pub mod recording;
 mod review_reports;
-mod trace;
+pub(crate) mod trace;
 use review_reports::ReviewReports;
 
 pub use kind::{Kind, Logged};

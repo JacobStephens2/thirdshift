@@ -65,16 +65,31 @@ fn timestamp(nanos: u64) -> Option<Time> {
 }
 
 pub(super) fn calls(session: &Path) -> Result<Option<Vec<Call>>> {
-    let session = match session
-        .file_name()
-        .and_then(|name| name.to_str())
-        .and_then(|name| name.strip_suffix(".logs.jsonl"))
-    {
-        Some(stem) => session.with_file_name(format!("{stem}.jsonl")),
-        None => session.to_owned(),
-    };
+    let session = crate::logs::session::original(session);
     let spans = read::<Spans>(&session.with_extension("spans.jsonl"))?;
     let logs = read::<Logs>(&session.with_extension("logs.jsonl"))?;
+    // Historical conversions retain the old Waterfall's scoped Command-log
+    // estimates. Their spans are useful to exporters, but aren't measurements.
+    if spans.as_ref().is_some_and(|requests| {
+        requests
+            .iter()
+            .flat_map(|r| &r.resource_spans)
+            .filter_map(|r| r.resource.as_ref())
+            .any(|r| attribute(&r.attributes, "thirdshift.migration") == Some("legacy"))
+    }) || logs.as_ref().is_some_and(|requests| {
+        requests
+            .iter()
+            .flat_map(|r| &r.resource_logs)
+            .flat_map(|r| &r.scope_logs)
+            .flat_map(|s| &s.log_records)
+            .any(|r| {
+                r.attributes
+                    .iter()
+                    .any(|a| a.key == "thirdshift.migration.original")
+            })
+    }) {
+        return Ok(None);
+    }
     if spans.is_none() && logs.is_none() {
         return Ok(None);
     }

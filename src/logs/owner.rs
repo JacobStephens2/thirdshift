@@ -309,7 +309,7 @@ pub(super) fn evidenced_log(session: &Path) -> Option<PathBuf> {
     struct Evidence {
         command_log: Option<PathBuf>,
     }
-    let bytes = fs::read(session.with_extension("models.json")).ok()?;
+    let bytes = fs::read(super::session::original(session).with_extension("models.json")).ok()?;
     serde_json::from_slice::<Evidence>(&bytes).ok()?.command_log
 }
 

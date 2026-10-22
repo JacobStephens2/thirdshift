@@ -162,8 +162,13 @@ impl<'a> Observation<'a> {
             Self::Record(command) => {
                 let mut paths = Vec::new();
                 for path in command.record.session_references() {
-                    if !paths.contains(path) {
-                        paths.push(path.clone());
+                    let path = if path.exists() {
+                        path.clone()
+                    } else {
+                        crate::logs::session::path(path)
+                    };
+                    if !paths.contains(&path) {
+                        paths.push(path);
                     }
                 }
                 (
@@ -369,6 +374,13 @@ fn latest_event(command: &Command) -> Option<String> {
     }
     let events = crate::logs::session::tail_events(command.record.session_log.as_ref()?).ok()?;
     let harness = crate::harness::Harness::named(&command.record.harness)?;
+    latest_session_event(&events, harness)
+}
+
+pub(in crate::logs) fn latest_session_event(
+    events: &[String],
+    harness: crate::harness::Harness,
+) -> Option<String> {
     let mut stream = harness.adapter().interpretation(Path::new(""), "");
     let event = events
         .iter()

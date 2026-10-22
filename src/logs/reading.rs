@@ -23,6 +23,7 @@ use super::{Pass, activity};
 pub(super) use health::{Health, UsualRange};
 pub(super) use history::Command as HistoricalCommand;
 pub(super) use inbox::{Group, InboxItem};
+pub(in crate::logs) use selection::latest_session_event;
 pub(super) use selection::{Detailed, Observation};
 
 pub(super) struct Snapshot {
@@ -173,7 +174,11 @@ pub(super) struct CurrentStage {
 }
 
 impl Command {
-    fn new(record: CommandRecord, record_path: PathBuf, now: DateTime<Local>) -> Self {
+    pub(in crate::logs) fn new(
+        record: CommandRecord,
+        record_path: PathBuf,
+        now: DateTime<Local>,
+    ) -> Self {
         let state = if record.outcome.is_some() {
             "ended"
         } else if record.live(&mut OnMachine) {

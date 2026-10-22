@@ -201,6 +201,13 @@ impl Interpretation {
         self
     }
 
+    /// Historical replay must not launch a Harness to export today's state.
+    /// Callers can still opt into a local retained reader (Codex patch files).
+    pub(crate) fn without_retained(mut self) -> Self {
+        self.retained = None;
+        self
+    }
+
     /// Apply refusal and Model reporting rules independently of the session's log label.
     pub fn for_security(mut self, requested_model: Option<&str>) -> Self {
         self.security = Some(Security::new(requested_model));

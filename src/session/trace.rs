@@ -20,11 +20,12 @@ use attributes::{attribute, event_attributes};
 // Pin the development conventions rather than silently following latest.
 const SCHEMA: &str = "https://opentelemetry.io/schemas/1.44.0";
 
-pub(super) struct Trace {
+pub(crate) struct Trace {
     logs: Writer<File, Logs>,
     spans: Writer<File, Spans>,
     resource: Resource,
-    version: Version,
+    version: Option<Version>,
+    historical: bool,
     context: Context,
     session: Span,
     open: BTreeMap<String, Span>,
@@ -79,7 +80,8 @@ impl Trace {
                 },
                 ..Default::default()
             },
-            version: Version::new(choice.harness.adapter(), command_log, command),
+            version: Some(Version::new(choice.harness.adapter(), command_log, command)),
+            historical: false,
             context,
             session: Span {
                 span_id: Some(session_id),
@@ -121,11 +123,62 @@ impl Trace {
     }
 
     pub fn record(&mut self, raw: &str, events: &[Event]) -> io::Result<()> {
-        let observed = now();
+        self.record_at(raw, events, now())
+    }
+
+    /// Replay through the live writer, without querying today's Harness version
+    /// or substituting today's clock for an old Session's missing timestamps.
+    pub(crate) fn historical(
+        source: &Path,
+        output: &Path,
+        kind: &str,
+        choice: &Choice,
+        context: Context,
+        started: u64,
+    ) -> io::Result<Self> {
+        let mut trace = Self::create(
+            output,
+            kind,
+            choice,
+            "",
+            context,
+            &std::process::Command::new(""),
+            None,
+        )?;
+        trace.version = None;
+        trace.historical = true;
+        trace
+            .resource
+            .attributes
+            .push(attribute("thirdshift.migration", "legacy"));
+        trace.session.span_id = Some(id(&[
+            &trace.context.trace.0,
+            b"session",
+            source.as_os_str().as_encoded_bytes(),
+        ]));
+        trace.session.start_time_unix_nano = started;
+        trace.session.attributes.push(estimated(true));
+        Ok(trace)
+    }
+
+    pub(crate) fn record_at(
+        &mut self,
+        raw: &str,
+        events: &[Event],
+        observed: u64,
+    ) -> io::Result<()> {
         let envelope: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
         self.record_version(&envelope);
-        let time = event_time(&envelope);
+        let own_time = event_time(&envelope);
+        let time = own_time.or(self.historical.then_some(observed));
         let mut attrs = Vec::new();
+        if self.historical {
+            attrs.push(KeyValue {
+                key: "thirdshift.migration.original".into(),
+                value: Some(AnyValue::Bool(true)),
+            });
+            attrs.push(estimated(own_time.is_none()));
+        }
         // Partial Messages frames can carry only usage/deltas, with no new
         // normalized fact. Their envelope retains the parent tool scope.
         let mut span_id = if envelope["type"] == "stream_event" {
@@ -138,7 +191,13 @@ impl Trace {
             self.session.span_id
         };
         for event in events {
-            span_id = self.apply(event, time.unwrap_or(observed))?.or(span_id);
+            span_id = self
+                .apply(
+                    event,
+                    time.unwrap_or(observed),
+                    self.historical && own_time.is_none(),
+                )?
+                .or(span_id);
             for attr in event_attributes(event, self.input_excludes_cache) {
                 set(&mut attrs, attr);
             }
@@ -192,8 +251,11 @@ impl Trace {
     }
 
     pub fn finish(&mut self, error: Option<&str>) -> io::Result<()> {
+        self.finish_at(error, now())
+    }
+
+    pub(crate) fn finish_at(&mut self, error: Option<&str>, ended: u64) -> io::Result<()> {
         self.record_version(&Value::Null);
-        let ended = now();
         for (key, mut span) in std::mem::take(&mut self.open) {
             span.end_time_unix_nano = ended.max(span.start_time_unix_nano);
             span.status = Some(Status {
@@ -228,7 +290,7 @@ impl Trace {
         Ok(())
     }
 
-    fn apply(&mut self, event: &Event, time: u64) -> io::Result<Option<SpanId>> {
+    fn apply(&mut self, event: &Event, time: u64, estimated: bool) -> io::Result<Option<SpanId>> {
         use Event::*;
         let (kind, call, parent, completion) = match event {
             ModelCallStarted { id, parent_id, .. } => ("model", id, parent_id.as_deref(), None),
@@ -305,7 +367,13 @@ impl Trace {
             .and_then(|parent| self.locations.get(parent).map(|(_, span)| *span))
             .or(self.session.span_id);
         self.locations.insert(call.clone(), (key.clone(), span_id));
-        let attrs = event_attributes(event, self.input_excludes_cache);
+        let mut attrs = event_attributes(event, self.input_excludes_cache);
+        if estimated {
+            attrs.push(KeyValue {
+                key: "thirdshift.time.estimated".into(),
+                value: Some(AnyValue::Bool(true)),
+            });
+        }
         if let Some(span) = self.ended.get_mut(&key) {
             for attr in attrs {
                 set(&mut span.attributes, attr);
@@ -315,7 +383,6 @@ impl Trace {
             }
             return Ok(Some(span_id));
         }
-        let mut attrs = attrs;
         for attr in &self.session.attributes {
             if attr.key == "gen_ai.request.model" {
                 attrs.push(attr.clone());
@@ -349,9 +416,12 @@ impl Trace {
     }
 
     fn record_version(&mut self, envelope: &Value) {
+        let Some(version) = &mut self.version else {
+            return;
+        };
         set(
             &mut self.resource.attributes,
-            attribute("thirdshift.harness.version", self.version.observe(envelope)),
+            attribute("thirdshift.harness.version", version.observe(envelope)),
         );
     }
 
@@ -379,6 +449,13 @@ fn status(outcome: Outcome) -> Status {
     Status {
         code: if outcome == Outcome::Succeeded { 1 } else { 2 },
         message: format!("{outcome:?}"),
+    }
+}
+
+fn estimated(value: bool) -> KeyValue {
+    KeyValue {
+        key: "thirdshift.time.estimated".into(),
+        value: Some(AnyValue::Bool(value)),
     }
 }
 
