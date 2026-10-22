@@ -378,7 +378,10 @@ fn a_ci_fix_repair_that_makes_no_commit_gets_one_check_re_run_and_green_is_succe
 fn a_refused_self_merge_keeps_the_consumed_check_rerun_for_the_delivery() {
     let scenario = Scenario::new();
     let failed = format!("[{}]", actions_failure("test", 900, 1, RERUN_PASSES));
-    let red_again = checks_on_head(&failed).replace('\'', "'\\''");
+    // Merge hooks run in the Launch directory, whose HEAD is the Base branch.
+    let red_again = checks_on_head(&failed)
+        .replace("rev-parse HEAD", "rev-parse origin/issue-7")
+        .replace('\'', "'\\''");
     scenario.agent_does(&format!(
         "{AGENT_OPENS_PR}{}gh fake on-merge 1 '{red_again}'\n\
          gh fake refuse-merges 1 'merge refused'\n",
