@@ -712,6 +712,36 @@ esac
 }
 
 #[test]
+fn a_completed_newer_workflow_without_observed_jobs_cannot_establish_green_ci() {
+    with_recorded_signal(
+        "github::execution_tests::a_completed_newer_workflow_without_observed_jobs_cannot_establish_green_ci",
+        |_| {
+            let _fixture = Fixture::new(
+                r#"
+case "$5" in
+  */check-runs*) printf '%s\n' '{"id":1,"name":"test","status":"completed","conclusion":"cancelled","details_url":"https://github.com/acme/widgets/actions/runs/900/job/1"}' ;;
+  */actions/runs*) printf '%s\n' \
+    '{"id":900,"workflow_id":10,"created_at":"2026-10-19T12:00:00Z","status":"completed","conclusion":"cancelled"}' \
+    '{"id":901,"workflow_id":10,"created_at":"2026-10-19T12:01:00Z","status":"completed","conclusion":"failure","name":"CI","html_url":"https://github.com/acme/widgets/actions/runs/901"}' ;;
+  */status*) printf '%s\n' '{"context":"deploy","state":"success"}' ;;
+  *) exit 1 ;;
+esac
+"#,
+            );
+            if let Ok(checks) = GitHub::new().checks_on(&issue(), "abc") {
+                assert!(
+                    checks.iter().any(|check| !matches!(
+                        check.conclusion,
+                        Conclusion::Success | Conclusion::Neutral | Conclusion::Skipped
+                    )),
+                    "the newest workflow is failed but its jobs were not observed; this observation must not establish green CI"
+                );
+            }
+        },
+    );
+}
+
+#[test]
 fn checks_on_ignores_older_runs_of_each_workflow_but_keeps_other_checks() {
     with_recorded_signal(
         "github::execution_tests::checks_on_ignores_older_runs_of_each_workflow_but_keeps_other_checks",
@@ -770,6 +800,11 @@ esac
 "#,
             );
             let checks = GitHub::new().checks_on(&issue(), "abc").unwrap();
+            assert!(checks.iter().any(|check| check.workflow_run
+                == Some(WorkflowRun {
+                    id: 901,
+                    workflow_id: 10
+                })));
             assert!(
                 checks
                     .iter()

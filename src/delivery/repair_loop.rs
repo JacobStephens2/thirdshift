@@ -480,6 +480,7 @@ mod tests {
                         conclusion: Conclusion::Failure,
                         url: None,
                         job: None,
+                        workflow_run: None,
                     })
                     .collect()
             };

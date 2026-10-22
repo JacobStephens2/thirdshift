@@ -814,6 +814,7 @@ impl GitHub {
                     .to_string(),
                 conclusion,
                 job: ActionsJob::of(run["id"].as_u64(), run["details_url"].as_str()),
+                workflow_run: None,
                 url: url(&run["details_url"]).or_else(|| url(&run["html_url"])),
             });
         }
@@ -829,6 +830,7 @@ impl GitHub {
                 conclusion,
                 url: url(&status["target_url"]),
                 job: None,
+                workflow_run: None,
             });
         }
         if checks.iter().any(|check| check.job.is_some()) {
@@ -847,11 +849,12 @@ impl GitHub {
         checks: &mut Vec<Check>,
     ) -> Result<()> {
         #[derive(serde::Deserialize)]
-        struct WorkflowRun {
+        struct ListedRun {
             id: u64,
             workflow_id: u64,
             created_at: String,
             status: Option<String>,
+            conclusion: Option<String>,
             name: Option<String>,
             html_url: Option<String>,
         }
@@ -860,7 +863,7 @@ impl GitHub {
             issue.repo_slug()
         );
         let runs = self.gh_api_items_once(&path, "workflow_runs")?;
-        let runs: Vec<WorkflowRun> = runs
+        let runs: Vec<ListedRun> = runs
             .into_iter()
             .map(serde_json::from_value)
             .collect::<Result<_, _>>()
@@ -886,14 +889,22 @@ impl GitHub {
                 .job
                 .is_none_or(|job| !superseded.contains(&job.workflow_run))
         });
-        // A new run may be queued before GitHub lists its jobs. Removing the
-        // old run must not make other green checks establish success meanwhile.
+        for check in checks.iter_mut() {
+            if let Some(job) = check.job {
+                check.workflow_run =
+                    runs.iter()
+                        .find(|run| run.id == job.workflow_run)
+                        .map(|run| WorkflowRun {
+                            id: run.id,
+                            workflow_id: run.workflow_id,
+                        });
+            }
+        }
+        // The requests are separate observations: a new run may have no jobs
+        // in the preceding check listing, even if it already completed. Keep
+        // its workflow result visible until its jobs appear.
         for run in &runs {
             if latest[&run.workflow_id].1 == run.id
-                && run
-                    .status
-                    .as_deref()
-                    .is_some_and(|status| status != "completed")
                 && !checks
                     .iter()
                     .any(|check| check.job.is_some_and(|job| job.workflow_run == run.id))
@@ -903,9 +914,17 @@ impl GitHub {
                         .name
                         .clone()
                         .unwrap_or_else(|| format!("workflow {}", run.workflow_id)),
-                    conclusion: Conclusion::Unfinished,
+                    conclusion: if run.status.as_deref() == Some("completed") {
+                        Conclusion::of_check_run(run.conclusion.as_deref())
+                    } else {
+                        Conclusion::Unfinished
+                    },
                     url: run.html_url.clone(),
                     job: None,
+                    workflow_run: Some(WorkflowRun {
+                        id: run.id,
+                        workflow_id: run.workflow_id,
+                    }),
                 });
             }
         }
@@ -1472,6 +1491,15 @@ pub struct Check {
     /// The GitHub Actions job it is, if it is one. No other check can be
     /// re-run: not a commit status, nor a check run of another app.
     pub job: Option<ActionsJob>,
+    /// Workflow identity, including for a run whose jobs are not listed yet.
+    pub workflow_run: Option<WorkflowRun>,
+}
+
+/// A run's identity within its workflow. A new attempt keeps both ids.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct WorkflowRun {
+    pub id: u64,
+    pub workflow_id: u64,
 }
 
 /// A job of a GitHub Actions workflow run, as one of its attempts ran it.
