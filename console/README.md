@@ -170,17 +170,25 @@ time tests check scale in all windows, child selection, live ordering and 390 px
 Waterfall chooses one retained Command with live, died and ended chips, keeping
 its exact selection in `command=`. Runs, stages and tool calls share one axis,
 including a Spec run's Ticket Runs. It pairs with `show --json` and `logs`:
-stage intervals come from the Command record, and Claude/Codex tool summaries
-match their scoped `HH:MM:SS` Command-log lines in order, across midnight.
-Each tool interval extends to the next matched call in its Session or its stage
-boundary. These include waiting; they are not measured tool execution times.
-Unmatched calls stay visible with “Time unknown” and no bar. Session links open
-their retained evidence. The Waterfall browser test checks selection, scale,
-unknown times, escaping and phone layout; Rust checks matching and CLI parity.
+stage intervals come from the Command record. For a Session trace, each tool
+interval uses its span's start and end, including overlapping calls and fractions
+of a second. A running call uses its start record and extends to the current time
+while its Command is live. A call left open in an ended or died Command retains
+its start with “Time unknown” for its duration.
+Only sessions with an old Session log and no Session trace use Claude/Codex tool
+summaries matched to scoped `HH:MM:SS` Command-log lines in order, across midnight.
+Those estimated intervals extend to the next matched call or stage boundary and
+include waiting. Unmatched legacy calls stay visible with “Time unknown” and no
+bar. Session links open their retained evidence. The Waterfall browser test checks
+selection, span times, running calls, scale, unknown times, escaping and phone
+layout; Rust checks trace timing, legacy matching and CLI parity.
 The retained Spec-review checks are `python3 console/reproductions/waterfall-fractional.py`
 and `python3 console/reproductions/waterfall-stage.py` from the repo root after a build.
 The Rust router test walks the registered routes and checks their CLI pairs.
 The fractional Run/stage boundaries also run in the Rust integration tests.
+The retained Session-trace regression is
+`python3 console/reproductions/waterfall-trace-axis.py`; it checks that completed
+tool spans still draw bars after a Command dies without recording its end.
 
 `j` / `k` select headings and visible rows, wrapping at either end. `Space`
 folds a heading or toggles a row's peek; `Enter` opens that row's full Command
@@ -205,9 +213,11 @@ reads an exact listed file and accepts `--follow`.
 `thirdshift logs --command <id> --json` selects the same Command and child Run
 logs as its Console link; the inventory's `owners` field lists those exact IDs.
 
-Command logs are plain text. Claude and Codex Session logs are conversations
-with folded tool groups, collapsed thinking, Bash, Edit, Read and Grep views,
-and plain output for unfamiliar events. A live reader uses its own SSE stream
+Command logs are plain text. Session traces from all six Harnesses render their
+normalized messages, tool calls and results as conversations with folded tool
+groups and Bash, Edit, Read and Grep views. Unfamiliar events stay visible as
+plain raw lines. Older Claude and Codex Session logs retain their conversation
+rendering and collapsed thinking. A live reader uses its own SSE stream
 to append escaped HTML from a byte offset. Reconnecting resumes from the last
 event's byte offset; incomplete live lines wait until their newline arrives.
 The Follow newest line checkbox lets you read back while the Session grows.
@@ -238,9 +248,13 @@ outcome, `issue_branches` and `pull_requests` as one JSON object.
 On Linux after a build, `python3 console/reproductions/session-stop.py` checks that
 a live Session reader's Details link reaches its exact Command's Stop.
 
-Claude Edit events include old/new text and show unified diff excerpts. Codex
-`file_change` events retain only file paths and change kinds, so the reader
-shows their plain fallback and says the patch is unavailable. The Spec-review
-reproduction, `python3 console/reproductions/codex-edit-diff.py` from the repo
-root, preserves the unmet Codex diff expectation; it currently fails. Capturing
-patch evidence for Codex requires a separate retention decision.
+Claude Edit events include old/new text and show unified diff excerpts. For Codex,
+thirdshift reads the thread's native session file after exit, under
+`$CODEX_HOME/sessions` (default `~/.codex/sessions`). When the current turn's edits
+match the stream in order and file path, the Session trace keeps each patch as
+Codex's record of the edit. The reader replaces its placeholder with that diff,
+including in an open live reader. Shell edits and missing, unreadable, changed-format
+or mismatched session files keep the fallback. The format is unpublished, so this
+evidence is optional and never changes a Run's outcome.
+Run `cargo test --test console codex_patches` for the fake-Codex regression and
+`node --test console/tests/logs.test.cjs` for the live-reader checks after building.

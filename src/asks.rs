@@ -271,6 +271,7 @@ mod tests {
             base_fix: false,
             launch_pull: false,
             logs_dir: PathBuf::from("/home/me/.thirdshift/logs"),
+            otlp_endpoint: None,
             waiting_line_interval: std::time::Duration::from_secs(5 * 60),
             silent_interval: std::time::Duration::from_secs(10 * 60),
             inbox_days: 7,

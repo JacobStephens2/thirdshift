@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub(in crate::harness) struct SessionExport {
+    raw: String,
+    events: Vec<crate::harness::interpretation::event::Event>,
     pub(in crate::harness) message: Option<String>,
     pub(in crate::harness) summary: Option<String>,
     pub(in crate::harness) failure: Option<String>,
@@ -54,7 +56,7 @@ impl Usage {
 }
 
 impl SessionExport {
-    pub fn parse(text: &str) -> Result<Self> {
+    pub fn parse(text: &str, session_id: &str) -> Result<Self> {
         let export: Value = serde_json::from_str(text)?;
         let outcome = export["info"]["outcome"]
             .as_str()
@@ -63,6 +65,8 @@ impl SessionExport {
             .as_array()
             .ok_or_else(|| anyhow!("no messages in OpenCode session export"))?;
         let mut result = Self {
+            raw: text.into(),
+            events: super::events::Events::export(&export, session_id),
             message: None,
             summary: None,
             failure: None,
@@ -119,7 +123,7 @@ pub(in crate::harness) fn read(worktree: &Path, id: &str) -> Result<Option<Sessi
     );
     match output {
         Ok(output) if output.status.success() => {
-            Ok(SessionExport::parse(&String::from_utf8_lossy(&output.stdout)).ok())
+            Ok(SessionExport::parse(&String::from_utf8_lossy(&output.stdout), id).ok())
         }
         Err(error) if crate::interrupt::requested() => Err(error),
         _ => Ok(None),
@@ -143,8 +147,19 @@ impl Retained for Completion {
             && let Some(export) = read(&self.worktree, id)?
         {
             facts.ended.final_message = export.message;
+            facts
+                .report
+                .retained_records
+                .push(crate::harness::interpretation::RetainedRecord {
+                    raw: export.raw,
+                    events: export.events.clone(),
+                });
             facts.report.summary = export.summary;
             facts.report.models = export.models;
+            crate::harness::interpretation::event::reconcile(
+                &mut facts.report.events,
+                export.events,
+            );
             if export.failure.is_some() {
                 facts.outcome = TurnOutcome::Failed;
                 facts.diagnostic = facts.diagnostic.take().or(export.failure);

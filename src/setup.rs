@@ -1178,6 +1178,9 @@ from = \"ts@acme.dev\"
 dir = \"/var/log/thirdshift\"
 waiting_line_minutes = 5
 
+[otlp]
+endpoint = \"http://localhost:4318/v1/traces\"
+
 [inbox]
 days = 7
 silent_minutes = 10

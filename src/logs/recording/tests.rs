@@ -207,6 +207,38 @@ fn listed() -> ListedIssue {
 }
 
 #[test]
+fn session_ancestry_reconstructs_from_the_saved_command_record() {
+    let memory = Scripted::default();
+    let mut record = Record::new(memory.clone());
+    record.begin(Begin::Run(&issue()));
+    record.configured(&config(false));
+    record.started(Work::Run(&issue()), &harness());
+    record.stage(StageName::Implement, None);
+    let live = record.trace_context().unwrap();
+    let path = record.record_path().unwrap();
+    let saved: CommandRecord = serde_json::from_str(&memory.file(&path)).unwrap();
+    let owner = record.captured_owner().unwrap();
+    let rebuilt = crate::logs::trace::Context::from_record(&owner, &saved);
+    assert_eq!(live.trace, rebuilt.trace);
+    assert_eq!(live.command, rebuilt.command);
+    assert_eq!(live.run, rebuilt.run);
+    assert_eq!(live.stage, rebuilt.stage);
+    record.stage(StageName::Repair, None);
+    let repair = record.trace_context().unwrap();
+    assert_eq!(live.trace, repair.trace);
+    assert_eq!(live.run, repair.run);
+    assert_ne!(live.stage, repair.stage);
+    let saved: CommandRecord = serde_json::from_str(&memory.file(&path)).unwrap();
+    let historical = crate::logs::trace::Context::from_record(&owner, &saved);
+    let implement = saved
+        .stages
+        .iter()
+        .find(|stage| stage.name == "implement")
+        .unwrap();
+    assert_eq!(live.stage, historical.stage_id(implement));
+}
+
+#[test]
 fn a_stop_request_in_the_file_adapter_is_logged_before_the_ending() {
     let memory = Scripted::default();
     let mut record = Record::new(memory.clone());

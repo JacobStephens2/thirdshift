@@ -1,24 +1,46 @@
-//! Normalize retained Claude and Codex events into one escaped conversation,
-//! with each `https://` URL a link.
+//! Render normalized Session-trace events, with legacy Claude/Codex support,
+//! as one escaped conversation with each `https://` URL a link.
 use super::filters::{escaped, linked};
+use crate::harness::interpretation::event::Event;
 use crate::logs::catalog::Kind;
+use crate::otlp_jsonl::{AnyValue, LogRecord};
 use serde_json::Value;
+use std::collections::HashMap;
 
 enum Part {
-    Message(String, String),
+    Message(String, String, Option<String>),
     Thinking(String),
     Tool(String, String),
+    CodexEdit(String, String),
     Plain(String),
 }
 
-pub(super) fn render(lines: &str, kind: Kind) -> String {
+pub(crate) fn render(lines: &str, kind: Kind) -> String {
     if matches!(kind, Kind::Command) {
         return format!("<pre class=\"command-output\">{}</pre>", linked(lines));
     }
     let mut html = String::new();
     let mut tools_open = false;
-    for part in lines.lines().flat_map(parts) {
-        if matches!(part, Part::Tool(..)) {
+    let mut conversation = Vec::new();
+    let mut edits = HashMap::new();
+    let mut messages = HashMap::new();
+    for part in crate::logs::session::records(lines).flat_map(record_parts) {
+        let snapshots = match &part {
+            Part::Message(_, _, Some(id)) => Some((&mut messages, id)),
+            Part::CodexEdit(id, _) => Some((&mut edits, id)),
+            _ => None,
+        };
+        if let Some((snapshots, id)) = snapshots {
+            if let Some(index) = snapshots.get(id) {
+                conversation[*index] = part;
+                continue;
+            }
+            snapshots.insert(id.clone(), conversation.len());
+        }
+        conversation.push(part);
+    }
+    for part in conversation {
+        if matches!(part, Part::Tool(..) | Part::CodexEdit(..)) {
             if !tools_open {
                 html.push_str(
                     "<details class=\"tool-group\"><summary>Tools</summary><div class=\"tools\">",
@@ -30,8 +52,10 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
             tools_open = false;
         }
         match part {
-            Part::Message(role, text) => html.push_str(&format!(
-                "<article class=\"message\"><h3>{}</h3><pre>{}</pre></article>",
+            Part::Message(role, text, id) => html.push_str(&format!(
+                "<article class=\"message\"{}><h3>{}</h3><pre>{}</pre></article>",
+                id.map(|id| format!(" data-message-id=\"{}\"", escaped(&id)))
+                    .unwrap_or_default(),
                 escaped(&role),
                 linked(&text)
             )),
@@ -43,6 +67,10 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
                 "<article class=\"tool\" data-tool=\"{}\"><h3>{}</h3>{body}</article>",
                 escaped(&name),
                 escaped(&name)
+            )),
+            Part::CodexEdit(id, body) => html.push_str(&format!(
+                "<article class=\"tool\" data-tool=\"Edit\" data-codex-edit=\"{}\"><h3>Edit</h3>{body}</article>",
+                escaped(&id)
             )),
             Part::Plain(text) => html.push_str(&format!(
                 "<pre class=\"unknown-event\">{}</pre>",
@@ -56,19 +84,137 @@ pub(super) fn render(lines: &str, kind: Kind) -> String {
     html
 }
 
+fn record_parts(record: LogRecord) -> Vec<Part> {
+    let Some(AnyValue::String(raw)) = record.body else {
+        return Vec::new();
+    };
+    // Backfilled Sessions retain the presentation of their original events.
+    // Normalized facts remain available for export and retained amendments.
+    if record
+        .attributes
+        .iter()
+        .any(|attr| attr.key == "thirdshift.migration.original")
+    {
+        return parts(&raw);
+    }
+    let Some(attribute) = record
+        .attributes
+        .iter()
+        .find(|attr| attr.key == "thirdshift.events")
+    else {
+        return parts(&raw);
+    };
+    let Some(AnyValue::String(events)) = &attribute.value else {
+        return vec![Part::Plain(raw)];
+    };
+    let Ok(Value::Array(events)) = serde_json::from_str(events) else {
+        return vec![Part::Plain(raw)];
+    };
+    let envelope = serde_json::from_str::<Value>(&raw).unwrap_or_default();
+    let thinking = matches!(
+        envelope["type"].as_str(),
+        Some("item.started" | "item.updated" | "item.completed")
+    ) && envelope["item"]["type"] == "reasoning";
+    let mut output = Vec::new();
+    for event in events {
+        match serde_json::from_value::<Event>(event) {
+            Ok(Event::Message {
+                id,
+                parent_id,
+                role,
+                text,
+            }) => {
+                output.push(if thinking {
+                    Part::Thinking(text)
+                } else {
+                    Part::Message(
+                        role,
+                        text,
+                        id.map(|id| serde_json::to_string(&(parent_id, id)).unwrap()),
+                    )
+                });
+            }
+            Ok(Event::ToolCallStarted { id, tool: name, .. })
+                if name == "apply_patch" && envelope["item"]["type"] == "file_change" =>
+            {
+                output.push(codex_edit(&id, &envelope["item"]));
+            }
+            Ok(Event::ToolCallStarted {
+                tool: name, input, ..
+            }) => {
+                output.push(tool(&name, &input));
+            }
+            Ok(Event::ToolCallEnded {
+                id,
+                tool: name,
+                result,
+                ..
+            }) if name == "apply_patch"
+                && (result["source"] == "codex_session_file"
+                    || envelope["item"]["type"] == "file_change") =>
+            {
+                let record = if result["source"] == "codex_session_file" {
+                    &result
+                } else {
+                    &envelope["item"]
+                };
+                output.push(codex_edit(&id, record));
+            }
+            Ok(Event::ToolCallEnded {
+                tool: name,
+                input,
+                result,
+                ..
+            }) => {
+                let mut part = tool(&name, &input);
+                if let Part::Tool(_, body) = &mut part {
+                    body.push_str(&pre("result", &pretty(&result)));
+                }
+                output.push(part);
+            }
+            Ok(_) => {}
+            Err(_) => output.push(Part::Plain(raw.clone())),
+        }
+    }
+    if output.is_empty() {
+        // Thinking and other raw-only content still use the legacy renderer.
+        parts(&raw)
+    } else {
+        // Messages normalization has no thinking/unknown-block facts. Retain
+        // those blocks alongside normalized content without repeating text or
+        // tools from the raw message envelope.
+        if matches!(envelope["type"].as_str(), Some("assistant" | "user")) {
+            output.extend(
+                parts(&raw)
+                    .into_iter()
+                    .filter(|part| matches!(part, Part::Thinking(_) | Part::Plain(_))),
+            );
+        }
+        output
+    }
+}
+
 fn parts(line: &str) -> Vec<Part> {
     let Ok(event) = serde_json::from_str::<Value>(line) else {
         return vec![Part::Plain(line.into())];
     };
     match event["type"].as_str() {
+        Some("tool_call_ended")
+            if event["tool"] == "apply_patch"
+                && event["result"]["source"] == "codex_session_file" =>
+        {
+            vec![codex_edit(text(&event, "id"), &event["result"])]
+        }
         Some("assistant" | "user") => {
             let role = text(&event, "type");
             match &event["message"]["content"] {
-                Value::String(content) => vec![Part::Message(role.into(), content.clone())],
+                Value::String(content) => vec![Part::Message(role.into(), content.clone(), None)],
                 Value::Array(blocks) if !blocks.is_empty() => blocks
                     .iter()
                     .map(|block| match block["type"].as_str() {
-                        Some("text") => Part::Message(role.into(), text(block, "text").into()),
+                        Some("text") => {
+                            Part::Message(role.into(), text(block, "text").into(), None)
+                        }
                         Some("thinking") => Part::Thinking(text(block, "thinking").into()),
                         Some("tool_use") => tool(text(block, "name"), &block["input"]),
                         Some("tool_result") => Part::Tool(
@@ -85,11 +231,11 @@ fn parts(line: &str) -> Vec<Part> {
             let item = &event["item"];
             vec![match item["type"].as_str() {
                 Some("agent_message") => {
-                    Part::Message("assistant".into(), text(item, "text").into())
+                    Part::Message("assistant".into(), text(item, "text").into(), None)
                 }
                 Some("reasoning") => Part::Thinking(text(item, "text").into()),
                 Some("command_execution") => tool("Bash", item),
-                Some("file_change") => tool("Edit", item),
+                Some("file_change") => codex_edit(text(item, "id"), item),
                 Some("mcp_tool_call") => tool(text(item, "tool"), item),
                 Some("web_search") => tool("Grep", item),
                 _ => Part::Plain(line.into()),
@@ -97,6 +243,30 @@ fn parts(line: &str) -> Vec<Part> {
         }
         _ => vec![Part::Plain(line.into())],
     }
+}
+
+fn codex_edit(id: &str, record: &Value) -> Part {
+    let body = if record["source"] == "codex_session_file" {
+        let diffs: String = record["changes"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|change| {
+                format!(
+                    "{}{}",
+                    pre("path", text(change, "path")),
+                    pre("diff", text(change, "diff"))
+                )
+            })
+            .collect();
+        format!("<p>Codex’s record of this edit</p>{diffs}")
+    } else {
+        format!(
+            "<p>Patch unavailable in this log.</p>{}",
+            pre("fallback", &pretty(record))
+        )
+    };
+    Part::CodexEdit(id.into(), body)
 }
 
 fn tool(name: &str, input: &Value) -> Part {

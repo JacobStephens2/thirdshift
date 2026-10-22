@@ -1,5 +1,6 @@
 //! Antigravity CLI: launch, free Model catalog, Setup and stream protocol.
 mod catalog;
+mod events;
 pub(crate) mod stream;
 pub use catalog::Catalog;
 

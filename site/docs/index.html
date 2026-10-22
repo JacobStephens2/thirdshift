@@ -412,6 +412,9 @@ from = &quot;thirdshift@your-verified-domain.com&quot;  # the sender; onboarding
 dir = &quot;~/elsewhere/logs&quot;   # the root of the logs, instead of ~/.thirdshift/logs
 waiting_line_minutes = 5  # repeat unchanged CI watch and Self-merge waiting lines
 
+[otlp]
+endpoint = &quot;http://localhost:4318/v1/traces&quot;   # also send ended spans to a local viewer
+
 [activity]
 quiet_skips = true   # a skipped Pass prints nothing
 
@@ -441,6 +444,7 @@ effort = &quot;&quot;
 model = &quot;gemini-3.8-flash&quot;
 effort = &quot;medium&quot;
 </code></pre>
+<p><code>otlp.endpoint</code> is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in <code>/v1/traces</code>) to receive each Session&#39;s ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session&#39;s stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. A Security run exports none of its sessions, including child Runs.</p>
 <p><code>thirdshift setup</code> writes this file for you, listing every setting at its default so the file itself shows what can be changed:</p>
 <pre><code class="language-toml">[merge]
 always = false   # every Run is a Merge run, without the merge word; default false
@@ -459,6 +463,9 @@ from = &quot;onboarding@resend.dev&quot;  # the sender; default onboarding@resen
 [logs]
 dir = &quot;~/.thirdshift/logs&quot;   # the root of the logs, each repository&#39;s in &lt;owner&gt;/&lt;repo&gt;/; default ~/.thirdshift/logs
 waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
+
+[otlp]
+endpoint = &quot;&quot;   # optional OTLP/HTTP traces URL, including /v1/traces; default blank (off); Security runs never export
 
 [inbox]
 days = 7             # days to keep ended problems and Resolved; default 7
@@ -625,6 +632,45 @@ request left behind.</p>
 </div></details>
 <details class="fold"><summary><h3>Logs</h3></summary>
 <div class="manual-content" id="logs">
+<p>Convert old <strong>Session logs</strong> under this machine&#39;s configured <code>logs.dir</code>, across
+all repositories and including Security runs, in two steps:</p>
+<pre><code class="language-sh">thirdshift logs --convert
+# Read &lt;logs.dir&gt;/session-trace-conversion.json before proceeding.
+thirdshift logs --remove-converted
+</code></pre>
+<p>Conversion writes <code>.logs.jsonl</code> and <code>.spans.jsonl</code> beside each original, using
+the live Session-trace writer. The report lists each Session and whether its
+conversation, Waterfall, <code>show</code> latest event and Model evidence round-trip
+without a difference. Recovered Codex diffs are intentional additions, counted
+as <code>codex_diffs</code>, when Codex&#39;s matching local session file still exists.
+Missing event times use scoped Command-log progress, then the preceding
+estimate or Command start, and carry <code>thirdshift.time.estimated</code>. They are
+estimates rather than measurements; the Waterfall preserves its old reading.</p>
+<p>The first step keeps every original and never overwrites an existing trace.
+Rerunning it skips passed conversions. Sessions with no identifiable Harness,
+live Commands, existing traces or reader differences stay in the report for
+inspection. The second step removes only passed originals whose original,
+trace pair, Model sidecar and Command evidence still match the report&#39;s saved
+fingerprints. Changed or failed Sessions keep their originals. Sidecars and
+review reports stay beside the Session. Both steps and their report stay on
+the machine, including Security-run evidence.</p>
+<p>Export a Command&#39;s whole <strong>Trace</strong> for another tool with:</p>
+<pre><code class="language-sh">thirdshift logs acme/widgets#7 --export ./trace
+</code></pre>
+<p>This writes <code>spans.jsonl</code> and <code>logs.jsonl</code> in the directory, creating it if
+needed. Both use OpenTelemetry&#39;s OTLP JSON Lines format: one export request
+per line, with spans and log records in separate files. The spans include the
+Command, all its child Runs and their stages, using the Command record&#39;s times,
+plus every retained Session trace&#39;s spans. The log records come from every
+Session trace in that Command. All share one trace ID, and every span&#39;s parent
+is included. Naming a child Run exports its whole owning Command too.</p>
+<p>The export stays on the machine; nothing is sent anywhere. Existing export
+files are never overwritten. A Command record is required; legacy Session logs
+without OTLP traces contribute no Session records. Missing files, malformed
+requests or missing parent spans fail the export before the output files are
+published. Wait for a live Command to finish before exporting its complete
+Trace; unfinished record intervals retain an unset end time rather than an
+invented completion time.</p>
 <p>Everything thirdshift logs goes under <code>~/.thirdshift/logs/</code>, or the <code>logs.dir</code> set in the <a href="#user-config">User config</a>, in a folder per repository, <code>&lt;owner&gt;/&lt;repo&gt;/</code>, named for the GitHub repository rather than your checkout, so a fork and its upstream never share one and every checkout or worktree of a repository logs to the same place. thirdshift creates each folder as it needs it, so a repository&#39;s first pass needs nothing made by hand:</p>
 <pre><code>~/.thirdshift/logs/&lt;owner&gt;/&lt;repo&gt;/
 ├── activity.log              the Activity log

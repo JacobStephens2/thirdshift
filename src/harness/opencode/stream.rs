@@ -11,6 +11,7 @@ pub struct OpenCodeProgress {
     message: Option<String>,
     failure: Option<String>,
     skill_load: SkillLoad,
+    events: super::events::Events,
 }
 
 impl OpenCodeProgress {
@@ -79,6 +80,7 @@ impl Decoder for OpenCodeProgress {
             _ => Vec::new(),
         };
         StreamUpdate {
+            events: self.events.stream(&event),
             progress,
             evidence: Vec::new(),
         }
@@ -109,6 +111,74 @@ mod tests {
         Harness,
         interpretation_tests::{finish, stream},
     };
+
+    #[test]
+    fn normalized_opencode_steps_and_completed_only_tools_keep_reported_times_and_usage() {
+        use crate::harness::interpretation::event::{Event, Outcome, Usage};
+        let mut stream = stream(Harness::OpenCode, "");
+        let mut live = Vec::new();
+        for line in include_str!("../../../tests/fixtures/normalized-opencode.jsonl").lines() {
+            live.extend(stream.decode(line).events);
+        }
+        assert_eq!(live.len(), 6);
+        assert!(matches!(live[0], Event::ModelCallStarted { .. }));
+        assert!(
+            matches!(&live[1], Event::ToolCallStarted { tool, input, .. } if tool == "bash" && input["command"] == "cargo test")
+        );
+        assert_eq!(
+            live[3],
+            Event::ModelCallEnded {
+                id: "s:m1".into(),
+                parent_id: None,
+                model: None,
+                usage: Usage {
+                    input: Some(7515),
+                    output: Some(23),
+                    cache_read: Some(7424),
+                    cache_write: Some(0),
+                },
+                cost_usd: Some(0.02),
+                outcome: Outcome::Succeeded,
+            }
+        );
+        assert!(matches!(&live[0], Event::ModelCallStarted { id, .. } if id == "s:m1"));
+        assert!(finish(stream).report.unwrap().summary.is_none());
+    }
+
+    #[test]
+    fn normalized_opencode_errors_denials_and_cancelled_tools_survive_failure() {
+        use crate::harness::interpretation::event::{ErrorKind, Event, Outcome};
+        let mut stream = stream(Harness::OpenCode, "");
+        for line in [
+            r#"{"type":"tool_use","sessionID":"s","part":{"id":"t","tool":"bash","state":{"status":"error","input":{"command":"cargo test"},"error":"permission denied"}}}"#,
+            r#"{"type":"tool_use","sessionID":"s","part":{"id":"b","tool":"bash","state":{"status":"cancelled","error":"session ended"}}}"#,
+            r#"{"type":"error","sessionID":"s","error":{"type":"usage_limit","message":"quota exhausted"}}"#,
+        ] {
+            stream.decode(line);
+        }
+        let completion = finish(stream);
+        assert!(completion.outcome.is_err());
+        let events = completion.report.unwrap().events;
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::ToolCallEnded {
+                id,
+                outcome: Outcome::Denied,
+                ..
+            } if id == "s:tool:t"
+        )));
+        assert!(events.iter().any(|event| matches!(
+            event,
+            Event::Error {
+                kind: ErrorKind::UsageLimit,
+                ..
+            }
+        )));
+        assert!(events.iter().any(|event| matches!(event, Event::WorkEnded {
+                    id,
+                    outcome: Outcome::Killed | Outcome::Interrupted,
+                } if id == "s:tool:b")));
+    }
 
     #[test]
     fn a_dropped_last_step_keeps_the_last_text_without_trusting_stream_usage() {

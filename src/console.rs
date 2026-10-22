@@ -2,7 +2,7 @@
 mod account_commands;
 mod accounts;
 mod auth;
-mod conversation;
+pub(crate) mod conversation;
 mod cronjobs;
 mod filters;
 pub use account_commands::{password, print_log, sign_out};

@@ -18,6 +18,12 @@ mod accounts;
 #[path = "console/look.rs"]
 mod look;
 
+#[path = "console/codex_patches.rs"]
+mod codex_patches;
+
+#[path = "console/waterfall.rs"]
+mod waterfall;
+
 #[cfg(unix)]
 #[path = "console/cronjobs.rs"]
 mod cronjobs;
@@ -104,6 +110,17 @@ impl Console {
             .get(format!("{}{path}", self.address))
             .send()
             .unwrap()
+    }
+
+    fn log_link(&self, suffix: &str) -> String {
+        let page = self.get("/logs").text().unwrap();
+        page.split("href=\"")
+            .skip(1)
+            .filter_map(|part| part.split_once('"'))
+            .find(|(_, label)| label.split("</a>").next().unwrap().ends_with(suffix))
+            .unwrap()
+            .0
+            .to_owned()
     }
 }
 
@@ -197,68 +214,77 @@ fn command_changes_push_events_over_http() {
 
 #[test]
 fn heartbeat_observes_log_lengths_and_is_flat_for_silent_runs() {
-    let scenario = support::Scenario::new();
-    scenario.user_config_is("[console]\nport = 0\n");
-    scenario.agent_does(&format!(
-        "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\nexit 1\n",
-        scenario.path("started").display(),
-        scenario.path("release").display()
-    ));
-    let _held = HeldFixture {
-        run: Some(scenario.run_until(&[&scenario.issue_url(7)], &[], "started")),
-        release: scenario.path("release"),
-    };
-    let dir = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");
-    let path = fs::read_dir(dir)
-        .unwrap()
-        .map(|entry| entry.unwrap().path())
-        .find(|path| path.to_string_lossy().ends_with(".command.json"))
-        .unwrap();
-    let mut fixture: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    let session = std::path::PathBuf::from(fixture["session_log"].as_str().unwrap());
-    let log = path.with_file_name(
-        path.file_name()
+    for trace in [false, true] {
+        let scenario = support::Scenario::new();
+        scenario.user_config_is("[console]\nport = 0\n");
+        scenario.agent_does(&format!(
+            "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\nexit 1\n",
+            scenario.path("started").display(),
+            scenario.path("release").display()
+        ));
+        let _held = HeldFixture {
+            run: Some(scenario.run_until(&[&scenario.issue_url(7)], &[], "started")),
+            release: scenario.path("release"),
+        };
+        let dir = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");
+        let path = fs::read_dir(dir)
             .unwrap()
-            .to_str()
-            .unwrap()
-            .replace(".command.json", ".log"),
-    );
-    let began = (chrono::Local::now() - chrono::Duration::minutes(20)).to_rfc3339();
-    fixture["stages"] = json!([{"name": "implement", "began_at": began, "session_log": session}]);
-    fs::write(&path, serde_json::to_vec(&fixture).unwrap()).unwrap();
-    fs::write(&log, "a").unwrap();
-    fs::write(&session, "ab").unwrap();
-    let console = Console::start(
-        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
-        &scenario.path("home"),
-    );
-    let html = console.get("/").text().unwrap();
-    assert!(html.contains("data-log-growth=\"1:2\""), "{html}");
-    assert!(html.contains("data-logging=\"true\""));
-    fs::write(&session, "abcde").unwrap();
-    assert!(
-        console
-            .get("/")
-            .text()
-            .unwrap()
-            .contains("data-log-growth=\"1:5\"")
-    );
-    for file in [&log, &session] {
-        fs::File::options()
-            .write(true)
-            .open(file)
-            .unwrap()
-            .set_times(
-                fs::FileTimes::new()
-                    .set_modified(std::time::SystemTime::now() - Duration::from_secs(20 * 60)),
-            )
+            .map(|entry| entry.unwrap().path())
+            .find(|path| path.to_string_lossy().ends_with(".command.json"))
             .unwrap();
+        let mut fixture: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let old_log = std::path::PathBuf::from(fixture["session_log"].as_str().unwrap());
+        let session = if trace {
+            old_log.with_extension("logs.jsonl")
+        } else {
+            fs::remove_file(old_log.with_extension("logs.jsonl")).unwrap();
+            old_log.clone()
+        };
+        let log = path.with_file_name(
+            path.file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .replace(".command.json", ".log"),
+        );
+        let began = (chrono::Local::now() - chrono::Duration::minutes(20)).to_rfc3339();
+        fixture["stages"] =
+            json!([{"name": "implement", "began_at": began, "session_log": old_log}]);
+        fs::write(&path, serde_json::to_vec(&fixture).unwrap()).unwrap();
+        fs::write(&log, "a").unwrap();
+        fs::write(&session, "ab").unwrap();
+        let console = Console::start(
+            Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+            &scenario.path("home"),
+        );
+        let html = console.get("/").text().unwrap();
+        assert!(html.contains("data-log-growth=\"1:2\""), "{html}");
+        assert!(html.contains("data-logging=\"true\""));
+        fs::write(&session, "abcde").unwrap();
+        assert!(
+            console
+                .get("/")
+                .text()
+                .unwrap()
+                .contains("data-log-growth=\"1:5\"")
+        );
+        for file in [&log, &session] {
+            fs::File::options()
+                .write(true)
+                .open(file)
+                .unwrap()
+                .set_times(
+                    fs::FileTimes::new()
+                        .set_modified(std::time::SystemTime::now() - Duration::from_secs(20 * 60)),
+                )
+                .unwrap();
+        }
+        let html = console.get("/").text().unwrap();
+        assert!(html.contains("data-state=\"Silent\""));
+        assert!(html.contains("data-logging=\"false\""));
+        assert!(html.contains("data-log-growth=\"1:5\""));
+        drop(console);
     }
-    let html = console.get("/").text().unwrap();
-    assert!(html.contains("data-state=\"Silent\""));
-    assert!(html.contains("data-logging=\"false\""));
-    assert!(html.contains("data-log-growth=\"1:5\""));
-    drop(console);
 }
 
 #[test]
@@ -830,6 +856,13 @@ fn logs_inventory_matches_cli_and_reads_current_layout_only() {
     .unwrap();
     fs::write(folder.join("7-20261003T120000-0400-implement.jsonl"),
         "{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"Hello <reader> (https://github.com/acme/widgets/issues/7)\"}}\n").unwrap();
+    let session = folder.join("7-20261003T120000-0400-implement.jsonl");
+    fs::write(
+        session.with_extension("logs.jsonl"),
+        support::session_trace::records(&fs::read_to_string(&session).unwrap()),
+    )
+    .unwrap();
+    fs::write(session.with_extension("spans.jsonl"), "{}\n").unwrap();
     let old = home.path().join(".thirdshift/logs/acme/widgets/sessions");
     fs::create_dir_all(&old).unwrap();
     fs::write(old.join("7-20261003T120000-0400-implement.jsonl"), "old\n").unwrap();
@@ -1051,6 +1084,195 @@ fn claude_and_codex_conversations_keep_tools_thinking_and_unknown_events() {
         }
         assert!(!html.contains("<script>bad()</script>"));
     }
+}
+
+#[test]
+fn session_traces_render_the_same_claude_and_codex_conversations_as_old_logs() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let folder = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    fs::create_dir_all(&folder).unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for (kind, fixture) in [
+        ("claude", include_str!("fixtures/console-claude.jsonl")),
+        ("codex", include_str!("fixtures/console-codex.jsonl")),
+    ] {
+        let path = folder.join(format!("7-20261003T120000-0400-{kind}.jsonl"));
+        fs::write(&path, fixture).unwrap();
+        let reader = || {
+            let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+                .args(["logs", "--json"])
+                .env("HOME", home.path())
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+            let inventory: Value = serde_json::from_slice(&output.stdout).unwrap();
+            let log = inventory["logs"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|log| log["name"].as_str().unwrap().contains(kind))
+                .unwrap();
+            console
+                .get(&format!("/logs/{}", log["id"].as_str().unwrap()))
+                .text()
+                .unwrap()
+        };
+        let conversation = |html: String| {
+            html.split_once("id=\"log-content\"")
+                .unwrap()
+                .1
+                .split_once('>')
+                .unwrap()
+                .1
+                .split_once("</main>")
+                .unwrap()
+                .0
+                .to_owned()
+        };
+        let old = conversation(reader());
+        fs::write(
+            path.with_extension("logs.jsonl"),
+            support::session_trace::records(fixture),
+        )
+        .unwrap();
+        fs::write(&path, "Old log must not be rendered\n").unwrap();
+        assert_eq!(conversation(reader()), old, "{kind}");
+        fs::remove_file(&path).unwrap();
+        assert_eq!(conversation(reader()), old, "trace without old log: {kind}");
+    }
+}
+
+#[test]
+fn all_six_harness_session_traces_render_normalized_conversations() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let folder = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    fs::create_dir_all(&folder).unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for (harness, fixture) in [
+        (
+            "claude",
+            include_str!("fixtures/console-claude-trace.jsonl"),
+        ),
+        ("codex", include_str!("fixtures/console-codex-trace.jsonl")),
+        ("agy", include_str!("fixtures/console-agy-trace.jsonl")),
+        ("grok", include_str!("fixtures/console-grok-trace.jsonl")),
+        ("muse", include_str!("fixtures/console-muse-trace.jsonl")),
+        (
+            "opencode",
+            include_str!("fixtures/console-opencode-trace.jsonl"),
+        ),
+    ] {
+        let path = folder.join(format!("7-20261003T120000-0400-{harness}.logs.jsonl"));
+        fs::write(&path, fixture).unwrap();
+        let link = console.log_link(&format!("-{harness}.logs.jsonl"));
+        let html = console.get(&link).text().unwrap();
+        assert!(
+            html.contains("<h3>assistant</h3><pre>Checking widgets.</pre>"),
+            "{harness}: {html}"
+        );
+        assert!(
+            html.contains("<h3>user</h3><pre>Check widgets.</pre>"),
+            "{harness}: {html}"
+        );
+        assert!(html.contains("data-tool=\"Read\""), "{harness}: {html}");
+        assert!(
+            html.contains("<pre class=\"read\">widgets.txt</pre>"),
+            "{harness}: {html}"
+        );
+        assert!(
+            html.contains(
+                "<pre class=\"result\">widget &#60;script&#62;bad()&#60;/script&#62;</pre>"
+            ),
+            "{harness}: {html}"
+        );
+        assert!(
+            html.contains("<pre class=\"unknown-event\">future event &#60;raw&#62;</pre>"),
+            "{harness}: {html}"
+        );
+        assert!(
+            html.contains("<h3>assistant</h3><pre>Widgets are ready.</pre>"),
+            "{harness}: {html}"
+        );
+        assert!(!html.contains("<script>bad()</script>"), "{harness}");
+        assert!(
+            !html.contains("raw body must not replace normalized text"),
+            "{harness}: {html}"
+        );
+        let snapshots = matches!(harness, "muse" | "opencode");
+        assert_eq!(
+            html.matches("class=\"message\"").count(),
+            if snapshots { 4 } else { 3 },
+            "{harness}: {html}"
+        );
+        if snapshots {
+            assert!(!html.contains("<pre>Checking </pre>"), "{harness}: {html}");
+            assert!(
+                html.contains("<pre>Nested widget note.</pre>"),
+                "{harness}: {html}"
+            );
+        }
+        if harness == "codex" {
+            assert!(html.contains("<details class=\"thinking\"><summary>Thinking</summary><pre>Consider a safe edit.</pre></details>"), "{html}");
+        }
+    }
+}
+
+#[test]
+fn normalized_conversation_stream_preserves_raw_only_blocks() {
+    use std::io::Write;
+
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let folder = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    fs::create_dir_all(&folder).unwrap();
+    let path = folder.join("7-20261003T120000-0400-claude.logs.jsonl");
+    let initial = include_str!("fixtures/console-claude-trace.jsonl");
+    fs::write(&path, initial).unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let link = console.log_link("-claude.logs.jsonl");
+    let raw = json!({"type":"assistant","message":{"content":[
+        {"type":"thinking","thinking":"Consider the widget shape."},
+        {"type":"text","text":"raw body must not replace normalized text"},
+        {"type":"future_block","detail":"unknown block stays visible"}
+    ]}})
+    .to_string();
+    let appended = format!(
+        "{}\n",
+        json!({"resourceLogs":[{"scopeLogs":[{"logRecords":[{
+            "body":{"stringValue":raw},
+            "attributes":[{"key":"thirdshift.events","value":{"stringValue":json!([
+                {"type":"message","role":"assistant","text":"Appended normalized reply.","parent_id":null}
+            ]).to_string()}}]
+        }]}]}]})
+    );
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(appended.as_bytes())
+        .unwrap();
+    let response = console.get(&format!("{link}/stream/{}", initial.len()));
+    let events = response.text().unwrap();
+    assert!(events.contains("Appended normalized reply."), "{events}");
+    assert!(events.contains("Consider the widget shape."), "{events}");
+    assert!(events.contains("unknown block stays visible"), "{events}");
+    assert!(
+        !events.contains("raw body must not replace normalized text"),
+        "{events}"
+    );
+    assert!(!events.contains("Widgets are ready."), "{events}");
+    assert!(
+        events.contains(&format!("id: {}", initial.len() + appended.len())),
+        "{events}"
+    );
 }
 
 #[test]

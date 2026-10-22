@@ -89,9 +89,14 @@ pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<
                 owners: owners.clone(),
                 selector: selector.clone(),
             });
+        let current = command
+            .record
+            .session_log
+            .as_deref()
+            .map(crate::logs::session::path);
         for session in Observation::Record(command).sessions()? {
-            let live =
-                command.state == "live" && command.record.session_log.as_ref() == Some(&session);
+            let session = crate::logs::session::path(&session);
+            let live = command.state == "live" && current.as_ref() == Some(&session);
             observed.insert(
                 session,
                 Observed {
@@ -124,6 +129,7 @@ pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<
                 for entry in entries(&folder)? {
                     let path = entry.path();
                     if !entry.file_type()?.is_file()
+                        || !owner::inventory_session(&path)
                         || !matches!(
                             path.extension().and_then(|ext| ext.to_str()),
                             Some("log" | "jsonl")
@@ -131,6 +137,11 @@ pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<
                     {
                         continue;
                     }
+                    let path = if path.extension().is_some_and(|ext| ext == "jsonl") {
+                        crate::logs::session::path(&path)
+                    } else {
+                        path
+                    };
                     let relative = path.strip_prefix(root)?;
                     let Observed {
                         live,

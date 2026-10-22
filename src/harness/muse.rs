@@ -1,6 +1,7 @@
 //! Muse Code: unattended sessions, skill-tool loading and the read after exit.
 
 mod catalog;
+mod events;
 pub(super) mod log;
 mod stream;
 

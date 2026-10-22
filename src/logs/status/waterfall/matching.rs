@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use chrono::{Duration, NaiveTime, TimeZone};
 use serde_json::Value;
 
-use super::{Time, time};
+use super::{Call, Time, time};
 use crate::harness::Harness;
 use crate::logs::owner;
 use crate::logs::reading::Command;
@@ -17,12 +17,8 @@ struct Line {
     message: String,
     used: bool,
 }
-pub(super) struct Log {
+pub(in crate::logs) struct Log {
     lines: Vec<Line>,
-}
-pub(super) struct Call {
-    pub label: String,
-    pub start: Option<Time>,
 }
 
 fn read(path: &Path) -> Result<String> {
@@ -34,7 +30,7 @@ fn read(path: &Path) -> Result<String> {
 }
 
 impl Log {
-    pub(super) fn read(path: &Path, start: Time) -> Result<Self> {
+    pub(in crate::logs) fn read(path: &Path, start: Time) -> Result<Self> {
         let mut lines = Vec::new();
         let mut previous = None;
         let mut date = start.date_naive();
@@ -85,8 +81,56 @@ impl Log {
         Ok(Self { lines })
     }
 
-    pub(super) fn last_time(&self) -> Option<Time> {
+    pub(in crate::logs) fn last_time(&self) -> Option<Time> {
         self.lines.iter().map(|line| line.time).max()
+    }
+
+    pub(in crate::logs) fn estimate(
+        &mut self,
+        label: &str,
+        file: Option<&str>,
+        kind: &str,
+        relays: &[u64],
+        bounds: (Option<Time>, Option<Time>),
+        cursor: &mut usize,
+    ) -> Option<Time> {
+        let message = format!("{kind}: {label}");
+        let (began, ended) = bounds;
+        let matched = self
+            .lines
+            .iter_mut()
+            .enumerate()
+            .skip(*cursor)
+            .find(|(_, line)| {
+                !line.used
+                    && line.relays == relays
+                    && (line.message == message
+                        || file.is_some_and(|path| {
+                            let Some(summary) = line.message.strip_prefix(&format!("{kind}: "))
+                            else {
+                                return false;
+                            };
+                            let Some((action, detail)) = summary.split_once(' ') else {
+                                return false;
+                            };
+                            if label.split_once(' ').map(|(action, _)| action) != Some(action) {
+                                return false;
+                            }
+                            if let Some(prefix) = detail.strip_suffix('…') {
+                                path.trim_start_matches('/').starts_with(prefix)
+                                    || path.contains(&format!("/{prefix}"))
+                            } else {
+                                path == detail || path.ends_with(&format!("/{detail}"))
+                            }
+                        }))
+                    && began.is_none_or(|began| line.time.timestamp() >= began.timestamp())
+                    && ended.is_none_or(|ended| line.time <= ended)
+            });
+        matched.map(|(index, line)| {
+            *cursor = index + 1;
+            line.used = true;
+            line.time
+        })
     }
 }
 
@@ -96,7 +140,7 @@ pub(super) fn calls(
     relays: &[u64],
     log: &mut Log,
 ) -> Result<Vec<Call>> {
-    let text = read(session)?;
+    let text = read(&crate::logs::session::path(session))?;
     let Some(harness) = Harness::named(&command.record.harness) else {
         return Ok(Vec::new());
     };
@@ -115,9 +159,9 @@ pub(super) fn calls(
     let ended = command.record.ended_at.as_deref().and_then(time);
     let mut calls = Vec::new();
     let mut cursor = 0;
-    for raw in text.lines() {
-        let labels = stream.condense(raw);
-        let Ok(event) = serde_json::from_str::<Value>(raw) else {
+    for raw in crate::logs::session::events(&text) {
+        let labels = stream.condense(&raw);
+        let Ok(event) = serde_json::from_str::<Value>(&raw) else {
             continue;
         };
         let is_tool = (event["type"] == "assistant"
@@ -141,47 +185,15 @@ pub(super) fn calls(
             continue;
         }
         for (label_index, label) in labels.into_iter().enumerate() {
-            let message = format!("{kind}: {label}");
             // Codex does not retain its cwd. File changes retain absolute
             // paths, while progress prints paths relative to that cwd.
             let file = event["item"]["changes"][label_index]["path"].as_str();
-            let matched = log
-                .lines
-                .iter_mut()
-                .enumerate()
-                .skip(cursor)
-                .find(|(_, line)| {
-                    !line.used
-                        && line.relays == relays
-                        && (line.message == message
-                            || file.is_some_and(|path| {
-                                let Some(summary) = line.message.strip_prefix(&format!("{kind}: "))
-                                else {
-                                    return false;
-                                };
-                                let Some((action, detail)) = summary.split_once(' ') else {
-                                    return false;
-                                };
-                                if label.split_once(' ').map(|(action, _)| action) != Some(action) {
-                                    return false;
-                                }
-                                if let Some(prefix) = detail.strip_suffix('…') {
-                                    path.trim_start_matches('/').starts_with(prefix)
-                                        || path.contains(&format!("/{prefix}"))
-                                } else {
-                                    path == detail || path.ends_with(&format!("/{detail}"))
-                                }
-                            }))
-                        // The log truncates fractions that the record keeps.
-                        && began.is_none_or(|began| line.time.timestamp() >= began.timestamp())
-                        && ended.is_none_or(|ended| line.time <= ended)
-                });
-            let start = matched.map(|(index, line)| {
-                cursor = index + 1;
-                line.used = true;
-                line.time
+            let start = log.estimate(&label, file, kind, relays, (began, ended), &mut cursor);
+            calls.push(Call {
+                label,
+                start,
+                end: None,
             });
-            calls.push(Call { label, start });
         }
     }
     Ok(calls)
