@@ -147,13 +147,14 @@ impl Recording {
         let executed = match executed {
             Ok(executed) => executed,
             Err(error) => {
-                trace.lock().unwrap().finish(Some(&format!("{error:#}")))?;
+                let finished = trace.lock().unwrap().finish(Some(&format!("{error:#}")));
+                warn_unfinished_trace(finished);
                 return Err(error);
             }
         };
 
         let completion = executed.state.finish(executed.execution);
-        {
+        let finished = (|| {
             let mut trace = trace.lock().unwrap();
             if let Some(report) = &completion.report {
                 for record in &report.retained_records {
@@ -168,8 +169,9 @@ impl Recording {
                     .err()
                     .map(|error| error.to_string())
                     .as_deref(),
-            )?;
-        }
+            )
+        })();
+        warn_unfinished_trace(finished);
         if let Some(report) = completion.report {
             self.keep(kind, log, choice, report.models.clone());
             for line in report.completion_progress {
@@ -316,6 +318,15 @@ fn follow(
         for condensed in decoded.progress {
             progress::step(format_args!("{kind}: {condensed}"));
         }
+    }
+}
+
+/// A Session trace that cannot be finished costs evidence, never the session.
+fn warn_unfinished_trace(finished: std::io::Result<()>) {
+    if let Err(error) = finished {
+        progress::step(format_args!(
+            "warning: could not finish the session trace: {error:#}"
+        ));
     }
 }
 
