@@ -19,6 +19,7 @@ mod process_identity;
 mod reading;
 pub(crate) use reading::catalog;
 mod recording;
+pub(crate) mod session;
 pub mod status;
 pub mod stop;
 pub(crate) mod trace;

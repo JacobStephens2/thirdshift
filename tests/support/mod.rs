@@ -42,6 +42,7 @@ pub mod guidance;
 
 pub mod fakes;
 pub mod resend;
+pub mod session_trace;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
