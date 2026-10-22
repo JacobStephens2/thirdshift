@@ -900,33 +900,49 @@ impl GitHub {
                         });
             }
         }
-        // The requests are separate observations: a new run may have no jobs
-        // in the preceding check listing, even if it already completed. Keep
-        // its workflow result visible until its jobs appear.
+        // The two reads are separate observations. A new run may have none of
+        // its jobs yet, or only jobs that already finished while a later one
+        // has not been created. Until the run has completed, that gap must
+        // stay pending: the older run's checks are already gone, and a
+        // listing of only finished successes is CI passed.
         for run in &runs {
-            if latest[&run.workflow_id].1 == run.id
-                && !checks
-                    .iter()
-                    .any(|check| check.job.is_some_and(|job| job.workflow_run == run.id))
-            {
-                checks.push(Check {
-                    name: run
-                        .name
-                        .clone()
-                        .unwrap_or_else(|| format!("workflow {}", run.workflow_id)),
-                    conclusion: if run.status.as_deref() == Some("completed") {
-                        Conclusion::of_check_run(run.conclusion.as_deref())
-                    } else {
-                        Conclusion::Unfinished
-                    },
-                    url: run.html_url.clone(),
-                    job: None,
-                    workflow_run: Some(WorkflowRun {
-                        id: run.id,
-                        workflow_id: run.workflow_id,
-                    }),
-                });
+            if latest[&run.workflow_id].1 != run.id {
+                continue;
             }
+            let mut saw_job = false;
+            let mut every_job_passed = true;
+            for check in checks.iter() {
+                if check.job.is_some_and(|job| job.workflow_run == run.id) {
+                    saw_job = true;
+                    every_job_passed &= matches!(
+                        check.conclusion,
+                        Conclusion::Success | Conclusion::Neutral | Conclusion::Skipped
+                    );
+                }
+            }
+            // A present status other than completed is still running. An
+            // absent one leaves the jobs to speak: GitHub sends a status.
+            let open = matches!(run.status.as_deref(), Some(status) if status != "completed");
+            if saw_job && (!open || !every_job_passed) {
+                continue;
+            }
+            checks.push(Check {
+                name: run
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| format!("workflow {}", run.workflow_id)),
+                conclusion: if run.status.as_deref() == Some("completed") {
+                    Conclusion::of_check_run(run.conclusion.as_deref())
+                } else {
+                    Conclusion::Unfinished
+                },
+                url: run.html_url.clone(),
+                job: None,
+                workflow_run: Some(WorkflowRun {
+                    id: run.id,
+                    workflow_id: run.workflow_id,
+                }),
+            });
         }
         Ok(())
     }

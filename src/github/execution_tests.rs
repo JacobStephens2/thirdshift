@@ -820,6 +820,58 @@ esac
 }
 
 #[test]
+fn an_in_progress_newer_run_with_only_a_finished_job_cannot_establish_green_ci() {
+    with_recorded_signal(
+        "github::execution_tests::an_in_progress_newer_run_with_only_a_finished_job_cannot_establish_green_ci",
+        |_| {
+            // A later job that `needs` this one has no check run yet. The
+            // superseded run's failure must not remain, and the open run must
+            // not look finished: CI watch treats a listing with no pending
+            // or failed check as passed and a Merge run can land it.
+            let _fixture = Fixture::new(
+                r#"
+case "$5" in
+  */check-runs*) printf '%s\n' \
+    '{"id":1,"name":"test","status":"completed","conclusion":"failure","details_url":"https://github.com/acme/widgets/actions/runs/900/job/1"}' \
+    '{"id":2,"name":"setup","status":"completed","conclusion":"success","details_url":"https://github.com/acme/widgets/actions/runs/901/job/2"}' ;;
+  */actions/runs*) printf '%s\n' \
+    '{"id":900,"workflow_id":10,"created_at":"2026-10-19T12:00:00Z","status":"completed","conclusion":"cancelled","name":"CI"}' \
+    '{"id":901,"workflow_id":10,"created_at":"2026-10-19T12:01:00Z","status":"in_progress","name":"CI","html_url":"https://github.com/acme/widgets/actions/runs/901"}' ;;
+  */status*) ;;
+  *) exit 1 ;;
+esac
+"#,
+            );
+            let checks = GitHub::new().checks_on(&issue(), "abc").unwrap();
+            let observed: Vec<_> = checks
+                .iter()
+                .map(|check| format!("{}:{:?}", check.name, check.conclusion))
+                .collect();
+            assert!(
+                checks.iter().all(|check| check.name != "test"),
+                "superseded run stayed visible: {observed:?}"
+            );
+            assert!(
+                checks
+                    .iter()
+                    .any(|check| check.conclusion == Conclusion::Unfinished),
+                "open run looked finished: {observed:?}"
+            );
+            assert!(
+                checks.iter().any(|check| {
+                    check.workflow_run
+                        == Some(WorkflowRun {
+                            id: 901,
+                            workflow_id: 10,
+                        })
+                }),
+                "newest run lost its identity: {observed:?}"
+            );
+        },
+    );
+}
+
+#[test]
 fn github_reports_each_check_as_github_named_it() {
     with_recorded_signal(
         "github::execution_tests::github_reports_each_check_as_github_named_it",
