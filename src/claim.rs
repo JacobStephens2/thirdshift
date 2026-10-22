@@ -64,6 +64,36 @@ pub fn make<'a>(issue: &'a IssueUrl, launch: &'a Git, branch: &str) -> Result<Cl
 }
 
 impl Claim<'_> {
+    /// A bug Run handed reproduction back to the reporter. End its Claim
+    /// without making the issue Ready again, including in a Continuation.
+    pub fn needs_info(self) {
+        let github = GitHub::new().completion();
+        let issue = self.claimed.issue;
+        let result = (|| {
+            let edit = Edit::of(
+                issue,
+                github.issue_labels(issue)?,
+                &[IN_PROGRESS, READY_FOR_AGENT],
+                &[labels::NEEDS_INFO],
+            );
+            edit.apply(&github)
+        })();
+        if let Err(error) = result {
+            progress::warn(
+                &error,
+                format_args!(
+                    "could not end the Claim on #{} after diagnosis; run: {}",
+                    issue.number,
+                    labels::by_hand(
+                        issue,
+                        &[IN_PROGRESS, READY_FOR_AGENT],
+                        &[labels::NEEDS_INFO]
+                    ),
+                ),
+            );
+        }
+    }
+
     /// End the Claim once the Run or the Spec run that made it has ended,
     /// having reached `reached`, or none in a Failed run:
     ///

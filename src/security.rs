@@ -256,7 +256,10 @@ fn fix(
                 }
                 Ok(reached) => FailedRun {
                     log: reached.log,
-                    pr_url: Some(reached.pr_url),
+                    pr_url: reached
+                        .resolution
+                        .goal()
+                        .map(|_| reached.resolution.url().to_string()),
                     ticket_lines: reached.ticket_lines,
                     ..error
                         .context("could not record the successful Security fix's ending")

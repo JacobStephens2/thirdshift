@@ -98,7 +98,13 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
     let scenario = Scenario::new();
     ready_issue(&scenario, 9, &["bug"]);
     ready_issue(&scenario, 7, &["bug"]);
-    scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+    scenario.agent_does_for(
+        7,
+        &format!(
+            "{}echo 'Bug reproduced: fixed' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+            agent_opens_pr(7, "main"),
+        ),
+    );
 
     let result = scenario.run(&["pickup"]);
 
@@ -114,7 +120,7 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
     let prompt = calls[0]["prompt"].as_str().unwrap();
     assert!(
         prompt.starts_with(&format!(
-            "/thirdshift-implement {}\n",
+            "/thirdshift-diagnosing-bugs {}\n",
             scenario.issue_url(7)
         )),
         "{prompt}"

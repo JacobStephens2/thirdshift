@@ -948,8 +948,10 @@ mod in_memory {
     pub fn ready_for_review() -> Ended {
         Ended {
             outcome: Ok(Reached {
-                pr_url: PR_URL.to_string(),
-                goal: Goal::ReadyForReview,
+                resolution: crate::run::Resolution::PullRequest {
+                    url: PR_URL.to_string(),
+                    goal: Goal::ReadyForReview,
+                },
                 log: None,
                 ticket_lines: Vec::new(),
             }),

@@ -215,7 +215,8 @@ impl<'a> Sessions<'a> {
     /// same way, or the session has no id to resume, the work may have been
     /// abandoned rather than awaited: a progress line names it and this
     /// succeeds, leaving the steps that follow to decide the outcome.
-    pub fn run(&self, kind: Kind, prompt: &str) -> Result<()> {
+    /// Returns the final message while retaining the prompt's launch policy.
+    pub fn run(&self, kind: Kind, prompt: &str) -> Result<Option<String>> {
         // The shared review-report contract identifies code review sessions
         // before expansion. Retain that policy even if report setup fails.
         let purpose = if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
@@ -223,7 +224,7 @@ impl<'a> Sessions<'a> {
         } else {
             Purpose::Ordinary
         };
-        self.run_to_final_message(purpose, kind, prompt).map(drop)
+        self.run_to_final_message(purpose, kind, prompt)
     }
 
     /// Run a session as [`Sessions::run`] does, and return its final message:

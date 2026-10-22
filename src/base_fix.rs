@@ -277,6 +277,9 @@ impl BaseFix {
         });
         outside.step(format!("waiting on Base fix #{number}"));
         match outside.run_base_fix(&taken.issue, base)? {
+            Ended::NotReproduced { comment_url } => {
+                bail!("Base fix #{number} did not reproduce: {comment_url}")
+            }
             Ended::Reached { .. } => {
                 taken.reached = true;
                 outside.merged(running);
