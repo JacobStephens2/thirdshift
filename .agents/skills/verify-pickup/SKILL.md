@@ -48,14 +48,14 @@ This skill authorizes verification edits only. Product fixes need their own task
 
 ## Coverage and sync
 
-Last confirmed source commit: `25ec54bc6d8e7c16d4bed1d49fafec2294f61747`.
+Last confirmed source commit: `4d4756b102af44e1fedd1fc625a61ff1d4364fe7`.
 The model describes these functions, including their ordering:
 
 | Source | Covered functions / requests |
 | --- | --- |
 | `src/pickup.rs` | `run`, `run_through`: reserve → refresh → dispatch; reservation lifetime |
 | `src/pickup/reservation.rs` | `Reservation::take`, `Drop::drop`: empty create lease, owner-token release |
-| `src/ready.rs` | `first`, `Search::first_ready`, `standing_of`, `refresh`: Ready reads and Claim-count comparison |
+| `src/ready.rs` | `first`, `Search::first_priority`, `standing_of`, `refresh`: Ready reads and Claim-count comparison; Pickup keeps the settling wait |
 | `src/claim.rs` | `make`, `Claimed::label_in_progress`, `Claimed::end`, `put_labels_back_unless_on_origin`, `release_labels` |
 | `src/github.rs` | `open_issues_labelled`, `issue`, `candidate`, `ClaimHistory::after`, `issue_labels`, `set_labels` |
 | `src/labels.rs` | `Edit::apply`, `request`: whole-label PUT; existing Claim is accepted |
