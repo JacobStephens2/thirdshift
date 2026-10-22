@@ -49,7 +49,8 @@ fn run_in_zone(scenario: &Scenario, args: &[&str], env: &[(&str, &str)]) -> RunR
 }
 
 /// Log and folder names under the logs, sorted, excluding Command and child
-/// records kept beside them; none if the folder is missing.
+/// records, Session traces and Harness version caches kept beside them;
+/// none if the folder is missing.
 fn logs_in(scenario: &Scenario, folder: &str) -> Vec<String> {
     let Ok(entries) = fs::read_dir(scenario.path(LOGS).join(folder)) else {
         return Vec::new();
@@ -61,6 +62,7 @@ fn logs_in(scenario: &Scenario, folder: &str) -> Vec<String> {
                 && !name.ends_with(".child.json")
                 && !name.ends_with(".logs.jsonl")
                 && !name.ends_with(".spans.jsonl")
+                && !name.ends_with(".version")
         })
         .collect();
     names.sort();
