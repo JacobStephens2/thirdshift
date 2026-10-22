@@ -49,7 +49,7 @@ body.proto-phone-host > :not(#proto-bar):not(#proto-frame) { display: none !impo
 .ta-dur { text-align: right; }
 @media (max-width: 760px) {
   .ta-axis { grid-template-columns: minmax(0, 1fr) 7ch; }
-  .ta-axis > :not(.ta-ticks) { display: none; }
+  .ta-axis > :not(.ta-ticks):not(.ta-zoom) { display: none; }
   .ta-row { grid-template-columns: minmax(0, 1fr) 7ch; gap: 2px 6px; padding: 4px 0; }
   .ta-row .ta-label { grid-column: 1 / -1; }
   .ta-row .bar { height: 6px; grid-row: 2; grid-column: 1; }
@@ -131,3 +131,7 @@ body.proto-phone-host > :not(#proto-bar):not(#proto-frame) { display: none !impo
   .slow-when { grid-column: 2; }
   .slow-dur { grid-column: 3; }
 }
+
+/* A/E zoom: always visible in the sticky axis header, rows outside the zoom dimmed */
+.ta-zoom { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 4px 8px; margin-bottom: 4px; font: 13px var(--font-body); color: var(--text); background: color-mix(in srgb, var(--look) 18%, var(--panel)); border: 1px solid var(--look); border-radius: var(--radius); }
+.ta-row.outside { opacity: .45; }

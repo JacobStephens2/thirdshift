@@ -111,7 +111,8 @@ function openPeek(node) {
   document.body.classList.add('peek-open');
   peekContent.innerHTML = PEEK[state.details](node);
   peekContent.querySelectorAll('[data-goto]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); const n = byId.get(a.dataset.goto); reveal(n); select(n); }));
-  peekContent.querySelectorAll('[data-fit]').forEach(b => b.addEventListener('click', () => { fit(node); }));
+  peekContent.querySelectorAll('[data-fit]').forEach(b => b.addEventListener('click', () => { fit(byId.get(b.dataset.fit) || node); openPeek(node); }));
+  peekContent.querySelectorAll('[data-unzoom]').forEach(b => b.addEventListener('click', () => { unzoom(); openPeek(node); }));
   peekContent.querySelectorAll('[data-copy]').forEach(b => b.addEventListener('click', () => { navigator.clipboard?.writeText(b.dataset.copy); b.textContent = 'Copied'; }));
   peekContent.querySelectorAll('.pd-tabs button').forEach(b => b.addEventListener('click', () => {
     peekContent.querySelectorAll('.pd-tabs button').forEach(x => x.setAttribute('aria-selected', x === b));
@@ -160,6 +161,15 @@ const table = rows => `<table class="pd-table">${rows.map(([k, v]) => `<tr><th>$
 const path = node => `<p class="pd-path">${ancestors(node).map(n => `<a href="#" data-goto="${esc(n.id)}">${esc(TAG[n.kind])} ${esc(n.name.length > 30 ? n.name.slice(0, 30) + '…' : n.name)}</a>`).join(' › ')}</p>`;
 const attrRows = node => Object.entries(node.attrs || {}).sort().map(([k, v]) => [k, v]);
 
+// A and E: zoom to a span with children; a call zooms to its parent, where it can be read.
+function zoomButton(node) {
+  if (state.variant === 'C') return '<button type="button" data-fit>Zoom to this span</button>';
+  if (state.variant === 'B') return '<button type="button" data-fit>Open this span\'s children</button>';
+  if (state.variant === 'D') return '';
+  if (!node.parent) return '';
+  if (A.fitNode === node) return '<button type="button" data-unzoom>Zoom out to whole Command</button>';
+  return `<button type="button" data-fit="${esc(node.id)}">${node.children.length ? `Zoom timeline to this ${esc(KIND[node.kind].toLowerCase())}` : 'Zoom timeline around this call'}</button>`;
+}
 const PEEK = {
   1(node) { // Tabs, after MLflow
     const { input, output, note } = io(node);
@@ -187,7 +197,7 @@ const PEEK = {
       <div class="pd-tiles">${tiles.map(([v, l]) => `<div class="pd-tile"><b>${esc(v)}</b><span>${esc(l)}</span></div>`).join('')}</div>
       ${parent ? `<p class="dim" style="font-size:12px;margin:0">Within its ${esc(KIND[parent.kind].toLowerCase())}</p>${bar(node, axisOf(parent))}` : ''}
       <p class="dim" style="font-size:12px;margin:6px 0 0">Within the Command</p>${bar(node, axisOf(node.command.tree))}
-      <div class="pd-actions"><button type="button" data-fit>${state.variant === 'C' ? 'Zoom to this span' : state.variant === 'B' ? 'Open this span\'s children' : 'Fit timeline to this span'}</button><a href="#">Open in conversation</a><button type="button" data-copy="${esc(spanCli(node))}">Copy CLI</button></div>
+      <div class="pd-actions">${zoomButton(node)}<a href="#">Open in conversation</a><button type="button" data-copy="${esc(spanCli(node))}">Copy CLI</button></div>
       ${note ? `<p class="dim">${esc(note)}</p>` : ''}
       ${input ? `<details open><summary>Input</summary><pre class="pd-pre">${esc(input)}</pre></details>` : ''}
       ${output ? `<details><summary>Output</summary><pre class="pd-pre">${esc(output)}</pre></details>` : ''}
@@ -198,7 +208,7 @@ const PEEK = {
 
 // ---------- variants ----------
 const host = document.querySelector('#variant-root');
-let fit = () => {}, reveal = () => {};
+let fit = () => {}, reveal = () => {}, unzoom = () => {};
 
 // A: one indented tree with a timeline column on a shared axis (MLflow's trace view).
 const A = { expanded: new Set(), axis: null };
@@ -212,10 +222,11 @@ function variantA(slow = false) {
   const rank = new Map(), contains = new Map();
   let slowest = [];
   if (slow) {
-    const scope = A.fitNode && A.fitNode.command === command() ? A.fitNode : r, leaves = [];
+    const fitted = A.fitNode && A.fitNode.command === command() ? A.fitNode : null;
+    const scope = fitted ? (fitted.children.length ? fitted : fitted.parent) : r, leaves = [];
     // A Codex turn spans its tool calls, so it would crowd them out.
     (function walk(n) { if (n.kind === 'tool' || n.kind === 'model') leaves.push(n); n.children.forEach(walk); })(scope);
-    slowest = leaves.sort((a, b) => length(b) - length(a)).slice(0, 10);
+    slowest = leaves.filter(n => !fitted || (n.endOrNow > axis.start && n.start < axis.end)).sort((a, b) => length(b) - length(a)).slice(0, 10);
     slowest.forEach((n, i) => { rank.set(n, i + 1); ancestors(n).forEach(a => contains.set(a, [...(contains.get(a) || []), i + 1])); });
   }
   const where = n => { const s = ancestors(n).find(a => a.kind === 'session'), run = [...ancestors(n)].reverse().find(a => a.kind === 'run'); return [run && run.name.replace(/^.*#/, '#'), s && `${s.name} session`].filter(Boolean).join(' · '); };
@@ -223,8 +234,8 @@ function variantA(slow = false) {
   host.innerHTML = `<div class="toolbar"><span>Expand to</span>${['run', 'stage', 'session', 'every call'].map(l => `<button type="button" data-level="${l}">${l === 'run' ? 'Runs' : l === 'stage' ? 'stages' : l === 'session' ? 'sessions' : l}</button>`).join('')}
       <span class="dim">·</span><span>Timeline: ${A.axis ? `<b>${esc(A.fitName)}</b> <button type="button" data-unfit>Whole Command</button>` : '<b>whole Command</b>'}</span></div>${legend()}
     ${slow ? `<details class="slow-list" open><summary>Slowest calls ${A.axis ? `in ${esc(A.fitName)}` : 'in this Command'}</summary><ol>${slowest.map(n => `<li data-slow="${esc(n.id)}" class="${n === selected ? 'is-selected' : ''}"><span class="slow-rank">#${rank.get(n)}</span><span class="slow-name">${tag(n)} <span class="name" title="${esc(n.name)}">${esc(n.name)}</span></span><span class="slow-when">${clock(n.start)} → ${n.end ? clock(n.end) : '<span class="st-running">now</span>'}</span><b class="slow-dur">${dur(length(n))}${n.estimated ? '*' : ''}</b><span class="slow-where">${Math.round(length(n) / Math.max(length(n.parent), 1) * 100)}% of its ${KIND[n.parent.kind].toLowerCase()} · ${esc(where(n))}</span></li>`).join('')}</ol></details>` : ''}
-    <div class="ta-axis"><span>Span</span><span class="ta-dur">Time</span><div class="ta-ticks">${ticks(axis, innerWidth < 760 ? 3 : 5)}</div></div>
-    <ul class="ta-tree" role="tree" tabindex="0" aria-label="Span tree">${rows.map(n => `<li class="ta-row" role="treeitem" data-id="${esc(n.id)}" aria-level="${n.depth + 1}" ${n.children.length ? `aria-expanded="${A.expanded.has(n.id)}"` : ''}>
+    <div class="ta-axis">${A.axis ? `<div class="ta-zoom">Timeline zoomed ${A.fitNode?.children.length ? 'to ' : ''}<b>${esc(A.fitName)}</b>: ${clock(axis.start)} → ${clock(axis.end)} (${dur(axis.end - axis.start)}) <button type="button" data-unfit>Zoom out to whole Command</button></div>` : ''}<span>Span</span><span class="ta-dur">Time</span><div class="ta-ticks">${ticks(axis, innerWidth < 760 ? 3 : 5)}</div></div>
+    <ul class="ta-tree" role="tree" tabindex="0" aria-label="Span tree">${rows.map(n => `<li class="ta-row${A.axis && (n.endOrNow <= axis.start || n.start >= axis.end) ? ' outside' : ''}" role="treeitem" data-id="${esc(n.id)}" aria-level="${n.depth + 1}" ${n.children.length ? `aria-expanded="${A.expanded.has(n.id)}"` : ''}>
       <div class="ta-label" style="padding-left:${Math.min(n.depth, 12) * (innerWidth < 760 ? 8 : 14)}px">${n.children.length ? `<button type="button" class="ta-twist" data-twist tabindex="-1">${A.expanded.has(n.id) ? '▾' : '▸'}</button>` : '<span class="ta-twist"></span>'}${tag(n)} <span class="name" title="${esc(n.name)}">${esc(n.name)}</span> ${n.status === 'error' ? `<span class="st-error" title="${esc(n.statusMessage || 'error')}">✕</span>` : n.status === 'running' ? '<span class="st-running" title="running">●</span>' : ''}${ranks(n)}${n.children.length && !A.expanded.has(n.id) && n.rollup.errors && n.status !== 'error' ? ` <span class="st-error rollup">${n.rollup.errors} err</span>` : ''}</div>
       <span class="rollup ta-dur">${dur(length(n))}${n.estimated ? '*' : ''}</span>${bar(n, axis, rank.has(n) ? 'slow' : '')}</li>`).join('')}</ul>`;
   host.querySelectorAll('[data-slow]').forEach(li => li.addEventListener('click', () => {
@@ -239,7 +250,8 @@ function variantA(slow = false) {
     if (upTo !== Infinity) (function walk(n) { if (n.kind === 'run' || n.kind === 'command') A.expanded.add(n.id); n.children.forEach(walk); })(r);
     render();
   }));
-  host.querySelector('[data-unfit]')?.addEventListener('click', () => { A.axis = null; A.fitNode = null; render(); });
+  unzoom = () => { A.axis = null; A.fitNode = null; render(); };
+  host.querySelectorAll('[data-unfit]').forEach(b => b.addEventListener('click', () => { unzoom(); if (selected && !peek.hidden) openPeek(selected); }));
   const tree = host.querySelector('.ta-tree');
   tree.addEventListener('click', e => {
     const row = e.target.closest('.ta-row'); if (!row) return;
@@ -257,7 +269,18 @@ function variantA(slow = false) {
     else if ((e.key === 'Enter' || e.key === ' ') && selected) { e.preventDefault(); openPeek(selected); }
   });
   function toggle(n) { A.expanded.has(n.id) ? A.expanded.delete(n.id) : A.expanded.add(n.id); render(); tree.focus?.(); }
-  fit = n => { A.axis = axisOf(n); A.fitNode = n; A.fitName = `${TAG[n.kind]} ${n.name.slice(0, 40)}`; render(); };
+  fit = n => {
+    if (n.children.length) { A.axis = axisOf(n); A.fitName = `${KIND[n.kind].toLowerCase()} ${n.name.slice(0, 40)}`; }
+    else {
+      // A call alone would fill the axis; show it with what ran just before and after it.
+      const pad = Math.max(length(n), 1000) * 1.5, p = n.parent;
+      A.axis = { start: Math.max(p.start, n.start - pad), end: Math.min(p.endOrNow, n.endOrNow + pad) };
+      A.fitName = `around ${KIND[n.kind].toLowerCase()} ${n.name.slice(0, 40)}`;
+    }
+    A.fitNode = n;
+    ancestors(n).forEach(a => A.expanded.add(a.id)); A.expanded.add(n.id); render();
+    host.querySelector(`.ta-row[data-id="${CSS.escape(n.id)}"]`)?.scrollIntoView({ block: 'start' });
+  };
   reveal = n => { ancestors(n).forEach(a => A.expanded.add(a.id)); render(); };
 }
 
