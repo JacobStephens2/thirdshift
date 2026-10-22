@@ -155,8 +155,8 @@ impl Recording {
         {
             let mut trace = trace.lock().unwrap();
             if let Some(report) = &completion.report {
-                for raw in &report.retained_records {
-                    trace.record(raw, &[])?;
+                for record in &report.retained_records {
+                    trace.record(&record.raw, &record.events)?;
                 }
                 trace.reconcile(&report.events)?;
             }

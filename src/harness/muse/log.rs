@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Default)]
 pub(in crate::harness) struct SessionLog {
-    raw: Vec<String>,
+    raw: Vec<crate::harness::interpretation::RetainedRecord>,
     pub(in crate::harness) events: Vec<crate::harness::interpretation::event::Event>,
     pub(in crate::harness) message: Option<String>,
     pub(in crate::harness) models: Vec<String>,
@@ -44,13 +44,17 @@ impl SessionLog {
         if record["stream"]["id"].as_str() != Some(session_id) {
             return;
         }
-        self.raw.push(raw.into());
-        if matches!(record["payload"]["kind"].as_str(), Some("run" | "task")) {
-            crate::harness::interpretation::event::reconcile(
-                &mut self.events,
-                self.decoder.record(record),
-            );
-        }
+        let events = if matches!(record["payload"]["kind"].as_str(), Some("run" | "task")) {
+            self.decoder.record(record)
+        } else {
+            Vec::new()
+        };
+        crate::harness::interpretation::event::reconcile(&mut self.events, events.clone());
+        self.raw
+            .push(crate::harness::interpretation::RetainedRecord {
+                raw: raw.into(),
+                events,
+            });
         if record["payload"]["kind"] != "run" {
             return;
         }

@@ -30,6 +30,7 @@ pub(super) struct Trace {
     spans_path: PathBuf,
     seen: Vec<Event>,
     locations: BTreeMap<String, (String, SpanId)>,
+    model_usage: BTreeMap<String, Value>,
     input_excludes_cache: bool,
 }
 
@@ -101,6 +102,7 @@ impl Trace {
             spans_path: log.with_extension("spans.jsonl"),
             seen: Vec::new(),
             locations: BTreeMap::new(),
+            model_usage: BTreeMap::new(),
             input_excludes_cache: matches!(
                 choice.harness,
                 crate::harness::Harness::Claude | crate::harness::Harness::Grok
@@ -141,6 +143,7 @@ impl Trace {
         let name = ["type", "event", "payload_type"]
             .iter()
             .find_map(|key| envelope[*key].as_str())
+            .or_else(|| envelope["payload"]["event"]["kind"].as_str())
             .unwrap_or("output");
         self.logs.write(&Logs {
             resource_logs: vec![ResourceLogs {
@@ -214,49 +217,47 @@ impl Trace {
 
     fn apply(&mut self, event: &Event, time: u64) -> io::Result<Option<SpanId>> {
         use Event::*;
-        let (kind, call, parent, start, end, outcome) = match event {
-            ModelCallStarted { id, parent_id, .. } => (
-                "model",
-                id,
-                parent_id.as_deref(),
-                true,
-                false,
-                Outcome::Succeeded,
-            ),
+        let (kind, call, parent, completion) = match event {
+            ModelCallStarted { id, parent_id, .. } => ("model", id, parent_id.as_deref(), None),
             ModelCallEnded {
                 id,
                 parent_id,
                 outcome,
                 ..
-            } => ("model", id, parent_id.as_deref(), false, true, *outcome),
-            ToolCallStarted { id, parent_id, .. } => (
-                "tool",
-                id,
-                parent_id.as_deref(),
-                true,
-                false,
-                Outcome::Succeeded,
-            ),
+            } => ("model", id, parent_id.as_deref(), Some(*outcome)),
+            ToolCallStarted { id, parent_id, .. } => ("tool", id, parent_id.as_deref(), None),
             ToolCallEnded {
                 id,
                 parent_id,
                 outcome,
                 ..
-            } => ("tool", id, parent_id.as_deref(), false, true, *outcome),
-            TurnStarted { id } => ("turn", id, None, true, false, Outcome::Succeeded),
-            TurnEnded { id, outcome, .. } => ("turn", id, None, false, true, *outcome),
-            SubagentStarted { id, parent_id, .. } => (
-                "agent",
-                id,
-                parent_id.as_deref(),
-                true,
-                false,
-                Outcome::Succeeded,
-            ),
-            SubagentEnded { id, outcome, .. } => ("agent", id, None, false, true, *outcome),
+            } => ("tool", id, parent_id.as_deref(), Some(*outcome)),
+            TurnStarted { id } => ("turn", id, None, None),
+            TurnEnded { id, outcome, .. } => ("turn", id, None, Some(*outcome)),
+            SubagentStarted { id, parent_id, .. } => ("agent", id, parent_id.as_deref(), None),
+            SubagentEnded { id, outcome, .. } => ("agent", id, None, Some(*outcome)),
             _ => {
-                for attr in event_attributes(event, self.input_excludes_cache) {
-                    set(&mut self.session.attributes, attr);
+                if let Usage {
+                    scope: crate::harness::interpretation::event::UsageScope::Model,
+                    model,
+                    ..
+                } = event
+                {
+                    self.model_usage.insert(
+                        model.as_deref().unwrap_or("").into(),
+                        serde_json::to_value(event).unwrap(),
+                    );
+                    set(
+                        &mut self.session.attributes,
+                        attribute(
+                            "thirdshift.model_usage",
+                            serde_json::to_string(&self.model_usage).unwrap(),
+                        ),
+                    );
+                } else {
+                    for attr in event_attributes(event, self.input_excludes_cache) {
+                        set(&mut self.session.attributes, attr);
+                    }
                 }
                 let (call, parent) = match event {
                     Message { id, parent_id, .. } => (id.as_deref(), parent_id.as_deref()),
@@ -264,12 +265,13 @@ impl Trace {
                     _ => (None, None),
                 };
                 return Ok(call
-                    .or(parent)
                     .and_then(|id| self.locations.get(id).map(|(_, span)| *span))
-                    .or(self.session.span_id));
+                    .or_else(|| {
+                        parent.and_then(|id| self.locations.get(id).map(|(_, span)| *span))
+                    }));
             }
         };
-        let key = if kind == "agent" && end {
+        let key = if kind == "agent" && completion.is_some() {
             self.locations.get(call).map(|(key, _)| key.clone())
         } else {
             None
@@ -285,7 +287,7 @@ impl Trace {
             for attr in attrs {
                 set(&mut span.attributes, attr);
             }
-            if end {
+            if let Some(outcome) = completion {
                 span.status = Some(status(outcome));
             }
             return Ok(Some(span_id));
@@ -313,14 +315,12 @@ impl Trace {
         for attr in attrs {
             set(&mut span.attributes, attr);
         }
-        if end {
+        if let Some(outcome) = completion {
             let mut span = self.open.remove(&key).unwrap();
             span.end_time_unix_nano = time.max(span.start_time_unix_nano);
             span.status = Some(status(outcome));
             self.ended.insert(key, span.clone());
             self.write_span(span)?;
-        } else if !start {
-            unreachable!();
         }
         Ok(Some(span_id))
     }

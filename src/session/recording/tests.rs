@@ -739,3 +739,136 @@ fn completion_progress_comes_from_interpretation_without_duplicate_live_lines() 
     );
     assert_eq!(stderr.matches("session ended after").count(), 3, "{stderr}");
 }
+
+// Append this entire file to src/session/recording/tests.rs.
+fn review_trace_records(
+    path: &Path,
+    resource: &str,
+    scope: &str,
+    records: &str,
+) -> Vec<serde_json::Value> {
+    fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .flat_map(|line| {
+            let request: serde_json::Value = serde_json::from_str(line).unwrap();
+            request[resource][0][scope][0][records]
+                .as_array()
+                .unwrap()
+                .clone()
+        })
+        .collect()
+}
+
+#[test]
+fn review_session_totals_are_not_replaced_by_one_models_usage() {
+    let fixture = Fixture::new();
+    fixture.run("implement", r#"
+echo '{"type":"result","subtype":"success","usage":{"input_tokens":100,"output_tokens":20},"total_cost_usd":1.0,"modelUsage":{"model-a":{"inputTokens":40,"outputTokens":8,"costUSD":0.4},"model-b":{"inputTokens":60,"outputTokens":12,"costUSD":0.6}}}'
+"#, &Choice::default()).unwrap();
+    let spans = review_trace_records(
+        &fixture.log("implement").with_extension("spans.jsonl"),
+        "resourceSpans",
+        "scopeSpans",
+        "spans",
+    );
+    let session = spans
+        .iter()
+        .find(|span| span["name"] == "invoke_agent implement")
+        .unwrap();
+    let attrs = session["attributes"].as_array().unwrap();
+    let value = |key: &str| attrs.iter().find(|attr| attr["key"] == key).unwrap()["value"].clone();
+    assert_eq!(
+        value("gen_ai.usage.input_tokens"),
+        serde_json::json!({"intValue":"100"})
+    );
+    assert_eq!(
+        value("gen_ai.usage.output_tokens"),
+        serde_json::json!({"intValue":"20"})
+    );
+    assert_eq!(
+        value("thirdshift.cost.usd"),
+        serde_json::json!({"doubleValue":1.0})
+    );
+}
+
+#[test]
+fn review_assistant_message_log_links_to_its_model_call() {
+    let fixture = Fixture::new();
+    fixture.run("implement", r#"
+echo '{"type":"assistant","message":{"id":"m1","model":"test-model","content":[{"type":"text","text":"Hello."}]}}'
+echo '{"type":"result","subtype":"success","result":"Hello."}'
+"#, &Choice::default()).unwrap();
+    let spans = review_trace_records(
+        &fixture.log("implement").with_extension("spans.jsonl"),
+        "resourceSpans",
+        "scopeSpans",
+        "spans",
+    );
+    let model = spans
+        .iter()
+        .find(|span| span["name"] == "model m1")
+        .unwrap();
+    let logs = review_trace_records(
+        &fixture.log("implement").with_extension("logs.jsonl"),
+        "resourceLogs",
+        "scopeLogs",
+        "logRecords",
+    );
+    let assistant = logs
+        .iter()
+        .find(|record| {
+            let raw: serde_json::Value =
+                serde_json::from_str(record["body"]["stringValue"].as_str().unwrap()).unwrap();
+            raw["type"] == "assistant"
+        })
+        .unwrap();
+    assert_eq!(assistant["spanId"], model["spanId"]);
+}
+
+#[test]
+fn review_retained_raw_model_record_has_call_context_and_attributes() {
+    let fixture = Fixture::new();
+    let retained = r#"{"recorded_at":1000,"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"retained-model","usage":{"input_tokens":8,"output_tokens":4}}}}"#;
+    let dir = fixture.root.path().join("sessions/s1");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("session.jsonl"), retained).unwrap();
+    fixture
+        .recording
+        .run(
+            "implement",
+            &Choice::default(),
+            Command::new("/bin/sh").args(["-c", &format!("echo '{INIT}'")]),
+            Input::default(),
+            &fixture.log("implement"),
+            crate::harness::interpretation_tests::recording_interpretation(
+                fixture.root.path(),
+                Harness::Muse,
+            ),
+        )
+        .unwrap();
+    let spans = review_trace_records(
+        &fixture.log("implement").with_extension("spans.jsonl"),
+        "resourceSpans",
+        "scopeSpans",
+        "spans",
+    );
+    let model = spans
+        .iter()
+        .find(|span| span["name"].as_str().unwrap().starts_with("model "))
+        .unwrap();
+    let logs = review_trace_records(
+        &fixture.log("implement").with_extension("logs.jsonl"),
+        "resourceLogs",
+        "scopeLogs",
+        "logRecords",
+    );
+    let raw = logs
+        .iter()
+        .find(|record| record["body"]["stringValue"] == retained)
+        .unwrap();
+    assert_eq!(raw["spanId"], model["spanId"]);
+    assert!(raw["attributes"].as_array().unwrap().iter().any(|attr| {
+        attr["key"] == "gen_ai.operation.name" && attr["value"]["stringValue"] == "chat"
+    }));
+}

@@ -147,7 +147,13 @@ impl Retained for Completion {
             && let Some(export) = read(&self.worktree, id)?
         {
             facts.ended.final_message = export.message;
-            facts.report.retained_records.push(export.raw);
+            facts
+                .report
+                .retained_records
+                .push(crate::harness::interpretation::RetainedRecord {
+                    raw: export.raw,
+                    events: export.events.clone(),
+                });
             facts.report.summary = export.summary;
             facts.report.models = export.models;
             crate::harness::interpretation::event::reconcile(
