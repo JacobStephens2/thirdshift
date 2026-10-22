@@ -177,15 +177,31 @@ fn main() {
     let mut args = std::env::args();
     let name = args.next().expect("no argv[0]");
     let name = Path::new(&name).file_name().unwrap().to_str().unwrap();
+    let args: Vec<String> = args.collect();
+    if name != "gh" && name != "detached-command" && args == ["--version"] {
+        let key = format!("FAKE_{}_RECORD", name.to_uppercase());
+        let path = env_path(&key).with_extension("versions.json");
+        let _lock = lock_beside(&path);
+        append_record(&path, json::string(name));
+        if std::env::var_os("FAKE_HARNESS_VERSION_ERROR").is_some() {
+            die("version unavailable", 1);
+        }
+        println!(
+            "{}",
+            std::env::var("FAKE_HARNESS_VERSION").unwrap_or("9.8.7".into())
+        );
+        exit(0);
+    }
     match name {
-        "gh" => gh::main(args.collect()),
-        "claude" => claude::main(args.collect()),
-        "codex" => codex::main(args.collect()),
-        "agy" => agy::main(args.collect()),
-        "grok" => grok::main(args.collect()),
-        "muse" => muse::main(args.collect()),
-        "opencode" => opencode::main(args.collect()),
+        "gh" => gh::main(args),
+        "claude" => claude::main(args),
+        "codex" => codex::main(args),
+        "agy" => agy::main(args),
+        "grok" => grok::main(args),
+        "muse" => muse::main(args),
+        "opencode" => opencode::main(args),
         "detached-command" => {
+            let mut args = args.into_iter();
             let command = args.next().expect("no detached command");
             let mut command = Command::new(command);
             command.args(args);

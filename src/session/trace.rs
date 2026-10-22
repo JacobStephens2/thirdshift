@@ -1,6 +1,6 @@
 //! A Session trace owns streaming logs and ended spans. The transcript stays
 //! beside it until the readers switch. No Harness protocol parsing lives here
-//! beyond envelope metadata (event name, clock and reported version).
+//! beyond envelope metadata (event name and clock).
 use std::collections::BTreeMap;
 use std::fs::File;
 use std::io;
@@ -10,6 +10,7 @@ use serde_json::Value;
 
 use crate::harness::Choice;
 use crate::harness::interpretation::event::{Event, Outcome};
+use crate::harness::version::Version;
 use crate::logs::trace::{Context, id};
 use crate::otlp_jsonl::*;
 
@@ -23,6 +24,7 @@ pub(super) struct Trace {
     logs: Writer<File, Logs>,
     spans: Writer<File, Spans>,
     resource: Resource,
+    version: Version,
     context: Context,
     session: Span,
     open: BTreeMap<String, Span>,
@@ -43,6 +45,7 @@ impl Trace {
         prompt: &str,
         context: Context,
         command: &std::process::Command,
+        command_log: Option<&Path>,
     ) -> io::Result<Self> {
         let started = now();
         let session_id = id(&[
@@ -69,9 +72,14 @@ impl Trace {
             logs: Writer::new(File::create(log.with_extension("logs.jsonl"))?),
             spans: Writer::new(File::create(log.with_extension("spans.jsonl"))?),
             resource: Resource {
-                attributes: attrs.clone(),
+                attributes: {
+                    let mut resource = attrs.clone();
+                    resource.push(attribute("thirdshift.harness.version", "unknown"));
+                    resource
+                },
                 ..Default::default()
             },
+            version: Version::new(choice.harness.adapter(), command_log, command),
             context,
             session: Span {
                 span_id: Some(session_id),
@@ -115,15 +123,13 @@ impl Trace {
     pub fn record(&mut self, raw: &str, events: &[Event]) -> io::Result<()> {
         let observed = now();
         let envelope: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
-        if let Some(version) = envelope["claude_code_version"]
-            .as_str()
-            .or_else(|| envelope["version"].as_str())
-        {
-            set(
-                &mut self.resource.attributes,
-                attribute("thirdshift.harness.version", version),
-            );
-        }
+        set(
+            &mut self.resource.attributes,
+            attribute(
+                "thirdshift.harness.version",
+                self.version.observe(&envelope),
+            ),
+        );
         let time = event_time(&envelope);
         let mut attrs = Vec::new();
         // Partial Messages frames can carry only usage/deltas, with no new
@@ -192,6 +198,13 @@ impl Trace {
     }
 
     pub fn finish(&mut self, error: Option<&str>) -> io::Result<()> {
+        set(
+            &mut self.resource.attributes,
+            attribute(
+                "thirdshift.harness.version",
+                self.version.observe(&Value::Null),
+            ),
+        );
         let ended = now();
         for (key, mut span) in std::mem::take(&mut self.open) {
             span.end_time_unix_nano = ended.max(span.start_time_unix_nano);
