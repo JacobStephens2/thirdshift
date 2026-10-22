@@ -897,3 +897,26 @@ fn retained_completion_reports_stream_fallback_then_authoritative_empty_models_a
         },
     );
 }
+
+#[test]
+fn review_opencode_preserves_all_live_text_parts_without_export() {
+    use interpretation::event::Kind;
+    let mut interpretation = stream(Harness::OpenCode, "");
+    for line in [
+        r#"{"type":"step_start","timestamp":1000,"sessionID":"s","part":{"id":"start","messageID":"m"}}"#,
+        r#"{"type":"text","timestamp":1100,"sessionID":"s","part":{"id":"text1","messageID":"m","text":"First part. "}}"#,
+        r#"{"type":"text","timestamp":1200,"sessionID":"s","part":{"id":"text2","messageID":"m","text":"Second part."}}"#,
+        r#"{"type":"step_finish","timestamp":1300,"sessionID":"s","part":{"id":"end","messageID":"m","tokens":{"input":10,"output":4}}}"#,
+    ] {
+        interpretation.condense(line);
+    }
+    let events = finish(interpretation).report.unwrap().events;
+    let text: String = events
+        .iter()
+        .filter_map(|event| match &event.kind {
+            Kind::Message { role, text } if role == "assistant" => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(text, "First part. Second part.");
+}

@@ -40,15 +40,19 @@ impl SessionLog {
         Ok(log)
     }
     fn record(&mut self, record: &Value, session_id: &str) {
-        if record["stream"]["id"].as_str() != Some(session_id) || record["payload"]["kind"] != "run"
-        {
+        if record["stream"]["id"].as_str() != Some(session_id) {
+            return;
+        }
+        if matches!(record["payload"]["kind"].as_str(), Some("run" | "task")) {
+            crate::harness::interpretation::event::reconcile(
+                &mut self.events,
+                self.decoder.record(record),
+            );
+        }
+        if record["payload"]["kind"] != "run" {
             return;
         }
         let event = &record["payload"]["event"];
-        crate::harness::interpretation::event::reconcile(
-            &mut self.events,
-            self.decoder.record(record),
-        );
         match event["kind"].as_str() {
             Some("assistant_message_committed") => {
                 self.message = event["text"].as_str().map(String::from);
@@ -160,19 +164,107 @@ mod tests {
     use std::os::unix::process::ExitStatusExt;
 
     #[test]
+    fn review_muse_retained_task_envelopes_enrich_the_live_model_call() {
+        let root = tempfile::tempdir().unwrap();
+        let folder = root.path().join("sessions/2026/10/06/s");
+        fs::create_dir_all(&folder).unwrap();
+        let record = |kind: &str, event: serde_json::Value| {
+            json!({
+                "stream":{"kind":"session","id":"s"},
+                "payload_type":"runtime.session",
+                "recorded_at":20000,
+                "payload":{"kind":kind,"run_id":"r","event":event}
+            })
+        };
+        let records = [
+            record(
+                "task",
+                json!({"kind":"proposed","task_id":"m1","task_kind":"model.meta.response"}),
+            ),
+            record("task", json!({"kind":"started","task_id":"m1"})),
+            record(
+                "run",
+                json!({"kind":"model_completed","model":"muse-spark-1.3","duration_ms":10,"usage":{"input_tokens":100,"output_tokens":12}}),
+            ),
+            record("task", json!({"kind":"completed","task_id":"m1"})),
+        ];
+        fs::write(
+            folder.join("session.jsonl"),
+            records
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join("\n"),
+        )
+        .unwrap();
+        let mut interpretation = recording_interpretation(
+            root.path(),
+            Box::new(super::super::stream::MuseProgress::default()),
+        );
+        for line in include_str!("../../../tests/fixtures/normalized-muse.jsonl").lines() {
+            interpretation.condense(line);
+        }
+        let events = interpretation
+            .finish(Ok(std::process::ExitStatus::from_raw(0)))
+            .report
+            .unwrap()
+            .events;
+        let model_ends: Vec<_> = events
+            .iter()
+            .filter(|event| matches!(event.kind, Kind::ModelEnded { .. }))
+            .collect();
+        assert_eq!(
+            model_ends.len(),
+            1,
+            "one real model call must remain one call: {model_ends:?}"
+        );
+        assert_eq!(model_ends[0].id, "r:m1");
+        assert!(matches!(&model_ends[0].kind, Kind::ModelEnded { usage, .. }
+            if usage.input == Some(100) && usage.output == Some(12)));
+    }
+
+    #[test]
+    fn review_muse_retained_terminal_usage_limit_is_normalized() {
+        use crate::harness::interpretation::event::ErrorKind;
+        let record = json!({
+            "stream":{"kind":"session","id":"s"},
+            "payload_type":"runtime.session",
+            "recorded_at":20000,
+            "payload":{
+                "kind":"run","run_id":"r",
+                "event":{"kind":"terminal","terminal":"failed","reason":"quota exceeded"}
+            }
+        });
+        let log = SessionLog::parse(&record.to_string(), "s").unwrap();
+        assert!(
+            log.events.iter().any(|event| matches!(
+                &event.kind,
+                Kind::Error { kind: ErrorKind::UsageLimit, message } if message == "quota exceeded"
+            )),
+            "retained terminal error is absent: {:?}",
+            log.events
+        );
+    }
+
+    #[test]
     fn normalized_muse_retained_transactions_enrich_live_calls_without_duplicating_usage() {
         let root = tempfile::tempdir().unwrap();
         let folder = root.path().join("sessions/2026/10/06/s");
         fs::create_dir_all(&folder).unwrap();
-        let record = |event| json!({"stream":{"id":"s"},"recorded_at":4000,"payload":{"kind":"run","run_id":"r","event":event}});
+        let record = |kind: &str, event| json!({"stream":{"id":"s"},"recorded_at":4000,"payload":{"kind":kind,"run_id":"r","event":event}});
         let records = [
-            record(json!({"kind":"proposed","task_id":"m1","task_kind":"model.meta.response"})),
-            record(json!({"kind":"started","task_id":"m1"})),
             record(
+                "task",
+                json!({"kind":"proposed","task_id":"m1","task_kind":"model.meta.response"}),
+            ),
+            record("task", json!({"kind":"started","task_id":"m1"})),
+            record(
+                "run",
                 json!({"kind":"model_completed","model":"muse-spark-1.3","duration_ms":10,"usage":{"input_tokens":100,"output_tokens":12,"cached_tokens":80,"cache_write_tokens":5,"reasoning_tokens":2}}),
             ),
-            record(json!({"kind":"completed","task_id":"m1"})),
+            record("task", json!({"kind":"completed","task_id":"m1"})),
             record(
+                "run",
                 json!({"kind":"assistant_message_committed","message_id":"reply","text":"retained reply"}),
             ),
             json!({"stream":{"id":"foreign"},"payload":{"kind":"run","event":{"kind":"model_completed","usage":{"input_tokens":999999}}}}),

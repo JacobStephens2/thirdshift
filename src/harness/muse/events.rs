@@ -29,6 +29,17 @@ enum TaskKind {
 }
 
 impl Task {
+    fn new(kind: TaskKind) -> Self {
+        Self {
+            kind,
+            start: None,
+            started: false,
+            input: Value::Null,
+            output: Value::Null,
+            denied: false,
+        }
+    }
+
     fn start(&mut self, id: &str, time: Option<u64>, model: Option<String>) -> Event {
         if !self.started {
             self.start = time;
@@ -95,21 +106,12 @@ impl Events {
             kind,
             "run.terminal.failed" | "run.terminal.cancelled" | "run.terminal.interrupted"
         ) {
-            let reason = payload["reason"].as_str().unwrap_or("Muse's turn failed");
-            let id = format!("{scope}:terminal");
-            let mut events = vec![Event::error(&id, time, reason)];
-            if kind != "run.terminal.failed"
-                || crate::harness::interpretation::event::interrupted(reason)
-            {
-                events.push(Event::new(
-                    id,
-                    time,
-                    Kind::Killed {
-                        description: reason.into(),
-                    },
-                ));
-            }
-            return events;
+            return terminal(
+                scope,
+                kind.strip_prefix("run.terminal.").unwrap(),
+                payload,
+                time,
+            );
         }
         if kind == "turn.input.user" {
             return payload["prompt"]
@@ -156,6 +158,7 @@ impl Events {
         let event = &payload["event"];
         let time = nanos(&record["recorded_at"], 1000);
         match event["kind"].as_str().unwrap_or("") {
+            "terminal" => terminal(scope, event["terminal"].as_str().unwrap_or(""), event, time),
             "model_completed" => {
                 let mut events = Vec::new();
                 let id = self.last_model.get(scope).cloned().unwrap_or_else(|| {
@@ -247,14 +250,7 @@ impl Events {
             } else {
                 return Vec::new();
             };
-            self.tasks.entry(id).or_insert(Task {
-                kind,
-                start: None,
-                started: false,
-                output: Value::Null,
-                input: Value::Null,
-                denied: false,
-            });
+            self.tasks.entry(id).or_insert_with(|| Task::new(kind));
             return Vec::new();
         }
         if let Some(call) = event["idempotency_key"]
@@ -318,14 +314,10 @@ impl Events {
         let name = payload["correlation_facts"]["tool_name"]
             .as_str()
             .unwrap_or("tool");
-        let task = self.tasks.entry(id.clone()).or_insert(Task {
-            kind: TaskKind::Tool(name.into()),
-            start: None,
-            started: false,
-            input: Value::Null,
-            output: Value::Null,
-            denied: false,
-        });
+        let task = self
+            .tasks
+            .entry(id.clone())
+            .or_insert_with(|| Task::new(TaskKind::Tool(name.into())));
         let result = payload["text"].clone();
         if let Some(text) = result
             .as_str()
@@ -346,4 +338,23 @@ impl Events {
             ),
         ]
     }
+}
+
+fn terminal(scope: &str, status: &str, payload: &Value, time: Option<u64>) -> Vec<Event> {
+    if !matches!(status, "failed" | "cancelled" | "interrupted") {
+        return Vec::new();
+    }
+    let reason = payload["reason"].as_str().unwrap_or("Muse's turn failed");
+    let id = format!("{scope}:terminal");
+    let mut events = vec![Event::error(&id, time, reason)];
+    if status != "failed" || crate::harness::interpretation::event::interrupted(reason) {
+        events.push(Event::new(
+            id,
+            time,
+            Kind::Killed {
+                description: reason.into(),
+            },
+        ));
+    }
+    events
 }

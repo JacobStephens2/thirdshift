@@ -69,6 +69,11 @@ pub enum ErrorKind {
 }
 
 impl Event {
+    fn same_fact(&self, other: &Self) -> bool {
+        self.id == other.id
+            && std::mem::discriminant(&self.kind) == std::mem::discriminant(&other.kind)
+    }
+
     pub(in crate::harness) fn new(
         id: impl Into<String>,
         time_unix_nanos: Option<u64>,
@@ -114,10 +119,7 @@ impl Event {
 pub(in crate::harness) fn reconcile(live: &mut Vec<Event>, retained: Vec<Event>) {
     let mut cursor = None;
     for (position, mut event) in retained.iter().cloned().enumerate() {
-        if let Some(index) = live.iter().position(|old| {
-            old.id == event.id
-                && std::mem::discriminant(&old.kind) == std::mem::discriminant(&event.kind)
-        }) {
+        if let Some(index) = live.iter().position(|old| old.same_fact(&event)) {
             let old = &mut live[index];
             event.time_unix_nanos = event.time_unix_nanos.or(old.time_unix_nanos);
             event.duration_nanos = event.duration_nanos.or(old.duration_nanos);
@@ -165,13 +167,7 @@ pub(in crate::harness) fn reconcile(live: &mut Vec<Event>, retained: Vec<Event>)
             let index = cursor.unwrap_or_else(|| {
                 retained[position + 1..]
                     .iter()
-                    .find_map(|next| {
-                        live.iter().position(|old| {
-                            old.id == next.id
-                                && std::mem::discriminant(&old.kind)
-                                    == std::mem::discriminant(&next.kind)
-                        })
-                    })
+                    .find_map(|next| live.iter().position(|old| old.same_fact(next)))
                     .unwrap_or(live.len())
             });
             live.insert(index, event);

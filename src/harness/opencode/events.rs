@@ -1,7 +1,7 @@
 //! OpenCode step/message IDs identify model calls; tool IDs survive export.
 use crate::harness::interpretation::event::{Event, Kind, Usage, denied, interrupted, nanos};
 use serde_json::Value;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Default)]
 pub(super) struct Events {
@@ -10,6 +10,7 @@ pub(super) struct Events {
     next: usize,
     started: HashSet<String>,
     ended: HashSet<String>,
+    text: HashMap<String, Vec<(String, String)>>,
 }
 
 impl Events {
@@ -189,20 +190,27 @@ impl Events {
                     nanos(&part["state"]["time"]["end"], 1_000_000).or(time),
                 )
             }
-            Some("text") => part["text"]
-                .as_str()
-                .map(|text| {
-                    Event::new(
-                        format!("{}:{}:message", self.session, self.current),
-                        time,
-                        Kind::Message {
-                            role: "assistant".into(),
-                            text: text.into(),
-                        },
-                    )
-                })
-                .into_iter()
-                .collect(),
+            Some("text") => {
+                let Some(text) = part["text"].as_str() else {
+                    return Vec::new();
+                };
+                let id = format!("{}:{}:message", self.session, self.current);
+                let parts = self.text.entry(id.clone()).or_default();
+                let part_id = part["id"].as_str().unwrap_or("");
+                if let Some((_, previous)) = parts.iter_mut().find(|(id, _)| id == part_id) {
+                    *previous = text.into();
+                } else {
+                    parts.push((part_id.into(), text.into()));
+                }
+                vec![Event::new(
+                    id,
+                    time,
+                    Kind::Message {
+                        role: "assistant".into(),
+                        text: parts.iter().map(|(_, text)| text.as_str()).collect(),
+                    },
+                )]
+            }
             Some("error") => {
                 self.next += 1;
                 let id = format!("{}:error:{}", self.session, self.next);
