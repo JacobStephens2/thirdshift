@@ -1,5 +1,6 @@
 {% extends "console/account_base.html" %}
 {% block title %}Account{% endblock %}
+{% block notifications %}{% include "console/notifications.html" %}{% endblock %}
 {% block content %}
 <h1>Account</h1><p>{{ email }}</p>
 {% if signed_in %}<form class="account-form" method="post" action="/sign-out"><input type="hidden" name="csrf" value="{{ csrf }}"><button type="submit">Sign out this browser</button></form>{% endif %}

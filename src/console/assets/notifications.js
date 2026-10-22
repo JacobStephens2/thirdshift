@@ -42,10 +42,11 @@ async function observe(previous, currentGeneration) {
     let shared;
     try { shared = JSON.parse(localStorage.getItem(snapshot)); } catch { /* reset malformed history */ }
     const current = { count: rows.length, ids: rows.map(row => row.id) };
-    const notified = shared?.count === current.count && shared?.notified === true;
+    const notified = shared?.count > current.count || (shared?.count === current.count && shared?.notified === true);
     const notify = previous && current.count > previous.count && !notified;
     // Loading a tab establishes its own baseline without consuming a rise
-    // another open tab has yet to see. A count change starts a new shared rise.
+    // another open tab has yet to see. A fall is consumed too, so a delayed tab
+    // cannot mistake it for a rise from its older baseline.
     localStorage.setItem(snapshot, JSON.stringify({ count: current.count, notified: notified || !!notify }));
     if (!notify) return current;
     const added = rows.filter(row => !previous.ids.includes(row.id));
@@ -105,5 +106,6 @@ button.addEventListener('click', async () => {
 });
 window.addEventListener('storage', event => { if (event.key === preference || event.key === null) sync(); });
 window.addEventListener('focus', sync);
-window.addEventListener('pagehide', () => { generation++; stopWatching?.(); });
+window.addEventListener('pagehide', () => { generation++; stopWatching?.(); stopWatching = undefined; });
+window.addEventListener('pageshow', sync);
 sync();

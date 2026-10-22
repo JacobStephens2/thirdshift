@@ -1,5 +1,4 @@
 <header><p class="brand">thirdshift / Console</p><h1>{{ page.hostname }}</h1>
   {% if !page.consoles.is_empty() %}<nav aria-label="Other Consoles">{% for address in page.consoles %}<a href="{{ address }}">{{ address }}</a>{% endfor %}</nav>{% endif %}
-  <p><button type="button" id="notifications-toggle" aria-pressed="false" aria-describedby="notifications-status" disabled>Turn notifications on</button> <span id="notifications-status" role="status">Notifications need JavaScript.</span></p>
-  <script src="/assets/notifications.js" type="module"></script>
+  {% include "console/notifications.html" %}
 </header>

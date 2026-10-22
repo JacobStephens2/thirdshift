@@ -50,6 +50,10 @@ async function contextFor(t, mode = 'granted') {
     window.permissionRequests = 0;
     window.focusCalls = 0;
     window.focus = () => window.focusCalls++;
+    const NativeSource = EventSource;
+    window.EventSource = class extends NativeSource {
+      constructor(...args) { super(...args); window.notificationStream = this; }
+    };
     let permission = localStorage.getItem('test:notification-permission') ?? (mode === 'prompt' ? 'default' : mode);
     window.Notification = class {
       static get permission() { return permission; }
@@ -224,12 +228,6 @@ test('notifications recover after the Inbox is temporarily unavailable', async t
 
 test('opening another tab during a rise does not swallow the existing tab notification', async t => {
   const context = await contextFor(t);
-  await context.addInitScript(() => {
-    const NativeSource = EventSource;
-    window.EventSource = class extends NativeSource {
-      constructor(...args) { super(...args); window.notificationStream = this; }
-    };
-  });
   const older = await context.newPage();
   await older.goto(`${origin}/?page=history`);
   await older.getByRole('button', { name: 'Turn notifications on', exact: true }).click();
@@ -249,5 +247,71 @@ test('opening another tab during a rise does not swallow the existing tab notifi
     assert.equal(await newer.evaluate(() => notices.length), 0);
   } finally {
     await rm(join(records, '9.command.json'), { force: true });
+  }
+});
+
+test('a delayed tab does not notify for a fall already observed by another tab', async t => {
+  const context = await contextFor(t);
+  const active = await context.newPage();
+  await active.goto(`${origin}/?page=history`);
+  await active.getByRole('button', { name: 'Turn notifications on', exact: true }).click();
+  const delayed = await context.newPage();
+  await delayed.goto(`${origin}/?page=history`);
+  await delayed.getByRole('button', { name: 'Turn notifications off', exact: true }).waitFor();
+  await delayed.waitForTimeout(1200);
+  await delayed.evaluate(() => notificationStream.close());
+  try {
+    await item(10);
+    await item(11);
+    await active.waitForFunction(() => notices.at(-1)?.title.startsWith('3 need you'));
+    await rm(join(records, '11.command.json'));
+    // Wait for the active tab's successful fall sample to complete.
+    await active.waitForResponse(response => response.url() === `${origin}/` && response.ok());
+    await active.waitForTimeout(100);
+    const fetched = delayed.waitForResponse(response => response.url() === `${origin}/` && response.ok());
+    await delayed.evaluate(() => notificationStream.dispatchEvent(new Event('commands')));
+    await fetched;
+    await delayed.waitForTimeout(100);
+    assert.equal(await delayed.evaluate(() => notices.length), 0);
+  } finally {
+    await rm(join(records, '10.command.json'), { force: true });
+    await rm(join(records, '11.command.json'), { force: true });
+  }
+});
+
+test('notifications resume when a page returns from the back-forward cache', async t => {
+  const context = await contextFor(t);
+  const page = await context.newPage();
+  await page.goto(`${origin}/?page=history`);
+  await page.getByRole('button', { name: 'Turn notifications on', exact: true }).click();
+  await page.getByRole('button', { name: 'Turn notifications off', exact: true }).waitFor();
+  await page.waitForTimeout(1200);
+  await page.evaluate(() => {
+    dispatchEvent(new PageTransitionEvent('pagehide', { persisted: true }));
+    dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }));
+  });
+  await page.waitForTimeout(1200);
+  try {
+    await item(12);
+    await page.waitForFunction(() => notices.length === 1, null, { timeout: 5000 });
+  } finally { await rm(join(records, '12.command.json'), { force: true }); }
+});
+
+test('Account and Console log tabs keep notifications available', async t => {
+  const context = await contextFor(t);
+  const page = await context.newPage();
+  await page.goto(origin);
+  await page.getByRole('button', { name: 'Turn notifications on', exact: true }).click();
+  try {
+    for (const [path, number] of [['/account', 13], ['/console-log', 14]]) {
+      await page.goto(`${origin}${path}`);
+      await page.getByRole('button', { name: 'Turn notifications off', exact: true }).waitFor({ timeout: 2000 });
+      await page.waitForTimeout(1200);
+      await item(number);
+      await page.waitForFunction(() => notices.length === 1);
+    }
+  } finally {
+    await rm(join(records, '13.command.json'), { force: true });
+    await rm(join(records, '14.command.json'), { force: true });
   }
 });
