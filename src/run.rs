@@ -288,6 +288,12 @@ fn start<O: Outside>(
             },
             matches!(selection, Selection::Continuation { .. }),
         );
+        if let Some(review) = &asks.security_review_harness
+            && review.chosen_by == crate::harness::ChosenBy::SecurityConfig
+            && review.harness != asks.harness.harness
+        {
+            recovery.add_security_review_harness(review.harness);
+        }
     }
     if claims {
         outside.end_claim(outcome.as_ref().ok().map(|reached| reached.goal));

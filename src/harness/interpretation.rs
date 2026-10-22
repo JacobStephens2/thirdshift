@@ -1,5 +1,6 @@
 //! Interpret a Harness session once, including optional retained records.
 
+use std::fmt;
 use std::process::{ExitStatus, Output};
 
 use anyhow::{Result, anyhow};
@@ -152,8 +153,40 @@ enum Failure {
     },
 }
 
+/// A failed session keeps the Harness's diagnostic separate from its exit
+/// status so callers can report it without parsing the error's display text.
+#[derive(Debug)]
+pub struct SessionFailure {
+    pub harness: &'static str,
+    pub diagnostic: Option<String>,
+    status: ExitStatus,
+}
+
+impl fmt::Display for SessionFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.harness)?;
+        if self.status.success() {
+            f.write_str("'s turn failed")?;
+        } else {
+            write!(
+                f,
+                " exited {}",
+                self.status
+                    .code()
+                    .map_or("by signal".to_string(), |code| code.to_string())
+            )?;
+        }
+        if let Some(diagnostic) = &self.diagnostic {
+            write!(f, ": {diagnostic}")?;
+        }
+        Ok(())
+    }
+}
+
+impl std::error::Error for SessionFailure {}
+
 impl Failure {
-    fn session_error(self, cli: &str) -> anyhow::Error {
+    fn session_error(self, cli: &'static str) -> anyhow::Error {
         match self {
             Self::Execution(error) => error,
             Self::Rejected {
@@ -161,20 +194,11 @@ impl Failure {
                 diagnostic,
                 refusal,
             } => {
-                let ended = if status.success() {
-                    "'s turn failed".to_string()
-                } else {
-                    format!(
-                        " exited {}",
-                        status
-                            .code()
-                            .map_or("by signal".to_string(), |code| code.to_string())
-                    )
-                };
-                let error = match diagnostic {
-                    Some(error) => anyhow!("{cli}{ended}: {error}"),
-                    None => anyhow!("{cli}{ended}"),
-                };
+                let error = anyhow::Error::new(SessionFailure {
+                    harness: cli,
+                    diagnostic,
+                    status,
+                });
                 match refusal {
                     Some(refusal) => error.context(refusal),
                     None => error,

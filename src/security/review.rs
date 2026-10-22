@@ -8,7 +8,7 @@ use std::{fmt, fs};
 
 use super::reproduction::{FixSize, Outcome as ReproductionOutcome, Reproduction, Severity};
 use crate::github::{DraftAdvisory, FindingDraft, FindingProvenance, GitHub};
-use crate::harness::interpretation::SafeguardRefusal;
+use crate::harness::interpretation::{SafeguardRefusal, SessionFailure};
 use crate::issue::IssueUrl;
 use crate::session::{Kind, Purpose, Sessions};
 use crate::worktree::Worktree;
@@ -189,6 +189,16 @@ impl Outcome {
                     format!("Security review refused: {refusal}")
                 } else if let Some(incomplete) = error.downcast_ref::<Incomplete>() {
                     format!("Security review incomplete: {incomplete}")
+                } else if let Some(failure) = error.downcast_ref::<SessionFailure>()
+                    && let Some(diagnostic) = failure
+                        .diagnostic
+                        .as_deref()
+                        .and_then(|text| text.lines().map(str::trim).find(|line| !line.is_empty()))
+                {
+                    format!(
+                        "Security review on {} failed: {diagnostic}",
+                        failure.harness
+                    )
                 } else {
                     "Security review incomplete: session failed, ended early or omitted a valid final line; see Session log".to_string()
                 },
