@@ -4,6 +4,107 @@ use opentelemetry_proto::tonic::collector::trace::v1::ExportTraceServiceRequest;
 use serde_json::json;
 
 #[test]
+fn finite_double_reads_back_without_changing_bits() {
+    let number = f64::from_bits(0x20fd5db43a776693);
+    let request = Logs {
+        resource_logs: vec![ResourceLogs {
+            scope_logs: vec![ScopeLogs {
+                log_records: vec![LogRecord {
+                    body: Some(AnyValue::Double(number)),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+    };
+    let mut bytes = Vec::new();
+    Writer::new(&mut bytes).write(&request).unwrap();
+    let actual = Reader::<_, Logs>::new(bytes.as_slice())
+        .next()
+        .unwrap()
+        .unwrap();
+    assert_eq!(actual, request);
+}
+
+#[test]
+fn reader_accepts_protojson_integer_spellings_without_rounding() {
+    fn read_record(fields: &str) -> std::io::Result<LogRecord> {
+        let line =
+            format!(r#"{{"resourceLogs":[{{"scopeLogs":[{{"logRecords":[{{{fields}}}]}}]}}]}}"#);
+        Reader::<_, Logs>::new(line.as_bytes())
+            .next()
+            .unwrap()
+            .map(|request| request.resource_logs[0].scope_logs[0].log_records[0].clone())
+    }
+
+    for (encoded, expected) in [
+        (r#""4.2e1""#, 42),
+        ("4.2e1", 42),
+        ("42.0", 42),
+        (r#""42.0""#, 42),
+        ("18446744073709551615", u64::MAX),
+        (r#""18446744073709551615""#, u64::MAX),
+        ("18446744073709551615e0", u64::MAX),
+        (r#""18446744073709551615e0""#, u64::MAX),
+    ] {
+        let record = read_record(&format!(r#""timeUnixNano":{encoded}"#))
+            .unwrap_or_else(|error| panic!("timeUnixNano {encoded}: {error}"));
+        assert_eq!(record.time_unix_nano, expected, "{encoded}");
+    }
+    for (encoded, expected) in [
+        (r#""-4.2e1""#, -42),
+        ("-4.2e1", -42),
+        ("-42.0", -42),
+        ("9223372036854775807", i64::MAX),
+        (r#""9223372036854775807""#, i64::MAX),
+        ("9223372036854775807e0", i64::MAX),
+        (r#""9223372036854775807e0""#, i64::MAX),
+        ("-9223372036854775808", i64::MIN),
+        (r#""-9223372036854775808""#, i64::MIN),
+        ("-9223372036854775808e0", i64::MIN),
+        (r#""-9223372036854775808e0""#, i64::MIN),
+    ] {
+        let record = read_record(&format!(r#""body":{{"intValue":{encoded}}}"#))
+            .unwrap_or_else(|error| panic!("intValue {encoded}: {error}"));
+        assert_eq!(record.body, Some(AnyValue::Int(expected)), "{encoded}");
+    }
+    for encoded in ["1", r#""1""#, "1e0", r#""1e0""#, "1.0", r#""1.0""#] {
+        let record = read_record(&format!(r#""flags":{encoded}"#))
+            .unwrap_or_else(|error| panic!("flags {encoded}: {error}"));
+        assert_eq!(record.flags, 1, "{encoded}");
+    }
+    for encoded in [
+        "-1",
+        "18446744073709551616",
+        r#""18446744073709551616e0""#,
+        "42.5",
+    ] {
+        assert!(
+            read_record(&format!(r#""timeUnixNano":{encoded}"#)).is_err(),
+            "{encoded}"
+        );
+    }
+    for encoded in [
+        "9223372036854775808",
+        "-9223372036854775809",
+        r#""9223372036854775808e0""#,
+        "42.5",
+    ] {
+        assert!(
+            read_record(&format!(r#""body":{{"intValue":{encoded}}}"#)).is_err(),
+            "{encoded}"
+        );
+    }
+    for encoded in ["-1", "4294967296", r#""4294967296e0""#, "1.5"] {
+        assert!(
+            read_record(&format!(r#""flags":{encoded}"#)).is_err(),
+            "{encoded}"
+        );
+    }
+}
+
+#[test]
 fn log_requests_are_official_otlp_and_read_back_unchanged() {
     let request = Logs {
         resource_logs: vec![ResourceLogs {
@@ -33,24 +134,11 @@ fn log_requests_are_official_otlp_and_read_back_unchanged() {
             ..Default::default()
         }],
     };
-    let mut bytes = Vec::new();
-    Writer::new(&mut bytes).write(&request).unwrap();
-    assert_eq!(bytes.iter().filter(|b| **b == b'\n').count(), 1);
-    let official: ExportLogsServiceRequest = serde_json::from_slice(&bytes).unwrap();
+    let official: ExportLogsServiceRequest = check_roundtrip(&request);
     let record = &official.resource_logs[0].scope_logs[0].log_records[0];
     assert_eq!(record.time_unix_nano, 1_701_234_567_000_000_001);
     assert_eq!(record.event_name, "example.event");
     assert_eq!(record.severity_number, 9);
-    assert_eq!(
-        Reader::<_, Logs>::new(bytes.as_slice())
-            .next()
-            .unwrap()
-            .unwrap(),
-        request
-    );
-    let from_official: Logs =
-        serde_json::from_value(serde_json::to_value(&official).unwrap()).unwrap();
-    assert_eq!(from_official, request);
 }
 
 #[test]
@@ -106,9 +194,7 @@ fn span_requests_preserve_parents_status_events_and_links() {
             schema_url: "https://example.org/resource".into(),
         }],
     };
-    let mut bytes = Vec::new();
-    Writer::new(&mut bytes).write(&request).unwrap();
-    let official: ExportTraceServiceRequest = serde_json::from_slice(&bytes).unwrap();
+    let official: ExportTraceServiceRequest = check_roundtrip(&request);
     let span = &official.resource_spans[0].scope_spans[0].spans[0];
     assert_eq!(span.trace_id, vec![0xab; 16]);
     assert_eq!(span.parent_span_id, vec![0xef; 8]);
@@ -116,16 +202,6 @@ fn span_requests_preserve_parents_status_events_and_links() {
     assert_eq!(span.status.as_ref().unwrap().code, 2);
     assert_eq!(span.events[0].time_unix_nano, 42);
     assert_eq!(span.links[0].span_id, vec![0xef; 8]);
-    assert_eq!(
-        Reader::<_, Spans>::new(bytes.as_slice())
-            .next()
-            .unwrap()
-            .unwrap(),
-        request
-    );
-    let from_official: Spans =
-        serde_json::from_value(serde_json::to_value(&official).unwrap()).unwrap();
-    assert_eq!(from_official, request);
 }
 
 #[test]
@@ -197,22 +273,40 @@ where
     R: Request + PartialEq + std::fmt::Debug,
     P: serde::de::DeserializeOwned + Serialize + PartialEq + std::fmt::Debug,
 {
-    let expected: P = serde_json::from_str(text).unwrap();
+    let expected: P = decode_official(text.as_bytes());
     let request: R = serde_json::from_str(text).unwrap();
+    assert_eq!(check_roundtrip::<_, P>(&request), expected);
+    request
+}
+
+fn check_roundtrip<R, P>(request: &R) -> P
+where
+    R: Request + PartialEq + std::fmt::Debug,
+    P: serde::de::DeserializeOwned + Serialize,
+{
     let mut bytes = Vec::new();
-    Writer::new(&mut bytes).write(&request).unwrap();
-    let official: P = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(official, expected);
+    Writer::new(&mut bytes).write(request).unwrap();
+    assert_eq!(bytes.iter().filter(|b| **b == b'\n').count(), 1);
+    let official: P = decode_official(&bytes);
     assert_eq!(
-        Reader::<_, R>::new(bytes.as_slice())
+        &Reader::<_, R>::new(bytes.as_slice())
             .next()
             .unwrap()
             .unwrap(),
         request
     );
-    let from_official: R = serde_json::from_value(serde_json::to_value(official).unwrap()).unwrap();
-    assert_eq!(from_official, request);
-    request
+    let from_official: R =
+        serde_json::from_value(serde_json::to_value(&official).unwrap()).unwrap();
+    assert_eq!(&from_official, request);
+    official
+}
+
+fn decode_official<P: serde::de::DeserializeOwned>(bytes: &[u8]) -> P {
+    // The official AnyValue uses serde flatten, which cannot consume serde_json's
+    // arbitrary-precision number token directly. A JSON Value first exposes
+    // ordinary f64 values to that visitor while retaining the official schema.
+    let json: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+    serde_json::from_value(json).unwrap()
 }
 
 #[test]

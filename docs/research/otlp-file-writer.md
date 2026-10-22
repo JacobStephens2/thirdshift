@@ -337,8 +337,12 @@ PY
 The live check used the same source and tests compiled in a temporary standalone
 crate with only serde and serde_json at run time, also proving the module has no
 thirdshift dependencies. The repository's own targeted test command above checks
-the same module and creates the same files. The standalone run passed all 11
-codec tests before the live check.
+the same module and creates the same files. The final standalone run passed all
+13 codec tests, including review regressions for precise finite doubles and
+quoted/unquoted decimal integers. The Collector comparison was repeated after
+those fixes with the same passing result. serde_json's existing `float_roundtrip`
+and `arbitrary_precision` features preserve those numbers; neither adds a crate
+to the run-time dependency tree.
 
 ### 4.5 MSRV and CI
 

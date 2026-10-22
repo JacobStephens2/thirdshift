@@ -6,6 +6,8 @@
 //! Calls require exclusive access and flush each complete line. An I/O failure
 //! can leave a partial line; repair the tail before appending again. Flush moves
 //! buffered bytes to the OS, not durable storage: file owners choose fsync policy.
+//! serde_json's `float_roundtrip` and `arbitrary_precision` features are required
+//! to read floating-point and integer values without changing their precision.
 
 // This module is introduced before the Session recorder that will consume it.
 #![allow(dead_code)]
@@ -15,6 +17,7 @@ use std::marker::PhantomData;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+mod integer;
 mod value;
 pub use value::AnyValue;
 
@@ -59,12 +62,14 @@ message!(ScopeLogs {
 });
 message!(Resource {
     attributes: Vec<KeyValue>,
+    #[serde(deserialize_with = "integer::deserialize")]
     dropped_attributes_count: u32,
 });
 message!(Scope {
     name: String,
     version: String,
     attributes: Vec<KeyValue>,
+    #[serde(deserialize_with = "integer::deserialize")]
     dropped_attributes_count: u32,
 });
 message!(KeyValue { key: String, value: Option<AnyValue> });
@@ -78,7 +83,9 @@ message!(LogRecord {
     severity_text: String,
     body: Option<AnyValue>,
     attributes: Vec<KeyValue>,
+    #[serde(deserialize_with = "integer::deserialize")]
     dropped_attributes_count: u32,
+    #[serde(deserialize_with = "integer::deserialize")]
     flags: u32,
     #[serde(deserialize_with = "optional_id")]
     trace_id: Option<TraceId>,
@@ -95,6 +102,7 @@ message!(Span {
     trace_state: String,
     #[serde(deserialize_with = "optional_id")]
     parent_span_id: Option<SpanId>,
+    #[serde(deserialize_with = "integer::deserialize")]
     flags: u32,
     name: String,
     // 0 unspecified, 1 internal, 2 server, 3 client, 4 producer, 5 consumer.
@@ -104,10 +112,13 @@ message!(Span {
     #[serde(with = "integer")]
     end_time_unix_nano: u64,
     attributes: Vec<KeyValue>,
+    #[serde(deserialize_with = "integer::deserialize")]
     dropped_attributes_count: u32,
     events: Vec<SpanEvent>,
+    #[serde(deserialize_with = "integer::deserialize")]
     dropped_events_count: u32,
     links: Vec<SpanLink>,
+    #[serde(deserialize_with = "integer::deserialize")]
     dropped_links_count: u32,
     status: Option<Status>,
 });
@@ -116,6 +127,7 @@ message!(SpanEvent {
     time_unix_nano: u64,
     name: String,
     attributes: Vec<KeyValue>,
+    #[serde(deserialize_with = "integer::deserialize")]
     dropped_attributes_count: u32,
 });
 message!(SpanLink {
@@ -125,7 +137,9 @@ message!(SpanLink {
     span_id: Option<SpanId>,
     trace_state: String,
     attributes: Vec<KeyValue>,
+    #[serde(deserialize_with = "integer::deserialize")]
     dropped_attributes_count: u32,
+    #[serde(deserialize_with = "integer::deserialize")]
     flags: u32,
 });
 message!(Status {
@@ -155,7 +169,7 @@ impl<'de, const N: usize> Deserialize<'de> for Id<N> {
             return Err(D::Error::custom(format!("expected {} hex digits", N * 2)));
         }
         let mut bytes = [0; N];
-        for (byte, pair) in bytes.iter_mut().zip(hex.as_bytes().chunks_exact(2)) {
+        for (byte, pair) in bytes.iter_mut().zip(hex.as_bytes().as_chunks::<2>().0) {
             let high = (pair[0] as char).to_digit(16);
             let low = (pair[1] as char).to_digit(16);
             match (high, low) {
@@ -174,33 +188,6 @@ fn optional_id<'de, D: serde::Deserializer<'de>, const N: usize>(
     match Option::<String>::deserialize(d)? {
         Some(s) if !s.is_empty() => Id::deserialize(s.into_deserializer()).map(Some),
         _ => Ok(None),
-    }
-}
-
-mod integer {
-    use serde::{Deserialize, Deserializer, Serializer, de::Error};
-    use std::{fmt::Display, str::FromStr};
-
-    pub fn serialize<S: Serializer, T: Display>(value: &T, s: S) -> Result<S::Ok, S::Error> {
-        s.collect_str(value)
-    }
-
-    pub fn deserialize<'de, D, T>(d: D) -> Result<T, D::Error>
-    where
-        D: Deserializer<'de>,
-        T: Deserialize<'de> + FromStr,
-        T::Err: Display,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum Number<T> {
-            String(String),
-            Number(T),
-        }
-        match Number::deserialize(d)? {
-            Number::String(s) => s.parse().map_err(D::Error::custom),
-            Number::Number(n) => Ok(n),
-        }
     }
 }
 
