@@ -67,7 +67,11 @@ impl LiveRun {
                 command,
             ),
             (
-                PathBuf::from(self.record["session_log"].as_str().unwrap()),
+                {
+                    let log = PathBuf::from(self.record["session_log"].as_str().unwrap());
+                    let records = log.with_extension("logs.jsonl");
+                    if records.is_file() { records } else { log }
+                },
                 session,
             ),
         ] {
@@ -163,6 +167,42 @@ fn silent_requires_both_logs_and_escalates_in_status_and_show() {
     run.scenario
         .user_config_is("[inbox]\nsilent_minutes = 20\n");
     run.log_ages(14, 14);
+    assert_eq!(run.status()["health"]["state"], "ok");
+}
+
+#[test]
+fn silent_watches_session_trace_records_and_falls_back_to_old_session_logs() {
+    use std::io::Write;
+
+    let mut run = LiveRun::new();
+    run.stage_age(60);
+    run.log_ages(20, 20);
+    let session = PathBuf::from(run.record["session_log"].as_str().unwrap());
+    let records = session.with_extension("logs.jsonl");
+    let event =
+        support::session_trace::records(r#"{"type":"assistant","message":{"content":"Working"}}"#);
+    fs::write(&records, &event).unwrap();
+    assert_eq!(run.status()["health"]["state"], "ok");
+
+    File::options()
+        .write(true)
+        .open(&records)
+        .unwrap()
+        .set_times(FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(20 * 60)))
+        .unwrap();
+    fs::write(&session, "Old log grew, but the records did not\n").unwrap();
+    assert_eq!(run.status()["health"]["state"], "silent");
+    File::options()
+        .append(true)
+        .open(&records)
+        .unwrap()
+        .write_all(event.as_bytes())
+        .unwrap();
+    assert_eq!(run.status()["health"]["state"], "ok");
+    fs::remove_file(&session).unwrap();
+    assert_eq!(run.status()["health"]["state"], "ok");
+    fs::remove_file(&records).unwrap();
+    fs::write(&session, "Old Session log is active\n").unwrap();
     assert_eq!(run.status()["health"]["state"], "ok");
 }
 
