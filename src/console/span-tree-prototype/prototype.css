@@ -115,10 +115,19 @@ body.proto-phone-host > :not(#proto-bar):not(#proto-frame) { display: none !impo
 .slow-list { border: 1px solid var(--rule); border-radius: var(--radius); background: var(--panel); padding: 4px 10px; margin: 8px 0 12px; }
 .slow-list > summary { font-size: 14px; font-weight: var(--head-weight); padding: 4px 0; }
 .slow-list ol { list-style: none; margin: 4px 0 6px; padding-left: 0; max-height: 260px; overflow: auto; }
-.slow-list li { padding: 3px 0; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slow-list li { display: grid; grid-template-columns: 3.2ch minmax(0, 1fr) auto 8ch; gap: 0 10px; align-items: baseline; padding: 4px 0; cursor: pointer; border-bottom: 1px solid color-mix(in srgb, var(--rule) 40%, transparent); }
+.slow-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.slow-when { font: 12px var(--font-mono); color: var(--dim); white-space: nowrap; }
+.slow-dur { font: 12px var(--font-mono); text-align: right; white-space: nowrap; }
+.slow-where { grid-column: 2 / -1; font-size: 12px; color: var(--dim); }
 .slow-list li:hover { background: var(--bg); }
 .slow-list li .name { font-size: 13px; }
 .slow-rank { font: 11px var(--font-mono); background: var(--look); color: var(--bg); border-radius: var(--radius); padding: 0 4px; }
 .slow-hint { font: 11px var(--font-mono); color: var(--look-text); }
 .bar.slow > i { border: 2px solid var(--look); background: color-mix(in srgb, var(--look) 45%, transparent); min-width: 4px; }
-@media (max-width: 760px) { .slow-list li { white-space: normal; } }
+@media (max-width: 760px) {
+  .slow-list li { grid-template-columns: 3.2ch minmax(0, 1fr) auto; }
+  .slow-name { grid-column: 2 / -1; }
+  .slow-when { grid-column: 2; }
+  .slow-dur { grid-column: 3; }
+}
