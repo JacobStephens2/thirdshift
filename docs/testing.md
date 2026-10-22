@@ -52,3 +52,30 @@ Measure local full-suite time with `/usr/bin/time -p cargo nextest run` (or
 wall time and whether compilation was included in the PR's evidence. Timings
 depend on host load and build cache; compare them with CI execution time rather
 than CI queue delay.
+
+## Setup PTY child lifetime
+
+`Scenario::run_terminal` kills and reaps its immediate child when it returns or
+unwinds, and bounds prompt and exit waits. Both PTY descriptors are close-on-exec;
+the child gets a new session and controlling terminal so interruption and
+terminal-restoration tests exercise normal terminal behavior.
+
+On Linux the fixture also arms `PR_SET_PDEATHSIG` with SIGKILL before exec, and
+checks the parent PID after arming it to close the parent-exit race. The child
+ends when its spawning test thread dies, including SIGKILL of the test process,
+even if another process retains a PTY master. This covers the immediate terminal
+child, not descendants it may start. Production commands are unchanged. See
+the [Linux parent-death signal contract](https://man7.org/linux/man-pages/man2/PR_SET_PDEATHSIG.2const.html).
+
+`cargo test --test setup_lifetime` runs real setup children in separate fixture
+processes for successful completion, assertion unwinding, an exit timeout,
+SIGKILL, and SIGKILL with an inherited PTY master held open. The supervisor uses
+Linux's [subreaper facility](https://man7.org/linux/man-pages/man2/PR_SET_CHILD_SUBREAPER.2const.html)
+to adopt and reap exact recorded orphan PIDs. It owns the fixtures' temporary
+subtrees and cleans up its recorded children even on a failed assertion.
+
+macOS retains Drop cleanup and terminal hangup when the last master closes. It
+has no Linux parent-death signal or subreaper facility: the abrupt-death guarantee
+with a retained master is Linux-only, and the lifecycle supervisor test is
+explicitly skipped on macOS with that platform limit. Existing setup interruption
+and terminal-restoration tests still run there.
