@@ -9,6 +9,9 @@ use crate::interrupt;
 
 mod stream;
 pub(super) use stream::Stream;
+pub mod event;
+#[cfg(test)]
+mod event_tests;
 mod models;
 mod security;
 pub use security::SafeguardRefusal;
@@ -100,6 +103,14 @@ pub(super) trait Decoder: Send {
 pub(super) struct StreamUpdate {
     pub progress: Vec<String>,
     pub evidence: Vec<Evidence>,
+    pub events: Vec<event::Event>,
+}
+
+/// One decoded line. Consumers needing normalized facts use this interface;
+/// progress-only callers keep using `condense`, with no event buffering.
+pub struct Decoded {
+    pub progress: Vec<String>,
+    pub events: Vec<event::Event>,
 }
 
 pub(super) enum Evidence {
@@ -190,9 +201,16 @@ impl Interpretation {
 
     /// Unknown or malformed lines produce no progress, never an error.
     pub fn condense(&mut self, raw: &str) -> Vec<String> {
+        let decoded = self.decode(raw);
+        drop(decoded.events);
+        decoded.progress
+    }
+
+    pub fn decode(&mut self, raw: &str) -> Decoded {
         let StreamUpdate {
             mut progress,
             evidence,
+            events,
         } = self.decoder.condense(raw);
         for fact in evidence {
             if let Evidence::ObservedModel { name, .. } = &fact
@@ -206,7 +224,7 @@ impl Interpretation {
                 progress.push(line);
             }
         }
-        progress
+        Decoded { progress, events }
     }
 
     pub fn finish(self, execution: Result<ExitStatus>) -> Completion {

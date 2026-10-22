@@ -131,6 +131,7 @@ impl Decoder for MuseProgress {
         StreamUpdate {
             progress,
             evidence: Vec::new(),
+            ..StreamUpdate::default()
         }
     }
     fn complete(self: Box<Self>) -> Facts {

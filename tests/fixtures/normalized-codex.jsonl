@@ -1,0 +1,12 @@
+{"type":"thread.started","thread_id":"codex-session"}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"web","type":"web_search","query":""}}
+{"type":"item.completed","item":{"id":"web","type":"web_search","query":"rust docs","results":[{"url":"https://doc.rust-lang.org"}]}}
+{"type":"item.completed","item":{"id":"spawn","type":"collab_tool_call","tool":"spawn_agent","sender_thread_id":"codex-session","receiver_thread_ids":["child"],"agents_states":{"child":{"status":"running"}},"status":"completed"}}
+{"type":"item.started","item":{"id":"build","type":"command_execution","command":"cargo build","status":"in_progress"}}
+{"type":"item.completed","item":{"id":"build","type":"command_execution","command":"cargo build","status":"in_progress"}}
+{"type":"turn.completed","usage":{"input_tokens":100,"output_tokens":7,"cached_input_tokens":20}}
+{"type":"turn.started"}
+{"type":"item.started","item":{"id":"interrupted","type":"command_execution","command":"sleep 100","status":"in_progress"}}
+{"type":"error","message":"rate limit reached, retrying"}
+{"type":"turn.failed","error":{"message":"interrupted by user"}}

@@ -1,6 +1,7 @@
 //! Codex: its launch protocol, free Model catalog and Setup.
 
 mod catalog;
+mod events;
 pub(crate) mod stream;
 pub use catalog::Catalog;
 
