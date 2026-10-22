@@ -82,6 +82,7 @@ impl Events {
             {
                 if let Some(text) = item["text"].as_str() {
                     output.push(Event::Message {
+                        id: None,
                         role: "assistant".into(),
                         text: text.into(),
                         parent_id: None,

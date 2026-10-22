@@ -144,6 +144,29 @@ impl AgyProgress {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn review_agy_terminal_result_does_not_repeat_streamed_text() {
+        use crate::harness::interpretation::event::Event;
+        let mut interpretation = stream(Harness::Agy, "");
+        for line in [
+            r#"{"event":"init","conversation_id":"c","init":{"model":"gemini"}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"c","step_index":1,"state":"ACTIVE","step_type":"agent_response","text_delta":"First part. "}}"#,
+            r#"{"event":"step_update","step_update":{"conversation_id":"c","step_index":1,"state":"DONE","step_type":"agent_response","text_delta":"Second part.","usage":{"input_tokens":10,"output_tokens":4}}}"#,
+            r#"{"event":"result","result":{"status":"SUCCESS","response":"First part. Second part."}}"#,
+        ] {
+            interpretation.decode(line);
+        }
+        let events = finish(interpretation).report.unwrap().events;
+        let text: String = events
+            .iter()
+            .filter_map(|event| match event {
+                Event::Message { role, text, .. } if role == "assistant" => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "First part. Second part.");
+    }
     use crate::harness::{
         Harness,
         interpretation_tests::{finish, stream},

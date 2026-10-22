@@ -51,6 +51,10 @@ pub enum Event {
         amended: bool,
     },
     Message {
+        /// Stable message identity when reported. Snapshots with this ID refine
+        /// the same message; parent_id is only its causal scope.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        id: Option<String>,
         role: String,
         text: String,
         parent_id: Option<String>,
@@ -228,13 +232,13 @@ impl Event {
             | (WorkEnded { id: a, .. }, WorkEnded { id: b, .. }) => a == b,
             (
                 Message {
-                    role: a,
-                    parent_id: Some(x),
+                    id: Some(a),
+                    parent_id: x,
                     ..
                 },
                 Message {
-                    role: b,
-                    parent_id: Some(y),
+                    id: Some(b),
+                    parent_id: y,
                     ..
                 },
             ) => a == b && x == y,

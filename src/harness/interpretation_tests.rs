@@ -2,6 +2,35 @@ use super::*;
 use std::os::unix::process::ExitStatusExt;
 
 #[test]
+fn review_completion_preserves_distinct_claude_child_messages() {
+    use interpretation::event::Event;
+    let mut interpretation = stream(Harness::Claude, "");
+    for line in [
+        r#"{"type":"assistant","parent_tool_use_id":"child","message":{"id":"m1","role":"assistant","content":[{"type":"text","text":"Checking."}]}}"#,
+        r#"{"type":"assistant","parent_tool_use_id":"child","message":{"id":"m2","role":"assistant","content":[{"type":"text","text":"Done."}]}}"#,
+        r#"{"type":"result","parent_tool_use_id":"child","subtype":"success","result":"Done."}"#,
+    ] {
+        interpretation.decode(line);
+    }
+    let events = finish(interpretation).report.unwrap().events;
+    let messages: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::Message {
+                role,
+                text,
+                parent_id,
+                ..
+            } if role == "assistant" && parent_id.as_deref() == Some("child") => {
+                Some(text.as_str())
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(messages, ["Checking.", "Done."]);
+}
+
+#[test]
 fn a_security_session_can_discuss_the_cyber_marker_without_being_refused() {
     let mut interpretation = stream(Harness::Claude, "").for_security(None);
     interpretation.condense(

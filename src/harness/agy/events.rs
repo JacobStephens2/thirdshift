@@ -14,6 +14,7 @@ pub(super) struct Events {
     model: Option<String>,
     conversation: String,
     results: usize,
+    last_text: Option<(String, String)>,
 }
 
 impl Events {
@@ -27,8 +28,14 @@ impl Events {
             let id = format!("{}:result:{}", self.conversation, self.results);
             let result = &event["result"];
             let mut events = Vec::new();
-            if let Some(text) = result["response"].as_str() {
+            if let Some(text) = result["response"].as_str()
+                && self
+                    .last_text
+                    .as_ref()
+                    .is_none_or(|(_, previous)| previous != text)
+            {
                 events.push(Event::Message {
+                    id: Some(id.clone()),
                     role: "assistant".into(),
                     text: text.into(),
                     parent_id: None,
@@ -148,7 +155,14 @@ impl Events {
                 Some("system_message") => "system",
                 _ => "assistant",
             };
+            if role == "assistant" {
+                match &mut self.last_text {
+                    Some((step, previous)) if step == &id => previous.push_str(text),
+                    previous => *previous = Some((id.clone(), text.into())),
+                }
+            }
             events.push(Event::Message {
+                id: None,
                 role: role.into(),
                 text: text.into(),
                 parent_id: None,

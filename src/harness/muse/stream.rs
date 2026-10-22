@@ -156,6 +156,25 @@ impl Decoder for MuseProgress {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn review_muse_successful_terminal_fallback_is_normalized() {
+        use crate::harness::interpretation::{Interpretation, event::Event};
+        let mut interpretation =
+            Interpretation::new("muse", Box::new(super::MuseProgress::default()));
+        interpretation.decode(
+        r#"{"stream":{"kind":"session","id":"s"},"payload_type":"run.terminal.completed","payload":{"command_id":"r","text":"Terminal fallback."}}"#,
+    );
+        let completion = finish(interpretation);
+        assert_eq!(
+            completion.outcome.unwrap().final_message.as_deref(),
+            Some("Terminal fallback.")
+        );
+        let events = completion.report.unwrap().events;
+        assert!(events.iter().any(|event| matches!(event,
+        Event::Message { role, text, .. } if role == "assistant" && text == "Terminal fallback."
+    )), "available terminal text is missing: {events:?}");
+    }
     use crate::harness::{
         Harness,
         interpretation_tests::{finish, stream},

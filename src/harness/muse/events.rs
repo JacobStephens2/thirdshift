@@ -115,12 +115,13 @@ impl Events {
             return self.result(scope, payload);
         }
         if let Some(status) = kind.strip_prefix("run.terminal.") {
-            return terminal(scope, status, payload);
+            return self.terminal(scope, status, payload);
         }
         if kind == "turn.input.received" {
             return payload["text"]
                 .as_str()
                 .map(|text| Event::Message {
+                    id: None,
                     role: "user".into(),
                     text: text.into(),
                     parent_id: None,
@@ -137,9 +138,10 @@ impl Events {
             let text = self.text.entry(id.clone()).or_default();
             text.push_str(payload["text"].as_str().unwrap_or(""));
             return vec![Event::Message {
+                id: Some(format!("{id}:message")),
                 role: "assistant".into(),
                 text: text.clone(),
-                parent_id: Some(id),
+                parent_id: None,
             }];
         }
         Vec::new()
@@ -153,7 +155,7 @@ impl Events {
             .unwrap_or("");
         let event = &payload["event"];
         match event["kind"].as_str().unwrap_or("") {
-            "terminal" => terminal(scope, event["terminal"].as_str().unwrap_or(""), event),
+            "terminal" => self.terminal(scope, event["terminal"].as_str().unwrap_or(""), event),
             "model_completed" => {
                 let mut events = Vec::new();
                 let id = self
@@ -203,15 +205,38 @@ impl Events {
                 event["text"]
                     .as_str()
                     .map(|text| Event::Message {
+                        id: Some(format!("{id}:message")),
                         role: "assistant".into(),
                         text: text.into(),
-                        parent_id: Some(id),
+                        parent_id: None,
                     })
                     .into_iter()
                     .collect()
             }
             kind => self.lifecycle(scope, kind, event),
         }
+    }
+
+    fn terminal(&self, scope: &str, status: &str, payload: &Value) -> Vec<Event> {
+        if status == "completed" {
+            let id = self
+                .last_model
+                .get(scope)
+                .cloned()
+                .unwrap_or_else(|| format!("{scope}:reply"));
+            return payload["text"]
+                .as_str()
+                .filter(|_| !self.text.contains_key(&id))
+                .map(|text| Event::Message {
+                    id: Some(format!("{id}:message")),
+                    role: "assistant".into(),
+                    text: text.into(),
+                    parent_id: None,
+                })
+                .into_iter()
+                .collect();
+        }
+        terminal(scope, status, payload)
     }
 
     fn lifecycle(&mut self, scope: &str, kind: &str, event: &Value) -> Vec<Event> {

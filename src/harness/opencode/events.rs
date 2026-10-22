@@ -35,6 +35,7 @@ impl Events {
             if message["type"] == "user" {
                 if let Some(text) = message["text"].as_str() {
                     events.push(Event::Message {
+                        id: Some(id),
                         role: "user".into(),
                         text: text.into(),
                         parent_id: None,
@@ -73,9 +74,10 @@ impl Events {
             }
             if !text.is_empty() {
                 events.push(Event::Message {
+                    id: Some(format!("{id}:message")),
                     role: "assistant".into(),
                     text,
-                    parent_id: Some(id.clone()),
+                    parent_id: None,
                 });
             }
             let error = super::error_text(&message["error"]);
@@ -160,9 +162,10 @@ impl Events {
                     parts.push((part_id.into(), text.into()));
                 }
                 vec![Event::Message {
+                    id: Some(format!("{id}:message")),
                     role: "assistant".into(),
                     text: parts.iter().map(|(_, text)| text.as_str()).collect(),
-                    parent_id: Some(id),
+                    parent_id: None,
                 }]
             }
             Some("error") => {
