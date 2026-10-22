@@ -227,6 +227,19 @@ struct Tool {
     input: Value,
 }
 
+impl Tool {
+    fn end(self, result: Value, outcome: Outcome) -> Event {
+        Event::ToolCallEnded {
+            id: self.id,
+            parent_id: self.parent_id,
+            tool: self.name,
+            input: self.input,
+            result,
+            outcome,
+        }
+    }
+}
+
 impl Tools {
     pub(in crate::harness) fn start(
         &mut self,
@@ -272,35 +285,32 @@ impl Tools {
             .iter()
             .position(|call| call.parent_id == parent_id && call.id == id)?;
         let call = self.running.remove(index);
-        Some(Event::ToolCallEnded {
-            id: call.id,
-            parent_id,
-            tool: call.name,
-            input: call.input,
-            result,
-            outcome,
-        })
+        Some(call.end(result, outcome))
     }
 
     pub(in crate::harness) fn stop(&mut self, outcome: Outcome) -> Vec<Event> {
-        self.running
-            .drain(..)
-            .flat_map(|call| {
-                [
-                    Event::ToolCallEnded {
-                        id: call.id.clone(),
-                        parent_id: call.parent_id,
-                        tool: call.name,
-                        input: call.input,
-                        result: Value::Null,
-                        outcome,
-                    },
-                    Event::WorkEnded {
-                        id: call.id,
-                        outcome,
-                    },
-                ]
-            })
-            .collect()
+        self.stop_matching(|_| true, outcome)
+    }
+
+    pub(in crate::harness) fn stop_scope(
+        &mut self,
+        parent_id: &Option<String>,
+        outcome: Outcome,
+    ) -> Vec<Event> {
+        self.stop_matching(|call| &call.parent_id == parent_id, outcome)
+    }
+
+    fn stop_matching(&mut self, matches: impl Fn(&Tool) -> bool, outcome: Outcome) -> Vec<Event> {
+        let mut output = Vec::new();
+        for call in std::mem::take(&mut self.running) {
+            if matches(&call) {
+                let id = call.id.clone();
+                output.push(call.end(Value::Null, outcome));
+                output.push(Event::WorkEnded { id, outcome });
+            } else {
+                self.running.push(call);
+            }
+        }
+        output
     }
 }

@@ -51,6 +51,42 @@ struct Tokens {
     output: u64,
 }
 
+/// Read the wire vocabulary once for both progress and normalized events.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum ItemKind {
+    Command,
+    FileChange,
+    McpTool,
+    WebSearch,
+    CollabTool,
+    AgentMessage,
+    Reasoning,
+    TodoList,
+    Error,
+    Unknown,
+}
+
+impl ItemKind {
+    pub(super) fn read(item: &Value) -> Self {
+        match item["type"].as_str() {
+            Some("command_execution") => Self::Command,
+            Some("file_change") => Self::FileChange,
+            Some("mcp_tool_call") => Self::McpTool,
+            Some("web_search") => Self::WebSearch,
+            Some("collab_tool_call") => Self::CollabTool,
+            Some("agent_message") => Self::AgentMessage,
+            Some("reasoning") => Self::Reasoning,
+            Some("todo_list") => Self::TodoList,
+            Some("error") => Self::Error,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+pub(super) fn reports_running(item: &Value) -> bool {
+    item["status"] == "in_progress"
+}
+
 impl CodexProgress {
     /// The stream of a session running in `worktree`.
     pub fn in_worktree(worktree: &Path) -> Self {
@@ -72,7 +108,7 @@ impl CodexProgress {
     /// still running, as `description`.
     fn track_running(&mut self, id: &str, item: &Value, description: String) {
         self.running.retain(|(running, _)| running != id);
-        if item["status"] == "in_progress" {
+        if reports_running(item) {
             self.running.push((id.to_string(), description));
         }
     }
@@ -80,20 +116,21 @@ impl CodexProgress {
     /// Track an item's state, and give its line the first time it is seen.
     fn item(&mut self, item: &Value) -> Vec<String> {
         let id = item["id"].as_str().unwrap_or("").to_string();
-        match item["type"].as_str() {
-            Some("command_execution") => {
+        let kind = ItemKind::read(item);
+        match kind {
+            ItemKind::Command => {
                 let command = unwrapped(item["command"].as_str().unwrap_or(""));
                 self.track_running(&id, item, command);
             }
-            Some("collab_tool_call") => {
+            ItemKind::CollabTool => {
                 self.track_running(&id, item, sub_agent_call(item));
             }
-            Some("agent_message") => {
+            ItemKind::AgentMessage => {
                 if let Some(text) = item["text"].as_str() {
                     self.final_message = Some(text.to_string());
                 }
             }
-            Some("error") => {
+            ItemKind::Error => {
                 self.reported(item);
             }
             _ => {}
@@ -101,15 +138,15 @@ impl CodexProgress {
         if !self.seen.insert(id) {
             return Vec::new();
         }
-        self.lines_for(item)
+        self.lines_for(item, kind)
     }
 
     /// The progress lines an item gives.
-    fn lines_for(&self, item: &Value) -> Vec<String> {
+    fn lines_for(&self, item: &Value, kind: ItemKind) -> Vec<String> {
         let text = |key: &str| item[key].as_str().unwrap_or("?");
-        match item["type"].as_str() {
-            Some("command_execution") => vec![bash(&unwrapped(text("command")))],
-            Some("file_change") => item["changes"]
+        match kind {
+            ItemKind::Command => vec![bash(&unwrapped(text("command")))],
+            ItemKind::FileChange => item["changes"]
                 .as_array()
                 .into_iter()
                 .flatten()
@@ -123,9 +160,9 @@ impl CodexProgress {
                     format!("{kind} {}", shorten(self.relative(path)))
                 })
                 .collect(),
-            Some("mcp_tool_call") => vec![format!("{} {}", text("server"), text("tool"))],
-            Some("web_search") => vec![format!("web search {}", shorten(text("query")))],
-            Some("collab_tool_call") => vec![format!("agent {}", text("tool"))],
+            ItemKind::McpTool => vec![format!("{} {}", text("server"), text("tool"))],
+            ItemKind::WebSearch => vec![format!("web search {}", shorten(text("query")))],
+            ItemKind::CollabTool => vec![format!("agent {}", text("tool"))],
             _ => Vec::new(),
         }
     }

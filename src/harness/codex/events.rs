@@ -4,6 +4,7 @@ use std::collections::HashSet;
 
 use serde_json::{Value, json};
 
+use super::stream::{ItemKind, reports_running};
 use crate::harness::interpretation::event::{Agents, ErrorKind, Event, Outcome, Tools, Usage};
 
 #[derive(Default)]
@@ -73,9 +74,12 @@ impl Events {
         let Some(id) = item["id"].as_str() else {
             return;
         };
-        let completed = event["type"] == "item.completed" && item["status"] != "in_progress";
-        match item["type"].as_str() {
-            Some("agent_message" | "reasoning") if completed && self.messages.insert(id.into()) => {
+        let completed = event["type"] == "item.completed" && !reports_running(item);
+        let kind = ItemKind::read(item);
+        match kind {
+            ItemKind::AgentMessage | ItemKind::Reasoning
+                if completed && self.messages.insert(id.into()) =>
+            {
                 if let Some(text) = item["text"].as_str() {
                     output.push(Event::Message {
                         role: "assistant".into(),
@@ -85,24 +89,24 @@ impl Events {
                 }
                 return;
             }
-            Some("error") if completed && self.messages.insert(id.into()) => {
+            ItemKind::Error if completed && self.messages.insert(id.into()) => {
                 output.push(error(item));
                 return;
             }
             _ => {}
         }
-        let (tool, input, result) = match item["type"].as_str() {
-            Some("command_execution") => (
+        let (tool, input, result) = match kind {
+            ItemKind::Command => (
                 "command_execution".into(),
                 json!({"command":item["command"]}),
                 json!({"output":item["aggregated_output"],"exit_code":item["exit_code"]}),
             ),
-            Some("file_change") => (
+            ItemKind::FileChange => (
                 "apply_patch".into(),
                 item["changes"].clone(),
                 item["changes"].clone(),
             ),
-            Some("mcp_tool_call") => (
+            ItemKind::McpTool => (
                 format!(
                     "{}.{}",
                     item["server"].as_str().unwrap_or("?"),
@@ -115,17 +119,17 @@ impl Events {
                     item["error"].clone()
                 },
             ),
-            Some("web_search") => (
+            ItemKind::WebSearch => (
                 "web_search".into(),
                 json!({"query":item["query"],"action":item["action"]}),
                 item["results"].clone(),
             ),
-            Some("collab_tool_call") => (
+            ItemKind::CollabTool => (
                 item["tool"].as_str().unwrap_or("?").into(),
                 json!({"prompt":item["prompt"],"receiver_thread_ids":item["receiver_thread_ids"],"sender_thread_id":item["sender_thread_id"]}),
                 item["agents_states"].clone(),
             ),
-            Some("todo_list") => (
+            ItemKind::TodoList => (
                 "update_plan".into(),
                 item["items"].clone(),
                 item["items"].clone(),
@@ -148,7 +152,7 @@ impl Events {
             };
             output.extend(self.tools.end(id, None, result, outcome));
         }
-        if item["type"] == "collab_tool_call" {
+        if kind == ItemKind::CollabTool {
             self.agents(item, output);
         }
     }

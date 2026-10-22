@@ -1,6 +1,163 @@
 use crate::harness::{Harness, interpretation_tests::stream};
 use serde_json::{Value, json};
 
+#[test]
+#[ignore = "Codex exec has no per-request boundaries; requires a Spec #700 decision (see PR Unaddressed findings)"]
+fn review_codex_fixture_contains_model_call_lifecycles() {
+    let mut decoder =
+        crate::harness::interpretation_tests::stream(crate::harness::Harness::Codex, "");
+    let mut events = Vec::new();
+    for raw in include_str!("../../../tests/fixtures/normalized-codex.jsonl").lines() {
+        events.extend(decoder.decode(raw).events);
+    }
+    let events = serde_json::to_value(events).unwrap();
+    let events = events.as_array().unwrap();
+    let starts: Vec<_> = events
+        .iter()
+        .filter(|event| event["type"] == "model_call_started")
+        .collect();
+    assert!(
+        !starts.is_empty(),
+        "The successful recorded Codex turn reports usage, but no model calls: {events:?}"
+    );
+    for start in starts {
+        assert!(
+            events
+                .iter()
+                .any(|event| { event["type"] == "model_call_ended" && event["id"] == start["id"] })
+        );
+    }
+}
+
+#[test]
+fn api_error_envelopes_do_not_invent_model_calls_and_fail_a_started_request() {
+    let events = decoded(
+        Harness::Claude,
+        [
+            json!({"type":"assistant","error":"rate_limit","message":{"model":"<synthetic>","content":[{"type":"text","text":"limited"}]}}),
+            json!({"type":"stream_event","event":{"type":"message_start","message":{"id":"real","model":"claude-opus-4-8","content":[],"usage":{"input_tokens":8}}}}),
+            json!({"type":"assistant","api_error":"usage_limit_reached","message":{"content":[{"type":"text","text":"usage exhausted"}]}}),
+            json!({"type":"result","subtype":"success"}),
+        ],
+    );
+    let calls: Vec<_> = events
+        .iter()
+        .filter(|event| {
+            event["type"] == "model_call_started" || event["type"] == "model_call_ended"
+        })
+        .collect();
+    assert_eq!(calls.len(), 2);
+    assert_eq!(calls[0]["id"], "real");
+    assert_eq!(calls[1]["id"], "real");
+    assert_eq!(calls[1]["outcome"], "failed");
+}
+
+#[test]
+fn stopping_an_agent_closes_descendants_and_preserves_other_agents() {
+    let events = decoded(
+        Harness::Claude,
+        [
+            json!({"type":"assistant","message":{"id":"root","content":[{"type":"tool_use","id":"a1","name":"Agent","input":{"run_in_background":true}},{"type":"tool_use","id":"a2","name":"Agent","input":{"run_in_background":true}}]}}),
+            json!({"type":"system","subtype":"task_started","task_id":"task1","tool_use_id":"a1","task_type":"local_agent"}),
+            json!({"type":"system","subtype":"task_started","task_id":"task2","tool_use_id":"a2","task_type":"local_agent"}),
+            json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"a1","content":"launched"},{"type":"tool_result","tool_use_id":"a2","content":"launched"}]}}),
+            json!({"type":"assistant","parent_tool_use_id":"a1","message":{"id":"child1","content":[{"type":"tool_use","id":"g1","name":"Agent","input":{"run_in_background":true}},{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sleep 100"}}]}}),
+            json!({"type":"assistant","parent_tool_use_id":"g1","message":{"id":"grandchild","content":[{"type":"tool_use","id":"tg","name":"Bash","input":{"command":"sleep 200"}}]}}),
+            json!({"type":"assistant","parent_tool_use_id":"a2","message":{"id":"child2","content":[{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"sleep 300"}}]}}),
+            json!({"type":"system","subtype":"task_notification","task_id":"task1","status":"stopped","summary":"Terminated"}),
+            json!({"type":"result","subtype":"success"}),
+        ],
+    );
+    for id in ["t1", "tg", "g1"] {
+        assert!(events.iter().any(|event| event["type"] == "tool_call_ended"
+            && event["id"] == id
+            && event["outcome"] == "killed"));
+    }
+    for id in ["child1", "grandchild"] {
+        assert!(
+            events
+                .iter()
+                .any(|event| event["type"] == "model_call_ended"
+                    && event["id"] == id
+                    && event["outcome"] == "killed")
+        );
+    }
+    assert!(
+        !events
+            .iter()
+            .any(|event| event["type"] == "tool_call_ended" && event["id"] == "t2")
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| event["type"] == "model_call_ended" && event["id"] == "child2")
+    );
+    assert!(
+        !events
+            .iter()
+            .any(|event| event["type"] == "subagent_ended" && event["id"] == "a2")
+    );
+}
+
+#[test]
+fn claude_result_metadata_records_denials_and_interrupted_work() {
+    let events = decoded(
+        Harness::Claude,
+        [
+            json!({"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"deny","name":"Bash","input":{"command":"git push"}},{"type":"tool_use","id":"active","name":"Bash","input":{"command":"sleep 100"}}],"usage":{"input_tokens":8,"output_tokens":4}}}),
+            json!({"type":"result","subtype":"success","is_error":false,"terminal_reason":"aborted_tools","permission_denials":[{"tool_use_id":"deny","tool_name":"Bash","tool_input":{"command":"git push"}}]}),
+        ],
+    );
+    assert!(events.iter().any(|event| event["type"] == "tool_call_ended"
+        && event["id"] == "deny"
+        && event["outcome"] == "denied"));
+    assert!(events.iter().any(|event| event["type"] == "tool_call_ended"
+        && event["id"] == "active"
+        && event["outcome"] == "interrupted"));
+    assert!(
+        events
+            .iter()
+            .any(|event| event["type"] == "model_call_ended"
+                && event["id"] == "m1"
+                && event["outcome"] == "interrupted")
+    );
+    assert!(events.contains(&json!({"type":"work_ended","id":"active","outcome":"interrupted"})));
+}
+
+#[test]
+fn review_claude_terminated_subagent_closes_its_calls() {
+    use serde_json::json;
+
+    for (status, outcome) in [("stopped", "killed"), ("interrupted", "interrupted")] {
+        let mut decoder =
+            crate::harness::interpretation_tests::stream(crate::harness::Harness::Claude, "");
+        let mut events = Vec::new();
+        for record in [
+            json!({"type":"assistant","message":{"id":"root","content":[{"type":"tool_use","id":"a1","name":"Agent","input":{"description":"Review","run_in_background":true}}]}}),
+            json!({"type":"system","subtype":"task_started","task_id":"agent-task","tool_use_id":"a1","task_type":"local_agent"}),
+            json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"a1","content":"Async agent launched"}]}}),
+            json!({"type":"assistant","parent_tool_use_id":"a1","message":{"id":"child","model":"claude-opus-4-8","content":[{"type":"tool_use","id":"t1","name":"Bash","input":{"command":"sleep 100"}}],"usage":{"input_tokens":8,"output_tokens":4}}}),
+            json!({"type":"system","subtype":"task_notification","task_id":"agent-task","status":status,"summary":"Terminated"}),
+            json!({"type":"result","subtype":"success","result":"Done"}),
+        ] {
+            events.extend(decoder.decode(&record.to_string()).events);
+        }
+        let events = serde_json::to_value(events).unwrap();
+        let events = events.as_array().unwrap();
+        assert!(events.iter().any(|event| {
+            event["type"] == "subagent_ended" && event["id"] == "a1" && event["outcome"] == outcome
+        }));
+        for (event_type, id) in [("tool_call_ended", "t1"), ("model_call_ended", "child")] {
+            assert!(
+                events.iter().any(|event| {
+                    event["type"] == event_type && event["id"] == id && event["outcome"] == outcome
+                }),
+                "Missing {event_type} for {id} after {status}: {events:?}"
+            );
+        }
+    }
+}
+
 fn decoded(harness: Harness, records: impl IntoIterator<Item = Value>) -> Vec<Value> {
     let mut decoder = stream(harness, "");
     records
