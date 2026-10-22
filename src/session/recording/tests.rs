@@ -740,7 +740,6 @@ fn completion_progress_comes_from_interpretation_without_duplicate_live_lines() 
     assert_eq!(stderr.matches("session ended after").count(), 3, "{stderr}");
 }
 
-// Append this entire file to src/session/recording/tests.rs.
 fn review_trace_records(
     path: &Path,
     resource: &str,
@@ -871,4 +870,44 @@ fn review_retained_raw_model_record_has_call_context_and_attributes() {
     assert!(raw["attributes"].as_array().unwrap().iter().any(|attr| {
         attr["key"] == "gen_ai.operation.name" && attr["value"]["stringValue"] == "chat"
     }));
+}
+
+#[test]
+fn review_streamed_model_records_keep_their_call_association() {
+    let fixture = Fixture::new();
+    fixture.run("implement", r#"
+echo '{"type":"stream_event","event":{"type":"message_start","message":{"id":"m1","model":"test-model","content":[]}}}'
+echo '{"type":"assistant","message":{"id":"m1","model":"test-model","content":[{"type":"text","text":"Hello."}]}}'
+echo '{"type":"stream_event","event":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":4}}}'
+echo '{"type":"stream_event","event":{"type":"message_stop"}}'
+echo '{"type":"result","subtype":"success","result":"Hello."}'
+"#, &Choice::default()).unwrap();
+    let spans = review_trace_records(
+        &fixture.log("implement").with_extension("spans.jsonl"),
+        "resourceSpans",
+        "scopeSpans",
+        "spans",
+    );
+    let model = spans
+        .iter()
+        .find(|span| span["name"] == "model m1")
+        .unwrap();
+    let logs = review_trace_records(
+        &fixture.log("implement").with_extension("logs.jsonl"),
+        "resourceLogs",
+        "scopeLogs",
+        "logRecords",
+    );
+    let model_records: Vec<_> = logs
+        .iter()
+        .filter(|record| {
+            let raw: serde_json::Value =
+                serde_json::from_str(record["body"]["stringValue"].as_str().unwrap()).unwrap();
+            raw["type"] != "result"
+        })
+        .collect();
+    assert_eq!(model_records.len(), 4);
+    for record in model_records {
+        assert_eq!(record["spanId"], model["spanId"], "{}", record["body"]);
+    }
 }

@@ -31,6 +31,7 @@ pub(super) struct Trace {
     seen: Vec<Event>,
     locations: BTreeMap<String, (String, SpanId)>,
     model_usage: BTreeMap<String, Value>,
+    model_scopes: BTreeMap<Option<String>, SpanId>,
     input_excludes_cache: bool,
 }
 
@@ -103,6 +104,7 @@ impl Trace {
             seen: Vec::new(),
             locations: BTreeMap::new(),
             model_usage: BTreeMap::new(),
+            model_scopes: BTreeMap::new(),
             input_excludes_cache: matches!(
                 choice.harness,
                 crate::harness::Harness::Claude | crate::harness::Harness::Grok
@@ -124,7 +126,17 @@ impl Trace {
         }
         let time = event_time(&envelope);
         let mut attrs = Vec::new();
-        let mut span_id = self.session.span_id;
+        // Partial Messages frames can carry only usage/deltas, with no new
+        // normalized fact. Their envelope retains the parent tool scope.
+        let mut span_id = if envelope["type"] == "stream_event" {
+            let parent = envelope["parent_tool_use_id"].as_str().map(str::to_owned);
+            self.model_scopes
+                .get(&parent)
+                .copied()
+                .or(self.session.span_id)
+        } else {
+            self.session.span_id
+        };
         for event in events {
             span_id = self.apply(event, time.unwrap_or(observed))?.or(span_id);
             for attr in event_attributes(event, self.input_excludes_cache) {
@@ -267,6 +279,13 @@ impl Trace {
                 return Ok(call
                     .and_then(|id| self.locations.get(id).map(|(_, span)| *span))
                     .or_else(|| {
+                        if matches!(event, Message { .. }) {
+                            self.model_scopes.get(&parent.map(str::to_owned)).copied()
+                        } else {
+                            None
+                        }
+                    })
+                    .or_else(|| {
                         parent.and_then(|id| self.locations.get(id).map(|(_, span)| *span))
                     }));
             }
@@ -278,6 +297,9 @@ impl Trace {
         }
         .unwrap_or_else(|| serde_json::to_string(&(kind, parent, call)).unwrap());
         let span_id = id(&[&self.session.span_id.unwrap().0, key.as_bytes()]);
+        if kind == "model" {
+            self.model_scopes.insert(parent.map(str::to_owned), span_id);
+        }
         let parent_span = parent
             .and_then(|parent| self.locations.get(parent).map(|(_, span)| *span))
             .or(self.session.span_id);
