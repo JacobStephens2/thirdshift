@@ -281,6 +281,11 @@ thirdshift logs &#39;widgets#7&#39; --session repair --follow
 <p>If you use Rust, you can install it from crates.io instead:</p>
 <pre><code class="language-sh">cargo install thirdshift
 </code></pre>
+<details class="fold"><summary><h3>Console installation</h3></summary>
+<div class="manual-content" id="console-installation">
+<p>On Linux, <code>thirdshift console install</code> prints a script to read and run with sudo; <code>--output install-console.sh</code> saves it instead. For Caddy or Apache (Debian&#39;s <code>apache2</code> or Red Hat&#39;s <code>httpd</code>), the script first checks the configured Console address through the system resolver with <code>getent hosts</code>. If the name doesn&#39;t resolve, it exits before writing files, enabling services or restarting anything, and asks you to add an A or AAAA record pointing at this server and run the script again. It doesn&#39;t check whether the address points at this machine. Once the name resolves, installation continues with the Console&#39;s systemd service, proxy site and HTTPS certificate.</p>
+<p>With neither proxy, the script installs a localhost-only service and prints an SSH tunnel command, without checking an address. See the <a href="https://github.com/JacobStephens2/thirdshift/blob/main/README.md#console-on-a-server">Console setup instructions</a> for settings and proxy prerequisites.</p>
+</div></details>
 <details class="fold"><summary><h3>Updating</h3></summary>
 <div class="manual-content" id="updating">
 <pre><code class="language-sh">thirdshift update
