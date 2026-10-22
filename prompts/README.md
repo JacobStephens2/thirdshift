@@ -7,13 +7,13 @@ Every Session prompt thirdshift can start or resume an agent session with, one f
 Every session runs `claude` headless in the Run's worktree, in auto permission mode. The Factory skills are linked into the worktree's `.claude/skills/`, where Claude Code finds them, and kept out of git:
 
 ```sh
-claude -p --permission-mode auto --output-format stream-json --verbose <prompt>
+claude -p --permission-mode auto --settings '{"attribution":{"commit":"","pr":""}}' --output-format stream-json --verbose <prompt>
 ```
 
 A [Resume](resume.md) continues the session that ended:
 
 ```sh
-claude -p --permission-mode auto --output-format stream-json --verbose --resume <session id> <prompt>
+claude -p --permission-mode auto --settings '{"attribution":{"commit":"","pr":""}}' --output-format stream-json --verbose --resume <session id> <prompt>
 ```
 
 With `harness codex`, each session runs `codex exec --json --dangerously-bypass-approvals-and-sandbox -m <model> -c model_reasoning_effort="<effort>" -c project_doc_fallback_filenames=["CLAUDE.md"] <prompt>` instead, without `-m <model>` or the Effort's `-c` where they are not set, and with `resume <session id>` before the prompt for a Resume. The Factory skills are linked into `.agents/skills/`, and a prompt's first line loads its skill as `$thirdshift-<skill>`.

@@ -49,9 +49,9 @@
     <details class="fold">
     <summary class="sec-head"><span class="eyebrow">The command line</span><h2 id="command-title">How each session starts</h2></summary>
     <p class="lede">Every session runs <code>claude</code> headless in the Run's worktree, in auto permission mode. The Factory skills are linked into the worktree's <code>.claude/skills/</code>, where Claude Code finds them, and kept out of git. The prompt is one of the templates below.</p>
-    <pre class="job-text" aria-label="A new session"><code>claude -p --permission-mode auto --output-format stream-json --verbose <mark class="ph">&lt;prompt&gt;</mark></code></pre>
+    <pre class="job-text" aria-label="A new session"><code>claude -p --permission-mode auto --settings '{"attribution":{"commit":"","pr":""}}' --output-format stream-json --verbose <mark class="ph">&lt;prompt&gt;</mark></code></pre>
     <p class="lede">A <a href="#prompt-resume">Resume</a> continues the session that ended:</p>
-    <pre class="job-text" aria-label="A Resume"><code>claude -p --permission-mode auto --output-format stream-json --verbose --resume <mark class="ph">&lt;session id&gt;</mark> <mark class="ph">&lt;prompt&gt;</mark></code></pre>
+    <pre class="job-text" aria-label="A Resume"><code>claude -p --permission-mode auto --settings '{"attribution":{"commit":"","pr":""}}' --output-format stream-json --verbose --resume <mark class="ph">&lt;session id&gt;</mark> <mark class="ph">&lt;prompt&gt;</mark></code></pre>
     <p class="lede">With <code>harness codex</code>, each session runs <code>codex exec --json --dangerously-bypass-approvals-and-sandbox -m <mark class="ph">&lt;model&gt;</mark> -c model_reasoning_effort="<mark class="ph">&lt;effort&gt;</mark>" -c project_doc_fallback_filenames=["CLAUDE.md"] <mark class="ph">&lt;prompt&gt;</mark></code> instead, without <code>-m <mark class="ph">&lt;model&gt;</mark></code> or the Effort's <code>-c</code> where they are not set, and with <code>resume <mark class="ph">&lt;session id&gt;</mark></code> before the prompt for a Resume. The Factory skills are linked into <code>.agents/skills/</code>, and a prompt's first line loads its skill as <code>$thirdshift-&lt;skill&gt;</code>.</p>
     </details>
   </div>
