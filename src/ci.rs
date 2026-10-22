@@ -22,6 +22,8 @@ pub enum Ci {
     /// counts as passing.
     Absent,
     Passed,
+    /// Only cancelled checks were red, and origin now has a different head.
+    Superseded,
     /// Red, with the checks that failed.
     Failed(FailedChecks),
 }
@@ -100,11 +102,13 @@ impl<'a> Watch<'a> {
         head: &str,
         base_commit: Option<&str>,
         actionable: &mut dyn FnMut() -> Result<()>,
+        head_moved: &mut dyn FnMut(&str) -> Result<bool>,
     ) -> Result<Ci> {
         self.assess_through(
             &mut OnGitHub {
                 issue: self.issue,
                 actionable,
+                head_moved,
             },
             head,
             base_commit,
@@ -169,6 +173,8 @@ trait Outside {
     type Deadline;
     /// The checks and statuses on the commit `sha`.
     fn checks_on(&mut self, sha: &str) -> Result<Vec<Check>>;
+    /// Whether the Issue branch on origin no longer points at `sha`.
+    fn head_moved(&mut self, sha: &str) -> Result<bool>;
     /// The GitHub Actions job whose check run is `check_run`, with its
     /// steps, or why it could not be read. Fails only if the Run is not to
     /// go on.
@@ -195,6 +201,7 @@ trait Outside {
 struct OnGitHub<'a> {
     issue: &'a IssueUrl,
     actionable: &'a mut dyn FnMut() -> Result<()>,
+    head_moved: &'a mut dyn FnMut(&str) -> Result<bool>,
 }
 
 impl Outside for OnGitHub<'_> {
@@ -213,6 +220,13 @@ impl Outside for OnGitHub<'_> {
         Interruption::Ordinary.check()?;
         (self.actionable)()?;
         Ok(job_run)
+    }
+
+    fn head_moved(&mut self, sha: &str) -> Result<bool> {
+        (self.actionable)()?;
+        let moved = (self.head_moved)(sha)?;
+        (self.actionable)()?;
+        Ok(moved)
     }
 
     fn rerun_failed_jobs(&mut self, workflow_run: u64) -> Result<()> {
@@ -485,10 +499,21 @@ fn watch_to_end(
         }
         Ok(None)
     })?;
-    let failed: Vec<Check> = checks.into_iter().filter(is_failed).collect();
+    let mut failed: Vec<Check> = checks.into_iter().filter(is_failed).collect();
     if failed.is_empty() {
         outside.step(format!("CI passed on {short}"));
         return Ok(Ci::Passed);
+    }
+    if failed
+        .iter()
+        .any(|check| check.conclusion == Conclusion::Cancelled)
+        && outside.head_moved(sha)?
+    {
+        failed.retain(|check| check.conclusion != Conclusion::Cancelled);
+        if failed.is_empty() {
+            outside.step(format!("CI on {short} was superseded by a newer push"));
+            return Ok(Ci::Superseded);
+        }
     }
     outside.step(format!("CI failed on {short}: {}", check_names(&failed)));
     let on_base = match base_commit {
@@ -687,6 +712,7 @@ mod in_memory {
         pauses: usize,
         job_runs: Vec<(u64, JobRun)>,
         failing_job_reads: Vec<u64>,
+        head_moved: bool,
         /// The check run of each job read, in order.
         pub job_reads: Vec<u64>,
         /// The commit of each read, in order.
@@ -711,6 +737,7 @@ mod in_memory {
                 pauses: 0,
                 job_runs: Vec::new(),
                 failing_job_reads: Vec::new(),
+                head_moved: false,
                 job_reads: Vec::new(),
                 reads: Vec::new(),
                 reruns: Vec::new(),
@@ -722,6 +749,11 @@ mod in_memory {
         /// Script the reads of `sha` to take `listings` in turn.
         pub fn listing(mut self, sha: &str, listings: Vec<Vec<Check>>) -> Self {
             self.listings.push((sha.to_string(), listings));
+            self
+        }
+
+        pub fn moved_head(mut self) -> Self {
+            self.head_moved = true;
             self
         }
 
@@ -810,6 +842,10 @@ mod in_memory {
             )))
         }
 
+        fn head_moved(&mut self, _: &str) -> Result<bool> {
+            Ok(self.head_moved)
+        }
+
         fn rerun_failed_jobs(&mut self, workflow_run: u64) -> Result<()> {
             self.reruns.push(workflow_run);
             if self.refused.contains(&workflow_run) {
@@ -852,6 +888,37 @@ mod tests {
 
     const HEAD: &str = "abcdef0123456789";
     const BASE: &str = "0123456789abcdef";
+
+    #[test]
+    fn a_moved_head_supersedes_only_cancelled_checks_and_spends_no_rerun() {
+        let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap();
+        let cancelled = job(
+            check("test", Conclusion::Cancelled, "https://head/test"),
+            1,
+            900,
+        );
+        let mut watch = Watch::new(&issue);
+        let mut github = InMemory::new()
+            .moved_head()
+            .listing(HEAD, vec![vec![cancelled.clone()]]);
+        assert!(matches!(
+            watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap(),
+            Ci::Superseded
+        ));
+        assert!(github.reruns.is_empty());
+
+        let mut github = InMemory::new()
+            .moved_head()
+            .listing(HEAD, vec![vec![cancelled.clone(), red("lint")]]);
+        let failed = failed_of(watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap());
+        assert_eq!(listed(&failed.own), ["lint: https://head/lint"]);
+        assert!(github.reruns.is_empty());
+
+        let mut github = InMemory::new().listing(HEAD, vec![vec![cancelled]]);
+        let failed = failed_of(watch.assess_through(&mut github, HEAD, Some(BASE)).unwrap());
+        assert_eq!(listed(&failed.own), ["test: https://head/test"]);
+        assert!(github.reruns.is_empty());
+    }
 
     #[test]
     fn assessment_re_runs_an_unchanged_ci_fix_head_from_a_new_attempt() {
@@ -1147,6 +1214,7 @@ mod tests {
             Ci::Failed(failed) => failed,
             Ci::Absent => panic!("CI was Absent, not Failed"),
             Ci::Passed => panic!("CI Passed, not Failed"),
+            Ci::Superseded => panic!("CI was Superseded, not Failed"),
         }
     }
 
@@ -1619,6 +1687,7 @@ mod tests {
                     Reading::Failed
                 }
                 Ci::Absent => panic!("CI was Absent with {conclusion:?} on the head"),
+                Ci::Superseded => panic!("the Issue branch has not moved"),
             };
             assert_eq!(read, reading, "{conclusion:?} on the head");
         }

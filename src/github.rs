@@ -1,6 +1,7 @@
 //! Asking GitHub, through `gh`, about issues, pull requests and the signed-in
 //! user.
 
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::process::{Command, Output};
 use std::time::Duration;
@@ -781,9 +782,9 @@ impl GitHub {
         ])
     }
 
-    /// Every check run and commit status on commit `sha`, each with its
-    /// conclusion as GitHub named it. Of the check runs sharing a name, as
-    /// the attempts of a re-run job do, only the latest is here.
+    /// Current check runs and commit statuses on `sha`, with conclusions as
+    /// GitHub named them. Only the newest run of each Actions workflow counts;
+    /// GitHub itself selects the latest check runs within a run's attempts.
     pub fn checks_on(&self, issue: &IssueUrl, sha: &str) -> Result<Vec<Check>> {
         let commit = format!("repos/{}/commits/{sha}", issue.repo_slug());
         // CI retries the complete observation, not its individual requests.
@@ -830,7 +831,85 @@ impl GitHub {
                 job: None,
             });
         }
+        if checks.iter().any(|check| check.job.is_some()) {
+            self.exclude_superseded_runs(issue, sha, &mut checks)?;
+        }
         Ok(checks)
+    }
+
+    /// Ignore checks of earlier workflow runs on this same commit, including
+    /// jobs whose names the newest run no longer uses. A re-run keeps its run
+    /// id and creation time, so its attempts are never superseded here.
+    fn exclude_superseded_runs(
+        &self,
+        issue: &IssueUrl,
+        sha: &str,
+        checks: &mut Vec<Check>,
+    ) -> Result<()> {
+        #[derive(serde::Deserialize)]
+        struct WorkflowRun {
+            id: u64,
+            workflow_id: u64,
+            created_at: String,
+            status: Option<String>,
+            name: Option<String>,
+            html_url: Option<String>,
+        }
+        let path = format!(
+            "repos/{}/actions/runs?head_sha={sha}&per_page=100",
+            issue.repo_slug()
+        );
+        let runs = self.gh_api_items_once(&path, "workflow_runs")?;
+        let runs: Vec<WorkflowRun> = runs
+            .into_iter()
+            .map(serde_json::from_value)
+            .collect::<Result<_, _>>()
+            .context(CommandFailure::InvalidResponse(
+                "unreadable workflow run".into(),
+            ))?;
+        let mut latest = HashMap::new();
+        for run in &runs {
+            let created = DateTime::parse_from_rfc3339(&run.created_at).context(
+                CommandFailure::InvalidResponse("unreadable workflow creation time".into()),
+            )?;
+            let candidate = (created, run.id);
+            let selected = latest.entry(run.workflow_id).or_insert(candidate);
+            *selected = (*selected).max(candidate);
+        }
+        let superseded: HashSet<_> = runs
+            .iter()
+            .filter(|run| latest[&run.workflow_id].1 != run.id)
+            .map(|run| run.id)
+            .collect();
+        checks.retain(|check| {
+            check
+                .job
+                .is_none_or(|job| !superseded.contains(&job.workflow_run))
+        });
+        // A new run may be queued before GitHub lists its jobs. Removing the
+        // old run must not make other green checks establish success meanwhile.
+        for run in &runs {
+            if latest[&run.workflow_id].1 == run.id
+                && run
+                    .status
+                    .as_deref()
+                    .is_some_and(|status| status != "completed")
+                && !checks
+                    .iter()
+                    .any(|check| check.job.is_some_and(|job| job.workflow_run == run.id))
+            {
+                checks.push(Check {
+                    name: run
+                        .name
+                        .clone()
+                        .unwrap_or_else(|| format!("workflow {}", run.workflow_id)),
+                    conclusion: Conclusion::Unfinished,
+                    url: run.html_url.clone(),
+                    job: None,
+                });
+            }
+        }
+        Ok(())
     }
 
     /// The GitHub Actions job whose check run is `check_run`, as the jobs

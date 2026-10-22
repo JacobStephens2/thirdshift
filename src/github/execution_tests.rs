@@ -712,6 +712,79 @@ esac
 }
 
 #[test]
+fn checks_on_ignores_older_runs_of_each_workflow_but_keeps_other_checks() {
+    with_recorded_signal(
+        "github::execution_tests::checks_on_ignores_older_runs_of_each_workflow_but_keeps_other_checks",
+        |_| {
+            let _fixture = Fixture::new(
+                r#"
+case "$5" in
+  */check-runs*) printf '%s\n' \
+    '{"id":1,"name":"test","status":"completed","conclusion":"cancelled","details_url":"https://github.com/acme/widgets/actions/runs/900/job/1"}' \
+    '{"id":2,"name":"old-only","status":"completed","conclusion":"failure","details_url":"https://github.com/acme/widgets/actions/runs/900/job/2"}' \
+    '{"id":3,"name":"test","status":"in_progress","details_url":"https://github.com/acme/widgets/actions/runs/901/job/3"}' \
+    '{"id":4,"name":"test","status":"completed","conclusion":"failure","details_url":"https://github.com/acme/widgets/actions/runs/902/job/4"}' \
+    '{"id":5,"name":"external","status":"completed","conclusion":"cancelled","details_url":"https://ci.example/test"}' ;;
+  */actions/runs*) printf '%s\n' \
+    '{"id":900,"workflow_id":10,"created_at":"2026-10-19T12:00:00Z"}' \
+    '{"id":902,"workflow_id":20,"created_at":"2026-10-19T11:00:00Z"}' \
+    '{"id":901,"workflow_id":10,"created_at":"2026-10-19T12:01:00Z"}' ;;
+  */status*) printf '%s\n' '{"context":"deploy","state":"error"}' ;;
+  *) exit 1 ;;
+esac
+"#,
+            );
+            let checks = GitHub::new().checks_on(&issue(), "abc").unwrap();
+            let answers: Vec<_> = checks
+                .iter()
+                .map(|check| (check.name.as_str(), check.conclusion.clone()))
+                .collect();
+            assert_eq!(
+                answers,
+                [
+                    ("test", Conclusion::Unfinished),
+                    ("test", Conclusion::Failure),
+                    ("external", Conclusion::Cancelled),
+                    ("deploy", Conclusion::Error),
+                ]
+            );
+        },
+    );
+}
+
+#[test]
+fn a_newer_pending_workflow_run_without_jobs_cannot_establish_green_ci() {
+    with_recorded_signal(
+        "github::execution_tests::a_newer_pending_workflow_run_without_jobs_cannot_establish_green_ci",
+        |_| {
+            let _fixture = Fixture::new(
+                r#"
+case "$5" in
+  */check-runs*) printf '%s\n' '{"id":1,"name":"test","status":"completed","conclusion":"cancelled","details_url":"https://github.com/acme/widgets/actions/runs/900/job/1"}' ;;
+  */actions/runs*) printf '%s\n' \
+    '{"id":900,"workflow_id":10,"created_at":"2026-10-19T12:00:00Z","status":"completed"}' \
+    '{"id":901,"workflow_id":10,"created_at":"2026-10-19T12:01:00Z","status":"queued","name":"CI","html_url":"https://github.com/acme/widgets/actions/runs/901"}' ;;
+  */status*) printf '%s\n' '{"context":"deploy","state":"success"}' ;;
+  *) exit 1 ;;
+esac
+"#,
+            );
+            let checks = GitHub::new().checks_on(&issue(), "abc").unwrap();
+            assert!(
+                checks
+                    .iter()
+                    .any(|check| check.conclusion == Conclusion::Unfinished)
+            );
+            assert!(
+                !checks
+                    .iter()
+                    .any(|check| check.conclusion == Conclusion::Cancelled)
+            );
+        },
+    );
+}
+
+#[test]
 fn github_reports_each_check_as_github_named_it() {
     with_recorded_signal(
         "github::execution_tests::github_reports_each_check_as_github_named_it",
@@ -975,7 +1048,7 @@ fn cancellation_during_a_ci_check_read_starts_no_further_request() {
             ));
             let started = Instant::now();
             let error = crate::ci::Watch::new(&issue())
-                .assess("abc", None, &mut || Ok(()))
+                .assess("abc", None, &mut || Ok(()), &mut |_| Ok(false))
                 .err()
                 .unwrap();
 

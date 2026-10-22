@@ -50,6 +50,74 @@ const GREEN: &str =
 const RED: &str =
     r#"[{"name": "test", "conclusion": "failure", "url": "https://ci.example/test"}]"#;
 
+/// Bash that records successive workflow runs of one workflow on `commit`.
+fn workflow_runs_on(commit: &str) -> String {
+    format!(
+        r#"
+gh fake run "{{\"databaseId\":900,\"workflow_id\":10,\"created_at\":\"2026-10-19T12:00:00Z\",\"headSha\":\"$(git rev-parse {commit})\"}}"
+gh fake run "{{\"databaseId\":901,\"workflow_id\":10,\"created_at\":\"2026-10-19T12:01:00Z\",\"headSha\":\"$(git rev-parse {commit})\"}}"
+"#
+    )
+}
+
+#[test]
+fn superseded_runs_on_the_same_head_wait_for_the_latest_run_without_a_repair() {
+    for old_conclusion in ["cancelled", "failure"] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&format!(
+            "{AGENT_OPENS_PR}{}{}",
+            checks_on_head(&format!(
+                r#"[{{"name":"test","conclusion":"{old_conclusion}","url":"https://github.com/acme/widgets/actions/runs/900/job/1"}},
+                    {{"name":"test","conclusion":"success","pending_polls":3,"url":"https://github.com/acme/widgets/actions/runs/901/job/2"}}]"#
+            )),
+            workflow_runs_on("HEAD")
+        ));
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert!(
+            result.stderr.contains("1 still running out of 1 checks"),
+            "{}",
+            result.stderr
+        );
+        assert!(result.stderr.contains("CI passed"), "{}", result.stderr);
+        assert_eq!(scenario.claude_calls().len(), 1);
+        assert!(rerun_requests(&scenario).is_empty());
+    }
+}
+
+#[test]
+fn inherited_failures_ignore_superseded_successes_on_the_base_commit() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(1, &format!(
+        "{AGENT_OPENS_PR}{}{}{}",
+        checks_on_head(RED),
+        checks_on_base(r#"[
+            {"name":"test","conclusion":"success","url":"https://github.com/acme/widgets/actions/runs/900/job/1"},
+            {"name":"test","conclusion":"failure","url":"https://github.com/acme/widgets/actions/runs/901/job/2"}
+        ]"#),
+        workflow_runs_on("origin/main")
+    ));
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_ne!(result.code, Some(0));
+    let base = scenario.origin_git(&["rev-parse", "main"]);
+    assert!(
+        result.stderr.contains(&inherited_failure("test", &base)),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("starting Repair"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert!(rerun_requests(&scenario).is_empty());
+}
+
 #[test]
 fn checks_pending_then_green_is_success() {
     let scenario = Scenario::new();
