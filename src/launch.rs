@@ -120,7 +120,7 @@ impl LaunchDirectory {
                  start it from a clone of {}",
                 issue.url,
                 directory.origin,
-                issue.repo_slug()
+                issue.repo().slug()
             );
         }
         if !GitHub::new().issue_is_open(issue)? {
