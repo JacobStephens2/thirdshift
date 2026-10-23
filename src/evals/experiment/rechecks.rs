@@ -52,6 +52,21 @@ impl std::fmt::Display for Pending {
     }
 }
 
+fn task_is_void(result: &TrialResult, results: &[TrialResult]) -> bool {
+    results.iter().any(|other| {
+        other.suite == result.suite && other.task == result.task && other.outcome == Outcome::Void
+    })
+}
+
+fn flip(score: &mut grading::Score, wrong_finding: bool) {
+    let value = if wrong_finding {
+        &mut score.wrong_finding
+    } else {
+        &mut score.passed
+    };
+    *value = !*value;
+}
+
 pub(super) fn assess(
     tasks: &[Task],
     results: &mut [TrialResult],
@@ -63,11 +78,7 @@ pub(super) fn assess(
     for index in 0..results.len() {
         let result = &results[index];
         // A Void Trial drops the whole paired task, including the other Arm.
-        if results.iter().any(|other| {
-            other.suite == result.suite
-                && other.task == result.task
-                && other.outcome == Outcome::Void
-        }) {
+        if task_is_void(result, results) {
             continue;
         }
         let score = result.score.as_ref().context("Trial has no Score")?;
@@ -81,23 +92,13 @@ pub(super) fn assess(
                 .score
                 .as_mut()
                 .context("Trial has no Score")?;
-            let value = if wrong_finding {
-                &mut score.wrong_finding
-            } else {
-                &mut score.passed
-            };
-            *value = !*value;
+            flip(score, wrong_finding);
             let flipped = grading::decision(tasks, results, bar);
             let score = results[index]
                 .score
                 .as_mut()
                 .context("Trial has no Score")?;
-            let value = if wrong_finding {
-                &mut score.wrong_finding
-            } else {
-                &mut score.passed
-            };
-            *value = !*value;
+            flip(score, wrong_finding);
             if flipped? != original {
                 decisive = true;
                 break;
@@ -167,9 +168,7 @@ pub(crate) fn record(args: &[String]) -> Result<String> {
         .find(|result| result.key() == *trial)
         .context("Trial not found")?;
     ensure!(
-        !results.iter().any(|other| other.suite == result.suite
-            && other.task == result.task
-            && other.outcome == Outcome::Void),
+        !task_is_void(result, &results),
         "Void Eval tasks cannot be rechecked"
     );
     ensure!(result.score.is_some(), "Trial has no Score");
