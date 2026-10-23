@@ -201,8 +201,13 @@ impl<'a> Description<'a> {
     }
 
     /// Note why the finding was left open, keeping the record for the Day
-    /// shift. The fix link must still name the dispatched fix.
+    /// shift. The fix link must still name the dispatched fix, and the
+    /// record must not already be closed: a 'Closed by' line claims the
+    /// finding is closed.
     pub(super) fn with_left_open_note(&self, issue: &IssueUrl, reason: &str) -> Result<String> {
+        if self.closed_by().is_some() {
+            bail!("the private record is already closed; leaving it unchanged");
+        }
         if self.fix_link() != Some(issue.url.as_str()) {
             bail!("the private record's fix Ticket changed during its Run; leaving it unchanged");
         }

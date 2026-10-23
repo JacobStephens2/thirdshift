@@ -179,6 +179,24 @@ fn closing_names_the_merged_pull_request_and_keeps_the_record_from_waiting_or_fi
 }
 
 #[test]
+fn left_open_note_refuses_an_already_closed_record() {
+    let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap();
+    let pr = "https://github.com/acme/widgets/pull/9";
+    let storage = collection(false, Vec::new());
+    let record = storage.decode_created(native(false, &mut draft("legacy"))).unwrap();
+    let pending = record.with_pending_fix(record.description(), &issue).unwrap();
+    let succeeded = record
+        .with_fix_ending(&pending, &issue, FixEnding::Succeeded)
+        .unwrap();
+    let closed = record.with_close(&succeeded, &issue, pr).unwrap();
+    assert!(
+        record
+            .with_left_open_note(&closed, &issue, "could not close the private record: gh failed")
+            .is_err()
+    );
+}
+
+#[test]
 fn public_fix_checks_preserve_copied_line_exclusions_and_short_statement_detection() {
     for private in [false, true] {
         let mut candidate = draft("private-lines");
