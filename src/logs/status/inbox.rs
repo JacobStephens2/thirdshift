@@ -200,9 +200,8 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
     let now = Local::now();
     let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
     let items = snapshot.inbox(false, config.inbox_days);
-    let ready_selectors: std::collections::BTreeSet<_> = items
+    let listed: std::collections::BTreeSet<_> = items
         .iter()
-        .filter(|item| item.group == Group::ReadyForReview)
         .filter_map(|item| item.command.selector())
         .collect();
     let sections = Group::ORDER
@@ -214,10 +213,11 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                 .filter(|item| item.group == group)
                 .map(|item| {
                     let mut row = entry_row(item.command, now, &config.logs_dir)?;
-                    // Ready dispatched Runs have their own Inbox row. Preserve
-                    // the full tree in history/show without duplicating DOM IDs.
+                    // Ready dispatched Runs have their own Inbox row, in
+                    // whichever group they reached. Preserve the full tree in
+                    // history/show without duplicating DOM IDs.
                     row.children
-                        .retain(|child| !ready_selectors.contains(&child.selector));
+                        .retain(|child| !listed.contains(&child.selector));
                     if let Some(kind) = item.needs_you_kind {
                         row.state = kind.title().into();
                     }

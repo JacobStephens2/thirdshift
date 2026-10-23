@@ -283,7 +283,7 @@ One running record per machine of what happened to its **Console accounts**: sig
 _Avoid_: audit log, access log
 
 **Inbox**:
-The **Console**'s first page, and `thirdshift status`'s order: a machine's **Commands** grouped by what each asks of the **Day shift**. **Needs you** comes first. Ready for review holds Commands that ended ready, with a pull request waiting. Landing holds live Ticket runs at CI watch or **Self-merge**. Working holds every other live Command. Done holds Commands that ended in the last day, and Resolved holds older ones with nothing waiting. Commands older still are only in the history.
+The **Console**'s first page, and `thirdshift status`'s order: a machine's **Commands** grouped by what each asks of the **Day shift**. **Needs you** comes first. Ready for review holds Commands that ended ready, with a pull request waiting. One leaves it as an ended Needs you one does: when a later Command on the same issue starts on the machine, or once it is older than the period the **User config** sets. A pull request merged or closed by hand stays until then, since the Inbox reads only the machine. Landing holds live Ticket runs at CI watch or **Self-merge**. Working holds every other live Command. Done holds Commands that ended in the last day, and Resolved holds older ones with nothing waiting. Commands older still are only in the history.
 _Avoid_: dashboard, feed, queue
 
 **Needs you**:

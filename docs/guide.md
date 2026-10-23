@@ -109,7 +109,7 @@ The designed behaviour described in this manual is implemented. Known gaps and p
 `thirdshift status` names this host and shows its **Inbox** across every repository in `logs.dir`, in this order:
 
 - **Needs you:** live Silent Ticket runs, then Slow Ticket runs, then ended problems newest first: Died, Failed, Triage (a Stop without requeue), or a Security finding waiting on a decision. An ended problem leaves when a later Command on the same issue starts on this machine, or after `inbox.days` (7 by default). Nothing is read from GitHub. Failures with the same nonempty cause collapse into one item with a count; unknown causes stay separate.
-- **Ready for review:** Commands that ended ready, with a pull request.
+- **Ready for review:** Commands that ended ready, with a pull request. Like an ended problem, one leaves when a later Command on the same issue starts on this machine, or after `inbox.days`, and then shows in Done, Resolved or History by its age. A pull request merged or closed by hand stays until then, since nothing is read from GitHub.
 - **Landing:** live Ticket runs at CI watch or Self-merge. A Command already in Needs you has a reference here instead of a second row.
 - **Working:** every other live Command.
 - **Done:** Commands that ended in the last day with nothing waiting.
@@ -489,7 +489,7 @@ waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting li
 endpoint = ""   # optional OTLP/HTTP traces URL, including /v1/traces; default blank (off); Security runs never export
 
 [inbox]
-days = 7             # days to keep ended problems and Resolved; default 7
+days = 7             # days to keep ended problems, Ready for review and Resolved; default 7
 silent_minutes = 10   # minutes without growth in either log before a Ticket run is Silent; default 10
 
 [activity]

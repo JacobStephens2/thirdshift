@@ -488,6 +488,55 @@ fn inbox_groups_ended_commands_and_adds_only_old_history_with_all() {
 }
 
 #[test]
+fn ready_commands_leave_ready_for_review_on_a_later_local_start_or_the_configured_age() {
+    let scenario = Scenario::new();
+    let now = chrono::Local::now();
+    // #7 is old; #8 was replaced by #9 on the same issue; #10 still waits.
+    for (number, issue, hours) in [(7, 7, 8 * 24 + 1), (8, 8, 2), (9, 8, 1), (10, 10, 1)] {
+        let time = (now - chrono::Duration::hours(hours)).to_rfc3339();
+        write_record(&scenario, number, &time, Some(&time));
+        change_record(&scenario, number, |record| {
+            record["issue"]["number"] = issue.into();
+            if number == 9 {
+                record["outcome"] = "merged".into();
+            } else {
+                record["pull_request"] =
+                    format!("https://github.com/acme/widgets/pull/{number}").into();
+            }
+        });
+    }
+    let groups = |flags: &[&str]| {
+        let output = scenario.run(flags);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        status["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["pull_request"].as_str().unwrap_or("none").to_owned(),
+                    row["group"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let pull = |number: u32| format!("https://github.com/acme/widgets/pull/{number}");
+    assert_eq!(
+        groups(&["status", "--json"]),
+        [
+            (pull(10), "ready for review".into()),
+            ("none".into(), "done".into()),
+            (pull(8), "done".into()),
+        ]
+    );
+    assert_eq!(
+        groups(&["status", "--all", "--json"]).last(),
+        Some(&(pull(7), "history".into()))
+    );
+}
+
+#[test]
 fn inbox_clears_ended_problems_on_a_later_local_start_or_the_configured_age() {
     let scenario = Scenario::new();
     let now = chrono::Local::now();
@@ -1063,6 +1112,8 @@ fn status_reads_activity_history_and_command_logs_without_stages() {
         "commands/secure/20261004T120000-0400.log",
         "thirdshift: 12:30:00 findings recorded\n",
     );
+    // Keep the dated fixture inside the Inbox period, so Ready for review holds it.
+    scenario.user_config_is("[inbox]\ndays = 36500\n");
     let result = scenario.run(&["status", "--all", "--json"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let status: Value = serde_json::from_str(&result.stdout).unwrap();

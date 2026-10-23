@@ -641,6 +641,65 @@ fn peek_and_full_logs_use_the_exact_selected_command_and_share_show_details() {
 }
 
 #[test]
+fn a_replaced_ready_dispatch_moves_to_done_and_is_shown_once() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let earlier = (chrono::Local::now() - chrono::Duration::hours(2)).to_rfc3339();
+    let mut outer = record(home.path(), 1, Some("ready for review"), 0);
+    outer["kind"] = json!("Pickup run");
+    outer["name"] = json!("pickup-fixture");
+    outer["issue"] = Value::Null;
+    outer["pull_request"] = Value::Null;
+    outer["started_at"] = json!(earlier);
+    outer["ended_at"] = json!(earlier);
+    let mut dispatched = record(home.path(), 1, Some("ready for review"), 0);
+    dispatched["kind"] = json!("Run");
+    dispatched["name"] = json!("acme/widgets#7");
+    dispatched["issue"]["number"] = json!(7);
+    dispatched["started_at"] = json!(earlier);
+    dispatched["ended_at"] = json!(earlier);
+    outer["dispatched"] = json!([dispatched]);
+    write_record(home.path(), 1, &outer);
+    let mut later = record(home.path(), 2, Some("merged"), 0);
+    later["issue"]["number"] = json!(7);
+    write_record(home.path(), 2, &later);
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let status = Command::new(binary)
+        .args(["status", "--json"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+    let groups: Vec<_> = status["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|row| {
+            (
+                row["kind"].as_str().unwrap(),
+                row["group"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        groups,
+        [
+            ("Spec run", "done"),
+            ("Pickup run", "done"),
+            ("Run", "done")
+        ],
+        "{status}"
+    );
+    let console = Console::start(binary, home.path());
+    let html = console.get("/").text().unwrap();
+    let path = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json");
+    let row = format!("data-command=\"{}::acme/widgets#7\"", path.display());
+    assert_eq!(html.matches(&row).count(), 1, "{html}");
+}
+
+#[test]
 fn dispatched_run_and_its_security_command_have_distinct_peeks() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

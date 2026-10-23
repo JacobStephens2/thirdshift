@@ -143,7 +143,11 @@ fn a_silent_transition_wakes_the_inbox_without_a_file_change() {
 
 #[test]
 fn elapsed_time_updates_inbox_groups_and_retention_without_a_file_change() {
-    for (outcome, days, remains) in [("merged", 7, true), ("failed", 1, false)] {
+    for (outcome, days, remains) in [
+        ("merged", 7, true),
+        ("failed", 1, false),
+        ("ready for review", 1, false),
+    ] {
         let home = tempfile::tempdir().unwrap();
         configure(home.path());
         fs::write(
