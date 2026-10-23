@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn decisive_score_waits_for_recheck_and_retains_both_scores_and_history() {
     let fixture = Fixture::new();
-    fixture.scenario.agent_does(&review_reports_prelude());
+    fixture.scenario.agent_does(review_reports_prelude());
     let run = fixture.run(&["--prior", "0.01"]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let experiment = fixture.experiment();
@@ -84,7 +84,7 @@ fn decisive_score_waits_for_recheck_and_retains_both_scores_and_history() {
 #[test]
 fn borderline_scores_wait_even_when_their_flip_cannot_change_the_verdict() {
     let fixture = Fixture::new();
-    fixture.scenario.agent_does(&review_reports_prelude());
+    fixture.scenario.agent_does(review_reports_prelude());
     fs::write(fixture.scenario.path("claude-script.sh.grader"), r#"
 python3 - <<'PY'
 import json, os
@@ -135,7 +135,7 @@ PY
 #[test]
 fn wrong_finding_rechecks_change_the_verdict_and_keep_the_flag_on_revision() {
     let fixture = Fixture::new();
-    fixture.scenario.agent_does(&review_reports_prelude());
+    fixture.scenario.agent_does(review_reports_prelude());
     assert_eq!(fixture.run(&["--prior", "0.01"]).code, Some(0));
     let experiment = fixture.experiment();
     let id = experiment["id"].as_str().unwrap();
@@ -209,7 +209,7 @@ fn wrong_finding_rechecks_change_the_verdict_and_keep_the_flag_on_revision() {
 #[test]
 fn invalid_or_concurrent_rechecks_leave_the_experiment_unchanged() {
     let fixture = Fixture::new();
-    fixture.scenario.agent_does(&review_reports_prelude());
+    fixture.scenario.agent_does(review_reports_prelude());
     assert_eq!(fixture.run(&["--prior", "0.01"]).code, Some(0));
     let experiment = fixture.experiment();
     let id = experiment["id"].as_str().unwrap();
@@ -271,7 +271,7 @@ fn invalid_or_concurrent_rechecks_leave_the_experiment_unchanged() {
 #[test]
 fn completed_experiments_saved_before_rechecks_acquire_the_pending_gate() {
     let fixture = Fixture::new();
-    fixture.scenario.agent_does(&review_reports_prelude());
+    fixture.scenario.agent_does(review_reports_prelude());
     assert_eq!(fixture.run(&["--prior", "0.01"]).code, Some(0));
     let experiment = fixture.experiment();
     let id = experiment["id"].as_str().unwrap();
