@@ -41,7 +41,7 @@ impl Name {
                 });
             }
         }
-        if ["architect-", "pickup-", "secure-"]
+        if ["architect-", "pickup-", "secure-", "experiment-"]
             .iter()
             .any(|prefix| name.starts_with(prefix))
         {
@@ -242,6 +242,7 @@ pub(in crate::logs) fn pass_prefix(kind: &str) -> Option<&'static str> {
         "Architect run" => Some("architect"),
         "Pickup run" => Some("pickup"),
         "Security run" => Some("secure"),
+        "Experiment" => Some("experiment"),
         _ => None,
     }
 }

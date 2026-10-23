@@ -3,9 +3,12 @@
 //! The captured owning Command also governs child inheritance and collection.
 
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(test)]
+use std::io::{BufRead, BufReader};
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{ChildStdout, Command};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -20,7 +23,9 @@ use crate::{logs, progress};
 /// Immutable Command identity, captured after Command logging is established.
 #[derive(Clone)]
 pub struct Recording {
-    owner: std::result::Result<Owner, String>,
+    /// A Trial explicitly has no Command owner. Allocation failures in a
+    /// Command remain errors; they must never select the Trial's storage.
+    owner: std::result::Result<Option<Owner>, String>,
 }
 
 /// The Session prompt and the Harness-specific way it receives input.
@@ -35,8 +40,13 @@ impl Recording {
     /// inherited ownership. Child Runs retain their parent's exact path.
     pub fn capture() -> Self {
         Self {
-            owner: logs::captured_owner(),
+            owner: logs::captured_owner().map(Some),
         }
+    }
+
+    /// Trial artifacts have their own empty output directory and no Command.
+    pub fn for_trial() -> Self {
+        Self { owner: Ok(None) }
     }
 
     /// Construct from captured facts; fixtures need no process-global changes.
@@ -46,6 +56,7 @@ impl Recording {
             owner: local
                 .or(inherited)
                 .map(|log| Owner::fixture(Some(log), stamp))
+                .map(Some)
                 .ok_or_else(|| "no owner in fixture".into()),
         }
     }
@@ -55,17 +66,24 @@ impl Recording {
             .owner
             .as_ref()
             .map_err(|cause| anyhow::anyhow!("cannot name Session log: {cause}"))?;
-        Ok(owner.session_path(dir, subject, kind))
+        Ok(match owner {
+            Some(owner) => owner.session_path(dir, subject, kind),
+            None => dir.join(format!("{subject}-{kind}.jsonl")),
+        })
+    }
+
+    fn owner(&self) -> Option<&Owner> {
+        self.owner.as_ref().ok()?.as_ref()
     }
 
     fn command_log(&self) -> Option<&Path> {
-        self.owner.as_ref().ok()?.log_path()
+        self.owner()?.log_path()
     }
 
     /// Give a child this exact owning Command, including through nested Runs.
     /// Absence removes stale ownership from the child's environment.
     pub fn inherit_command(&self, command: &mut Command) {
-        Owner::inherit(self.owner.as_ref().ok(), command);
+        Owner::inherit(self.owner(), command);
     }
 
     /// Collection failures cost attribution, never notification delivery.
@@ -95,6 +113,11 @@ impl Recording {
         stream: Interpretation,
     ) -> Result<Ended> {
         let adapter = choice.harness.adapter();
+        if matches!(self.owner, Ok(None)) {
+            // A Trial must not lend a caller's stale Command identity to
+            // the Harness or to thirdshift processes it might start.
+            self.inherit_command(command);
+        }
         if let Some(dir) = log.parent() {
             fs::create_dir_all(dir)
                 .with_context(|| format!("could not create {}", dir.display()))?;
@@ -103,7 +126,7 @@ impl Recording {
             File::create(log).with_context(|| format!("could not create {}", log.display()))?;
         let started = Instant::now();
         let context = logs::trace_context()
-            .or_else(|| self.owner.as_ref().ok().map(logs::trace::Context::of_owner))
+            .or_else(|| self.owner().map(logs::trace::Context::of_owner))
             .unwrap_or_else(|| logs::trace::Context::of_session(log));
         let trace = Arc::new(Mutex::new(super::trace::Trace::create(
             log,
@@ -118,6 +141,7 @@ impl Recording {
         let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());
         let choice_owned = choice.clone();
         let recording = self.clone();
+        let stop_at_limit = matches!(self.owner, Ok(None));
         let executed = process::streaming(
             adapter,
             command,
@@ -131,6 +155,7 @@ impl Recording {
                     &log_owned,
                     stream,
                     &streaming_trace,
+                    stop_at_limit,
                 );
                 // The process owner joins this reader before returning, including
                 // on interruption, when it deliberately suppresses state recovery.
@@ -224,11 +249,7 @@ impl Recording {
         let mut paths = Vec::new();
         for entry in fs::read_dir(dir)? {
             let path = entry?.path();
-            if self
-                .owner
-                .as_ref()
-                .is_ok_and(|owner| owner.models_match(&path))
-            {
+            if self.owner().is_some_and(|owner| owner.models_match(&path)) {
                 paths.push(path);
             }
         }
@@ -292,33 +313,83 @@ struct SessionModels {
 /// condenses to, until the stream ends.
 fn follow(
     kind: &str,
-    stream: impl Read,
+    mut stream: ChildStdout,
+    log_file: &mut File,
+    log: &Path,
+    progress: &mut Interpretation,
+    trace: &Mutex<super::trace::Trace>,
+    stop_at_limit: bool,
+) -> Result<()> {
+    let mut pending = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        // The pipe may stay idle while Codex writes a native quota report.
+        // Poll in this owned reader so process cleanup still joins it.
+        let mut descriptor = libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ready = unsafe { libc::poll(&mut descriptor, 1, if stop_at_limit { 100 } else { -1 }) };
+        if ready < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error.into());
+        }
+        let mut eof = false;
+        if ready > 0 {
+            let count = stream
+                .read(&mut buffer)
+                .context("could not read the session stream")?;
+            eof = count == 0;
+            pending.extend_from_slice(&buffer[..count]);
+            let complete = if eof {
+                pending.len()
+            } else {
+                pending
+                    .iter()
+                    .rposition(|byte| *byte == b'\n')
+                    .map_or(0, |index| index + 1)
+            };
+            for line in pending[..complete].split_inclusive(|byte| *byte == b'\n') {
+                record_line(kind, line, log_file, log, progress, trace)?;
+            }
+            pending.drain(..complete);
+        }
+        if stop_at_limit {
+            for raw in progress.limit_records() {
+                record_line(kind, raw.as_bytes(), log_file, log, progress, trace)?;
+            }
+            if progress.plan_limit_reached() {
+                return super::limits::stop();
+            }
+        }
+        if eof {
+            return Ok(());
+        }
+    }
+}
+
+fn record_line(
+    kind: &str,
+    line: &[u8],
     log_file: &mut File,
     log: &Path,
     progress: &mut Interpretation,
     trace: &Mutex<super::trace::Trace>,
 ) -> Result<()> {
-    let mut stream = BufReader::new(stream);
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        if stream
-            .read_until(b'\n', &mut line)
-            .context("could not read the session stream")?
-            == 0
-        {
-            return Ok(());
-        }
-        log_file
-            .write_all(&line)
-            .with_context(|| format!("could not write {}", log.display()))?;
-        let raw = String::from_utf8_lossy(&line);
-        let decoded = progress.decode(&raw);
-        trace.lock().unwrap().record(&raw, &decoded.events)?;
-        for condensed in decoded.progress {
-            progress::step(format_args!("{kind}: {condensed}"));
-        }
+    log_file
+        .write_all(line)
+        .with_context(|| format!("could not write {}", log.display()))?;
+    let raw = String::from_utf8_lossy(line);
+    let decoded = progress.decode(&raw);
+    trace.lock().unwrap().record(&raw, &decoded.events)?;
+    for condensed in decoded.progress {
+        progress::step(format_args!("{kind}: {condensed}"));
     }
+    Ok(())
 }
 
 /// A Session trace that cannot be finished costs evidence, never the session.

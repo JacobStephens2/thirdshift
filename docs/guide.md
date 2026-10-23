@@ -394,12 +394,122 @@ thirdshift secure                   # audit the Base branch and record findings 
 thirdshift secure base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
 thirdshift email-test [<address>]   # send a test email through Resend (see Email)
 thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
+thirdshift evals list               # list private Eval suites and approved/proposed Eval tasks
+thirdshift evals import-replays     # import #429's private manifests and grading files once
+thirdshift evals touched <path>...  # select suites from their declared source dependencies
+thirdshift evals prepare <suite> <task> <destination>  # prepare a throwaway repository at its base
+thirdshift evals verify <repository> <base>  # refuse history beyond the base commit
+thirdshift evals prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>  # cache builds and record fixed Harness paths
+thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json]  # run or resume an Experiment
+thirdshift experiments [<id>] [--json]  # list Experiments or show one
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print a compact command and option reference
 ```
 
 `help` lists commands and shared options, with a link to the [README](../README.md), which points here for workflow details, settings, Harness setup, email, logs and scheduling.
+
+### Eval tasks
+
+Eval suites live privately under `~/.thirdshift/evals/suites/<suite>/`. Their
+manifests declare Factory skill, Session prompt and Harness, Model and Effort
+default dependencies, plus Trials per Arm. `evals touched` selects suites from
+those declarations. `evals list` includes proposed Eval tasks, while `evals
+prepare` refuses them until approved. Preparation keeps only base history, applies
+the change under review without its commit objects, and gives Spec-review Eval
+tasks a local bare origin. These commands write JSON and start no agent sessions.
+`evals prepare-arms` prepares both Arms before Trials: it caches release builds
+by commit under `~/.thirdshift/evals/builds/` and records their commits, binaries,
+and each Harness's real path and version in a new JSON file. A failed build or
+version lookup stops preparation. Trials use the recorded Harness path so an
+installation's symlink update cannot change the Harness between Arms.
+The [Eval task format](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md)
+documents the manifests with made-up data and the Arm record.
+
+On the host holding #429's material, `thirdshift evals import-replays` reads
+the private replay manifests, cached original issue bodies and grading index
+under `~/.thirdshift/replays/` into the code-review and Spec-review suites.
+Rerunning adds missing Eval tasks and completes missing Code review Trial inputs,
+preserving local edits. The format document also describes the
+grading index to prepare on that host; private material stays outside the repository.
+
+### Experiments
+
+From a local thirdshift clone, `thirdshift experiment <candidate>` compares a
+branch or commit with its merge-base with `main`. Use `--baseline <ref>` to name
+another Baseline. Suites default to those touched by the change, using their
+declarations; repeat `--suite <name>` to select them explicitly, including for a
+Harness, Model or Effort comparison with the same build in both Arms.
+
+Each Arm accepts `--baseline-harness`, `--baseline-model`, `--baseline-effort`
+or the corresponding `--candidate-*` flag, followed by a value. Unspecified
+choices follow the User config, then the Harness defaults. Both builds must
+support the [versioned Trial protocol](https://github.com/JacobStephens2/thirdshift/blob/main/docs/trial.md).
+Both Code review and Spec review Eval tasks run. Code review Trials use the
+production code-review Factory skill on the historical diff and retain both
+axis reports without fixing or publishing anything. Spec review Trials keep
+the ordinary Spec review prompt.
+
+The Bar is saved before the first Trial: margin `-0.10`, credible level `0.95`,
+prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
+`1800`-second per-Trial timeout, and up to two fresh retries for Void Trials.
+Override these with `--margin`, `--credible-level`, `--prior`, `--seed`,
+`--draws`, `--trials-per-task`, `--timeout` (seconds), or `--void-retries`.
+`--void-retries` accepts zero, one or two. A sandbox that cannot start, a
+provider connection or login failure, a provider server error before work, a
+plan-limit stop, or a host kill or Trial-only memory cap makes a Trial void.
+Timeouts, context-window overflow, refusals and agent failures count as failed
+Trials. Void Trials retry fresh up to the Bar's limit and remain void if
+exhausted. A task still void in either Arm drops out of both Arms.
+
+Usage/rate limits pause scheduling until the same Experiment is started again.
+Claude's warning and rejection events also pause it immediately, as do Codex quota reports at
+85% usage in either window. A Trial cut short by a warning is void; a Trial
+already running on the other worker may finish, but neither worker starts
+another Trial or retry. Ordinary Runs do not stop at these warnings.
+The Experiment watches each Trial with the current detectors, including when
+an Arm's build predates warning detection.
+
+Two workers take alternating Baseline and Candidate Trials, each in a fresh
+prepared repository. Trial artifacts and one result per finished Trial live
+privately in `~/.thirdshift/evals/experiments/<id>/`. Trials currently run
+without a sandbox; #1014 adds isolation. Code Graders then score each Trial:
+a changed repository makes it void, a review with no reports fails, and the
+Eval task's mechanical checks must pass. Scores retain each check and its reason.
+Model grading of written success criteria follows separately; these Scores
+cover mechanical checks only and set no wrong-finding flags.
+
+Each suite gets a paired Verdict using its recorded Trials per Eval task (one
+or three). Any failed suite fails the Experiment; otherwise any inconclusive
+suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
+also makes it inconclusive. Results include the suite intervals, the Bar and
+each Arm's minutes across all attempts, including Void Trials and timeouts.
+The code-review suite runs three Trials per Arm per Eval task by default; the
+Spec-review suite runs one. For three-Trial suites, `experiments --json` reports
+`pass_cubed`: the share of retained Eval tasks where all three Trials passed,
+separately for each Arm.
+Provider usage/rate limits pause scheduling until the same Experiment is
+started again, consuming the same fresh-retry budget across resumes. Completed
+attempts count toward minutes and per-Arm Void totals even while paused or
+after resume. Stop preserves completed attempts and the remaining budget.
+
+The same Arms and suite names identify the same Experiment. Running it again
+skips finished Trials and re-runs interrupted ones; a completed Experiment only
+reports its saved results. A changed Bar is refused after the first Trial.
+`thirdshift experiments --json` lists them and `thirdshift experiments <id>
+--json` shows one. The starting command's `--json` ends with one JSON line
+containing the Verdict and suite intervals alongside the Trial results and Arm
+minutes. Both views show Void counts and causes per Arm, and report repeated
+Trial-only memory-cap stops as a finding against that Arm. The text view shows
+Baseline and Candidate minutes beside the Verdict.
+
+Each invocation that does work keeps a Command record, Command log and Activity
+log lines under `<logs.dir>/JacobStephens2/thirdshift/commands/experiment/`
+(the Activity log is at the repository level). The record names both Arms and
+the Bar and moves through Arm builds, Eval tasks and Trials. It appears in the
+Inbox: a pass goes in Done, and a fail or inconclusive Verdict goes in Needs you.
+Use the name from `status` with `thirdshift stop <command>` to Stop it.
+The individual Trials keep no factory Command records.
 
 `version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr. `architect` follows it too: stdout carries the pull request's URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with `--plan-only`, or its idea when the review published no plan. A skipped Architect run prints nothing there when [another is still running](#one-at-a-time), the URL of each Architect plan that is [still open](#one-architect-plan-at-a-time), the URL of each [Architect idea waiting for triage](#an-architect-idea-waits-for-triage), and the URL of the [Ready issue, or issue still settling, that goes first](#a-ready-issue-goes-first). `pickup` follows it as well: stdout carries the pull request's URL of the run it dispatches, and nothing when the [Pickup run](#pickup-runs) is skipped. So does `secure`: stdout carries the pull request's URL of a fix it dispatches, and nothing otherwise.
 
@@ -544,10 +654,11 @@ Every key holds its real value, so a Run reading it does exactly what it does wi
 6. Runs review their change for Security findings? (`security.review`), off by default.
 7. Run notifications? (`email.always`). If yes, the address (`email.to`), asked again until it has an `@`, then the sender (`email.from`).
 8. With notifications on, the Resend API key, with input hidden. With none saved it asks `Resend API key (input hidden, Enter to skip):`; with one in the [Credentials](#email), `Resend API key (input hidden, Enter keeps the saved one):`, and a new one replaces it. Surrounding spaces are trimmed, and anything that doesn't start with `re_` is asked again. A key you give is saved in the Credentials, `~/.thirdshift/credentials.toml`, created with mode 600 (and `~/.thirdshift` with it) or edited in place, keeping its comments and anything else in it and changing only `resend.key`; `setup` then prints `wrote the Credentials <path>`. The key is never printed, nor written to the User config. Skipping writes no Credentials and says how to add a key later: rerun `thirdshift setup`, or set `RESEND_API_KEY`. With `RESEND_API_KEY` set and not empty, which wins over the Credentials, nothing is asked, and it says the key comes from `RESEND_API_KEY`. With a key found or given, it offers to send a test email (default No), as `thirdshift email-test` does, once the files are written.
+9. A Claude setup token, made separately with `claude setup-token`, with input hidden, whether notifications are on or off. Enter skips it, or keeps the saved token; a new one replaces `claude.setup_token` in the Credentials, keeping comments and the Resend key. Saving Credentials sets mode 600. The token is never printed or written to the User config. It is reserved for Trials; passing it to a Trial as `CLAUDE_CODE_OAUTH_TOKEN` is tracked in #1012. Ordinary Runs keep using the Harness's existing login.
 
 When the saved `security.review` or `security.fix` is on, Setup also prints a Security sandbox probe result. On Linux it starts a real `bwrap` sandbox and tries a connection to a temporary host-loopback listener (no internet), opening the saved User config for writing without changing its contents, and writing a scratch file with a throwaway HOME. A failed check names the capability and prints operator-run commands for installing bubblewrap and granting `/usr/bin/bwrap` user namespaces through AppArmor on Ubuntu; Setup runs none of those commands and still saves the User config. The sandbox has a three-second deadline. With both settings off, no probe runs. On macOS the probe reports that it is unavailable. Passing checks these capabilities only: Security sessions must still enforce all the audit skill's controls, including credential isolation and resource limits.
 
-Pressing Enter takes the default shown, which is the file's current value, or else the setting's default, and for the address the suggested email above. `logs.dir`, `activity.quiet_skips`, `spec.parallel`, `pickup.limit`, `pickup.wait_minutes` and `security.harness` are not asked about. Setup adds a missing `security.harness` at its default, blank, with a comment explaining it; a configured Harness is kept. The answers are written like everything else below: in place, keeping your comments. Ctrl-C, SIGTERM or SIGHUP during the questions or a Model/Effort check exits `1` with `interrupted` and writes nothing: neither the User config nor the Credentials. Ordinary and hidden questions stop without another line of input, and hidden input restores the saved terminal settings, including echo. With notifications off, nothing about a key is asked, and saved Credentials stay as they were, so `--email` on a single Run still works. Credentials a Run would refuse (see [Email](#email)) are refused before any question, exit `1`, and not touched. With no terminal, as from cron or `thirdshift setup </dev/null`, `setup` asks nothing and never writes the Credentials. Either way it prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its comments and key order stay, as do the values it didn't ask about, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. If `[security]` falls between Harness sections, Setup moves it after them, keeping its values and comments. One that already lists every setting, down to the commented-out `email.to` line, with Security outside the Harness area is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
+Pressing Enter takes the default shown, which is the file's current value, or else the setting's default, and for the address the suggested email above. `logs.dir`, `activity.quiet_skips`, `spec.parallel`, `pickup.limit`, `pickup.wait_minutes` and `security.harness` are not asked about. Setup adds a missing `security.harness` at its default, blank, with a comment explaining it; a configured Harness is kept. The answers are written like everything else below: in place, keeping your comments. Ctrl-C, SIGTERM or SIGHUP during the questions or a Model/Effort check exits `1` with `interrupted` and writes nothing: neither the User config nor the Credentials. Ordinary and hidden questions stop without another line of input, and hidden input restores the saved terminal settings, including echo. With notifications off, the Resend key is not asked about and stays as it was, so `--email` on a single Run still works. The Claude setup token is offered independently. Credentials a Run would refuse (see [Email](#email)) are refused before any question, exit `1`, and not touched. With no terminal, as from cron or `thirdshift setup </dev/null`, `setup` asks nothing and never writes the Credentials. Either way it prints the file's path on stderr and exits `0` with stdout empty. Over a User config that is already there, `setup` edits it in place: its comments and key order stay, as do the values it didn't ask about, and each key it lacks is added at its default with its comment, so afterwards the file lists every setting this version knows. If `[security]` falls between Harness sections, Setup moves it after them, keeping its values and comments. One that already lists every setting, down to the commented-out `email.to` line, with Security outside the Harness area is left byte for byte as it was. A key added to an inline table, such as `launch = { pull = true }`, gets no comment, since TOML has no place for one there. One a Run would refuse is refused the same way, exit `1`, and not touched. Any argument after `setup` is an argument error (exit `2`).
 
 The first Run on a machine with no User config, started from a terminal, offers Setup before any work, on stderr: `No User config at <path>. Set your defaults now? [Y/n]`. Yes (or Enter) asks the questions above, writes the file, and the Run carries on using your answers; a flag in the command, such as `--no-merge`, `--email` or `--no-email`, still wins over them. No writes every setting at its default, as `setup` with no terminal does, asks nothing about a key, writes no Credentials, says that `thirdshift setup` changes it, and the Run carries on; later Runs find the file and don't offer again. If the file can't be written, stderr gets a `warning:` line and the Run carries on with the defaults. Ctrl-C, SIGTERM or SIGHUP during the offer, the questions or a Model/Effort check exits `1` with `interrupted`, writes nothing and ends the command before any work, with no Run notification. A command thirdshift can't parse exits `2` before any offer. A Run with no terminal, as from cron, CI, `nohup` or an agent's shell, offers nothing, writes nothing, and runs on the defaults, so a later Run from a terminal still gets the offer.
 
@@ -650,7 +761,7 @@ no Resend API key. Either:
     (a crontab line, CI secret, or a shell profile the Run's shell reads)
 ```
 
-The Credentials are read only when `RESEND_API_KEY` is unset or empty, and only by `email-test`, `setup`, and a Run or a Pass that asks for a notification. A missing file just means no key from it. One that isn't valid TOML, or holds anything but a quoted `resend.key`, such as a typo like `kye`, stops the command with exit `1`, naming the file and the offending key, and nothing is sent. One that others can read is still used, with a `warning:` line on stderr saying to `chmod 600` it. Nothing is sent to check the key itself. When Resend accepts the email, it prints `accepted by Resend; check your inbox` and exits `0`; that is all it can verify, so check that the email arrives. When Resend refuses it, for example for a bad key or a sender it won't send from, it prints Resend's error text word for word, with where the key came from, and exits `1`. It gives up after 30 seconds without an answer.
+Setup validates the Credentials before asking questions on a terminal. For email, `email-test`, the Console and a Run or a Pass that asks for a notification read them only when `RESEND_API_KEY` is unset or empty. A missing file just means no key from it. The file accepts quoted `resend.key` and `claude.setup_token` values. Invalid TOML, unknown sections or keys (such as `kye`), and values of other types stop the command with exit `1`, naming the file and the offending key, and nothing is sent. One that others can read is still used, with a `warning:` line on stderr saying to `chmod 600` it. Nothing is sent to check the key itself. When Resend accepts the email, it prints `accepted by Resend; check your inbox` and exits `0`; that is all it can verify, so check that the email arrives. When Resend refuses it, for example for a bad key or a sender it won't send from, it prints Resend's error text word for word, with where the key came from, and exits `1`. It gives up after 30 seconds without an answer.
 
 #### Run notifications
 

@@ -4,6 +4,7 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 
 | Issue term | Owning implementation / search symbol | Supporting tests |
 | --- | --- | --- |
+| Verdict, Bar, paired Scores | `src/verdict.rs` — `judge`; `src/verdict/prediction.rs` — posterior-predictive assurance | `src/verdict/tests.rs` (parent #977's standalone Verdict seam) |
 | Claim | `src/claim.rs` — `Claim`, `make`, `end` | Inline tests; `tests/pickup_run.rs` |
 | Ready issue, Claim limit, Sweep | `src/ready.rs` — `ReadyIssue`, `first`, `refresh`; `src/pickup.rs` — `gates`, `sweep`; `src/pickup/reservation.rs` — cross-machine Pickup reservation | Inline tests; `tests/pickup_run.rs` |
 | Run, Continuation, Issue branch | `src/run.rs`; `src/branch.rs` | `tests/fresh_run.rs`, `tests/continuation.rs`, `tests/numbered_branches.rs` |
@@ -20,6 +21,10 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | Session prompt, Factory skills | `src/prompt.rs`; `src/skills.rs`; `skills/` | `src/skills/tests.rs`, `tests/packaging.rs` |
 | Trusted account, the issue a session gets | `src/trust.rs` — `issue_trust`, `ticket_trust`, `untrusted_edit` over `Reads`; the GitHub adapter's trust reads, `src/github/trust.rs`; `src/github/session_issue.rs` — `issue_for_session`; `src/delivery.rs` — `hand_over_issue` | Inline tests, including `src/trust.rs` and `src/prompt.rs`; `tests/fresh_run.rs`, `tests/pickup_run.rs` |
 | Session log, Resume | `src/session.rs` and `src/session/`; `src/session/kind.rs` — `Kind`, `Logged`: every session kind, its Session-log token, the Command record stage it enters and its `--session` rule (`selects`) | `src/session/execution_tests.rs`, inline tests in `src/session/kind.rs`, `tests/background_work.rs` |
+| Trial, Code review | `src/trial.rs` — versioned request/result protocol for Code review and Spec review, shared `Sessions` execution with output outside factory logs; `src/prompt.rs` — Session prompts | `tests/trial.rs`; protocol: `docs/trial.md` |
+| Experiment, Bar, running Trials | `src/evals/experiment.rs` and `src/evals/experiment/` — fixed inputs, private storage, two workers and resume; ordinary Command recording in `src/logs/` | `tests/experiments.rs`; CLI: `docs/guide.md#experiments` |
+| Plan-limit warnings | `src/harness/interpretation/limits.rs` — Claude/Codex quota detection; `src/harness/codex/limits.rs` — live native reports; `src/session/limits.rs` and `src/session/recording.rs` — Eval stop policy and shared pause signal; `src/evals/experiment/limits.rs` — supervision of older Arm builds | `src/harness/interpretation_tests.rs`, `tests/trial.rs`, `tests/experiments.rs`, `tests/fresh_run.rs` |
+| Code Grader, Experiment Scores and Verdict, Arm minutes | `src/evals/experiment/grading.rs` — mechanical checks and paired suite Verdicts; `src/evals/experiment/integrity.rs` — repository snapshots; `src/evals/experiment/store.rs` — saved Verdict and minutes | `tests/experiments.rs`; check environment: `docs/eval-tasks.md` |
 | OTLP JSON Lines (Session-trace file format) | `src/otlp_jsonl.rs` — application-independent requests, `Writer`, `Reader`; `src/otlp_jsonl/value.rs` — attribute values and byte encoding | `src/otlp_jsonl/tests.rs`; official examples and local Collector config in `src/otlp_jsonl/fixtures/` |
 | Session trace recording and Trace ancestry | `src/session/trace.rs` — streaming records, ended spans and retained amendments; `src/logs/trace.rs` — deterministic Command, Run and stage identities | `tests/session_traces.rs`, `src/session/recording/tests.rs`, `src/logs/recording/tests.rs` |
 | Whole Trace export | `src/logs/export.rs` — Command record ancestry and local OTLP JSON Lines export | `tests/export_trace.rs` |
@@ -42,6 +47,12 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | User config, Setup | `src/config.rs`; `src/setup.rs` | `tests/user_config.rs`, `tests/setup.rs` |
 | Architecture review, Architect run | `src/architect.rs` | `tests/architect_run.rs` |
 | Security audit, Security review, Security run | `src/security.rs` and `src/security/`; which Runs run a Security review, and what every child Run is handed: `src/child_run/asks.rs` — `ChildAsks` | Inline tests; `tests/security_review.rs`, `tests/security_run.rs` |
+
+Eval task manifests, suite dependency selection and repository preparation live in
+`src/evals.rs` and `src/evals/`; `tests/evals.rs` tests the CLI with real Git
+repositories. The private data format is documented in `docs/eval-tasks.md`.
+The one-time #429 replay import is owned by `src/evals/import.rs` and exercised
+through the same CLI tests with made-up manifests and grading files.
 
 For example, `rg -n 'Claim|TicketBoard|RunNotification' src/claim.rs src/spec_run/ticket_board.rs src/notification.rs` locates the owners of Claim, Ticket board and Run notification without reading the whole glossary or README. Ticket board is an implementation term; the glossary defines its Spec run and Ticket vocabulary.
 

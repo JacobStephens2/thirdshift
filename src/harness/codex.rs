@@ -2,6 +2,7 @@
 
 mod catalog;
 mod events;
+mod limits;
 mod patches;
 pub(crate) mod stream;
 pub use catalog::Catalog;

@@ -25,6 +25,7 @@ use crate::prompt;
 use crate::skills;
 
 pub mod kind;
+pub(crate) mod limits;
 pub mod recording;
 mod review_reports;
 pub(crate) mod trace;
@@ -63,6 +64,15 @@ pub struct Logs {
 }
 
 impl Logs {
+    /// An isolated Trial's artifacts, with no Command owner or factory logs.
+    pub fn of_trial(dir: &Path) -> Self {
+        Logs {
+            name: "trial".to_string(),
+            dir: dir.to_path_buf(),
+            recording: recording::Recording::for_trial().into(),
+        }
+    }
+
     /// The logs of the Run on `issue`.
     pub fn of_run(issue: &IssueUrl) -> Self {
         Logs {
@@ -239,6 +249,13 @@ impl<'a> Sessions<'a> {
         kind: Kind,
         prompt: &str,
     ) -> Result<Option<String>> {
+        self.run_to_end(purpose, kind, prompt)
+            .map(|ended| ended.final_message)
+    }
+
+    /// The same session and Resume policy, retaining the Harness session ID
+    /// for a Trial's result as well as its final message.
+    pub fn run_to_end(&self, purpose: Purpose, kind: Kind, prompt: &str) -> Result<Ended> {
         // Progress lines name the session by its kind's token.
         let label = kind.token();
         let reports = if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
@@ -279,13 +296,22 @@ impl<'a> Sessions<'a> {
             self.step(format!(
                 "{label}: background work was killed as the session ended; resuming it once"
             ));
-            ended = self.start(
-                purpose,
-                Logged::resume_of(kind),
-                Some(session_id),
-                &resume_prompt,
-                reports.as_ref(),
-            )?;
+            ended = self
+                .start(
+                    purpose,
+                    Logged::resume_of(kind),
+                    Some(session_id),
+                    &resume_prompt,
+                    reports.as_ref(),
+                )
+                .map_err(|mut error| {
+                    // Work was observed before this Resume, even if its first
+                    // turn fails.
+                    if let Some(failure) = error.downcast_mut::<SessionFailure>() {
+                        failure.before_first_turn = false;
+                    }
+                    error
+                })?;
             ended_last = "Resume";
         }
         if !ended.killed.is_empty() {
@@ -305,7 +331,7 @@ impl<'a> Sessions<'a> {
                 .borrow_mut()
                 .push(format!("{label} session {ending}"));
         }
-        Ok(ended.final_message)
+        Ok(ended)
     }
 
     /// Run `session`, logged under its own path, which becomes the last log,

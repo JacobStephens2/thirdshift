@@ -9,6 +9,8 @@ use crate::logs::Stage;
 pub enum Kind {
     /// A Run's implement session, `implement`.
     Implementation,
+    /// An Eval's review-only Code review, `code-review`.
+    CodeReview,
     /// A Spec run's Spec review, `spec-review`.
     SpecReview,
     /// The numbered Repair, `repair-<n>`.
@@ -33,6 +35,7 @@ impl Kind {
     pub fn token(self) -> String {
         match self {
             Self::Implementation => "implement".to_string(),
+            Self::CodeReview => "code-review".to_string(),
             Self::SpecReview => "spec-review".to_string(),
             Self::Repair(n) => format!("repair-{n}"),
             Self::SecurityReview => "security-review".to_string(),
@@ -47,8 +50,9 @@ impl Kind {
     /// The kind `token` names, if any. A numbered kind's number is read as
     /// `--session repair` has always read a Repair's.
     fn read(token: &str) -> Option<Self> {
-        const UNNUMBERED: [Kind; 7] = [
+        const UNNUMBERED: [Kind; 8] = [
             Kind::Implementation,
+            Kind::CodeReview,
             Kind::SpecReview,
             Kind::SecurityReview,
             Kind::SecurityReviewFallback,
@@ -109,12 +113,13 @@ impl Logged {
     }
 
     /// The Command record stage the session enters. A Resume of the
-    /// implement session, Spec review, a Repair or Security review enters
+    /// implement session, Code review, Spec review, a Repair or Security review enters
     /// `Resume`; any other Resume keeps its kind's stage.
     pub fn stage(self) -> Stage {
         match (self.kind, self.resume) {
             (
                 Kind::Implementation
+                | Kind::CodeReview
                 | Kind::SpecReview
                 | Kind::Repair(_)
                 | Kind::SecurityReview
@@ -122,6 +127,7 @@ impl Logged {
                 true,
             ) => Stage::Resume,
             (Kind::Implementation, false) => Stage::Implement,
+            (Kind::CodeReview, false) => Stage::CodeReview,
             (Kind::SpecReview, false) => Stage::SpecReview,
             (Kind::Repair(_), false) => Stage::Repair,
             (Kind::SecurityReview | Kind::SecurityReviewFallback, false) => Stage::SecurityReview,
@@ -158,8 +164,9 @@ mod tests {
     use super::*;
 
     /// Every kind, the numbered ones with a number of their own.
-    const KINDS: [(Kind, &str); 8] = [
+    const KINDS: [(Kind, &str); 9] = [
         (Kind::Implementation, "implement"),
+        (Kind::CodeReview, "code-review"),
         (Kind::SpecReview, "spec-review"),
         (Kind::Repair(3), "repair-3"),
         (Kind::SecurityReview, "security-review"),
@@ -202,6 +209,7 @@ mod tests {
     fn each_session_enters_its_command_record_stage() {
         let stages = [
             (Kind::Implementation, "implement", "Resume"),
+            (Kind::CodeReview, "Code review", "Resume"),
             (Kind::SpecReview, "Spec review", "Resume"),
             (Kind::Repair(1), "Repair", "Resume"),
             (Kind::SecurityReview, "Security review", "Resume"),

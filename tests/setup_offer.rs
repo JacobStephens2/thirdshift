@@ -87,6 +87,7 @@ fn accepting_and_choosing_merge_always_makes_that_run_a_merge_run() {
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
+            ("Claude setup token", ""),
             ("Run the Console?", ""),
         ],
     );
