@@ -131,7 +131,7 @@ Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: ht
   "version": 1,
   "hostname": "factory",
   "commands": [{
-    "version": 1,
+    "version": 2,
     "kind": "Run",
     "repository": "acme/widgets",
     "name": "acme/widgets#7",
@@ -224,7 +224,9 @@ thirdshift logs 'widgets#7' --session repair --follow
 
 A stage's **Usual range** is its 25th–75th percentile time over the repository's last 30 Command records on this machine. Completed stages supply times, with the next stage's start or the Command's end marking completion; an unfinished stage supplies none. The range appears once there are at least three stage times. Quartiles interpolate between sorted times. A live Run past the top of the range is **Slow**: `slower than usual (12–17 min), still working`. At twice the top it also shows the multiple, such as `2× usual` or `3× usual`. Silent takes precedence over Slow.
 
-Both JSON views add `health` to recorded Commands: `{"state":"ok"}`, `{"state":"slow","step":1,"usual_range":{"lower_seconds":720.0,"upper_seconds":1020.0},"multiple":1}`, or `{"state":"silent","step":2,"seconds":2700,"threshold_seconds":600}`. Step 1 is the first threshold; step 2 is the escalation. Ended or dead Commands have null health. The `usual_ranges` map gives each stage's range by name, for example `{"implement":{"lower_seconds":720.0,"upper_seconds":1020.0}}`; a stage is omitted until enough times exist. Health and ranges are reader observations, never written back to Command records.
+Both JSON views add `health` to recorded Commands: `{"state":"ok"}`, `{"state":"slow","step":1,"usual_range":{"lower_seconds":720.0,"upper_seconds":1020.0},"multiple":1}`, or `{"state":"silent","step":2,"seconds":2700,"threshold_seconds":600}`. Step 1 is the first threshold; step 2 is the escalation. Ended or dead Commands have null health. The `usual_ranges` map gives each stage's current range by name, for example `{"implement":{"lower_seconds":720.0,"upper_seconds":1020.0}}`; a stage is omitted until enough times exist. Health and this map are reader observations.
+
+At completion, each Run, Base fix and Spec run writes `run_metrics` into its own Command record (version 2). Ticket Runs retain their own metrics. The field holds `outcome`, `repairs` (the number of Repair stages), `ci_rounds` (CI watch stages), `total_minutes` from launch to completion, and a `stages` array with each stage's `name`, `seconds`, `minutes`, `usual_range` and `position`. Position is `below`, `within`, `above` or `too_few_runs`; the last has a null range. The saved ranges use the same repository history as health, excluding the record being finished. They remain fixed as later Runs finish. `show --json` includes these retained metrics; older records without the field remain readable, with null metrics.
 
 `show --json` is a versioned API, usable outside a repository. Version 1 wraps the selected Command in this shape:
 
@@ -233,7 +235,7 @@ Both JSON views add `health` to recorded Commands: `{"state":"ok"}`, `{"state":"
   "version": 1,
   "hostname": "factory",
   "command": {
-    "version": 1,
+    "version": 2,
     "kind": "Run",
     "repository": "acme/widgets",
     "name": "acme/widgets#7",

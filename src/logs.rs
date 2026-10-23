@@ -20,11 +20,13 @@ mod process_identity;
 mod reading;
 pub(crate) use reading::catalog;
 mod recording;
+mod run_metrics;
 pub(crate) mod session;
 pub(crate) mod spans;
 pub mod status;
 pub mod stop;
 pub(crate) mod trace;
+mod usual_range;
 
 use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};

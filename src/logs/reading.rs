@@ -19,8 +19,9 @@ use serde::Serialize;
 
 use super::command_record::{CommandRecord, CommandTree};
 use super::effects::OnMachine;
+pub(super) use super::usual_range::UsualRange;
 use super::{Pass, activity};
-pub(super) use health::{Health, UsualRange};
+pub(super) use health::Health;
 pub(super) use history::Command as HistoricalCommand;
 pub(super) use inbox::{Group, InboxItem};
 pub(super) use selection::{Detailed, Observation};
@@ -75,7 +76,7 @@ impl Snapshot {
                 );
             }
         }
-        let ranges = health::UsualRanges::from_records(&records);
+        let ranges = super::usual_range::UsualRanges::from_records(&records);
         let roots: Vec<_> = records
             .iter()
             .filter(|(_, tree)| {
@@ -208,6 +209,14 @@ impl Command {
     }
 }
 
+pub(super) fn repository_records(root: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
+    let mut records = BTreeMap::new();
+    for folder in directories(&root.join("commands"))? {
+        records.extend(read_records(&folder)?);
+    }
+    Ok(records)
+}
+
 fn read_records(folder: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
     let mut records = BTreeMap::new();
     for entry in entries(folder)? {
@@ -225,7 +234,7 @@ fn read_records(folder: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
             continue;
         };
         let record = &mut tree.command;
-        if record.version != 1 {
+        if !matches!(record.version, 1 | 2) {
             continue;
         }
         // Records written before completion times existed were last

@@ -168,7 +168,7 @@
   &quot;version&quot;: 1,
   &quot;hostname&quot;: &quot;factory&quot;,
   &quot;commands&quot;: [{
-    &quot;version&quot;: 1,
+    &quot;version&quot;: 2,
     &quot;kind&quot;: &quot;Run&quot;,
     &quot;repository&quot;: &quot;acme/widgets&quot;,
     &quot;name&quot;: &quot;acme/widgets#7&quot;,
@@ -248,13 +248,14 @@ thirdshift logs &#39;widgets#7&#39; --session repair --follow
 <p><code>show</code> includes the Runs, stage history with start times and Usual ranges, outcomes, and paths to Command logs and Session traces. Each live Run also gets its latest event, such as <code>Bash: cargo test</code>, from the last 64 KiB of its current Session trace. It uses the Harness&#39;s stream interpretation, including Claude and Codex, and ignores malformed or unknown lines. Missing or unreadable Session traces leave the event unavailable.</p>
 <p><code>status</code> and <code>show</code> describe live work as <strong>Silent</strong> when neither its Session trace nor its Command log has grown for <code>inbox.silent_minutes</code> (10 by default). Silence starts no earlier than the current stage. A dispatch stage is never Silent or Slow and has no Usual range: the dispatched Run or Spec run carries its own. At three times the threshold, the words escalate: <code>silent 45 min · past 30</code>. A fresh line in either log keeps the Run from being Silent. Missing logs use the stage&#39;s start time.</p>
 <p>A stage&#39;s <strong>Usual range</strong> is its 25th–75th percentile time over the repository&#39;s last 30 Command records on this machine. Completed stages supply times, with the next stage&#39;s start or the Command&#39;s end marking completion; an unfinished stage supplies none. The range appears once there are at least three stage times. Quartiles interpolate between sorted times. A live Run past the top of the range is <strong>Slow</strong>: <code>slower than usual (12–17 min), still working</code>. At twice the top it also shows the multiple, such as <code>2× usual</code> or <code>3× usual</code>. Silent takes precedence over Slow.</p>
-<p>Both JSON views add <code>health</code> to recorded Commands: <code>{&quot;state&quot;:&quot;ok&quot;}</code>, <code>{&quot;state&quot;:&quot;slow&quot;,&quot;step&quot;:1,&quot;usual_range&quot;:{&quot;lower_seconds&quot;:720.0,&quot;upper_seconds&quot;:1020.0},&quot;multiple&quot;:1}</code>, or <code>{&quot;state&quot;:&quot;silent&quot;,&quot;step&quot;:2,&quot;seconds&quot;:2700,&quot;threshold_seconds&quot;:600}</code>. Step 1 is the first threshold; step 2 is the escalation. Ended or dead Commands have null health. The <code>usual_ranges</code> map gives each stage&#39;s range by name, for example <code>{&quot;implement&quot;:{&quot;lower_seconds&quot;:720.0,&quot;upper_seconds&quot;:1020.0}}</code>; a stage is omitted until enough times exist. Health and ranges are reader observations, never written back to Command records.</p>
+<p>Both JSON views add <code>health</code> to recorded Commands: <code>{&quot;state&quot;:&quot;ok&quot;}</code>, <code>{&quot;state&quot;:&quot;slow&quot;,&quot;step&quot;:1,&quot;usual_range&quot;:{&quot;lower_seconds&quot;:720.0,&quot;upper_seconds&quot;:1020.0},&quot;multiple&quot;:1}</code>, or <code>{&quot;state&quot;:&quot;silent&quot;,&quot;step&quot;:2,&quot;seconds&quot;:2700,&quot;threshold_seconds&quot;:600}</code>. Step 1 is the first threshold; step 2 is the escalation. Ended or dead Commands have null health. The <code>usual_ranges</code> map gives each stage&#39;s current range by name, for example <code>{&quot;implement&quot;:{&quot;lower_seconds&quot;:720.0,&quot;upper_seconds&quot;:1020.0}}</code>; a stage is omitted until enough times exist. Health and this map are reader observations.</p>
+<p>At completion, each Run, Base fix and Spec run writes <code>run_metrics</code> into its own Command record (version 2). Ticket Runs retain their own metrics. The field holds <code>outcome</code>, <code>repairs</code> (the number of Repair stages), <code>ci_rounds</code> (CI watch stages), <code>total_minutes</code> from launch to completion, and a <code>stages</code> array with each stage&#39;s <code>name</code>, <code>seconds</code>, <code>minutes</code>, <code>usual_range</code> and <code>position</code>. Position is <code>below</code>, <code>within</code>, <code>above</code> or <code>too_few_runs</code>; the last has a null range. The saved ranges use the same repository history as health, excluding the record being finished. They remain fixed as later Runs finish. <code>show --json</code> includes these retained metrics; older records without the field remain readable, with null metrics.</p>
 <p><code>show --json</code> is a versioned API, usable outside a repository. Version 1 wraps the selected Command in this shape:</p>
 <pre><code class="language-json">{
   &quot;version&quot;: 1,
   &quot;hostname&quot;: &quot;factory&quot;,
   &quot;command&quot;: {
-    &quot;version&quot;: 1,
+    &quot;version&quot;: 2,
     &quot;kind&quot;: &quot;Run&quot;,
     &quot;repository&quot;: &quot;acme/widgets&quot;,
     &quot;name&quot;: &quot;acme/widgets#7&quot;,

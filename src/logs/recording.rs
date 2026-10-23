@@ -330,17 +330,19 @@ impl<O: Outside> Record<O> {
     }
 
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
+        let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record {
-            tree.command.finish(account, self.outside.now());
+            tree.command.finish(account, self.outside.now(), &ranges);
             self.write_record();
         }
     }
 
     pub(super) fn dispatch_ended(&mut self, account: &crate::run_ending::Account<'_>) {
+        let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record
             && let Some(dispatched) = tree.dispatched.last_mut()
         {
-            dispatched.finish(account, self.outside.now());
+            dispatched.finish(account, self.outside.now(), &ranges);
             self.write_record();
         }
     }
@@ -359,6 +361,30 @@ impl<O: Outside> Record<O> {
             facts.process_start = tree.command.process_start.clone();
             tree.dispatched.push(facts);
             self.write_record();
+        }
+    }
+
+    fn usual_ranges(&mut self) -> super::usual_range::UsualRanges {
+        let Some((path, tree)) = &self.command_record else {
+            return super::usual_range::UsualRanges::default();
+        };
+        let root = self
+            .logs_dir
+            .as_ref()
+            .unwrap()
+            .join(&tree.command.repository);
+        match self.outside.command_records(&root) {
+            Ok(mut records) => {
+                // The Run being finished must not supply its own comparison times.
+                records.remove(path);
+                super::usual_range::UsualRanges::from_records(&records)
+            }
+            Err(error) => {
+                self.step(format_args!(
+                    "warning: could not read Usual ranges for Run metrics: {error:#}"
+                ));
+                super::usual_range::UsualRanges::default()
+            }
         }
     }
 
