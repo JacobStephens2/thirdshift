@@ -34,8 +34,23 @@ const BASE_FIX: &str = "Base fix: ";
 pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
     match ending {
         Ending::Run(ended) => Ok(Account::of_run(ended)),
-        Ending::SecurityFix { ended, findings } => Ok(Account {
-            security_findings: Some(findings),
+        Ending::SecurityFix {
+            ended,
+            finding,
+            audit,
+        } => Ok(Account {
+            security_findings: Some(match audit {
+                Some(audit) => &audit.findings,
+                None => std::slice::from_ref(finding),
+            }),
+            security_findings_waiting: audit.as_ref().is_some_and(|audit| audit.findings_waiting),
+            security_fix: Some(SecurityFix {
+                finding,
+                audit: audit.as_ref().map(|audit| match &audit.outcome {
+                    Ok(recorded) => recorded.to_string(),
+                    Err(failed) => failure_outcome(failed, "audit failed").to_string(),
+                }),
+            }),
             ..Account::of_run(ended)
         }),
         Ending::Architect { review, dispatched } => {
@@ -55,6 +70,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                     review: None,
                     security_findings: None,
                     security_findings_waiting: false,
+                    security_fix: None,
                     failed_reproduction: None,
                     pre_audit_failure: None,
                     recovery: None,
@@ -136,9 +152,23 @@ pub struct Account<'a> {
     /// Safe metadata from a Security run's private records, even if the audit failed.
     pub security_findings: Option<&'a [crate::security::RecordedFinding]>,
     pub security_findings_waiting: bool,
+    /// In a Security run that dispatched a fix, which finding it was
+    /// dispatched for and how the audit before it ended.
+    pub security_fix: Option<SecurityFix<'a>>,
     /// The URLs on stdout, a line each: the pull request's, or that of the
     /// issue an Architect run's review ended on.
     pub urls: Vec<&'a str>,
+}
+
+/// The fix a Security run dispatched, told apart from the findings its audit
+/// only recorded.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SecurityFix<'a> {
+    /// The Security finding the fix's pull request addresses.
+    pub finding: &'a crate::security::RecordedFinding,
+    /// How the audit before the fix ended; `None` when the Security run
+    /// fixed an earlier recorded finding without auditing.
+    pub audit: Option<String>,
 }
 
 /// How an Architect run's Architecture review ended.
@@ -209,6 +239,7 @@ impl<'a> Account<'a> {
                 review: None,
                 security_findings: None,
                 security_findings_waiting: false,
+                security_fix: None,
                 failed_reproduction: None,
                 pre_audit_failure: None,
                 recovery: None,
@@ -237,6 +268,7 @@ impl<'a> Account<'a> {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: failed.recovery.as_deref(),
@@ -269,6 +301,7 @@ impl<'a> Account<'a> {
                 review: None,
                 security_findings: None,
                 security_findings_waiting: false,
+                security_fix: None,
                 failed_reproduction: None,
                 pre_audit_failure: None,
                 recovery: None,
@@ -563,6 +596,7 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -585,6 +619,7 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -776,6 +811,7 @@ mod tests {
                     }),
                     security_findings: None,
                     security_findings_waiting: false,
+                    security_fix: None,
                     failed_reproduction: None,
                     pre_audit_failure: None,
                     recovery: None,

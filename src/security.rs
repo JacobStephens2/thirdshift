@@ -30,9 +30,15 @@ pub enum FixAsk {
 pub enum Outcome {
     Skipped(Skipped),
     Audited(Ended),
+    /// A fix was dispatched for one Security finding.
     Fixed {
+        /// How the fix's Run ended.
         ended: crate::run::Ended,
-        findings: Vec<RecordedFinding>,
+        /// The Security finding the fix was dispatched for.
+        finding: RecordedFinding,
+        /// The audit this Security run completed before the fix, if it
+        /// audited; its findings include those left waiting for the Day shift.
+        audit: Option<Box<Ended>>,
     },
 }
 
@@ -175,7 +181,9 @@ fn run_through(
     }
     if fixing {
         match records.next_fix() {
-            Ok(Some((record, metadata))) => return fix(outside, repo, base, record, metadata),
+            Ok(Some((record, metadata))) => {
+                return fix(outside, repo, base, record, metadata, None);
+            }
             Ok(None) => {}
             Err(error) => return Outcome::Audited(error.into()),
         }
@@ -196,14 +204,14 @@ fn run_through(
             .and_then(|records| records.next_fix())
         {
             Ok(Some((record, metadata))) => {
-                let outcome = fix(outside, repo, base, record, metadata);
-                if let Outcome::Fixed { ended, .. } = outcome {
-                    return Outcome::Fixed {
-                        ended,
-                        findings: audited.findings,
-                    };
-                }
-                return outcome;
+                return fix(
+                    outside,
+                    repo,
+                    base,
+                    record,
+                    metadata,
+                    Some(Box::new(audited)),
+                );
             }
             Ok(None) => {}
             Err(error) => {
@@ -217,12 +225,14 @@ fn run_through(
     Outcome::Audited(audited)
 }
 
+/// Dispatch the fix for `record`, after `audit` if this Security run audited.
 fn fix(
     outside: &mut impl Outside,
     repo: &Repo,
     base: &str,
     record: crate::github::SecurityRecord,
     metadata: RecordedFinding,
+    audit: Option<Box<Ended>>,
 ) -> Outcome {
     let mut log = None;
     let ended = (|| -> Result<crate::run::Ended> {
@@ -268,7 +278,8 @@ fn fix(
             base_fix: None,
             advice: Vec::new(),
         }),
-        findings: vec![metadata],
+        finding: metadata,
+        audit,
     }
 }
 

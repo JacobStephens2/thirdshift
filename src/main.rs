@@ -392,7 +392,15 @@ fn secure(args: PassArgs) -> ExitCode {
             urls: Vec::new(),
         }),
         security::Outcome::Audited(audited) => Ending::Security(audited),
-        security::Outcome::Fixed { ended, findings } => Ending::SecurityFix { ended, findings },
+        security::Outcome::Fixed {
+            ended,
+            finding,
+            audit,
+        } => Ending::SecurityFix {
+            ended,
+            finding,
+            audit,
+        },
     })
 }
 
