@@ -711,7 +711,7 @@ mod tests {
             &logs,
             Path::new("/unused"),
             Box::new(scripted),
-            &|| Ok(()),
+            || Ok(()),
             steps,
         );
         let calls = calls.take();

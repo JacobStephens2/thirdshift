@@ -110,3 +110,60 @@ fn interrupting_a_resource_wait_starts_no_session() {
     assert!(result.stderr.contains("interrupted"));
     assert!(scenario.claude_calls().is_empty());
 }
+
+#[test]
+fn resource_limits_block_opencode_probe_sessions_too() {
+    let scenario = support::Scenario::new();
+    scenario.user_config_is("[resources]\nmin_available_memory_mb = 9007199254740991\n");
+    let result = scenario.run_terminal(
+        &[&scenario.issue_url(7), "harness", "opencode"],
+        &[],
+        &[support::TerminalStep::signal(
+            "waiting for host resources:",
+            libc::SIGINT,
+        )],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("waiting for host resources:"),
+        "{}",
+        result.stderr
+    );
+    let checks = std::fs::read_to_string(scenario.path("opencode-calls.checks.json"))
+        .unwrap_or_else(|_| "[]".to_owned());
+    let checks: serde_json::Value = serde_json::from_str(&checks).unwrap();
+    assert_eq!(
+        checks.as_array().unwrap().len(),
+        0,
+        "OpenCode started an agent session before resource admission: {checks}\n{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn resource_limits_also_block_claude_and_muse_model_test_calls() {
+    for (harness, model, record) in [
+        ("claude", "opus", "claude-calls.json"),
+        ("muse", "example-model", "muse-calls.checks.json"),
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(BLOCKED);
+        let result = scenario.run_terminal(
+            &[&scenario.issue_url(7), "harness", harness, "model", model],
+            &[],
+            &[support::TerminalStep::signal(
+                "waiting for host resources:",
+                libc::SIGINT,
+            )],
+        );
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        let checks =
+            std::fs::read_to_string(scenario.path(record)).unwrap_or_else(|_| "[]".to_owned());
+        let checks: Value = serde_json::from_str(&checks).unwrap();
+        assert_eq!(
+            checks.as_array().unwrap().len(),
+            0,
+            "{harness} started a Model test call before resource admission: {checks}"
+        );
+    }
+}
