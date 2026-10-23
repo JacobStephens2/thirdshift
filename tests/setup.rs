@@ -258,7 +258,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(config["activity"]["quiet_skips"].as_bool(), Some(false));
     assert_eq!(config["spec"]["parallel"].as_integer(), Some(3));
     assert_eq!(config["pickup"]["limit"].as_integer(), Some(3));
-    assert_eq!(config["pickup"]["wait_minutes"].as_integer(), Some(30));
+    assert_eq!(config["pickup"]["wait_minutes"].as_integer(), Some(5));
     assert_eq!(config["security"]["fix"].as_bool(), Some(false));
     assert_eq!(config["security"]["harness"].as_str(), Some(""));
     assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
