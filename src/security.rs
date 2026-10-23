@@ -50,7 +50,9 @@ pub struct Ended {
     /// A failed reproduction's number; its audit and private recording completed.
     pub failed_reproduction: Option<usize>,
     pub findings: Vec<RecordedFinding>,
-    pub findings_waiting: bool,
+    /// The private links of the findings whose records wait for the Day
+    /// shift's triage.
+    pub waiting: Vec<String>,
     pub advice: Vec<Advice>,
 }
 
@@ -61,7 +63,7 @@ impl From<anyhow::Error> for Ended {
             audit_started: false,
             failed_reproduction: None,
             findings: Vec::new(),
-            findings_waiting: false,
+            waiting: Vec::new(),
             advice: Vec::new(),
         }
     }
@@ -291,7 +293,7 @@ fn audit_and_record(
 ) -> Ended {
     let mut advice = Vec::new();
     let mut findings = Vec::new();
-    let mut findings_waiting = false;
+    let mut waiting = Vec::new();
     let mut log = None;
     let mut reproduction = None;
     let mut audit_started = false;
@@ -324,7 +326,9 @@ fn audit_and_record(
                 recorded.existing += 1;
             }
             let record = resolved.record;
-            findings_waiting |= record.untriaged();
+            if record.untriaged() {
+                waiting.push(record.metadata().url.clone());
+            }
             let mut metadata = record.metadata().clone();
             let url = metadata.url.clone();
             let first = seen.insert(finding.fingerprint);
@@ -390,7 +394,7 @@ fn audit_and_record(
         audit_started,
         failed_reproduction,
         findings,
-        findings_waiting,
+        waiting,
         advice,
     }
 }

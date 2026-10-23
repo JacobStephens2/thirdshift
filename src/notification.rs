@@ -295,7 +295,8 @@ fn body(
             };
             text += &format!("Reproduction: {number} {status}\n");
         }
-        // A dispatched fix addresses one finding; the audit's others wait.
+        // A dispatched fix addresses one finding; the audit's others are
+        // listed apart from it.
         let sections = match &account.security_fix {
             Some(fix) => vec![
                 (
@@ -306,13 +307,8 @@ fn body(
                     },
                     vec![fix.finding],
                 ),
-                (
-                    "Recorded, waiting for the Day shift",
-                    findings
-                        .iter()
-                        .filter(|finding| finding.url != fix.finding.url)
-                        .collect(),
-                ),
+                ("Recorded, waiting for the Day shift", fix.waiting.clone()),
+                ("Also recorded by the audit", fix.recorded.clone()),
             ],
             None => vec![("Security findings", findings.iter().collect())],
         };

@@ -38,21 +38,34 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
             ended,
             finding,
             audit,
-        } => Ok(Account {
-            security_findings: Some(match audit {
-                Some(audit) => &audit.findings,
-                None => std::slice::from_ref(finding),
-            }),
-            security_findings_waiting: audit.as_ref().is_some_and(|audit| audit.findings_waiting),
-            security_fix: Some(SecurityFix {
-                finding,
-                audit: audit.as_ref().map(|audit| match &audit.outcome {
-                    Ok(recorded) => recorded.to_string(),
-                    Err(failed) => failure_outcome(failed, "audit failed").to_string(),
+        } => {
+            let audit = audit.as_deref();
+            // The audit's other findings, those whose records wait for triage first.
+            let (waiting, recorded): (Vec<_>, Vec<_>) =
+                audit.map_or_else(Default::default, |audit| {
+                    audit
+                        .findings
+                        .iter()
+                        .filter(|other| other.url != finding.url)
+                        .partition(|other| audit.waiting.contains(&other.url))
+                });
+            Ok(Account {
+                security_findings: Some(
+                    audit.map_or(std::slice::from_ref(finding), |audit| &audit.findings),
+                ),
+                security_findings_waiting: !waiting.is_empty(),
+                security_fix: Some(SecurityFix {
+                    finding,
+                    audit: audit.map(|audit| match &audit.outcome {
+                        Ok(recorded) => recorded.to_string(),
+                        Err(failed) => failure_outcome(failed, "audit failed").to_string(),
+                    }),
+                    waiting,
+                    recorded,
                 }),
-            }),
-            ..Account::of_run(ended)
-        }),
+                ..Account::of_run(ended)
+            })
+        }
         Ending::Architect { review, dispatched } => {
             Ok(Account::of_architect(review, dispatched.as_ref()))
         }
@@ -98,7 +111,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                 },
                 failed_reproduction: audited.failed_reproduction,
                 security_findings: Some(&audited.findings),
-                security_findings_waiting: audited.findings_waiting,
+                security_findings_waiting: !audited.waiting.is_empty(),
                 advice: &audited.advice,
                 ..account
             })
@@ -169,6 +182,11 @@ pub struct SecurityFix<'a> {
     /// How the audit before the fix ended; `None` when the Security run
     /// fixed an earlier recorded finding without auditing.
     pub audit: Option<String>,
+    /// The audit's other findings whose records wait for the Day shift's
+    /// triage.
+    pub waiting: Vec<&'a crate::security::RecordedFinding>,
+    /// The audit's other findings, already triaged.
+    pub recorded: Vec<&'a crate::security::RecordedFinding>,
 }
 
 /// How an Architect run's Architecture review ended.
