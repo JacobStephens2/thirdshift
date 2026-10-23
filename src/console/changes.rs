@@ -1,6 +1,6 @@
 //! One native filesystem observer for the Console, shared by all streams.
 //! Watch directories so atomic replacements keep working. The slow fallback
-//! recovers lost notifications and observations of process death or elapsed time.
+//! recovers lost notifications.
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock, Weak};
@@ -71,6 +71,14 @@ struct Paths {
 }
 
 impl Paths {
+    fn new(root: PathBuf, logs: PathBuf, executable: PathBuf) -> Self {
+        Self {
+            root: observed_path(&root),
+            logs: observed_path(&logs),
+            executable: observed_path(&executable),
+        }
+    }
+
     fn notice(&self, result: notify::Result<Event>, revision: &mut Revision) {
         let event = match result {
             Ok(event) if matches!(event.kind, EventKind::Access(_)) => return,
@@ -145,30 +153,48 @@ impl Paths {
     }
 }
 
+// Native backends may report canonical paths (notably /private/var on macOS).
+// Resolve the existing ancestor so roots created later use the same spelling.
+pub(super) fn observed_path(path: &std::path::Path) -> PathBuf {
+    for ancestor in path.ancestors() {
+        if let Ok(canonical) = ancestor.canonicalize() {
+            return canonical.join(path.strip_prefix(ancestor).unwrap());
+        }
+    }
+    path.to_path_buf()
+}
+
 pub(super) fn observe(
     config: &crate::config::UserConfig,
     executable: &super::restart::Executable,
 ) -> Result<(Receiver, Notifier, tokio::task::JoinHandle<()>)> {
-    let paths = Arc::new(RwLock::new(Paths {
-        root: crate::config::home()?.join(".thirdshift"),
-        logs: config.logs_dir.clone(),
-        executable: executable.path.clone(),
-    }));
+    let paths = Arc::new(RwLock::new(Paths::new(
+        crate::config::home()?.join(".thirdshift"),
+        config.logs_dir.clone(),
+        executable.path.clone(),
+    )));
     let (pending, mut notifications) = watch::channel(Revision::default());
     let notifier = Notifier {
         pending: pending.clone(),
         following: Arc::default(),
     };
     let observed = paths.clone();
-    let mut watcher = notify::recommended_watcher(move |event| {
+    let enqueue = move |event| {
         pending.send_if_modified(|revision| {
             let before = (revision.commands, revision.accounts, revision.executable);
             observed.read().unwrap().notice(event, revision);
             before != (revision.commands, revision.accounts, revision.executable)
         });
-    })?;
+    };
+    let mut watcher = notify::recommended_watcher(enqueue.clone())?;
+    // Recovery compares metadata rather than making every viewer render again
+    // each minute. Its scan runs on notify's thread and never reads contents.
+    let mut recovery =
+        notify::PollWatcher::new(enqueue, notify::Config::default().with_manual_polling())?;
     let mut watched = BTreeMap::new();
+    let mut recovered = BTreeMap::new();
     reconcile(&mut watcher, &mut watched, &paths.read().unwrap());
+    reconcile(&mut recovery, &mut recovered, &paths.read().unwrap());
     let (sender, changes) = watch::channel(Revision::default());
     let observer =
         tokio::spawn(async move {
@@ -189,24 +215,22 @@ pub(super) fn observe(
                 if !fallback {
                     tokio::time::sleep(Duration::from_millis(100)).await;
                 }
+                if fallback && let Err(error) = recovery.poll() {
+                    eprintln!("thirdshift Console: filesystem recovery: {error}");
+                }
                 let revision = *notifications.borrow_and_update();
-                if (fallback || revision.accounts != previous.accounts)
+                if revision.accounts != previous.accounts
                     && let Ok(config) = crate::config::UserConfig::load()
                 {
-                    paths.write().unwrap().logs = config.logs_dir;
+                    paths.write().unwrap().logs = observed_path(&config.logs_dir);
                 }
                 reconcile(&mut watcher, &mut watched, &paths.read().unwrap());
-                sender.send_modify(|current| {
-                    if fallback || revision.commands != previous.commands {
-                        current.commands += 1;
-                    }
-                    if fallback || revision.accounts != previous.accounts {
-                        current.accounts += 1;
-                    }
-                    if fallback || revision.executable != previous.executable {
-                        current.executable += 1;
-                    }
-                });
+                reconcile(&mut recovery, &mut recovered, &paths.read().unwrap());
+                if (revision.commands, revision.accounts, revision.executable)
+                    != (previous.commands, previous.accounts, previous.executable)
+                {
+                    sender.send_replace(revision);
+                }
                 previous = revision;
             }
         });
@@ -214,7 +238,7 @@ pub(super) fn observe(
 }
 
 fn reconcile(
-    watcher: &mut notify::RecommendedWatcher,
+    watcher: &mut impl Watcher,
     watched: &mut BTreeMap<PathBuf, Registration>,
     paths: &Paths,
 ) {
@@ -245,4 +269,37 @@ fn reconcile(
         let _ = watcher.unwatch(path);
         false
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn canonical_backend_events_match_paths_under_a_symlinked_home() {
+        let temp = tempfile::tempdir().unwrap();
+        let real = temp.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let alias = temp.path().join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let root = alias.join(".thirdshift");
+        std::fs::create_dir(&root).unwrap();
+        // The log root need not exist yet. FSEvents reports canonical paths,
+        // including /private/var for a HOME supplied under macOS's /var alias.
+        let paths = Paths::new(root.clone(), root.join("logs"), alias.join("thirdshift"));
+        let canonical = real.canonicalize().unwrap().join(".thirdshift");
+        let mut revision = Revision::default();
+        for file in [
+            "config.toml",
+            "console-accounts.json",
+            "logs/new.command.json",
+        ] {
+            paths.notice(
+                Ok(Event::new(EventKind::Any).add_path(canonical.join(file))),
+                &mut revision,
+            );
+        }
+        assert_eq!(revision.accounts, 2);
+        assert_eq!(revision.commands, 2);
+    }
 }

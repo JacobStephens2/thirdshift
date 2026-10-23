@@ -177,20 +177,18 @@ pub(super) fn observe(
                 ] {
                     schedule_transition(&mut next_change, now, threshold, stage.age_seconds as u64);
                 }
-            }
-            if let Some(range) = ranges.get(&command.record.repository, &stage.name)
-                && stage.age_seconds as f64 > range.upper_seconds
-            {
-                command.health = Some(Health::Slow {
-                    step: if stage.age_seconds as f64 >= range.upper_seconds * 2.0 {
-                        2
-                    } else {
-                        1
-                    },
-                    usual_range: range,
-                    multiple: (stage.age_seconds as f64 / range.upper_seconds.max(1.0)).floor()
-                        as u64,
-                });
+                if stage.age_seconds as f64 > range.upper_seconds {
+                    command.health = Some(Health::Slow {
+                        step: if stage.age_seconds as f64 >= range.upper_seconds * 2.0 {
+                            2
+                        } else {
+                            1
+                        },
+                        usual_range: range,
+                        multiple: (stage.age_seconds as f64 / range.upper_seconds.max(1.0)).floor()
+                            as u64,
+                    });
+                }
             }
             // A newly entered stage cannot already be Silent. Missing logs use
             // its start time, rather than inventing activity at read time.

@@ -44,7 +44,12 @@ pub(super) fn follow(notifier: Notifier, mut changes: Receiver) -> Following {
                     continue;
                 }
             };
-            let paths = watching.paths;
+            let paths: BTreeSet<_> = watching
+                .paths
+                .iter()
+                .map(|path| super::changes::observed_path(path))
+                .collect();
+            let logs = super::changes::observed_path(&config.logs_dir);
             let changed = notifier.clone();
             let filter = paths.clone();
             let mut files =
@@ -65,7 +70,7 @@ pub(super) fn follow(notifier: Notifier, mut changes: Receiver) -> Following {
             if let Some(files) = &mut files {
                 let parents: BTreeSet<_> = paths
                     .iter()
-                    .filter(|path| !path.starts_with(&config.logs_dir))
+                    .filter(|path| !path.starts_with(&logs))
                     .filter_map(|path| path.parent()?.ancestors().find(|parent| parent.is_dir()))
                     .collect();
                 for parent in parents {

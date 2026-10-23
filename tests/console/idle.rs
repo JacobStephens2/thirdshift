@@ -46,19 +46,16 @@ fn unchanged_requests_reuse_retained_records_but_replacements_are_visible() {
     assert!(console.get("/").text().unwrap().contains("Changed title"));
 }
 
-fn live_fixture(home: &Path, pid: u32) {
-    let mut fixture = record(home, 81, None, 0);
-    fixture["process_id"] = json!(pid);
-    fixture["process_start"] = json!(super::watching::start(pid));
-    write_record(home, 81, &fixture);
-}
-
 #[test]
 fn idle_viewers_sleep_and_log_appends_and_completion_wake_the_reader() {
     use std::io::Write;
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
-    live_fixture(home.path(), std::process::id());
+    write_record(
+        home.path(),
+        81,
+        &super::watching::live_record(home.path(), std::process::id()),
+    );
     let path = home
         .path()
         .join(".thirdshift/logs/acme/widgets/commands/issue/81-fixture.log");
