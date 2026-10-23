@@ -77,7 +77,7 @@ test("the manual starts folded and readers can unfold nested sections without Ja
   assert.equal(await page.locator("main details[open]").count(), 0);
   assert.equal(await page.locator("main details").count(), await page.locator("main :is(h2,h3,h4)").count());
   await checkSectionToggles(page, ":scope > .manual-content", "Enter");
-  await page.getByRole("heading", { name: "What a Run does", exact: true }).click();
+  await page.getByRole("heading", { name: "What a Ticket run does", exact: true }).click();
   const claim = page.getByRole("heading", { name: "The Claim", exact: true });
   assert.equal(await claim.isVisible(), true);
   const ends = page.getByRole("heading", { name: "When the Claim ends", exact: true });

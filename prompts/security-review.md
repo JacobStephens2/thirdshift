@@ -2,7 +2,7 @@
 
 # Security review
 
-When enabled, runs one guidance review after a Run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Ticket Runs get none; Base fixes get one too. Introduced findings, refusals or incomplete reviews hold Self-merge.
+When enabled, runs one guidance review after a Ticket run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Each Ticket run and Base fix gets one too. Introduced findings, refusals or incomplete reviews hold Self-merge.
 
 ```
 Use the `thirdshift-security-audit` skill in guidance mode.

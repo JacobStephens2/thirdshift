@@ -2,9 +2,9 @@
 
 # Session prompts
 
-Every Session prompt thirdshift can start or resume an agent session with, one file each, with placeholders such as `<branch>` where each Run fills in its own values. The [Prompts and skills page](https://thirdshift.app/prompts/) shows the same prompts.
+Every Session prompt thirdshift can start or resume an agent session with, one file each, with placeholders such as `<branch>` where each Ticket run fills in its own values. The [Prompts and skills page](https://thirdshift.app/prompts/) shows the same prompts.
 
-Every session runs `claude` headless in the Run's worktree, in auto permission mode. The Factory skills are linked into the worktree's `.claude/skills/`, where Claude Code finds them, and kept out of git:
+Every session runs `claude` headless in the Ticket run's worktree, in auto permission mode. The Factory skills are linked into the worktree's `.claude/skills/`, where Claude Code finds them, and kept out of git:
 
 ```sh
 claude -p --permission-mode auto --settings '{"attribution":{"commit":"","pr":""}}' --output-format stream-json --verbose <prompt>
@@ -20,18 +20,18 @@ With `harness codex`, each session runs `codex exec --json --dangerously-bypass-
 
 | Prompt | When it is sent | File |
 | --- | --- | --- |
-| Fresh | Starts the implement session, which goes on to review and open the pull request, when the Run starts a new Issue branch. | [fresh.md](fresh.md) |
-| Continuation, with no pull request | Starts the implement session when the Run is a Continuation of an Issue branch that has no pull request. | [continuation.md](continuation.md) |
-| Continuation, with an open pull request | Starts the implement session when the Run is a Continuation of an Issue branch whose pull request is open. | [continuation-pr.md](continuation-pr.md) |
+| Fresh | Starts the implement session, which goes on to review and open the pull request, when the Ticket run starts a new Issue branch. | [fresh.md](fresh.md) |
+| Continuation, with no pull request | Starts the implement session when the Ticket run is a Continuation of an Issue branch that has no pull request. | [continuation.md](continuation.md) |
+| Continuation, with an open pull request | Starts the implement session when the Ticket run is a Continuation of an Issue branch whose pull request is open. | [continuation-pr.md](continuation-pr.md) |
 | Spec review | In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready. | [spec-review.md](spec-review.md) |
 | Architecture review | Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none. | [architecture-review.md](architecture-review.md) |
-| Security review | When enabled, runs one guidance review after a Run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Ticket Runs get none; Base fixes get one too. Introduced findings, refusals or incomplete reviews hold Self-merge. | [security-review.md](security-review.md) |
+| Security review | When enabled, runs one guidance review after a Ticket run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Each Ticket run and Base fix gets one too. Introduced findings, refusals or incomplete reviews hold Self-merge. | [security-review.md](security-review.md) |
 | Security audit | Starts the report-only Security audit in a throwaway worktree at origin's Base branch head. The threat-model line is included when a conventional document exists; artifacts stay under the repository's audit root. | [security-audit.md](security-audit.md) |
 | Security reproduction | After a Security audit, tries to reproduce one recorded finding in a fresh throwaway worktree at its audited commit. The test is copied into the private record only after a complete outcome. | [security-reproduction.md](security-reproduction.md) |
 | Conflict Repair | Starts a Repair session when merging the Base branch into the Issue branch leaves conflicts. | [conflict-repair.md](conflict-repair.md) |
-| Security fix publishing | With fixing allowed, publishes a terse Ticket or Spec with Tickets for the most severe reproduced finding, reusing a private finding's issue. thirdshift checks and marks it ready before dispatching its Run or Spec run. | [security-fix.md](security-fix.md) |
-| Conflict Repair, on Foreign commits | In a Merge run, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts. | [foreign-conflict-repair.md](foreign-conflict-repair.md) |
-| Review Repair | In a Merge run, starts a Repair session when Foreign commits merged into the Issue branch change the tree, to review it from the head the Run last knew as its own before they can be merged. | [review-repair.md](review-repair.md) |
+| Security fix publishing | With fixing allowed, publishes a terse Ticket or Spec with Tickets for the most severe reproduced finding, reusing a private finding's issue. thirdshift checks and marks it ready before dispatching its Ticket run or Spec run. | [security-fix.md](security-fix.md) |
+| Conflict Repair, on Foreign commits | In a Ticket run that Self-merges, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts. | [foreign-conflict-repair.md](foreign-conflict-repair.md) |
+| Review Repair | In a Ticket run that Self-merges, starts a Repair session when Foreign commits merged into the Issue branch change the tree, to review it from the head the Ticket run last knew as its own before they can be merged. | [review-repair.md](review-repair.md) |
 | CI-fix Repair | Starts a Repair session when CI fails on the pull request's head commit, listing each failed check. | [ci-fix-repair.md](ci-fix-repair.md) |
 | CI-fix Repair, with Inherited failures | Starts a Repair session when CI fails on the pull request's head commit and some of the failed checks, but not all, are Inherited failures: they also failed on the Base branch commit the head last merged in, so they are listed apart as not to fix. | [ci-fix-repair-inherited.md](ci-fix-repair-inherited.md) |
 | Resume | Continues any session, once, that ended its turn with background work still running, which was killed with it. | [resume.md](resume.md) |

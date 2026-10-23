@@ -41,7 +41,8 @@ test("the README and manual's repository links reach files and section anchors",
 
   // These README URLs were linked from the site before the manual moved.
   const { anchors } = await document(resolve(root, "README.md"));
-  for (const anchor of ["unattended-sessions", "security-review", "logs", "spec-runs"]) {
+  for (const anchor of ["unattended-sessions", "security-review", "logs", "spec-runs",
+    "what-a-run-does", "foreign-commits-in-a-merge-run", "failed-runs", "weeding", "fencing"]) {
     assert.ok(anchors.has(anchor), `existing README bookmark #${anchor}`);
   }
 });
