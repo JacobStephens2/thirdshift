@@ -1,6 +1,6 @@
 //! Setup: writing the User config by answering a few questions, from
 //! `thirdshift setup` or the first Run's offer of it, and the Credentials
-//! when a Resend API key is entered.
+//! when a Resend API key or Claude setup token is entered.
 //!
 //! Its rules are here: whether to ask, the questions and their defaults, the
 //! suggested address, what is written and in what order, and which failures
@@ -32,7 +32,7 @@ use crate::harness::{
 use crate::resend_key::{Credentials, Source};
 use crate::{email, interrupt, progress};
 
-use questions::Answers;
+use questions::{Answers, CredentialEdits};
 
 /// Setup: write the User config. From a terminal, the Setup questions come
 /// first, each with the current value as its default answer, and the answers
@@ -110,9 +110,9 @@ fn run_setup(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<Str
         return Ok(written);
     };
     offer_console_install(outside, answers);
-    if let Some(key) = answers.key() {
+    if let Some(edits) = answers.credential_edits() {
         outside.step(written);
-        written = outside.save_key(key)?;
+        written = outside.save_credentials(edits)?;
     }
     if !answers.send_test() {
         return Ok(written);
@@ -146,8 +146,8 @@ fn run_offer(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<()>
     outside.step(format!("wrote the User config {}", path.display()));
     check_security_sandbox(outside, &text, path, home)?;
     offer_console_install(outside, answers);
-    if let Some(key) = answers.key() {
-        match outside.save_key(key) {
+    if let Some(edits) = answers.credential_edits() {
+        match outside.save_credentials(edits) {
             Ok(wrote) => outside.step(wrote),
             Err(error) => outside.step(format!("warning: {error:#}")),
         }
@@ -263,8 +263,10 @@ pub(crate) trait Outside: Terminal {
     /// Read the Credentials, as strictly as a Run does: where a Resend API
     /// key is found, if anywhere.
     fn find_key(&mut self) -> Result<Option<Source>>;
-    /// Save `key` in the Credentials: the line saying where.
-    fn save_key(&mut self, key: &str) -> Result<String>;
+    /// Whether the already-read Credentials hold a Claude setup token.
+    fn claude_setup_token_saved(&self) -> bool;
+    /// Save supplied secrets together in the Credentials: the line saying where.
+    fn save_credentials(&mut self, edits: CredentialEdits<'_>) -> Result<String>;
     /// The public email of the user's GitHub profile, if it has one.
     fn github_email(&mut self) -> Result<Option<String>>;
     /// The global git `user.email`.
@@ -356,12 +358,18 @@ impl Outside for OnMachine<'_> {
         Ok(found)
     }
 
-    fn save_key(&mut self, key: &str) -> Result<String> {
+    fn claude_setup_token_saved(&self) -> bool {
+        self.credentials
+            .as_ref()
+            .is_some_and(Credentials::has_claude_setup_token)
+    }
+
+    fn save_credentials(&mut self, edits: CredentialEdits<'_>) -> Result<String> {
         let credentials = match self.credentials.take() {
             Some(credentials) => credentials,
             None => Credentials::read()?,
         };
-        credentials.save(key)?;
+        credentials.save(edits.resend_key, edits.claude_setup_token)?;
         Ok(format!("wrote {credentials}"))
     }
 
@@ -451,6 +459,8 @@ mod scripted {
         Replace(String),
         /// It saved this key in the Credentials.
         SaveKey(String),
+        /// It saved a Claude setup token in the Credentials.
+        SaveClaudeSetupToken(String),
         /// It sent the test email to `to`, from `from`.
         SendTest {
             to: Option<String>,
@@ -606,8 +616,18 @@ mod scripted {
             self.key.clone().map_err(|error| anyhow!("{error}"))
         }
 
-        fn save_key(&mut self, key: &str) -> Result<String> {
-            self.calls.push(Call::SaveKey(key.to_string()));
+        fn claude_setup_token_saved(&self) -> bool {
+            false
+        }
+
+        fn save_credentials(&mut self, edits: CredentialEdits<'_>) -> Result<String> {
+            if let Some(key) = edits.resend_key {
+                self.calls.push(Call::SaveKey(key.to_string()));
+            }
+            if let Some(token) = edits.claude_setup_token {
+                self.calls
+                    .push(Call::SaveClaudeSetupToken(token.to_string()));
+            }
             self.fail_if(Fails::SaveKey)
                 .with_context(|| format!("can't write {CREDENTIALS}"))?;
             Ok(format!("wrote the Credentials {CREDENTIALS}"))
@@ -700,15 +720,17 @@ mod tests {
                            starts from.";
     const ENDED: &str = "Setup ended before its last answer; nothing written";
     const KEY: &str = "re_secret_123";
+    const CLAUDE_TOKEN: &str = "Claude setup token";
 
     /// The answers that take every default and turn nothing on.
-    const ENTER_THROUGHOUT: [(&str, &str); 7] = [
+    const ENTER_THROUGHOUT: [(&str, &str); 8] = [
         (MERGE, ""),
         (BASE_FIX, ""),
         (PULL, ""),
         (SECURITY_FIX, ""),
         (SECURITY_REVIEW, ""),
         (NOTIFY, ""),
+        (CLAUDE_TOKEN, ""),
         (CONSOLE, ""),
     ];
 
@@ -810,6 +832,7 @@ mod tests {
     fn console_answers_are_written_with_comments_and_install_is_offered() {
         let mut answers = ENTER_THROUGHOUT[..6].to_vec();
         answers.extend([
+            (CLAUDE_TOKEN, ""),
             ("Run the Console?", "y"),
             ("Console's whole address", "https://thirdshift.example.com"),
             ("Allowed emails", "me@example.com, other@example.net"),
@@ -1103,6 +1126,7 @@ to = \"me@example.com\"  # my inbox
                 "Security runs may fix reproduced findings? [y/N] ",
                 "Ticket runs review their change for Security findings? [y/N] ",
                 "Run notifications, an email as each Ticket run ends? [y/N] ",
+                "Claude setup token from `claude setup-token` (Trials only; input hidden, Enter to skip): ",
                 "Run the Console? [y/N] ",
             ]
         );
@@ -1122,6 +1146,7 @@ to = \"me@example.com\"  # my inbox
                 (TO, "me@example.com"),
                 (FROM, "ts@acme.dev"),
                 (TEST_EMAIL, ""),
+                (CLAUDE_TOKEN, ""),
                 (CONSOLE, "n"),
             ])
         };
@@ -1250,6 +1275,7 @@ effort = \"\"
                 (TO, ""),
                 (FROM, ""),
                 (TEST_EMAIL, ""),
+                (CLAUDE_TOKEN, ""),
                 (CONSOLE, "n"),
             ])
         };
@@ -1273,6 +1299,7 @@ effort = \"\"
                 "Send Run notifications to [mine@example.net]: ",
                 "Send them from [ts@acme.dev]: ",
                 "Send a test email now? [y/N] ",
+                "Claude setup token from `claude setup-token` (Trials only; input hidden, Enter to skip): ",
                 "Run the Console? [y/N] ",
             ]
         );
@@ -1289,6 +1316,7 @@ effort = \"\"
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
+                (CLAUDE_TOKEN, ""),
                 (CONSOLE, "n"),
             ])
         };
@@ -1327,6 +1355,7 @@ always = false # quiet, please
                 (TO, "me@example.com"),
                 (FROM, ""),
                 (KEY_PROMPT, ""),
+                (CLAUDE_TOKEN, ""),
                 (CONSOLE, "n"),
             ])
         };
@@ -1351,6 +1380,7 @@ always = false # quiet, please
         let mut outside = Scripted::answering(&notifications_on(&[
             (KEY_PROMPT, KEY),
             (TEST_EMAIL, "y"),
+            (CLAUDE_TOKEN, ""),
             (CONSOLE, "n"),
         ]));
 
@@ -1377,6 +1407,7 @@ always = false # quiet, please
         let mut outside = Scripted::answering(&notifications_on(&[
             (KEY_PROMPT, KEY),
             (TEST_EMAIL, "n"),
+            (CLAUDE_TOKEN, ""),
             (CONSOLE, "n"),
         ]));
 
@@ -1438,6 +1469,7 @@ always = false # quiet, please
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
+                (CLAUDE_TOKEN, ""),
                 (CONSOLE, "n"),
             ]);
 
@@ -1466,6 +1498,7 @@ always = false # quiet, please
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
+                (CLAUDE_TOKEN, ""),
                 (CONSOLE, "n"),
             ]);
 
@@ -1488,6 +1521,7 @@ always = false # quiet, please
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
+                (CLAUDE_TOKEN, ""),
                 (CONSOLE, "n"),
             ])
         };
@@ -1516,6 +1550,7 @@ always = false # quiet, please
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, ""),
+                (CLAUDE_TOKEN, ""),
                 (CONSOLE, "n"),
             ])
         };
@@ -1542,6 +1577,7 @@ always = false # quiet, please
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
+            (CLAUDE_TOKEN, ""),
             (CONSOLE, "n"),
         ]);
 
@@ -1564,6 +1600,7 @@ always = false # quiet, please
             (TO, "me@example.com"),
             (FROM, ""),
             (KEY_PROMPT, ""),
+            (CLAUDE_TOKEN, ""),
             (CONSOLE, "n"),
         ]);
 
@@ -1594,6 +1631,7 @@ always = false # quiet, please
                 (SECURITY_FIX, ""),
                 (SECURITY_REVIEW, ""),
                 (NOTIFY, "n"),
+                (CLAUDE_TOKEN, ""),
                 (CONSOLE, "n"),
             ])
         };
@@ -1613,8 +1651,11 @@ always = false # quiet, please
     #[test]
     fn with_no_key_anywhere_skipping_it_saves_nothing_offers_no_test_email_and_says_how_to_add_one()
     {
-        let mut outside =
-            Scripted::answering(&notifications_on(&[(KEY_PROMPT, ""), (CONSOLE, "n")]));
+        let mut outside = Scripted::answering(&notifications_on(&[
+            (KEY_PROMPT, ""),
+            (CLAUDE_TOKEN, ""),
+            (CONSOLE, "n"),
+        ]));
 
         let done = setup(&mut outside).unwrap();
 
@@ -1631,6 +1672,7 @@ always = false # quiet, please
             (KEY_PROMPT, "sk_not_resend"),
             (KEY_PROMPT, KEY),
             (TEST_EMAIL, ""),
+            (CLAUDE_TOKEN, ""),
             (CONSOLE, "n"),
         ]));
 
@@ -1639,7 +1681,7 @@ always = false # quiet, please
         let hidden: Vec<&Call> = outside
             .calls
             .iter()
-            .filter(|call| matches!(call, Call::AskHidden(_)))
+            .filter(|call| matches!(call, Call::AskHidden(prompt) if prompt.starts_with("Resend API key")))
             .collect();
         assert_eq!(hidden, [&Call::AskHidden(KEY_PROMPT.to_string()); 2]);
         assert_eq!(
@@ -1661,6 +1703,7 @@ always = false # quiet, please
             ..Scripted::answering(&notifications_on(&[
                 (KEPT, ""),
                 (TEST_EMAIL, ""),
+                (CLAUDE_TOKEN, ""),
                 (CONSOLE, "n"),
             ]))
         };
@@ -1683,6 +1726,7 @@ always = false # quiet, please
             ..Scripted::answering(&notifications_on(&[
                 (KEPT, KEY),
                 (TEST_EMAIL, ""),
+                (CLAUDE_TOKEN, ""),
                 (CONSOLE, "n"),
             ]))
         };
@@ -1696,7 +1740,11 @@ always = false # quiet, please
     fn with_resend_api_key_set_no_key_is_asked_and_its_source_is_said() {
         let mut outside = Scripted {
             key: Ok(Some(Source::Environment)),
-            ..Scripted::answering(&notifications_on(&[(TEST_EMAIL, ""), (CONSOLE, "n")]))
+            ..Scripted::answering(&notifications_on(&[
+                (TEST_EMAIL, ""),
+                (CLAUDE_TOKEN, ""),
+                (CONSOLE, "n"),
+            ]))
         };
 
         setup(&mut outside).unwrap();
@@ -1715,7 +1763,11 @@ always = false # quiet, please
         for (answer, sent) in [("y", true), ("n", false), ("", false)] {
             let mut outside = Scripted {
                 key: Ok(Some(Source::Environment)),
-                ..Scripted::answering(&notifications_on(&[(TEST_EMAIL, answer), (CONSOLE, "n")]))
+                ..Scripted::answering(&notifications_on(&[
+                    (TEST_EMAIL, answer),
+                    (CLAUDE_TOKEN, ""),
+                    (CONSOLE, "n"),
+                ]))
             };
 
             let done = setup(&mut outside).unwrap();
@@ -1854,6 +1906,7 @@ always = false # quiet, please
                 (TO, ""),
                 (FROM, ""),
                 (KEY_PROMPT, ""),
+                (CLAUDE_TOKEN, ""),
                 (CONSOLE, "n"),
             ])
         };
@@ -1954,6 +2007,7 @@ always = false # quiet, please
             (SECURITY_FIX, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
+            (CLAUDE_TOKEN, ""),
             (CONSOLE, "n"),
         ]);
 
@@ -1980,6 +2034,7 @@ always = false # quiet, please
             (FROM, ""),
             (KEY_PROMPT, KEY),
             (TEST_EMAIL, "y"),
+            (CLAUDE_TOKEN, ""),
             (CONSOLE, "n"),
         ]);
 
@@ -2007,6 +2062,7 @@ always = false # quiet, please
             ..Scripted::answering(&notifications_on(&[
                 (KEY_PROMPT, KEY),
                 (TEST_EMAIL, "y"),
+                (CLAUDE_TOKEN, ""),
                 (CONSOLE, "n"),
             ]))
         };
@@ -2031,6 +2087,7 @@ always = false # quiet, please
             ..Scripted::answering(&notifications_on(&[
                 (KEY_PROMPT, KEY),
                 (TEST_EMAIL, "y"),
+                (CLAUDE_TOKEN, ""),
                 (CONSOLE, "n"),
             ]))
         };

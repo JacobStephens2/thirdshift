@@ -410,6 +410,7 @@ fn setup_proposes_no_model_and_checks_the_answer_standalone() {
             ("Security runs may fix reproduced findings?", ""),
             ("Ticket runs review their change for Security findings?", ""),
             ("Run notifications", ""),
+            ("Claude setup token", ""),
             ("Run the Console?", ""),
         ],
     );
@@ -490,6 +491,7 @@ fn setup_retries_a_refused_model_and_effort_with_the_same_preflight_check() {
             ("Security runs may fix reproduced findings?", ""),
             ("Ticket runs review their change for Security findings?", ""),
             ("Run notifications", ""),
+            ("Claude setup token", ""),
             ("Run the Console?", ""),
         ],
     );
