@@ -50,6 +50,7 @@ pub enum Ending {
         ended: Ended,
         finding: crate::security::RecordedFinding,
         audit: Option<Box<crate::security::Ended>>,
+        close: crate::security::CloseOutcome,
     },
     /// A Pass was skipped before any work.
     Skipped(Skip),

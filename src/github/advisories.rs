@@ -112,10 +112,17 @@ impl SecurityRecords {
     }
 
     /// A dispatched fix that failed and whose issue the Day shift has not closed.
+    /// A closed record never reports one: closing follows a succeeded fix.
     pub fn failed_fix(&self) -> Result<Option<IssueUrl>> {
         let (records, field, _) = self.entries();
         for record in records {
             if record["security_fix_closed"] == true {
+                continue;
+            }
+            if Description(record[field].as_str().unwrap_or_default())
+                .closed_by()
+                .is_some()
+            {
                 continue;
             }
             if let Some(issue) =
@@ -138,6 +145,9 @@ impl SecurityRecords {
                 .is_some_and(|s| s.eq_ignore_ascii_case(state))
                 || Description(value[description].as_str().unwrap_or_default())
                     .fix_link()
+                    .is_some()
+                || Description(value[description].as_str().unwrap_or_default())
+                    .closed_by()
                     .is_some()
             {
                 continue;
@@ -266,6 +276,19 @@ impl SecurityRecord {
         ending: FixEnding,
     ) -> Result<String> {
         Description(current).with_fix_ending(issue, ending)
+    }
+
+    pub fn with_close(&self, current: &str, issue: &IssueUrl, pr_url: &str) -> Result<String> {
+        Description(current).with_close(issue, pr_url)
+    }
+
+    pub fn with_left_open_note(
+        &self,
+        current: &str,
+        issue: &IssueUrl,
+        reason: &str,
+    ) -> Result<String> {
+        Description(current).with_left_open_note(issue, reason)
     }
 
     pub fn with_reproduction(&self, reproduction: &Reproduction) -> String {
@@ -398,6 +421,120 @@ impl GitHub {
                 FixEnding::Failed
             }),
         )
+    }
+
+    /// Close the finding whose fix merged as `pr_url`: name the pull
+    /// request in the private record, then close the record. An advisory is
+    /// closed through its description and state; there is no advisory
+    /// comment endpoint. A finding issue gets a comment naming the pull
+    /// request before it is closed. Nothing is published.
+    pub fn close_security_record(
+        &self,
+        repo: &str,
+        record: &SecurityRecord,
+        issue: &IssueUrl,
+        pr_url: &str,
+    ) -> Result<()> {
+        match &record.data {
+            RecordData::Advisory { id, .. } => {
+                let path = format!("repos/{repo}/security-advisories/{id}");
+                let current =
+                    self.private_record(&path, "reading the private record before closing it")?;
+                let current = current["description"]
+                    .as_str()
+                    .context("the private record has no description")?;
+                let description = record.with_close(current, issue, pr_url)?;
+                let body = serde_json::to_vec(&json!({
+                    "description": description,
+                    "state": "closed",
+                }))?;
+                let output = self.output_with_input(
+                    &["api", "--method", "PATCH", &path, "--input", "-"],
+                    Some(&body),
+                )?;
+                if !output.status.success() {
+                    bail!(
+                        "closing the private Security finding record failed ({})",
+                        output.status
+                    );
+                }
+                Ok(())
+            }
+            RecordData::Issue { number, .. } => {
+                let path = format!("repos/{repo}/issues/{number}");
+                let current =
+                    self.private_record(&path, "reading the private record before closing it")?;
+                let open = current["state"]
+                    .as_str()
+                    .is_some_and(|state| state.eq_ignore_ascii_case("open"));
+                let current = current["body"]
+                    .as_str()
+                    .context("the private record has no body")?;
+                let body = record.with_close(current, issue, pr_url)?;
+                let body = serde_json::to_vec(&json!({"body": body}))?;
+                let output = self.output_with_input(
+                    &["api", "--method", "PATCH", &path, "--input", "-"],
+                    Some(&body),
+                )?;
+                if !output.status.success() {
+                    bail!(
+                        "closing the private Security finding record failed ({})",
+                        output.status
+                    );
+                }
+                let finding =
+                    IssueUrl::parse(&format!("https://github.com/{repo}/issues/{number}"))?;
+                if open {
+                    self.close_issue(
+                        &finding,
+                        &format!("Security fix merged as {pr_url}; closing this finding."),
+                    )
+                } else {
+                    // The merged fix already closed its issue: still name the
+                    // pull request that closed the finding.
+                    self.comment_issue(
+                        &finding,
+                        &format!("Security fix merged as {pr_url}; this finding is closed."),
+                    )
+                }
+            }
+        }
+    }
+
+    /// Note in the private record why its finding was left open, keeping it
+    /// for the Day shift.
+    pub fn note_security_close_left_open(
+        &self,
+        repo: &str,
+        record: &SecurityRecord,
+        issue: &IssueUrl,
+        reason: &str,
+    ) -> Result<()> {
+        let (path, field) = match &record.data {
+            RecordData::Advisory { id, .. } => (
+                format!("repos/{repo}/security-advisories/{id}"),
+                "description",
+            ),
+            RecordData::Issue { number, .. } => (format!("repos/{repo}/issues/{number}"), "body"),
+        };
+        let current =
+            self.private_record(&path, "reading the private record before noting its close")?;
+        let current = current[field]
+            .as_str()
+            .context("the private record has no description")?;
+        let description = record.with_left_open_note(current, issue, reason)?;
+        let body = serde_json::to_vec(&json!({field: description}))?;
+        let output = self.output_with_input(
+            &["api", "--method", "PATCH", &path, "--input", "-"],
+            Some(&body),
+        )?;
+        if !output.status.success() {
+            bail!(
+                "noting the private Security finding record failed ({})",
+                output.status
+            );
+        }
+        Ok(())
     }
 
     fn write_security_fix(

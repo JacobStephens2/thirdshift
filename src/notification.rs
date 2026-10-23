@@ -331,6 +331,15 @@ fn body(
         if listed {
             text += "\n";
         }
+        match &account.security_close {
+            Some(crate::run_ending::SecurityClose::Closed { finding, pr_url }) => {
+                text += &format!("Closed: {} by {}\n", finding.title, pr_url);
+            }
+            Some(crate::run_ending::SecurityClose::LeftOpen { finding, reason }) => {
+                text += &format!("Close: {} left open: {reason}\n", finding.title);
+            }
+            None => {}
+        }
     }
     if let Some(review) = &account.review {
         text += &format!("Review:       {}\n", review.line);
@@ -453,6 +462,7 @@ mod tests {
             security_findings: None,
             security_findings_waiting: false,
             security_fix: None,
+            security_close: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -476,6 +486,7 @@ mod tests {
             security_findings: None,
             security_findings_waiting: false,
             security_fix: None,
+            security_close: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -731,6 +742,46 @@ mod tests {
                      Repository:   acme/widgets\n\
                      Audit:"
             )
+        );
+    }
+
+    #[test]
+    fn a_security_fix_notification_names_the_finding_its_pull_request_closed() {
+        use crate::security::RecordedFinding;
+        let findings = [RecordedFinding {
+            severity: Some("high".to_string()),
+            title: "Bound input".to_string(),
+            url: "https://github.com/acme/widgets/security/advisories/GHSA-first".to_string(),
+        }];
+        let subject = Subject::SecurityRun(Repo::of_origin("https://github.com/acme/widgets.git"));
+        let closed = crate::run_ending::SecurityClose::Closed {
+            finding: &findings[0],
+            pr_url: PR,
+        };
+        let account = Account {
+            security_findings: Some(&findings),
+            security_close: Some(closed),
+            ..merged()
+        };
+        let body = body_of(&subject, &account);
+        assert!(
+            body.contains("Closed: Bound input by https://github.com/acme/widgets/pull/1"),
+            "{body}"
+        );
+        assert!(!body.contains("Private"), "{body}");
+        let left_open = crate::run_ending::SecurityClose::LeftOpen {
+            finding: &findings[0],
+            reason: "the proof-of-concept still fails",
+        };
+        let account = Account {
+            security_findings: Some(&findings),
+            security_close: Some(left_open),
+            ..merged()
+        };
+        let body = body_of(&subject, &account);
+        assert!(
+            body.contains("Close: Bound input left open: the proof-of-concept still fails"),
+            "{body}"
         );
     }
 

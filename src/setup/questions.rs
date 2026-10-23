@@ -31,6 +31,8 @@ pub struct Answers {
     pub launch_pull: bool,
     /// `security.fix`: Security runs may fix reproduced findings.
     pub security_fix: bool,
+    /// `security.close`: a Security run may close a finding its fix merged.
+    pub security_close: bool,
     pub security_review: bool,
     /// With Run notifications on, `email.always`, their settings; with them
     /// off, `None`, and the email settings stay as they were.
@@ -54,6 +56,7 @@ impl Answers {
             base_fix: self.base_fix,
             launch_pull: self.launch_pull,
             security_fix: self.security_fix,
+            security_close: self.security_close,
             security_review: self.security_review,
             notifications: self
                 .notifications
@@ -152,6 +155,15 @@ pub fn ask(
         "Security runs may fix reproduced findings?",
         current.security_fix.unwrap_or(false),
     )?;
+    let security_close = if security_fix {
+        yes_or_no(
+            outside,
+            "Security runs may close a finding their fix merged?",
+            current.security_close.unwrap_or(false),
+        )?
+    } else {
+        current.security_close.unwrap_or(false)
+    };
     let security_review = yes_or_no(
         outside,
         "Ticket runs review their change for Security findings?",
@@ -184,6 +196,7 @@ pub fn ask(
         base_fix,
         launch_pull,
         security_fix,
+        security_close,
         security_review,
         notifications,
         claude_setup_token,
