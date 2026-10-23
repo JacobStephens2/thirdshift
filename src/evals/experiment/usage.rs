@@ -126,22 +126,23 @@ impl Arm {
                             cost_usd: event["cost_usd"].as_f64(),
                         };
                         if measurement.reported() {
-                            arm.models.insert(
-                                if model.is_empty() {
+                            arm.models
+                                .entry(if model.is_empty() {
                                     "unknown".into()
                                 } else {
                                     model
-                                },
-                                measurement,
-                            );
+                                })
+                                .or_default()
+                                .prefer(measurement);
                         }
                     }
                 }
             }
             let total = Measurement::span(session);
             if arm.models.is_empty() && total.reported() {
+                let model = text(&session.attributes, "thirdshift.model").unwrap_or("unknown");
                 arm.models.insert(
-                    "unknown".into(),
+                    model.into(),
                     Measurement {
                         cost_usd: None,
                         ..total
@@ -188,6 +189,15 @@ impl std::fmt::Display for Arm {
 }
 
 impl Measurement {
+    // A Model total supersedes only the fields the Harness actually reported.
+    fn prefer(&mut self, total: Self) {
+        self.input_tokens = total.input_tokens.or(self.input_tokens);
+        self.output_tokens = total.output_tokens.or(self.output_tokens);
+        self.cache_read_tokens = total.cache_read_tokens.or(self.cache_read_tokens);
+        self.cache_write_tokens = total.cache_write_tokens.or(self.cache_write_tokens);
+        self.cost_usd = total.cost_usd.or(self.cost_usd);
+    }
+
     fn span(span: &Span) -> Self {
         Self {
             input_tokens: count(&span.attributes, "gen_ai.usage.input_tokens"),

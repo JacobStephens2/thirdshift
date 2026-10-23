@@ -185,6 +185,51 @@ fn arm_usage_keeps_unreported_cost_and_model_unknown() {
 }
 
 #[test]
+fn session_totals_keep_the_harness_reported_model() {
+    let fixture = Fixture::new();
+    let harness = fixture.scenario.path("bin/agy");
+    let real = harness.canonicalize().unwrap();
+    let fixed = fixture.scenario.path("versions/v1/agy");
+    fs::copy(real, &fixed).unwrap();
+    fs::remove_file(&harness).unwrap();
+    std::os::unix::fs::symlink(fixed, &harness).unwrap();
+    fixture.scenario.agent_does(
+        r#"
+echo '{"event":"init","conversation_id":"reported","init":{"model":"gemini-observed"}}'
+"#,
+    );
+    let run = fixture.run(&["--baseline-harness", "agy", "--candidate-harness", "agy"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    for arm in ["baseline", "candidate"] {
+        let models = &experiment["usage"][arm]["models"];
+        assert_eq!(models["gemini-observed"]["input_tokens"], 1200);
+        assert_eq!(models["gemini-observed"]["output_tokens"], 300);
+        assert_eq!(models["gemini-observed"]["cache_read_tokens"], 200);
+        assert!(models["unknown"].is_null(), "{models:#}");
+    }
+}
+
+#[test]
+fn partial_model_totals_preserve_other_reported_call_measurements() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(r#"
+echo '{"type":"assistant","message":{"id":"m1","model":"observed","usage":{"input_tokens":11,"output_tokens":2,"cache_read_input_tokens":5},"content":[]}}'
+echo '{"type":"result","subtype":"success","total_cost_usd":0.125,"modelUsage":{"observed":{"outputTokens":3,"costUSD":0.125}}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+"#);
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    for arm in ["baseline", "candidate"] {
+        let model = &experiment["usage"][arm]["models"]["observed"];
+        assert_eq!(model["input_tokens"], 16);
+        assert_eq!(model["output_tokens"], 3);
+        assert_eq!(model["cache_read_tokens"], 5);
+        assert_eq!(experiment["usage"][arm]["cost_usd"], 0.125);
+    }
+}
+
+#[test]
 fn arm_usage_sums_void_retries_and_both_sessions_of_each_resume() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does(&format!(r#"
