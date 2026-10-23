@@ -310,6 +310,7 @@ mod tests {
             spec_parallel: n(3),
             pickup_limit: n(3),
             pickup_wait: chrono::TimeDelta::minutes(30),
+            pickup_order: crate::ready::PickupOrder::LowestFirst,
             harness: harness::Settings::default(),
             security_harness: None,
             security_fix: None,

@@ -195,7 +195,7 @@ thirdshift stop &lt;command&gt; --requeue</code></pre>
       <figure class="guide-diagram grid-bg">
         <figcaption>Different entry points, the same implementation and Delivery</figcaption>
         <div class="guide-entrypoints">
-          <div class="guide-node"><strong>Pickup run</strong><span>Takes the lowest-numbered eligible Ready issue, labelled ready-for-agent</span></div>
+          <div class="guide-node"><strong>Pickup run</strong><span>Takes the lowest-numbered eligible Ready issue by default, labelled ready-for-agent</span></div>
           <div class="guide-node"><strong>Architect run</strong><span>Reviews architecture; a strong recommendation becomes an Architect plan, otherwise an idea waits for triage</span></div>
           <div class="guide-node"><strong>Security run</strong><span>Audits and reproduces findings; records them privately, dispatches fixes only when allowed, and closes a finding its fix merged only when allowed too</span></div>
         </div>
