@@ -108,7 +108,13 @@ fn text(attrs: &[KeyValue], key: &str) -> Option<String> {
 /// Read normalized facts, including retained amendments. Raw Harness bodies are
 /// never reparsed. A missing or unreadable trace is missing evidence to callers.
 pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
-    let Some(requests) = super::session::read_requests::<Logs>(&super::session::path(log))? else {
+    let path = super::session::path(log);
+    // A failed recorder can leave a FIFO or device behind. Reading it while
+    // ending a Run must not block; only regular files contain retained traces.
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let Some(requests) = super::session::read_requests::<Logs>(&path)? else {
         return Ok(None);
     };
     let mut harness = None;

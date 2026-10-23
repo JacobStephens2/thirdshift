@@ -194,6 +194,43 @@ fn session_usage_keeps_its_reported_model() {
 }
 
 #[test]
+#[cfg(target_os = "linux")]
+fn non_regular_session_traces_are_missing_without_blocking() {
+    use support::child_lifetime::FixtureChild;
+    let scenario = Scenario::new();
+    let pipe = scenario.path("broken.logs.jsonl");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&pipe)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let trace = scenario.path("broken-link.logs.jsonl");
+    std::os::unix::fs::symlink(pipe, &trace).unwrap();
+    let mut past = record(7);
+    past["stages"][0]["session_log"] = json!(trace);
+    write(&scenario, "7-fixture.command.json", &past);
+    let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_thirdshift"));
+    command
+        .args(["metrics", "widgets#7", "--json"])
+        .env("HOME", scenario.path("home"));
+    let output = FixtureChild::spawn(&mut command, "").wait(std::time::Duration::from_secs(3));
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        report["command"]["metrics"]["session_signals"]["implement"],
+        json!({
+            "observed_sessions":0,"missing_sessions":1,"signals":null
+        })
+    );
+}
+
+#[test]
 fn unaddressed_findings_stay_separate_in_run_views_and_weekly_trends() {
     let scenario = Scenario::new();
     write(&scenario, "7-fixture.command.json", &record(7));
