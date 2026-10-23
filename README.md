@@ -2,6 +2,8 @@
 
 A factory that turns a GitHub issue into a ready-for-review pull request, or on request a merged one, by running unattended agent sessions. The humans are the day shift; the agents work the third shift, overnight, while you do something else.
 
+thirdshift drives the coding agents you already use, logged in as you, so runs use each agent's plan or account. With Claude Code logged in through a claude.ai subscription, runs use the plan's usage allowance. thirdshift itself is free and open source.
+
 Quality over quantity: a pull request marked ready for review is one the factory stands behind. When it can't stand behind the work, it preserves the work and leaves a draft.
 
 Read the **[user manual](docs/guide.md)** here on GitHub or **[on thirdshift.app](https://thirdshift.app/docs/)**. Both come from the same Markdown. For a visual introduction, see [How thirdshift works](https://thirdshift.app/how-it-works/).
