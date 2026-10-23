@@ -124,6 +124,70 @@ These commands prepare data for the Experiment runner; they start no Harness,
 Trial or Grader. Isolation of the session's home, processes and network belongs
 to the runner's sandbox, not to this Git preparation step.
 
+## One-time import of #429's material
+
+Run `thirdshift evals import-replays` on the host holding the private material.
+It reads the paths used by `docs/research/second-opinion-replays/replay.py`:
+
+```text
+~/.thirdshift/replays/
+├── inputs-2026-10-07/manifest.json   # timing_bugs and spec_reviews
+└── 2026-10-09/
+    ├── inputs/manifest.json         # codex_bugs
+    ├── context/<repo>/<issue>.json  # cached original title/body/parent/tickets
+    └── grading/eval-import.json     # catch criteria and scored findings
+```
+
+The replay manifests retain their original shape: timing bugs have `id` and
+`introducing_pr`; reverse bugs have `id` and `introducing_prs`. Each PR supplies
+`number`, `merge_base`, `head_as_merged` and `implements_issue`. Spec entries
+supply `repo`, `spec_issue`, `merge_base` and `pre_review_head`. Other replay
+fields (plans, branch names, recorded sessions) are ignored. Bug IDs may be
+numbers or directory-safe strings, optionally prefixed with `#`.
+
+The replay script does not define a machine-readable grading format. Put the
+existing written catch criteria and real/wrong decisions in this grading index
+on the private host before importing; do not infer missing grades. This invented
+example documents its complete shape:
+
+```json
+{
+  "bugs": {"7": "Name the invented lost update and its consequence."},
+  "specs": {
+    "invented-counter-19": [
+      {"finding": "The invented retry loses a write.", "score": "real"},
+      {"finding": "The invented counter is too small.", "score": "wrong"}
+    ]
+  }
+}
+```
+
+Keys in `bugs` match manifest IDs exactly (including `#`, if present); Spec keys
+are `<repo>-<spec_issue>`. A Spec with no known findings has an explicit `[]`.
+Missing criteria, missing Spec grades, blank findings and scores other than
+`real` or `wrong` fail the import. An `unsure` decision must be resolved first.
+Both replay manifests and every referenced cached issue body are required;
+the importer never fetches issues, repositories or grades from the network.
+Local source repositories are `~/repos/<repo>/`, as in the replay script;
+bug repositories are `~/repos/thirdshift/`.
+
+The importer creates approved Eval tasks in `code-review` (three Trials per Arm)
+and `spec-review` (one). Each bug/introducing-PR pair becomes
+`bug-<id>-pr-<number>`; each Spec becomes `<repo>-<spec_issue>`. Thus the nine
+bugs may occupy more than nine Eval tasks when one bug spans several PRs.
+Cached original issues, parents and Tickets become `.thirdshift-issue.md` inputs;
+catch criteria and scored findings stay in `task.toml`, outside Trials. The
+suites declare production review skills, prompts and Harness/default sources as
+dependencies. No plan-check or reverse-Spec suite is imported.
+
+All source data is checked before publishing either suite. Each new Eval task
+is published as a complete folder. Repeating the command preserves existing
+valid Eval tasks and suite declarations, even if edited after the first import,
+and adds only missing ones. It prints JSON counts, for example
+`{"imported":4,"skipped":0}`, with the same exit rules as the other Eval commands.
+Keep the source material and imported suites private; only made-up fixtures
+belong in tests. Run the import itself only on the host that holds the material.
+
 ## Arm preparation
 
 Before its first Trial, an Experiment prepares both Arms together:
