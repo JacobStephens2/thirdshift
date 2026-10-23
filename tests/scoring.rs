@@ -8,6 +8,35 @@ use support::Scenario;
 const LOGS: &str = "home/.thirdshift/logs/JacobStephens2/thirdshift/commands/scoring";
 
 #[test]
+fn packet_diff_preserves_trailing_whitespace_in_the_last_changed_line() {
+    let scenario = scenario();
+    scenario.origin_has_commit(
+        "main",
+        "trailing.txt",
+        "keep trailing spaces  \n",
+        "Whitespace fixture",
+    );
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "codex", "model", false)]);
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let week = weeks(&scenario).remove(0);
+    let packet: Value = serde_json::from_slice(
+        &std::fs::read(
+            scenario
+                .path("home/.thirdshift/evals/scoring")
+                .join(week["packets"].as_str().unwrap())
+                .join("0/packet.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let diff = packet["diff"].as_str().unwrap();
+    assert!(diff.ends_with("+keep trailing spaces  \n"), "{diff:?}");
+}
+
+#[test]
 fn packet_blinding_preserves_binary_files_with_valid_utf8_bytes() {
     let scenario = scenario();
     let binary = b"\0binary header\nBuilt with fixture\nbinary tail\0";

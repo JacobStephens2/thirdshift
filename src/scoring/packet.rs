@@ -55,15 +55,19 @@ pub(super) fn write(github: &GitHub, pr: &PullRequest, dir: &Path) -> Result<()>
     git.run(&["checkout", "--detach", &input.merge_commit])?;
     // The PR's captured base covers the whole change for merge, squash and
     // rebase merges; a rebased mergeCommit's parent covers only its last commit.
-    let diff = git.run(&[
+    let diff_file = tempfile::NamedTempFile::new_in(dir)?;
+    git.run(&[
         "diff",
         "--binary",
         "--no-ext-diff",
         "--no-textconv",
+        "--output",
+        &diff_file.path().to_string_lossy(),
         &input.base_commit,
         "HEAD",
         "--",
     ])?;
+    let diff = fs::read_to_string(diff_file.path())?;
     // A detached checkout alone still exposes commit messages, identities and
     // fetch information. Only the checked-out files belong to the packet.
     fs::remove_dir_all(repository.join(".git"))?;
