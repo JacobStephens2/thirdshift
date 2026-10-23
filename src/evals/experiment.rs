@@ -1,6 +1,8 @@
 //! A resumable Experiment owns its fixed inputs and Trial artifacts. Command
 //! recording stays in the ordinary logs; private Eval data stays here.
 
+mod grading;
+mod integrity;
 mod limits;
 mod options;
 mod store;
@@ -74,6 +76,7 @@ impl Default for Bar {
                     VoidCause::UsageLimit,
                     VoidCause::RateLimit,
                     VoidCause::Interrupted,
+                    VoidCause::RepositoryChanged,
                 ]
                 .into(),
             },
@@ -164,6 +167,10 @@ pub fn run(options: Options) -> Result<()> {
                 .unwrap_or(manifest.trials_per_arm.get()),
         );
     }
+    ensure!(
+        bar.trials_per_task.values().all(|n| matches!(n, 1 | 3)),
+        "Trials per Eval task must be one or three"
+    );
     let identity = serde_json::to_vec(&(&baseline, &candidate, &suites))?;
     let id = format!("{:x}", Sha256::digest(identity));
     let description = Description {
@@ -219,6 +226,11 @@ pub fn run(options: Options) -> Result<()> {
         }
         logs::stage(logs::Stage::EvalTasks);
         workers::run(&experiment)?;
+        experiment.verdict = Some(grading::judge(
+            &experiment.tasks,
+            &experiment.results()?,
+            &experiment.description.bar,
+        )?);
         experiment.state = State::Completed;
         Ok(())
     })();
@@ -235,14 +247,20 @@ pub fn run(options: Options) -> Result<()> {
     }
     let saved = experiment.save();
     if result.is_ok() && saved.is_ok() {
-        logs::print(&experiment.render(options.json)?);
+        // Results contain private Grader evidence, unlike the public Command
+        // facts. Print them without copying them into the factory's logs.
+        println!("{}", experiment.render(options.json)?);
     }
     let outcome = if interrupt::requested() {
         "interrupted"
     } else if result.is_err() || saved.is_err() {
         "failed"
     } else {
-        "completed"
+        experiment
+            .verdict
+            .as_ref()
+            .context("completed Experiment has no Verdict")?
+            .outcome()
     };
     logs::ended(outcome);
     logs::experiment_finished(outcome, cause.as_deref());

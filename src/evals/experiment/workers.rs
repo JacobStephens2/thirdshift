@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 
-use super::{Task, arms, store};
+use super::{Task, arms, grading, integrity, store};
 use crate::process::{self, Control, Interruption};
 use crate::session::limits;
 use crate::trial::{Outcome, Output, VoidCause};
@@ -26,13 +26,13 @@ use crate::{interrupt, logs, progress};
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-enum Arm {
+pub(super) enum Arm {
     Baseline,
     Candidate,
 }
 
 impl Arm {
-    fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::Baseline => "baseline",
             Self::Candidate => "candidate",
@@ -42,11 +42,13 @@ impl Arm {
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct TrialResult {
-    suite: String,
-    task: String,
-    arm: Arm,
+    pub suite: String,
+    pub task: String,
+    pub arm: Arm,
     trial: usize,
-    outcome: Outcome,
+    pub outcome: Outcome,
+    #[serde(default)]
+    pub score: Option<grading::Score>,
     pub attempts: Vec<Output>,
 }
 
@@ -67,6 +69,14 @@ impl Trial<'_> {
             .finalize();
         format!("{task:x}--{}--{}", self.arm.name(), self.index)
     }
+}
+
+fn pauses(output: &Output) -> bool {
+    output.outcome == Outcome::Void
+        && matches!(
+            output.void_cause,
+            Some(VoidCause::UsageLimit | VoidCause::RateLimit | VoidCause::Interrupted)
+        )
 }
 
 pub(super) fn run(experiment: &store::Stored) -> Result<()> {
@@ -174,11 +184,19 @@ fn run_trial(
             arm: trial.arm,
             trial: trial.index,
             outcome: Outcome::Void,
+            score: None,
             attempts: Vec::new(),
         }
     };
     let bar = &experiment.description.bar;
-    while result.outcome == Outcome::Void && result.attempts.len() <= bar.void_rules.retries {
+    while result.outcome == Outcome::Void
+        && result
+            .attempts
+            .iter()
+            .filter(|attempt| !pauses(attempt))
+            .count()
+            <= bar.void_rules.retries
+    {
         interrupt::check()?;
         limits::check(signal)?;
         let attempt = tempfile::Builder::new()
@@ -191,6 +209,18 @@ fn run_trial(
             &attempt.join("repository"),
         )?;
         prepare_branches(&prepared_repo.repository, trial.task)?;
+        crate::skills::exclude(
+            &crate::git::Git::new(&prepared_repo.repository),
+            &format!("/{}", crate::prompt::ISSUE_FILE),
+        )?;
+        // Establish the Harness's idempotent instruction fallback before the
+        // comparison. The session may read it, but editing it still voids a Trial.
+        setup
+            .choice()
+            .harness
+            .adapter()
+            .link_instruction_fallback(&prepared_repo.repository)?;
+        let before = integrity::snapshot(&prepared_repo.repository)?;
         let inputs = trial
             .task
             .manifest
@@ -228,7 +258,7 @@ fn run_trial(
             &monitor,
         );
         interrupt::check()?;
-        let protocol = match output {
+        let mut protocol = match output {
             Ok(output) => {
                 fs::write(attempt.join("stdout"), &output.stdout)?;
                 fs::write(attempt.join("stderr"), &output.stderr)?;
@@ -252,28 +282,39 @@ fn run_trial(
                 .cut_short(started.elapsed().as_millis()),
             Err(error) => return Err(error),
         };
+        let after = integrity::snapshot(&prepared_repo.repository);
+        interrupt::check()?;
+        // A limit stop remains a pause even if the cut-short Trial also
+        // changed its repository; it must not spend the fresh-retry budget.
+        if !pauses(&protocol) && !after.as_ref().is_ok_and(|after| after == &before) {
+            protocol.outcome = Outcome::Void;
+            protocol.void_cause = Some(VoidCause::RepositoryChanged);
+            protocol.cause = Some("Trial repository changed during its session".into());
+        }
         store::write(&attempt.join("result.json"), &protocol)?;
         let outcome = protocol.outcome;
         let void_cause = protocol.void_cause;
-        if outcome == Outcome::Void
-            && matches!(
-                void_cause,
-                Some(VoidCause::UsageLimit | VoidCause::RateLimit | VoidCause::Interrupted)
-            )
-        {
-            bail!(
-                "Trial {} paused: {:?}; run the Experiment again to resume",
-                trial.key(),
-                void_cause.unwrap()
-            );
-        }
+        let paused = pauses(&protocol);
         result.outcome = outcome;
+        result.score = Some(grading::score(
+            trial.task,
+            &prepared_repo.repository,
+            &protocol,
+            bar,
+        )?);
         let retry = outcome == Outcome::Void
             && void_cause.is_some_and(|cause| bar.void_rules.causes.contains(&cause));
         result.attempts.push(protocol);
         // Preserve completed void attempts even if Stop cuts the next retry
         // short. A resume keeps the original Bar's remaining retry budget.
         store::write(&pending, &result)?;
+        if paused {
+            bail!(
+                "Trial {} paused: {:?}; run the Experiment again to resume",
+                trial.key(),
+                void_cause.unwrap()
+            );
+        }
         if !retry {
             break;
         }
