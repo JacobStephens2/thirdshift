@@ -245,7 +245,7 @@ exec "{git}" "$@"
             r#"#!/bin/sh
 if [ "$HOLD_READY_READ" = 1 ]; then
     case "$1 $2 $*" in
-    'issue list '*ready-for-agent*)
+    'api --paginate '*ready-for-agent*)
         if [ ! -f "$TMPDIR/listing-read" ]; then
             "$(dirname "$0")/real/gh" "$@" > "$TMPDIR/listing-answer" || exit $?
             touch "$TMPDIR/listing-read"
