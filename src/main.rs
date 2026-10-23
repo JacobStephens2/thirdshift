@@ -50,6 +50,9 @@ mod test_support;
 mod trial;
 mod trust;
 mod update;
+// The Experiment runner will consume this independently tested module.
+#[allow(dead_code)]
+mod verdict;
 mod worktree;
 
 use std::process::ExitCode;
