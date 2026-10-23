@@ -74,7 +74,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift architect [<focus>]                 Review architecture, publish a plan and run it
        thirdshift architect [<focus>] --plan-only     Publish a plan and stop
        thirdshift architect base <branch> [<focus>]   Use <branch> as the Base branch
-       thirdshift pickup                              Take the lowest-numbered Ready issue and run it
+       thirdshift pickup [lowest-first|highest-first] Take the Ready issue at that end of the issue numbers (default lowest-first)
        thirdshift pickup base <branch>                Use <branch> as the Base branch
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
@@ -334,10 +334,11 @@ fn architect(args: ArchitectArgs) -> ExitCode {
     })
 }
 
-/// A Pickup run: the search for the lowest-numbered Ready issue in the Launch
-/// directory's repository, then that issue dispatched as `thirdshift <Issue
-/// URL>` with the same flags would be, but on the Pickup run's Base branch,
-/// whatever the Launch directory has checked out. The dispatched run's ending
+/// A Pickup run: the search for the Ready issue at its order's end of the
+/// issue numbers in the Launch directory's repository, then that issue
+/// dispatched as `thirdshift <Issue URL>` with the same flags would be, but
+/// on the Pickup run's Base branch, whatever the Launch directory has
+/// checked out. The dispatched run's ending
 /// is the Pickup run's. One that is skipped, as when the repository is at the
 /// User config's Claim limit, says why on stderr, puts nothing on stdout, and
 /// is no failure. If asked, by the command or the User config, one that took
@@ -356,7 +357,8 @@ fn pickup(args: PassArgs) -> ExitCode {
         Err(failure) => return failure,
     };
     let mut harness = args.flags.harness(&config);
-    let took = pickup::run(args.base.as_deref(), &args.flags, &config, &mut harness);
+    let order = args.order.unwrap_or(config.pickup_order);
+    let took = pickup::run(args.base.as_deref(), &args.flags, &config, &mut harness, order);
     started.built_with(&harness);
     match took {
         Ok(pickup::Outcome::Took(Took {

@@ -1228,6 +1228,7 @@ parallel = 5
 [pickup]
 limit = 5
 wait_minutes = 60
+order = \"highest-first\"
 
 [security]
 harness = \"codex\"

@@ -126,6 +126,114 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
     );
 }
 
+/// With Ready issues #7 and #9, `pickup` with `extra` takes `taken` and
+/// leaves `left` labelled `ready-for-agent` with no branch on origin.
+fn pickup_takes(extra: &[&str], taken: u32, left: u32) {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 9, &["bug"]);
+    ready_issue(&scenario, 7, &["bug"]);
+    scenario.agent_does_for(taken, &agent_opens_pr(taken, "main"));
+
+    let mut command = vec!["pickup"];
+    command.extend(extra);
+    let result = scenario.run(&command);
+
+    let pr = pr_from(&scenario, &format!("issue-{taken}"));
+    assert_ended_with_pr(&result, &pr, "ready for review");
+    assert_eq!(
+        scenario.issue_labels(left),
+        [READY_FOR_AGENT, "bug"],
+        "extra: {extra:?}"
+    );
+    assert!(scenario.origin_log(&format!("issue-{left}")).is_none());
+    assert_eq!(scenario.claude_calls().len(), 1, "sessions: {:?}", scenario.claude_calls());
+}
+
+#[test]
+fn the_higher_numbered_of_two_ready_issues_is_run_with_highest_first() {
+    pickup_takes(&["highest-first"], 9, 7);
+}
+
+#[test]
+fn the_lower_numbered_of_two_ready_issues_is_run_with_lowest_first() {
+    pickup_takes(&["lowest-first"], 7, 9);
+}
+
+#[test]
+fn pickup_order_in_the_user_config_sets_which_ready_issue_is_run() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 9, &["bug"]);
+    ready_issue(&scenario, 7, &["bug"]);
+    scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
+    scenario.user_config_is("[pickup]\norder = \"highest-first\"\n");
+
+    let result = scenario.run(&["pickup"]);
+
+    let pr = pr_from(&scenario, "issue-9");
+    assert_ended_with_pr(&result, &pr, "ready for review");
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT, "bug"]);
+}
+
+#[test]
+fn a_pickup_order_flag_beats_pickup_order_in_the_user_config() {
+    for (configured, flag, taken, left) in [
+        ("lowest-first", "highest-first", 9, 7),
+        ("highest-first", "lowest-first", 7, 9),
+    ] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 9, &["bug"]);
+        ready_issue(&scenario, 7, &["bug"]);
+        scenario.agent_does_for(taken, &agent_opens_pr(taken, "main"));
+        scenario.user_config_is(&format!("[pickup]\norder = \"{configured}\"\n"));
+
+        let result = scenario.run(&["pickup", flag]);
+
+        let pr = pr_from(&scenario, &format!("issue-{taken}"));
+        assert_ended_with_pr(&result, &pr, "ready for review");
+        assert_eq!(
+            scenario.issue_labels(left),
+            [READY_FOR_AGENT, "bug"],
+            "configured {configured}, flag {flag}"
+        );
+    }
+}
+
+#[test]
+fn an_invalid_pickup_order_stops_the_pass_naming_the_file_and_key() {
+    for order in ["\"lowest\"", "\"highest\"", "\"\"", "\"Lowest-First\""] {
+        let scenario = ready_ticket();
+        let path = scenario.user_config_is(&format!("[pickup]\norder = {order}\n"));
+
+        let result = scenario.run(&["pickup"]);
+
+        scenario.assert_rejected_before_any_work(
+            &result,
+            &format!(
+                "thirdshift: pickup.order must be lowest-first or highest-first, not {order}, in the User config {}\n",
+                path.display()
+            ),
+        );
+        assert_eq!(result.code, Some(1), "{order}: {}", result.stderr);
+        assert_eq!(scenario.gh_calls(), Vec::<Vec<String>>::new());
+    }
+    for order in ["true", "3"] {
+        let scenario = ready_ticket();
+        let path = scenario.user_config_is(&format!("[pickup]\norder = {order}\n"));
+
+        let result = scenario.run(&["pickup"]);
+
+        scenario.assert_rejected_before_any_work(
+            &result,
+            &format!(
+                "thirdshift: pickup.order must be a quoted order in the User config {}\n",
+                path.display()
+            ),
+        );
+        assert_eq!(result.code, Some(1), "{order}: {}", result.stderr);
+        assert_eq!(scenario.gh_calls(), Vec::<Vec<String>>::new());
+    }
+}
+
 #[test]
 fn a_rejecting_pre_push_hook_does_not_block_reserving_or_releasing_a_ready_issue() {
     let scenario = Scenario::new();
