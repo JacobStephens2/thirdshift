@@ -211,6 +211,25 @@ echo '{"event":"init","conversation_id":"reported","init":{"model":"gemini-obser
 }
 
 #[test]
+fn partial_model_input_total_includes_preserved_cache_tokens() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(r#"
+echo '{"type":"assistant","message":{"id":"m1","model":"observed","usage":{"input_tokens":11,"output_tokens":2,"cache_read_input_tokens":5},"content":[]}}'
+echo '{"type":"result","subtype":"success","total_cost_usd":0.125,"modelUsage":{"observed":{"inputTokens":20,"outputTokens":3,"costUSD":0.125}}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+"#);
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    for arm in ["baseline", "candidate"] {
+        let model = &experiment["usage"][arm]["models"]["observed"];
+        assert_eq!(model["input_tokens"], 25);
+        assert_eq!(model["output_tokens"], 3);
+        assert_eq!(model["cache_read_tokens"], 5);
+        assert_eq!(experiment["usage"][arm]["cost_usd"], 0.125);
+    }
+}
+
+#[test]
 fn partial_model_totals_preserve_other_reported_call_measurements() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does(r#"

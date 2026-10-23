@@ -109,17 +109,8 @@ impl Arm {
                 for (model, event) in models {
                     if event["type"] == "usage" {
                         let usage = &event["usage"];
-                        let input_tokens = usage["input"].as_u64().map(|input| {
-                            if excludes_cache {
-                                input
-                                    .saturating_add(usage["cache_read"].as_u64().unwrap_or(0))
-                                    .saturating_add(usage["cache_write"].as_u64().unwrap_or(0))
-                            } else {
-                                input
-                            }
-                        });
                         let measurement = Measurement {
-                            input_tokens,
+                            input_tokens: usage["input"].as_u64(),
                             output_tokens: usage["output"].as_u64(),
                             cache_read_tokens: usage["cache_read"].as_u64(),
                             cache_write_tokens: usage["cache_write"].as_u64(),
@@ -133,7 +124,7 @@ impl Arm {
                                     model
                                 })
                                 .or_default()
-                                .prefer(measurement);
+                                .prefer_total(measurement, excludes_cache);
                         }
                     }
                 }
@@ -190,12 +181,33 @@ impl std::fmt::Display for Arm {
 
 impl Measurement {
     // A Model total supersedes only the fields the Harness actually reported.
-    fn prefer(&mut self, total: Self) {
-        self.input_tokens = total.input_tokens.or(self.input_tokens);
+    fn prefer_total(&mut self, total: Self, input_excludes_cache: bool) {
+        // Calls have inclusive input already. Recover the uncached count so
+        // partial Model totals can replace input or cache independently.
+        let input = total.input_tokens.or_else(|| {
+            self.input_tokens.map(|input| {
+                if input_excludes_cache {
+                    input
+                        .saturating_sub(self.cache_read_tokens.unwrap_or(0))
+                        .saturating_sub(self.cache_write_tokens.unwrap_or(0))
+                } else {
+                    input
+                }
+            })
+        });
         self.output_tokens = total.output_tokens.or(self.output_tokens);
         self.cache_read_tokens = total.cache_read_tokens.or(self.cache_read_tokens);
         self.cache_write_tokens = total.cache_write_tokens.or(self.cache_write_tokens);
         self.cost_usd = total.cost_usd.or(self.cost_usd);
+        self.input_tokens = input.map(|input| {
+            if input_excludes_cache {
+                input
+                    .saturating_add(self.cache_read_tokens.unwrap_or(0))
+                    .saturating_add(self.cache_write_tokens.unwrap_or(0))
+            } else {
+                input
+            }
+        });
     }
 
     fn span(span: &Span) -> Self {
