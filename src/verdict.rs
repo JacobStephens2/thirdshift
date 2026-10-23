@@ -131,6 +131,15 @@ pub struct MoreTasks {
 }
 
 pub fn judge(scores: &[TaskScores], bar: &Bar) -> Result<Verdict> {
+    evaluate(scores, bar, true)
+}
+
+/// The same seeded decision, without forecasting extra tasks for counterfactuals.
+pub fn judge_without_predictions(scores: &[TaskScores], bar: &Bar) -> Result<Verdict> {
+    evaluate(scores, bar, false)
+}
+
+fn evaluate(scores: &[TaskScores], bar: &Bar, predictions: bool) -> Result<Verdict> {
     validate(scores, bar)?;
     let trials = bar.trials_per_task;
     let mut counts = vec![0; 2 * trials + 1];
@@ -151,8 +160,8 @@ pub fn judge(scores: &[TaskScores], bar: &Bar) -> Result<Verdict> {
         let candidate_wrong = task.candidate.iter().filter(|s| s.wrong_finding).count();
         wrong_counts[baseline_wrong + trials - candidate_wrong] += 1;
     }
-    let accuracy = assess(&counts, bar, bar.seed)?;
-    let wrong_findings = assess(&wrong_counts, bar, bar.seed.wrapping_add(1))?;
+    let accuracy = assess(&counts, bar, bar.seed, predictions)?;
+    let wrong_findings = assess(&wrong_counts, bar, bar.seed.wrapping_add(1), predictions)?;
     let decisions = [accuracy.verdict, wrong_findings.verdict];
     let verdict = if dropped_tasks > scores.len() / 10 {
         Decision::Inconclusive
@@ -218,7 +227,7 @@ fn validate(scores: &[TaskScores], bar: &Bar) -> Result<()> {
     Ok(())
 }
 
-fn assess(counts: &[usize], bar: &Bar, seed: u64) -> Result<Assessment> {
+fn assess(counts: &[usize], bar: &Bar, seed: u64, predictions: bool) -> Result<Assessment> {
     let posterior = Posterior::new(counts, bar)?;
     let mut rng = Pcg64::seed_from_u64(seed);
     let mut draws: Vec<_> = (0..bar.draws)
@@ -234,7 +243,7 @@ fn assess(counts: &[usize], bar: &Bar, seed: u64) -> Result<Assessment> {
         difference_counts: counts.to_vec(),
         interval,
         verdict,
-        more_tasks: (verdict == Decision::Inconclusive)
+        more_tasks: (predictions && verdict == Decision::Inconclusive)
             .then(|| prediction::more_tasks(&posterior, bar, &mut rng))
             .transpose()?,
     })

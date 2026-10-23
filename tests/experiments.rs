@@ -10,6 +10,9 @@ use support::Scenario;
 #[path = "experiments/model_graders.rs"]
 mod model_graders;
 
+#[path = "experiments/rechecks.rs"]
+mod rechecks;
+
 #[test]
 fn experiment_trace_contains_trials_and_graders_and_reports_arm_usage() {
     let fixture = Fixture::new();

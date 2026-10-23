@@ -6,6 +6,7 @@ mod integrity;
 mod limits;
 mod model_grader;
 mod options;
+mod rechecks;
 mod store;
 mod trace;
 mod usage;
@@ -28,6 +29,7 @@ use crate::trial::VoidCause;
 use crate::{interrupt, logs, progress};
 
 pub use options::{Options, parse};
+pub(crate) use rechecks::record as recheck;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Bar {
@@ -234,11 +236,7 @@ pub fn run(options: Options) -> Result<()> {
         model_grader::prepare(&experiment, &config.harness)?;
         workers::run(&experiment)?;
         model_grader::run(&experiment)?;
-        experiment.verdict = Some(grading::judge(
-            &experiment.tasks,
-            &experiment.results()?,
-            &experiment.description.bar,
-        )?);
+        experiment.refresh_verdict()?;
         experiment.state = State::Completed;
         Ok(())
     })();

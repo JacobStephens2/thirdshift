@@ -392,6 +392,7 @@ thirdshift evals verify &lt;repository&gt; &lt;base&gt;  # refuse history beyond
 thirdshift evals prepare-arms &lt;repository&gt; &lt;baseline-commit&gt; &lt;baseline-harness&gt; &lt;candidate-commit&gt; &lt;candidate-harness&gt; &lt;record.json&gt;  # cache builds and record fixed Harness paths
 thirdshift experiment &lt;candidate&gt; [--baseline &lt;ref&gt;] [--suite &lt;name&gt;] [--json]  # run or resume an Experiment
 thirdshift experiments [&lt;id&gt;] [--json]  # list Experiments or show one
+thirdshift recheck &lt;id&gt; &lt;trial&gt; &lt;pass|fail&gt; --reason &lt;text&gt; [--wrong-finding &lt;true|false&gt;] [--json]
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift &lt;version&gt;
 thirdshift help                     # print a compact command and option reference
@@ -476,6 +477,27 @@ evidence and stderr there, including after interruption or timeout. A failed,
 incomplete or malformed Grader response pauses the Experiment; resuming retries
 grading without rerunning finished Trials,
 and reuses already validated Scores.</p>
+<p>The Verdict stays <code>waiting_on_rechecks</code> until you have rechecked every borderline
+Score and every decisive Score. A Score is decisive when flipping its pass/fail
+or wrong-finding flag changes the Experiment&#39;s pass/fail/inconclusive decision
+under the fixed Bar. Scores from a task dropped as void are excluded.
+<code>thirdshift experiments &lt;id&gt; --json</code> lists these under <code>pending_rechecks</code>, with
+each Trial&#39;s <code>id</code>, suite, task, Arm, Trial number and borderline/decisive flags.
+The text view lists the same IDs. <code>verdict.provisional_verdict</code> and suite
+intervals show the calculation while <code>verdict.verdict</code> waits.</p>
+<p>Read the Trial&#39;s reports and record your decision:</p>
+<pre><code class="language-sh">thirdshift recheck &lt;experiment-id&gt; &lt;trial-id&gt; pass --reason &#39;The report meets the written criteria.&#39;
+thirdshift recheck &lt;experiment-id&gt; &lt;trial-id&gt; fail --reason &#39;This finding is wrong.&#39; --wrong-finding true
+</code></pre>
+<p>Your latest recheck supplies the pass/fail used in the Verdict; the optional
+<code>--wrong-finding true|false</code> corrects that flag too. Omission retains its last
+value. Each Trial&#39;s <code>score</code> keeps the original Grader&#39;s decision, checks and
+model evidence, with your timestamped decisions and reasons in <code>score.rechecks</code>.
+Rechecking again appends to that history. The command atomically saves the
+history and recalculated Verdict, then prints the updated Experiment, with
+<code>--json</code> available. A changed Score can make another Score decisive, so consult
+the updated pending list. Trials and Graders never rerun for a recheck, and the
+Bar stays fixed. An Experiment being run or rechecked refuses concurrent writes.</p>
 <p>Each suite gets a paired Verdict using its recorded Trials per Eval task (one
 or three). Any failed suite fails the Experiment; otherwise any inconclusive
 suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
@@ -507,7 +529,9 @@ Trial-only memory-cap stops as a finding against that Arm.</p>
 log lines under <code>&lt;logs.dir&gt;/JacobStephens2/thirdshift/commands/experiment/</code>
 (the Activity log is at the repository level). The record names both Arms and
 the Bar and moves through Arm builds, Eval tasks and Trials. It appears in the
-Inbox: a pass goes in Done, and a fail or inconclusive Verdict goes in Needs you.
+Inbox: a pass goes in Done, and a fail, inconclusive Verdict or waiting rechecks
+go in Needs you. Command records retain the outcome at the end of that invocation;
+the Experiment views show the latest rechecks and Verdict.
 Use the name from <code>status</code> with <code>thirdshift stop &lt;command&gt;</code> to Stop it.
 The individual Trials keep no factory Command records.
 Trial and model Grader Session traces and code Grader spans join the invocation&#39;s
