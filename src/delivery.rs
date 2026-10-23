@@ -759,8 +759,8 @@ impl repair_loop::Outside for RunOutside<'_> {
         };
         self.pull_request.ensure_actionable(true)?;
         let result = self.sessions.run(kind, &prompt);
-        self.refresh_built_with()?;
-        result
+        let refreshed = self.refresh_built_with();
+        result.and(refreshed)
     }
 
     fn sees_inherited_failures(&mut self) -> bool {
@@ -776,8 +776,8 @@ impl repair_loop::Outside for RunOutside<'_> {
         let result = self
             .base_fix
             .fix(outside, self.pr_url, self.base, base_commit, failed);
-        self.refresh_built_with()?;
-        result
+        let refreshed = self.refresh_built_with();
+        result.and(refreshed)
     }
 
     fn pr_mergeable(&mut self) -> Result<bool> {
