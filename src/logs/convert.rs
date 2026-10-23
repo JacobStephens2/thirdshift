@@ -383,12 +383,9 @@ fn convert(root: &Path, source: &Path, snapshot: &Snapshot, session: &mut Sessio
     let mut expected = before;
     if !amendments.is_empty() {
         let combined = format!("{}\n{amendments}", original.trim_end());
-        expected.conversation = crate::console::conversation::render(
-            &combined,
-            super::catalog::Kind::Session,
-        );
-        let combined_events: Vec<String> =
-            super::session::events(&combined).collect();
+        expected.conversation =
+            crate::console::conversation::render(&combined, super::catalog::Kind::Session);
+        let combined_events: Vec<String> = super::session::events(&combined).collect();
         expected.show = super::reading::latest_session_event(&combined_events, harness);
     }
     session.readers = expected.compare(&after);

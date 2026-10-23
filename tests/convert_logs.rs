@@ -44,9 +44,8 @@ fn show_passes_a_codex_session_whose_recovered_diffs_overflow_the_tail_window() 
         "codex",
         include_str!("fixtures/console-codex.jsonl"),
     );
-    let native = scenario.path(
-        "home/.codex/sessions/2026/10/01/rollout-2026-10-01T12-00-00-made-up-thread.jsonl",
-    );
+    let native = scenario
+        .path("home/.codex/sessions/2026/10/01/rollout-2026-10-01T12-00-00-made-up-thread.jsonl");
     fs::create_dir_all(native.parent().unwrap()).unwrap();
     let directory = scenario.path("work/widgets");
     // One recovered diff larger than the 64 KiB live tail: a tail-window
@@ -87,7 +86,8 @@ fn show_passes_a_claude_session_ending_in_a_large_tool_call() {
         "type": "tool_use", "id": "call-1", "name": "Bash",
         "input": {"command": format!("cargo test {}", "x".repeat(40_000))}
     }]}});
-    let final_result = json!({"type": "result", "subtype": "success", "result": "y".repeat(30_000)});
+    let final_result =
+        json!({"type": "result", "subtype": "success", "result": "y".repeat(30_000)});
     let raw = format!(
         "{}\n{tool}\n{final_result}\n",
         json!({"type": "system", "subtype": "init"}),

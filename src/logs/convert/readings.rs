@@ -118,8 +118,8 @@ mod tests {
 
     #[test]
     fn compare_still_catches_a_changed_latest_event() {
-        let readers = readings(Some("Bash: cargo test"))
-            .compare(&readings(Some("Bash: cargo clippy")));
+        let readers =
+            readings(Some("Bash: cargo test")).compare(&readings(Some("Bash: cargo clippy")));
         assert_eq!(readers["show"], false);
         let readers =
             readings(Some("Bash: cargo test")).compare(&readings(Some("Bash: cargo test")));
