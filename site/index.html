@@ -366,6 +366,7 @@
       </div>
       <figure class="floor grid-bg">
         <p><code>thirdshift metrics &lt;command&gt; [--json]</code> shows one Run and its children; <code>thirdshift metrics [--json]</code> shows weekly trends by repository, Harness, Harness version, Model, Effort and kind of session, with week and repository filters. Session traces supply tokens by observed Model with the cache split, reported cost, tool errors, permission denials, killed work and repeated tool calls. Completed Runs sum these by session kind; past Runs get them from converted traces when metrics are read. Missing values stay missing. Every signal stays separate.</p>
+        <p>Every Run also checks its sessions' shell commands for force pushes, shared-branch history rewrites and recursive deletes outside the Worktree. Run metrics retain each matching command as an advisory flag; flags never block or fail a Run.</p>
         <!-- Static plan: visible names, statuses and hints also work without JavaScript.
              Lines sit on a 150-unit pitch from y=60. The shared machinery is decorative. -->
         <svg viewBox="0 0 480 980" role="group" aria-labelledby="floor-title" aria-describedby="floor-desc">

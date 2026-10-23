@@ -19,12 +19,217 @@ fn trace(
     fs::write(&path, serde_json::to_string(&json!({
         "resourceLogs": [{"resource": {"attributes": [
             {"key":"thirdshift.harness", "value":{"stringValue":harness}},
+            {"key":"thirdshift.harness.directory", "value":{"stringValue":"/worktree"}},
             {"key":"thirdshift.harness.version", "value":{"stringValue":version}}
         ]}, "scopeLogs":[{"logRecords":[{"attributes":[{
             "key":"thirdshift.events", "value":{"stringValue":serde_json::to_string(&events).unwrap()}
         }]}]}]}]
     })).unwrap() + "\n").unwrap();
     path
+}
+
+fn destructive_flags(command: &str) -> Value {
+    let scenario = Scenario::new();
+    let log = trace(
+        &scenario,
+        "destructive-check",
+        "claude",
+        "1.0",
+        json!([{
+            "type":"tool_call_started", "id":"call", "parent_id":null,
+            "tool":"Bash", "input":{"command":command}
+        }]),
+    );
+    let mut past = record(7);
+    past["stages"][0]["session_log"] = json!(log);
+    write(&scenario, "7-fixture.command.json", &past);
+    metrics(&scenario, &["metrics", "widgets#7", "--json"])["command"]["metrics"]["session_signals"]
+        ["implement"]["signals"]["destructive_commands"]
+        .clone()
+}
+
+#[test]
+fn conditional_force_push_is_checked() {
+    let command = "if true; then git push --force origin main; fi";
+    assert_eq!(
+        destructive_flags(command),
+        json!([{"pattern":"force-push", "command":command}])
+    );
+}
+
+#[test]
+fn heredoc_text_is_not_a_shell_command() {
+    assert_eq!(
+        destructive_flags("cat <<'EOF'\ngit push --force origin main\nEOF"),
+        json!([])
+    );
+}
+
+#[test]
+fn subshell_cd_does_not_change_parent_directory() {
+    let command = "(cd /worktree/build); rm -rf ../outside-cache";
+    assert_eq!(
+        destructive_flags(command),
+        json!([{
+            "pattern":"recursive-delete-outside-worktree", "command":command
+        }])
+    );
+}
+
+#[test]
+fn optioned_shared_history_rewrites_are_checked() {
+    for command in [
+        "git rebase --onto origin/main old-base release",
+        "git update-ref -m rewrite refs/heads/release HEAD~1",
+    ] {
+        assert_eq!(
+            destructive_flags(command),
+            json!([{"pattern":"shared-history-rewrite", "command":command}]),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn trace_without_worktree_keeps_destructive_evidence_missing() {
+    let scenario = Scenario::new();
+    let log = trace(
+        &scenario,
+        "old-trace",
+        "claude",
+        "1.0",
+        json!([{
+            "type":"tool_call_started", "id":"call", "parent_id":null,
+            "tool":"Bash", "input":{"command":"rm -rf /outside/cache"}
+        }]),
+    );
+    let mut request: Value = serde_json::from_str(&fs::read_to_string(&log).unwrap()).unwrap();
+    request["resourceLogs"][0]["resource"]["attributes"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|attribute| attribute["key"] != "thirdshift.harness.directory");
+    fs::write(&log, serde_json::to_string(&request).unwrap() + "\n").unwrap();
+    let mut past = record(7);
+    past["stages"][0]["session_log"] = json!(log);
+    write(&scenario, "7-fixture.command.json", &past);
+    let shown = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert_eq!(
+        shown["command"]["metrics"]["session_signals"]["implement"]["signals"]["destructive_commands"],
+        Value::Null
+    );
+    let trends = metrics(&scenario, &["metrics", "--json"]);
+    let row = trends["weeks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["session_kind"] == "implement")
+        .unwrap();
+    assert_eq!(
+        row["session_signals"]["destructive_commands"],
+        json!({"observed":0, "missing":1, "sum":null, "mean":null})
+    );
+}
+
+#[test]
+fn destructive_command_patterns_flag_fixture_commands_but_not_near_misses() {
+    let scenario = Scenario::new();
+    let cases: Value =
+        serde_json::from_str(include_str!("fixtures/destructive-commands.json")).unwrap();
+    let events: Vec<_> = cases
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .map(|(i, case)| {
+            json!({"type":"tool_call_started", "id":i.to_string(), "parent_id":null,
+            "tool":case["tool"], "input":case["input"]})
+        })
+        .collect();
+    let log = trace(&scenario, "destructive", "claude", "1.0", json!(events));
+    let mut past = record(7);
+    past["stages"][0]["session_log"] = json!(log);
+    write(&scenario, "7-fixture.command.json", &past);
+    let shown = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    let flags = &shown["command"]["metrics"]["session_signals"]["implement"]["signals"]["destructive_commands"];
+    let expected: Vec<_> = cases
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|case| {
+            case["pattern"].as_str().map(|pattern| {
+                json!({
+                    "pattern":pattern, "command":case["input"]["command"]
+                })
+            })
+        })
+        .collect();
+    let mut actual = flags.as_array().expect("destructive command flags").clone();
+    actual.sort_by_key(|flag| flag["command"].to_string());
+    let mut expected = expected;
+    expected.sort_by_key(|flag| flag["command"].to_string());
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn current_worktree_rebase_options_are_near_misses() {
+    for command in [
+        "git rebase -C 3 origin/main",
+        "git rebase --whitespace fix origin/main",
+    ] {
+        assert_eq!(destructive_flags(command), json!([]), "{command}");
+    }
+}
+
+#[test]
+fn piped_brace_group_cannot_move_parent_outside_worktree() {
+    assert_eq!(
+        destructive_flags("{ cd /outside; } | cat; rm -rf local-cache"),
+        json!([])
+    );
+}
+
+#[test]
+fn piped_brace_group_cannot_hide_outer_recursive_delete() {
+    let command = "{ cd /worktree/build; } | cat; rm -rf ../outside-cache";
+    assert_eq!(
+        destructive_flags(command),
+        json!([{
+            "pattern":"recursive-delete-outside-worktree", "command":command
+        }])
+    );
+}
+
+#[test]
+fn shell_commands_from_each_harness_are_checked() {
+    for (harness, tool, key) in [
+        ("claude", "Bash", "command"),
+        ("codex", "command_execution", "command"),
+        ("agy", "run_command", "CommandLine"),
+        ("grok", "run_terminal_command", "command"),
+        ("muse", "bash", "command"),
+        ("opencode", "bash", "command"),
+    ] {
+        let scenario = Scenario::new();
+        let log = trace(
+            &scenario,
+            harness,
+            harness,
+            "1.0",
+            json!([
+                {"type":"tool_call_started", "id":"call", "parent_id":null,
+                 "tool":tool, "input":{key:"git push --force origin issue-7"}}
+            ]),
+        );
+        let mut past = record(7);
+        past["stages"][0]["session_log"] = json!(log);
+        write(&scenario, "7-fixture.command.json", &past);
+        let shown = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+        assert_eq!(
+            shown["command"]["metrics"]["session_signals"]["implement"]["signals"]["destructive_commands"],
+            json!([{"pattern":"force-push", "command":"git push --force origin issue-7"}]),
+            "{harness}"
+        );
+    }
 }
 
 #[test]

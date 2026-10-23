@@ -73,6 +73,9 @@ impl Trace {
         if let Some(effort) = &choice.effort {
             attrs.push(attribute("thirdshift.request.effort", effort));
         }
+        if let Some(dir) = command.get_current_dir() {
+            attrs.push(attribute("thirdshift.harness.directory", dir.display()));
+        }
         Ok(Self {
             logs: Writer::new(File::create(log.with_extension("logs.jsonl"))?),
             spans: Writer::new(File::create(log.with_extension("spans.jsonl"))?),
@@ -106,9 +109,6 @@ impl Trace {
                         )
                         .unwrap(),
                     ));
-                    if let Some(dir) = command.get_current_dir() {
-                        attrs.push(attribute("thirdshift.harness.directory", dir.display()));
-                    }
                     attrs
                 },
                 ..Default::default()
