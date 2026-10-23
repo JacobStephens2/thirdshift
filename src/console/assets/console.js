@@ -269,6 +269,19 @@ for (const [letter, target] of targets) {
   jumps.append(button);
 }
 
+content.addEventListener('click', async event => {
+  const copy = event.target.closest('.peek-cli button');
+  if (!copy) return;
+  const status = copy.parentElement.querySelector('[role="status"]');
+  try {
+    await navigator.clipboard.writeText(copy.dataset.copyCli);
+    status.textContent = 'CLI copied.';
+  } catch {
+    // An insecure origin or refused permission still leaves the text ready to copy by hand.
+    getSelection().selectAllChildren(copy.parentElement.querySelector('code'));
+    status.textContent = 'Selected; copy it with your keyboard.';
+  }
+});
 document.querySelector('[data-close-peek]').addEventListener('click', closePeek);
 document.querySelector('[data-close-keys]').addEventListener('click', () => help.close());
 document.querySelector('[data-open-keys]').addEventListener('click', () => help.showModal());

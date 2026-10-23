@@ -768,6 +768,34 @@ test('Enter and Space activate focused peek buttons', async t => {
   }
 });
 
+test('Command details copies its show command to the clipboard', async t => {
+  const page = await pageFor(t);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+  await page.goto(`${origin}/?page=security`);
+  const selector = await page.locator('.command').first().getAttribute('data-command');
+  await page.locator('.peek-link').click();
+  await page.locator('#peek dt').first().waitFor();
+  const expected = `thirdshift show '${selector}' --json`;
+  assert.equal(await page.locator('#peek code').filter({ hasText: 'thirdshift show' }).textContent(), expected);
+  await page.locator('#peek').getByRole('button', { name: 'Copy CLI', exact: true }).click();
+  await page.locator('#peek').getByRole('status').filter({ hasText: 'CLI copied.' }).waitFor();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), expected);
+});
+
+test('Command details selects its show command when the clipboard is refused', async t => {
+  const page = await pageFor(t);
+  await page.addInitScript(() => {
+    navigator.clipboard.writeText = () => Promise.reject(new DOMException('refused', 'NotAllowedError'));
+  });
+  await page.goto(`${origin}/?page=security`);
+  const selector = await page.locator('.command').first().getAttribute('data-command');
+  await page.locator('.peek-link').click();
+  await page.locator('#peek dt').first().waitFor();
+  await page.locator('#peek').getByRole('button', { name: 'Copy CLI', exact: true }).click();
+  await page.locator('#peek').getByRole('status').filter({ hasText: 'Selected; copy it with your keyboard.' }).waitFor();
+  assert.equal(await page.evaluate(() => getSelection().toString()), `thirdshift show '${selector}' --json`);
+});
+
 test('Logs rows open the shared reader and page keys work from the reader', async t => {
   const page = await pageFor(t);
   await page.goto(`${origin}/?page=logs`);

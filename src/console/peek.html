@@ -5,7 +5,7 @@
   {% for branch in branches %}<p>Issue branch left: {{ branch }}</p>{% endfor %}
   {% for pr in pull_requests %}<p>Pull request left: {{ pr|linkify }}</p>{% endfor %}
   {% match issue_url %}{% when Some with (url) %}<p><a href="{{ url }}">{{ issue_label }}</a></p>{% when None %}{% endmatch %}
-  <code>{{ cli }}</code>
+  <p class="peek-cli"><code>{{ cli }}</code> <button type="button" data-copy-cli="{{ cli }}">Copy CLI</button> <span role="status"></span></p>
   <p><a href="{{ crate::logs::status::inspect::url("/log", command, None) }}">Full Command log</a></p>
   {% for log in logs %}<p><a href="{{ log.url }}">Session trace: {{ log.name }}</a></p>{% endfor %}
   <dl>{% for fact in facts %}{{ self.fact(fact)|safe }}{% endfor %}</dl>
