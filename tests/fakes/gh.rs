@@ -136,6 +136,9 @@
 //! `gh issue list --label <label> --json <fields>` lists the open issues with
 //! that label, whatever its case, newest first, or with `--state closed` the
 //! closed ones.
+//! `gh api --paginate --jq '.[]' repos/<repo>/issues?state=<state>&labels=<label>&...`
+//! streams REST issues with `html_url`, filtered by that state and label,
+//! newest first. State may also be `all` for private Security findings.
 //!
 //! `gh issue create --title <title> --body <body> --label <label>,<label>`
 //! opens an issue numbered one past the highest issue, with that title, body
@@ -958,6 +961,25 @@ fn issue_list(state: &Json, flags: &Flags) {
         );
     }
     let wanted_state = flag(flags, "state").unwrap_or("open").to_uppercase();
+    let limit: usize = flag(flags, "limit").unwrap_or("30").parse().unwrap();
+    let wanted = wanted_fields(flags);
+    let listed = matching_issues(state, &wanted_state, label)
+        .into_iter()
+        .take(limit)
+        .map(|(n, issue_state)| {
+            json_fields(&issue_fields(state, &n.to_string(), issue_state), &wanted)
+        })
+        .collect();
+    println!("{}", Array(listed));
+}
+
+/// Issues matching a state and optional label, newest first, for both the
+/// CLI listing and the REST listing.
+fn matching_issues<'a>(
+    state: &'a Json,
+    wanted_state: &str,
+    label: Option<&str>,
+) -> Vec<(i64, &'a Json)> {
     let Json::Object(issues) = state.at("issues") else {
         panic!("issues is an object")
     };
@@ -966,7 +988,7 @@ fn issue_list(state: &Json, flags: &Flags) {
         .iter()
         .filter(|(n, issue_state)| {
             let labels = labels.and_then(|labels| labels.get(n));
-            issue_state.str() == wanted_state
+            (wanted_state == "ALL" || issue_state.str() == wanted_state)
                 && label.is_none_or(|label| {
                     labels
                         .map(Json::items)
@@ -978,16 +1000,7 @@ fn issue_list(state: &Json, flags: &Flags) {
         .map(|(n, issue_state)| (n.parse().unwrap(), issue_state))
         .collect();
     matching.sort_by_key(|(n, _)| -n);
-    let limit: usize = flag(flags, "limit").unwrap_or("30").parse().unwrap();
-    let wanted = wanted_fields(flags);
-    let listed = matching
-        .into_iter()
-        .take(limit)
-        .map(|(n, issue_state)| {
-            json_fields(&issue_fields(state, &n.to_string(), issue_state), &wanted)
-        })
-        .collect();
-    println!("{}", Array(listed));
+    matching
 }
 
 fn issue_close(state: &mut Json, positional: &[String], flags: &Flags) {
@@ -1393,23 +1406,21 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
         && rest.starts_with("issues?")
     {
         check_repo_is(state, Some(repo));
-        assert!(rest.contains("state=all"));
-        assert!(rest.contains("labels=security-finding"));
-        assert!(rest.contains("per_page=100"));
+        let query: BTreeMap<_, _> = rest
+            .strip_prefix("issues?")
+            .unwrap()
+            .split('&')
+            .map(|parameter| parameter.split_once('=').unwrap())
+            .collect();
+        let wanted_state = query["state"].to_uppercase();
+        assert!(matches!(wanted_state.as_str(), "OPEN" | "CLOSED" | "ALL"));
+        assert_eq!(query["per_page"], "100");
         assert!(flags.contains_key("paginate"));
         assert_eq!(flag(flags, "jq"), Some(".[]"));
-        let Json::Object(issues) = state.at("issues") else {
-            panic!("issues is an object")
-        };
-        for (n, issue_state) in issues {
-            if issue_labels(state, n)
-                .iter()
-                .any(|label| label.str().eq_ignore_ascii_case("security-finding"))
-            {
-                let mut issue = issue_fields(state, n, issue_state);
-                issue.set("html_url", issue.at("url").clone());
-                println!("{issue}");
-            }
+        for (n, issue_state) in matching_issues(state, &wanted_state, Some(query["labels"])) {
+            let mut issue = issue_fields(state, &n.to_string(), issue_state);
+            issue.set("html_url", issue.at("url").clone());
+            println!("{issue}");
         }
         return;
     }
