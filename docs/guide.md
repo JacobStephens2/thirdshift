@@ -109,7 +109,7 @@ The designed behaviour described in this manual is implemented. Known gaps and p
 `thirdshift status` names this host and shows its **Inbox** across every repository in `logs.dir`, in this order:
 
 - **Needs you:** live Silent Ticket runs, then Slow Ticket runs, then ended problems newest first: Died, Failed, Triage (a Stop without requeue), or a Security finding waiting on a decision. An ended problem leaves when a later Command on the same issue starts on this machine, or after `inbox.days` (7 by default). Nothing is read from GitHub. Failures with the same nonempty cause collapse into one item with a count; unknown causes stay separate.
-- **Ready for review:** Commands that ended ready, with a pull request.
+- **Ready for review:** Commands that ended ready, with a pull request. Like an ended problem, one leaves when a later Command on the same issue starts on this machine, or after `inbox.days`, and then shows in Done, Resolved or History by its age. A pull request merged or closed by hand stays until then, since nothing is read from GitHub.
 - **Landing:** live Ticket runs at CI watch or Self-merge. A Command already in Needs you has a reference here instead of a second row.
 - **Working:** every other live Command.
 - **Done:** Commands that ended in the last day with nothing waiting.
@@ -492,7 +492,7 @@ waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting li
 endpoint = ""   # optional OTLP/HTTP traces URL, including /v1/traces; default blank (off); Security runs never export
 
 [inbox]
-days = 7             # days to keep ended problems and Resolved; default 7
+days = 7             # days to keep ended problems, Ready for review and Resolved; default 7
 silent_minutes = 10   # minutes without growth in either log before a Ticket run is Silent; default 10
 
 [activity]
@@ -577,7 +577,7 @@ With `email.always = true`, every Ticket run sends a [Run notification](#run-not
 
 `logs.waiting_line_minutes` sets how often CI watch and Self-merge repeat a waiting line even when nothing changes, in the terminal and the Command log. It defaults to 5 and must be a whole number of minutes from 1 up. CI watch still writes a line whenever the running or total check count changes; Self-merge writes waiting lines while GitHub calculates mergeability.
 
-`inbox.days` defaults to 7 and must be a positive whole number of days. It bounds both ended problems in Needs you and older completions in Resolved. Done always covers one day. Ready for review stays visible while the locally recorded outcome is ready; status never checks whether its PR has since changed. Security runs retain whether findings were waiting at completion, without their private write-ups; older records lacking this fact do not infer it from the audit's outcome.
+`inbox.days` defaults to 7 and must be a positive whole number of days. It bounds ended problems in Needs you, ready Commands in Ready for review and older completions in Resolved. Done always covers one day. Status never checks whether a ready Command's PR has since changed, so one merged or closed by hand stays in Ready for review until a later Command on its issue starts here or it ages out. Security runs retain whether findings were waiting at completion, without their private write-ups; older records lacking this fact do not infer it from the audit's outcome.
 
 `inbox.silent_minutes` defaults to 10 and must be a whole number of minutes from 1 up. If `logs.waiting_line_minutes` is greater than or equal to it, `status` warns on stderr and waiting stages use half the silent time instead. A one-minute silent threshold therefore uses waiting lines every 30 seconds.
 

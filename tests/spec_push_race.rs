@@ -1,12 +1,11 @@
 mod support;
-use std::os::unix::fs::PermissionsExt;
-use support::Scenario;
+use support::{Scenario, write_executable};
 
 #[test]
 fn merging_before_the_push_comparison_must_not_recreate_the_branch() {
     let scenario = Scenario::new();
     let wrapper = scenario.path("bin/git");
-    std::fs::write(
+    write_executable(
         &wrapper,
         r#"#!/bin/bash
 if [[ "$1" == ls-remote && "$*" == *refs/heads/issue-7* && -e "$FAKE_CLAUDE_SCRIPT.armed" ]]; then
@@ -16,9 +15,7 @@ if [[ "$1" == ls-remote && "$*" == *refs/heads/issue-7* && -e "$FAKE_CLAUDE_SCRI
 fi
 exec /usr/bin/git "$@"
 "#,
-    )
-    .unwrap();
-    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
     scenario.agent_does(
         r#"
 echo feature > feature.txt
@@ -44,7 +41,7 @@ fn merging_at_publication_does_not_recreate_the_branch_even_during_failure_prese
     for failed_session in [false, true] {
         let scenario = Scenario::new();
         let wrapper = scenario.path("bin/git");
-        std::fs::write(
+        write_executable(
             &wrapper,
             r#"#!/bin/bash
 if [[ "$1" == push && "$2" == --no-verify && -e "$FAKE_CLAUDE_SCRIPT.armed" ]]; then
@@ -54,9 +51,7 @@ if [[ "$1" == push && "$2" == --no-verify && -e "$FAKE_CLAUDE_SCRIPT.armed" ]]; 
 fi
 exec /usr/bin/git "$@"
 "#,
-        )
-        .unwrap();
-        std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+        );
         let finish = if failed_session {
             "exit 17"
         } else {
