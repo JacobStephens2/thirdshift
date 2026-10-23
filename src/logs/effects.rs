@@ -1,9 +1,10 @@
 //! The complete record's private clock, terminal and file seam. Adapters
 //! perform effects only; none can call the process-wide recording interface.
 
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, FixedOffset, Local};
@@ -22,6 +23,10 @@ pub(super) struct Tail {
 }
 
 pub(super) trait Outside: owner::Files {
+    fn command_records(
+        &mut self,
+        root: &Path,
+    ) -> Result<BTreeMap<PathBuf, super::command_record::CommandTree>>;
     fn now(&mut self) -> DateTime<FixedOffset>;
     fn emit(&mut self, stream: Stream, line: &str) -> io::Result<()>;
     fn activity_tail(&mut self, path: &Path, limit: u64) -> Result<Tail>;
@@ -43,6 +48,13 @@ impl owner::Files for OnMachine {
 }
 
 impl Outside for OnMachine {
+    fn command_records(
+        &mut self,
+        root: &Path,
+    ) -> Result<BTreeMap<PathBuf, super::command_record::CommandTree>> {
+        super::reading::repository_records(root)
+    }
+
     fn stop_request(&mut self, record: &Path) -> Option<super::stop::Request> {
         super::stop::requested(record)
     }
