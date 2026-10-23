@@ -4,6 +4,7 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 
 | Issue term | Owning implementation / search symbol | Supporting tests |
 | --- | --- | --- |
+| Verdict, Bar, paired Scores | `src/verdict.rs` — `judge`; `src/verdict/prediction.rs` — posterior-predictive assurance | `src/verdict/tests.rs` (parent #977's standalone Verdict seam) |
 | Claim | `src/claim.rs` — `Claim`, `make`, `end` | Inline tests; `tests/pickup_run.rs` |
 | Ready issue, Claim limit, Sweep | `src/ready.rs` — `ReadyIssue`, `first`, `refresh`; `src/pickup.rs` — `gates`, `sweep`; `src/pickup/reservation.rs` — cross-machine Pickup reservation | Inline tests; `tests/pickup_run.rs` |
 | Run, Continuation, Issue branch | `src/run.rs`; `src/branch.rs` | `tests/fresh_run.rs`, `tests/continuation.rs`, `tests/numbered_branches.rs` |
