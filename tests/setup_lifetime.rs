@@ -234,6 +234,7 @@ mod linux {
                 TerminalStep::line("Security runs may fix", ""),
                 TerminalStep::line("Runs review their change", ""),
                 TerminalStep::line("Run notifications, an email", "n"),
+                TerminalStep::line("Claude setup token", ""),
                 TerminalStep::line("Run the Console?", "n"),
             ]);
         }

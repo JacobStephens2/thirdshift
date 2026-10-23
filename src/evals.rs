@@ -7,11 +7,13 @@ use anyhow::{Result, bail};
 mod arms;
 pub(crate) mod experiment;
 mod format;
+mod import;
 mod repository;
 mod suite;
 
 pub enum Action {
     List,
+    ImportReplays,
     Touched(Vec<String>),
     Prepare {
         suite: String,
@@ -32,6 +34,7 @@ pub enum Action {
 pub fn parse(args: &[String]) -> Result<Action> {
     match args {
         [action] if action == "list" => Ok(Action::List),
+        [action] if action == "import-replays" => Ok(Action::ImportReplays),
         [action, paths @ ..] if action == "touched" => {
             for path in paths {
                 format::relative_path(path)?;
@@ -71,7 +74,7 @@ pub fn parse(args: &[String]) -> Result<Action> {
             record: record.into(),
         }),
         _ => bail!(
-            "usage: thirdshift evals list | touched [<path>...] | prepare <suite> <task> <destination> | verify <repository> <base> | prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>"
+            "usage: thirdshift evals list | import-replays | touched [<path>...] | prepare <suite> <task> <destination> | verify <repository> <base> | prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>"
         ),
     }
 }
@@ -80,6 +83,9 @@ pub fn execute(action: Action) -> Result<String> {
     let root = crate::config::home()?.join(".thirdshift/evals/suites");
     match action {
         Action::List => Ok(serde_json::to_string_pretty(&suite::list(&root)?)?),
+        Action::ImportReplays => Ok(serde_json::to_string(&import::replays(
+            &crate::config::home()?,
+        )?)?),
         Action::Touched(paths) => Ok(serde_json::to_string_pretty(&suite::touched(
             &root, &paths,
         )?)?),

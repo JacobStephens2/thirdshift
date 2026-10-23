@@ -49,6 +49,8 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 Eval task manifests, suite dependency selection and repository preparation live in
 `src/evals.rs` and `src/evals/`; `tests/evals.rs` tests the CLI with real Git
 repositories. The private data format is documented in `docs/eval-tasks.md`.
+The one-time #429 replay import is owned by `src/evals/import.rs` and exercised
+through the same CLI tests with made-up manifests and grading files.
 
 For example, `rg -n 'Claim|TicketBoard|RunNotification' src/claim.rs src/spec_run/ticket_board.rs src/notification.rs` locates the owners of Claim, Ticket board and Run notification without reading the whole glossary or README. Ticket board is an implementation term; the glossary defines its Spec run and Ticket vocabulary.
 
