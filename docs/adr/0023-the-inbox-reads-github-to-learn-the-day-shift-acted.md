@@ -19,4 +19,10 @@ Now each machine's Console reads GitHub once a minute. One batched GraphQL query
 - The Console runs `gh`, and its reads come out of the same quotas as the factory's (#739): about 60 GraphQL points an hour per machine, plus the REST lists.
 - Needs you and Ready for review keep a row until it is dealt with, not until it is old (#919 Q2.5). #1083's age limit applies only to rows GitHub can't speak for.
 - The reads never write to GitHub. Taking `in-progress` off a closed issue stays the Sweep's job.
-- The Inbox can be up to a minute behind GitHub.
+- GitHub moves only ended rows. A **Silent** or **Slow** row stays whatever GitHub shows, and GitHub's facts apply once it ends (#919 Q3.5).
+- When GitHub can't be read, the Inbox keeps the last answer. A row keeps the group its last-read facts give it, and one GitHub hasn't been read for, or can't find, goes by age. After 5 minutes without a good read, the Inbox's warning says when GitHub last answered and why the latest read failed (#919 Q3.1).
+- The Console leaves the last tenth of each quota to the factory. With fewer than 500 GraphQL points or 500 REST requests left, it skips its reads until that quota resets, and says so (#919 Q3.2).
+- GitHub is read for a row only until it reaches the History page, so each read grows with the Inbox, not with the machine's history, and a reopened issue brings back only a row still in Done or Resolved (#919 Q3.3).
+- Resolved counts from when a row stopped waiting, so a row dealt with after a long wait stays in view (#919 Q3.4).
+- Nothing turns the reads off, and none of their timings is a setting (#919 Q3.7).
+- The Inbox can be up to a minute behind GitHub, and further while GitHub can't be read or the quota is low, when it says so.
