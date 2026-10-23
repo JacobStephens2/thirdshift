@@ -264,6 +264,42 @@ fn imports_replay_bugs_and_scored_specs_once_as_preparable_eval_tasks() {
 }
 
 #[test]
+fn replay_import_completes_legacy_code_review_trial_inputs_and_preserves_local_edits() {
+    let fixture = Fixture::new();
+    replay_inputs(&fixture);
+    success(fixture.evals(&["import-replays"]));
+    let task = fixture
+        .suite("code-review")
+        .join("tasks/bug-7-pr-17/task.toml");
+    let mut document = fs::read_to_string(&task)
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    document.remove("trial");
+    document["criteria"] = toml_edit::value("Locally revised catch criterion.");
+    fs::write(&task, format!("# Keep my note.\n{document}")).unwrap();
+
+    assert_eq!(
+        success(fixture.evals(&["import-replays"])),
+        serde_json::json!({"imported": 0, "skipped": 4})
+    );
+
+    let contents = fs::read_to_string(&task).unwrap();
+    let mut restored = contents.parse::<toml_edit::DocumentMut>().unwrap();
+    assert_eq!(
+        restored["criteria"].as_str(),
+        Some("Locally revised catch criterion.")
+    );
+    assert!(contents.contains("# Keep my note."));
+    assert!(restored.get("trial").is_some(), "{contents}");
+    restored["trial"]["branch"] = toml_edit::value("custom-review-branch");
+    let before = restored.to_string();
+    fs::write(&task, &before).unwrap();
+    success(fixture.evals(&["import-replays"]));
+    assert_eq!(fs::read_to_string(task).unwrap(), before);
+}
+
+#[test]
 fn imported_suites_follow_production_review_sources() {
     let fixture = Fixture::new();
     replay_inputs(&fixture);

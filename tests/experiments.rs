@@ -324,6 +324,84 @@ esac
 }
 
 #[test]
+fn imported_code_review_suite_runs_three_trials_per_arm_and_reports_pass_cubed() {
+    let fixture = Fixture::with_session("code-review", 3);
+    fs::remove_dir_all(
+        fixture
+            .scenario
+            .path("home/.thirdshift/evals/suites/code-review"),
+    )
+    .unwrap();
+    let repository = fixture.scenario.path("home/repos/thirdshift");
+    fs::create_dir_all(repository.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(fixture.scenario.launch_dir(), &repository).unwrap();
+    let replays = fixture.scenario.path("home/.thirdshift/replays");
+    for (name, value) in [
+        (
+            "inputs-2026-10-07/manifest.json",
+            json!({
+                "timing_bugs": [{
+                    "id": 7,
+                    "introducing_pr": {
+                        "number": 17,
+                        "merge_base": fixture.baseline,
+                        "head_as_merged": fixture.candidate,
+                        "implements_issue": 7
+                    }
+                }],
+                "spec_reviews": []
+            }),
+        ),
+        ("2026-10-09/inputs/manifest.json", json!({"codex_bugs": []})),
+        (
+            "2026-10-09/grading/eval-import.json",
+            json!({"bugs": {"7": "Catch the invented defect."}, "specs": {}}),
+        ),
+        (
+            "2026-10-09/context/thirdshift/7.json",
+            json!({
+                "title": "Invented change",
+                "body": "Original issue.",
+                "parent": null,
+                "tickets": []
+            }),
+        ),
+    ] {
+        let path = replays.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+    }
+    let imported = fixture.scenario.run(&["evals", "import-replays"]);
+    assert_eq!(imported.code, Some(0), "{}", imported.stderr);
+    fixture.scenario.agent_does(r#"
+test "$(git diff --name-only main...HEAD)" = src/prompt.rs
+test -z "$(git remote)"
+reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
+test -n "$reports"
+printf 'Standards report\n' > "$reports/standards.md"
+printf 'Spec report\n' > "$reports/spec.md"
+"#);
+    let run = fixture.run(&["--suite", "code-review"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment: Value = serde_json::from_str(run.stdout.lines().last().unwrap()).unwrap();
+    assert_eq!(experiment["bar"]["trials_per_task"]["code-review"], 3);
+    let results = experiment["results"].as_array().unwrap();
+    assert_eq!(results.len(), 6);
+    for result in results {
+        assert_eq!(result["outcome"], "succeeded", "{result}");
+        assert_eq!(result["score"]["passed"], true, "{result}");
+        let attempt = &result["attempts"][0];
+        for axis in ["standards", "spec"] {
+            assert!(std::path::Path::new(attempt["reports"][axis].as_str().unwrap()).is_file());
+        }
+    }
+    assert_eq!(
+        experiment["verdict"]["suites"]["code-review"]["pass_cubed"],
+        json!({"baseline": 1.0, "candidate": 1.0})
+    );
+}
+
+#[test]
 fn mechanical_scores_determine_the_verdict_inbox_and_arm_minutes() {
     for (passing_arm, decision, group) in [
         ("candidate", "pass", "done"),

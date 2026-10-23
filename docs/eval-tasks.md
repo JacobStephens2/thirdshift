@@ -200,10 +200,16 @@ the importer never fetches issues, repositories or grades from the network.
 Local source repositories are `~/repos/<repo>/`, as in the replay script;
 bug repositories are `~/repos/thirdshift/`.
 
-Replay manifests do not supply the Trial's branch and PR service inputs. Before
-running an imported Spec-review Eval task in an Experiment, add its `[trial]`
-table as described above, using fixture services or a disposable PR. Import
-leaves that optional table unset and preserves any later edits on a rerun.
+Code-review imports include their review-only `[trial]` inputs: the original
+thirdshift issue and PR URLs, a local `main` Base branch and `issue-<n>` Issue
+branch. The PR URL is unused and no GitHub service is needed. Rerunning the
+import fills this table in older code-review tasks only when it is missing,
+preserving local edits and any existing Trial inputs.
+
+Replay manifests do not supply Spec review's branch and PR service inputs.
+Before running an imported Spec-review Eval task in an Experiment, add its
+`[trial]` table as described above, using fixture services or a disposable PR.
+Import leaves that optional table unset and preserves later edits on a rerun.
 
 The importer creates approved Eval tasks in `code-review` (three Trials per Arm)
 and `spec-review` (one). Each bug/introducing-PR pair becomes
@@ -217,7 +223,8 @@ dependencies. No plan-check or reverse-Spec suite is imported.
 All source data is checked before publishing either suite. Each new Eval task
 is published as a complete folder. Repeating the command preserves existing
 valid Eval tasks and suite declarations, even if edited after the first import,
-and adds only missing ones. It prints JSON counts, for example
+apart from completing missing Code review Trial inputs, and adds missing tasks.
+Completed tables count as skipped tasks in the JSON counts, for example
 `{"imported":4,"skipped":0}`, with the same exit rules as the other Eval commands.
 Keep the source material and imported suites private; only made-up fixtures
 belong in tests. Run the import itself only on the host that holds the material.
