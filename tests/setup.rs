@@ -502,6 +502,7 @@ const BASE_FIX: &str = "Every Ticket run may start a Base fix when the Base bran
 const PULL: &str = "fast-forward";
 const SECURITY_REVIEW: &str = "Ticket runs review their change for Security findings?";
 const SECURITY_FIX: &str = "Security runs may fix reproduced findings?";
+const SECURITY_CLOSE: &str = "close a finding their fix merged?";
 const NOTIFY: &str = "Run notifications, an email";
 const CONSOLE: &str = "Run the Console?";
 const TO: &str = "Send Run notifications to";
@@ -783,6 +784,7 @@ fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes(
             (BASE_FIX, ""),
             (PULL, ""),
             (SECURITY_FIX, "y"),
+            (SECURITY_CLOSE, "y"),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
             (CLAUDE_TOKEN, ""),
@@ -799,6 +801,8 @@ fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes(
     let text = result.user_config.unwrap();
     let config: toml::Table = text.parse().unwrap();
     assert_eq!(config["security"]["fix"].as_bool(), Some(true));
+    assert_eq!(config["security"]["close"].as_bool(), Some(true));
+    assert_eq!(result.stderr.matches(SECURITY_CLOSE).count(), 1);
     assert_eq!(config["security"]["harness"].as_str(), Some(""));
     assert!(
         text.contains(
@@ -814,29 +818,34 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
     let saved = "# my Security settings\n[security]\nfix = true # keep this choice\nharness = 'codex' # use Codex\n";
     scenario.user_config_is(saved);
 
-    for (answer, enabled, choices) in [
-        ("", true, "[Y/n]"),
-        ("n", false, "[Y/n]"),
-        ("", false, "[y/N]"),
+    for (answer, was_on, enabled, close) in [
+        ("", true, true, Some("")),
+        ("n", true, false, None),
+        ("", false, false, None),
     ] {
-        let result = setup_on_terminal(
-            &scenario,
-            &[],
-            &[
-                (HARNESS, ""),
-                (MODEL, ""),
-                (EFFORT, ""),
-                (MERGE, ""),
-                (BASE_FIX, ""),
-                (PULL, ""),
-                (SECURITY_FIX, answer),
-                (SECURITY_REVIEW, ""),
-                (NOTIFY, ""),
-                (CLAUDE_TOKEN, ""),
-                (CONSOLE, "n"),
-            ],
-        );
-        assert!(result.stderr.contains(&format!("{SECURITY_FIX} {choices}")));
+        let mut keystrokes = vec![
+            (HARNESS, ""),
+            (MODEL, ""),
+            (EFFORT, ""),
+            (MERGE, ""),
+            (BASE_FIX, ""),
+            (PULL, ""),
+            (SECURITY_FIX, answer),
+        ];
+        if let Some(close) = close {
+            keystrokes.push((SECURITY_CLOSE, close));
+        }
+        keystrokes.extend_from_slice(&[
+            (SECURITY_REVIEW, ""),
+            (NOTIFY, ""),
+            (CLAUDE_TOKEN, ""),
+            (CONSOLE, "n"),
+        ]);
+        let result = setup_on_terminal(&scenario, &[], &keystrokes);
+        assert!(result.stderr.contains(&format!(
+            "{SECURITY_FIX} {}",
+            if was_on { "[Y/n]" } else { "[y/N]" }
+        )));
         assert_eq!(
             result.stderr.contains("Security sandbox probe:"),
             enabled,
@@ -847,6 +856,7 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
         let text = result.user_config.unwrap();
         let config: toml::Table = text.parse().unwrap();
         assert_eq!(config["security"]["fix"].as_bool(), Some(enabled));
+        assert_eq!(config["security"]["close"].as_bool(), Some(false));
         assert_eq!(config["security"]["harness"].as_str(), Some("codex"));
         assert!(text.starts_with("# my Security settings\n[security]\n"));
         assert!(text.contains("# keep this choice\n"));

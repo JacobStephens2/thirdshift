@@ -427,6 +427,20 @@ pub fn security_reproduction(commit: &str, finding: &str, test: &std::path::Path
     )
 }
 
+/// The close check's terminal protocol: only this final line is read.
+pub const CLOSE_CHECK_PASSES_LINE: &str = "Security close check: passes";
+pub const CLOSE_CHECK_FAILS_PREFIX: &str = "Security close check: fails: ";
+
+pub fn security_close_check(base: &str, pr_url: &str, finding: &str) -> String {
+    format!(
+        "Check whether the fix for this reproduced Security finding holds on Base branch `{base}`, now that it merged as {pr_url}.\n\
+         Re-run the finding's proof-of-concept test from the private record below against the untouched code in this throwaway worktree, at the merged Base branch head. The test failed before the fix. Use harmless payloads only, never a deployed site or a real third-party service. Do not fix or change repository source.\n\
+         In your final message, give the exact command and its result. End your final message with exactly `{CLOSE_CHECK_PASSES_LINE}` when the test now passes, or `{CLOSE_CHECK_FAILS_PREFIX}<one-line reason>` when it still fails or cannot run.\n\
+         This session commits, pushes, opens and publishes nothing.\n\n\
+         Private record:\n{finding}\n\n{HEADLESS}",
+    )
+}
+
 pub const SECURITY_FIX_LINE: &str = "Security fix Ticket: ";
 pub const SECURITY_FIX_SPEC_LINE: &str = "Security fix Spec: ";
 pub const STAGED_PROPOSAL_MARKER: &str = "Proposed public issue:";

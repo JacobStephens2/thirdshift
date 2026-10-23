@@ -26,6 +26,9 @@ pub enum Kind {
     SecurityReproduction(usize),
     /// `security-fix-publishing`.
     SecurityFixPublishing,
+    /// The recheck of a fixed finding's proof-of-concept test against the
+    /// merged Base branch, `security-close-check`.
+    SecurityCloseCheck,
 }
 
 impl Kind {
@@ -41,13 +44,14 @@ impl Kind {
             Self::SecurityAudit => "security-audit".to_string(),
             Self::SecurityReproduction(n) => format!("security-reproduction-{n}"),
             Self::SecurityFixPublishing => "security-fix-publishing".to_string(),
+            Self::SecurityCloseCheck => "security-close-check".to_string(),
         }
     }
 
     /// The kind `token` names, if any. A numbered kind's number is read as
     /// `--session repair` has always read a Repair's.
     fn read(token: &str) -> Option<Self> {
-        const UNNUMBERED: [Kind; 7] = [
+        const UNNUMBERED: [Kind; 8] = [
             Kind::Implementation,
             Kind::SpecReview,
             Kind::SecurityReview,
@@ -55,6 +59,7 @@ impl Kind {
             Kind::ArchitectureReview,
             Kind::SecurityAudit,
             Kind::SecurityFixPublishing,
+            Kind::SecurityCloseCheck,
         ];
         let numbered = |prefix: &str| {
             let n = token.strip_prefix(prefix)?.parse::<u32>().ok()?;
@@ -129,6 +134,7 @@ impl Logged {
             (Kind::SecurityAudit, _) => Stage::SecurityAudit,
             (Kind::SecurityReproduction(_), _) => Stage::SecurityReproduction,
             (Kind::SecurityFixPublishing, _) => Stage::SecurityFixPublishing,
+            (Kind::SecurityCloseCheck, _) => Stage::SecurityCloseCheck,
         }
     }
 }
@@ -158,7 +164,7 @@ mod tests {
     use super::*;
 
     /// Every kind, the numbered ones with a number of their own.
-    const KINDS: [(Kind, &str); 8] = [
+    const KINDS: [(Kind, &str); 9] = [
         (Kind::Implementation, "implement"),
         (Kind::SpecReview, "spec-review"),
         (Kind::Repair(3), "repair-3"),
@@ -167,6 +173,7 @@ mod tests {
         (Kind::SecurityAudit, "security-audit"),
         (Kind::SecurityReproduction(12), "security-reproduction-12"),
         (Kind::SecurityFixPublishing, "security-fix-publishing"),
+        (Kind::SecurityCloseCheck, "security-close-check"),
     ];
 
     #[test]
@@ -220,6 +227,11 @@ mod tests {
                 Kind::SecurityFixPublishing,
                 "Security fix publishing",
                 "Security fix publishing",
+            ),
+            (
+                Kind::SecurityCloseCheck,
+                "Security close check",
+                "Security close check",
             ),
         ];
         for (kind, stage, resume_stage) in stages {

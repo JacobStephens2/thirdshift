@@ -28,6 +28,8 @@ pub struct Flags {
     pub base_fix: Option<BaseFixAsk>,
     /// What `security-fix` or `no-security-fix` asked for.
     pub security_fix: Option<crate::security::FixAsk>,
+    /// What `security-close` or `no-security-close` asked for.
+    pub security_close: Option<crate::security::CloseAsk>,
     /// What security-review or no-security-review asked for.
     pub security_review: Option<crate::security::review::Ask>,
     /// What `harness <name>`, `model <name>` and `effort <level>` asked for.
@@ -199,6 +201,20 @@ impl Flags {
             None => config.security_fix.unwrap_or(false),
         }
     }
+
+    /// Whether a Security run whose fix merged may close the finding it
+    /// fixed: as `security-close` or `no-security-close` asked, else as
+    /// `config` says, and only when fixing is also allowed.
+    pub fn security_close_allowed(&self, config: &UserConfig) -> bool {
+        if !self.security_fix_allowed(config) {
+            return false;
+        }
+        match self.security_close {
+            Some(crate::security::CloseAsk::Allow) => true,
+            Some(crate::security::CloseAsk::Forbid) => false,
+            None => config.security_close.unwrap_or(false),
+        }
+    }
     /// Whether any flag here is for the Spec run or Run that a Pass
     /// dispatches: every one but `email` and `no-email`,
     /// which ask that run for its own Run notification.
@@ -289,6 +305,7 @@ mod tests {
             harness: harness::Settings::default(),
             security_harness: None,
             security_fix: None,
+            security_close: None,
             security_review: false,
         }
     }
@@ -410,6 +427,7 @@ mod tests {
     fn each_flag_decides_its_ask_whatever_the_user_config_says() {
         let against = Flags {
             security_fix: None,
+            security_close: None,
             security_review: None,
             goal: Some(Goal::ReadyForReview),
             email: Some(NotificationAsk::Skip),
@@ -438,6 +456,7 @@ mod tests {
 
         let for_it = Flags {
             security_fix: None,
+            security_close: None,
             security_review: None,
             goal: Some(Goal::Merged),
             email: Some(to("flag@example.com")),
@@ -531,11 +550,64 @@ mod tests {
         }
     }
 
+    #[test]
+    fn security_close_needs_fixing_and_follows_word_then_setting() {
+        use crate::security::{CloseAsk, FixAsk};
+        for (fix_word, fix_setting, close_word, close_setting, expected) in [
+            (Some(FixAsk::Allow), None, Some(CloseAsk::Allow), None, true),
+            (Some(FixAsk::Allow), None, None, Some(true), true),
+            (Some(FixAsk::Allow), None, None, None, false),
+            (
+                Some(FixAsk::Allow),
+                None,
+                Some(CloseAsk::Forbid),
+                Some(true),
+                false,
+            ),
+            (None, Some(true), None, Some(true), true),
+            (None, Some(true), None, None, false),
+            (None, Some(true), Some(CloseAsk::Forbid), Some(true), false),
+            // Closing never takes effect when fixing is not allowed.
+            (
+                Some(FixAsk::Allow),
+                Some(false),
+                Some(CloseAsk::Allow),
+                Some(true),
+                true,
+            ),
+            (None, Some(false), Some(CloseAsk::Allow), Some(true), false),
+            (None, Some(false), None, Some(true), false),
+            (
+                Some(FixAsk::Forbid),
+                Some(true),
+                Some(CloseAsk::Allow),
+                Some(true),
+                false,
+            ),
+            (Some(FixAsk::Forbid), Some(true), None, Some(true), false),
+        ] {
+            let flags = Flags {
+                security_fix: fix_word,
+                security_close: close_word,
+                ..Flags::default()
+            };
+            let mut config = no_settings();
+            config.security_fix = fix_setting;
+            config.security_close = close_setting;
+            assert_eq!(
+                flags.security_close_allowed(&config),
+                expected,
+                "fix {fix_word:?}/{fix_setting:?} close {close_word:?}/{close_setting:?}"
+            );
+        }
+    }
+
     /// Every flag a Pass takes for the run it
     /// dispatches, with `email` for its own Run notification.
     fn dispatch_flags() -> Flags {
         Flags {
             security_fix: None,
+            security_close: None,
             security_review: None,
             goal: Some(Goal::Merged),
             email: Some(to("flag@example.com")),

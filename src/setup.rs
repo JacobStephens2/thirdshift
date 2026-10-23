@@ -1232,6 +1232,7 @@ wait_minutes = 60
 [security]
 harness = \"codex\"
 fix = false
+close = false
 review = false
 
 [harness]
