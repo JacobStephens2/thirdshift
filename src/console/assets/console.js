@@ -215,6 +215,21 @@ async function refreshPeek() {
   }
 }
 
+// A live refresh replaces the pane; keep a copy's status and its by-hand selection.
+function keepCopy() {
+  const old = content.querySelector('.peek-cli');
+  if (!old) return () => {};
+  const status = old.querySelector('[role="status"]').textContent;
+  const selection = getSelection();
+  const selected = old.contains(selection.anchorNode) && selection.toString() === old.querySelector('code').textContent;
+  return () => {
+    const fresh = content.querySelector('.peek-cli');
+    if (!fresh) return;
+    fresh.querySelector('[role="status"]').textContent = status;
+    if (selected) selection.selectAllChildren(fresh.querySelector('code'));
+  };
+}
+
 async function loadPeek(url) {
   pendingPeek?.abort();
   const request = new AbortController();
@@ -224,8 +239,10 @@ async function loadPeek(url) {
     if (!response.ok) throw new Error('Details unavailable');
     const html = await response.text();
     if (request.signal.aborted) return;
+    const restoreCopy = keepCopy();
     // Only the server's escaped show template is inserted, never a log.
     content.replaceChildren(document.createRange().createContextualFragment(html));
+    restoreCopy();
     if (content.querySelector('[data-live="true"]')) startUpdates();
     else stopPeekUpdates();
   } catch (error) {
@@ -270,15 +287,16 @@ for (const [letter, target] of targets) {
 }
 
 content.addEventListener('click', async event => {
-  const copy = event.target.closest('.peek-cli button');
+  const copy = event.target.closest('.peek-cli [data-copy-cli]');
   if (!copy) return;
-  const status = copy.parentElement.querySelector('[role="status"]');
+  const line = copy.closest('.peek-cli');
+  const status = line.querySelector('[role="status"]');
   try {
     await navigator.clipboard.writeText(copy.dataset.copyCli);
     status.textContent = 'CLI copied.';
   } catch {
     // An insecure origin or refused permission still leaves the text ready to copy by hand.
-    getSelection().selectAllChildren(copy.parentElement.querySelector('code'));
+    getSelection().selectAllChildren(line.querySelector('code'));
     status.textContent = 'Selected; copy it with your keyboard.';
   }
 });

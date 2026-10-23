@@ -796,6 +796,41 @@ test('Command details selects its show command when the clipboard is refused', a
   assert.equal(await page.evaluate(() => getSelection().toString()), `thirdshift show '${selector}' --json`);
 });
 
+test('Command details keeps its fallback selection across a live refresh', { skip: process.platform !== 'linux' }, async t => {
+  const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
+  const start = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const path = join(dir, '203-fixture.command.json');
+  const session = join(home, 'copy-session.logs.jsonl');
+  const fixture = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+  Object.assign(fixture, { kind: 'Run', process_id: server.pid, process_start: start, outcome: null, ended_at: null, session_log: session });
+  fixture.issue.number = 203;
+  fixture.stages = [{ name: 'implement', began_at: new Date().toISOString(), session_log: session }];
+  await writeFile(path, JSON.stringify(fixture));
+  await writeFile(join(dir, '203-fixture.log'), 'command');
+  await writeFile(session, traceRecord('session'));
+  try {
+    const page = await pageFor(t);
+    await page.addInitScript(() => {
+      navigator.clipboard.writeText = () => Promise.reject(new DOMException('refused', 'NotAllowedError'));
+    });
+    await page.goto(origin);
+    await page.locator('[data-group="working"] > summary').click();
+    const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#203$/ }) });
+    await row.locator('.peek-link').click();
+    await page.locator('#peek [data-live="true"]').waitFor();
+    await page.locator('#peek').getByRole('button', { name: 'Copy CLI', exact: true }).click();
+    await page.locator('#peek').getByRole('status').filter({ hasText: 'Selected; copy it with your keyboard.' }).waitFor();
+    const cli = await page.evaluate(() => getSelection().toString());
+    assert.match(cli, /^thirdshift show '.*' --json$/);
+    const before = await page.locator('#peek .peek-cli').elementHandle();
+    await appendFile(session, traceRecord(' growth'));
+    await appendFile(join(dir, '203-fixture.log'), ' more');
+    await page.waitForFunction(old => !old.isConnected, before, { timeout: 5000 });
+    assert.equal(await page.evaluate(() => getSelection().toString()), cli);
+  } finally { await rm(path, { force: true }); }
+});
+
 test('Logs rows open the shared reader and page keys work from the reader', async t => {
   const page = await pageFor(t);
   await page.goto(`${origin}/?page=logs`);
