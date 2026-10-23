@@ -103,6 +103,30 @@ pub(super) fn historical_command(
     Ok(command)
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn readings(show: Option<&str>) -> Readings {
+        Readings {
+            conversation: String::new(),
+            waterfall: Vec::new(),
+            show: show.map(str::to_owned),
+            model_evidence: Value::Null,
+        }
+    }
+
+    #[test]
+    fn compare_still_catches_a_changed_latest_event() {
+        let readers = readings(Some("Bash: cargo test"))
+            .compare(&readings(Some("Bash: cargo clippy")));
+        assert_eq!(readers["show"], false);
+        let readers =
+            readings(Some("Bash: cargo test")).compare(&readings(Some("Bash: cargo test")));
+        assert_eq!(readers["show"], true);
+    }
+}
+
 /// Prefer durable Harness evidence. For very old logs lacking it, recognize
 /// protocol envelopes rather than assuming that every Session ran on Claude.
 pub(super) fn harness(text: &str) -> Option<Harness> {
