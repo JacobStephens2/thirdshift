@@ -10,7 +10,7 @@ use anyhow::Result;
 use notify::{Event, EventKind, RecursiveMode, Watcher};
 use tokio::sync::watch;
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Copy, Default, PartialEq)]
 pub(super) struct Revision {
     pub commands: u64,
     pub accounts: u64,
@@ -94,6 +94,15 @@ impl Paths {
             }
         };
         for path in event.paths {
+            // Parent-directory mtimes change for unrelated children and our
+            // own account/log writes. File events carry the actual change.
+            if matches!(
+                event.kind,
+                EventKind::Modify(notify::event::ModifyKind::Metadata(_))
+            ) && path.is_dir()
+            {
+                continue;
+            }
             if path == self.root.join("config.toml") || self.root.starts_with(&path) {
                 revision.commands += 1;
                 revision.accounts += 1;
@@ -196,44 +205,50 @@ pub(super) fn observe(
     reconcile(&mut watcher, &mut watched, &paths.read().unwrap());
     reconcile(&mut recovery, &mut recovered, &paths.read().unwrap());
     let (sender, changes) = watch::channel(Revision::default());
-    let observer =
-        tokio::spawn(async move {
-            let mut previous = Revision::default();
-            loop {
-                let fallback =
-                    match tokio::time::timeout(Duration::from_secs(60), notifications.changed())
-                        .await
-                    {
-                        Ok(Ok(())) => false,
-                        Err(_) => true,
-                        Ok(Err(_)) => {
-                            tokio::time::sleep(Duration::from_secs(60)).await;
-                            true
-                        }
-                    };
-                // Coalesce an atomic save and bursts of log appends into one notice.
-                if !fallback {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
+    let observer = tokio::spawn(async move {
+        let mut previous = Revision::default();
+        let mut recovery_tick = tokio::time::interval(Duration::from_secs(60));
+        recovery_tick.tick().await;
+        loop {
+            let fallback = tokio::select! {
+                _ = recovery_tick.tick() => true,
+                result = notifications.changed() => {
+                    if result.is_err() { return; }
+                    false
                 }
-                if fallback && let Err(error) = recovery.poll() {
-                    eprintln!("thirdshift Console: filesystem recovery: {error}");
-                }
-                let revision = *notifications.borrow_and_update();
-                if revision.accounts != previous.accounts
-                    && let Ok(config) = crate::config::UserConfig::load()
-                {
-                    paths.write().unwrap().logs = observed_path(&config.logs_dir);
-                }
-                reconcile(&mut watcher, &mut watched, &paths.read().unwrap());
-                reconcile(&mut recovery, &mut recovered, &paths.read().unwrap());
-                if (revision.commands, revision.accounts, revision.executable)
-                    != (previous.commands, previous.accounts, previous.executable)
-                {
-                    sender.send_replace(revision);
-                }
-                previous = revision;
+            };
+            // Coalesce an atomic save and bursts of log appends into one notice.
+            if !fallback {
+                tokio::time::sleep(Duration::from_millis(100)).await;
             }
-        });
+            if fallback && let Err(error) = recovery.poll() {
+                eprintln!("thirdshift Console: filesystem recovery: {error}");
+            }
+            let revision = *notifications.borrow_and_update();
+            if (fallback || revision.accounts != previous.accounts)
+                && let Ok(config) = crate::config::UserConfig::load()
+            {
+                paths.write().unwrap().logs = observed_path(&config.logs_dir);
+            }
+            reconcile(&mut watcher, &mut watched, &paths.read().unwrap());
+            reconcile(&mut recovery, &mut recovered, &paths.read().unwrap());
+            sender.send_if_modified(|current| {
+                let before = *current;
+                if revision.commands != previous.commands {
+                    current.commands += 1;
+                }
+                // Session expiry follows wall time even when no file changes.
+                if fallback || revision.accounts != previous.accounts {
+                    current.accounts += 1;
+                }
+                if revision.executable != previous.executable {
+                    current.executable += 1;
+                }
+                *current != before
+            });
+            previous = revision;
+        }
+    });
     Ok((changes, notifier, observer))
 }
 
@@ -301,5 +316,33 @@ mod tests {
         }
         assert_eq!(revision.accounts, 2);
         assert_eq!(revision.commands, 2);
+    }
+
+    #[test]
+    fn directory_metadata_alone_does_not_invalidate_the_inbox() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join(".thirdshift");
+        std::fs::create_dir(&root).unwrap();
+        let paths = Paths::new(
+            root.clone(),
+            root.join("logs"),
+            temp.path().join("thirdshift"),
+        );
+        let mut revision = Revision::default();
+        for path in [
+            temp.path().canonicalize().unwrap(),
+            root.canonicalize().unwrap(),
+        ] {
+            paths.notice(
+                Ok(
+                    Event::new(EventKind::Modify(notify::event::ModifyKind::Metadata(
+                        notify::event::MetadataKind::WriteTime,
+                    )))
+                    .add_path(path),
+                ),
+                &mut revision,
+            );
+        }
+        assert!(revision == Revision::default());
     }
 }

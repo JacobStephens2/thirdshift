@@ -134,6 +134,52 @@ impl<'a> Observation<'a> {
     }
 }
 
+fn observations(entries: &[Entry]) -> impl Iterator<Item = Observation<'_>> {
+    entries.iter().flat_map(|entry| {
+        let (outer, ready): (_, Vec<_>) = match entry {
+            Entry::Record(command) => (
+                Observation::Record(command),
+                command
+                    .dispatched
+                    .iter()
+                    .filter(|run| Observation::Record(run).facts().ready)
+                    .map(Observation::Record)
+                    .collect(),
+            ),
+            Entry::History(command) => (Observation::History(command), Vec::new()),
+        };
+        std::iter::once(outer).chain(ready)
+    })
+}
+
+pub(super) fn next_change(
+    entries: &[Entry],
+    now: DateTime<Local>,
+    days: i64,
+) -> Option<DateTime<Local>> {
+    observations(entries)
+        .filter_map(|observation| {
+            let facts = observation.facts();
+            if facts.state == "live" || facts.ready {
+                return None;
+            }
+            let ended = time(facts.ended_at);
+            let recent = ended.and_then(|at| at.checked_add_signed(chrono::Duration::days(1)));
+            let retained = ended
+                .or_else(|| time(Some(facts.started_at)))
+                .and_then(|at| at.checked_add_signed(chrono::Duration::days(days)));
+            [recent, retained]
+                .into_iter()
+                .flatten()
+                // Grouping includes the exact cutoff; cross it before waking.
+                .filter_map(|at| at.checked_add_signed(chrono::Duration::nanoseconds(1)))
+                .map(|at| at.with_timezone(&Local))
+                .filter(|at| *at > now)
+                .min()
+        })
+        .min()
+}
+
 pub(super) fn list(
     entries: &[Entry],
     now: DateTime<Local>,
@@ -143,24 +189,7 @@ pub(super) fn list(
     // An accepted duration can exceed chrono's calendar. In that case every
     // representable timestamp is inside the requested retention period.
     let cutoff = now.checked_sub_signed(chrono::Duration::days(days));
-    let observations: Vec<_> = entries
-        .iter()
-        .flat_map(|entry| {
-            let (outer, ready): (_, Vec<_>) = match entry {
-                Entry::Record(command) => (
-                    Observation::Record(command),
-                    command
-                        .dispatched
-                        .iter()
-                        .filter(|run| Observation::Record(run).facts().ready)
-                        .map(Observation::Record)
-                        .collect(),
-                ),
-                Entry::History(command) => (Observation::History(command), Vec::new()),
-            };
-            std::iter::once(outer).chain(ready)
-        })
-        .collect();
+    let observations: Vec<_> = observations(entries).collect();
     let starts: Vec<_> = observations.iter().copied().map(issue_starts).collect();
     let mut latest = BTreeMap::new();
     for starts in &starts {

@@ -17,13 +17,23 @@ final-status-level = "slow"
 #   (src/child_run.rs), started from the executable's path by a Spec run.
 # - native Console process-exit notifications (src/console/watching.rs),
 #   exercised through HTTP by tests/console/watching.rs.
+# - canonical filesystem event paths from macOS FSEvents (src/console/changes.rs),
+#   exercised by command pushes, account revocation and executable replacement.
 # The console installer's Linux-only refusal (src/console/install.rs) has no
 # test that runs off Linux, so nothing here covers it.
 [profile.macos-gate]
 default-filter = """
 (binary_id(thirdshift::bin/thirdshift) & test(/^(logs|skills|child_run)::/))
 | binary_id(thirdshift::stop)
-| (binary_id(thirdshift::console) & test(/^watching::/))
+| (binary_id(thirdshift::bin/thirdshift) & test(/^console::changes::tests::/))
+| (binary_id(thirdshift::console) & (
+    test(/^watching::/)
+    | test(=command_changes_push_events_over_http)
+    | test(=accounts::cli_and_allowlist_changes_revoke_http_sessions_without_deleting_the_account)
+    | test(=accounts::an_open_inbox_stream_closes_when_its_session_is_revoked)
+    | test(=accounts::an_open_log_stream_closes_when_cli_sign_out_revokes_its_session)
+    | test(=replacing_the_binary_executes_the_replacement_with_the_original_arguments)
+))
 | (binary_id(thirdshift::spec_run) & (
     test(=a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr)
     | test(=a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as_interrupted)

@@ -140,3 +140,56 @@ fn a_silent_transition_wakes_the_inbox_without_a_file_change() {
     }
     assert!(began.elapsed() < Duration::from_secs(3));
 }
+
+#[test]
+fn elapsed_time_updates_inbox_groups_and_retention_without_a_file_change() {
+    for (outcome, days, remains) in [("merged", 7, true), ("failed", 1, false)] {
+        let home = tempfile::tempdir().unwrap();
+        configure(home.path());
+        fs::write(
+            home.path().join(".thirdshift/config.toml"),
+            format!("[console]\nport = 0\n[inbox]\ndays = {days}\n"),
+        )
+        .unwrap();
+        let mut fixture = record(home.path(), 81, Some(outcome), 0);
+        fixture["issue"]["title"] = json!("Elapsed boundary fixture");
+        fixture["ended_at"] = json!(
+            (chrono::Local::now() - chrono::Duration::days(1) + chrono::Duration::seconds(2))
+                .to_rfc3339()
+        );
+        write_record(home.path(), 81, &fixture);
+        let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+        assert!(
+            console
+                .get("/")
+                .text()
+                .unwrap()
+                .contains("Elapsed boundary fixture")
+        );
+        let response = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap()
+            .get(format!("{}/events", console.address))
+            .send()
+            .unwrap();
+        let mut stream = BufReader::new(response);
+        let began = std::time::Instant::now();
+        loop {
+            assert!(sse_event(&mut stream).contains("event: commands"));
+            let html = console.get("/").text().unwrap();
+            match html.find("Elapsed boundary fixture") {
+                None if !remains => break,
+                Some(at) if remains => {
+                    let prefix = &html[..at];
+                    let group = &prefix[prefix.rfind("data-group=\"").unwrap()..];
+                    if group.starts_with("data-group=\"resolved\"") {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        assert!(began.elapsed() < Duration::from_secs(4));
+    }
+}

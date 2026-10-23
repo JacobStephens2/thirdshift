@@ -33,6 +33,10 @@ pub(super) struct Snapshot {
 }
 
 impl Snapshot {
+    pub(super) fn next_inbox_change(&self, days: i64) -> Option<DateTime<Local>> {
+        inbox::next_change(&self.commands, self.now, days)
+    }
+
     pub(super) fn entries(&self) -> &[Entry] {
         &self.commands
     }
