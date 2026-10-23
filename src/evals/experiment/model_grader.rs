@@ -254,7 +254,10 @@ fn blind(text: &str) -> String {
             let kind = table.get_or_insert_with(|| {
                 if cells.iter().any(|cell| fields.contains(cell)) {
                     Table::Identities
-                } else if cells.len() == 2 && cells[1] == "value" {
+                } else if cells.len() == 2
+                    && (cells[1] == "value"
+                        || ["field", "key", "attribute", "property", "setting"].contains(&cells[0]))
+                {
                     Table::KeyValue
                 } else {
                     Table::Findings
