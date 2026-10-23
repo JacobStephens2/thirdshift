@@ -1393,7 +1393,7 @@ fn a_tickets_run_offers_the_spec_runs_command_with_a_base_fix_and_the_spec_run_r
              thirdshift: #21: Base check: test\n\
              thirdshift: #21: Retry with: thirdshift {spec_url} --email me@example.com parallel 1 base-fix\n\
              thirdshift: #21: Or set: base.fix = true in ~/.thirdshift/config.toml, \
-             to allow a Base fix for every Run on this machine\n\
+             to allow a Base fix for every Ticket run on this machine\n\
              thirdshift: #21: session trace: "
         ),
     );
@@ -1473,7 +1473,7 @@ fn two_tickets_with_the_same_inherited_failure() -> Scenario {
 /// issue, so neither meets a Spec branch already fixed.
 const BOTH_TICKETS_HAVE_LOOKED: &str = r#"
 for _ in $(seq 200); do
-    looked="$(grep -A1 '"issue",' "$FAKE_GH_RECORD" | grep -c '"list",' || true)"
+    looked="$(grep -Fc 'repos/acme/widgets/issues?state=open&labels=base-fix&' "$FAKE_GH_RECORD" || true)"
     [ "$looked" -ge 2 ] && break
     sleep 0.05
 done
@@ -2327,7 +2327,7 @@ fn a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as
     assert_eq!(sessions_by_issue(&scenario), ["21"]);
     assert_eq!(
         scenario.origin_log("issue-21").unwrap()[0],
-        "thirdshift: failed run (interrupted)"
+        "thirdshift: failed ticket run (interrupted)"
     );
     assert_eq!(
         scenario.origin_file("issue-21", "wip.txt").as_deref(),
@@ -2435,7 +2435,7 @@ fn an_existing_spec_pr_accounts_for_every_drained_ticket_after_interruption() {
         );
         assert_eq!(
             scenario.origin_log(&format!("issue-{ticket}")).unwrap()[0],
-            "thirdshift: failed run (interrupted)"
+            "thirdshift: failed ticket run (interrupted)"
         );
         scenario.assert_cleaned_up(&format!("issue-{ticket}"));
     }
@@ -2507,7 +2507,7 @@ done
         );
         assert_eq!(
             scenario.origin_log(&format!("issue-{ticket}")).unwrap()[0],
-            "thirdshift: failed run (interrupted)"
+            "thirdshift: failed ticket run (interrupted)"
         );
         assert_contains(
             &result.stderr,

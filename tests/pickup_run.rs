@@ -245,7 +245,7 @@ exec "{git}" "$@"
             r#"#!/bin/sh
 if [ "$HOLD_READY_READ" = 1 ]; then
     case "$1 $2 $*" in
-    'issue list '*ready-for-agent*)
+    'api --paginate '*ready-for-agent*)
         if [ ! -f "$TMPDIR/listing-read" ]; then
             "$(dirname "$0")/real/gh" "$@" > "$TMPDIR/listing-answer" || exit $?
             touch "$TMPDIR/listing-read"
@@ -1488,7 +1488,7 @@ fn the_notification_of_a_run_left_ready_for_review_is_that_runs() {
             "Result:       ready for review\n\
              Issue:        https://github.com/acme/widgets/issues/7\n\
              Title:        Sharpen the widgets\n\
-             Command:      Pickup run, which dispatched a Run\n\
+             Command:      Pickup run, which dispatched a Ticket run\n\
              Pull request: {}\n\
              Session trace:  {}\n\
              Command log:  {}\n\
@@ -1520,7 +1520,7 @@ fn the_notification_of_a_merge_run_says_it_merged() {
         "[thirdshift] acme/widgets#7 Sharpen the widgets: merged"
     );
     let pull_request = format!(
-        "Result:       merged\nIssue:        https://github.com/acme/widgets/issues/7\nTitle:        Sharpen the widgets\nCommand:      Pickup run, which dispatched a Run\nPull request: {}\n",
+        "Result:       merged\nIssue:        https://github.com/acme/widgets/issues/7\nTitle:        Sharpen the widgets\nCommand:      Pickup run, which dispatched a Ticket run\nPull request: {}\n",
         pr["url"].as_str().unwrap()
     );
     assert!(text.starts_with(&pull_request), "{text}");
@@ -1545,7 +1545,7 @@ fn the_notification_of_a_failed_run_has_its_pull_request_and_its_cause() {
             "Result:       failed\n\
              Issue:        https://github.com/acme/widgets/issues/7\n\
              Title:        Sharpen the widgets\n\
-             Command:      Pickup run, which dispatched a Run\n\
+             Command:      Pickup run, which dispatched a Ticket run\n\
              Pull request: {}\n\
              Cause:        claude exited 3\n\
              Session trace:  ",
@@ -1827,18 +1827,11 @@ fn a_claim_limit_skip_names_every_holder_lowest_first_without_extra_github_reque
     assert_eq!(
         scenario.gh_calls(),
         ["closed", "open"].map(|state| vec![
-            "issue",
-            "list",
-            "--state",
-            state,
-            "--repo",
-            "acme/widgets",
-            "--label",
-            "in-progress",
-            "--json",
-            "url,title,labels",
-            "--limit",
-            "1000",
+            "api".to_string(),
+            "--paginate".into(),
+            "--jq".into(),
+            ".[]".into(),
+            format!("repos/acme/widgets/issues?state={state}&labels=in-progress&sort=created&direction=desc&per_page=100"),
         ])
     );
     assert_skipped(

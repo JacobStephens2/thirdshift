@@ -209,6 +209,39 @@ test("the Inbox works without JavaScript and Focus auto follows system light and
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(18, 18, 20)");
 });
 
+test("idle explanations stay visible with hidden sections, on phones and without JavaScript", async t => {
+  const config = join(home, '.thirdshift/config.toml');
+  const activity = join(home, '.thirdshift/logs/acme/widgets/activity.log');
+  const ready = join(home, '.thirdshift/logs/acme/widgets/commands/issue/203-fixture.command.json');
+  const fixture = JSON.parse(await readFile(join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json'), 'utf8'));
+  Object.assign(fixture, { outcome: 'ready for review', pull_request: 'https://github.com/acme/widgets/pull/203' });
+  fixture.issue.number = 203;
+  await writeFile(ready, JSON.stringify(fixture));
+  await writeFile(config, '[console]\nport = 0\nhidden_sections = ["needs-you", "ready-for-review", "landing", "working", "done", "resolved"]\n');
+  await writeFile(activity, '2026-01-01 12:00:00 Pickup run skipped: no Ready issue on acme/widgets <script>unsafe</script>\n');
+  try {
+    for (const javaScriptEnabled of [false, true]) {
+      const page = await pageFor(t, { javaScriptEnabled, viewport: { width: 390, height: 844 } });
+      await page.goto(origin);
+      const notice = page.getByRole('region', { name: 'No running Commands' });
+      assert.equal(await notice.isVisible(), true);
+      assert.match(await notice.textContent(), /Pickup run idle on acme\/widgets: no Ready issue/);
+      assert.equal(await notice.locator('script').count(), 0);
+      for (const [label, section] of [['Needs you', 'needs-you'], ['Ready for review', 'ready-for-review']]) {
+        assert.equal(await notice.getByRole('link', { name: label, exact: true }).count(), 0, 'hidden sections must not have dead links');
+        assert.ok((await notice.textContent()).includes(`${label} (hidden; show it with Sections or thirdshift console sections --show ${section})`));
+      }
+      assert.equal(await notice.getByRole('link', { name: 'Cron jobs', exact: true }).getAttribute('href'), '/cronjobs');
+      assert.equal(await page.locator('#inbox > details:visible').count(), 0);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    }
+  } finally {
+    await rm(activity, { force: true });
+    await rm(ready, { force: true });
+    await writeFile(config, '[console]\nport = 0\n');
+  }
+});
+
 test("explicit Focus light and dark override the system preference", async t => {
   const page = await pageFor(t, { javaScriptEnabled: false });
   const config = join(home, ".thirdshift/config.toml");
@@ -396,6 +429,7 @@ for (const storage of ['blocked', 'malformed']) {
     try {
       const page = await pageFor(t);
       await page.goto(origin);
+      assert.equal(await page.getByRole('region', { name: 'No running Commands' }).count(), 0);
       await page.locator('[data-group="working"] > summary').click();
       const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#202$/ }) });
       const id = await row.getAttribute('id');
@@ -428,6 +462,7 @@ for (const storage of ['blocked', 'malformed']) {
       await utimes(log, old, old);
       await utimes(session, old, old);
       await page.waitForFunction(id => document.getElementById(id).dataset.state === 'Silent', id);
+      assert.equal(await page.getByRole('region', { name: 'No running Commands' }).count(), 0);
       assert.equal(await row.locator('.state').evaluate(state => getComputedStyle(state).animationIterationCount), '3');
       assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
       await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -439,6 +474,7 @@ for (const storage of ['blocked', 'malformed']) {
       fixture.outcome = 'merged'; fixture.ended_at = new Date().toISOString();
       await writeFile(path, JSON.stringify(fixture));
       await page.waitForFunction(() => document.documentElement.dataset.live === 'false');
+      await page.getByRole('region', { name: 'No running Commands' }).waitFor();
       await page.emulateMedia({ reducedMotion: 'no-preference' });
       assert.equal(await page.evaluate(() => document.getAnimations().length), 0, 'an ended Command must stop the garden and conveyor');
     } finally {
@@ -447,6 +483,78 @@ for (const storage of ['blocked', 'malformed']) {
     }
   });
 }
+
+test('Landing, Ready and Stopping rows carry their state, Theme tags and still-able motion', { skip: process.platform !== 'linux' }, async t => {
+  // The live fixtures borrow the Console's own process identity, as above.
+  const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
+  const start = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const base = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+  const now = new Date().toISOString();
+  const live = stage => ({ kind: 'Run', process_id: server.pid, process_start: start, ended_at: null, outcome: null, cause: null, stages: [{ name: stage, began_at: now, session_log: null }] });
+  const fixtures = {
+    211: live('CI watch'),
+    212: { ended_at: now, outcome: 'ready for review', cause: null, pull_request: 'https://github.com/acme/widgets/pull/212' },
+    213: live('implement'),
+  };
+  const stop = join(dir, '213-fixture.command.stop.json');
+  const paths = [stop];
+  for (const [number, change] of Object.entries(fixtures)) {
+    const path = join(dir, `${number}-fixture.command.json`);
+    paths.push(path, join(dir, `${number}-fixture.log`));
+    await writeFile(path, JSON.stringify({ ...base, ...change, issue: { ...base.issue, number: Number(number), url: `https://github.com/acme/widgets/issues/${number}` } }));
+    await writeFile(join(dir, `${number}-fixture.log`), 'command\n');
+  }
+  try {
+    const page = await pageFor(t);
+    await page.goto(origin);
+    for (const group of ['ready for review', 'landing', 'working']) await page.locator(`[data-group="${group}"] > summary`).click();
+    const row = number => page.locator(`[data-group] > .commands > .command:has(> .row-head > .subject a[href$="/issues/${number}"])`);
+    const look = (number, tag) => row(number).evaluate((node, tag) => {
+      const probe = document.createElement('span');
+      document.body.append(probe);
+      const token = name => { probe.style.color = `var(--${name})`; return getComputedStyle(probe).color; };
+      const want = { text: token(`tag-${tag}-text`), bg: token(`tag-${tag}-bg`), done: token('tag-done-bg') };
+      probe.remove();
+      const label = node.querySelector(':scope > .row-head > .state');
+      const style = getComputedStyle(label);
+      return { ...want, state: node.dataset.state, word: label.textContent, color: style.color, background: style.backgroundColor, marker: getComputedStyle(label, '::before').content, spin: getComputedStyle(label, '::before').animationName };
+    }, tag);
+    for (const theme of ['focus-light', 'signal-light']) {
+      await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      for (const [number, state, tag, group] of [[211, 'Landing', 'landing', 'landing'], [212, 'Ready', 'ready', 'ready for review']]) {
+        assert.equal(await row(number).evaluate(node => node.closest('[data-group]').dataset.group), group);
+        const seen = await look(number, tag);
+        assert.equal(seen.state, state, `${theme}: ${number}`);
+        assert.equal(seen.word, state, `${theme}: ${number}`);
+        assert.equal(seen.color, seen.text, `${theme}: ${state} tag text`);
+        assert.equal(seen.background, seen.bg, `${theme}: ${state} tag background`);
+        if (theme === 'signal-light') assert.notEqual(seen.background, seen.done, `${theme}: ${state} must not fall back to Done`);
+      }
+      const landing = await look(211, 'landing');
+      assert.notEqual(landing.marker, 'none', 'Landing keeps the live-activity marker');
+      assert.equal(landing.spin, 'working');
+      const working = await look(213, 'working');
+      assert.deepEqual([working.state, working.word, working.background, working.spin], ['live', 'live', working.bg, 'working']);
+    }
+    // A Stop request reaches the open Inbox through its live update.
+    await writeFile(stop, JSON.stringify({ who: 'fixture', requeue: false }));
+    await page.waitForFunction(() => document.querySelector('.command:has(> .row-head > .subject a[href$="/issues/213"])')?.dataset.state === 'Stopping');
+    assert.equal(await row(213).evaluate(node => node.closest('[data-group]').dataset.group), 'working');
+    const stripe = () => row(213).evaluate(node => ({ word: node.querySelector(':scope > .row-head > .state').textContent, height: getComputedStyle(node, '::after').height, motion: getComputedStyle(node, '::after').animationName, running: node.getAnimations({ subtree: true }).length }));
+    assert.deepEqual(await stripe(), { word: 'Stopping', height: '3px', motion: 'activity-drift', running: 1 });
+    await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
+    assert.deepEqual(await stripe(), { word: 'Stopping', height: '3px', motion: 'none', running: 0 });
+    assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
+    await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    assert.deepEqual(await stripe(), { word: 'Stopping', height: '3px', motion: 'none', running: 0 });
+    // Needs you rows keep their kind beside the new states.
+    assert.equal(await row(1).getAttribute('data-state'), 'Failed');
+  } finally {
+    await Promise.all(paths.map(path => rm(path, { force: true })));
+  }
+});
 
 test("a push keeps a Pass dispatch selected instead of its parent", async t => {
   const dir = join(home, '.thirdshift/logs/acme/widgets/commands/security');

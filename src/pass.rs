@@ -142,6 +142,29 @@ pub trait Outside {
         issue: &IssueUrl,
         succeeded: bool,
     ) -> Result<()>;
+    /// Re-run the private record's proof-of-concept test against the merged
+    /// Base branch `base`, now that it merged as `pr_url`, in the
+    /// reproduction sandbox.
+    fn recheck_security_fix(
+        &mut self,
+        base: &str,
+        record: &SecurityRecord,
+        pr_url: &str,
+    ) -> (Result<crate::security::close::Check>, Option<PathBuf>);
+    /// Name `pr_url` in the private record, then close it. Nothing is published.
+    fn close_security_record(
+        &mut self,
+        record: &SecurityRecord,
+        issue: &IssueUrl,
+        pr_url: &str,
+    ) -> Result<()>;
+    /// Note why the finding was left open, keeping it for the Day shift.
+    fn note_security_close_left_open(
+        &mut self,
+        record: &SecurityRecord,
+        issue: &IssueUrl,
+        reason: &str,
+    ) -> Result<()>;
     /// Run `dispatch` to its end, on the Harness the pass checked.
     fn dispatch(&mut self, dispatch: Dispatch) -> Ended;
 }
@@ -381,6 +404,41 @@ impl Outside for LaunchAndGitHub<'_> {
             succeeded,
         )
     }
+
+    fn recheck_security_fix(
+        &mut self,
+        base: &str,
+        record: &SecurityRecord,
+        pr_url: &str,
+    ) -> (Result<crate::security::close::Check>, Option<PathBuf>) {
+        logs::stage(logs::Stage::SecurityCloseCheck);
+        crate::security::close::recheck(
+            self.launch.git(),
+            self.repo,
+            base,
+            pr_url,
+            record,
+            self.harness,
+        )
+    }
+
+    fn close_security_record(
+        &mut self,
+        record: &SecurityRecord,
+        issue: &IssueUrl,
+        pr_url: &str,
+    ) -> Result<()> {
+        GitHub::new().close_security_record(&self.repo.slug(), record, issue, pr_url)
+    }
+
+    fn note_security_close_left_open(
+        &mut self,
+        record: &SecurityRecord,
+        issue: &IssueUrl,
+        reason: &str,
+    ) -> Result<()> {
+        GitHub::new().note_security_close_left_open(&self.repo.slug(), record, issue, reason)
+    }
 }
 
 #[cfg(test)]
@@ -449,6 +507,23 @@ mod in_memory {
             issue: u64,
             succeeded: bool,
         },
+        /// It re-ran this private record's proof-of-concept test against
+        /// this Base branch before closing it.
+        RecheckSecurityFix {
+            record: String,
+            base: String,
+        },
+        /// It named this pull request in the fix issue's private record,
+        /// then closed the record.
+        CloseSecurityRecord {
+            issue: u64,
+            pr: String,
+        },
+        /// It noted why the fix issue's finding was left open.
+        NoteSecurityCloseLeftOpen {
+            issue: u64,
+            reason: String,
+        },
         DispatchSecurityFix {
             issue: u64,
             is_spec: bool,
@@ -513,6 +588,12 @@ mod in_memory {
         session_log: Option<PathBuf>,
         /// How the run dispatched ends.
         ending: Option<Ended>,
+        /// How the close recheck ends, or the cause it fails with.
+        close_check: Option<crate::security::close::Check>,
+        close_check_error: Option<String>,
+        /// Whether closing the record, or noting why it stays open, fails.
+        close_failing: bool,
+        note_failing: bool,
         /// Every call made, in order.
         pub calls: Vec<Call>,
     }
@@ -539,6 +620,10 @@ mod in_memory {
                 review: Ok(None),
                 session_log: None,
                 ending: None,
+                close_check: None,
+                close_check_error: None,
+                close_failing: false,
+                note_failing: false,
                 calls: Vec::new(),
             }
         }
@@ -662,6 +747,33 @@ mod in_memory {
         /// Have the run dispatched end as `ending`.
         pub fn dispatched_ending(mut self, ending: Ended) -> Self {
             self.ending = Some(ending);
+            self
+        }
+
+        /// Have the close recheck end with `passes` and `detail`.
+        pub fn close_check(mut self, passes: bool, detail: &str) -> Self {
+            self.close_check = Some(crate::security::close::Check {
+                passes,
+                detail: detail.to_string(),
+            });
+            self
+        }
+
+        /// Make the close recheck fail with `cause`.
+        pub fn close_check_error(mut self, cause: &str) -> Self {
+            self.close_check_error = Some(cause.to_string());
+            self
+        }
+
+        /// Make closing the private record fail.
+        pub fn close_failing(mut self) -> Self {
+            self.close_failing = true;
+            self
+        }
+
+        /// Make noting why the record stays open fail.
+        pub fn note_failing(mut self) -> Self {
+            self.note_failing = true;
             self
         }
 
@@ -933,6 +1045,57 @@ mod in_memory {
                 issue: issue.number,
                 succeeded,
             });
+            Ok(())
+        }
+
+        fn recheck_security_fix(
+            &mut self,
+            base: &str,
+            record: &SecurityRecord,
+            _pr_url: &str,
+        ) -> (Result<crate::security::close::Check>, Option<PathBuf>) {
+            self.calls.push(Call::RecheckSecurityFix {
+                record: record.name(),
+                base: base.to_string(),
+            });
+            if let Some(cause) = self.close_check_error.take() {
+                return (Err(anyhow!(cause)), self.session_log.clone());
+            }
+            match self.close_check.take() {
+                Some(check) => (Ok(check), self.session_log.clone()),
+                None => panic!("a close recheck, with no close check scripted for it"),
+            }
+        }
+
+        fn close_security_record(
+            &mut self,
+            _record: &SecurityRecord,
+            issue: &IssueUrl,
+            pr_url: &str,
+        ) -> Result<()> {
+            self.calls.push(Call::CloseSecurityRecord {
+                issue: issue.number,
+                pr: pr_url.to_string(),
+            });
+            if self.close_failing {
+                bail!("gh: could not close the private record");
+            }
+            Ok(())
+        }
+
+        fn note_security_close_left_open(
+            &mut self,
+            _record: &SecurityRecord,
+            issue: &IssueUrl,
+            reason: &str,
+        ) -> Result<()> {
+            self.calls.push(Call::NoteSecurityCloseLeftOpen {
+                issue: issue.number,
+                reason: reason.to_string(),
+            });
+            if self.note_failing {
+                bail!("gh: could not note the private record");
+            }
             Ok(())
         }
     }

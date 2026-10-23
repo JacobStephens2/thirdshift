@@ -2,7 +2,7 @@
 
 # Continuation, with no pull request
 
-Starts the implement session when the Run is a Continuation of an Issue branch that has no pull request.
+Starts the implement session when the Ticket run is a Continuation of an Issue branch that has no pull request.
 
 ```
 /thirdshift-implement <Issue URL>

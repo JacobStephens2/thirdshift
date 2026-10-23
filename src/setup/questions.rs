@@ -1,7 +1,7 @@
 //! Setup's questions, asked through [`Outside`]: on the terminal, on stderr,
 //! with the answers read from stdin, so stdout stays empty. Each question's
 //! default answer, taken by pressing Enter, is the current value. The Resend
-//! API key is read hidden, and never shown.
+//! API key and Claude setup token are read hidden, and never shown.
 
 use std::path::Path;
 
@@ -31,10 +31,20 @@ pub struct Answers {
     pub launch_pull: bool,
     /// `security.fix`: Security runs may fix reproduced findings.
     pub security_fix: bool,
+    /// `security.close`: a Security run may close a finding its fix merged.
+    pub security_close: bool,
     pub security_review: bool,
     /// With Run notifications on, `email.always`, their settings; with them
     /// off, `None`, and the email settings stay as they were.
     pub notifications: Option<Notifications>,
+    /// A Claude setup token to save for Trials, independent of notifications.
+    pub claude_setup_token: Option<String>,
+}
+
+/// The entered secrets to persist together, with omitted values retained.
+pub struct CredentialEdits<'a> {
+    pub resend_key: Option<&'a str>,
+    pub claude_setup_token: Option<&'a str>,
 }
 
 impl Answers {
@@ -46,6 +56,7 @@ impl Answers {
             base_fix: self.base_fix,
             launch_pull: self.launch_pull,
             security_fix: self.security_fix,
+            security_close: self.security_close,
             security_review: self.security_review,
             notifications: self
                 .notifications
@@ -70,6 +81,16 @@ impl Answers {
         self.notifications
             .as_ref()
             .and_then(|notifications| notifications.key.as_deref())
+    }
+
+    /// No save is needed when both hidden answers were skipped or retained.
+    pub fn credential_edits(&self) -> Option<CredentialEdits<'_>> {
+        let resend_key = self.key();
+        let claude_setup_token = self.claude_setup_token.as_deref();
+        (resend_key.is_some() || claude_setup_token.is_some()).then_some(CredentialEdits {
+            resend_key,
+            claude_setup_token,
+        })
     }
 }
 
@@ -114,15 +135,19 @@ pub fn ask(
     found: Option<Source>,
 ) -> Result<Answers> {
     let harness = outside.ask_harness_settings(&current.harness)?;
-    let merge_always = yes_or_no(outside, "Every Run a Merge run?", current.merge_always)?;
+    let merge_always = yes_or_no(
+        outside,
+        "Every Ticket run Self-merges?",
+        current.merge_always,
+    )?;
     let base_fix = yes_or_no(
         outside,
-        "Every Run may start a Base fix when the Base branch's CI is red?",
+        "Every Ticket run may start a Base fix when the Base branch's CI is red?",
         current.base_fix,
     )?;
     let launch_pull = yes_or_no(
         outside,
-        "Every Run first fast-forwards your checkout of the Base branch?",
+        "Every Ticket run first fast-forwards your checkout of the Base branch?",
         current.launch_pull,
     )?;
     let security_fix = yes_or_no(
@@ -130,12 +155,33 @@ pub fn ask(
         "Security runs may fix reproduced findings?",
         current.security_fix.unwrap_or(false),
     )?;
+    let security_close = if security_fix {
+        yes_or_no(
+            outside,
+            "Security runs may close a finding their fix merged?",
+            current.security_close.unwrap_or(false),
+        )?
+    } else {
+        current.security_close.unwrap_or(false)
+    };
     let security_review = yes_or_no(
         outside,
-        "Runs review their change for Security findings?",
+        "Ticket runs review their change for Security findings?",
         current.security_review,
     )?;
     let notifications = ask_notifications(outside, current, found)?;
+    let on_enter = if outside.claude_setup_token_saved() {
+        "Enter keeps the saved one"
+    } else {
+        "Enter to skip"
+    };
+    let prompt = format!(
+        "Claude setup token from `claude setup-token` (Trials only; input hidden, {on_enter}): "
+    );
+    let claude_setup_token = outside
+        .read_hidden(&prompt)?
+        .ok_or_else(|| anyhow::anyhow!(ENDED))?;
+    let claude_setup_token = (!claude_setup_token.is_empty()).then_some(claude_setup_token);
     let console = ask_console(
         outside,
         &current.console,
@@ -150,8 +196,10 @@ pub fn ask(
         base_fix,
         launch_pull,
         security_fix,
+        security_close,
         security_review,
         notifications,
+        claude_setup_token,
         console,
     })
 }
@@ -163,7 +211,7 @@ fn ask_notifications(
 ) -> Result<Option<Notifications>> {
     if !yes_or_no(
         outside,
-        "Run notifications, an email as each Run ends?",
+        "Run notifications, an email as each Ticket run ends?",
         current.email.always,
     )? {
         return Ok(None);
@@ -196,7 +244,7 @@ fn ask_notifications(
     } else {
         outside.say(
             "No Resend API key, so no email can go yet. To add one later, rerun \
-             `thirdshift setup`, or set RESEND_API_KEY in the environment the Run starts from."
+             `thirdshift setup`, or set RESEND_API_KEY in the environment the Ticket run starts from."
                 .to_string(),
         );
         false

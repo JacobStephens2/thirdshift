@@ -42,7 +42,7 @@ pub(super) struct Viewer {
 }
 
 impl Viewer {
-    // Streams recheck without extending idle lifetime on polling alone.
+    // Streams recheck on account changes without extending idle lifetime.
     pub fn still_allowed(&self) -> Result<bool> {
         match &self.token {
             Some(token) => Ok(Accounts::load()?.session(token, false)?.is_some()),

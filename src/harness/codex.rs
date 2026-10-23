@@ -209,7 +209,7 @@ fn check_model_and_effort(choice: &mut Choice) -> Result<()> {
 }
 /// Ask Codex's Model, listing those in its `catalog`, then its Effort,
 /// listing those the Model chosen supports, with `current` as the defaults.
-/// Each is matched against the catalog as a Run matches it, and written as
+/// Each is matched against the catalog as a Ticket run matches it, and written as
 /// Codex names it; one the catalog doesn't have is asked again, with the
 /// valid choices.
 fn ask_codex(

@@ -4,6 +4,7 @@
   {% if stopping %}<p role="status">still ending</p><div class="stopping-bar" role="progressbar" aria-label="Command stopping"></div>{% endif %}
   {% for branch in branches %}<p>Issue branch left: {{ branch }}</p>{% endfor %}
   {% for pr in pull_requests %}<p>Pull request left: {{ pr|linkify }}</p>{% endfor %}
+  {% match issue_url %}{% when Some with (url) %}<p><a href="{{ url }}">{{ issue_label }}</a></p>{% when None %}{% endmatch %}
   <code>{{ cli }}</code>
   <p><a href="{{ crate::logs::status::inspect::url("/log", command, None) }}">Full Command log</a></p>
   {% for log in logs %}<p><a href="{{ log.url }}">Session trace: {{ log.name }}</a></p>{% endfor %}

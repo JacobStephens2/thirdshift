@@ -68,6 +68,9 @@ pub struct UserConfig {
     pub security_harness: Option<Harness>,
     /// `security.fix`: off by default; None leaves the decision unmade.
     pub security_fix: Option<bool>,
+    /// `security.close`: off by default; None leaves the decision unmade.
+    /// It takes effect only when fixing is also allowed.
+    pub security_close: Option<bool>,
     pub security_review: bool,
 }
 
@@ -127,6 +130,7 @@ impl UserConfig {
             harness: harness::Settings::default(),
             security_harness: None,
             security_fix: None,
+            security_close: None,
             security_review: false,
         }
     }
@@ -252,6 +256,12 @@ impl UserConfig {
                     }
                     ("security", "fix", Value::Boolean(fix)) => config.security_fix = Some(*fix),
                     ("security", "fix", _) => bail!("security.fix must be true or false in {file}"),
+                    ("security", "close", Value::Boolean(close)) => {
+                        config.security_close = Some(*close)
+                    }
+                    ("security", "close", _) => {
+                        bail!("security.close must be true or false in {file}")
+                    }
                     ("security", "harness", Value::String(name)) => {
                         let name = name.trim();
                         if !name.is_empty() {
@@ -307,6 +317,7 @@ pub struct UserConfigChanges {
     pub base_fix: bool,
     pub launch_pull: bool,
     pub security_fix: bool,
+    pub security_close: bool,
     pub security_review: bool,
     /// None disables Run notifications while retaining their addresses.
     pub notifications: Option<NotificationAddresses>,
@@ -370,6 +381,7 @@ impl UserConfigDocument {
             set(&mut document, "base", "fix", changes.base_fix);
             set(&mut document, "launch", "pull", changes.launch_pull);
             set(&mut document, "security", "fix", changes.security_fix);
+            set(&mut document, "security", "close", changes.security_close);
             set(&mut document, "security", "review", changes.security_review);
             set(
                 &mut document,
@@ -837,16 +849,16 @@ fn is_commented_out_email_to(line: &str) -> bool {
 /// each with what it does and that default. `email.to` has no default, so it
 /// is the one key written commented out.
 pub const DEFAULTS: &str = r#"[merge]
-always = false   # every Run is a Merge run, without the merge word; default false
+always = false   # every Ticket run Self-merges, without the merge word; default false
 
 [base]
-fix = false      # every Run may start a Base fix, without the base-fix word; default false
+fix = false      # every Ticket run may start a Base fix, without the base-fix word; default false
 
 [launch]
-pull = false     # every Run first fast-forwards your checkout of the Base branch; default false
+pull = false     # every Ticket run first fast-forwards your checkout of the Base branch; default false
 
 [email]
-always = false                  # every Run sends a Run notification, without the email word; default false
+always = false                  # every Ticket run sends a Run notification, without the email word; default false
 # to = "you@example.com"        # where email goes when the command names no address; no default
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 
@@ -859,7 +871,7 @@ endpoint = ""   # optional OTLP/HTTP traces URL, including /v1/traces; default b
 
 [inbox]
 days = 7             # days to keep ended problems and Resolved; default 7
-silent_minutes = 10   # minutes without growth in either log before a Run is Silent; default 10
+silent_minutes = 10   # minutes without growth in either log before a Ticket run is Silent; default 10
 
 [console]
 address = ""        # HTTPS address for console install, e.g. https://console.example.com; default blank
@@ -880,7 +892,7 @@ limit = 3   # how many open issues labelled in-progress stop a Pickup run taking
 wait_minutes = 30   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 30
 
 [harness]
-default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
+default = "claude"   # the Harness every Ticket run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
 
 [harness.claude]
 model = ""    # the Model Claude Code's sessions run on; default blank, for Claude Code's own
@@ -908,7 +920,8 @@ effort = ""   # the Model's variant, passed as #effort; default blank, for OpenC
 
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
-review = false   # Runs review their change for Security findings; default false
+close = false   # Security runs may close a finding their fix merged, when fixing is allowed; default false
+review = false   # Ticket runs review their change for Security findings; default false
 harness = ""   # the Harness for Security runs, unless the command names one, and for every Security review; default blank; blank or missing leaves Security runs on harness.default, or Claude Code if that is missing, and Security reviews on their Command's Harness
 "#;
 
@@ -1015,6 +1028,8 @@ mod tests {
         config.harness.default = None;
         assert_eq!(config.security_fix, Some(false));
         config.security_fix = None;
+        assert_eq!(config.security_close, Some(false));
+        config.security_close = None;
         assert_eq!(config, UserConfig::defaults(Path::new("/home/me")));
     }
 
@@ -1072,6 +1087,7 @@ mod tests {
                 "harness.opencode.model",
                 "harness.opencode.effort",
                 "security.fix",
+                "security.close",
                 "security.review",
                 "security.harness",
             ]
@@ -1202,6 +1218,24 @@ mod tests {
         assert!(parse("[base]\nfix = true\n").unwrap().base_fix);
         assert!(!parse("[base]\nfix = false\n").unwrap().base_fix);
         assert!(!parse("").unwrap().base_fix);
+    }
+
+    #[test]
+    fn security_close_is_read_and_must_be_a_bool() {
+        assert_eq!(
+            parse("[security]\nclose = true\n").unwrap().security_close,
+            Some(true)
+        );
+        assert_eq!(
+            parse("[security]\nclose = false\n").unwrap().security_close,
+            Some(false)
+        );
+        assert_eq!(parse("").unwrap().security_close, None);
+        let error = parse("[security]\nclose = \"yes\"\n").unwrap_err();
+        assert!(
+            format!("{error:#}").contains("security.close must be true or false"),
+            "{error:#}"
+        );
     }
 
     #[test]
@@ -1445,6 +1479,7 @@ mod tests {
             base_fix: true,
             launch_pull: true,
             security_fix: false,
+            security_close: false,
             security_review: false,
             notifications: Some(NotificationAddresses {
                 to: "me@example.com".to_string(),
@@ -1492,6 +1527,10 @@ mod tests {
         if before.security_fix.is_none() {
             assert_eq!(after.security_fix, Some(false));
             after.security_fix = None;
+        }
+        if before.security_close.is_none() {
+            assert_eq!(after.security_close, Some(false));
+            after.security_close = None;
         }
         assert_eq!(after, before, "{completed}");
         let again = document(&completed).render(None);
@@ -1601,6 +1640,7 @@ mod tests {
             base_fix: false,
             launch_pull: false,
             security_fix: false,
+            security_close: false,
             security_review: false,
             notifications: Some(NotificationAddresses {
                 to: to.to_string(),
@@ -1696,6 +1736,7 @@ mod tests {
             base_fix: false,
             launch_pull: false,
             security_fix: false,
+            security_close: false,
             security_review: false,
             notifications: None,
             harness: Some((
@@ -1742,6 +1783,7 @@ mod tests {
                 base_fix: true,
                 launch_pull: true,
                 security_fix: false,
+                security_close: false,
                 security_review: false,
                 notifications: Some(NotificationAddresses {
                     to: "o\"brien@example.com".to_string(),
@@ -1829,6 +1871,7 @@ mod tests {
             base_fix: false,
             launch_pull: true,
             security_fix: false,
+            security_close: false,
             security_review: false,
             notifications: None,
             harness: None,

@@ -42,6 +42,15 @@ pub(crate) use command_record::{TicketRecord, TicketState};
 use effects::OnMachine;
 use recording::Record;
 
+/// Human-facing names for stable stored kinds and dispatch stages (ADR 0022).
+pub(crate) fn display_name(stored: &str) -> &str {
+    match stored {
+        "Run" => "Ticket run",
+        "dispatched Run" => "dispatched Ticket run",
+        other => other,
+    }
+}
+
 /// The command typed, which owns its Session traces and all child Runs' logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandKind {

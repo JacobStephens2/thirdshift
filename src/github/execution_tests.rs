@@ -73,6 +73,52 @@ fn issue() -> IssueUrl {
 }
 
 #[test]
+fn labelled_issue_reads_include_every_page_and_exclude_pull_requests() {
+    with_recorded_signal(
+        "github::execution_tests::labelled_issue_reads_include_every_page_and_exclude_pull_requests",
+        |_| {
+            let fixture = Fixture::new("");
+            let label = Label::new("Architect plan & idea", "");
+            let mut response = String::from(
+                "{\"html_url\":\"https://github.com/acme/widgets/pull/42\",\"pull_request\":{}}\n",
+            );
+            for number in (1..=1001).rev() {
+                response.push_str(
+                    &serde_json::json!({
+                        "html_url": format!("https://github.com/acme/widgets/issues/{number}"),
+                        "title": format!("Plan {number}"),
+                        "labels": [{"name": label.name()}],
+                    })
+                    .to_string(),
+                );
+                response.push('\n');
+            }
+            for state in ["open", "closed"] {
+                fixture.script(&format!(
+                    r#"
+test "$*" = 'api --paginate --jq .[] repos/acme/widgets/issues?state={state}&labels=Architect+plan+%26+idea&sort=created&direction=desc&per_page=100' || exit 2
+cat <<'ISSUES'
+{response}ISSUES
+"#,
+                ));
+                let github = GitHub::new();
+                let listed = match state {
+                    "open" => github.open_issues_labelled("acme/widgets", label),
+                    "closed" => github.closed_issues_labelled("acme/widgets", label),
+                    _ => unreachable!(),
+                }
+                .unwrap();
+                assert_eq!(listed.len(), 1001, "{state}");
+                assert_eq!(listed[0].issue.number, 1001);
+                assert_eq!(listed[0].title, "Plan 1001");
+                assert!(listed[0].labels.has(label));
+                assert_eq!(listed[1000].issue.number, 1);
+            }
+        },
+    );
+}
+
+#[test]
 fn a_transient_private_security_issue_listing_recovers() {
     with_recorded_signal(
         "github::execution_tests::a_transient_private_security_issue_listing_recovers",
@@ -327,7 +373,7 @@ fn transient_transport_failures_recover_across_read_only_operations() {
                 (
                     "issues",
                     "echo 'HTTP 429: Too Many Requests' >&2; exit 1",
-                    "[]",
+                    "",
                 ),
                 (
                     "pr",

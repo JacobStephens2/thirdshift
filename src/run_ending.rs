@@ -34,10 +34,60 @@ const BASE_FIX: &str = "Base fix: ";
 pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
     match ending {
         Ending::Run(ended) => Ok(Account::of_run(ended)),
-        Ending::SecurityFix { ended, findings } => Ok(Account {
-            security_findings: Some(findings),
-            ..Account::of_run(ended)
-        }),
+        Ending::SecurityFix {
+            ended,
+            finding,
+            audit,
+            close,
+        } => {
+            let audit = audit.as_deref();
+            // The audit's other findings, those whose records wait for triage first.
+            let (waiting, recorded): (Vec<_>, Vec<_>) =
+                audit.map_or_else(Default::default, |audit| {
+                    audit
+                        .findings
+                        .iter()
+                        .filter(|other| other.url != finding.url)
+                        .partition(|other| audit.waiting.contains(&other.url))
+                });
+            let mut account = Account {
+                security_findings: Some(
+                    audit.map_or(std::slice::from_ref(finding), |audit| &audit.findings),
+                ),
+                security_findings_waiting: !waiting.is_empty(),
+                security_fix: Some(SecurityFix {
+                    finding,
+                    audit: audit.map(|audit| match &audit.outcome {
+                        Ok(recorded) => recorded.to_string(),
+                        Err(failed) => failure_outcome(failed, "audit failed").to_string(),
+                    }),
+                    waiting,
+                    recorded,
+                }),
+                ..Account::of_run(ended)
+            };
+            let security_close = match close {
+                crate::security::CloseOutcome::Closed { pr_url } => {
+                    Some(SecurityClose::Closed { finding, pr_url })
+                }
+                crate::security::CloseOutcome::LeftOpen { reason } => {
+                    Some(SecurityClose::LeftOpen { finding, reason })
+                }
+                crate::security::CloseOutcome::NotAttempted => None,
+            };
+            if let (Ok(line), Some(close)) = (&mut account.ended, &security_close) {
+                match close {
+                    SecurityClose::Closed { finding, pr_url } => {
+                        line.push_str(&format!("; closed {} by {pr_url}", finding.url));
+                    }
+                    SecurityClose::LeftOpen { finding, reason } => {
+                        line.push_str(&format!("; left {} open: {reason}", finding.url));
+                    }
+                }
+            }
+            account.security_close = security_close;
+            Ok(account)
+        }
         Ending::Architect { review, dispatched } => {
             Ok(Account::of_architect(review, dispatched.as_ref()))
         }
@@ -55,6 +105,8 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                     review: None,
                     security_findings: None,
                     security_findings_waiting: false,
+                    security_fix: None,
+                    security_close: None,
                     failed_reproduction: None,
                     pre_audit_failure: None,
                     recovery: None,
@@ -75,6 +127,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                 pre_audit_failure: if !audited.audit_started {
                     audited.outcome.as_ref().err().map(|failed| {
                         crate::github::operational_cause(&failed.error)
+                            .or_else(|| crate::launch::base_branch_cause(&failed.error))
                             .unwrap_or("pre-audit checks failed")
                     })
                 } else {
@@ -82,7 +135,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                 },
                 failed_reproduction: audited.failed_reproduction,
                 security_findings: Some(&audited.findings),
-                security_findings_waiting: audited.findings_waiting,
+                security_findings_waiting: !audited.waiting.is_empty(),
                 advice: &audited.advice,
                 ..account
             })
@@ -136,9 +189,44 @@ pub struct Account<'a> {
     /// Safe metadata from a Security run's private records, even if the audit failed.
     pub security_findings: Option<&'a [crate::security::RecordedFinding]>,
     pub security_findings_waiting: bool,
+    /// In a Security run that dispatched a fix, which finding it was
+    /// dispatched for and how the audit before it ended.
+    pub security_fix: Option<SecurityFix<'a>>,
+    /// What became of the attempt to close the fixed finding, if one was made.
+    pub security_close: Option<SecurityClose<'a>>,
     /// The URLs on stdout, a line each: the pull request's, or that of the
     /// issue an Architect run's review ended on.
     pub urls: Vec<&'a str>,
+}
+
+/// The fix a Security run dispatched, told apart from the findings its audit
+/// only recorded.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SecurityFix<'a> {
+    /// The Security finding the fix's pull request addresses.
+    pub finding: &'a crate::security::RecordedFinding,
+    /// How the audit before the fix ended; `None` when the Security run
+    /// fixed an earlier recorded finding without auditing.
+    pub audit: Option<String>,
+    /// The audit's other findings whose records wait for the Day shift's
+    /// triage.
+    pub waiting: Vec<&'a crate::security::RecordedFinding>,
+    /// The audit's other findings, already triaged.
+    pub recorded: Vec<&'a crate::security::RecordedFinding>,
+}
+
+/// What became of the attempt to close the Security finding a merged fix
+/// fixed: which finding, by which pull request, or why it stays open.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SecurityClose<'a> {
+    Closed {
+        finding: &'a crate::security::RecordedFinding,
+        pr_url: &'a str,
+    },
+    LeftOpen {
+        finding: &'a crate::security::RecordedFinding,
+        reason: &'a str,
+    },
 }
 
 /// How an Architect run's Architecture review ended.
@@ -209,6 +297,8 @@ impl<'a> Account<'a> {
                 review: None,
                 security_findings: None,
                 security_findings_waiting: false,
+                security_fix: None,
+                security_close: None,
                 failed_reproduction: None,
                 pre_audit_failure: None,
                 recovery: None,
@@ -237,6 +327,8 @@ impl<'a> Account<'a> {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
+            security_close: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: failed.recovery.as_deref(),
@@ -269,6 +361,8 @@ impl<'a> Account<'a> {
                 review: None,
                 security_findings: None,
                 security_findings_waiting: false,
+                security_fix: None,
+                security_close: None,
                 failed_reproduction: None,
                 pre_audit_failure: None,
                 recovery: None,
@@ -563,6 +657,8 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
+            security_close: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -585,6 +681,8 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
+            security_close: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -776,6 +874,8 @@ mod tests {
                     }),
                     security_findings: None,
                     security_findings_waiting: false,
+                    security_fix: None,
+                    security_close: None,
                     failed_reproduction: None,
                     pre_audit_failure: None,
                     recovery: None,
@@ -822,6 +922,49 @@ mod tests {
                 ..failed_account("interrupted")
             }
         );
+    }
+
+    #[test]
+    fn a_security_fix_sums_up_the_finding_its_pull_request_closed() {
+        let findings = [crate::security::RecordedFinding {
+            severity: Some("high".to_string()),
+            title: "Bound input".to_string(),
+            url: "https://github.com/acme/widgets/security/advisories/GHSA-first".to_string(),
+        }];
+        let record = "https://github.com/acme/widgets/security/advisories/GHSA-first";
+        for (close, line) in [
+            (
+                crate::security::CloseOutcome::Closed {
+                    pr_url: PR.to_string(),
+                },
+                format!("PR {PR} is merged; closed {record} by {PR}"),
+            ),
+            (
+                crate::security::CloseOutcome::LeftOpen {
+                    reason: "the proof-of-concept still fails".to_string(),
+                },
+                format!("PR {PR} is merged; left {record} open: the proof-of-concept still fails"),
+            ),
+            (
+                crate::security::CloseOutcome::NotAttempted,
+                format!("PR {PR} is merged"),
+            ),
+        ] {
+            let ending = Ending::SecurityFix {
+                ended: reached(Goal::Merged),
+                finding: findings[0].clone(),
+                audit: None,
+                close,
+            };
+            let account = read_account(&ending);
+            assert_eq!(account.outcome, "merged");
+            assert_eq!(account.summary(), line);
+            assert_eq!(
+                shown(&account).0,
+                vec![line],
+                "stderr must tell the Day shift"
+            );
+        }
     }
 
     #[test]

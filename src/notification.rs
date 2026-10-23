@@ -259,9 +259,9 @@ fn body(
             text += &format!("Title:        {title}\n");
         }
         let command = match (*picked_up, *is_spec) {
-            (false, false) => "Run",
+            (false, false) => "Ticket run",
             (false, true) => "Spec run",
-            (true, false) => "Pickup run, which dispatched a Run",
+            (true, false) => "Pickup run, which dispatched a Ticket run",
             (true, true) => "Pickup run, which dispatched a Spec run",
         };
         text += &command_lines(command, None);
@@ -270,11 +270,13 @@ fn body(
         text += &command_lines(command, repo);
     }
     if let Some(findings) = account.security_findings {
-        let audit = match &account.ended {
-            Err(_) if account.pre_audit_failure.is_some() => "not started",
-            Err(_) if account.failed_reproduction.is_some() => "audit complete",
-            Ok(line) => line.as_str(),
-            Err(_) => account.outcome,
+        // A fix's ending is told by the Result and Pull request lines.
+        let audit = match (&account.security_fix, &account.ended) {
+            (Some(fix), _) => fix.audit.as_deref().unwrap_or("not run"),
+            (None, Err(_)) if account.pre_audit_failure.is_some() => "not started",
+            (None, Err(_)) if account.failed_reproduction.is_some() => "audit complete",
+            (None, Ok(line)) => line.as_str(),
+            (None, Err(_)) => account.outcome,
         };
         text += &format!("Audit:        {audit}\n");
         if let Some(number) = account.failed_reproduction {
@@ -293,8 +295,30 @@ fn body(
             };
             text += &format!("Reproduction: {number} {status}\n");
         }
-        if !findings.is_empty() {
-            text += "\nSecurity findings:\n";
+        // A dispatched fix addresses one finding; the audit's others are
+        // listed apart from it.
+        let sections = match &account.security_fix {
+            Some(fix) => vec![
+                (
+                    if account.ended.is_ok() {
+                        "Addressed by the pull request"
+                    } else {
+                        "Fix attempted, not fixed"
+                    },
+                    vec![fix.finding],
+                ),
+                ("Recorded, waiting for the Day shift", fix.waiting.clone()),
+                ("Also recorded by the audit", fix.recorded.clone()),
+            ],
+            None => vec![("Security findings", findings.iter().collect())],
+        };
+        let mut listed = false;
+        for (heading, findings) in sections {
+            if findings.is_empty() {
+                continue;
+            }
+            listed = true;
+            text += &format!("\n{heading}:\n");
             for finding in findings {
                 let severity = finding
                     .severity
@@ -303,7 +327,18 @@ fn body(
                     .unwrap_or_default();
                 text += &format!("- {severity}{}: {}\n", finding.title, finding.url);
             }
+        }
+        if listed {
             text += "\n";
+        }
+        match &account.security_close {
+            Some(crate::run_ending::SecurityClose::Closed { finding, pr_url }) => {
+                text += &format!("Closed: {} by {}\n", finding.title, pr_url);
+            }
+            Some(crate::run_ending::SecurityClose::LeftOpen { finding, reason }) => {
+                text += &format!("Close: {} left open: {reason}\n", finding.title);
+            }
+            None => {}
         }
     }
     if let Some(review) = &account.review {
@@ -426,6 +461,8 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
+            security_close: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -448,6 +485,8 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
+            security_close: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -484,7 +523,7 @@ mod tests {
                     "Result:       merged\n\
                      Issue:        https://github.com/acme/widgets/issues/123\n\
                      Title:        Add export button\n\
-                     Command:      Run\n\
+                     Command:      Ticket run\n\
                      Pull request: {PR}\n\
                      Session trace:  {LOG}\n\
                      Sent by:      thirdshift\n\
@@ -507,7 +546,7 @@ mod tests {
                     "Result:       failed\n\
                      Issue:        https://github.com/acme/widgets/issues/123\n\
                      Title:        Add export button\n\
-                     Command:      Run\n\
+                     Command:      Ticket run\n\
                      Cause:        claude exited 1\n\
                      Base fix:     {PLAN} not merged\n\
                      Session trace:  {LOG}\n\
@@ -533,7 +572,7 @@ mod tests {
                 "Result:       interrupted\n\
                  Issue:        https://github.com/acme/widgets/issues/123\n\
                  Title:        Add export button\n\
-                 Command:      Run\n\
+                 Command:      Ticket run\n\
                  Sent by:      thirdshift\n\
                  Host:         droplet-1\n\
                  Took:         4s\n"
@@ -703,6 +742,46 @@ mod tests {
                      Repository:   acme/widgets\n\
                      Audit:"
             )
+        );
+    }
+
+    #[test]
+    fn a_security_fix_notification_names_the_finding_its_pull_request_closed() {
+        use crate::security::RecordedFinding;
+        let findings = [RecordedFinding {
+            severity: Some("high".to_string()),
+            title: "Bound input".to_string(),
+            url: "https://github.com/acme/widgets/security/advisories/GHSA-first".to_string(),
+        }];
+        let subject = Subject::SecurityRun(Repo::of_origin("https://github.com/acme/widgets.git"));
+        let closed = crate::run_ending::SecurityClose::Closed {
+            finding: &findings[0],
+            pr_url: PR,
+        };
+        let account = Account {
+            security_findings: Some(&findings),
+            security_close: Some(closed),
+            ..merged()
+        };
+        let body = body_of(&subject, &account);
+        assert!(
+            body.contains("Closed: Bound input by https://github.com/acme/widgets/pull/1"),
+            "{body}"
+        );
+        assert!(!body.contains("Private"), "{body}");
+        let left_open = crate::run_ending::SecurityClose::LeftOpen {
+            finding: &findings[0],
+            reason: "the proof-of-concept still fails",
+        };
+        let account = Account {
+            security_findings: Some(&findings),
+            security_close: Some(left_open),
+            ..merged()
+        };
+        let body = body_of(&subject, &account);
+        assert!(
+            body.contains("Close: Bound input left open: the proof-of-concept still fails"),
+            "{body}"
         );
     }
 

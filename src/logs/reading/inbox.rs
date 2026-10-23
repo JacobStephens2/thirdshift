@@ -7,6 +7,7 @@ use chrono::{DateTime, FixedOffset, Local};
 use serde::Serialize;
 
 use super::{Command, Entry, Health, Observation};
+use crate::logs::stop;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -85,6 +86,8 @@ pub(in crate::logs) struct InboxItem<'a> {
     pub group: Group,
     pub needs_you_kind: Option<NeedsYouKind>,
     pub landing: bool,
+    /// A live Command given a Stop, still ending.
+    pub stopping: bool,
     pub count: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub collapsed: Vec<InboxItem<'a>>,
@@ -93,6 +96,22 @@ pub(in crate::logs) struct InboxItem<'a> {
 impl InboxItem<'_> {
     pub(in crate::logs) fn cause(&self) -> Option<&str> {
         self.command.facts().cause
+    }
+
+    /// The row's state word in the Console and `status`: its Needs you kind,
+    /// then Stopping, Ready or Landing, otherwise the Command's own state.
+    pub(in crate::logs) fn state_word(&self) -> &str {
+        if let Some(kind) = self.needs_you_kind {
+            return kind.title();
+        }
+        if self.stopping {
+            return "Stopping";
+        }
+        match self.group {
+            Group::ReadyForReview => "Ready",
+            Group::Landing => "Landing",
+            _ => self.command.facts().state,
+        }
     }
 }
 
@@ -134,6 +153,52 @@ impl<'a> Observation<'a> {
     }
 }
 
+fn observations(entries: &[Entry]) -> impl Iterator<Item = Observation<'_>> {
+    entries.iter().flat_map(|entry| {
+        let (outer, ready): (_, Vec<_>) = match entry {
+            Entry::Record(command) => (
+                Observation::Record(command),
+                command
+                    .dispatched
+                    .iter()
+                    .filter(|run| Observation::Record(run).facts().ready)
+                    .map(Observation::Record)
+                    .collect(),
+            ),
+            Entry::History(command) => (Observation::History(command), Vec::new()),
+        };
+        std::iter::once(outer).chain(ready)
+    })
+}
+
+pub(super) fn next_change(
+    entries: &[Entry],
+    now: DateTime<Local>,
+    days: i64,
+) -> Option<DateTime<Local>> {
+    observations(entries)
+        .filter_map(|observation| {
+            let facts = observation.facts();
+            if facts.state == "live" || facts.ready {
+                return None;
+            }
+            let ended = time(facts.ended_at);
+            let recent = ended.and_then(|at| at.checked_add_signed(chrono::Duration::days(1)));
+            let retained = ended
+                .or_else(|| time(Some(facts.started_at)))
+                .and_then(|at| at.checked_add_signed(chrono::Duration::days(days)));
+            [recent, retained]
+                .into_iter()
+                .flatten()
+                // Grouping includes the exact cutoff; cross it before waking.
+                .filter_map(|at| at.checked_add_signed(chrono::Duration::nanoseconds(1)))
+                .map(|at| at.with_timezone(&Local))
+                .filter(|at| *at > now)
+                .min()
+        })
+        .min()
+}
+
 pub(super) fn list(
     entries: &[Entry],
     now: DateTime<Local>,
@@ -143,24 +208,7 @@ pub(super) fn list(
     // An accepted duration can exceed chrono's calendar. In that case every
     // representable timestamp is inside the requested retention period.
     let cutoff = now.checked_sub_signed(chrono::Duration::days(days));
-    let observations: Vec<_> = entries
-        .iter()
-        .flat_map(|entry| {
-            let (outer, ready): (_, Vec<_>) = match entry {
-                Entry::Record(command) => (
-                    Observation::Record(command),
-                    command
-                        .dispatched
-                        .iter()
-                        .filter(|run| Observation::Record(run).facts().ready)
-                        .map(Observation::Record)
-                        .collect(),
-                ),
-                Entry::History(command) => (Observation::History(command), Vec::new()),
-            };
-            std::iter::once(outer).chain(ready)
-        })
-        .collect();
+    let observations: Vec<_> = observations(entries).collect();
     let starts: Vec<_> = observations.iter().copied().map(issue_starts).collect();
     let mut latest = BTreeMap::new();
     for starts in &starts {
@@ -177,7 +225,7 @@ pub(super) fn list(
         let ended = time(facts.ended_at);
         let problem = if facts.state == "died" {
             Some(NeedsYouKind::Died)
-        } else if matches!(command, Observation::Record(command) if facts.state == "ended" && !facts.ready && super::super::stop::requested(&command.record_path).is_some_and(|request| !request.requeue))
+        } else if matches!(command, Observation::Record(command) if facts.state == "ended" && !facts.ready && stop::requested(&command.record_path).is_some_and(|request| !request.requeue))
         {
             Some(NeedsYouKind::Triage)
         } else if facts
@@ -196,6 +244,7 @@ pub(super) fn list(
             _ => None,
         };
         let landing = matches!(command, Observation::Record(command) if is_landing(command));
+        let stopping = matches!(command, Observation::Record(command) if facts.state == "live" && stop::requested(&command.record_path).is_some());
         let needs_you_kind = live_problem.or_else(|| {
             problem.filter(|_| {
                 ended
@@ -227,6 +276,7 @@ pub(super) fn list(
                 group,
                 needs_you_kind,
                 landing,
+                stopping,
                 count: 1,
                 collapsed: Vec::new(),
             });

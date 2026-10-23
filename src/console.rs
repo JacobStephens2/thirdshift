@@ -12,10 +12,12 @@ mod live;
 mod logs;
 mod look;
 pub use look::{export_theme, import_theme, sections, theme};
+mod changes;
 mod peek;
 mod restart;
 mod stop;
 mod time;
+mod watching;
 mod waterfall;
 
 use std::io::Write;
@@ -312,23 +314,29 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, config.console.port))
             .await
             .context("can't listen for the Console on localhost")?;
+        let watched = executable.clone();
+        let (changes, notifier, observer) = changes::observe(&config, &executable)?;
+        let mut control = changes.clone();
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
-        let watched = executable.clone();
-        let (changes, observer) = live::observe(render_inbox("thirdshift status").await?);
         axum::serve(
             listener,
-            router(no_sign_in, changes).layer(axum::Extension(executable.clone())),
+            router(no_sign_in, changes).layer(axum::Extension(notifier)),
         )
         .with_graceful_shutdown(async move {
+            let mut accounts_revision = 0;
             loop {
-                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                if control.changed().await.is_err() {
+                    break;
+                }
                 if watched.changed() {
                     break;
                 }
                 // Revoke removed accounts even when nobody makes a request,
                 // so re-adding an address cannot revive its old sessions.
-                if !no_sign_in {
+                let revision = control.borrow_and_update().accounts;
+                if !no_sign_in && revision != accounts_revision {
+                    accounts_revision = revision;
                     match tokio::task::spawn_blocking(|| accounts::Accounts::load().map(drop)).await
                     {
                         Ok(Ok(())) => {}
@@ -352,7 +360,7 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
     executable.exec()
 }
 
-fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Router {
+fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
     let mut router = Router::new();
     for page in PAGES {
         let cli = page.cli[0];
@@ -390,6 +398,7 @@ fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Route
     router = router.route("/assets/{*path}", get(asset));
     let access = auth::Access::new(no_sign_in);
     router
+        .layer(axum::Extension(changes.clone()))
         .with_state(changes)
         .layer(DefaultBodyLimit::max(16 * 1024))
         .layer(middleware::from_fn_with_state(access.clone(), auth::guard))
@@ -418,6 +427,18 @@ impl InboxPage {
     }
     fn needs_you(&self) -> usize {
         self.inbox.sections[0].rows.len()
+    }
+
+    fn idle(&self) -> bool {
+        !self
+            .inbox
+            .sections
+            .iter()
+            .any(|section| section.rows.iter().any(|row| row.live))
+    }
+
+    fn ready_for_review(&self) -> usize {
+        self.inbox.sections[1].rows.len()
     }
 
     fn urgent(&self) -> bool {
@@ -565,10 +586,6 @@ fn page(result: std::result::Result<Result<String>, tokio::task::JoinError>) -> 
     }
 }
 
-async fn render_inbox(cli: &'static str) -> Result<String> {
-    render_page(cli, None, None).await
-}
-
 async fn asset(Path(path): Path<String>) -> Response {
     if path == "user-themes.css" || path.starts_with("user-fonts/") {
         return match tokio::task::spawn_blocking(move || user_asset(&path)).await {
@@ -641,7 +658,7 @@ mod tests {
     use tower_layer::Layer;
 
     fn router() -> Router {
-        let (_, changes) = tokio::sync::watch::channel(0);
+        let (_, changes) = tokio::sync::watch::channel(super::changes::Revision::default());
         super::router(false, changes)
     }
 

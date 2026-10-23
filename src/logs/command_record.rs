@@ -10,7 +10,7 @@ use crate::harness::Choice;
 use crate::issue::IssueUrl;
 
 /// A Pass owns its dispatched work in the same process and atomic record.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct CommandTree {
     #[serde(flatten)]
     pub command: CommandRecord,
@@ -27,7 +27,7 @@ impl CommandTree {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct CommandRecord {
     pub version: u32,
     pub kind: String,
@@ -80,14 +80,14 @@ impl From<&IssueUrl> for Issue {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct TicketRecord {
     pub issue: Issue,
     pub state: TicketState,
     pub blockers: Vec<Issue>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum TicketState {
     Running,
@@ -98,7 +98,7 @@ pub(crate) enum TicketState {
     NotStarted,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Stage {
     pub name: String,
     pub began_at: String,
@@ -120,51 +120,58 @@ impl StageTime<'_> {
     }
 }
 
-/// Internal transitions are typed; persisted names stay tolerant of new stages.
-#[derive(Clone, Copy)]
-pub enum StageName {
-    Implement,
-    Resume,
-    SecurityReview,
-    PullRequest,
-    CiWatch,
-    Repair,
-    SelfMerge,
-    Cleanup,
-    ArchitectureReview,
-    Tickets,
-    SpecReview,
-    SecurityAudit,
-    SecurityReproduction,
-    SecurityFixPublishing,
+// Keep typed stages, persisted names and display order in one declaration.
+macro_rules! stage_names {
+    ($($(#[$meta:meta])* $stage:ident => $name:literal,)*) => {
+        /// Internal transitions are typed; persisted names stay tolerant of new stages.
+        #[derive(Clone, Copy)]
+        pub enum StageName {
+            $($(#[$meta])* $stage,)*
+        }
+
+        impl StageName {
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Self::$stage => $name,)*
+                }
+            }
+
+            /// Declaration order, with unfamiliar persisted names after every known stage.
+            pub(super) fn order(name: &str) -> usize {
+                match name {
+                    $($name => Self::$stage as usize,)*
+                    _ => usize::MAX,
+                }
+            }
+        }
+    };
+}
+
+stage_names! {
+    Implement => "implement",
+    Resume => "Resume",
+    SecurityReview => "Security review",
+    PullRequest => "pull request",
+    CiWatch => "CI watch",
+    Repair => "Repair",
+    SelfMerge => "Self-merge",
+    Cleanup => "cleanup",
+    ArchitectureReview => "Architecture review",
+    Tickets => "Tickets",
+    SpecReview => "Spec review",
+    SecurityAudit => "Security audit",
+    SecurityReproduction => "Security reproduction",
+    SecurityFixPublishing => "Security fix publishing",
+    /// A fixed finding's proof-of-concept recheck against the merged Base
+    /// branch, before its private record is closed.
+    SecurityCloseCheck => "Security close check",
     /// A Pickup run or Security run waiting on the Run it dispatched.
-    DispatchedRun,
+    DispatchedRun => "dispatched Run",
     /// A Pickup run or Security run waiting on the Spec run it dispatched.
-    DispatchedSpecRun,
+    DispatchedSpecRun => "dispatched Spec run",
 }
 
 impl StageName {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Implement => "implement",
-            Self::Resume => "Resume",
-            Self::SecurityReview => "Security review",
-            Self::PullRequest => "pull request",
-            Self::CiWatch => "CI watch",
-            Self::Repair => "Repair",
-            Self::SelfMerge => "Self-merge",
-            Self::Cleanup => "cleanup",
-            Self::ArchitectureReview => "Architecture review",
-            Self::Tickets => "Tickets",
-            Self::SpecReview => "Spec review",
-            Self::SecurityAudit => "Security audit",
-            Self::SecurityReproduction => "Security reproduction",
-            Self::SecurityFixPublishing => "Security fix publishing",
-            Self::DispatchedRun => "dispatched Run",
-            Self::DispatchedSpecRun => "dispatched Spec run",
-        }
-    }
-
     /// The stage a pass enters while `work`, the Command it dispatched, runs.
     pub(super) fn dispatched(work: Work<'_>) -> Self {
         match work {
@@ -187,26 +194,7 @@ impl StageName {
     }
 
     pub(super) fn known(name: &str) -> bool {
-        [
-            Self::Implement,
-            Self::Resume,
-            Self::SecurityReview,
-            Self::PullRequest,
-            Self::CiWatch,
-            Self::Repair,
-            Self::SelfMerge,
-            Self::Cleanup,
-            Self::ArchitectureReview,
-            Self::Tickets,
-            Self::SpecReview,
-            Self::SecurityAudit,
-            Self::SecurityReproduction,
-            Self::SecurityFixPublishing,
-            Self::DispatchedRun,
-            Self::DispatchedSpecRun,
-        ]
-        .into_iter()
-        .any(|stage| stage.name() == name)
+        Self::order(name) != usize::MAX
     }
 }
 

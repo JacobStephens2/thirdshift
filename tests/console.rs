@@ -18,6 +18,9 @@ mod accounts;
 #[path = "console/look.rs"]
 mod look;
 
+#[path = "console/inbox.rs"]
+mod inbox;
+
 #[path = "console/codex_patches.rs"]
 mod codex_patches;
 
@@ -26,6 +29,14 @@ mod waterfall;
 
 #[path = "console/spans.rs"]
 mod spans;
+
+#[cfg(target_os = "linux")]
+#[path = "console/idle.rs"]
+mod idle;
+
+#[cfg(unix)]
+#[path = "console/watching.rs"]
+mod watching;
 
 #[cfg(unix)]
 #[path = "console/cronjobs.rs"]
@@ -132,6 +143,18 @@ impl Drop for Console {
         let _ = self.child.kill();
         let _ = self.child.wait();
         self.reader.take().unwrap().join().unwrap();
+    }
+}
+
+fn sse_event(stream: &mut impl BufRead) -> String {
+    let mut message = String::new();
+    loop {
+        let mut line = String::new();
+        assert!(stream.read_line(&mut line).unwrap() > 0, "stream closed");
+        if line.trim().is_empty() && !message.is_empty() {
+            return message;
+        }
+        message.push_str(&line);
     }
 }
 
@@ -370,7 +393,7 @@ fn time_pages_name_the_command_kind_without_repeating_it_for_commands_without_is
         let html = console.get(page).text().unwrap();
         for heading in [
             "Pickup run · acme/widgets#7",
-            "Run · acme/widgets#7",
+            "Ticket run · acme/widgets#7",
             "Security run on acme/widgets",
             "Spec run · acme/widgets#9",
         ] {
@@ -444,6 +467,86 @@ fn time_pages_pair_with_all_status_stages_and_repository_usual_ranges() {
 }
 
 #[test]
+fn stages_orders_known_rows_by_run_progression_then_unknown_names() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    for (index, names) in [
+        vec!["z legacy stage", "A future stage"],
+        vec![
+            "Security audit",
+            "Security reproduction",
+            "Security fix publishing",
+            "Security close check",
+            "dispatched Run",
+            "dispatched Spec run",
+        ],
+        vec!["Architecture review", "Tickets", "Spec review"],
+        vec![
+            "implement",
+            "Resume",
+            "Security review",
+            "pull request",
+            "CI watch",
+            "Repair",
+            "CI watch",
+            "Self-merge",
+            "cleanup",
+        ],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let number = index as u64 + 1;
+        let mut value = record(home.path(), number, Some("merged"), 0);
+        value["stages"] = names
+            .into_iter()
+            .map(|name| json!({"name": name, "began_at": value["started_at"], "session_log": null}))
+            .collect();
+        write_record(home.path(), number, &value);
+    }
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for page in ["/stages", "/?page=stages"] {
+        let html = console.get(page).text().unwrap();
+        assert_eq!(html.matches("<tbody>").count(), 2, "{html}");
+        for table in html.split("<tbody>").skip(1) {
+            let names: Vec<_> = table
+                .split("</tbody>")
+                .next()
+                .unwrap()
+                .split("<th scope=\"row\">")
+                .skip(1)
+                .map(|row| row.split("<br>").next().unwrap())
+                .collect();
+            assert_eq!(
+                names,
+                [
+                    "implement",
+                    "Resume",
+                    "Security review",
+                    "pull request",
+                    "CI watch",
+                    "Repair",
+                    "Self-merge",
+                    "cleanup",
+                    "Architecture review",
+                    "Tickets",
+                    "Spec review",
+                    "Security audit",
+                    "Security reproduction",
+                    "Security fix publishing",
+                    "Security close check",
+                    "dispatched Ticket run",
+                    "dispatched Spec run",
+                    "A future stage",
+                    "z legacy stage",
+                ],
+                "{page}"
+            );
+        }
+    }
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn stages_distinguishes_dispatch_from_insufficient_usual_range_samples() {
     let home = tempfile::tempdir().unwrap();
@@ -477,7 +580,7 @@ fn stages_distinguishes_dispatch_from_insufficient_usual_range_samples() {
     }
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get("/?page=stages").text().unwrap();
-    for name in ["dispatched Run", "dispatched Spec run"] {
+    for name in ["dispatched Ticket run", "dispatched Spec run"] {
         let row = html
             .split("<tr>")
             .find(|row| row.starts_with(&format!("<th scope=\"row\">{name}<br>")))
@@ -1427,4 +1530,32 @@ fn urls_in_inbox_and_peek_text_are_links_and_other_text_stays_escaped() {
     ] {
         assert!(peek.contains(expected), "missing {expected}: {peek}");
     }
+}
+
+#[test]
+fn stages_and_command_details_link_the_github_issue() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 7, Some("merged"), 0);
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let stages = console.get("/?page=stages").text().unwrap();
+    assert!(
+        stages.contains("<a href=\"https://github.com/acme/widgets/issues/7\">Issue #7</a>"),
+        "stages page links the Issue URL: {stages}"
+    );
+    let selector = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture.command.json");
+    let mut url = reqwest::Url::parse("http://localhost/peek").unwrap();
+    url.query_pairs_mut()
+        .append_pair("command", selector.to_str().unwrap());
+    let peek = console
+        .get(&format!("/peek?{}", url.query().unwrap()))
+        .text()
+        .unwrap();
+    assert!(
+        peek.contains("<a href=\"https://github.com/acme/widgets/issues/7\">Issue #7</a>"),
+        "Command details links the Issue URL: {peek}"
+    );
 }

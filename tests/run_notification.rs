@@ -97,7 +97,7 @@ fn a_run_without_email_saves_its_notification_beside_its_command_log() {
         ),
         "{saved}"
     );
-    assert_contains(&saved, "\nCommand:      Run\n");
+    assert_contains(&saved, "\nCommand:      Ticket run\n");
     assert_contains(&saved, PR_URL);
     assert_contains(&saved, path.to_str().unwrap());
     assert_contains(&saved, "\nSession models:\n");
@@ -548,7 +548,7 @@ fn a_run_ready_for_review_sends_one_notification_to_the_address_given() {
         "{text}"
     );
     assert_one_issue_line(text);
-    assert_contains(text, "\nCommand:      Run\n");
+    assert_contains(text, "\nCommand:      Ticket run\n");
     assert_contains(text, PR_URL);
     assert_contains(text, &the_one_log(&scenario));
     assert_contains(text, &hostname());
@@ -586,7 +586,7 @@ fn a_merge_run_sends_one_notification_that_it_merged() {
         text(&request)
     );
     assert_contains(text(&request), PR_URL);
-    assert_contains(text(&request), "\nCommand:      Run\n");
+    assert_contains(text(&request), "\nCommand:      Ticket run\n");
 }
 
 #[test]
@@ -747,7 +747,14 @@ fn a_run_whose_issue_title_cant_be_read_sends_a_notification_without_it() {
         "{}",
         text(&request)
     );
-    assert_contains(text(&request), "origin mismatch");
+    assert_contains(
+        text(&request),
+        &format!(
+            "origin mismatch: {url} is not in the repository at origin {}; \
+             start it from a clone of Other/Widgets",
+            scenario.github_url()
+        ),
+    );
 }
 
 // Where `email` and `--email` can go, and when an address follows them, are
@@ -997,7 +1004,7 @@ fn with_no_key_anywhere_the_run_stops_before_any_work_listing_every_way_to_give_
         "run `thirdshift setup`",
         &format!("add it to {} (mode 600):", path.display()),
         "key = \"re_...\"",
-        "set RESEND_API_KEY in the environment the Run starts from",
+        "set RESEND_API_KEY in the environment the Ticket run starts from",
     ] {
         scenario.assert_rejected_before_any_work(&result, part);
     }

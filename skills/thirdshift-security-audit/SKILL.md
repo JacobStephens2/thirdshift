@@ -104,7 +104,7 @@ If prior runs exist, read every compatible `coverage-ledger.json` and `findings.
 
 If no prior ledger exists, say so in the final coverage statement. Never imply that one run exhausts the target.
 
-### Run profiles and scope
+### Audit profiles and scope
 
 During full audit setup, pick a profile from the user's request or propose one from the target's size and stakes. Record it in `run-metadata.json` (`profile`, `scope_paths`) and state it in the report. The default is `standard`.
 

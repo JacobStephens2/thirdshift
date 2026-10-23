@@ -110,6 +110,25 @@ test('Lanes scales every window, nests child Runs and fits 390 px without CSP vi
   assert.deepEqual(errors, []);
 });
 
+test('a live Lanes push preserves an unsubmitted hours selection', async t => {
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  const page = await context.newPage();
+  await page.goto(`${origin}/?page=lanes&hours=24`);
+  await page.locator('[name="hours"]').selectOption('12');
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/3-fixture.command.json');
+  const before = await readFile(path, 'utf8');
+  const fixture = JSON.parse(before);
+  fixture.issue.title = 'Changed while the Lanes filter is being edited';
+  try {
+    await writeFile(path, JSON.stringify(fixture));
+    await page.getByText(fixture.issue.title, { exact: true }).waitFor();
+    assert.equal(await page.locator('[name="hours"]').inputValue(), '12');
+    await page.getByRole('button', { name: 'Show', exact: true }).click();
+    await page.waitForURL('**hours=12');
+  } finally { await writeFile(path, before); }
+});
+
 test('time headings distinguish a live Pickup run and its Run and name kinds once at 390 px', { skip: process.platform !== 'linux' }, async t => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   t.after(() => context.close());
@@ -117,13 +136,13 @@ test('time headings distinguish a live Pickup run and its Run and name kinds onc
   for (const view of ['lanes', 'stages']) {
     await page.goto(`${origin}/?page=${view}`);
     const headings = view === 'lanes' ? page.locator('.time-run h3') : page.locator('thead .command');
-    for (const heading of ['Pickup run · acme/widgets#1', 'Run · acme/widgets#1', 'Spec run · acme/widgets#2', 'Run · acme/widgets#6', 'Security run on acme/widgets']) {
+    for (const heading of ['Pickup run · acme/widgets#1', 'Ticket run · acme/widgets#1', 'Spec run · acme/widgets#2', 'Ticket run · acme/widgets#6', 'Security run on acme/widgets']) {
       assert.equal(await headings.getByRole('link', { name: heading, exact: true }).count(), 1);
       if (view === 'stages') {
         assert.ok((await page.locator('.cell-run').allTextContents()).includes(`${heading}: `));
       }
     }
-    for (const heading of ['Pickup run · acme/widgets#1', 'Run · acme/widgets#1']) {
+    for (const heading of ['Pickup run · acme/widgets#1', 'Ticket run · acme/widgets#1']) {
       const link = headings.getByRole('link', { name: heading, exact: true });
       assert.match(await link.locator('..').textContent(), /live/);
       await link.click();
@@ -145,13 +164,16 @@ test('Stages pins live Runs, matches CLI order and opens the selected child Run 
   const flatten = command => [command, ...(command.dispatched ?? []).flatMap(flatten), ...(command.children ?? []).flatMap(flatten)];
   const runs = status.commands.flatMap(flatten);
   runs.sort((a, b) => (a.state !== 'live') - (b.state !== 'live') || Date.parse(b.ended_at ?? b.started_at) - Date.parse(a.ended_at ?? a.started_at));
-  assert.deepEqual(await page.locator('thead .peek-link').allTextContents(), runs.map(run => run.issue ? `${run.kind} · ${run.repository}#${run.issue.number}` : `${run.kind} on ${run.repository}`));
+  assert.deepEqual(await page.locator('thead .peek-link').allTextContents(), runs.map(run => {
+    const kind = run.kind === 'Run' ? 'Ticket run' : run.kind;
+    return run.issue ? `${kind} · ${run.repository}#${run.issue.number}` : `${kind} on ${run.repository}`;
+  }));
   assert.equal(await page.locator('thead .command').first().getAttribute('data-command'), runs[0].record_path ?? `${join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json')}::pickup-fixture`);
   assert.match(await page.locator('.stage-grid').first().textContent(), /Running ·/);
   assert.match(await page.locator('.stage-grid').first().textContent(), /Usual range: 10–10 min/);
   const historical = page.locator('.stage-grid').filter({ has: page.locator('thead .peek-link', { hasText: 'acme/widgets#9' }) });
   const headers = await historical.locator('thead .peek-link').allTextContents();
-  const historicalCell = historical.locator('tbody tr').first().locator('td').nth(headers.indexOf('Run · acme/widgets#9'));
+  const historicalCell = historical.locator('tbody tr').first().locator('td').nth(headers.indexOf('Ticket run · acme/widgets#9'));
   assert.match(await historicalCell.textContent(), /Unknown · no stage times retained/);
   assert.doesNotMatch(await historicalCell.textContent(), /Not reached/);
   const child = page.locator('thead .peek-link').filter({ hasText: 'acme/widgets#6' });

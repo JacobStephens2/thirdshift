@@ -460,6 +460,12 @@ gh pr create --base main --head issue-8 --title 'Bound accepted input' --body 'C
 "#
 }
 
+/// A staged proposal whose title copies the private write-up, which
+/// thirdshift rejects before creating any public issue.
+fn stage_private_title() -> &'static str {
+    "printf 'Proposed public issue:\\nTitle: Private candidate write-up.\\nBody:\\nReject oversized input. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n"
+}
+
 /// The #627 staged path: the session returns its proposed public issue text
 /// without running `gh issue create` itself.
 fn stage_fix(record: &str) -> String {
@@ -519,10 +525,10 @@ fn status_tracks_security_stages_and_nests_the_dispatched_fix() {
                 .lines()
                 .find(|line| line.starts_with("Security run "))
                 .expect(&text.stdout);
-            assert!(row.contains(" · dispatched Run · "), "{row}");
+            assert!(row.contains(" · dispatched Ticket run · "), "{row}");
             assert_eq!(active["issue"]["number"], 8);
             assert!(
-                text.stdout.contains("\n  Run acme/widgets#8"),
+                text.stdout.contains("\n  Ticket run acme/widgets#8"),
                 "{}",
                 text.stdout
             );
@@ -1014,12 +1020,170 @@ fn fixing_selects_the_most_severe_record_then_dispatches_one_ticket_before_audit
 }
 
 #[test]
-fn a_staged_ticket_title_cannot_copy_the_private_write_up() {
-    let scenario = with_reproduced_findings(&["high"]);
+fn an_audit_then_fix_notification_marks_the_fixed_finding_apart_from_those_waiting() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+    let mut other = finding("other-input");
+    other["title"] = json!("Unchecked header size");
     scenario.agent_does_in_session(
         1,
-        "printf 'Proposed public issue:\\nTitle: Private candidate write-up.\\nBody:\\nReject oversized input. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+        &audit_script(&json!([finding("input-size"), other]).to_string()),
     );
+    scenario.agent_does_in_session(2, &reproduction_script("reproduced high single"));
+    scenario.agent_does_in_session(3, &reproduction_script("reproduced low single"));
+    scenario.agent_does_in_session(4, &stage_fix("GHSA-test-test-0001"));
+    scenario.agent_does_for(8, implement_fix());
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(
+        &["secure", "security-fix", "email", "me@example.com"],
+        &resend_env(&resend),
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let (_, text) = the_one_notification(&resend);
+    assert!(
+        text.contains(
+            "Audit:        Security audit recorded 2 new finding(s), 0 already recorded\n\
+             \n\
+             Addressed by the pull request:\n\
+             - high: Unchecked input size: https://github.com/acme/widgets/security/advisories/GHSA-test-test-0001\n\
+             \n\
+             Recorded, waiting for the Day shift:\n\
+             - low: Unchecked header size: https://github.com/acme/widgets/security/advisories/GHSA-test-test-0002\n\
+             \n\
+             Pull request: https://github.com/acme/widgets/pull/1\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("Security findings:"), "{text}");
+    // The findings the fix left waiting still need the Day shift.
+    let status = scenario.run(&["status", "--json"]);
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    assert_eq!(
+        status["commands"][0]["needs_you_kind"], "finding",
+        "{status}"
+    );
+}
+
+#[test]
+fn an_audit_then_fix_that_leaves_nothing_waiting_flags_no_finding() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+    scenario.agent_does_in_session(
+        1,
+        &audit_script(&json!([finding("input-size")]).to_string()),
+    );
+    scenario.agent_does_in_session(2, &reproduction_script("reproduced high single"));
+    scenario.agent_does_in_session(3, &stage_fix("GHSA-test-test-0001"));
+    scenario.agent_does_for(8, implement_fix());
+    let result = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let status = scenario.run(&["status", "--json"]);
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    assert_ne!(
+        status["commands"][0]["needs_you_kind"], "finding",
+        "{status}"
+    );
+}
+
+#[test]
+fn an_audit_then_fix_notification_lists_a_graded_finding_apart_from_those_waiting() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+    let mut github = scenario.gh_state();
+    github["advisories"] = json!([{
+        "ghsa_id": "GHSA-graded", "state": "draft", "severity": "medium",
+        "summary": "Graded finding", "description": "Fingerprint: `graded`\nPrivate record.\n",
+        "html_url": "https://github.com/acme/widgets/security/advisories/GHSA-graded"
+    }]);
+    scenario.write_gh_state(&github);
+    scenario.agent_does_in_session(
+        1,
+        &audit_script(&json!([finding("graded"), finding("input-size")]).to_string()),
+    );
+    scenario.agent_does_in_session(2, &reproduction_script("reproduced high single"));
+    scenario.agent_does_in_session(3, &stage_fix("GHSA-test-test-0002"));
+    scenario.agent_does_for(8, implement_fix());
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(
+        &["secure", "security-fix", "email", "me@example.com"],
+        &resend_env(&resend),
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let (_, text) = the_one_notification(&resend);
+    assert!(
+        text.contains(
+            "Audit:        Security audit recorded 1 new finding(s), 1 already recorded\n\
+             \n\
+             Addressed by the pull request:\n\
+             - high: Unchecked input size: https://github.com/acme/widgets/security/advisories/GHSA-test-test-0002\n\
+             \n\
+             Also recorded by the audit:\n\
+             - medium: Graded finding: https://github.com/acme/widgets/security/advisories/GHSA-graded\n\
+             \n\
+             Pull request: https://github.com/acme/widgets/pull/1\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("Recorded, waiting"), "{text}");
+}
+
+#[test]
+fn a_fix_without_an_audit_notification_says_the_audit_did_not_run() {
+    let scenario = with_reproduced_findings(&["low", "critical"]);
+    scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-1"));
+    scenario.agent_does_for(8, implement_fix());
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(
+        &["secure", "security-fix", "email", "me@example.com"],
+        &resend_env(&resend),
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let (_, text) = the_one_notification(&resend);
+    assert!(
+        text.contains(
+            "Audit:        not run\n\
+             \n\
+             Addressed by the pull request:\n\
+             - critical: Finding 1: https://github.com/acme/widgets/security/advisories/GHSA-finding-1\n\
+             \n\
+             Pull request: https://github.com/acme/widgets/pull/1\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("Finding 0"), "{text}");
+    assert!(!text.contains("Recorded, waiting"), "{text}");
+}
+
+#[test]
+fn a_failed_fix_notification_marks_its_finding_attempted_not_fixed() {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(1, stage_private_title());
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(
+        &["secure", "security-fix", "email", "me@example.com"],
+        &resend_env(&resend),
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(subject, "[thirdshift] acme/widgets Security run: failed");
+    assert!(
+        text.contains(
+            "Audit:        not run\n\
+             \n\
+             Fix attempted, not fixed:\n\
+             - high: Finding 0: https://github.com/acme/widgets/security/advisories/GHSA-finding-0\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("Addressed by"), "{text}");
+}
+
+#[test]
+fn a_staged_ticket_title_cannot_copy_the_private_write_up() {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(1, stage_private_title());
     let result = scenario.run(&["secure", "security-fix"]);
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert!(
@@ -1154,41 +1318,42 @@ fn a_staged_proposal_is_validated_before_any_public_issue_is_created() {
 }
 
 #[test]
-fn a_dispatched_fix_still_waits_without_permission_until_its_ticket_is_closed() {
+fn a_dispatched_fix_holds_off_no_audit_and_is_not_dispatched_again() {
     let scenario = with_reproduced_findings(&["high"]);
     scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
     scenario.agent_does_for(8, implement_fix());
     let fixed = scenario.run(&["secure", "security-fix"]);
     assert_eq!(fixed.code, Some(0), "{}", fixed.stderr);
-    let waiting = scenario.run(&["secure"]);
-    assert_eq!(waiting.code, Some(0), "{}", waiting.stderr);
-    assert!(
-        waiting
-            .stderr
-            .contains("a Security finding is waiting for the Day shift"),
-        "{}",
-        waiting.stderr
-    );
-    assert_eq!(scenario.claude_calls().len(), 2);
-    let mut state = scenario.gh_state();
-    state["issues"]["8"] = json!("CLOSED");
-    scenario.write_gh_state(&state);
-    // Once fixed, the next run may audit the Base branch again.
-    scenario.agent_does(&audit_script("[]"));
-    let after = scenario.run(&["secure"]);
-    assert_eq!(after.code, Some(0), "{}", after.stderr);
-    assert!(
-        !after
-            .stderr
-            .contains("a Security finding is waiting for the Day shift")
-    );
+    let issues = scenario.gh_state()["issues"].clone();
+    // Its fix Ticket is still open, and its finding still waits for the Day shift.
+    scenario.agent_does(&audit_script(&json!([finding("finding-0")]).to_string()));
+    for args in [vec!["secure"], vec!["secure", "security-fix"]] {
+        scenario.origin_has_commit(
+            "main",
+            &format!("{}.txt", args.len()),
+            "new work",
+            "Move Base branch",
+        );
+        let audited = scenario.run(&args);
+        assert_eq!(audited.code, Some(0), "{args:?}: {}", audited.stderr);
+        assert!(
+            audited
+                .stderr
+                .contains("0 new finding(s), 1 already recorded"),
+            "{args:?}: {}",
+            audited.stderr
+        );
+    }
+    assert_eq!(scenario.claude_calls().len(), 4);
+    assert_eq!(scenario.gh_state()["issues"], issues);
 }
 
 #[test]
-fn reproduced_findings_wait_without_permission_even_after_severity_is_written() {
+fn reproduced_findings_without_permission_are_not_fixed_and_hold_off_no_audit() {
     for config in ["", "[security]\nfix = false\n", "[security]\nfix = true\n"] {
         let scenario = with_reproduced_findings(&["high"]);
         scenario.user_config_is(config);
+        scenario.agent_does(&audit_script("[]"));
         let args = if config.contains("true") {
             vec!["secure", "no-security-fix"]
         } else {
@@ -1199,11 +1364,11 @@ fn reproduced_findings_wait_without_permission_even_after_severity_is_written() 
         assert!(
             result
                 .stderr
-                .contains("a Security finding is waiting for the Day shift"),
+                .contains("0 new finding(s), 0 already recorded"),
             "{}",
             result.stderr
         );
-        assert!(scenario.claude_calls().is_empty());
+        assert_eq!(scenario.claude_calls().len(), 1);
         assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 1);
     }
 }
@@ -1350,6 +1515,180 @@ fn the_setting_allows_a_merge_fix_and_the_command_can_override_either_setting() 
             if merged { "MERGED" } else { "OPEN" }
         );
         assert_eq!(scenario.claude_calls().len(), 2);
+    }
+}
+
+/// The close check's scripted session: it saw the private record, then its
+/// proof-of-concept run ended as `outcome` (`passes` or `fails: <reason>`).
+fn close_check_script(outcome: &str) -> String {
+    format!(
+        r#"
+printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'finding-0'
+printf '%s\n' 'Command: bounded-fixture; exit 0' 'Security close check: {outcome}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#
+    )
+}
+
+#[test]
+fn a_merged_fix_with_closing_allowed_closes_the_advisory_naming_its_pull_request() {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
+    scenario.agent_does_for(8, implement_fix());
+    scenario.agent_does_in_session(3, &close_check_script("passes"));
+    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+    let result = scenario.run_with_env(
+        &[
+            "secure",
+            "security-fix",
+            "security-close",
+            "merge",
+            "email",
+            "day@example.com",
+        ],
+        &resend_env(&resend),
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let pr = &state["prs"][0];
+    assert_eq!(pr["state"], "MERGED");
+    let pr_url = pr["url"].as_str().unwrap();
+    let record = &state["advisories"][0];
+    assert_eq!(record["state"], "closed");
+    let body = record["description"].as_str().unwrap();
+    assert!(body.contains("Fix Run: succeeded"), "{body}");
+    assert!(body.contains(&format!("Closed by: {pr_url}")), "{body}");
+    assert!(
+        result
+            .stderr
+            .contains(&format!("closed GHSA-finding-0 by {pr_url}")),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(result.stdout, format!("{pr_url}\n"));
+    let (subject, body) = the_one_notification(&resend);
+    assert_eq!(subject, "[thirdshift] acme/widgets Security run: merged");
+    assert!(
+        body.contains(&format!("Closed: Finding 0 by {pr_url}")),
+        "{body}"
+    );
+    assert!(!body.contains("Private candidate write-up."), "{body}");
+}
+
+#[test]
+fn a_merged_fix_with_closing_allowed_closes_the_finding_issue_naming_its_pull_request() {
+    let scenario = with_reproduced_findings(&["high"]);
+    let mut state = scenario.gh_state();
+    state["private"] = json!(true);
+    state["bodies"]["7"] = state["advisories"][0]["description"].clone();
+    state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
+    scenario.write_gh_state(&state);
+    scenario.agent_does_for(
+        7,
+        &implement_fix()
+            .replace("issue-8", "issue-7")
+            .replace("#8", "#7"),
+    );
+    scenario.agent_does_in_session(2, &close_check_script("passes"));
+    let result = scenario.run(&["secure", "security-fix", "security-close", "merge"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let pr_url = state["prs"][0]["url"].as_str().unwrap().to_string();
+    // The merged fix already closed its issue: the close still names the
+    // pull request in the record and in a comment.
+    assert_eq!(state["issues"]["7"], "CLOSED");
+    let body = state["bodies"]["7"].as_str().unwrap();
+    assert!(body.contains(&format!("Closed by: {pr_url}")), "{body}");
+    assert!(
+        state["comments"]["7"].to_string().contains(&pr_url),
+        "{}",
+        state["comments"]["7"]
+    );
+    assert!(
+        result
+            .stderr
+            .contains(&format!("closed issue #7 by {pr_url}")),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_failing_close_check_leaves_the_advisory_open_with_a_note_and_tells_the_day_shift() {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
+    scenario.agent_does_for(8, implement_fix());
+    scenario.agent_does_in_session(3, &close_check_script("fails: the bound still overflows"));
+    let result = scenario.run(&["secure", "security-fix", "security-close", "merge"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    assert_eq!(state["prs"][0]["state"], "MERGED");
+    let record = &state["advisories"][0];
+    assert_eq!(record["state"], "draft");
+    let body = record["description"].as_str().unwrap();
+    assert!(
+        body.contains("Security close left open: the proof-of-concept test did not pass"),
+        "{body}"
+    );
+    assert!(!body.contains("Closed by:"), "{body}");
+    assert!(
+        result.stderr.contains("left GHSA-finding-0 open"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        result.stdout,
+        format!("{}\n", state["prs"][0]["url"].as_str().unwrap())
+    );
+}
+
+#[test]
+fn closing_follows_the_setting_unless_the_command_overrides_it() {
+    for (config, words, merged, closed) in [
+        (
+            "[security]\nfix = true\nclose = true\n[merge]\nalways = true\n",
+            Vec::new(),
+            true,
+            true,
+        ),
+        (
+            "[security]\nfix = true\nclose = true\n[merge]\nalways = true\n",
+            vec!["no-security-close"],
+            true,
+            false,
+        ),
+        (
+            "[security]\nfix = true\n[merge]\nalways = true\n",
+            vec!["security-close"],
+            true,
+            true,
+        ),
+        (
+            "[security]\nfix = true\nclose = true\n",
+            Vec::new(),
+            false,
+            false,
+        ),
+    ] {
+        let scenario = with_reproduced_findings(&["medium"]);
+        scenario.user_config_is(config);
+        scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
+        scenario.agent_does_for(8, implement_fix());
+        scenario.agent_does_in_session(3, &close_check_script("passes"));
+        let mut args = vec!["secure"];
+        args.extend(words.clone());
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(0), "{words:?}: {}", result.stderr);
+        let state = scenario.gh_state();
+        assert_eq!(
+            state["prs"][0]["state"].as_str().unwrap(),
+            if merged { "MERGED" } else { "OPEN" },
+            "{words:?}"
+        );
+        assert_eq!(
+            state["advisories"][0]["state"].as_str().unwrap(),
+            if closed { "closed" } else { "draft" },
+            "{words:?}"
+        );
     }
 }
 
@@ -2265,7 +2604,7 @@ printf '%s\n' 'Security audit: complete' > "$FAKE_CLAUDE_FINAL_MESSAGE"
     )
 }
 
-/// A finding recorded during the audit is first seen after the waiting gate.
+/// A finding recorded during the audit is first seen after the gates.
 fn audit_script_with_records(scenario: &Scenario, findings: &str, records: &Value) -> String {
     fs::write(
         scenario.path("audit-records.json"),
@@ -2327,57 +2666,52 @@ fn an_unchanged_base_skips_after_a_completed_audit_and_resumes_when_origin_moves
 }
 
 #[test]
-fn waiting_findings_skip_quietly_once_and_triage_allows_the_next_audit() {
-    for triage in [
-        "closed",
-        "published",
-        "severity",
-        "private-closed",
-        "private-labelled",
-    ] {
+fn waiting_findings_hold_off_no_audit_and_keep_their_completed_reproductions() {
+    for private in [false, true] {
         let scenario = Scenario::new();
-        scenario.user_config_is("[activity]\nquiet_skips = true\n");
-        scenario.agent_does(&audit_script("[]"));
         let mut github = scenario.gh_state();
-        let private = triage.starts_with("private-");
+        github["private"] = json!(private);
+        scenario.write_gh_state(&github);
+        scenario.agent_does(&audit_script(
+            &json!([finding("input-size"), finding("storage-bound")]).to_string(),
+        ));
+        let first = scenario.run(&["secure"]);
+        assert_eq!(first.code, Some(0), "{}", first.stderr);
+        assert_eq!(scenario.claude_calls().len(), 3);
+        // Both findings are not reproduced and still wait for the Day shift.
+        let waiting = scenario.gh_state();
+        scenario.origin_has_commit("main", "new-work.txt", "new work", "Move Base branch");
+        let second = scenario.run(&["secure"]);
+        assert_eq!(second.code, Some(0), "{private}: {}", second.stderr);
+        assert!(
+            second
+                .stderr
+                .contains("0 new finding(s), 2 already recorded"),
+            "{}",
+            second.stderr
+        );
+        assert_eq!(
+            second
+                .stderr
+                .matches("keeping the completed Security reproduction of ")
+                .count(),
+            2,
+            "{}",
+            second.stderr
+        );
         if private {
-            github["private"] = json!(true);
-            github["labels"]["7"] = json!(["security-finding", "Needs-Triage"]);
-        } else {
-            github["advisories"] = json!([{"state":"draft", "severity":null, "summary":"Private title", "description":"Private evidence"}]);
+            for issue in ["issue #8", "issue #9"] {
+                assert!(
+                    second.stderr.contains(&format!(
+                        "keeping the completed Security reproduction of {issue}: not reproduced"
+                    )),
+                    "{}",
+                    second.stderr
+                );
+            }
         }
-        scenario.write_gh_state(&github);
-        assert_two_quiet_skips_send_no_email(&scenario);
-        assert!(scenario.claude_calls().is_empty());
-        assert!(
-            !scenario
-                .path("home/.thirdshift/logs/acme/widgets/commands")
-                .exists()
-        );
-        assert!(
-            !scenario
-                .path("home/.thirdshift/logs/acme/widgets/audits")
-                .exists()
-        );
-        let log =
-            fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
-                .unwrap();
-        assert_eq!(log.lines().count(), 1, "{log}");
-        assert!(
-            log.contains("Security run skipped: a Security finding is waiting for the Day shift")
-        );
-        assert!(!log.contains("Private"));
-        assert_eq!(scenario.gh_state(), github);
-        match triage {
-            "private-closed" => github["issues"]["7"] = json!("CLOSED"),
-            "private-labelled" => github["labels"]["7"] = json!(["security-finding"]),
-            "severity" => github["advisories"][0]["severity"] = json!("high"),
-            state => github["advisories"][0]["state"] = json!(state),
-        }
-        scenario.write_gh_state(&github);
-        let next = scenario.run(&["secure"]);
-        assert_eq!(next.code, Some(0), "{triage}: {}", next.stderr);
-        assert_eq!(scenario.claude_calls().len(), 1, "{triage}");
+        assert_eq!(scenario.claude_calls().len(), 4);
+        assert_eq!(scenario.gh_state(), waiting);
     }
 }
 
@@ -2736,6 +3070,8 @@ fn another_pass_holds_the_security_run_and_its_skip_is_logged() {
     );
     scenario.agent_does(&waiting);
     let first = scenario.run_until(&["secure"], &[], "started");
+    // Another Pass goes before a Ready issue.
+    scenario.issue_labelled(7, &["ready-for-agent"]);
     let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
     let second =
         scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
@@ -2748,6 +3084,11 @@ fn another_pass_holds_the_security_run_and_its_skip_is_logged() {
         assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
         assert!(
             skipped.stderr.contains("another Pass is already running"),
+            "{}",
+            skipped.stderr
+        );
+        assert!(
+            !skipped.stderr.contains("Ready issue"),
             "{}",
             skipped.stderr
         );
@@ -3425,6 +3766,92 @@ fn failed_security_audits_send_one_notification_with_a_safe_status() {
     }
 }
 
+fn assert_base_branch_pre_audit_cause(
+    scenario: &Scenario,
+    args: &[&str],
+    diagnostic: &str,
+    cause: &str,
+) {
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(args, &resend_env(&resend));
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(result.stderr.contains(diagnostic), "{}", result.stderr);
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.codex_calls().is_empty());
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Security run: pre-audit failed"
+    );
+    assert!(text.contains("Result:       pre-audit failed"), "{text}");
+    assert!(text.contains("Audit:        not started"), "{text}");
+    assert!(text.contains(&format!("Cause:        {cause}")), "{text}");
+    assert!(
+        text.contains("Diagnostics:  Check this command's stderr on "),
+        "{text}"
+    );
+    for private in [
+        diagnostic,
+        "PRIVATE-BRANCH",
+        "PRIVATE-COMMIT",
+        "create or obtain",
+        "git push",
+        "pre-audit checks failed",
+    ] {
+        assert!(
+            !resend.requests()[0].body.to_string().contains(private),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn missing_base_branch_reports_a_safe_pre_audit_cause() {
+    let scenario = Scenario::new();
+    assert_base_branch_pre_audit_cause(
+        &scenario,
+        &[
+            "secure",
+            "base",
+            "PRIVATE-BRANCH",
+            "email",
+            "me@example.com",
+        ],
+        "base branch PRIVATE-BRANCH does not exist on origin or locally",
+        "Base branch not found",
+    );
+}
+
+#[test]
+fn other_base_branch_preparation_failures_report_safe_pre_audit_causes() {
+    for (setup, diagnostic, cause) in [
+        (
+            &["checkout", "-q", "-b", "PRIVATE-BRANCH"][..],
+            "base branch PRIVATE-BRANCH does not exist on origin; push it first",
+            "Base branch not on origin",
+        ),
+        (
+            &["checkout", "-q", "--detach"][..],
+            "HEAD is detached; check out the branch",
+            "Base branch not selected",
+        ),
+        (
+            &["commit", "--allow-empty", "-qm", "PRIVATE-COMMIT"][..],
+            "local main is 1 commit(s) ahead of origin/main; push them first",
+            "Base branch ahead of origin",
+        ),
+    ] {
+        let scenario = Scenario::new();
+        scenario.launch_git(setup);
+        assert_base_branch_pre_audit_cause(
+            &scenario,
+            &["secure", "email", "me@example.com"],
+            diagnostic,
+            cause,
+        );
+    }
+}
+
 #[test]
 fn pre_audit_github_failures_report_a_safe_cause_without_claiming_an_audit_ran() {
     for (diagnostic, expected_cause) in [
@@ -3453,7 +3880,10 @@ fn pre_audit_github_failures_report_a_safe_cause_without_claiming_an_audit_ran()
             "GitHub dependency failure",
         ),
     ] {
-        for call in ["issue list", "api --paginate"] {
+        for call in [
+            "api --paginate --jq .[] repos/acme/widgets/issues?state=open&labels=ready-for-agent&sort=created&direction=desc&per_page=100",
+            "api --paginate --jq .[] repos/acme/widgets/security-advisories?per_page=100",
+        ] {
             let scenario = Scenario::new();
             scenario.user_config_is(&format!(
                 "[harness.codex]\nmodel = \"gpt-6.1-sol\"\neffort = \"high\"\n[logs]\ndir = {:?}\n",
@@ -3583,13 +4013,13 @@ fn assert_pre_audit_response_dependency_cause(response: &str, diagnostic: &str) 
 fn malformed_pre_audit_github_response_has_dependency_cause() {
     assert_pre_audit_response_dependency_cause(
         "PRIVATE-INVALID-JSON",
-        "gh issue list returned invalid JSON",
+        "gh api repos/acme/widgets/issues?state=open&labels=ready-for-agent&sort=created&direction=desc&per_page=100 returned invalid JSON",
     );
 }
 
 #[test]
 fn invalid_schema_pre_audit_github_response_has_dependency_cause() {
-    assert_pre_audit_response_dependency_cause("{}", "gh issue list did not return a list");
+    assert_pre_audit_response_dependency_cause("{}", "gh api output has no html_url");
 }
 
 #[test]
@@ -4548,6 +4978,10 @@ fn review_acquisition_failure_is_pre_audit() {
         result.stderr
     );
     assert!(text.contains("Audit:        not started"), "{text}");
+    assert!(
+        text.contains("Cause:        pre-audit checks failed"),
+        "{text}"
+    );
 }
 
 #[test]

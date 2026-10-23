@@ -489,7 +489,7 @@ fn assert_declined_ci_fix(
     let cause = declined_ci_fix(watched.trim());
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[0],
-        format!("thirdshift: failed run ({cause})"),
+        format!("thirdshift: failed ticket run ({cause})"),
         "stderr: {}",
         result.stderr
     );
@@ -1105,7 +1105,7 @@ fn checks_that_also_fail_on_the_base_branch_commit_fail_the_run_without_a_repair
     assert_eq!(
         scenario.origin_log("issue-7"),
         Some(vec![
-            format!("thirdshift: failed run ({cause})"),
+            format!("thirdshift: failed ticket run ({cause})"),
             "Add feature".to_string(),
             "Initial commit".to_string(),
         ])
@@ -1176,7 +1176,7 @@ fn with_mixed_failures_the_repair_fixes_only_the_branchs_own_and_the_run_then_fa
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[..2],
         [
-            format!("thirdshift: failed run ({cause})"),
+            format!("thirdshift: failed ticket run ({cause})"),
             "Fix CI 1".to_string()
         ]
     );
