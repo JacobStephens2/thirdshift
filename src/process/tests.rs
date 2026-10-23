@@ -249,6 +249,7 @@ fn consumer_panic_stops_and_reaps_the_child_and_reports_its_cause() {
             interruption: Interruption::Ordinary,
             stop: &stop_fixture,
         },
+        None,
         (),
         |mut pipe, _state| {
             pipe.read_exact(&mut [0; 5])?;

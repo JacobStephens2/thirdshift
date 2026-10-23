@@ -19,7 +19,7 @@ use crate::prompt;
 use crate::session::{claude_args, codex_args};
 use crate::skills::SKILLS;
 
-use Sender::{ArchitectRun, Experiment, SecurityRun, Units};
+use Sender::{ArchitectRun, Experiment, SecurityRun, Trial, Units};
 
 /// A press unit on the home page, which each prompt and skill links back to.
 struct Unit {
@@ -93,6 +93,8 @@ enum Sender {
     SecurityRun,
     /// An Experiment's private model Grader.
     Experiment,
+    /// An Eval Trial, outside the Run's press units.
+    Trial,
 }
 
 /// A prompt as the page shows it: when it is sent, by whom, and its text
@@ -161,6 +163,13 @@ fn prompts() -> Vec<Prompt> {
             when: "Starts the implement session when the Run is a Continuation of an Issue branch whose pull request is open.",
             sender: Units(&[IMPLEMENT]),
             text: prompt::continuation(&issue, BASE, BRANCH, Some(PR_URL)),
+        },
+        Prompt {
+            id: "prompt-code-review",
+            title: "Code review",
+            when: "In an Eval Trial, reviews the prepared historical diff with the production code-review Factory skill, under the implement session's sub-agent rules. Writes reports without fixing or publishing anything.",
+            sender: Trial,
+            text: prompt::code_review(&issue, BASE, BRANCH),
         },
         Prompt {
             id: "prompt-spec-review",
@@ -382,7 +391,8 @@ fn fence(text: &str) -> String {
 fn skill_used_by(skill: &str) -> String {
     match skill {
         "thirdshift-implement" | "thirdshift-tdd" => unit_links(&[IMPLEMENT]),
-        "thirdshift-code-review" | "thirdshift-pr" => unit_links(&[REVIEW]),
+        "thirdshift-code-review" => format!("{}, or a Code review Trial", unit_links(&[REVIEW])),
+        "thirdshift-pr" => unit_links(&[REVIEW]),
         "thirdshift-resolving-merge-conflicts" => {
             format!("{}, in a Repair", unit_links(&[FINISH]))
         }
@@ -607,6 +617,7 @@ fn sent_by(sender: &Sender) -> String {
         ArchitectRun => "an Architect run, before any unit".to_string(),
         SecurityRun => "a Security run, before any unit".to_string(),
         Experiment => "an Experiment, after its Trials".to_string(),
+        Trial => "an Eval Trial, outside the Run's units".to_string(),
     }
 }
 

@@ -48,6 +48,59 @@ printf 'Spec fixture report\n' > "$reports/spec.md"
 }
 
 #[test]
+fn a_code_review_trial_reviews_the_prepared_diff_and_keeps_both_reports() {
+    let scenario = Scenario::new();
+    scenario.launch_git(&["checkout", "-b", "issue-7"]);
+    scenario.commit_locally("counter.txt", "off by one\n", "Reviewed change");
+    let request = request(&scenario);
+    let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    document["session_kind"] = json!("code-review");
+    document["harness"] = json!("codex");
+    fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
+    scenario.agent_does(write_reports());
+
+    let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(output["outcome"], "succeeded");
+    assert!(
+        output["log"]
+            .as_str()
+            .unwrap()
+            .ends_with("trial-code-review.jsonl")
+    );
+    for (axis, expected) in [
+        ("standards", "Standards fixture report\n"),
+        ("spec", "Spec fixture report\n"),
+    ] {
+        let path = PathBuf::from(output["reports"][axis].as_str().unwrap());
+        assert!(path.starts_with(scenario.path("trial-output")));
+        assert_eq!(fs::read_to_string(path).unwrap(), expected);
+    }
+    let calls = scenario.codex_calls();
+    let prompt = calls[0]["prompt"].as_str().unwrap();
+    assert!(
+        prompt.starts_with("$thirdshift-code-review main"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("using main as the fixed point"));
+    assert!(prompt.contains(".thirdshift-issue.md"));
+    assert!(prompt.contains("review-only"));
+    assert!(prompt.contains("Do not fix"));
+    assert!(prompt.contains("do not commit, push"));
+    assert!(!prompt.contains("Address the Standards and Spec findings"));
+    assert!(!prompt.contains("Update PR"));
+    assert!(prompt.contains("fork_turns: \"none\""), "{prompt}");
+    assert!(prompt.contains("only its own task and necessary evidence"));
+    let argv = calls[0]["argv"].to_string();
+    assert!(!argv.contains("agents.max_threads"), "{argv}");
+    scenario.assert_every_codex_session_found_the_factory_skills();
+    assert!(scenario.gh_calls().is_empty());
+    assert!(!scenario.path("home/.thirdshift/logs").exists());
+}
+
+#[test]
 fn a_spec_review_trial_prints_one_complete_line_and_keeps_artifacts_outside_factory_logs() {
     let scenario = Scenario::new();
     let request = request(&scenario);
@@ -199,9 +252,107 @@ fn a_failed_trial_keeps_its_session_id_diagnostic_and_model_evidence() {
 }
 
 #[test]
+fn a_live_plan_limit_cuts_short_a_trial_and_keeps_its_evidence() {
+    for (harness, event, session_id) in [
+        (
+            "claude",
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day"}}"#,
+            "fake-session-1",
+        ),
+        (
+            "claude",
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour"}}"#,
+            "fake-session-1",
+        ),
+        (
+            "codex",
+            r#"{"type":"token_count","rate_limits":{"primary":{"used_percent":85}}}"#,
+            "fake-thread-1",
+        ),
+    ] {
+        let scenario = Scenario::new();
+        let request = request(&scenario);
+        let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+        document["harness"] = json!(harness);
+        fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
+        let escaped = scenario.path("continued-past-warning");
+        scenario.agent_does(&format!(
+            "echo '{event}'\nsleep 0.5\ntouch '{}'\n",
+            escaped.display()
+        ));
+
+        let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let output: Value = serde_json::from_str(&result.stdout).unwrap();
+        assert_eq!(output["outcome"], "void", "{harness}: {output}");
+        assert_eq!(output["void_cause"], "usage_limit", "{output}");
+        assert_eq!(output["session_id"], session_id);
+        assert!(output["cause"].as_str().unwrap().contains("plan-limit"));
+        assert!(PathBuf::from(output["model_evidence"].as_str().unwrap()).is_file());
+        assert!(
+            fs::read_to_string(output["log"].as_str().unwrap())
+                .unwrap()
+                .contains(event)
+        );
+        assert!(
+            !escaped.exists(),
+            "{harness} kept working after its warning"
+        );
+    }
+}
+
+#[test]
+fn codex_quota_reports_are_read_live_from_the_current_sessions_native_file() {
+    let scenario = Scenario::new();
+    let request = request(&scenario);
+    let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    document["harness"] = json!("codex");
+    fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
+    let escaped = scenario.path("continued-after-native-warning");
+    scenario.agent_does(&format!(r#"
+mkdir -p "$HOME/.codex/sessions/2026/10/23"
+native="$HOME/.codex/sessions/2026/10/23/rollout-fixture-fake-thread-1.jsonl"
+printf '{{"type":"session_meta","payload":{{"id":"fake-thread-1","cwd":"%s"}}}}\n' "$PWD" > "$native"
+printf '{{"timestamp":"2000-01-01T00:00:00Z","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"primary":{{"used_percent":99}}}}}}}}\n' >> "$native"
+sleep 1.1
+touch '{}'
+timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '{{"timestamp":"%s","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"secondary":{{"used_percent":85}}}}}}}}\n' "$timestamp" >> "$native"
+sleep 0.5
+touch '{}'
+"#, scenario.path("ignored-old-native-warning").display(), escaped.display()));
+
+    let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(output["outcome"], "void", "{output}");
+    assert_eq!(output["void_cause"], "usage_limit");
+    assert_eq!(output["session_id"], "fake-thread-1");
+    assert!(
+        scenario.path("ignored-old-native-warning").exists(),
+        "an old report stopped the new session"
+    );
+    assert!(
+        !escaped.exists(),
+        "the native warning was not read while stdout was idle"
+    );
+    assert!(
+        fs::read_to_string(output["log"].as_str().unwrap())
+            .unwrap()
+            .contains("used_percent")
+    );
+}
+
+#[test]
 fn unavailable_sessions_and_provider_limits_are_void_trials() {
     for (script, expected, diagnostic) in [
-        ("exit 3".to_string(), "session_unavailable", "claude exited 3"),
+        (
+            r#"echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["connection refused"]}' >> "$FAKE_CLAUDE_AFTER_RESULT""#.to_string(),
+            "session_unavailable",
+            "connection refused",
+        ),
         (
             r#"echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["quota exceeded"]}' >> "$FAKE_CLAUDE_AFTER_RESULT""#.to_string(),
             "usage_limit",
@@ -297,18 +448,34 @@ fn a_trial_clears_inherited_ownership_and_resumes_killed_work_only_once_with_its
 }
 
 #[test]
-fn early_refusals_and_context_limits_fail_while_login_and_provider_failures_are_void() {
-    for (diagnostic, expected) in [
-        ("context window exceeded", "failed"),
-        ("request refused", "failed"),
-        ("not logged in", "void"),
-        ("provider server error", "void"),
+fn only_external_failures_are_void_and_provider_server_errors_require_no_work() {
+    for (diagnostic, turns, expected, cause) in [
+        ("", 0, "failed", Value::Null),
+        ("context window exceeded", 0, "failed", Value::Null),
+        ("request refused", 0, "failed", Value::Null),
+        ("JavaScript heap out of memory", 0, "failed", Value::Null),
+        ("not logged in", 0, "void", json!("session_unavailable")),
+        ("login expired", 1, "void", json!("session_unavailable")),
+        (
+            "provider server error",
+            0,
+            "void",
+            json!("session_unavailable"),
+        ),
+        ("provider server error", 1, "failed", Value::Null),
+        (
+            "sandbox failed to start",
+            0,
+            "void",
+            json!("sandbox_unavailable"),
+        ),
+        ("sandbox failed to start", 1, "failed", Value::Null),
     ] {
         let scenario = Scenario::new();
         let request = request(&scenario);
         scenario.agent_does(&format!(
             "cat >> \"$FAKE_CLAUDE_AFTER_RESULT\" <<'TRIAL_ERROR'\n{}\nTRIAL_ERROR\nexit 3\n",
-            json!({"type":"result", "subtype":"error_during_execution", "is_error":true, "errors":[diagnostic]}),
+            json!({"type":"result", "subtype":"error_during_execution", "is_error":true, "errors":[diagnostic], "num_turns":turns}),
         ));
 
         let result = scenario.run(&["--trial", request.to_str().unwrap()]);
@@ -316,19 +483,37 @@ fn early_refusals_and_context_limits_fail_while_login_and_provider_failures_are_
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         let line: Value = serde_json::from_str(&result.stdout).unwrap();
         assert_eq!(line["outcome"], expected, "{diagnostic}: {line}");
-        assert_eq!(
-            line["void_cause"],
-            if expected == "void" {
-                json!("session_unavailable")
-            } else {
-                Value::Null
-            },
-        );
+        assert_eq!(line["void_cause"], cause, "{diagnostic}: {line}");
         assert!(
             line["cause"].as_str().unwrap().contains(diagnostic),
             "{line}"
         );
     }
+}
+
+#[test]
+fn a_server_error_on_resume_after_trial_work_is_failed() {
+    let scenario = Scenario::new();
+    let request = request(&scenario);
+    scenario.agent_does_in_session(1, &format!(
+        "{}\n{}\n{}",
+        write_reports(),
+        r#"echo '{"type":"result","subtype":"success","is_error":false,"num_turns":1}' >> "$FAKE_CLAUDE_AFTER_RESULT""#,
+        leaves_running("cargo test"),
+    ));
+    scenario.agent_does_in_session(2, r#"
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["provider server error"],"num_turns":0}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+exit 3
+"#);
+    let run = scenario.run(&["--trial", request.to_str().unwrap()]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2, "{}", run.stderr);
+    let result: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(
+        result["outcome"], "failed",
+        "work before the Resume must count: {result}"
+    );
+    assert_eq!(result["void_cause"], Value::Null);
 }
 
 #[test]

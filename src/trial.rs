@@ -32,6 +32,7 @@ struct Request {
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum SessionKind {
+    CodeReview,
     SpecReview,
 }
 
@@ -75,7 +76,7 @@ impl std::fmt::Display for Outcome {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub(crate) enum VoidCause {
     Interrupted,
@@ -83,6 +84,24 @@ pub(crate) enum VoidCause {
     UsageLimit,
     RateLimit,
     RepositoryChanged,
+    SandboxUnavailable,
+    HostKilled,
+    MemoryCap,
+}
+
+impl std::fmt::Display for VoidCause {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Interrupted => "interrupted",
+            Self::SessionUnavailable => "session_unavailable",
+            Self::UsageLimit => "usage_limit",
+            Self::RateLimit => "rate_limit",
+            Self::RepositoryChanged => "repository_changed",
+            Self::SandboxUnavailable => "sandbox_unavailable",
+            Self::HostKilled => "host_killed",
+            Self::MemoryCap => "memory_cap",
+        })
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -98,7 +117,7 @@ pub(crate) struct Reports {
 }
 
 impl Output {
-    pub fn timed_out(total_ms: u128) -> Self {
+    pub fn failed(total_ms: u128, cause: &str) -> Self {
         Self {
             version: 1,
             outcome: Outcome::Failed,
@@ -107,7 +126,7 @@ impl Output {
                 session_ms: total_ms,
             },
             void_cause: None,
-            cause: Some("Trial timed out".into()),
+            cause: Some(cause.into()),
             session_id: None,
             log: None,
             model_evidence: None,
@@ -155,6 +174,10 @@ pub fn run(path: &Path) -> Result<String> {
         chosen_by: ChosenBy::Command,
     };
     let (kind, prompt) = match request.session_kind {
+        SessionKind::CodeReview => (
+            Kind::CodeReview,
+            prompt::code_review(&issue, &request.inputs.base, &request.inputs.branch),
+        ),
         SessionKind::SpecReview => (
             Kind::SpecReview,
             prompt::spec_review(
@@ -237,8 +260,13 @@ fn void_cause(error: &anyhow::Error) -> Option<VoidCause> {
     if interrupt::requested() {
         return Some(VoidCause::Interrupted);
     }
+    if error.is::<crate::session::limits::Reached>() {
+        return Some(VoidCause::UsageLimit);
+    }
     let Some(failure) = error.downcast_ref::<SessionFailure>() else {
-        return Some(VoidCause::SessionUnavailable);
+        return error
+            .is::<std::io::Error>()
+            .then_some(VoidCause::SessionUnavailable);
     };
     match failure.diagnostic.as_deref().map(ErrorKind::from_text) {
         Some(ErrorKind::UsageLimit) => Some(VoidCause::UsageLimit),
@@ -249,6 +277,17 @@ fn void_cause(error: &anyhow::Error) -> Option<VoidCause> {
                 .as_deref()
                 .unwrap_or("")
                 .to_ascii_lowercase();
+            if failure.before_first_turn
+                && [
+                    "sandbox failed to start",
+                    "sandbox could not start",
+                    "sandbox didn't start",
+                ]
+                .iter()
+                .any(|text| diagnostic.contains(text))
+            {
+                return Some(VoidCause::SandboxUnavailable);
+            }
             let unavailable = [
                 "not logged in",
                 "login failed",
@@ -265,16 +304,15 @@ fn void_cause(error: &anyhow::Error) -> Option<VoidCause> {
             .iter()
             .any(|text| diagnostic.contains(text));
             let startup = failure.before_first_turn
-                && (diagnostic.is_empty()
-                    || [
-                        "server error",
-                        "http 500",
-                        "http 502",
-                        "http 503",
-                        "http 504",
-                    ]
-                    .iter()
-                    .any(|text| diagnostic.contains(text)));
+                && [
+                    "server error",
+                    "http 500",
+                    "http 502",
+                    "http 503",
+                    "http 504",
+                ]
+                .iter()
+                .any(|text| diagnostic.contains(text));
             (unavailable || startup).then_some(VoidCause::SessionUnavailable)
         }
     }

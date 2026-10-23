@@ -126,6 +126,7 @@ impl StageTime<'_> {
 #[derive(Clone, Copy)]
 pub enum StageName {
     Implement,
+    CodeReview,
     Resume,
     SecurityReview,
     PullRequest,
@@ -152,6 +153,7 @@ impl StageName {
     pub fn name(self) -> &'static str {
         match self {
             Self::Implement => "implement",
+            Self::CodeReview => "Code review",
             Self::Resume => "Resume",
             Self::SecurityReview => "Security review",
             Self::PullRequest => "pull request",
@@ -198,6 +200,7 @@ impl StageName {
     pub(super) fn known(name: &str) -> bool {
         [
             Self::Implement,
+            Self::CodeReview,
             Self::Resume,
             Self::SecurityReview,
             Self::PullRequest,

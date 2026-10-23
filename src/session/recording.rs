@@ -3,9 +3,12 @@
 //! The captured owning Command also governs child inheritance and collection.
 
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(test)]
+use std::io::{BufRead, BufReader};
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{ChildStdout, Command};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -142,6 +145,7 @@ impl Recording {
         let choice_owned = choice.clone();
         let recording = self.clone();
         let private = input.private;
+        let stop_at_limit = matches!(self.owner, Ok(None));
         let executed = process::streaming(
             adapter,
             command,
@@ -156,7 +160,10 @@ impl Recording {
                     &log_owned,
                     stream,
                     &streaming_trace,
-                    private,
+                    StreamPolicy {
+                        stop_at_limit,
+                        private,
+                    },
                 );
                 // The process owner joins this reader before returning, including
                 // on interruption, when it deliberately suppresses state recovery.
@@ -313,40 +320,109 @@ struct SessionModels {
     observed: Vec<String>,
 }
 
-/// Copy every line of `stream` to `log_file` and print the progress lines it
-/// condenses to, until the stream ends.
+struct StreamPolicy {
+    stop_at_limit: bool,
+    private: bool,
+}
+
+/// Copy every line to the private transcript and trace. Ordinary sessions also
+/// print progress; Eval sessions stop at plan limits while preserving evidence.
 fn follow(
     kind: &str,
-    stream: impl Read,
+    mut stream: ChildStdout,
+    log_file: &mut File,
+    log: &Path,
+    progress: &mut Interpretation,
+    trace: &Mutex<super::trace::Trace>,
+    policy: StreamPolicy,
+) -> Result<()> {
+    let mut pending = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        // The pipe may stay idle while Codex writes a native quota report.
+        // Poll in this owned reader so process cleanup still joins it.
+        let mut descriptor = libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let ready = unsafe {
+            libc::poll(
+                &mut descriptor,
+                1,
+                if policy.stop_at_limit { 100 } else { -1 },
+            )
+        };
+        if ready < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error.into());
+        }
+        let mut eof = false;
+        if ready > 0 {
+            let count = stream
+                .read(&mut buffer)
+                .context("could not read the session stream")?;
+            eof = count == 0;
+            pending.extend_from_slice(&buffer[..count]);
+            let complete = if eof {
+                pending.len()
+            } else {
+                pending
+                    .iter()
+                    .rposition(|byte| *byte == b'\n')
+                    .map_or(0, |index| index + 1)
+            };
+            for line in pending[..complete].split_inclusive(|byte| *byte == b'\n') {
+                record_line(kind, line, log_file, log, progress, trace, policy.private)?;
+            }
+            pending.drain(..complete);
+        }
+        if policy.stop_at_limit {
+            for raw in progress.limit_records() {
+                record_line(
+                    kind,
+                    raw.as_bytes(),
+                    log_file,
+                    log,
+                    progress,
+                    trace,
+                    policy.private,
+                )?;
+            }
+            if progress.plan_limit_reached() {
+                return super::limits::stop();
+            }
+        }
+        if eof {
+            return Ok(());
+        }
+    }
+}
+
+fn record_line(
+    kind: &str,
+    line: &[u8],
     log_file: &mut File,
     log: &Path,
     progress: &mut Interpretation,
     trace: &Mutex<super::trace::Trace>,
     private: bool,
 ) -> Result<()> {
-    let mut stream = BufReader::new(stream);
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        if stream
-            .read_until(b'\n', &mut line)
-            .context("could not read the session stream")?
-            == 0
-        {
-            return Ok(());
-        }
-        log_file
-            .write_all(&line)
-            .with_context(|| format!("could not write {}", log.display()))?;
-        let raw = String::from_utf8_lossy(&line);
-        let decoded = progress.decode(&raw);
-        trace.lock().unwrap().record(&raw, &decoded.events)?;
-        if !private {
-            for condensed in decoded.progress {
-                progress::step(format_args!("{kind}: {condensed}"));
-            }
+    log_file
+        .write_all(line)
+        .with_context(|| format!("could not write {}", log.display()))?;
+    let raw = String::from_utf8_lossy(line);
+    let decoded = progress.decode(&raw);
+    trace.lock().unwrap().record(&raw, &decoded.events)?;
+    if !private {
+        for condensed in decoded.progress {
+            progress::step(format_args!("{kind}: {condensed}"));
         }
     }
+    Ok(())
 }
 
 /// A Session trace that cannot be finished costs evidence, never the session.

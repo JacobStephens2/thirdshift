@@ -1,5 +1,6 @@
 //! Atomic metadata and one result per Trial. An exclusive lock fences resumes.
 
+use std::collections::BTreeMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -9,6 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use super::workers::{Arm, TrialResult};
 use super::{Description, Task};
+use crate::trial::{Outcome, VoidCause};
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct Stored {
@@ -35,6 +37,64 @@ struct View<'a> {
     results: Vec<TrialResult>,
     verdict: &'a Option<super::grading::Verdict>,
     minutes: Minutes,
+    voids: Voids,
+    findings: Vec<String>,
+}
+
+#[derive(Default, Serialize)]
+struct Voids {
+    baseline: ArmVoids,
+    candidate: ArmVoids,
+}
+
+#[derive(Default, Serialize)]
+struct ArmVoids {
+    count: usize,
+    causes: BTreeMap<VoidCause, usize>,
+}
+
+impl Voids {
+    fn include(&mut self, result: &TrialResult) {
+        let arm = match result.arm {
+            Arm::Baseline => &mut self.baseline,
+            Arm::Candidate => &mut self.candidate,
+        };
+        for attempt in &result.attempts {
+            if attempt.outcome == Outcome::Void {
+                arm.count += 1;
+                if let Some(cause) = attempt.void_cause {
+                    *arm.causes.entry(cause).or_default() += 1;
+                }
+            }
+        }
+    }
+
+    fn findings(&self) -> Vec<String> {
+        [("Baseline", &self.baseline), ("Candidate", &self.candidate)]
+            .into_iter()
+            .filter_map(|(name, arm)| {
+                let count = arm.causes.get(&VoidCause::MemoryCap).copied().unwrap_or(0);
+                (count > 1).then(|| {
+                    format!("{name} Arm repeatedly hit its memory cap ({count} Void Trials)")
+                })
+            })
+            .collect()
+    }
+}
+
+impl std::fmt::Display for ArmVoids {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "{} Void Trials", self.count)?;
+        if !self.causes.is_empty() {
+            let causes = self
+                .causes
+                .iter()
+                .map(|(cause, count)| format!("{cause}: {count}"))
+                .collect::<Vec<_>>();
+            write!(formatter, " ({})", causes.join(", "))?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Default, Serialize)]
@@ -82,7 +142,7 @@ impl std::fmt::Display for State {
 impl Stored {
     pub fn open(
         root: &Path,
-        description: Description,
+        mut description: Description,
         tasks: impl FnOnce() -> Result<Vec<Task>>,
     ) -> Result<Self> {
         fs::create_dir_all(root)?;
@@ -94,11 +154,18 @@ impl Stored {
         let mut stored = if path.exists() {
             let mut stored: Self = serde_json::from_slice(&fs::read(path)?)?;
             ensure!(stored.format == 1, "unsupported Experiment format");
+            let started = directory.join("started").exists();
+            if started {
+                // Cause defaults belong to the installed runner, not a CLI
+                // override. Resume keeps the rules recorded before its Trials.
+                description
+                    .bar
+                    .void_rules
+                    .causes
+                    .clone_from(&stored.description.bar.void_rules.causes);
+            }
             if stored.description.bar != description.bar {
-                ensure!(
-                    !directory.join("started").exists(),
-                    "Bar cannot change after the first Trial"
-                );
+                ensure!(!started, "Bar cannot change after the first Trial");
                 stored.description.bar = description.bar;
             }
             stored
@@ -135,6 +202,7 @@ impl Stored {
     fn view(&self) -> Result<View<'_>> {
         let results = self.results()?;
         let mut minutes = Minutes::default();
+        let mut voids = Voids::default();
         let trials = self.directory.join("trials");
         if trials.exists() {
             for trial in fs::read_dir(trials)? {
@@ -143,10 +211,13 @@ impl Stored {
                     // Every completed attempt is retained here before a pause
                     // or final publication. Read it once per Trial, so live
                     // and paused Experiments include time already spent too.
-                    minutes.include(&serde_json::from_slice(&fs::read(pending)?)?);
+                    let result = serde_json::from_slice(&fs::read(pending)?)?;
+                    minutes.include(&result);
+                    voids.include(&result);
                 }
             }
         }
+        let findings = voids.findings();
         Ok(View {
             description: &self.description,
             state: self.state,
@@ -154,6 +225,8 @@ impl Stored {
             results,
             verdict: &self.verdict,
             minutes,
+            voids,
+            findings,
         })
     }
 
@@ -163,7 +236,7 @@ impl Stored {
             Ok(serde_json::to_string(&view)?)
         } else {
             Ok(format!(
-                "{} · {} · {} → {} · {} Trial results · Verdict: {} · Baseline: {:.3} minutes · Candidate: {:.3} minutes",
+                "{} · {} · {} → {} · {} Trial results · Verdict: {} · Baseline: {:.3} minutes · Candidate: {:.3} minutes\nBaseline: {}\nCandidate: {}{}",
                 self.description.id,
                 self.state,
                 self.description.baseline.commit,
@@ -173,7 +246,13 @@ impl Stored {
                     .as_ref()
                     .map_or("pending", |verdict| verdict.outcome()),
                 view.minutes.baseline,
-                view.minutes.candidate
+                view.minutes.candidate,
+                view.voids.baseline,
+                view.voids.candidate,
+                view.findings
+                    .iter()
+                    .map(|finding| format!("\nFinding: {finding}"))
+                    .collect::<String>()
             ))
         }
     }

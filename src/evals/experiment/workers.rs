@@ -1,9 +1,11 @@
 //! Two blocking workers take an alternating Arm queue. Each attempt gets a
 //! fresh prepared repository; only terminal Trial results are skipped on resume.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs;
 use std::os::unix::fs::symlink;
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{
@@ -19,6 +21,7 @@ use sha2::{Digest, Sha256};
 
 use super::{Task, arms, grading, integrity, store};
 use crate::process::{self, Control, Interruption};
+use crate::session::limits;
 use crate::trial::{Outcome, Output, VoidCause};
 use crate::{interrupt, logs, progress};
 
@@ -78,6 +81,12 @@ fn pauses(output: &Output) -> bool {
 }
 
 pub(super) fn run(experiment: &store::Stored) -> Result<()> {
+    let signal = experiment.directory.join("plan-limit");
+    match fs::remove_file(&signal) {
+        Ok(()) => (),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+        Err(error) => return Err(error.into()),
+    }
     let prepared = experiment
         .description
         .prepared
@@ -126,12 +135,13 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
                             return Ok(());
                         }
                         interrupt::check()?;
+                        limits::check(&signal)?;
                         queue.pop_front()
                     };
                     let Some(trial) = trial else {
                         return Ok(());
                     };
-                    if let Err(error) = run_trial(experiment, &trial, prepared) {
+                    if let Err(error) = run_trial(experiment, &trial, prepared, &signal) {
                         stopped.store(true, Ordering::SeqCst);
                         return Err(error);
                     }
@@ -157,6 +167,7 @@ fn run_trial(
     experiment: &store::Stored,
     trial: &Trial<'_>,
     prepared: &arms::Prepared,
+    signal: &Path,
 ) -> Result<()> {
     let (arm, setup) = match trial.arm {
         Arm::Baseline => (&prepared.baseline, &experiment.description.baseline),
@@ -165,6 +176,10 @@ fn run_trial(
     let directory = experiment.directory.join("trials").join(trial.key());
     fs::create_dir_all(&directory)?;
     let pending = directory.join("pending.json");
+    let terminal = experiment
+        .directory
+        .join("results")
+        .join(format!("{}.json", trial.key()));
     let mut result = if pending.exists() {
         serde_json::from_slice(&fs::read(&pending)?)?
     } else {
@@ -179,15 +194,9 @@ fn run_trial(
         }
     };
     let bar = &experiment.description.bar;
-    while result.outcome == Outcome::Void
-        && result
-            .attempts
-            .iter()
-            .filter(|attempt| !pauses(attempt))
-            .count()
-            <= bar.void_rules.retries
-    {
+    while result.outcome == Outcome::Void && result.attempts.len() <= bar.void_rules.retries {
         interrupt::check()?;
+        limits::check(signal)?;
         let attempt = tempfile::Builder::new()
             .prefix("attempt-")
             .tempdir_in(&directory)?
@@ -220,7 +229,7 @@ fn run_trial(
         store::write(
             &request,
             &json!({
-                "version": 1, "repository": prepared_repo.repository, "session_kind": "spec-review",
+                "version": 1, "repository": prepared_repo.repository, "session_kind": trial.task.manifest.session,
                 "inputs": inputs, "harness": setup.harness, "model": setup.model, "effort": setup.effort,
                 "output_dir": attempt.join("session")
             }),
@@ -229,39 +238,62 @@ fn run_trial(
             .create(true)
             .append(true)
             .open(experiment.directory.join("started"))?;
+        limits::check(signal)?;
         progress::step(format!("Trial {} starting", trial.key()));
+        let monitor = RefCell::new(super::limits::Monitor::new(
+            &attempt.join("session"),
+            &prepared_repo.repository,
+            &setup.choice(),
+        ));
+        let started = Instant::now();
         let output = execute(
             experiment,
             arm,
             trial.arm,
             &request,
             Duration::from_secs(bar.timeout_seconds),
+            signal,
+            &monitor,
         );
         interrupt::check()?;
         let mut protocol = match output {
             Ok(output) => {
                 fs::write(attempt.join("stdout"), &output.stdout)?;
                 fs::write(attempt.join("stderr"), &output.stderr)?;
-                if !output.status.success() {
-                    bail!(
-                        "Arm Trial protocol failed ({}): {}",
-                        output.status,
-                        String::from_utf8_lossy(&output.stderr)
-                    );
+                if output.status.signal() == Some(libc::SIGKILL) {
+                    Output::failed(
+                        started.elapsed().as_millis(),
+                        "Trial process killed (SIGKILL); external cause unknown",
+                    )
+                } else {
+                    if !output.status.success() {
+                        bail!(
+                            "Arm Trial protocol failed ({}): {}",
+                            output.status,
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                    let protocol: Output =
+                        serde_json::from_slice(&output.stdout).context("invalid Trial result")?;
+                    ensure!(protocol.version == 1, "unsupported Trial result");
+                    protocol
                 }
-                let protocol: Output =
-                    serde_json::from_slice(&output.stdout).context("invalid Trial result")?;
-                ensure!(protocol.version == 1, "unsupported Trial result");
-                protocol
             }
             Err(error) if error.is::<process::TimedOut>() => {
-                Output::timed_out(u128::from(bar.timeout_seconds) * 1000)
+                Output::failed(u128::from(bar.timeout_seconds) * 1000, "Trial timed out")
             }
+            Err(error) if error.is::<limits::Reached>() => monitor
+                .into_inner()
+                .cut_short(started.elapsed().as_millis()),
             Err(error) => return Err(error),
         };
         let after = integrity::snapshot(&prepared_repo.repository);
         interrupt::check()?;
-        if !after.as_ref().is_ok_and(|after| after == &before) {
+        // Keep known failures and external Void causes, including limit
+        // stops. Repository changes invalidate an otherwise successful Trial.
+        if protocol.outcome == Outcome::Succeeded
+            && !after.as_ref().is_ok_and(|after| after == &before)
+        {
             protocol.outcome = Outcome::Void;
             protocol.void_cause = Some(VoidCause::RepositoryChanged);
             protocol.cause = Some("Trial repository changed during its session".into());
@@ -284,6 +316,11 @@ fn run_trial(
         // short. A resume keeps the original Bar's remaining retry budget.
         store::write(&pending, &result)?;
         if paused {
+            // A provider limit still stops scheduling, including on the last
+            // attempt. Publish exhaustion so resume cannot grant more retries.
+            if result.attempts.len() > bar.void_rules.retries {
+                store::write(&terminal, &result)?;
+            }
             bail!(
                 "Trial {} paused: {:?}; run the Experiment again to resume",
                 trial.key(),
@@ -294,13 +331,7 @@ fn run_trial(
             break;
         }
     }
-    store::write(
-        &experiment
-            .directory
-            .join("results")
-            .join(format!("{}.json", trial.key())),
-        &result,
-    )?;
+    store::write(&terminal, &result)?;
     progress::step(format!("Trial {} {}", trial.key(), result.outcome));
     Ok(())
 }
@@ -334,7 +365,9 @@ fn prepare_branches(repository: &Path, task: &Task) -> Result<()> {
         "-m",
         "Eval change",
     ])?;
-    git.run(&["push", "origin", &inputs.base, &inputs.branch])?;
+    if task.manifest.session == super::super::format::Session::SpecReview {
+        git.run(&["push", "origin", &inputs.base, &inputs.branch])?;
+    }
     Ok(())
 }
 
@@ -344,6 +377,8 @@ fn execute(
     name: Arm,
     request: &Path,
     timeout: Duration,
+    signal: &Path,
+    monitor: &RefCell<super::limits::Monitor>,
 ) -> Result<std::process::Output> {
     let directory = experiment.directory.join("harnesses").join(name.name());
     let path = std::env::join_paths(std::iter::once(directory).chain(std::env::split_paths(
@@ -353,6 +388,7 @@ fn execute(
         Command::new(&arm.binary)
             .arg("--trial")
             .arg(request)
+            .env(limits::SIGNAL_ENV, signal)
             .env("PATH", path),
         None,
         Control {
@@ -361,5 +397,6 @@ fn execute(
             stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
         },
         Instant::now() + timeout,
+        &|| monitor.borrow_mut().check(signal),
     )
 }

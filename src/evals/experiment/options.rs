@@ -112,6 +112,10 @@ pub fn parse(args: &[String]) -> Result<Options> {
     number!("--draws", bar.draws);
     number!("--timeout", bar.timeout_seconds);
     number!("--void-retries", bar.void_rules.retries);
+    ensure!(
+        bar.void_rules.retries <= 2,
+        "Void Trials allow at most two fresh retries"
+    );
     let trials_per_task = flags
         .remove("--trials-per-task")
         .map(str::parse::<usize>)

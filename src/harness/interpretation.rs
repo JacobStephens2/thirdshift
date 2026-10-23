@@ -13,6 +13,7 @@ pub(super) use stream::Stream;
 pub mod event;
 #[cfg(test)]
 mod event_tests;
+pub(crate) mod limits;
 mod models;
 mod security;
 pub use security::SafeguardRefusal;
@@ -28,6 +29,7 @@ pub struct Interpretation {
     models: models::Models,
     events: Option<Vec<event::Event>>,
     work_started: bool,
+    plan_limit_reached: bool,
 }
 
 /// Reporting survives ordinary failures; only success supplies Resume facts.
@@ -110,6 +112,10 @@ pub(super) struct Facts {
 pub(super) trait Decoder: Send {
     fn condense(&mut self, raw: &str) -> StreamUpdate;
     fn complete(self: Box<Self>) -> Facts;
+    /// Optional live quota records absent from the Harness's stdout.
+    fn limit_records(&mut self) -> Vec<String> {
+        Vec::new()
+    }
 }
 
 /// Live protocol knowledge stays in the decoder, including evidence from
@@ -129,6 +135,7 @@ pub struct Decoded {
 }
 
 pub(super) enum Evidence {
+    PlanLimit,
     WorkStarted,
     ObservedModel { name: String, scope: ModelScope },
     RequestedModelFallback,
@@ -230,6 +237,7 @@ impl Interpretation {
             models: models::Models::default(),
             events: None,
             work_started: false,
+            plan_limit_reached: false,
         }
     }
 
@@ -255,6 +263,17 @@ impl Interpretation {
     /// completion reporting and retained-record reads.
     pub fn observed_models(&self) -> Vec<String> {
         self.models.names().to_vec()
+    }
+
+    /// Live quota evidence is sticky and independent of ordinary Run outcomes.
+    pub fn plan_limit_reached(&self) -> bool {
+        self.plan_limit_reached
+    }
+
+    /// Supplied raw records go through the same decoding and trace recording
+    /// as stdout. Only callers opting into the Eval stop policy poll these.
+    pub fn limit_records(&mut self) -> Vec<String> {
+        self.decoder.limit_records()
     }
 
     /// The stream decoder's ID alone, without retained-record recovery or
@@ -287,6 +306,9 @@ impl Interpretation {
         } = self.decoder.condense(raw);
         self.work_started |= events.iter().any(work_started);
         for fact in evidence {
+            if matches!(fact, Evidence::PlanLimit) {
+                self.plan_limit_reached = true;
+            }
             if matches!(fact, Evidence::WorkStarted) {
                 self.work_started = true;
             }
