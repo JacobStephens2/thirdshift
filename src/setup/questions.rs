@@ -1,7 +1,7 @@
 //! Setup's questions, asked through [`Outside`]: on the terminal, on stderr,
 //! with the answers read from stdin, so stdout stays empty. Each question's
 //! default answer, taken by pressing Enter, is the current value. The Resend
-//! API key is read hidden, and never shown.
+//! API key and Claude setup token are read hidden, and never shown.
 
 use std::path::Path;
 
@@ -35,6 +35,14 @@ pub struct Answers {
     /// With Run notifications on, `email.always`, their settings; with them
     /// off, `None`, and the email settings stay as they were.
     pub notifications: Option<Notifications>,
+    /// A Claude setup token to save for Trials, independent of notifications.
+    pub claude_setup_token: Option<String>,
+}
+
+/// The entered secrets to persist together, with omitted values retained.
+pub struct CredentialEdits<'a> {
+    pub resend_key: Option<&'a str>,
+    pub claude_setup_token: Option<&'a str>,
 }
 
 impl Answers {
@@ -70,6 +78,16 @@ impl Answers {
         self.notifications
             .as_ref()
             .and_then(|notifications| notifications.key.as_deref())
+    }
+
+    /// No save is needed when both hidden answers were skipped or retained.
+    pub fn credential_edits(&self) -> Option<CredentialEdits<'_>> {
+        let resend_key = self.key();
+        let claude_setup_token = self.claude_setup_token.as_deref();
+        (resend_key.is_some() || claude_setup_token.is_some()).then_some(CredentialEdits {
+            resend_key,
+            claude_setup_token,
+        })
     }
 }
 
@@ -136,6 +154,18 @@ pub fn ask(
         current.security_review,
     )?;
     let notifications = ask_notifications(outside, current, found)?;
+    let on_enter = if outside.claude_setup_token_saved() {
+        "Enter keeps the saved one"
+    } else {
+        "Enter to skip"
+    };
+    let prompt = format!(
+        "Claude setup token from `claude setup-token` (Trials only; input hidden, {on_enter}): "
+    );
+    let claude_setup_token = outside
+        .read_hidden(&prompt)?
+        .ok_or_else(|| anyhow::anyhow!(ENDED))?;
+    let claude_setup_token = (!claude_setup_token.is_empty()).then_some(claude_setup_token);
     let console = ask_console(
         outside,
         &current.console,
@@ -152,6 +182,7 @@ pub fn ask(
         security_fix,
         security_review,
         notifications,
+        claude_setup_token,
         console,
     })
 }

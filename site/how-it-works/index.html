@@ -70,7 +70,7 @@
       <pre class="guide-command"><code>cd ~/repos/widgets
 thirdshift --no-merge https://github.com/acme/widgets/issues/7</code></pre>
       <p>In that clone, <code>thirdshift 7</code> also starts the issue's Run: a bare issue number is resolved from <code>origin</code>. Add <code>--no-merge</code> to leave it for review regardless of your defaults. <a href="/docs/#usage">Command forms</a>.</p>
-      <p><code>--no-merge</code> explicitly leaves the pull request for review, even if your User config normally requests merging. Before starting, install and authenticate GitHub CLI (<code>gh</code>) and your chosen <strong>Harness</strong> (the agent CLI, such as Claude Code or Codex), configure Git's commit identity and push access, and install the repository's test toolchain. <code>thirdshift setup</code> chooses machine defaults.</p>
+      <p><code>--no-merge</code> explicitly leaves the pull request for review, even if your User config normally requests merging. Before starting, install and authenticate GitHub CLI (<code>gh</code>) and your chosen <strong>Harness</strong> (the agent CLI, such as Claude Code or Codex), configure Git's commit identity and push access, and install the repository's test toolchain. <code>thirdshift setup</code> chooses machine defaults and offers to save a Claude setup token, made with <code>claude setup-token</code>, with hidden input. That token is reserved for Trials; ordinary Runs use the Harness's existing login.</p>
       </div>
     </details>
   </section>
