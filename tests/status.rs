@@ -8,6 +8,30 @@ const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 const OPENS_PR: &str = "echo work > work.txt\ngit add work.txt\ngit commit -qm 'Make widgets'\ngh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7'\n";
 
 #[test]
+fn ticket_run_display_preserves_the_stored_command_kind() {
+    let scenario = Scenario::new();
+    let now = chrono::Local::now().to_rfc3339();
+    write_record(&scenario, 7, &now, Some(&now));
+    let path = scenario.path(LOGS).join("7-fixture.command.json");
+    let original = fs::read(&path).unwrap();
+    let text = scenario.run(&["status"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    assert!(
+        text.stdout.contains("Ticket run acme/widgets#7 Fixture"),
+        "{}",
+        text.stdout
+    );
+    let json = scenario.run(&["status", "--json"]);
+    assert_eq!(json.code, Some(0), "{}", json.stderr);
+    let status: Value = serde_json::from_str(&json.stdout).unwrap();
+    assert_eq!(status["commands"][0]["kind"], "Run");
+    let shown = scenario.run(&["show", path.to_str().unwrap()]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    assert!(shown.stdout.starts_with("Ticket run "), "{}", shown.stdout);
+    assert_eq!(fs::read(path).unwrap(), original);
+}
+
+#[test]
 fn status_shows_each_idle_pass_until_its_own_kind_starts_work() {
     let scenario = Scenario::new();
     scenario.user_config_is("[activity]\nquiet_skips = true\n");
@@ -92,7 +116,7 @@ fn status_shows_each_idle_pass_until_its_own_kind_starts_work() {
     let dispatched = text
         .stdout
         .lines()
-        .find(|line| line.starts_with("  Run acme/widgets#7"))
+        .find(|line| line.starts_with("  Ticket run acme/widgets#7"))
         .expect(&text.stdout);
     assert!(dispatched.ends_with("ready for review"), "{dispatched}");
 }
@@ -206,9 +230,10 @@ fn a_live_pickup_run_names_its_issue_and_the_run_it_dispatched() {
         row.starts_with("Pickup run acme/widgets#7 Make widgets · "),
         "{row}"
     );
-    assert!(row.contains(" · dispatched Run · "), "{row}");
+    assert!(row.contains(" · dispatched Ticket run · "), "{row}");
     assert!(
-        text.stdout.contains("  Run acme/widgets#7 Make widgets · "),
+        text.stdout
+            .contains("  Ticket run acme/widgets#7 Make widgets · "),
         "{}",
         text.stdout
     );
@@ -216,7 +241,7 @@ fn a_live_pickup_run_names_its_issue_and_the_run_it_dispatched() {
     assert!(
         shown
             .stdout
-            .starts_with(&format!("Pickup run {name} · dispatched Run · ")),
+            .starts_with(&format!("Pickup run {name} · dispatched Ticket run · ")),
         "{}",
         shown.stdout
     );
@@ -606,13 +631,16 @@ fn inbox_puts_live_problems_first_and_points_to_silent_landing_without_duplicati
         text.stdout
     );
     assert_eq!(
-        text.stdout.matches("Run acme/widgets#7 Fixture").count(),
+        text.stdout
+            .matches("Ticket run acme/widgets#7 Fixture")
+            .count(),
         1,
         "{}",
         text.stdout
     );
     assert!(
-        text.stdout.contains("Run acme/widgets#10 Fixture · live ·"),
+        text.stdout
+            .contains("Ticket run acme/widgets#10 Fixture · live ·"),
         "{}",
         text.stdout
     );
@@ -706,7 +734,7 @@ fn inbox_collapses_only_failures_with_the_same_known_cause_and_keeps_their_comma
         text.stdout
     );
     assert!(
-        !text.stdout.contains("Run acme/widgets#8 Fixture"),
+        !text.stdout.contains("Ticket run acme/widgets#8 Fixture"),
         "{}",
         text.stdout
     );
@@ -872,7 +900,7 @@ fn status_keeps_completed_ticket_trees_with_recent_and_all_history() {
         text.stdout
     );
     assert!(
-        text.stdout.contains("  Run acme/widgets#21 Ticket"),
+        text.stdout.contains("  Ticket run acme/widgets#21 Ticket"),
         "{}",
         text.stdout
     );
@@ -926,6 +954,11 @@ fn status_reads_activity_starts_from_before_harness_metadata() {
     assert_eq!(command["harness"], Value::Null);
     assert_eq!(command["model"], Value::Null);
     assert_eq!(command["effort"], Value::Null);
+    assert_eq!(command["kind"], "Run");
+    let text = scenario.run(&["status", "--all"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    assert!(text.stdout.contains("Ticket run"), "{}", text.stdout);
+    assert!(!text.stdout.contains(" Run · "), "{}", text.stdout);
 }
 
 #[test]

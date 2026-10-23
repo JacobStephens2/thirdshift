@@ -494,13 +494,13 @@ fn setup_with_an_argument_is_an_argument_error_and_writes_nothing() {
 
 // Setup from a terminal.
 
-const HARNESS: &str = "Harness for every Run's sessions";
+const HARNESS: &str = "Harness for every Ticket run's sessions";
 const MODEL: &str = "Model for claude";
 const EFFORT: &str = "Effort for claude";
-const MERGE: &str = "Merge run?";
-const BASE_FIX: &str = "Every Run may start a Base fix when the Base branch's CI is red?";
+const MERGE: &str = "Self-merges?";
+const BASE_FIX: &str = "Every Ticket run may start a Base fix when the Base branch's CI is red?";
 const PULL: &str = "fast-forward";
-const SECURITY_REVIEW: &str = "Runs review their change for Security findings?";
+const SECURITY_REVIEW: &str = "Ticket runs review their change for Security findings?";
 const SECURITY_FIX: &str = "Security runs may fix reproduced findings?";
 const NOTIFY: &str = "Run notifications, an email";
 const CONSOLE: &str = "Run the Console?";

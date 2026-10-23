@@ -117,13 +117,13 @@ test('time headings distinguish a live Pickup run and its Run and name kinds onc
   for (const view of ['lanes', 'stages']) {
     await page.goto(`${origin}/?page=${view}`);
     const headings = view === 'lanes' ? page.locator('.time-run h3') : page.locator('thead .command');
-    for (const heading of ['Pickup run · acme/widgets#1', 'Run · acme/widgets#1', 'Spec run · acme/widgets#2', 'Run · acme/widgets#6', 'Security run on acme/widgets']) {
+    for (const heading of ['Pickup run · acme/widgets#1', 'Ticket run · acme/widgets#1', 'Spec run · acme/widgets#2', 'Ticket run · acme/widgets#6', 'Security run on acme/widgets']) {
       assert.equal(await headings.getByRole('link', { name: heading, exact: true }).count(), 1);
       if (view === 'stages') {
         assert.ok((await page.locator('.cell-run').allTextContents()).includes(`${heading}: `));
       }
     }
-    for (const heading of ['Pickup run · acme/widgets#1', 'Run · acme/widgets#1']) {
+    for (const heading of ['Pickup run · acme/widgets#1', 'Ticket run · acme/widgets#1']) {
       const link = headings.getByRole('link', { name: heading, exact: true });
       assert.match(await link.locator('..').textContent(), /live/);
       await link.click();
@@ -151,7 +151,7 @@ test('Stages pins live Runs, matches CLI order and opens the selected child Run 
   assert.match(await page.locator('.stage-grid').first().textContent(), /Usual range: 10–10 min/);
   const historical = page.locator('.stage-grid').filter({ has: page.locator('thead .peek-link', { hasText: 'acme/widgets#9' }) });
   const headers = await historical.locator('thead .peek-link').allTextContents();
-  const historicalCell = historical.locator('tbody tr').first().locator('td').nth(headers.indexOf('Run · acme/widgets#9'));
+  const historicalCell = historical.locator('tbody tr').first().locator('td').nth(headers.indexOf('Ticket run · acme/widgets#9'));
   assert.match(await historicalCell.textContent(), /Unknown · no stage times retained/);
   assert.doesNotMatch(await historicalCell.textContent(), /Not reached/);
   const child = page.locator('thead .peek-link').filter({ hasText: 'acme/widgets#6' });

@@ -40,7 +40,7 @@ fn print_command(command: &Command, indent: &str) {
     }
     println!(
         "{indent}{} {subject} · {} · {} · {} · {} · {stage}",
-        facts.kind,
+        super::display_name(&facts.kind),
         command.state,
         facts.harness,
         facts.model.as_deref().unwrap_or("default Model"),
@@ -64,7 +64,7 @@ pub(super) fn print_history(command: &super::reading::HistoricalCommand) {
     println!(
         "{}{issue} {} · {} → {} · {}",
         command.repository,
-        command.kind,
+        super::display_name(&command.kind),
         command.started_at,
         command.ended_at.as_deref().unwrap_or("unknown end"),
         command.outcome.as_deref().unwrap_or("unknown outcome")
@@ -154,9 +154,13 @@ pub(super) fn stage_text(command: &Command) -> String {
         },
         |stage| {
             if command.state == "died" {
-                format!("died at {}", stage.name)
+                format!("died at {}", super::display_name(&stage.name))
             } else {
-                format!("{} · {}", stage.name, age(stage.age_seconds))
+                format!(
+                    "{} · {}",
+                    super::display_name(&stage.name),
+                    age(stage.age_seconds)
+                )
             }
         },
     );

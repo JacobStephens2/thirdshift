@@ -19,7 +19,7 @@ function pretty(text) {
   try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; }
 }
 const quote = text => `'${text.replaceAll("'", "'\\''")}'`;
-const kindName = { cmd: 'Command', run: 'Run', stage: 'stage', sess: 'session', model: 'model call', tool: 'tool call', turn: 'turn', agent: 'sub-agent' };
+const kindName = { cmd: 'Command', run: 'Ticket run', stage: 'stage', sess: 'session', model: 'model call', tool: 'tool call', turn: 'turn', agent: 'sub-agent' };
 
 export function initSpanTree({ openCommand, openDetails }) {
   const tree = document.getElementById('span-tree');
