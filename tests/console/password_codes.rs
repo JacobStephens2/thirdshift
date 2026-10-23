@@ -15,14 +15,29 @@ fn start(home: &Path, resend: &ResendStandIn, environment_key: bool) -> Console 
 }
 
 fn form(console: &Console) -> (String, String) {
-    let response = get(console, "/set-password", "");
+    form_from(console, "/set-password")
+}
+
+fn form_from(console: &Console, page: &str) -> (String, String) {
+    let response = get(console, page, "");
     assert_eq!(response.status(), 200);
     let cookie = cookie(&response);
     (cookie, csrf(&response.text().unwrap()))
 }
 
 fn post(console: &Console, path: &str, fields: &[(&str, &str)]) -> reqwest::blocking::Response {
-    let (cookie, csrf) = form(console);
+    post_from(console, "/set-password", path, fields)
+}
+
+/// Post `fields` to `path` with the CSRF of the form on `page`. Without a
+/// key /set-password has no form, so the sign-in form's CSRF serves.
+fn post_from(
+    console: &Console,
+    page: &str,
+    path: &str,
+    fields: &[(&str, &str)],
+) -> reqwest::blocking::Response {
+    let (cookie, csrf) = form_from(console, page);
     let mut fields = fields.to_vec();
     fields.push(("csrf", &csrf));
     client()
@@ -168,6 +183,38 @@ fn email_code_creates_and_resets_an_account_without_revealing_the_allowlist() {
 }
 
 #[test]
+fn the_code_page_uses_the_console_theme_and_stylesheet() {
+    let home = configured();
+    let config = home.path().join(".thirdshift/config.toml");
+    let themed = fs::read_to_string(&config)
+        .unwrap()
+        .replace("[console]\n", "[console]\ntheme = \"garden-dark\"\n");
+    fs::write(&config, themed).unwrap();
+    let resend = ResendStandIn::replying(200, "{}");
+    for (environment_key, status, text) in [
+        (true, 200, "a code has been sent"),
+        (false, 503, "thirdshift console password"),
+    ] {
+        let console = start(home.path(), &resend, environment_key);
+        let response = post_from(
+            &console,
+            "/sign-in",
+            "/set-password/code",
+            &[("email", EMAIL)],
+        );
+        assert_eq!(response.status(), status);
+        let html = response.text().unwrap();
+        assert!(html.contains("data-theme=\"garden-dark\""), "{html}");
+        assert!(html.contains("href=\"/assets/console.css\""), "{html}");
+        assert!(html.contains(text), "{html}");
+        if environment_key {
+            wait_for_email(&resend);
+        }
+    }
+    assert_eq!(resend.requests().len(), 1);
+}
+
+#[test]
 fn code_flow_requires_csrf_and_enforces_five_tries_and_send_throttling_over_http() {
     let home = configured();
     let resend = ResendStandIn::replying(200, "{}");
@@ -255,20 +302,12 @@ fn email_flow_is_off_without_a_key_and_in_no_sign_in_mode() {
         assert!(!html.contains("Send code"));
     }
     for path in ["/set-password/code", "/set-password"] {
-        let page = get(&console, "/sign-in", "");
-        let cookie = cookie(&page);
-        let csrf = csrf(&page.text().unwrap());
-        let response = client()
-            .post(format!("{}{path}", console.address))
-            .header("cookie", cookie)
-            .form(&[
-                ("email", EMAIL),
-                ("code", "123456"),
-                ("password", PASSWORD),
-                ("csrf", &csrf),
-            ])
-            .send()
-            .unwrap();
+        let response = post_from(
+            &console,
+            "/sign-in",
+            path,
+            &[("email", EMAIL), ("code", "123456"), ("password", PASSWORD)],
+        );
         assert_eq!(response.status(), 503);
         assert!(
             response
