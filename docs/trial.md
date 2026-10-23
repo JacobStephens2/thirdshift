@@ -64,6 +64,14 @@ The result version is independently identified by `version: 1`.
   login or connection failure, a provider server error before work, a Harness
   that exits before work without a diagnostic, or a provider usage/rate limit.
   The Experiment's Bar decides which Void causes to retry or exclude.
+  The Experiment's code Grader also marks a changed repository as void with
+  `repository_changed`, before running any Eval task checks. This compares the
+  session's starting and ending HEAD, refs, index, tracked and untracked file
+  contents, including ignored files and its excluded issue input. Only the
+  session-generated Factory skill symlinks are omitted; report scratch is
+  removed by session completion. Harness instruction fallback links are created
+  before the comparison, so later edits to them still invalidate the Trial.
+  Repository changes retry fresh under the Bar.
 - `timings`: elapsed wall time in integer milliseconds. `total_ms` includes
   request preparation; `session_ms` includes skills setup, the session and any
   Resume, and report preservation.

@@ -458,20 +458,34 @@ retry up to the Bar's limit and remain void if exhausted.
 Two workers take alternating Baseline and Candidate Trials, each in a fresh
 prepared repository. Trial artifacts and one result per finished Trial live
 privately in `~/.thirdshift/evals/experiments/<id>/`. Trials currently run
-without a sandbox; #1014 adds isolation. Grading and Verdict publication are
-separate work; a completed Experiment here reports its Trial results.
+without a sandbox; #1014 adds isolation. Code Graders then score each Trial:
+a changed repository makes it void, a review with no reports fails, and the
+Eval task's mechanical checks must pass. Scores retain each check and its reason.
+Model grading of written success criteria follows separately; these Scores
+cover mechanical checks only and set no wrong-finding flags.
+
+Each suite gets a paired Verdict using its recorded Trials per Eval task (one
+or three). Any failed suite fails the Experiment; otherwise any inconclusive
+suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
+also makes it inconclusive. Results include the suite intervals, the Bar and
+each Arm's minutes across all attempts, including Void Trials and timeouts.
+Completed attempts that pause for provider limits count too, both while paused
+and after resume, without consuming the Bar's fresh-retry budget.
 
 The same Arms and suite names identify the same Experiment. Running it again
 skips finished Trials and re-runs interrupted ones; a completed Experiment only
 reports its saved results. A changed Bar is refused after the first Trial.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
---json` shows one. The starting command's `--json` prints one result document.
+--json` shows one. The starting command's `--json` ends with one JSON line
+containing the Verdict and suite intervals alongside the Trial results and Arm
+minutes. The text view shows Baseline and Candidate minutes beside the Verdict.
 
 Each invocation that does work keeps a Command record, Command log and Activity
 log lines under `<logs.dir>/JacobStephens2/thirdshift/commands/experiment/`
 (the Activity log is at the repository level). The record names both Arms and
 the Bar and moves through Arm builds, Eval tasks and Trials. It appears in the
-Inbox; use the name from `status` with `thirdshift stop <command>` to Stop it.
+Inbox: a pass goes in Done, and a fail or inconclusive Verdict goes in Needs you.
+Use the name from `status` with `thirdshift stop <command>` to Stop it.
 The individual Trials keep no factory Command records.
 
 `version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr. `architect` follows it too: stdout carries the pull request's URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with `--plan-only`, or its idea when the review published no plan. A skipped Architect run prints nothing there when [another is still running](#one-at-a-time), the URL of each Architect plan that is [still open](#one-architect-plan-at-a-time), the URL of each [Architect idea waiting for triage](#an-architect-idea-waits-for-triage), and the URL of the [Ready issue, or issue still settling, that goes first](#a-ready-issue-goes-first). `pickup` follows it as well: stdout carries the pull request's URL of the run it dispatches, and nothing when the [Pickup run](#pickup-runs) is skipped. So does `secure`: stdout carries the pull request's URL of a fix it dispatches, and nothing otherwise.

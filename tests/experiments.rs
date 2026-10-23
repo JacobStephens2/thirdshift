@@ -6,6 +6,144 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 use support::Scenario;
 
+#[test]
+fn spec_review_generated_instruction_fallbacks_do_not_void_trials() {
+    for harness_name in ["agy", "opencode"] {
+        let fixture = Fixture::new();
+        let harness = fixture.scenario.path(&format!("bin/{harness_name}"));
+        let real = harness.canonicalize().unwrap();
+        let fixed = fixture
+            .scenario
+            .path(&format!("versions/v1/{harness_name}"));
+        fs::copy(real, &fixed).unwrap();
+        fs::remove_file(&harness).unwrap();
+        std::os::unix::fs::symlink(fixed, &harness).unwrap();
+        let directory = fixture
+            .scenario
+            .path("home/.thirdshift/evals/suites/spec-review/tasks/fixture");
+        fs::write(
+            directory.join("instructions.md"),
+            "Read the supplied Spec.\n",
+        )
+        .unwrap();
+        let task = directory.join("task.toml");
+        let manifest = fs::read_to_string(&task).unwrap();
+        fs::write(
+            &task,
+            manifest.replace("[inputs]", "[inputs]\n\"CLAUDE.md\" = \"instructions.md\""),
+        )
+        .unwrap();
+        fixture.scenario.agent_does("true");
+        let run = fixture.run(&[
+            "--baseline-harness",
+            harness_name,
+            "--candidate-harness",
+            harness_name,
+        ]);
+        assert_eq!(run.code, Some(0), "{harness_name}: {}", run.stderr);
+        let experiment = fixture.experiment();
+        for result in experiment["results"].as_array().unwrap() {
+            assert_eq!(
+                result["outcome"], "succeeded",
+                "{harness_name}: generated fallback links must not invalidate an unchanged Trial"
+            );
+        }
+    }
+}
+
+#[test]
+fn spec_review_ignored_repository_changes_are_void() {
+    let fixture = Fixture::new();
+    let directory = fixture
+        .scenario
+        .path("home/.thirdshift/evals/suites/spec-review/tasks/fixture");
+    let task = directory.join("task.toml");
+    let manifest = fs::read_to_string(&task).unwrap();
+    fs::write(directory.join("ignore.txt"), "ignored-by-fixture.txt\n").unwrap();
+    fs::write(
+        &task,
+        manifest.replace("[inputs]", "[inputs]\n\".gitignore\" = \"ignore.txt\""),
+    )
+    .unwrap();
+
+    fixture
+        .scenario
+        .agent_does("printf changed > ignored-by-fixture.txt");
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+
+    let experiment = fixture.experiment();
+    for result in experiment["results"].as_array().unwrap() {
+        assert_eq!(
+            result["outcome"], "void",
+            "creating an ignored repository file must invalidate the Trial"
+        );
+    }
+}
+
+#[test]
+fn spec_review_arm_minutes_include_limit_paused_attempts_after_resume() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(
+        r#"
+sleep 0.1
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["quota exceeded"]}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+"#,
+    );
+    let paused = fixture.run(&[]);
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    let paused_view = fixture.experiment();
+    assert!(
+        paused_view["minutes"]["baseline"].as_f64().unwrap()
+            + paused_view["minutes"]["candidate"].as_f64().unwrap()
+            > 0.0,
+        "completed sessions must count while the Experiment is paused"
+    );
+
+    fixture.scenario.agent_does("true");
+    let resumed = fixture.run(&[]);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    let experiment = fixture.experiment();
+    let id = experiment["id"].as_str().unwrap();
+    let trials = fixture
+        .scenario
+        .path(&format!("home/.thirdshift/evals/experiments/{id}/trials"));
+    let mut expected =
+        std::collections::BTreeMap::from([("baseline", 0.0_f64), ("candidate", 0.0_f64)]);
+
+    for trial in fs::read_dir(trials).unwrap() {
+        let trial = trial.unwrap();
+        let name = trial.file_name().to_string_lossy().into_owned();
+        let arm = if name.contains("--baseline--") {
+            "baseline"
+        } else {
+            "candidate"
+        };
+        for attempt in fs::read_dir(trial.path()).unwrap() {
+            let attempt = attempt.unwrap();
+            if !attempt.file_type().unwrap().is_dir() {
+                continue;
+            }
+            let path = attempt.path().join("result.json");
+            if !path.is_file() {
+                continue;
+            }
+            let output: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            *expected.get_mut(arm).unwrap() +=
+                output["timings"]["total_ms"].as_u64().unwrap() as f64 / 60_000.0;
+        }
+    }
+
+    for arm in ["baseline", "candidate"] {
+        let shown = experiment["minutes"][arm].as_f64().unwrap();
+        assert!(
+            shown + 1e-9 >= expected[arm],
+            "{arm}: displayed {shown} minutes, retained attempts consumed {}",
+            expected[arm]
+        );
+    }
+}
+
 struct Fixture {
     scenario: Scenario,
     baseline: String,
@@ -108,6 +246,124 @@ pr_url = "https://github.com/acme/widgets/pull/1"
 }
 
 #[test]
+fn mechanical_scores_determine_the_verdict_inbox_and_arm_minutes() {
+    for (passing_arm, decision, group) in [
+        ("candidate", "pass", "done"),
+        ("baseline", "fail", "needs you"),
+    ] {
+        let fixture = Fixture::new();
+        let task = fixture
+            .scenario
+            .path("home/.thirdshift/evals/suites/spec-review/tasks/fixture/task.toml");
+        let manifest = fs::read_to_string(&task).unwrap();
+        fs::write(&task, manifest.replace("[inputs]", &format!(
+            "checks = [[\"sh\", \"-c\", 'grep -q {passing_arm} \"$THIRDSHIFT_TRIAL_SPEC_REPORT\"']]\n[inputs]"
+        ))).unwrap();
+        fixture.scenario.agent_does(r#"
+reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
+printf 'Standards report\n' > "$reports/standards.md"
+case "$PWD" in
+  *--candidate--*) printf 'candidate\n' > "$reports/spec.md" ;;
+  *) printf 'baseline\n' > "$reports/spec.md" ;;
+esac
+"#);
+        let run = fixture.run(&["--prior", "0.01"]);
+        assert_eq!(run.code, Some(0), "{}", run.stderr);
+        let last = run.stdout.lines().last().unwrap();
+        let experiment: Value = serde_json::from_str(last).unwrap();
+        assert_eq!(experiment["verdict"]["verdict"], decision);
+        assert!(
+            experiment["verdict"]["suites"]["spec-review"]["accuracy"]["interval"]["lower"]
+                .is_number()
+        );
+        for result in experiment["results"].as_array().unwrap() {
+            assert_eq!(result["score"]["passed"], result["arm"] == passing_arm);
+            assert!(
+                result["score"]["checks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|check| check["command"].is_array())
+            );
+        }
+        let id = experiment["id"].as_str().unwrap();
+        let text = fixture.scenario.run(&["experiments", id]);
+        assert!(text.stdout.contains("Baseline:"), "{}", text.stdout);
+        assert!(text.stdout.contains("Candidate:"), "{}", text.stdout);
+        for arm in ["baseline", "candidate"] {
+            assert!(experiment["minutes"][arm].as_f64().unwrap() > 0.0);
+        }
+        assert_eq!(fixture.experiment(), experiment);
+        let record = fixture
+            .scenario
+            .command_record("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment");
+        assert_eq!(record["outcome"], decision);
+        let status = fixture.scenario.run(&["status", "--json"]);
+        let status: Value = serde_json::from_str(&status.stdout).unwrap();
+        assert_eq!(status["commands"][0]["group"], group);
+        assert_eq!(fixture.run(&["--prior", "0.01"]).stdout, run.stdout);
+    }
+}
+
+#[test]
+fn changed_repositories_are_void_retried_and_excluded_from_the_verdict() {
+    for mutation in [
+        "printf changed >> .thirdshift-issue.md",
+        "printf changed > invented-untracked.txt",
+        "git -c user.name=Fixture -c user.email=fixture@example.invalid commit --allow-empty -m changed",
+    ] {
+        let fixture = Fixture::new();
+        fixture.scenario.agent_does(mutation);
+        let run = fixture.run(&[]);
+        assert_eq!(run.code, Some(0), "{}", run.stderr);
+        let experiment = fixture.experiment();
+        assert_eq!(experiment["verdict"]["verdict"], "inconclusive");
+        assert_eq!(
+            experiment["verdict"]["suites"]["spec-review"]["dropped_tasks"],
+            1
+        );
+        for result in experiment["results"].as_array().unwrap() {
+            assert_eq!(result["outcome"], "void", "mutation: {mutation}");
+            assert_eq!(result["attempts"].as_array().unwrap().len(), 3);
+            for attempt in result["attempts"].as_array().unwrap() {
+                assert_eq!(attempt["void_cause"], "repository_changed");
+            }
+        }
+        let status = fixture.scenario.run(&["status", "--json"]);
+        let status: Value = serde_json::from_str(&status.stdout).unwrap();
+        assert_eq!(status["commands"][0]["group"], "needs you");
+    }
+}
+
+#[test]
+fn mechanical_check_output_stays_in_private_results() {
+    let fixture = Fixture::new();
+    let task = fixture
+        .scenario
+        .path("home/.thirdshift/evals/suites/spec-review/tasks/fixture/task.toml");
+    let manifest = fs::read_to_string(&task).unwrap();
+    fs::write(
+        &task,
+        manifest.replace(
+            "[inputs]",
+            "checks = [[\"printf\", \"private-grader-evidence\"]]\n[inputs]",
+        ),
+    )
+    .unwrap();
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(run.stdout.contains("private-grader-evidence"));
+    let folder = "home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment";
+    for log in fixture.scenario.log_files(folder, "log") {
+        let log = fs::read_to_string(fixture.scenario.path(folder).join(log)).unwrap();
+        assert!(
+            !log.contains("private-grader-evidence"),
+            "private Score entered factory logs"
+        );
+    }
+}
+
+#[test]
 fn experiment_records_both_arms_the_bar_logs_stages_and_each_trial() {
     let fixture = Fixture::new();
     let result = fixture.run(&[
@@ -129,6 +385,10 @@ fn experiment_records_both_arms_the_bar_logs_stages_and_each_trial() {
     assert_eq!(experiment["results"].as_array().unwrap().len(), 2);
     for result in experiment["results"].as_array().unwrap() {
         assert_eq!(result["outcome"], "succeeded");
+        assert_eq!(
+            result["score"]["passed"], false,
+            "a review without reports fails"
+        );
         assert!(PathBuf::from(result["attempts"][0]["log"].as_str().unwrap()).is_file());
     }
     assert_eq!(fixture.experiment(), experiment);
@@ -159,7 +419,7 @@ fn experiment_records_both_arms_the_bar_logs_stages_and_each_trial() {
         "{activity}"
     );
     assert!(
-        activity.contains("Experiment ended: completed"),
+        activity.contains("Experiment ended: inconclusive"),
         "{activity}"
     );
     let logs = fixture.scenario.log_files(folder, "log");
@@ -186,6 +446,7 @@ fn experiment_records_both_arms_the_bar_logs_stages_and_each_trial() {
     assert_eq!(status.code, Some(0), "{}", status.stderr);
     let status: Value = serde_json::from_str(&status.stdout).unwrap();
     assert_eq!(status["commands"][0]["kind"], "Experiment");
+    assert_eq!(status["commands"][0]["group"], "needs you");
     assert_eq!(
         fixture
             .run(&[

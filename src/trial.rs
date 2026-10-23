@@ -82,6 +82,7 @@ pub(crate) enum VoidCause {
     SessionUnavailable,
     UsageLimit,
     RateLimit,
+    RepositoryChanged,
 }
 
 #[derive(Serialize, Deserialize)]

@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::workers::TrialResult;
+use super::workers::{Arm, TrialResult};
 use super::{Description, Task};
 
 #[derive(Serialize, Deserialize)]
@@ -18,6 +18,8 @@ pub(super) struct Stored {
     pub state: State,
     created_at: String,
     pub tasks: Vec<Task>,
+    #[serde(default)]
+    pub verdict: Option<super::grading::Verdict>,
     #[serde(skip)]
     pub directory: PathBuf,
     #[serde(skip)]
@@ -31,6 +33,28 @@ struct View<'a> {
     state: State,
     created_at: &'a str,
     results: Vec<TrialResult>,
+    verdict: &'a Option<super::grading::Verdict>,
+    minutes: Minutes,
+}
+
+#[derive(Default, Serialize)]
+struct Minutes {
+    baseline: f64,
+    candidate: f64,
+}
+
+impl Minutes {
+    fn include(&mut self, result: &TrialResult) {
+        let arm = match result.arm {
+            Arm::Baseline => &mut self.baseline,
+            Arm::Candidate => &mut self.candidate,
+        };
+        *arm += result
+            .attempts
+            .iter()
+            .map(|attempt| attempt.timings.total_ms as f64 / 60_000.0)
+            .sum::<f64>();
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +109,7 @@ impl Stored {
                 state: State::Prepared,
                 created_at: chrono::Local::now().to_rfc3339(),
                 tasks: tasks()?,
+                verdict: None,
                 directory: PathBuf::new(),
                 lock: None,
             }
@@ -99,16 +124,36 @@ impl Stored {
         write(&self.directory.join("experiment.json"), self)
     }
 
-    fn view(&self) -> Result<View<'_>> {
+    pub fn results(&self) -> Result<Vec<TrialResult>> {
         let mut results = Vec::new();
         for path in result_paths(&self.directory)? {
             results.push(serde_json::from_slice(&fs::read(path)?)?);
+        }
+        Ok(results)
+    }
+
+    fn view(&self) -> Result<View<'_>> {
+        let results = self.results()?;
+        let mut minutes = Minutes::default();
+        let trials = self.directory.join("trials");
+        if trials.exists() {
+            for trial in fs::read_dir(trials)? {
+                let pending = trial?.path().join("pending.json");
+                if pending.is_file() {
+                    // Every completed attempt is retained here before a pause
+                    // or final publication. Read it once per Trial, so live
+                    // and paused Experiments include time already spent too.
+                    minutes.include(&serde_json::from_slice(&fs::read(pending)?)?);
+                }
+            }
         }
         Ok(View {
             description: &self.description,
             state: self.state,
             created_at: &self.created_at,
             results,
+            verdict: &self.verdict,
+            minutes,
         })
     }
 
@@ -118,12 +163,17 @@ impl Stored {
             Ok(serde_json::to_string(&view)?)
         } else {
             Ok(format!(
-                "{} · {} · {} → {} · {} Trial results",
+                "{} · {} · {} → {} · {} Trial results · Verdict: {} · Baseline: {:.3} minutes · Candidate: {:.3} minutes",
                 self.description.id,
                 self.state,
                 self.description.baseline.commit,
                 self.description.candidate.commit,
-                view.results.len()
+                view.results.len(),
+                self.verdict
+                    .as_ref()
+                    .map_or("pending", |verdict| verdict.outcome()),
+                view.minutes.baseline,
+                view.minutes.candidate
             ))
         }
     }
