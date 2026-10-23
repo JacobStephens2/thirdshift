@@ -257,6 +257,14 @@ pr_url = "https://github.com/acme/widgets/pull/1"
     }
 }
 
+fn review_reports_prelude() -> &'static str {
+    r#"
+reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
+test -n "$reports"
+printf 'Standards report\n' > "$reports/standards.md"
+"#
+}
+
 #[test]
 fn code_review_runs_three_trials_per_arm_on_the_reviewed_diff_and_reports_pass_cubed() {
     let fixture = Fixture::with_session("code-review", 3);
@@ -265,18 +273,20 @@ fn code_review_runs_three_trials_per_arm_on_the_reviewed_diff_and_reports_pass_c
         .path("home/.thirdshift/evals/suites/code-review/tasks/fixture/task.toml");
     let manifest = fs::read_to_string(&task).unwrap();
     fs::write(&task, manifest.replace("[inputs]", "checks = [[\"sh\", \"-c\", 'grep -q caught \"$THIRDSHIFT_TRIAL_SPEC_REPORT\"']]\n[inputs]")).unwrap();
-    fixture.scenario.agent_does(r#"
+    fixture.scenario.agent_does(&format!(
+        r#"
 test "$(git diff --name-only main...HEAD)" = src/prompt.rs
 test "$(git show HEAD:src/prompt.rs)" = 'candidate prompt'
 test "$(git rev-list --count main..HEAD)" = 1
 test -z "$(git remote)"
-reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
-printf 'Standards report\n' > "$reports/standards.md"
+{reports}
 case "$PWD" in
   *--candidate--1/*) printf 'missed\n' > "$reports/spec.md" ;;
   *) printf 'caught\n' > "$reports/spec.md" ;;
 esac
-"#);
+"#,
+        reports = review_reports_prelude()
+    ));
 
     let run = fixture.run(&[]);
 
@@ -373,14 +383,15 @@ fn imported_code_review_suite_runs_three_trials_per_arm_and_reports_pass_cubed()
     }
     let imported = fixture.scenario.run(&["evals", "import-replays"]);
     assert_eq!(imported.code, Some(0), "{}", imported.stderr);
-    fixture.scenario.agent_does(r#"
+    fixture.scenario.agent_does(&format!(
+        r#"
 test "$(git diff --name-only main...HEAD)" = src/prompt.rs
 test -z "$(git remote)"
-reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
-test -n "$reports"
-printf 'Standards report\n' > "$reports/standards.md"
+{reports}
 printf 'Spec report\n' > "$reports/spec.md"
-"#);
+"#,
+        reports = review_reports_prelude()
+    ));
     let run = fixture.run(&["--suite", "code-review"]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let experiment: Value = serde_json::from_str(run.stdout.lines().last().unwrap()).unwrap();
@@ -415,14 +426,16 @@ fn mechanical_scores_determine_the_verdict_inbox_and_arm_minutes() {
         fs::write(&task, manifest.replace("[inputs]", &format!(
             "checks = [[\"sh\", \"-c\", 'grep -q {passing_arm} \"$THIRDSHIFT_TRIAL_SPEC_REPORT\"']]\n[inputs]"
         ))).unwrap();
-        fixture.scenario.agent_does(r#"
-reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
-printf 'Standards report\n' > "$reports/standards.md"
+        fixture.scenario.agent_does(&format!(
+            r#"
+{reports}
 case "$PWD" in
   *--candidate--*) printf 'candidate\n' > "$reports/spec.md" ;;
   *) printf 'baseline\n' > "$reports/spec.md" ;;
 esac
-"#);
+"#,
+            reports = review_reports_prelude()
+        ));
         let run = fixture.run(&["--prior", "0.01"]);
         assert_eq!(run.code, Some(0), "{}", run.stderr);
         let last = run.stdout.lines().last().unwrap();
