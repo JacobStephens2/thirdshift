@@ -179,7 +179,7 @@ pub(super) fn next_change(
     observations(entries)
         .filter_map(|observation| {
             let facts = observation.facts();
-            if facts.state == "live" || facts.ready {
+            if facts.state == "live" {
                 return None;
             }
             let ended = time(facts.ended_at);
@@ -245,19 +245,18 @@ pub(super) fn list(
         };
         let landing = matches!(command, Observation::Record(command) if is_landing(command));
         let stopping = matches!(command, Observation::Record(command) if facts.state == "live" && stop::requested(&command.record_path).is_some());
-        let needs_you_kind = live_problem.or_else(|| {
-            problem.filter(|_| {
-                ended
-                    .or_else(|| time(Some(facts.started_at)))
-                    .is_some_and(|time| cutoff.is_none_or(|cutoff| time >= cutoff))
-                    && !starts.iter().any(|(issue, start)| {
-                        latest.get(issue).is_some_and(|latest| latest > start)
-                    })
-            })
-        });
+        // The Inbox holds an ended problem or ready Command until a later
+        // Command on the same issue starts here, or it outlives the period.
+        let held = ended
+            .or_else(|| time(Some(facts.started_at)))
+            .is_some_and(|time| cutoff.is_none_or(|cutoff| time >= cutoff))
+            && !starts
+                .iter()
+                .any(|(issue, start)| latest.get(issue).is_some_and(|latest| latest > start));
+        let needs_you_kind = live_problem.or_else(|| problem.filter(|_| held));
         let group = if needs_you_kind.is_some() {
             Group::NeedsYou
-        } else if facts.ready {
+        } else if facts.ready && held {
             Group::ReadyForReview
         } else if landing {
             Group::Landing
