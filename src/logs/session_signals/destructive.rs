@@ -51,16 +51,41 @@ const PATTERNS: &[Pattern] = &[
             // worktrees, unlike a normal rebase onto an upstream in this Worktree.
             (words.starts_with(&["git", "branch"])
                 && words.len() >= 4
+                && !words.contains(&"--list")
                 && words[2..]
                     .iter()
                     .any(|word| matches!(*word, "-f" | "--force")))
                 || (words.starts_with(&["git", "update-ref"])
-                    && words.len() >= 4
-                    && words[2].starts_with("refs/heads/"))
+                    && operands(&words[2..], &["-m"])
+                        .first()
+                        .is_some_and(|reference| reference.starts_with("refs/heads/")))
                 || (words.starts_with(&["git", "rebase"])
-                    && words.len() == 4
-                    && !words[2].starts_with('-')
-                    && !words[3].starts_with('-'))
+                    && !words[2..].iter().any(|word| {
+                        matches!(
+                            *word,
+                            "--abort"
+                                | "--continue"
+                                | "--quit"
+                                | "--skip"
+                                | "--show-current-patch"
+                                | "--edit-todo"
+                        )
+                    })
+                    && operands(
+                        &words[2..],
+                        &[
+                            "--onto",
+                            "-s",
+                            "--strategy",
+                            "-X",
+                            "--strategy-option",
+                            "-x",
+                            "--exec",
+                            "--empty",
+                        ],
+                    )
+                    .len()
+                        >= if words.contains(&"--root") { 1 } else { 2 })
         },
     },
     Pattern {
@@ -143,14 +168,31 @@ fn inspect(
     if depth > 16 {
         return;
     }
-    for words in commands(script) {
+    let mut scopes = Vec::new();
+    for part in commands(script) {
+        let (words, isolated) = match part {
+            Part::Words { words, isolated } => (words, isolated),
+            Part::Open => {
+                scopes.push(directory.clone());
+                continue;
+            }
+            Part::Close => {
+                if let Some(parent) = scopes.pop() {
+                    directory = parent;
+                }
+                continue;
+            }
+        };
         let words = unwrapped(words);
         if words.first().is_some_and(|word| word == "cd") {
-            directory = words
-                .iter()
-                .skip(1)
-                .find(|word| *word != "--")
-                .and_then(|path| resolve(path, directory.as_deref()));
+            // Pipeline and background commands cannot change the parent shell.
+            if !isolated {
+                directory = words
+                    .iter()
+                    .skip(1)
+                    .find(|word| *word != "--")
+                    .and_then(|path| resolve(path, directory.as_deref()));
+            }
             continue;
         }
         if words
@@ -182,7 +224,10 @@ fn inspect(
 fn unwrapped(mut words: Vec<String>) -> Vec<String> {
     while let Some(first) = words.first() {
         let program = first.rsplit('/').next().unwrap_or(first);
-        if first.split_once('=').is_some_and(|(key, _)| {
+        if matches!(
+            program,
+            "if" | "then" | "elif" | "else" | "while" | "until" | "do" | "!" | "{" | "}"
+        ) || first.split_once('=').is_some_and(|(key, _)| {
             !key.is_empty()
                 && key
                     .chars()
@@ -217,6 +262,23 @@ fn unwrapped(mut words: Vec<String>) -> Vec<String> {
     words
 }
 
+fn operands<'a>(words: &[&'a str], value_options: &[&str]) -> Vec<&'a str> {
+    let mut operands = Vec::new();
+    let mut words = words.iter().copied();
+    while let Some(word) = words.next() {
+        if word == "--" {
+            operands.extend(words);
+            break;
+        }
+        if value_options.contains(&word) {
+            words.next();
+        } else if !word.starts_with('-') {
+            operands.push(word);
+        }
+    }
+    operands
+}
+
 // Lexical resolution keeps past traces readable after Worktree removal. Shell
 // expansions and symlinks are deliberately not evaluated against today's host.
 fn resolve(path: &str, directory: Option<&Path>) -> Option<PathBuf> {
@@ -244,11 +306,43 @@ fn resolve(path: &str, directory: Option<&Path>) -> Option<PathBuf> {
 
 /// Split literal shell words and command separators while preserving quoted
 /// arguments. A quoted example in echo/printf remains an argument, not a call.
-fn commands(script: &str) -> Vec<Vec<String>> {
+enum Part {
+    Words { words: Vec<String>, isolated: bool },
+    Open,
+    Close,
+}
+
+struct Heredoc {
+    delimiter: String,
+    strip_tabs: bool,
+}
+
+fn finish_word(
+    word: &mut Option<String>,
+    words: &mut Vec<String>,
+    delimiter: &mut Option<bool>,
+    heredocs: &mut Vec<Heredoc>,
+) {
+    if let Some(word) = word.take() {
+        if let Some(strip_tabs) = delimiter.take() {
+            heredocs.push(Heredoc {
+                delimiter: word,
+                strip_tabs,
+            });
+        } else {
+            words.push(word);
+        }
+    }
+}
+
+fn commands(script: &str) -> Vec<Part> {
     let mut commands = Vec::new();
     let mut words = Vec::new();
     let mut word = None::<String>;
     let mut quote = None;
+    let mut delimiter = None;
+    let mut heredocs = Vec::new();
+    let mut pipeline = false;
     let mut chars = script.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '\\' && quote != Some('\'') {
@@ -266,24 +360,65 @@ fn commands(script: &str) -> Vec<Vec<String>> {
             while chars.peek().is_some_and(|ch| *ch != '\n') {
                 chars.next();
             }
+        } else if quote.is_none() && ch == '<' && chars.peek() == Some(&'<') {
+            finish_word(&mut word, &mut words, &mut delimiter, &mut heredocs);
+            chars.next();
+            if chars.peek() == Some(&'<') {
+                chars.next(); // A here-string has no following body to skip.
+            } else {
+                let strip_tabs = chars.peek() == Some(&'-');
+                if strip_tabs {
+                    chars.next();
+                }
+                delimiter = Some(strip_tabs);
+            }
         } else if quote.is_none()
             && (ch.is_whitespace() || matches!(ch, ';' | '|' | '&' | '(' | ')'))
         {
-            if let Some(word) = word.take() {
-                words.push(word);
-            }
+            finish_word(&mut word, &mut words, &mut delimiter, &mut heredocs);
             if matches!(ch, '\n' | ';' | '|' | '&' | '(' | ')') && !words.is_empty() {
-                commands.push(std::mem::take(&mut words));
+                let paired = matches!(ch, '|' | '&') && chars.peek() == Some(&ch);
+                if paired {
+                    chars.next();
+                }
+                let isolated = pipeline || (matches!(ch, '|' | '&') && !paired);
+                commands.push(Part::Words {
+                    words: std::mem::take(&mut words),
+                    isolated,
+                });
+                pipeline = ch == '|' && !paired;
+            }
+            match ch {
+                '(' => commands.push(Part::Open),
+                ')' => commands.push(Part::Close),
+                '\n' => {
+                    for heredoc in std::mem::take(&mut heredocs) {
+                        loop {
+                            let line: String =
+                                chars.by_ref().take_while(|ch| *ch != '\n').collect();
+                            let line = if heredoc.strip_tabs {
+                                line.trim_start_matches('\t')
+                            } else {
+                                &line
+                            };
+                            if line == heredoc.delimiter || chars.peek().is_none() {
+                                break;
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         } else {
             word.get_or_insert_default().push(ch);
         }
     }
-    if let Some(word) = word {
-        words.push(word);
-    }
+    finish_word(&mut word, &mut words, &mut delimiter, &mut heredocs);
     if !words.is_empty() {
-        commands.push(words);
+        commands.push(Part::Words {
+            words,
+            isolated: pipeline,
+        });
     }
     commands
 }

@@ -261,7 +261,7 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
     if let Some((_, _, Some(cost))) = session_usage {
         signals.cost_usd = Some(cost);
     }
-    signals.destructive_commands = Some(Vec::new());
+    let mut destructive_commands = Vec::new();
     let mut inputs = HashSet::new();
     for event in calls.values() {
         if let Event::ToolCallEnded {
@@ -281,15 +281,11 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
         match event {
             Event::ToolCallStarted { tool, input, .. }
             | Event::ToolCallEnded { tool, input, .. } => {
-                signals
-                    .destructive_commands
-                    .as_mut()
-                    .unwrap()
-                    .extend(destructive::check(
-                        tool,
-                        input,
-                        directory.as_deref().map(Path::new),
-                    ));
+                destructive_commands.extend(destructive::check(
+                    tool,
+                    input,
+                    directory.as_deref().map(Path::new),
+                ));
                 if !inputs.insert(serde_json::to_string(&(tool, input))?) {
                     signals.repeated_tool_calls += 1;
                 }
@@ -301,6 +297,10 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
             _ => {}
         }
     }
+    // Older log resources did not retain the Worktree directory. Keep known
+    // matches, but an unperformed outside-Worktree check cannot imply zero.
+    signals.destructive_commands =
+        (directory.is_some() || !destructive_commands.is_empty()).then_some(destructive_commands);
     signals.killed_work += killed.len() as u64;
     Ok(Some(SessionSignals {
         harness,

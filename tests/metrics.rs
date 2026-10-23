@@ -28,6 +28,108 @@ fn trace(
     path
 }
 
+fn spec_review_flags(command: &str) -> Value {
+    let scenario = Scenario::new();
+    let log = trace(
+        &scenario,
+        "spec-review",
+        "claude",
+        "1.0",
+        json!([{
+            "type":"tool_call_started", "id":"call", "parent_id":null,
+            "tool":"Bash", "input":{"command":command}
+        }]),
+    );
+    let mut past = record(7);
+    past["stages"][0]["session_log"] = json!(log);
+    write(&scenario, "7-fixture.command.json", &past);
+    metrics(&scenario, &["metrics", "widgets#7", "--json"])["command"]["metrics"]["session_signals"]
+        ["implement"]["signals"]["destructive_commands"]
+        .clone()
+}
+
+#[test]
+fn spec_review_conditional_force_push_is_checked() {
+    let command = "if true; then git push --force origin main; fi";
+    assert_eq!(
+        spec_review_flags(command),
+        json!([{"pattern":"force-push", "command":command}])
+    );
+}
+
+#[test]
+fn spec_review_heredoc_text_is_not_a_shell_command() {
+    assert_eq!(
+        spec_review_flags("cat <<'EOF'\ngit push --force origin main\nEOF"),
+        json!([])
+    );
+}
+
+#[test]
+fn spec_review_subshell_cd_does_not_change_parent_directory() {
+    let command = "(cd /worktree/build); rm -rf ../outside-cache";
+    assert_eq!(
+        spec_review_flags(command),
+        json!([{
+            "pattern":"recursive-delete-outside-worktree", "command":command
+        }])
+    );
+}
+
+#[test]
+fn spec_review_optioned_shared_history_rewrites_are_checked() {
+    for command in [
+        "git rebase --onto origin/main old-base release",
+        "git update-ref -m rewrite refs/heads/release HEAD~1",
+    ] {
+        assert_eq!(
+            spec_review_flags(command),
+            json!([{"pattern":"shared-history-rewrite", "command":command}]),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn spec_review_trace_without_worktree_keeps_destructive_evidence_missing() {
+    let scenario = Scenario::new();
+    let log = trace(
+        &scenario,
+        "old-trace",
+        "claude",
+        "1.0",
+        json!([{
+            "type":"tool_call_started", "id":"call", "parent_id":null,
+            "tool":"Bash", "input":{"command":"rm -rf /outside/cache"}
+        }]),
+    );
+    let mut request: Value = serde_json::from_str(&fs::read_to_string(&log).unwrap()).unwrap();
+    request["resourceLogs"][0]["resource"]["attributes"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|attribute| attribute["key"] != "thirdshift.harness.directory");
+    fs::write(&log, serde_json::to_string(&request).unwrap() + "\n").unwrap();
+    let mut past = record(7);
+    past["stages"][0]["session_log"] = json!(log);
+    write(&scenario, "7-fixture.command.json", &past);
+    let shown = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert_eq!(
+        shown["command"]["metrics"]["session_signals"]["implement"]["signals"]["destructive_commands"],
+        Value::Null
+    );
+    let trends = metrics(&scenario, &["metrics", "--json"]);
+    let row = trends["weeks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["session_kind"] == "implement")
+        .unwrap();
+    assert_eq!(
+        row["session_signals"]["destructive_commands"],
+        json!({"observed":0, "missing":1, "sum":null, "mean":null})
+    );
+}
+
 #[test]
 fn destructive_command_patterns_flag_fixture_commands_but_not_near_misses() {
     let scenario = Scenario::new();

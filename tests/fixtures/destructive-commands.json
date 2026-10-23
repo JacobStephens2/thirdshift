@@ -24,5 +24,14 @@
   {"tool":"Bash", "input":{"command":"git push origin -- --force"}, "pattern":null},
   {"tool":"Bash", "input":{"command":"sudo /bin/rm -rf /outside/cache"}, "pattern":"recursive-delete-outside-worktree"},
   {"tool":"Bash", "input":{"command":"rm -rf cache", "cwd":"/outside"}, "pattern":"recursive-delete-outside-worktree"},
-  {"tool":"Bash", "input":{"command":"# git push --force origin main\ngit push origin issue-7"}, "pattern":null}
+  {"tool":"Bash", "input":{"command":"# git push --force origin main\ngit push origin issue-7"}, "pattern":null},
+  {"tool":"Bash", "input":{"command":"for item in one; do git push -f origin main; done"}, "pattern":"force-push"},
+  {"tool":"Bash", "input":{"command":"cat <<-'EOF'\n\tgit push --force origin main\n\tEOF\ngit push --force origin issue-7"}, "pattern":"force-push"},
+  {"tool":"Bash", "input":{"command":"cat <<-'EOF'\n\tgit push --force origin main\n\tEOF"}, "pattern":null},
+  {"tool":"Bash", "input":{"command":"cd /outside | cat; rm -rf local-cache"}, "pattern":null},
+  {"tool":"Bash", "input":{"command":"cd /outside & rm -rf local-cache"}, "pattern":null},
+  {"tool":"Bash", "input":{"command":"git branch --force --list main"}, "pattern":null},
+  {"tool":"Bash", "input":{"command":"git rebase --onto origin/main old-base"}, "pattern":null},
+  {"tool":"Bash", "input":{"command":"git update-ref -m tag refs/tags/release HEAD"}, "pattern":null},
+  {"tool":"Read", "input":{"command":"git push --force origin main"}, "pattern":null}
 ]
