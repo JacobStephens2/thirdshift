@@ -171,6 +171,25 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
     )
 }
 
+/// A review-only Code review of an Eval task's prepared historical diff.
+pub fn code_review(issue: &IssueUrl, base: &str, branch: &str) -> String {
+    format!(
+        "/thirdshift-code-review {base}\n\
+         This is a review-only Code review session for issue {url}, on branch {branch}. \
+         Review with the `thirdshift-code-review` Factory skill using {base} as the fixed point, \
+         on the prepared diff as it was reviewed. Use the issue in `{ISSUE_FILE}` as the spec.\n\
+         Do not fix findings or change repository files, refs or the index; do not commit, push, \
+         or edit pull requests or issues. Write only the review reports to the directory below. \
+         These constraints apply to every sub-agent too. Include the skill's written-out tests or commands \
+         for behaviour findings in the reports without adding tests to the repository.\n\
+         {REVIEW_REPORTS}\n\n\
+         {issue_file_instruction}\n\
+         {HEADLESS}",
+        url = issue.url,
+        issue_file_instruction = issue_file_instruction(issue),
+    )
+}
+
 /// The Spec review prompt, for the Spec branch `branch` of `spec` once every
 /// Ticket has landed on it, with the draft Spec PR `pr_url` into `base`.
 pub fn spec_review(spec: &IssueUrl, base: &str, branch: &str, pr_url: &str) -> String {

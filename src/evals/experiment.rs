@@ -301,10 +301,6 @@ fn tasks(root: &Path, suites: &[String]) -> Result<Vec<Task>> {
             if manifest.state == format::State::Proposed {
                 continue;
             }
-            ensure!(
-                manifest.session == format::Session::SpecReview,
-                "Code-review Trials require #1016"
-            );
             let inputs = manifest
                 .trial
                 .as_ref()

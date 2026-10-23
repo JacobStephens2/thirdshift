@@ -48,6 +48,59 @@ printf 'Spec fixture report\n' > "$reports/spec.md"
 }
 
 #[test]
+fn a_code_review_trial_reviews_the_prepared_diff_and_keeps_both_reports() {
+    let scenario = Scenario::new();
+    scenario.launch_git(&["checkout", "-b", "issue-7"]);
+    scenario.commit_locally("counter.txt", "off by one\n", "Reviewed change");
+    let request = request(&scenario);
+    let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    document["session_kind"] = json!("code-review");
+    document["harness"] = json!("codex");
+    fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
+    scenario.agent_does(write_reports());
+
+    let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(output["outcome"], "succeeded");
+    assert!(
+        output["log"]
+            .as_str()
+            .unwrap()
+            .ends_with("trial-code-review.jsonl")
+    );
+    for (axis, expected) in [
+        ("standards", "Standards fixture report\n"),
+        ("spec", "Spec fixture report\n"),
+    ] {
+        let path = PathBuf::from(output["reports"][axis].as_str().unwrap());
+        assert!(path.starts_with(scenario.path("trial-output")));
+        assert_eq!(fs::read_to_string(path).unwrap(), expected);
+    }
+    let calls = scenario.codex_calls();
+    let prompt = calls[0]["prompt"].as_str().unwrap();
+    assert!(
+        prompt.starts_with("$thirdshift-code-review main"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("using main as the fixed point"));
+    assert!(prompt.contains(".thirdshift-issue.md"));
+    assert!(prompt.contains("review-only"));
+    assert!(prompt.contains("Do not fix"));
+    assert!(prompt.contains("do not commit, push"));
+    assert!(!prompt.contains("Address the Standards and Spec findings"));
+    assert!(!prompt.contains("Update PR"));
+    assert!(prompt.contains("fork_turns: \"none\""), "{prompt}");
+    assert!(prompt.contains("only its own task and necessary evidence"));
+    let argv = calls[0]["argv"].to_string();
+    assert!(!argv.contains("agents.max_threads"), "{argv}");
+    scenario.assert_every_codex_session_found_the_factory_skills();
+    assert!(scenario.gh_calls().is_empty());
+    assert!(!scenario.path("home/.thirdshift/logs").exists());
+}
+
+#[test]
 fn a_spec_review_trial_prints_one_complete_line_and_keeps_artifacts_outside_factory_logs() {
     let scenario = Scenario::new();
     let request = request(&scenario);

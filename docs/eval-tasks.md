@@ -102,6 +102,14 @@ pr_url = "https://github.com/acme/widgets/pull/1"
   create those local branches, commit the prepared change and push them to
   the disposable bare origin. Supply fixture services or disposable PRs for
   sessions that can reach GitHub, as described in the Trial protocol.
+  Code-review Experiments also commit the prepared patch on the Issue branch,
+  so the production review skill sees `base...HEAD` as reviewed. They create no
+  origin and push nothing. Their review-only prompt retains both axis reports
+  without fixing findings or changing repository files, refs or the index.
+
+The imported code-review suite declares three Trials per Arm per Eval task;
+the Spec-review suite declares one. Three-Trial Verdicts include `pass_cubed`
+for each Arm: the fraction of retained Eval tasks where all three Trials passed.
 
 ## Commands and repository preparation
 

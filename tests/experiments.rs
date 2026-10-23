@@ -153,6 +153,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_session("spec-review", 1)
+    }
+
+    fn with_session(session: &str, trials: usize) -> Self {
         let scenario = Scenario::new();
         for name in ["claude", "codex"] {
             let harness = scenario.path(&format!("bin/{name}"));
@@ -179,20 +183,22 @@ impl Fixture {
             fs::create_dir_all(&build).unwrap();
             fs::copy(env!("CARGO_BIN_EXE_thirdshift"), build.join("thirdshift")).unwrap();
         }
-        let suite = scenario.path("home/.thirdshift/evals/suites/spec-review");
+        let suite = scenario.path(&format!("home/.thirdshift/evals/suites/{session}"));
         let task = suite.join("tasks/fixture");
         fs::create_dir_all(&task).unwrap();
         fs::write(
             suite.join("suite.toml"),
-            r#"format = 1
-trials_per_arm = 1
+            format!(
+                r#"format = 1
+trials_per_arm = {trials}
 [dependencies]
 factory_skills = []
 session_prompts = ["src/prompt.rs"]
 harness_defaults = []
 model_defaults = []
 effort_defaults = []
-"#,
+"#
+            ),
         )
         .unwrap();
         fs::write(
@@ -200,15 +206,20 @@ effort_defaults = []
             "# Fixture Spec\n\nReview this invented change.\n",
         )
         .unwrap();
+        let change = if session == "code-review" {
+            &candidate
+        } else {
+            &baseline
+        };
         fs::write(
             task.join("task.toml"),
             format!(
                 r#"format = 1
 state = "approved"
-session = "spec-review"
+session = "{session}"
 repository = {:?}
 base = "{baseline}"
-change = "{baseline}"
+change = "{change}"
 criteria = "Report the invented finding."
 [inputs]
 ".thirdshift-issue.md" = "spec.md"
@@ -244,6 +255,72 @@ pr_url = "https://github.com/acme/widgets/pull/1"
         assert_eq!(shown.code, Some(0), "{}", shown.stderr);
         serde_json::from_str(&shown.stdout).unwrap()
     }
+}
+
+#[test]
+fn code_review_runs_three_trials_per_arm_on_the_reviewed_diff_and_reports_pass_cubed() {
+    let fixture = Fixture::with_session("code-review", 3);
+    let task = fixture
+        .scenario
+        .path("home/.thirdshift/evals/suites/code-review/tasks/fixture/task.toml");
+    let manifest = fs::read_to_string(&task).unwrap();
+    fs::write(&task, manifest.replace("[inputs]", "checks = [[\"sh\", \"-c\", 'grep -q caught \"$THIRDSHIFT_TRIAL_SPEC_REPORT\"']]\n[inputs]")).unwrap();
+    fixture.scenario.agent_does(r#"
+test "$(git diff --name-only main...HEAD)" = src/prompt.rs
+test "$(git show HEAD:src/prompt.rs)" = 'candidate prompt'
+test "$(git rev-list --count main..HEAD)" = 1
+test -z "$(git remote)"
+reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
+printf 'Standards report\n' > "$reports/standards.md"
+case "$PWD" in
+  *--candidate--1/*) printf 'missed\n' > "$reports/spec.md" ;;
+  *) printf 'caught\n' > "$reports/spec.md" ;;
+esac
+"#);
+
+    let run = fixture.run(&[]);
+
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment: Value = serde_json::from_str(run.stdout.lines().last().unwrap()).unwrap();
+    assert_eq!(experiment["bar"]["trials_per_task"]["code-review"], 3);
+    let results = experiment["results"].as_array().unwrap();
+    assert_eq!(results.len(), 6);
+    for arm in ["baseline", "candidate"] {
+        for trial in 0..3 {
+            let result = results
+                .iter()
+                .find(|r| r["arm"] == arm && r["trial"] == trial)
+                .unwrap();
+            assert_eq!(result["outcome"], "succeeded", "{result}");
+            assert_eq!(result["score"]["passed"], arm == "baseline" || trial != 1);
+            assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
+            let attempt = &result["attempts"][0];
+            assert!(
+                attempt["log"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("trial-code-review.jsonl")
+            );
+            for axis in ["standards", "spec"] {
+                assert!(std::path::Path::new(attempt["reports"][axis].as_str().unwrap()).is_file());
+            }
+        }
+    }
+    assert_eq!(
+        experiment["verdict"]["suites"]["code-review"]["pass_cubed"],
+        json!({"baseline": 1.0, "candidate": 0.0})
+    );
+    let shown = fixture.experiment();
+    assert_eq!(shown["verdict"], experiment["verdict"]);
+    for call in fixture.scenario.claude_calls() {
+        assert!(
+            call["prompt"]
+                .as_str()
+                .unwrap()
+                .starts_with("/thirdshift-code-review main\n")
+        );
+    }
+    assert!(fixture.scenario.gh_calls().is_empty());
 }
 
 #[test]
