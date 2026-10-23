@@ -142,7 +142,7 @@ impl std::fmt::Display for State {
 impl Stored {
     pub fn open(
         root: &Path,
-        description: Description,
+        mut description: Description,
         tasks: impl FnOnce() -> Result<Vec<Task>>,
     ) -> Result<Self> {
         fs::create_dir_all(root)?;
@@ -154,11 +154,18 @@ impl Stored {
         let mut stored = if path.exists() {
             let mut stored: Self = serde_json::from_slice(&fs::read(path)?)?;
             ensure!(stored.format == 1, "unsupported Experiment format");
+            let started = directory.join("started").exists();
+            if started {
+                // Cause defaults belong to the installed runner, not a CLI
+                // override. Resume keeps the rules recorded before its Trials.
+                description
+                    .bar
+                    .void_rules
+                    .causes
+                    .clone_from(&stored.description.bar.void_rules.causes);
+            }
             if stored.description.bar != description.bar {
-                ensure!(
-                    !directory.join("started").exists(),
-                    "Bar cannot change after the first Trial"
-                );
+                ensure!(!started, "Bar cannot change after the first Trial");
                 stored.description.bar = description.bar;
             }
             stored

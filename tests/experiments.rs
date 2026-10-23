@@ -936,6 +936,44 @@ fn an_agent_killing_its_own_harness_fails_without_a_retry() {
 }
 
 #[test]
+fn resuming_an_experiment_preserves_its_preexisting_void_rules() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(r#"
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["quota exceeded"]}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+"#);
+    let paused = fixture.run(&[]);
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    let experiment = fixture.experiment();
+    assert_eq!(experiment["state"], "paused");
+    let metadata = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}/experiment.json",
+        experiment["id"].as_str().unwrap()
+    ));
+    // A version-1 Experiment saved before the additional external causes.
+    let old_causes = json!([
+        "session_unavailable",
+        "usage_limit",
+        "rate_limit",
+        "interrupted",
+        "repository_changed"
+    ]);
+    let mut saved: Value = serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
+    saved["bar"]["void_rules"]["causes"] = old_causes.clone();
+    fs::write(&metadata, serde_json::to_vec(&saved).unwrap()).unwrap();
+    fixture.scenario.agent_does("true");
+    let resumed = fixture.run(&[]);
+    assert_eq!(
+        resumed.code,
+        Some(0),
+        "the same command must resume its saved Bar: {}",
+        resumed.stderr
+    );
+    let after = fixture.experiment();
+    assert_eq!(after["state"], "completed");
+    assert_eq!(after["bar"]["void_rules"]["causes"], old_causes);
+}
+
+#[test]
 fn externally_reported_host_kills_retry_fresh_and_keep_the_cause() {
     let fixture = Fixture::new();
     let output = json!({
