@@ -46,7 +46,7 @@ impl Owner {
     }
 
     pub fn session_path(&self, dir: &Path, subject: &str, kind: &str) -> PathBuf {
-        dir.join(format!("{subject}-{}-{kind}.jsonl", self.identity()))
+        dir.join(format!("{subject}-{}-{kind}.logs.jsonl", self.identity()))
     }
 
     pub fn models_match(&self, path: &Path) -> bool {
@@ -283,18 +283,12 @@ pub(super) fn decode(path: &Path) -> Option<Decoded<'_>> {
     })
 }
 
-/// During dual recording the original Session log is the inventory entry.
+/// Only the log-records file represents a Session trace in the inventory.
 pub(super) fn inventory_session(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    if name.ends_with(".spans.jsonl") {
-        return false;
-    }
-    if let Some(stem) = name.strip_suffix(".logs.jsonl") {
-        return !path.with_file_name(format!("{stem}.jsonl")).exists();
-    }
-    true
+    name.ends_with(".log") || name.ends_with(".logs.jsonl")
 }
 
 /// Preserve current legacy suffix stripping, including non-stamped fixture

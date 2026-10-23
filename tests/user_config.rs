@@ -184,7 +184,7 @@ fn help_and_version_succeed_with_a_broken_config() {
 const AGENT_EXITS_3: &str = "exit 3\n";
 
 /// Assert the Run failed after logging its one session in `commands/issue/` under
-/// `acme/widgets/` under `dir`, a directory under the scenario, and that the "session log:" line
+/// `acme/widgets/` under `dir`, a directory under the scenario, and that the "session trace:" line
 /// names that log.
 fn assert_logged_in(scenario: &Scenario, result: &RunResult, dir: &str) {
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
@@ -195,7 +195,7 @@ fn assert_logged_in(scenario: &Scenario, result: &RunResult, dir: &str) {
     assert!(
         result
             .stderr
-            .contains(&format!("session log: {}", log.display())),
+            .contains(&format!("session trace: {}", log.display())),
         "stderr: {}",
         result.stderr
     );

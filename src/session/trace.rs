@@ -1,5 +1,4 @@
-//! A Session trace owns streaming logs and ended spans. The transcript stays
-//! beside it until the readers switch. No Harness protocol parsing lives here
+//! A Session trace owns streaming logs and ended spans. No Harness protocol parsing lives here
 //! beyond envelope metadata (event name and clock).
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -29,7 +28,6 @@ pub(crate) struct Trace {
     export: Option<Export>,
     resource: Resource,
     version: Option<Version>,
-    historical: bool,
     metadata_logged: bool,
     context: Context,
     session: Span,
@@ -53,6 +51,7 @@ impl Trace {
         command: &std::process::Command,
         command_log: Option<&Path>,
     ) -> io::Result<Self> {
+        let log = crate::logs::session::original(log);
         let started = now();
         let session_id = id(&[
             &context.trace.0,
@@ -87,7 +86,6 @@ impl Trace {
                 ..Default::default()
             },
             version: Some(Version::new(choice.harness.adapter(), command_log, command)),
-            historical: false,
             metadata_logged: false,
             context,
             session: Span {
@@ -129,67 +127,25 @@ impl Trace {
         })
     }
 
-    pub fn record(&mut self, raw: &str, events: &[Event]) -> io::Result<()> {
-        self.record_at(raw, events, now())
-    }
-
-    /// Replay through the live writer, without querying today's Harness version
-    /// or substituting today's clock for an old Session's missing timestamps.
-    pub(crate) fn historical(
-        source: &Path,
-        output: &Path,
-        kind: &str,
-        choice: &Choice,
-        context: Context,
-        started: u64,
-    ) -> io::Result<Self> {
-        let mut trace = Self::create(
-            output,
-            kind,
-            choice,
-            "",
-            context,
-            &std::process::Command::new(""),
-            None,
-        )?;
-        trace.version = None;
-        trace.export = None;
-        trace.historical = true;
-        trace
-            .resource
-            .attributes
-            .push(attribute("thirdshift.migration", "legacy"));
-        trace.session.span_id = Some(id(&[
-            &trace.context.trace.0,
-            b"session",
-            source.as_os_str().as_encoded_bytes(),
-        ]));
-        trace.session.start_time_unix_nano = started;
-        trace.session.attributes.push(estimated(true));
-        Ok(trace)
+    pub fn record(&mut self, raw: impl AsRef<[u8]>, events: &[Event]) -> io::Result<()> {
+        self.record_at(raw.as_ref(), events, now())
     }
 
     pub(crate) fn record_at(
         &mut self,
-        raw: &str,
+        bytes: &[u8],
         events: &[Event],
         observed: u64,
     ) -> io::Result<()> {
-        let envelope: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
+        let raw = String::from_utf8_lossy(bytes);
+        let envelope: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
         self.record_version(&envelope);
-        let own_time = event_time(&envelope);
-        let time = own_time.or(self.historical.then_some(observed));
-        if self.historical {
-            self.session.end_time_unix_nano = self
-                .session
-                .end_time_unix_nano
-                .max(time.unwrap_or(observed));
-        }
+        let time = event_time(&envelope);
         let mut attrs = Vec::new();
         // The Session span is written on exit. Retain its prompt and start in
         // the first event too, so a live Peek can show them without repeating
         // the prompt in every resource envelope.
-        if !self.metadata_logged && !self.historical {
+        if !self.metadata_logged {
             attrs.extend(
                 self.session
                     .attributes
@@ -203,13 +159,6 @@ impl Trace {
             ));
         }
         self.metadata_logged = true;
-        if self.historical {
-            attrs.push(KeyValue {
-                key: "thirdshift.migration.original".into(),
-                value: Some(AnyValue::Bool(true)),
-            });
-            attrs.push(estimated(own_time.is_none()));
-        }
         // Partial Messages frames can carry only usage/deltas, with no new
         // normalized fact. Their envelope retains the parent tool scope.
         let mut span_id = if envelope["type"] == "stream_event" {
@@ -222,13 +171,7 @@ impl Trace {
             self.session.span_id
         };
         for event in events {
-            span_id = self
-                .apply(
-                    event,
-                    time.unwrap_or(observed),
-                    self.historical && own_time.is_none(),
-                )?
-                .or(span_id);
+            span_id = self.apply(event, time.unwrap_or(observed))?.or(span_id);
             for attr in event_attributes(event, self.input_excludes_cache) {
                 set(&mut attrs, attr);
             }
@@ -257,7 +200,10 @@ impl Trace {
                     log_records: vec![LogRecord {
                         time_unix_nano: time.unwrap_or_default(),
                         observed_time_unix_nano: observed,
-                        body: Some(AnyValue::String(raw.trim_end_matches(['\r', '\n']).into())),
+                        body: Some(match std::str::from_utf8(bytes) {
+                            Ok(raw) => AnyValue::String(raw.trim_end_matches(['\r', '\n']).into()),
+                            Err(_) => AnyValue::Bytes(bytes.to_vec()),
+                        }),
                         event_name: name.into(),
                         trace_id: Some(self.context.trace),
                         span_id,
@@ -322,7 +268,7 @@ impl Trace {
         Ok(())
     }
 
-    fn apply(&mut self, event: &Event, time: u64, estimated: bool) -> io::Result<Option<SpanId>> {
+    fn apply(&mut self, event: &Event, time: u64) -> io::Result<Option<SpanId>> {
         use Event::*;
         let Some(fact) = Call::of(event) else {
             if let Usage {
@@ -380,12 +326,6 @@ impl Trace {
         self.locations
             .insert(call.to_owned(), (key.clone(), span_id));
         let mut attrs = event_attributes(event, self.input_excludes_cache);
-        if estimated {
-            attrs.push(KeyValue {
-                key: "thirdshift.time.estimated".into(),
-                value: Some(AnyValue::Bool(true)),
-            });
-        }
         if let Some(span) = self.ended.get_mut(&key) {
             for attr in attrs {
                 set(&mut span.attributes, attr);
@@ -465,13 +405,6 @@ fn status(outcome: Outcome) -> Status {
     Status {
         code: if outcome == Outcome::Succeeded { 1 } else { 2 },
         message: format!("{outcome:?}"),
-    }
-}
-
-fn estimated(value: bool) -> KeyValue {
-    KeyValue {
-        key: "thirdshift.time.estimated".into(),
-        value: Some(AnyValue::Bool(value)),
     }
 }
 

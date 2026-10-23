@@ -234,7 +234,7 @@ fn gives_the_agent_the_fresh_prompt() {
          \n\
          Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.\n\
          \n\
-         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.\n"
+         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on. thirdshift records this session as a Session trace, with Model evidence and any review reports beside it.\n"
     );
 }
 
@@ -389,15 +389,14 @@ fn logs_the_session_stream_under_the_home_directory() {
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
     let name = &logs[0];
     assert!(
-        name.starts_with("7-") && name.ends_with("-implement.jsonl"),
+        name.starts_with("7-") && name.ends_with("-implement.logs.jsonl"),
         "log: {name}"
     );
-    let log = std::fs::read_to_string(
+    let log = support::session_trace::events(
         scenario
             .path("home/.thirdshift/logs/acme/widgets/commands/issue")
             .join(name),
-    )
-    .unwrap();
+    );
     assert!(
         log.contains(r#""type": "system""#) && log.contains(r#""type": "result""#),
         "log: {log}"

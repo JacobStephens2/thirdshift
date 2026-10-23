@@ -179,8 +179,17 @@ fn all_six_harnesses_leave_one_inventory_entry_and_both_otlp_files() {
             assert_eq!(request.resource_logs[0].scope_logs[0].log_records.len(), 1);
         }
         let stem = logs[0].strip_suffix(".logs.jsonl").unwrap();
-        assert!(folder.join(format!("{stem}.jsonl")).exists());
+        assert!(!folder.join(format!("{stem}.jsonl")).exists());
         assert!(folder.join(format!("{stem}.models.json")).exists());
+        let record = scenario.command_record(LOGS);
+        assert_eq!(record["session_log"], serde_json::json!(path));
+        assert!(
+            record["stages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|stage| { stage["session_log"] == serde_json::json!(path) })
+        );
         assert!(
             spans(&folder.join(format!("{stem}.spans.jsonl")))
                 .iter()

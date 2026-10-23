@@ -1,4 +1,4 @@
-//! Every kind of session thirdshift runs: its Session-log token, the Command
+//! Every kind of session thirdshift runs: its Session-trace token, the Command
 //! record stage it enters, and which `thirdshift logs --session` words
 //! select it.
 
@@ -27,7 +27,7 @@ pub enum Kind {
 }
 
 impl Kind {
-    /// The kind's token, in its Session log's name and progress lines.
+    /// The kind's token, in its Session trace's name and progress lines.
     pub fn token(self) -> String {
         match self {
             Self::Implementation => "implement".to_string(),
@@ -64,7 +64,7 @@ impl Kind {
     }
 }
 
-/// A session as its Session log names it: of `kind`, and its Resume if
+/// A session as its Session trace names it: of `kind`, and its Resume if
 /// `resume`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Logged {
@@ -86,7 +86,7 @@ impl Logged {
         Logged { kind, resume: true }
     }
 
-    /// The Session-log token: the kind's, with `-resume` for its Resume.
+    /// The Session-trace token: the kind's, with `-resume` for its Resume.
     pub fn token(self) -> String {
         let token = self.kind.token();
         if self.resume {
@@ -96,7 +96,7 @@ impl Logged {
         }
     }
 
-    /// The session a Session log's `token` names, if thirdshift can read it.
+    /// The session a Session trace's `token` names, if thirdshift can read it.
     pub fn read(token: &str) -> Option<Self> {
         match token.strip_suffix("-resume") {
             Some(kind) => Kind::read(kind).map(Self::resume_of),
@@ -125,7 +125,7 @@ impl Logged {
     }
 }
 
-/// Whether `thirdshift logs --session <word>` selects the Session log whose
+/// Whether `thirdshift logs --session <word>` selects the Session trace whose
 /// token is `token`: one whose token is `word`, or `word` with `-resume`,
 /// or, for `repair`, any numbered Repair or its Resume. A token no kind
 /// reads, as older thirdshift versions may have written, is still selected

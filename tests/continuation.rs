@@ -103,7 +103,7 @@ fn assert_nothing_created(scenario: &Scenario, local_branch: &str) {
         scenario
             .log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl")
             .is_empty(),
-        "a session log was created"
+        "a session trace was created"
     );
     assert_ne!(scenario.launch_git(&["branch", "--list", local_branch]), "");
 }

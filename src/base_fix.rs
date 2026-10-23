@@ -296,7 +296,7 @@ impl BaseFix {
             } => {
                 taken.local_work = local_work;
                 if let Some(log) = log {
-                    outside.step(format!("Base fix #{number} session log: {log}"));
+                    outside.step(format!("Base fix #{number} session trace: {log}"));
                 }
                 bail!("Base fix {} failed: {cause}", taken.issue.url)
             }
@@ -1024,7 +1024,7 @@ mod tests {
         for (log, log_line) in [
             (
                 Some("/logs/8.log".to_string()),
-                Some(line("Base fix #8 session log: /logs/8.log")),
+                Some(line("Base fix #8 session trace: /logs/8.log")),
             ),
             (None, None),
         ] {

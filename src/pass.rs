@@ -94,7 +94,7 @@ pub trait Outside {
     /// then `conclude` on this seam and that message, while the session is
     /// still open: a failure of `conclude` after a session left background
     /// work to be killed names that work too. Returns what `conclude` came
-    /// to, with the session's Session log, if it has one.
+    /// to, with the session's Session trace, if it has one.
     fn review<T>(
         &mut self,
         base: &str,
@@ -506,7 +506,7 @@ mod in_memory {
         /// The Architecture review session's final message, if it has one,
         /// or the cause it fails with.
         review: Result<Option<String>, String>,
-        /// The Architecture review session's Session log.
+        /// The Architecture review session's Session trace.
         session_log: Option<PathBuf>,
         /// How the run dispatched ends.
         ending: Option<Ended>,
@@ -516,7 +516,7 @@ mod in_memory {
 
     /// A repository with no issue, whose Harness check passes and whose
     /// Architecture review session ends with no final message and no
-    /// Session log.
+    /// Session trace.
     impl Default for InMemory {
         fn default() -> Self {
             InMemory {
@@ -650,7 +650,7 @@ mod in_memory {
             self
         }
 
-        /// Have the Architecture review session logged at `log`.
+        /// Have the Architecture review session traceged at `log`.
         pub fn session_log(mut self, log: &str) -> Self {
             self.session_log = Some(PathBuf::from(log));
             self

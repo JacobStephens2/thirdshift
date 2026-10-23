@@ -1358,12 +1358,8 @@ test -f {root}/{COPY_REPLACED}
         self.entries(relative)
             .into_iter()
             .filter(|name| {
-                // Existing transcript assertions select Session logs. Trace
-                // files are checked explicitly in session_traces.rs.
-                if extension == "jsonl"
-                    && (name.ends_with(".logs.jsonl") || name.ends_with(".spans.jsonl"))
-                {
-                    return false;
+                if extension == "jsonl" {
+                    return name.ends_with(".logs.jsonl");
                 }
                 Path::new(name)
                     .extension()

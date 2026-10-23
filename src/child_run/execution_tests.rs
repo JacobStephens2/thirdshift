@@ -45,7 +45,7 @@ fn distinct_children_deliver_out_of_order_with_their_own_endings_and_accounts() 
         "open(ROOT + '/ready', 'w').close()\nwhile not os.path.exists(ROOT + '/finish'): time.sleep(.01)\nos.write(1, b'{PR}\\n')\nos.write(2, b'thirdshift: Base fix: https://github.com/acme/widgets/issues/8 merged\\n')"
     ));
     let second = Fixture::new(
-        "os.write(2, b'thirdshift: checks failed\\nthirdshift: session log: /logs/22.jsonl\\n')\nraise SystemExit(7)",
+        "os.write(2, b'thirdshift: checks failed\\nthirdshift: session trace: /logs/22.jsonl\\n')\nraise SystemExit(7)",
     );
     let mut runs = Runs::default();
     first.start_in(&mut runs, 21).unwrap();
@@ -283,7 +283,7 @@ fn stdout_pipe_pressure_completes_with_the_last_line_as_the_pr() {
 #[test]
 fn malformed_diagnostics_preserve_later_failure_cause_and_final_session_log() {
     let fixture = Fixture::new(
-        "os.write(2, b'bad \\xff\\nthirdshift: inherited failure\\r\\nthirdshift: #9: descendant failure\\nthirdshift: session log: /logs/248.jsonl')\nraise SystemExit(7)",
+        "os.write(2, b'bad \\xff\\nthirdshift: inherited failure\\r\\nthirdshift: #9: descendant failure\\nthirdshift: session trace: /logs/248.jsonl')\nraise SystemExit(7)",
     );
     let ended = fixture.start().unwrap().wait().unwrap();
     assert!(matches!(ended, Ended::Failed { cause, log: Some(log), .. }

@@ -201,8 +201,8 @@ pub(in crate::logs) fn read(repo: &Path, covered: &HashSet<PathBuf>) -> Result<V
         })
         .collect();
     // Keep Activity entries unless a record covered them; all Activity starts
-    // still suppress their Session logs, including starts with no end line.
-    // `covered` above includes both sources for the Session-log pass.
+    // still suppress their Session traces, including starts with no end line.
+    // `covered` above includes both sources for the Session-trace pass.
     commands.extend(sessions(repo, &repository, &covered, &shared_owners)?);
     Ok(commands)
 }
@@ -225,7 +225,7 @@ fn start(
         return Ok(None);
     }
     // Early Activity logs named only the Command log, before Harness metadata
-    // was added. Their known outcome still takes precedence over Session logs.
+    // was added. Their known outcome still takes precedence over Session traces.
     let (path, choice) = detail.rsplit_once(", on ").unwrap_or((detail, ""));
     let relative = Path::new(path);
     if !relative.starts_with("commands")

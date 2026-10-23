@@ -17,50 +17,15 @@ fn start_console(home: &Path, value: &Value) -> Console {
 }
 
 #[test]
-fn converted_session_keeps_its_waterfall_stage_and_duration_after_cleanup() {
-    let home = tempfile::tempdir().unwrap();
-    let dir = home
-        .path()
-        .join(".thirdshift/logs/acme/widgets/commands/issue");
-    let session = dir.join("7-20261001T120000+0000-implement.jsonl");
-    let mut value = retained_command(home.path(), &session);
-    value["harness"] = json!("codex");
-    value["stages"] = json!([
-        {"name":"implement","began_at":value["started_at"],"session_log":session},
-        {"name":"review","began_at":"2026-10-01T12:00:05.500Z","session_log":null}
-    ]);
-    fs::write(&session, "{\"type\":\"item.completed\",\"item\":{\"id\":\"c1\",\"type\":\"command_execution\",\"command\":\"cargo test\",\"status\":\"completed\",\"exit_code\":0}}\n").unwrap();
-    fs::write(dir.join("7-fixture.log"), "thirdshift: 12:00:00 starting\nthirdshift: 12:00:05 implement: $ cargo test\nthirdshift: 12:01:00 finished\n").unwrap();
-    let console = start_console(home.path(), &value);
-    let before = span_tree(&console, "widgets%237");
-    assert_eq!(tool_spans(&before)[0]["start"], 1790856005000.0);
-    assert_eq!(tool_spans(&before)[0]["duration_ms"], 500.0);
-    for flag in ["--convert", "--remove-converted"] {
-        let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
-            .args(["logs", flag])
-            .env("HOME", home.path())
-            .output()
-            .unwrap();
-        assert!(output.status.success(), "{output:?}");
-    }
-    assert!(!session.exists());
-    let after = span_tree(&console, "widgets%237");
-    assert_eq!(tool_spans(&after)[0]["start"], 1790856005000.0);
-    assert_eq!(tool_spans(&after)[0]["duration_ms"], 500.0);
-    assert_eq!(tool_spans(&after)[0]["estimated"], true);
-}
-
-#[test]
 fn waterfall_reads_start_records_without_spans_and_ignores_an_unfinished_tail() {
     let home = tempfile::tempdir().unwrap();
     let dir = home
         .path()
         .join(".thirdshift/logs/acme/widgets/commands/issue");
-    let session = dir.join("7-20261001T120000+0000-implement.jsonl");
+    let session = dir.join("7-20261001T120000+0000-implement.logs.jsonl");
     let value = retained_command(home.path(), &session);
-    fs::write(&session, "{\"type\":\"item.completed\",\"item\":{\"id\":\"legacy\",\"type\":\"command_execution\",\"command\":\"wrong\",\"status\":\"completed\"}}\n").unwrap();
     fs::write(
-        session.with_extension("logs.jsonl"),
+        &session,
         format!(
             "{}{{\"resourceLogs\":",
             include_str!("../fixtures/waterfall-logs.jsonl")
@@ -137,11 +102,11 @@ fn waterfall_uses_session_trace_spans_instead_of_command_log_guesses() {
     let dir = home
         .path()
         .join(".thirdshift/logs/acme/widgets/commands/issue");
-    let session = dir.join("7-20261001T120000+0000-implement.jsonl");
+    let session = dir.join("7-20261001T120000+0000-implement.logs.jsonl");
     let mut value = retained_command(home.path(), &session);
     fs::write(&session, "").unwrap();
     fs::write(
-        session.with_extension("spans.jsonl"),
+        session.with_file_name("7-20261001T120000+0000-implement.spans.jsonl"),
         include_str!("../fixtures/waterfall-spans.jsonl"),
     )
     .unwrap();
@@ -171,7 +136,7 @@ fn waterfall_uses_session_trace_spans_instead_of_command_log_guesses() {
     spans["resourceSpans"][0]["scopeSpans"][0]["spans"][1]["endTimeUnixNano"] =
         json!("1790856016500500000");
     fs::write(
-        session.with_extension("spans.jsonl"),
+        session.with_file_name("7-20261001T120000+0000-implement.spans.jsonl"),
         serde_json::to_vec(&spans).unwrap(),
     )
     .unwrap();

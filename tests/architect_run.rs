@@ -187,7 +187,7 @@ fn assert_nothing_left_behind(scenario: &Scenario) {
 }
 
 /// What every failed Architect run shares once its review has started: exit
-/// 1, nothing on stdout, `cause` on stderr, then the session log and the
+/// 1, nothing on stdout, `cause` on stderr, then the session trace and the
 /// Command log as its last lines, and nothing left behind.
 fn assert_failed(scenario: &Scenario, result: &RunResult, cause: &str) {
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
@@ -203,7 +203,7 @@ fn assert_failed(scenario: &Scenario, result: &RunResult, cause: &str) {
     );
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
     assert!(
-        logs[0].starts_with("architect-") && logs[0].ends_with("-architecture-review.jsonl"),
+        logs[0].starts_with("architect-") && logs[0].ends_with("-architecture-review.logs.jsonl"),
         "logs: {logs:?}"
     );
     let log = scenario
@@ -211,7 +211,7 @@ fn assert_failed(scenario: &Scenario, result: &RunResult, cause: &str) {
         .join(&logs[0]);
     assert_eq!(
         before_command_log(&result.stderr).last(),
-        Some(&format!("thirdshift: session log: {}", log.display()).as_str()),
+        Some(&format!("thirdshift: session trace: {}", log.display()).as_str()),
         "stderr: {}",
         result.stderr
     );
@@ -1093,7 +1093,7 @@ fn a_dispatched_run_that_fails_fails_the_architect_run_as_a_failed_run_does() {
     );
     let last = *before_command_log(&result.stderr).last().unwrap();
     assert!(
-        last.starts_with("thirdshift: session log: ") && last.ends_with("-implement.jsonl"),
+        last.starts_with("thirdshift: session trace: ") && last.ends_with("-implement.logs.jsonl"),
         "stderr: {}",
         result.stderr
     );
@@ -1569,7 +1569,9 @@ fn a_failed_review_sends_one_notification_with_the_cause_and_the_session_log() {
     );
     let ending = result.stderr.lines().rev().take(2).collect::<Vec<_>>();
     let command_log = ending[0].strip_prefix("thirdshift: command log: ").unwrap();
-    let log = ending[1].strip_prefix("thirdshift: session log: ").unwrap();
+    let log = ending[1]
+        .strip_prefix("thirdshift: session trace: ")
+        .unwrap();
     assert!(
         text.starts_with(&format!(
             "Result:       review failed\n\
@@ -1577,7 +1579,7 @@ fn a_failed_review_sends_one_notification_with_the_cause_and_the_session_log() {
              Repository:   acme/widgets\n\
              Review:       failed\n\
              Cause:        {FAILED_REVIEW_CAUSE}\n\
-             Session log:  {log}\n\
+             Session trace:  {log}\n\
              Command log:  {command_log}\n"
         )),
         "{text}"

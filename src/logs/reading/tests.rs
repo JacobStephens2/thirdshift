@@ -180,11 +180,11 @@ fn ticket_session_inventory_includes_stage_current_resume_and_numbered_repairs()
         &spec,
     );
     let folder = path.parent().unwrap();
-    let implement = folder.join("21-20261019T110000-0400~spec-implement.jsonl");
-    let resume = folder.join("21-20261019T110000-0400~spec-implement-resume.jsonl");
-    let repair = folder.join("21-20261019T110000-0400~spec-repair-2-resume.jsonl");
-    let previous = folder.join("21-20261019T110000-0400~spec-repair-1.jsonl");
-    let retained_reference = folder.join("retained-session.jsonl");
+    let implement = folder.join("21-20261019T110000-0400~spec-implement.logs.jsonl");
+    let resume = folder.join("21-20261019T110000-0400~spec-implement-resume.logs.jsonl");
+    let repair = folder.join("21-20261019T110000-0400~spec-repair-2-resume.logs.jsonl");
+    let previous = folder.join("21-20261019T110000-0400~spec-repair-1.logs.jsonl");
+    let retained_reference = folder.join("retained-session.logs.jsonl");
     for (index, session) in [&retained_reference, &implement, &resume, &previous, &repair]
         .into_iter()
         .enumerate()
@@ -195,7 +195,7 @@ fn ticket_session_inventory_includes_stage_current_resume_and_numbered_repairs()
             .unwrap();
     }
     fs::write(
-        folder.join("21-20261019T110000-0400~other-repair-9.jsonl"),
+        folder.join("21-20261019T110000-0400~other-repair-9.logs.jsonl"),
         "unrelated",
     )
     .unwrap();
@@ -241,8 +241,8 @@ fn historical_selection_keeps_unknown_facts_and_has_no_process_or_stop_authority
     let dir = tempfile::tempdir().unwrap();
     let folder = dir.path().join("acme/widgets/commands/issue");
     fs::create_dir_all(&folder).unwrap();
-    let session = folder.join("7-20261019T110000-0400~history-implement.jsonl");
-    fs::write(&session, "not interpreted as a live event").unwrap();
+    let session = folder.join("7-20261019T110000-0400~history-implement.logs.jsonl");
+    fs::write(&session, serde_json::json!({"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"not interpreted as a live event"}}]}]}]}).to_string()).unwrap();
     let snapshot = Snapshot::load(dir.path(), now()).unwrap();
     assert!(snapshot.inbox(false, 7).is_empty());
     assert_eq!(snapshot.inbox(true, 7).len(), 1);

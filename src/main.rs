@@ -94,7 +94,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
        thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
        thirdshift logs [--command <id>] [--json]      List this machine's logs
-       thirdshift logs --file <id> [--follow]         Read a log; --convert / --remove-converted migrate old Sessions
+       thirdshift logs --file <id> [--follow]         Read a log
        thirdshift logs <command> [--session <kind>] [--follow]  Read a log; --export <dir> writes its whole Trace
        thirdshift update                              Update to the latest release
        thirdshift version                             Print the version
@@ -217,12 +217,6 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
-        Ok(Command::LogsConvert { remove }) => {
-            return match logs::convert::run(remove) {
-                Ok(()) => ExitCode::SUCCESS,
-                Err(error) => failure(&error),
-            };
-        }
         Ok(Command::Logs {
             command,
             session,
@@ -304,7 +298,7 @@ fn main() -> ExitCode {
 /// candidate and so published no plan to dispatch, puts the URL of the issue
 /// it ended on on stdout: the plan, the idea issue the review filed, or the
 /// issue that already covers its top recommendation. One whose review or
-/// plan fails puts the cause and the session log on stderr. One that is
+/// plan fails puts the cause and the session trace on stderr. One that is
 /// skipped says why on stderr, and is no failure: as another Pass on its
 /// repository is still running, it puts nothing on stdout,
 /// and as Architect plans are still open there, or Architect ideas wait for

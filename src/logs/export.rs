@@ -105,7 +105,7 @@ pub fn export(input: &str, directory: &Path) -> Result<()> {
             {
                 ensure!(
                     log.trace_id == Some(context.trace),
-                    "Session log belongs to another Trace"
+                    "Session trace belongs to another Trace"
                 );
                 ancestry.references.extend(log.span_id);
             }
