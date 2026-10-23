@@ -163,3 +163,95 @@ fn live_commands_never_show_the_idle_notice_even_in_needs_you_or_hidden_sections
     assert!(html.contains("data-state=\"Silent\""), "{html}");
     assert!(!html.contains("No running Commands"), "{html}");
 }
+
+#[cfg(unix)]
+#[test]
+fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status() {
+    use super::watching::{FixtureProcess, live_record};
+    use super::write_record;
+    use serde_json::json;
+
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let work = FixtureProcess(Command::new("sleep").arg("60").spawn().unwrap());
+    let pid = work.0.id();
+    for (number, stage) in [(1, "CI watch"), (2, "implement"), (3, "implement")] {
+        let mut fixture = live_record(home.path(), number, pid);
+        fixture["stages"][0]["name"] = json!(stage);
+        write_record(home.path(), number, &fixture);
+    }
+    record(home.path(), 4, Some("ready for review"), 0);
+    record(home.path(), 5, Some("failed"), 0);
+    let dir = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    fs::write(
+        dir.join("3-fixture.command.stop.json"),
+        r#"{"who":"jacob","requeue":false}"#,
+    )
+    .unwrap();
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let html = console.get("/").text().unwrap();
+    let status = |args: &[&str]| {
+        let output = Command::new(binary)
+            .args(args)
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let json: Value = serde_json::from_str(&status(&["status", "--json"])).unwrap();
+    let text = status(&["status"]);
+    for (number, group, state, live, stopping) in [
+        (1, "landing", "Landing", true, false),
+        (2, "working", "live", true, false),
+        (3, "working", "Stopping", true, true),
+        (4, "ready for review", "Ready", false, false),
+        (5, "needs you", "Failed", false, false),
+    ] {
+        let row = html
+            .split("<li class=\"command\"")
+            .find(|row| row.contains(&format!(">acme/widgets#{number}<")))
+            .expect(&html);
+        assert!(row.contains(&format!("data-live=\"{live}\"")), "{row}");
+        assert!(row.contains(&format!("data-state=\"{state}\"")), "{row}");
+        assert!(
+            row.contains(&format!("<span class=\"state\">{state}</span>")),
+            "{row}"
+        );
+        let section = html
+            .split(&format!("data-group=\"{group}\""))
+            .nth(1)
+            .unwrap()
+            .split("</details>")
+            .next()
+            .unwrap();
+        assert!(
+            section.contains(&format!(">acme/widgets#{number}<")),
+            "{section}"
+        );
+        let item = json["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|item| item["issue"]["number"] == number)
+            .unwrap();
+        assert_eq!(item["group"], group, "{item}");
+        assert_eq!(item["stopping"], stopping, "{item}");
+        assert!(
+            text.contains(&format!(
+                "Spec run acme/widgets#{number} Widgets <script>alert(1)</script>"
+            )) && text
+                .lines()
+                .any(|line| line.contains(&format!("acme/widgets#{number} "))
+                    && line.contains(&format!(" · {state} · "))),
+            "{text}"
+        );
+    }
+}
