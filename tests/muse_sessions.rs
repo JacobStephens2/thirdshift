@@ -170,7 +170,7 @@ fn the_user_config_selects_muse_and_its_cached_model_and_effort_are_settled() {
         scenario.gh_state()["prs"][0]["body"]
             .as_str()
             .unwrap()
-            .contains("Built with muse · muse-spark-1.3 · max")
+            .contains("Built with muse 9.8.7 · muse-spark-1.3 · max")
     );
 }
 

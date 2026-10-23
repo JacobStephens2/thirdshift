@@ -1492,7 +1492,7 @@ fn the_notification_of_a_run_left_ready_for_review_is_that_runs() {
              Pull request: {}\n\
              Session log:  {}\n\
              Command log:  {}\n\
-             Built with claude · default model · default effort (configured)\n\
+             Built with claude 9.8.7 · default model · default effort (configured)\n\
              Sent by:      thirdshift\n\
              Host:         ",
             pr["url"].as_str().unwrap(),

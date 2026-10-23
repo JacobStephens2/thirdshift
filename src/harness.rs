@@ -13,6 +13,7 @@ use anyhow::{Context, Result, bail};
 
 mod adapter;
 pub(crate) mod agy;
+pub(crate) mod built_with;
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod grok;
@@ -221,9 +222,9 @@ impl Choice {
     }
 
     /// The line thirdshift writes in a pull request's body and a Run
-    /// notification, as in `Built with claude · claude-opus-5-5 · high`.
+    /// notification, using the owning Command's detected Harness version.
     pub fn built_with(&self) -> String {
-        format!("Built with {self}")
+        built_with::BuiltWith::from(self).to_string()
     }
 
     // Compatibility for the existing argument tests; production callers
@@ -501,15 +502,15 @@ mod tests {
                     "high",
                     ChosenBy::Command,
                 ),
-                "Built with claude · claude-opus-5-5 · high",
+                "Built with claude unknown · claude-opus-5-5 · high",
             ),
             (
                 Choice::default(),
-                "Built with claude · default model · default effort",
+                "Built with claude unknown · default model · default effort",
             ),
             (
                 choice(Harness::Codex, "", "max", ChosenBy::UserConfig),
-                "Built with codex · default model · max",
+                "Built with codex unknown · default model · max",
             ),
         ] {
             assert_eq!(chosen.built_with(), line);

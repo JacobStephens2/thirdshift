@@ -1244,7 +1244,7 @@ mod tests {
         pr.write_built_with(&Choice::default()).unwrap();
         pr.write_built_with(&choice).unwrap();
         let expected =
-            "Closes #7\n\nBuilt with claude · opus · high <!-- thirdshift:built-with -->\n";
+            "Closes #7\n\nBuilt with claude unknown · opus · high <!-- thirdshift:built-with -->\n";
         assert_eq!(world.borrow().body, expected);
         assert_eq!(world.borrow().edits.len(), 2);
         assert!(world.borrow().edits.iter().all(|(number, _)| *number == 12));
@@ -1260,7 +1260,7 @@ mod tests {
         pr.write_built_with(&Choice::default()).unwrap();
         assert_eq!(
             world.borrow().body,
-            "Summary\r\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\r\n\r\nCloses #7\r\n"
+            "Summary\r\nBuilt with claude unknown · default model · default effort <!-- thirdshift:built-with -->\r\n\r\nCloses #7\r\n"
         );
     }
 

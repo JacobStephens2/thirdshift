@@ -92,7 +92,7 @@ echo '{{"event":"step_update","step_update":{{"step_index":2,"state":"DONE","ste
         scenario.gh_state()["prs"][0]["body"]
             .as_str()
             .unwrap()
-            .contains("Built with agy · gemini-3.8-flash · medium")
+            .contains("Built with agy 9.8.7 · gemini-3.8-flash · medium")
     );
     let sessions = "home/.thirdshift/logs/acme/widgets/commands/issue";
     let logs = scenario.log_files(sessions, "jsonl");
