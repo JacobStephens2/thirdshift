@@ -170,9 +170,7 @@ impl Trace {
             self.session.span_id
         };
         for event in events {
-            span_id = self
-                .apply(event, time.unwrap_or(observed), false)?
-                .or(span_id);
+            span_id = self.apply(event, time.unwrap_or(observed))?.or(span_id);
             for attr in event_attributes(event, self.input_excludes_cache) {
                 set(&mut attrs, attr);
             }
@@ -266,7 +264,7 @@ impl Trace {
         Ok(())
     }
 
-    fn apply(&mut self, event: &Event, time: u64, estimated: bool) -> io::Result<Option<SpanId>> {
+    fn apply(&mut self, event: &Event, time: u64) -> io::Result<Option<SpanId>> {
         use Event::*;
         let Some(fact) = Call::of(event) else {
             if let Usage {
@@ -324,12 +322,6 @@ impl Trace {
         self.locations
             .insert(call.to_owned(), (key.clone(), span_id));
         let mut attrs = event_attributes(event, self.input_excludes_cache);
-        if estimated {
-            attrs.push(KeyValue {
-                key: "thirdshift.time.estimated".into(),
-                value: Some(AnyValue::Bool(true)),
-            });
-        }
         if let Some(span) = self.ended.get_mut(&key) {
             for attr in attrs {
                 set(&mut span.attributes, attr);

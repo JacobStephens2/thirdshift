@@ -67,11 +67,7 @@ impl LiveRun {
                 command,
             ),
             (
-                {
-                    let log = PathBuf::from(self.record["session_log"].as_str().unwrap());
-                    let records = log.clone();
-                    if records.is_file() { records } else { log }
-                },
+                PathBuf::from(self.record["session_log"].as_str().unwrap()),
                 session,
             ),
         ] {

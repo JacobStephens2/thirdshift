@@ -122,7 +122,7 @@ impl Recording {
             input.stdin,
             stream,
             move |output, stream| {
-                let followed = follow(&kind_owned, output, stream, &streaming_trace);
+                let followed = follow(&kind_owned, output, &log_owned, stream, &streaming_trace);
                 // The process owner joins this reader before returning, including
                 // on interruption, when it deliberately suppresses state recovery.
                 recording.keep(
@@ -283,6 +283,7 @@ struct SessionModels {
 fn follow(
     kind: &str,
     stream: impl Read,
+    log: &Path,
     progress: &mut Interpretation,
     trace: &Mutex<super::trace::Trace>,
 ) -> Result<()> {
@@ -303,7 +304,7 @@ fn follow(
             .lock()
             .unwrap()
             .record(&raw, &decoded.events)
-            .context("could not write the Session trace")?;
+            .with_context(|| format!("could not write Session trace {}", log.display()))?;
         for condensed in decoded.progress {
             progress::step(format_args!("{kind}: {condensed}"));
         }

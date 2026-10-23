@@ -615,7 +615,7 @@ mod tests {
             );
             for axis in ["standards", "spec"] {
                 assert_eq!(
-                    fs::read_to_string(log.with_extension(axis)).unwrap(),
+                    fs::read_to_string(logs::session::original(&log).with_extension(axis)).unwrap(),
                     format!("{marker} {axis}")
                 );
             }

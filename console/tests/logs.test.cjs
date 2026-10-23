@@ -7,12 +7,13 @@ const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const { chromium } = require("playwright");
+const { record: traceRecord } = require("./session-trace.cjs");
 
   describe('Session trace', () => {
     let home, server, exited, browser, origin, folder, log, recordPath, record;
     const encode = event => {
       const raw = JSON.stringify(event);
-      return JSON.stringify({ resourceLogs: [{ scopeLogs: [{ logRecords: [{ body: { stringValue: raw } }] }] }] }) + '\n';
+      return traceRecord(raw);
     };
     const message = text => encode({ type: "item.completed", item: { id: text, type: "agent_message", text } });
     const tool = text => encode({ type: "item.completed", item: { id: text, type: "command_execution", command: text, aggregated_output: "output", status: "completed", exit_code: 0 } });

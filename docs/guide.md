@@ -701,33 +701,6 @@ request left behind.
 
 ### Logs
 
-Convert old **Session traces** under this machine's configured `logs.dir`, across
-all repositories and including Security runs, in two steps:
-
-```sh
-thirdshift logs --convert
-# Read <logs.dir>/session-trace-conversion.json before proceeding.
-thirdshift logs --remove-converted
-```
-
-Conversion writes `.logs.jsonl` and `.spans.jsonl` beside each original, using
-the live Session-trace writer. The report lists each Session and whether its
-conversation, Waterfall, `show` latest event and Model evidence round-trip
-without a difference. Recovered Codex diffs are intentional additions, counted
-as `codex_diffs`, when Codex's matching local session file still exists.
-Missing event times use scoped Command-log progress, then the preceding
-estimate or Command start, and carry `thirdshift.time.estimated`. They are
-estimates rather than measurements; the Waterfall preserves its old reading.
-
-The first step keeps every original and never overwrites an existing trace.
-Rerunning it skips passed conversions. Sessions with no identifiable Harness,
-live Commands, existing traces or reader differences stay in the report for
-inspection. The second step removes only passed originals whose original,
-trace pair, Model sidecar and Command evidence still match the report's saved
-fingerprints. Changed or failed Sessions keep their originals. Sidecars and
-review reports stay beside the Session. Both steps and their report stay on
-the machine, including Security-run evidence.
-
 Export a Command's whole **Trace** for another tool with:
 
 ```sh

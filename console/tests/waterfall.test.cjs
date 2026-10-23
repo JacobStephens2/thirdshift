@@ -164,6 +164,7 @@ test('Waterfall chips, nested scale and unknown tools work at desktop and 390 px
     assert.match(await chips.textContent(), /acme\/widgets#8 · died/);
     if (process.platform === 'linux') assert.match(await chips.textContent(), /acme\/widgets#9 · live/);
     await chips.getByRole('link', { name: 'acme/widgets#7 · merged' }).click();
+    await page.getByRole('button', { name: 'Every call', exact: true }).click();
     assert.equal(await page.locator('.span-item[data-kind="run"]').count(), 2);
     const child = page.locator('.span-item[data-kind="run"]').nth(1);
     assert.equal(await child.locator('.span-item[data-kind="tool"]').count(), 3);

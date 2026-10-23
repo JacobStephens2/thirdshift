@@ -7,6 +7,7 @@ const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const { chromium } = require("playwright");
+const { record: traceRecord } = require("./session-trace.cjs");
 
 let home, server, exited, browser, origin;
 before(async () => {
@@ -30,7 +31,7 @@ before(async () => {
   const security = join(configDir, 'logs/acme/widgets/commands/secure');
   await mkdir(security, { recursive: true });
   const session = join(security, 'secure-fixture-security-audit.logs.jsonl');
-  await writeFile(session, JSON.stringify({ resourceLogs: [{ scopeLogs: [{ logRecords: [{ body: { stringValue: 'Security Session output' } }] }] }] }) + '\n');
+  await writeFile(session, traceRecord('Security Session output'));
   await writeFile(join(security, 'secure-fixture.log'), 'Security Command output\n');
   await writeFile(join(security, 'secure-fixture.command.json'), JSON.stringify({
     version: 1, kind: 'Security run', name: 'secure-fixture', repository: 'acme/widgets',
@@ -383,7 +384,7 @@ for (const storage of ['blocked', 'malformed']) {
     const path = join(dir, '202-fixture.command.json');
     const log = join(dir, '202-fixture.log');
     const session = join(home, 'heartbeat-session.logs.jsonl');
-    const event = text => JSON.stringify({ resourceLogs: [{ scopeLogs: [{ logRecords: [{ body: { stringValue: text } }] }] }] }) + '\n';
+    const event = traceRecord;
     const fixture = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
     Object.assign(fixture, { kind: 'Run', process_id: server.pid, process_start: start, outcome: null, ended_at: null, session_log: session });
     fixture.issue.number = 202;

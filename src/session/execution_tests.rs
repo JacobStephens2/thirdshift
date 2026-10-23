@@ -218,7 +218,7 @@ exec sleep 5"#,
     let mut line = String::new();
     loop {
         line.clear();
-        if reader.read_line(&mut line).unwrap() == 0 || line == "ready-to-fail\n" {
+        if reader.read_line(&mut line).unwrap() == 0 || line.contains("ready-to-fail") {
             break;
         }
     }
