@@ -20,7 +20,9 @@ use crate::{logs, progress};
 /// Immutable Command identity, captured after Command logging is established.
 #[derive(Clone)]
 pub struct Recording {
-    owner: std::result::Result<Owner, String>,
+    /// A Trial explicitly has no Command owner. Allocation failures in a
+    /// Command remain errors; they must never select the Trial's storage.
+    owner: std::result::Result<Option<Owner>, String>,
 }
 
 /// The Session prompt and the Harness-specific way it receives input.
@@ -35,8 +37,13 @@ impl Recording {
     /// inherited ownership. Child Runs retain their parent's exact path.
     pub fn capture() -> Self {
         Self {
-            owner: logs::captured_owner(),
+            owner: logs::captured_owner().map(Some),
         }
+    }
+
+    /// Trial artifacts have their own empty output directory and no Command.
+    pub fn for_trial() -> Self {
+        Self { owner: Ok(None) }
     }
 
     /// Construct from captured facts; fixtures need no process-global changes.
@@ -46,6 +53,7 @@ impl Recording {
             owner: local
                 .or(inherited)
                 .map(|log| Owner::fixture(Some(log), stamp))
+                .map(Some)
                 .ok_or_else(|| "no owner in fixture".into()),
         }
     }
@@ -55,17 +63,24 @@ impl Recording {
             .owner
             .as_ref()
             .map_err(|cause| anyhow::anyhow!("cannot name Session log: {cause}"))?;
-        Ok(owner.session_path(dir, subject, kind))
+        Ok(match owner {
+            Some(owner) => owner.session_path(dir, subject, kind),
+            None => dir.join(format!("{subject}-{kind}.jsonl")),
+        })
+    }
+
+    fn owner(&self) -> Option<&Owner> {
+        self.owner.as_ref().ok()?.as_ref()
     }
 
     fn command_log(&self) -> Option<&Path> {
-        self.owner.as_ref().ok()?.log_path()
+        self.owner()?.log_path()
     }
 
     /// Give a child this exact owning Command, including through nested Runs.
     /// Absence removes stale ownership from the child's environment.
     pub fn inherit_command(&self, command: &mut Command) {
-        Owner::inherit(self.owner.as_ref().ok(), command);
+        Owner::inherit(self.owner(), command);
     }
 
     /// Collection failures cost attribution, never notification delivery.
@@ -95,6 +110,11 @@ impl Recording {
         stream: Interpretation,
     ) -> Result<Ended> {
         let adapter = choice.harness.adapter();
+        if matches!(self.owner, Ok(None)) {
+            // A Trial must not lend a caller's stale Command identity to
+            // the Harness or to thirdshift processes it might start.
+            self.inherit_command(command);
+        }
         if let Some(dir) = log.parent() {
             fs::create_dir_all(dir)
                 .with_context(|| format!("could not create {}", dir.display()))?;
@@ -103,7 +123,7 @@ impl Recording {
             File::create(log).with_context(|| format!("could not create {}", log.display()))?;
         let started = Instant::now();
         let context = logs::trace_context()
-            .or_else(|| self.owner.as_ref().ok().map(logs::trace::Context::of_owner))
+            .or_else(|| self.owner().map(logs::trace::Context::of_owner))
             .unwrap_or_else(|| logs::trace::Context::of_session(log));
         let trace = Arc::new(Mutex::new(super::trace::Trace::create(
             log,
@@ -224,11 +244,7 @@ impl Recording {
         let mut paths = Vec::new();
         for entry in fs::read_dir(dir)? {
             let path = entry?.path();
-            if self
-                .owner
-                .as_ref()
-                .is_ok_and(|owner| owner.models_match(&path))
-            {
+            if self.owner().is_some_and(|owner| owner.models_match(&path)) {
                 paths.push(path);
             }
         }
