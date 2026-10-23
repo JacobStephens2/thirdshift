@@ -1827,18 +1827,11 @@ fn a_claim_limit_skip_names_every_holder_lowest_first_without_extra_github_reque
     assert_eq!(
         scenario.gh_calls(),
         ["closed", "open"].map(|state| vec![
-            "issue",
-            "list",
-            "--state",
-            state,
-            "--repo",
-            "acme/widgets",
-            "--label",
-            "in-progress",
-            "--json",
-            "url,title,labels",
-            "--limit",
-            "1000",
+            "api".to_string(),
+            "--paginate".into(),
+            "--jq".into(),
+            ".[]".into(),
+            format!("repos/acme/widgets/issues?state={state}&labels=in-progress&sort=created&direction=desc&per_page=100"),
         ])
     );
     assert_skipped(
