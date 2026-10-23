@@ -18,6 +18,8 @@ pub(super) struct Stored {
     pub state: State,
     created_at: String,
     pub tasks: Vec<Task>,
+    #[serde(default)]
+    pub verdict: Option<super::grading::Verdict>,
     #[serde(skip)]
     pub directory: PathBuf,
     #[serde(skip)]
@@ -31,6 +33,8 @@ struct View<'a> {
     state: State,
     created_at: &'a str,
     results: Vec<TrialResult>,
+    verdict: &'a Option<super::grading::Verdict>,
+    minutes: std::collections::BTreeMap<&'static str, f64>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -85,6 +89,7 @@ impl Stored {
                 state: State::Prepared,
                 created_at: chrono::Local::now().to_rfc3339(),
                 tasks: tasks()?,
+                verdict: None,
                 directory: PathBuf::new(),
                 lock: None,
             }
@@ -99,16 +104,30 @@ impl Stored {
         write(&self.directory.join("experiment.json"), self)
     }
 
-    fn view(&self) -> Result<View<'_>> {
+    pub fn results(&self) -> Result<Vec<TrialResult>> {
         let mut results = Vec::new();
         for path in result_paths(&self.directory)? {
             results.push(serde_json::from_slice(&fs::read(path)?)?);
+        }
+        Ok(results)
+    }
+
+    fn view(&self) -> Result<View<'_>> {
+        let results = self.results()?;
+        let mut minutes = std::collections::BTreeMap::from([("baseline", 0.0), ("candidate", 0.0)]);
+        for result in &results {
+            for attempt in &result.attempts {
+                *minutes.get_mut(result.arm.name()).unwrap() +=
+                    attempt.timings.total_ms as f64 / 60_000.0;
+            }
         }
         Ok(View {
             description: &self.description,
             state: self.state,
             created_at: &self.created_at,
             results,
+            verdict: &self.verdict,
+            minutes,
         })
     }
 
@@ -118,12 +137,17 @@ impl Stored {
             Ok(serde_json::to_string(&view)?)
         } else {
             Ok(format!(
-                "{} · {} · {} → {} · {} Trial results",
+                "{} · {} · {} → {} · {} Trial results · Verdict: {} · Baseline: {:.3} minutes · Candidate: {:.3} minutes",
                 self.description.id,
                 self.state,
                 self.description.baseline.commit,
                 self.description.candidate.commit,
-                view.results.len()
+                view.results.len(),
+                self.verdict
+                    .as_ref()
+                    .map_or("pending", |verdict| verdict.outcome()),
+                view.minutes["baseline"],
+                view.minutes["candidate"]
             ))
         }
     }

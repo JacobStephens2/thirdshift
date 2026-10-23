@@ -80,7 +80,15 @@ pr_url = "https://github.com/acme/widgets/pull/1"
 - `criteria` is nonempty written success criteria for a model Grader. `checks`
   is optional (defaults to `[]`), with one nonempty argument vector per code
   Grader check. Arguments are not shell text. Checks are recorded here, not
-  executed by preparation.
+  executed by preparation. After a Trial, the Experiment runs each check with
+  the Trial repository as its working directory. Exit zero passes; nonzero,
+  failure to launch or the Bar's timeout fails the check. Each check gets
+  `THIRDSHIFT_TRIAL_STANDARDS_REPORT`, `THIRDSHIFT_TRIAL_SPEC_REPORT` and
+  `THIRDSHIFT_TRIAL_LOG` pointing to retained artifacts (empty when absent).
+  These paths let a check inspect the reports without putting grading criteria
+  in the Trial's repository. Checks run after repository-change detection and
+  may create their own build artifacts. Their commands and reasons are saved
+  privately in the Trial's Score.
 - `inputs` maps destination paths in the prepared repository to files relative
   to the Eval task's folder. Use, for example, a Spec's body **as first
   published**, not its revised answer. The table is required but may be empty.
