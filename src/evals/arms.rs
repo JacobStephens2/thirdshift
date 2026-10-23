@@ -91,7 +91,7 @@ pub(super) fn prepare(repository: &Path, arms: [Requested; 2], record: &Path) ->
     Ok(prepared)
 }
 
-fn fixed_harness(harness: Harness) -> Result<FixedHarness> {
+pub(super) fn fixed_harness(harness: Harness) -> Result<FixedHarness> {
     let name = harness.name();
     let path = std::env::var_os("PATH")
         .into_iter()

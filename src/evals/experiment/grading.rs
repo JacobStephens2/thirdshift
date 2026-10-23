@@ -1,4 +1,4 @@
-//! Mechanical Scores and paired suite Verdicts, kept with private Trial data.
+//! Combined Scores and paired suite Verdicts, kept with private Trial data.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -18,7 +18,20 @@ use crate::verdict::{self, Decision, TaskScores};
 pub(super) struct Score {
     pub passed: bool,
     pub wrong_finding: bool,
+    #[serde(default)]
+    pub borderline: bool,
+    #[serde(default)]
+    pub model: Option<super::model_grader::Score>,
     pub checks: Vec<Check>,
+}
+
+impl Score {
+    pub fn with_model(&mut self, score: super::model_grader::Score) {
+        self.passed = self.checks.iter().all(|check| check.passed) && score.passed;
+        self.wrong_finding = score.wrong_finding;
+        self.borderline = score.borderline;
+        self.model = Some(score);
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -94,6 +107,8 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
         // Code checks cannot judge a written finding. Model Graders add that
         // evidence in their separate stage; do not infer it from report text.
         wrong_finding: false,
+        borderline: false,
+        model: None,
         checks,
     })
 }
@@ -102,6 +117,8 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
 pub(super) struct Verdict {
     pub verdict: Decision,
     suites: BTreeMap<String, verdict::Verdict>,
+    #[serde(default)]
+    borderline_trials: usize,
 }
 
 impl Verdict {
@@ -175,5 +192,13 @@ pub(super) fn judge(tasks: &[Task], results: &[TrialResult], bar: &Bar) -> Resul
     } else {
         Decision::Pass
     };
-    Ok(Verdict { verdict, suites })
+    let borderline_trials = results
+        .iter()
+        .filter(|result| result.score.as_ref().is_some_and(|score| score.borderline))
+        .count();
+    Ok(Verdict {
+        verdict,
+        suites,
+        borderline_trials,
+    })
 }

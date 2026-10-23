@@ -89,6 +89,20 @@ pr_url = "https://github.com/acme/widgets/pull/1"
   in the Trial's repository. Checks run after repository-change detection and
   may create their own build artifacts. Their commands and reasons are saved
   privately in the Trial's Score.
+
+  After code checks, a fresh model Grader reads one `packet.json` per Eval task.
+  It contains `criteria` and `trials`: each Trial has a shuffled neutral `label`,
+  `outcome`, and optional `standards` and `spec` report text. Identifying lines
+  are removed; Arm mappings, artifact paths and raw session streams stay out.
+  The Grader writes `scores.json` as `{"scores": [...]}`, with exactly one
+  object per label: `label`, boolean `passed`, nonempty `reason`, boolean
+  `wrong_finding` and boolean `borderline`. Missing, duplicate or unknown labels,
+  unknown fields and invalid values pause grading rather than supplying defaults.
+  `THIRDSHIFT_GRADER_PACKET` and `THIRDSHIFT_GRADER_SCORES` name those two files.
+  Saved Trial Scores combine mechanical and model pass/fail and retain the
+  model response separately. The Verdict counts borderline Trials and uses
+  wrong-finding flags in its existing paired assessment. Graders currently run
+  without a sandbox pending #1014; the Session prompt restricts them to the packet.
 - `inputs` maps destination paths in the prepared repository to files relative
   to the Eval task's folder. Use, for example, a Spec's body **as first
   published**, not its revised answer. The table is required but may be empty.

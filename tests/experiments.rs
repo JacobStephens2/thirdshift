@@ -6,6 +6,9 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 use support::Scenario;
 
+#[path = "experiments/model_graders.rs"]
+mod model_graders;
+
 #[test]
 fn spec_review_generated_instruction_fallbacks_do_not_void_trials() {
     for harness_name in ["agy", "opencode"] {
@@ -153,6 +156,13 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let scenario = Scenario::new();
+        fs::write(scenario.path("claude-script.sh.grader"), r#"
+python3 - <<'PY'
+import json, os
+packet = json.load(open(os.environ['THIRDSHIFT_GRADER_PACKET']))
+json.dump({'scores': [dict(label=trial['label'], passed=True, reason='Written criteria met.', wrong_finding=False, borderline=False) for trial in packet['trials']]}, open(os.environ['THIRDSHIFT_GRADER_SCORES'], 'w'))
+PY
+"#).unwrap();
         for name in ["claude", "codex"] {
             let harness = scenario.path(&format!("bin/{name}"));
             let real = harness.canonicalize().unwrap();
@@ -242,6 +252,19 @@ pr_url = "https://github.com/acme/widgets/pull/1"
         let shown = self.scenario.run(&["experiments", id, "--json"]);
         assert_eq!(shown.code, Some(0), "{}", shown.stderr);
         serde_json::from_str(&shown.stdout).unwrap()
+    }
+
+    fn trial_calls(&self) -> Vec<Value> {
+        self.scenario
+            .claude_calls()
+            .into_iter()
+            .filter(|call| {
+                !call["prompt"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("You are a Grader")
+            })
+            .collect()
     }
 }
 
@@ -426,7 +449,7 @@ fn experiment_records_both_arms_the_bar_logs_stages_and_each_trial() {
     assert_eq!(logs.len(), 1);
     let log = fs::read_to_string(fixture.scenario.path(folder).join(&logs[0])).unwrap();
     assert!(log.contains("Trials"), "{log}");
-    let calls = fixture.scenario.claude_calls();
+    let calls = fixture.trial_calls();
     assert_eq!(calls.len(), 2);
     assert!(calls.iter().any(|c| {
         c["argv"]
@@ -459,7 +482,7 @@ fn experiment_records_both_arms_the_bar_logs_stages_and_each_trial() {
         Some(0)
     );
     assert_eq!(
-        fixture.scenario.claude_calls().len(),
+        fixture.trial_calls().len(),
         2,
         "completed Experiment ran again"
     );
@@ -507,7 +530,7 @@ while true; do sleep 0.05; done
     let finished = before["results"].as_array().unwrap();
     assert!(!finished.is_empty());
     assert!(finished.len() < 6);
-    let calls_before = fixture.scenario.claude_calls().len();
+    let calls_before = fixture.trial_calls().len();
     let changed = fixture.run(&["--trials-per-task", "3", "--seed", "1"]);
     assert_eq!(changed.code, Some(1));
     assert!(
@@ -517,7 +540,7 @@ while true; do sleep 0.05; done
         "{}",
         changed.stderr
     );
-    assert_eq!(fixture.scenario.claude_calls().len(), calls_before);
+    assert_eq!(fixture.trial_calls().len(), calls_before);
     fixture.scenario.agent_does("true");
     let resumed = fixture.run(&["--trials-per-task", "3"]);
     assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
@@ -526,13 +549,20 @@ while true; do sleep 0.05; done
     assert_eq!(after["id"], before["id"]);
     assert_eq!(after["results"].as_array().unwrap().len(), 6);
     for result in finished {
-        assert!(
-            after["results"].as_array().unwrap().contains(result),
-            "finished Trial changed"
+        let saved = after["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|saved| saved["arm"] == result["arm"] && saved["trial"] == result["trial"])
+            .unwrap();
+        assert_eq!(
+            saved["attempts"], result["attempts"],
+            "finished Trial reran"
         );
+        assert_eq!(saved["outcome"], result["outcome"]);
     }
     assert_eq!(
-        fixture.scenario.claude_calls().len(),
+        fixture.trial_calls().len(),
         calls_before + 6 - finished.len()
     );
     let activity = fs::read_to_string(
@@ -634,7 +664,7 @@ echo '{"type":"result","subtype":"error_during_execution","is_error":true,"error
             assert_eq!(attempt["void_cause"], "session_unavailable");
         }
     }
-    let calls = fixture.scenario.claude_calls();
+    let calls = fixture.trial_calls();
     assert_eq!(calls.len(), 6);
     let repositories: std::collections::BTreeSet<_> = calls
         .iter()
@@ -682,7 +712,7 @@ ln -sf /nonexistent/updated-codex '{}'
     assert_eq!(experiment["baseline"]["commit"], fixture.baseline);
     assert_eq!(experiment["candidate"]["commit"], fixture.baseline);
     assert_eq!(experiment["results"].as_array().unwrap().len(), 6);
-    assert_eq!(fixture.scenario.claude_calls().len(), 3);
+    assert_eq!(fixture.trial_calls().len(), 3);
     assert_eq!(fixture.scenario.codex_calls().len(), 3);
     for (arm, harness, effort) in [
         ("baseline", "claude", "high"),
@@ -726,7 +756,7 @@ fn distinct_suite_task_pairs_keep_distinct_trial_results() {
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let experiment: Value = serde_json::from_str(&result.stdout).unwrap();
     assert_eq!(experiment["state"], "completed");
-    assert_eq!(fixture.scenario.claude_calls().len(), 4);
+    assert_eq!(fixture.trial_calls().len(), 4);
     assert_eq!(
         experiment["results"].as_array().unwrap().len(),
         4,
@@ -764,12 +794,12 @@ while true; do sleep 0.05; done
     let ended = held.finish();
     assert_eq!(stopped.code, Some(0), "{}", stopped.stderr);
     assert_eq!(ended.code, Some(1), "{}", ended.stderr);
-    assert_eq!(fixture.scenario.claude_calls().len(), 4);
+    assert_eq!(fixture.trial_calls().len(), 4);
     fixture.scenario.agent_does(void);
     let resumed = fixture.run(&[]);
     assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
     assert_eq!(
-        fixture.scenario.claude_calls().len(),
+        fixture.trial_calls().len(),
         8,
         "each Arm already completed one Void Trial attempt before Stop"
     );

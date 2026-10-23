@@ -461,8 +461,23 @@ privately in `~/.thirdshift/evals/experiments/<id>/`. Trials currently run
 without a sandbox; #1014 adds isolation. Code Graders then score each Trial:
 a changed repository makes it void, a review with no reports fails, and the
 Eval task's mechanical checks must pass. Scores retain each check and its reason.
-Model grading of written success criteria follows separately; these Scores
-cover mechanical checks only and set no wrong-finding flags.
+Then a fresh model Grader scores one blind packet per Eval task against its
+written success criteria. Each packet holds every Trial's review reports with
+shuffled neutral labels and identifying Harness, Model, Effort and Arm lines
+removed. Graders see report text, never Trial paths or raw session streams.
+When an installed Harness has a configured Model different from both Arms,
+that Model grades; otherwise the User config's default choice grades. The
+Grader choice and executable are fixed before Trials start. Graders currently
+run without a sandbox too, until #1014.
+
+Each Trial retains the model's pass/fail, reason, wrong-finding flag and
+borderline mark beside its mechanical checks. A mechanical failure still fails
+the Trial. Wrong-finding flags enter the paired Verdict; the Verdict also shows
+the number of borderline Trials for rechecking, without changing the Bar.
+Packets, Grader session output and validated Scores stay in the private
+Experiment directory. A failed, incomplete or malformed Grader response pauses
+the Experiment; resuming retries grading without rerunning finished Trials,
+and reuses already validated Scores.
 
 Each suite gets a paired Verdict using its recorded Trials per Eval task (one
 or three). Any failed suite fails the Experiment; otherwise any inconclusive

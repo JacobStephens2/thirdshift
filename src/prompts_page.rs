@@ -19,7 +19,7 @@ use crate::prompt;
 use crate::session::{claude_args, codex_args};
 use crate::skills::SKILLS;
 
-use Sender::{ArchitectRun, SecurityRun, Units};
+use Sender::{ArchitectRun, Experiment, SecurityRun, Units};
 
 /// A press unit on the home page, which each prompt and skill links back to.
 struct Unit {
@@ -91,6 +91,8 @@ enum Sender {
     ArchitectRun,
     /// A Security run, before any dispatched Run.
     SecurityRun,
+    /// An Experiment's private model Grader.
+    Experiment,
 }
 
 /// A prompt as the page shows it: when it is sent, by whom, and its text
@@ -132,6 +134,13 @@ fn prompts() -> Vec<Prompt> {
         on_base: vec![check(INHERITED_CHECK)],
     };
     let with_sentinel = vec![
+        Prompt {
+            id: "prompt-grader",
+            title: "Grader",
+            when: "In an Experiment, starts a fresh model Grader for one Eval task's blind packet after code checks finish.",
+            sender: Experiment,
+            text: prompt::grader(),
+        },
         Prompt {
             id: "prompt-fresh",
             title: "Fresh",
@@ -597,6 +606,7 @@ fn sent_by(sender: &Sender) -> String {
         Units(units) => unit_links(units),
         ArchitectRun => "an Architect run, before any unit".to_string(),
         SecurityRun => "a Security run, before any unit".to_string(),
+        Experiment => "an Experiment, after its Trials".to_string(),
     }
 }
 
