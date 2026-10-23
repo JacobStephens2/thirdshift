@@ -4,6 +4,7 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 
 | Issue term | Owning implementation / search symbol | Supporting tests |
 | --- | --- | --- |
+| Verdict, Bar, paired Scores | `src/verdict.rs` — `judge`; `src/verdict/prediction.rs` — posterior-predictive assurance | `src/verdict/tests.rs` (parent #977's standalone Verdict seam) |
 | Claim | `src/claim.rs` — `Claim`, `make`, `end` | Inline tests; `tests/pickup_run.rs` |
 | Ready issue, Claim limit, Sweep | `src/ready.rs` — `ReadyIssue`, `first`, `refresh`; `src/pickup.rs` — `gates`, `sweep`; `src/pickup/reservation.rs` — cross-machine Pickup reservation | Inline tests; `tests/pickup_run.rs` |
 | Run, Continuation, Issue branch | `src/run.rs`; `src/branch.rs` | `tests/fresh_run.rs`, `tests/continuation.rs`, `tests/numbered_branches.rs` |
@@ -20,6 +21,7 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | Session prompt, Factory skills | `src/prompt.rs`; `src/skills.rs`; `skills/` | `src/skills/tests.rs`, `tests/packaging.rs` |
 | Trusted account, the issue a session gets | `src/trust.rs` — `issue_trust`, `ticket_trust`, `untrusted_edit` over `Reads`; the GitHub adapter's trust reads, `src/github/trust.rs`; `src/github/session_issue.rs` — `issue_for_session`; `src/delivery.rs` — `hand_over_issue` | Inline tests, including `src/trust.rs` and `src/prompt.rs`; `tests/fresh_run.rs`, `tests/pickup_run.rs` |
 | Session log, Resume | `src/session.rs` and `src/session/`; `src/session/kind.rs` — `Kind`, `Logged`: every session kind, its Session-log token, the Command record stage it enters and its `--session` rule (`selects`) | `src/session/execution_tests.rs`, inline tests in `src/session/kind.rs`, `tests/background_work.rs` |
+| Trial | `src/trial.rs` — versioned request/result protocol, shared `Sessions` execution with output outside factory logs | `tests/trial.rs`; protocol: `docs/trial.md` |
 | OTLP JSON Lines (Session-trace file format) | `src/otlp_jsonl.rs` — application-independent requests, `Writer`, `Reader`; `src/otlp_jsonl/value.rs` — attribute values and byte encoding | `src/otlp_jsonl/tests.rs`; official examples and local Collector config in `src/otlp_jsonl/fixtures/` |
 | Session trace recording and Trace ancestry | `src/session/trace.rs` — streaming records, ended spans and retained amendments; `src/logs/trace.rs` — deterministic Command, Run and stage identities | `tests/session_traces.rs`, `src/session/recording/tests.rs`, `src/logs/recording/tests.rs` |
 | Whole Trace export | `src/logs/export.rs` — Command record ancestry and local OTLP JSON Lines export | `tests/export_trace.rs` |

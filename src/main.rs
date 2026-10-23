@@ -47,8 +47,12 @@ mod spec_run;
 mod terminal;
 #[cfg(test)]
 mod test_support;
+mod trial;
 mod trust;
 mod update;
+// The Experiment runner will consume this independently tested module.
+#[allow(dead_code)]
+mod verdict;
 mod worktree;
 
 use std::process::ExitCode;
@@ -250,6 +254,7 @@ fn main() -> ExitCode {
             };
         }
         Ok(Command::ReleaseSummary) => return release_summary(),
+        Ok(Command::Trial(request)) => return printed(trial::run(&request)),
         Ok(Command::EmailTest(to)) => {
             return outcome(
                 UserConfig::load().and_then(|config| email::send_test(to, &config.email)),
