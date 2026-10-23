@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
 pub(crate) struct UnaddressedFindings {
-    standards: Option<usize>,
-    spec: Option<usize>,
-    security: Option<usize>,
+    pub(crate) standards: Option<usize>,
+    pub(crate) spec: Option<usize>,
+    pub(crate) security: Option<usize>,
 }
 
 enum Axis {

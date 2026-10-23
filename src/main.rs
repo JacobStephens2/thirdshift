@@ -92,6 +92,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console theme export <name>        Export a Theme as JSON
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
+       thirdshift metrics [<command>] [--json]         Show Run metrics or weekly trends
        thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
        thirdshift logs [--command <id>] [--json]      List this machine's logs
        thirdshift logs --file <id> [--follow]         Read a log
@@ -124,7 +125,6 @@ Pass commands: architect, pickup, secure (no Issue URL).
   base <branch>                      Use an origin branch, whatever is checked out
   --plan-only                        architect only; stops before dispatching a Run
 With --plan-only, only base, email and no-email apply.
-
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting.
 For workflow details, settings, Harness setup, email, logs and scheduling, see the manual:
   https://thirdshift.app/docs/
@@ -207,6 +207,12 @@ fn main() -> ExitCode {
             json,
         }) => {
             return match logs::spans::show(&command, span.as_deref(), json) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::Metrics(asked)) => {
+            return match logs::metrics::show(&asked) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };

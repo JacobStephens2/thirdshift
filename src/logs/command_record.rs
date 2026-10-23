@@ -195,6 +195,23 @@ impl StageName {
             .any(|stage| stage.name() == name)
     }
 
+    /// Stages entered by Sessions, as distinct from delivery or dispatch work.
+    pub(super) fn is_session(name: &str) -> bool {
+        [
+            Self::Implement,
+            Self::Resume,
+            Self::Repair,
+            Self::SpecReview,
+            Self::SecurityReview,
+            Self::ArchitectureReview,
+            Self::SecurityAudit,
+            Self::SecurityReproduction,
+            Self::SecurityFixPublishing,
+        ]
+        .into_iter()
+        .any(|stage| stage.name() == name)
+    }
+
     pub(super) fn known(name: &str) -> bool {
         [
             Self::Implement,
