@@ -388,6 +388,7 @@ thirdshift evals list               # list private Eval suites and approved/prop
 thirdshift evals touched &lt;path&gt;...  # select suites from their declared source dependencies
 thirdshift evals prepare &lt;suite&gt; &lt;task&gt; &lt;destination&gt;  # prepare a throwaway repository at its base
 thirdshift evals verify &lt;repository&gt; &lt;base&gt;  # refuse history beyond the base commit
+thirdshift evals prepare-arms &lt;repository&gt; &lt;baseline-commit&gt; &lt;baseline-harness&gt; &lt;candidate-commit&gt; &lt;candidate-harness&gt; &lt;record.json&gt;  # cache builds and record fixed Harness paths
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift &lt;version&gt;
 thirdshift help                     # print a compact command and option reference
@@ -401,8 +402,13 @@ default dependencies, plus Trials per Arm. <code>evals touched</code> selects su
 those declarations. <code>evals list</code> includes proposed Eval tasks, while <code>evals prepare</code> refuses them until approved. Preparation keeps only base history, applies
 the change under review without its commit objects, and gives Spec-review Eval
 tasks a local bare origin. These commands write JSON and start no agent sessions.
+<code>evals prepare-arms</code> prepares both Arms before Trials: it caches release builds
+by commit under <code>~/.thirdshift/evals/builds/</code> and records their commits, binaries,
+and each Harness&#39;s real path and version in a new JSON file. A failed build or
+version lookup stops preparation. Trials use the recorded Harness path so an
+installation&#39;s symlink update cannot change the Harness between Arms.
 The <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md">Eval task format</a>
-documents the manifests with made-up data.</p>
+documents the manifests with made-up data and the Arm record.</p>
 <p><code>version</code> and <code>help</code> print to stdout and exit <code>0</code>. <code>update</code>, <code>setup</code> and <code>email-test</code> follow the Run&#39;s rule: stdout stays empty, messages go to stderr. <code>architect</code> follows it too: stdout carries the pull request&#39;s URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with <code>--plan-only</code>, or its idea when the review published no plan. A skipped Architect run prints nothing there when <a href="#one-at-a-time">another is still running</a>, the URL of each Architect plan that is <a href="#one-architect-plan-at-a-time">still open</a>, the URL of each <a href="#an-architect-idea-waits-for-triage">Architect idea waiting for triage</a>, and the URL of the <a href="#a-ready-issue-goes-first">Ready issue, or issue still settling, that goes first</a>. <code>pickup</code> follows it as well: stdout carries the pull request&#39;s URL of the run it dispatches, and nothing when the <a href="#pickup-runs">Pickup run</a> is skipped. So does <code>secure</code>: stdout carries the pull request&#39;s URL of a fix it dispatches, and nothing otherwise.</p>
 <p>Uncommitted changes in your clone are fine: the Run works in its own worktree from <code>origin</code>, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Run stops.</p>
 </div></details>

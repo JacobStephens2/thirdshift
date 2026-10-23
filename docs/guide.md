@@ -398,6 +398,7 @@ thirdshift evals list               # list private Eval suites and approved/prop
 thirdshift evals touched <path>...  # select suites from their declared source dependencies
 thirdshift evals prepare <suite> <task> <destination>  # prepare a throwaway repository at its base
 thirdshift evals verify <repository> <base>  # refuse history beyond the base commit
+thirdshift evals prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>  # cache builds and record fixed Harness paths
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print a compact command and option reference
@@ -414,8 +415,13 @@ those declarations. `evals list` includes proposed Eval tasks, while `evals
 prepare` refuses them until approved. Preparation keeps only base history, applies
 the change under review without its commit objects, and gives Spec-review Eval
 tasks a local bare origin. These commands write JSON and start no agent sessions.
+`evals prepare-arms` prepares both Arms before Trials: it caches release builds
+by commit under `~/.thirdshift/evals/builds/` and records their commits, binaries,
+and each Harness's real path and version in a new JSON file. A failed build or
+version lookup stops preparation. Trials use the recorded Harness path so an
+installation's symlink update cannot change the Harness between Arms.
 The [Eval task format](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md)
-documents the manifests with made-up data.
+documents the manifests with made-up data and the Arm record.
 
 `version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr. `architect` follows it too: stdout carries the pull request's URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with `--plan-only`, or its idea when the review published no plan. A skipped Architect run prints nothing there when [another is still running](#one-at-a-time), the URL of each Architect plan that is [still open](#one-architect-plan-at-a-time), the URL of each [Architect idea waiting for triage](#an-architect-idea-waits-for-triage), and the URL of the [Ready issue, or issue still settling, that goes first](#a-ready-issue-goes-first). `pickup` follows it as well: stdout carries the pull request's URL of the run it dispatches, and nothing when the [Pickup run](#pickup-runs) is skipped. So does `secure`: stdout carries the pull request's URL of a fix it dispatches, and nothing otherwise.
 
