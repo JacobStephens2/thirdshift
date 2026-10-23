@@ -1,0 +1,5 @@
+# Ticket runs and plain schedules, with stable stored kinds
+
+The run on one Ticket is a **Ticket run**, beside a **Spec run** on a Spec. It leaves its pull request for review or does a **Self-merge** when asked; Merge run is a former name, not another kind of run. A failed one is a **Failed ticket run**. Weeding and Fencing are former names for Architect runs every few minutes and Security runs on a schedule, with fixing allowed. These names remove the capital letter and garden metaphors readers otherwise have to decode (#1101).
+
+Command records, the Activity log and `status --json` keep the stored kind `Run`. Old records and scripts depend on that value, so renaming it would break readers or require a migration. Displays present that kind as **Ticket run** instead. Code identifiers and log folders keep their names too; Run notification and Run metrics remain domain terms, with metrics measured on Ticket runs. ADRs 0001–0021 and other dated records keep the words they were written with, and the glossary maps the former names.

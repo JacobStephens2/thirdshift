@@ -30,21 +30,21 @@ cd ~/repos/widgets
 thirdshift https://github.com/acme/widgets/issues/7
 ```
 
-The Run works in its own worktree, implements and reviews the issue, opens a pull request, and keeps it mergeable and green. It leaves the pull request ready for your review; `thirdshift merge <Issue URL>` also merges it. Your checkout's uncommitted changes stay out of the Run. Push any Base branch commits first.
+The Ticket run works in its own worktree, implements and reviews the issue, opens a pull request, and keeps it mergeable and green. It leaves the pull request ready for your review; `thirdshift merge <Issue URL>` also merges it. Your checkout's uncommitted changes stay out of the Ticket run. Push any Base branch commits first.
 
-Use `thirdshift help` for the command reference, or read [Run behavior](docs/guide.md#what-a-run-does), [command options](docs/guide.md#usage) and [failure recovery](docs/guide.md#failed-runs).
+Use `thirdshift help` for the command reference, or read [Ticket run behavior](docs/guide.md#what-a-ticket-run-does), [command options](docs/guide.md#usage) and [failure recovery](docs/guide.md#failed-ticket-runs).
 
 ## Workflows
 
 | Start with | Workflow and details |
 | --- | --- |
-| One GitHub issue | [Run and Merge run](docs/guide.md#usage) |
+| One GitHub issue | [Ticket run, with optional Self-merge](docs/guide.md#usage) |
 | An issue with sub-issues | [Spec run](docs/guide.md#spec-runs): works through Tickets in dependency order |
 | Architecture improvements | [Architect run](docs/guide.md#architect-runs): reviews, publishes a plan and builds it |
 | An issue marked ready | [Pickup run](docs/guide.md#pickup-runs): takes the lowest-numbered Ready issue |
 | A security audit | [Security run](docs/guide.md#security-runs): records findings privately; can fix one reproduced finding |
 
-The operating system schedules Architect, Pickup and Security runs. See [scheduling](docs/guide.md#on-a-schedule), [Weeding](docs/guide.md#weeding) and [Fencing](docs/guide.md#fencing).
+The operating system schedules Architect, Pickup and Security runs. See [scheduling](docs/guide.md#on-a-schedule), [Architect runs every few minutes](docs/guide.md#architect-runs-every-few-minutes) and [Security runs on a schedule, with fixing allowed](docs/guide.md#security-runs-on-a-schedule-with-fixing-allowed).
 
 ## Console on a server
 
@@ -119,7 +119,7 @@ Released under the [MIT License](LICENSE). Factory skills include work by [Matt 
 
 These section links keep older bookmarks useful. The complete explanations now live in the [user manual](docs/guide.md).
 
-- <a name="what-a-run-does"></a>[What a Run does](docs/guide.md#what-a-run-does)
+- <a name="what-a-run-does"></a>[What a Ticket run does](docs/guide.md#what-a-ticket-run-does)
 - <a name="the-claim"></a>[The Claim](docs/guide.md#the-claim)
 - <a name="when-the-claim-ends"></a>[When the Claim ends](docs/guide.md#when-the-claim-ends)
 - <a name="status"></a>[Status](docs/guide.md#status)
@@ -137,11 +137,11 @@ These section links keep older bookmarks useful. The complete explanations now l
 - <a name="run-notifications"></a>[Run notifications](docs/guide.md#run-notifications)
 - <a name="stopping-a-command"></a>[Stopping a Command](docs/guide.md#stopping-a-command)
 - <a name="logs"></a>[Logs](docs/guide.md#logs)
-- <a name="foreign-commits-in-a-merge-run"></a>[Foreign commits in a Merge run](docs/guide.md#foreign-commits-in-a-merge-run)
+- <a name="foreign-commits-in-a-merge-run"></a>[Foreign commits in a Ticket run that Self-merges](docs/guide.md#foreign-commits-in-a-ticket-run-that-self-merges)
 - <a name="base-fix"></a>[Base fix](docs/guide.md#base-fix)
 - <a name="one-base-fix-per-base-branch"></a>[One Base fix per Base branch](docs/guide.md#one-base-fix-per-base-branch)
 - <a name="continuation"></a>[Continuation](docs/guide.md#continuation)
-- <a name="failed-runs"></a>[Failed runs](docs/guide.md#failed-runs)
+- <a name="failed-runs"></a>[Failed ticket runs](docs/guide.md#failed-ticket-runs)
 - <a name="an-inherited-failure-links-the-base-branchs-checks"></a>[An Inherited failure links the Base branch's checks](docs/guide.md#an-inherited-failure-links-the-base-branchs-checks)
 - <a name="spec-runs"></a>[Spec runs](docs/guide.md#spec-runs)
 - <a name="architect-runs"></a>[Architect runs](docs/guide.md#architect-runs)
@@ -152,10 +152,10 @@ These section links keep older bookmarks useful. The complete explanations now l
 - <a name="one-at-a-time"></a>[One at a time](docs/guide.md#one-at-a-time)
 - <a name="one-architect-plan-at-a-time"></a>[One Architect plan at a time](docs/guide.md#one-architect-plan-at-a-time)
 - <a name="on-a-schedule"></a>[On a schedule](docs/guide.md#on-a-schedule)
-- <a name="weeding"></a>[Weeding](docs/guide.md#weeding)
+- <a name="weeding"></a>[Architect runs every few minutes](docs/guide.md#architect-runs-every-few-minutes)
 - <a name="security-runs"></a>[Security runs](docs/guide.md#security-runs)
 - <a name="security-review"></a>[Security review](docs/guide.md#security-review)
-- <a name="fencing"></a>[Fencing](docs/guide.md#fencing)
+- <a name="fencing"></a>[Security runs on a schedule, with fixing allowed](docs/guide.md#security-runs-on-a-schedule-with-fixing-allowed)
 - <a name="pickup-runs"></a>[Pickup runs](docs/guide.md#pickup-runs)
 - <a name="the-claim-limit"></a>[The Claim limit](docs/guide.md#the-claim-limit)
 - <a name="the-sweep"></a>[The Sweep](docs/guide.md#the-sweep)
