@@ -135,10 +135,9 @@ impl GitHub {
                     // Base branch. A factory Issue branch still names its issue.
                     if let Some(issue) =
                         issue_branch(&pr.repository.name_with_owner, &pr.head_ref_name)?
+                        && self.issue_labels(&issue)?.has(SECURITY_FIX)
                     {
-                        if self.issue_labels(&issue)?.has(SECURITY_FIX) {
-                            continue;
-                        }
+                        continue;
                     }
                     if let Some(pr) = PullRequest::from_body(
                         pr.repository.name_with_owner,

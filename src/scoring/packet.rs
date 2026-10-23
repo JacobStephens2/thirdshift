@@ -52,7 +52,7 @@ pub(super) fn write(github: &GitHub, pr: &PullRequest, dir: &Path) -> Result<()>
         &input.merge_commit,
         &input.base_commit,
     ])?;
-    git.run(&["checkout", "--detach", "FETCH_HEAD"])?;
+    git.run(&["checkout", "--detach", &input.merge_commit])?;
     // The PR's captured base covers the whole change for merge, squash and
     // rebase merges; a rebased mergeCommit's parent covers only its last commit.
     let diff = git.run(&[
@@ -104,7 +104,7 @@ fn strip_attribution(text: &str) -> String {
         .collect()
 }
 
-/// Inspect ordinary text files only. Symlinks keep their merge-time targets;
+/// Inspect UTF-8 text without NUL bytes. Symlinks keep their merge-time targets;
 /// following them could read or rewrite a file outside the packet.
 fn blind_repository(dir: &Path) -> Result<()> {
     for entry in fs::read_dir(dir)? {
@@ -114,6 +114,7 @@ fn blind_repository(dir: &Path) -> Result<()> {
             blind_repository(&entry.path())?;
         } else if kind.is_file()
             && let Ok(text) = String::from_utf8(fs::read(entry.path())?)
+            && !text.contains('\0')
         {
             let blinded = strip_attribution(&text);
             if blinded != text {

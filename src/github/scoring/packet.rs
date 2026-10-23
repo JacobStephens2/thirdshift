@@ -56,13 +56,12 @@ impl GitHub {
             .into_iter()
             .map(|issue| IssueUrl::parse(&issue.url))
             .collect::<Result<_>>()?;
-        if let Some(issue) = issue_branch(&pr.repository, &metadata.head_ref_name)? {
-            if !linked
+        if let Some(issue) = issue_branch(&pr.repository, &metadata.head_ref_name)?
+            && !linked
                 .iter()
                 .any(|other| other.identity() == issue.identity())
-            {
-                linked.push(issue);
-            }
+        {
+            linked.push(issue);
         }
         if linked.is_empty() {
             bail!("Scoring packet has no originating issue");

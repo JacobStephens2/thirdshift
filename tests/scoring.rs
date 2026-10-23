@@ -8,6 +8,32 @@ use support::Scenario;
 const LOGS: &str = "home/.thirdshift/logs/JacobStephens2/thirdshift/commands/scoring";
 
 #[test]
+fn packet_blinding_preserves_binary_files_with_valid_utf8_bytes() {
+    let scenario = scenario();
+    let binary = b"\0binary header\nBuilt with fixture\nbinary tail\0";
+    assert!(std::str::from_utf8(binary).is_ok());
+    std::fs::write(scenario.launch_dir().join("binary"), binary).unwrap();
+    scenario.launch_git(&["add", "binary"]);
+    scenario.launch_git(&["commit", "-m", "Binary fixture"]);
+    scenario.launch_git(&["push", "origin", "main"]);
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "codex", "model", false)]);
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let week = weeks(&scenario).remove(0);
+    let repository = scenario
+        .path("home/.thirdshift/evals/scoring")
+        .join(week["packets"].as_str().unwrap())
+        .join("0/repository");
+    assert_eq!(
+        std::fs::read(repository.join("binary")).unwrap(),
+        binary,
+        "blinding rewrote a binary repository blob"
+    );
+}
+
+#[test]
 fn packet_diff_includes_every_commit_in_a_rebased_pull_request() {
     let scenario = scenario();
     scenario.origin_has_commit("main", "first.txt", "first PR change\n", "First PR commit");
