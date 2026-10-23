@@ -236,7 +236,7 @@ fn void_cause(error: &anyhow::Error) -> Option<VoidCause> {
     if interrupt::requested() {
         return Some(VoidCause::Interrupted);
     }
-    if error.is::<crate::harness::interpretation::limits::Reached>() {
+    if error.is::<crate::session::limits::Reached>() {
         return Some(VoidCause::UsageLimit);
     }
     let Some(failure) = error.downcast_ref::<SessionFailure>() else {

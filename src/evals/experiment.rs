@@ -1,6 +1,7 @@
 //! A resumable Experiment owns its fixed inputs and Trial artifacts. Command
 //! recording stays in the ordinary logs; private Eval data stays here.
 
+mod limits;
 mod options;
 mod store;
 mod workers;

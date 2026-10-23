@@ -5,6 +5,8 @@ repository through the same session code as a Run. This internal flag is hidden
 from `help`. Initially only the Spec review is supported; Code review is #1016.
 Both Arms' builds must support this protocol: the first Experiment's Baseline
 must be the first release that ships the flag, or a later release.
+The current Experiment supervises their raw Session logs for plan-limit
+warnings even when an Arm build has no warning detector of its own.
 
 The caller prepares an isolated repository at the required commit, its branch
 and local Base branch, and a `.thirdshift-issue.md` containing the Spec's title,

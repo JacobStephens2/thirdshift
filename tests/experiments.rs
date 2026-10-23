@@ -1,6 +1,7 @@
 mod support;
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use serde_json::{Value, json};
@@ -384,6 +385,62 @@ esac
         fixture.scenario.claude_calls().len(),
         7,
         "resume must keep the other worker's finished Trial"
+    );
+}
+
+#[test]
+fn a_baseline_built_before_this_change_pauses_at_its_live_warning() {
+    let fixture = Fixture::new();
+    let older = std::env::var_os("THIRDSHIFT_REVIEW_BASELINE_BIN").map(PathBuf::from).unwrap_or_else(|| {
+        // A frozen version-1 Trial adapter that records Harness stdout and
+        // succeeds, as the real pre-detector baseline did. The environment
+        // override also exercises the exact pinned baseline binary locally.
+        let path = fixture.scenario.path("legacy-thirdshift");
+        fs::write(&path, r#"#!/bin/bash
+set -e
+request=$2
+repository=$(sed -n 's/.*"repository": *"\([^"]*\)".*/\1/p' "$request")
+output=$(sed -n 's/.*"output_dir": *"\([^"]*\)".*/\1/p' "$request")
+mkdir -p "$output"
+cd "$repository"
+claude --output-format stream-json -p 'https://github.com/acme/widgets/issues/7' > "$output/trial-spec-review.jsonl"
+printf '{"version":1,"outcome":"succeeded","timings":{"total_ms":1,"session_ms":1},"void_cause":null,"cause":null,"session_id":null,"log":"%s/trial-spec-review.jsonl","model_evidence":null,"reports":{"standards":null,"spec":null}}\n' "$output"
+"#).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    });
+    fs::copy(
+        older,
+        fixture.scenario.path(&format!(
+            "home/.thirdshift/evals/builds/{}/thirdshift",
+            fixture.baseline,
+        )),
+    )
+    .unwrap();
+    let continued = fixture.scenario.path("baseline-continued-after-warning");
+    fixture.scenario.agent_does(&format!(r#"
+case "$PWD" in
+  *--baseline--*)
+    echo '{{"type":"rate_limit_event","rate_limit_info":{{"status":"allowed_warning","rateLimitType":"seven_day"}}}}'
+    sleep 0.3
+    touch '{}'
+    ;;
+  *) sleep 0.1 ;;
+esac
+"#, continued.display()));
+    let result = fixture.run(&["--trials-per-task", "3"]);
+    assert_eq!(
+        result.code,
+        Some(1),
+        "the older Baseline's warning must pause the Experiment: stdout={}, stderr={}",
+        result.stdout,
+        result.stderr
+    );
+    assert_eq!(fixture.experiment()["state"], "paused");
+    assert!(!continued.exists(), "the warned Trial kept working");
+    assert!(
+        fixture.scenario.claude_calls().len() <= 2,
+        "another Trial started after the warning"
     );
 }
 

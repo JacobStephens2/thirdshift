@@ -1,36 +1,6 @@
 //! Provider quota facts, independent of the caller's stop policy.
 
 use serde_json::Value;
-use std::path::Path;
-
-/// An Experiment passes a private signal path to its Trial processes without
-/// changing the versioned request understood by older Arm builds.
-pub(crate) const SIGNAL_ENV: &str = "THIRDSHIFT_EVAL_LIMIT_SIGNAL";
-
-#[derive(Debug)]
-pub(crate) struct Reached;
-
-impl std::fmt::Display for Reached {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Experiment paused at a plan-limit warning; run the Experiment again to resume")
-    }
-}
-
-impl std::error::Error for Reached {}
-
-pub(crate) fn stop() -> anyhow::Result<()> {
-    if let Some(path) = std::env::var_os(SIGNAL_ENV) {
-        std::fs::write(path, "plan-limit warning\n")?;
-    }
-    Err(Reached.into())
-}
-
-pub(crate) fn check(signal: &Path) -> anyhow::Result<()> {
-    if signal.try_exists()? {
-        return Err(Reached.into());
-    }
-    Ok(())
-}
 
 pub(super) fn claude(event: &Value) -> bool {
     event["type"] == "rate_limit_event"

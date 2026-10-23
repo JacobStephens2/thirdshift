@@ -1,6 +1,7 @@
 //! Two blocking workers take an alternating Arm queue. Each attempt gets a
 //! fresh prepared repository; only terminal Trial results are skipped on resume.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs;
 use std::os::unix::fs::symlink;
@@ -18,8 +19,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use super::{Task, arms, store};
-use crate::harness::interpretation::limits;
 use crate::process::{self, Control, Interruption};
+use crate::session::limits;
 use crate::trial::{Outcome, Output, VoidCause};
 use crate::{interrupt, logs, progress};
 
@@ -211,6 +212,12 @@ fn run_trial(
             .open(experiment.directory.join("started"))?;
         limits::check(signal)?;
         progress::step(format!("Trial {} starting", trial.key()));
+        let monitor = RefCell::new(super::limits::Monitor::new(
+            &attempt.join("session"),
+            &prepared_repo.repository,
+            &setup.choice(),
+        ));
+        let started = Instant::now();
         let output = execute(
             experiment,
             arm,
@@ -218,6 +225,7 @@ fn run_trial(
             &request,
             Duration::from_secs(bar.timeout_seconds),
             signal,
+            &monitor,
         );
         interrupt::check()?;
         let protocol = match output {
@@ -239,6 +247,9 @@ fn run_trial(
             Err(error) if error.is::<process::TimedOut>() => {
                 Output::timed_out(u128::from(bar.timeout_seconds) * 1000)
             }
+            Err(error) if error.is::<limits::Reached>() => monitor
+                .into_inner()
+                .cut_short(started.elapsed().as_millis()),
             Err(error) => return Err(error),
         };
         store::write(&attempt.join("result.json"), &protocol)?;
@@ -318,6 +329,7 @@ fn execute(
     request: &Path,
     timeout: Duration,
     signal: &Path,
+    monitor: &RefCell<super::limits::Monitor>,
 ) -> Result<std::process::Output> {
     let directory = experiment.directory.join("harnesses").join(name.name());
     let path = std::env::join_paths(std::iter::once(directory).chain(std::env::split_paths(
@@ -336,5 +348,6 @@ fn execute(
             stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
         },
         Instant::now() + timeout,
+        &|| monitor.borrow_mut().check(signal),
     )
 }

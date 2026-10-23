@@ -363,7 +363,7 @@ fn follow(
                 record_line(kind, raw.as_bytes(), log_file, log, progress, trace)?;
             }
             if progress.plan_limit_reached() {
-                return crate::harness::interpretation::limits::stop();
+                return super::limits::stop();
             }
         }
         if eof {
