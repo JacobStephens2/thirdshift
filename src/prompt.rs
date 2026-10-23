@@ -57,7 +57,9 @@ pub const REVIEW_REPORTS_DIRECTORY: &str = "<review reports directory>";
 
 /// The same report contract for every session that runs the code review.
 pub const REVIEW_REPORTS: &str = "Write the reviewers' reports, with each axis's final files-read list, \
-    to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec).";
+    to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec). \
+    Write `<review reports directory>/summary.json` beside them with the finding counts, \
+    following the `thirdshift-code-review` skill's summary format.";
 
 /// The shared review instruction, with each Session prompt's variations.
 enum ReviewInstruction {

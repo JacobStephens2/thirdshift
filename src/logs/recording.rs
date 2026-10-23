@@ -332,7 +332,7 @@ impl<O: Outside> Record<O> {
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
         let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record {
-            tree.command.finish(account, self.outside.now(), &ranges);
+            tree.command.finish(account, &mut self.outside, &ranges);
             self.write_record();
         }
     }
@@ -342,7 +342,7 @@ impl<O: Outside> Record<O> {
         if let Some((_, tree)) = &mut self.command_record
             && let Some(dispatched) = tree.dispatched.last_mut()
         {
-            dispatched.finish(account, self.outside.now(), &ranges);
+            dispatched.finish(account, &mut self.outside, &ranges);
             self.write_record();
         }
     }
