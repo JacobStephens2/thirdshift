@@ -25,6 +25,7 @@ pub enum Command {
     Version,
     Update,
     Setup,
+    Evals(crate::evals::Action),
     CronJobs {
         json: bool,
     },
@@ -288,6 +289,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
+        Some("evals") => return crate::evals::parse(&args[1..]).map(Command::Evals),
         Some("console") => {
             if args.get(1).is_some_and(|action| action == "theme") {
                 let json = args.last().is_some_and(|arg| arg == "--json");

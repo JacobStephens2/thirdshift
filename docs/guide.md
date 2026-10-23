@@ -394,12 +394,28 @@ thirdshift secure                   # audit the Base branch and record findings 
 thirdshift secure base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
 thirdshift email-test [<address>]   # send a test email through Resend (see Email)
 thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
+thirdshift evals list               # list private Eval suites and approved/proposed Eval tasks
+thirdshift evals touched <path>...  # select suites from their declared source dependencies
+thirdshift evals prepare <suite> <task> <destination>  # prepare a throwaway repository at its base
+thirdshift evals verify <repository> <base>  # refuse history beyond the base commit
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print a compact command and option reference
 ```
 
 `help` lists commands and shared options, with a link to the [README](../README.md), which points here for workflow details, settings, Harness setup, email, logs and scheduling.
+
+### Eval tasks
+
+Eval suites live privately under `~/.thirdshift/evals/suites/<suite>/`. Their
+manifests declare Factory skill, Session prompt and Harness, Model and Effort
+default dependencies, plus Trials per Arm. `evals touched` selects suites from
+those declarations. `evals list` includes proposed Eval tasks, while `evals
+prepare` refuses them until approved. Preparation keeps only base history, applies
+the change under review without its commit objects, and gives Spec-review Eval
+tasks a local bare origin. These commands write JSON and start no agent sessions.
+The [Eval task format](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md)
+documents the manifests with made-up data.
 
 `version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr. `architect` follows it too: stdout carries the pull request's URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with `--plan-only`, or its idea when the review published no plan. A skipped Architect run prints nothing there when [another is still running](#one-at-a-time), the URL of each Architect plan that is [still open](#one-architect-plan-at-a-time), the URL of each [Architect idea waiting for triage](#an-architect-idea-waits-for-triage), and the URL of the [Ready issue, or issue still settling, that goes first](#a-ready-issue-goes-first). `pickup` follows it as well: stdout carries the pull request's URL of the run it dispatches, and nothing when the [Pickup run](#pickup-runs) is skipped. So does `secure`: stdout carries the pull request's URL of a fix it dispatches, and nothing otherwise.
 
