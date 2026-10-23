@@ -537,6 +537,8 @@ fn help_lists_shared_options_and_the_context_needed_to_use_them() {
         "no-security-review",
         "security-fix",
         "no-security-fix",
+        "security-close",
+        "no-security-close",
         "base <branch>",
         "--plan-only",
     ] {

@@ -1023,6 +1023,21 @@ fn issue_close(state: &mut Json, positional: &[String], flags: &Flags) {
     save(state);
 }
 
+/// Comment on issue `n` with `--body`, open or closed.
+fn issue_comment(state: &mut Json, positional: &[String], flags: &Flags) {
+    let n = &positional[0];
+    if state.at("issues").get(n).is_none() {
+        unknown_issue(n)
+    }
+    let body = flag(flags, "body").expect("no --body");
+    state
+        .entry("comments", object([]))
+        .entry(n, Array(Vec::new()))
+        .items_mut()
+        .push(string(body));
+    save(state);
+}
+
 /// Open an issue with `--title`, `--body` and the comma-separated `--label`s,
 /// numbered one past the highest issue, and print its URL.
 fn issue_create(state: &mut Json, flags: &Flags) {
@@ -2457,6 +2472,10 @@ pub fn main(args: Vec<String>) {
         ["issue", "close", rest @ ..] => {
             let (positional, flags) = parsed(rest);
             issue_close(&mut state, &positional, &flags);
+        }
+        ["issue", "comment", rest @ ..] => {
+            let (positional, flags) = parsed(rest);
+            issue_comment(&mut state, &positional, &flags);
         }
         ["issue", "create", rest @ ..] => {
             let (_, flags) = parsed(rest);

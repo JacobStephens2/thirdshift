@@ -115,7 +115,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   model <name>                       Choose the Harness's Model
   effort <level>                     Choose the Harness's Effort
   security-review / no-security-review  Enable / disable a Ticket run's Security review
-  security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings
+  security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings, or closing a finding its fix merged (security-close / no-security-close)
 
 Options also accept a -- prefix. Each option may be given once; opposite options
 cannot be combined. Command options override the User config's defaults.
@@ -396,10 +396,12 @@ fn secure(args: PassArgs) -> ExitCode {
             ended,
             finding,
             audit,
+            close,
         } => Ending::SecurityFix {
             ended,
             finding,
             audit,
+            close,
         },
     })
 }

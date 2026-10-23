@@ -1518,6 +1518,180 @@ fn the_setting_allows_a_merge_fix_and_the_command_can_override_either_setting() 
     }
 }
 
+/// The close check's scripted session: it saw the private record, then its
+/// proof-of-concept run ended as `outcome` (`passes` or `fails: <reason>`).
+fn close_check_script(outcome: &str) -> String {
+    format!(
+        r#"
+printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'finding-0'
+printf '%s\n' 'Command: bounded-fixture; exit 0' 'Security close check: {outcome}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#
+    )
+}
+
+#[test]
+fn a_merged_fix_with_closing_allowed_closes_the_advisory_naming_its_pull_request() {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
+    scenario.agent_does_for(8, implement_fix());
+    scenario.agent_does_in_session(3, &close_check_script("passes"));
+    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+    let result = scenario.run_with_env(
+        &[
+            "secure",
+            "security-fix",
+            "security-close",
+            "merge",
+            "email",
+            "day@example.com",
+        ],
+        &resend_env(&resend),
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let pr = &state["prs"][0];
+    assert_eq!(pr["state"], "MERGED");
+    let pr_url = pr["url"].as_str().unwrap();
+    let record = &state["advisories"][0];
+    assert_eq!(record["state"], "closed");
+    let body = record["description"].as_str().unwrap();
+    assert!(body.contains("Fix Run: succeeded"), "{body}");
+    assert!(body.contains(&format!("Closed by: {pr_url}")), "{body}");
+    assert!(
+        result
+            .stderr
+            .contains(&format!("closed GHSA-finding-0 by {pr_url}")),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(result.stdout, format!("{pr_url}\n"));
+    let (subject, body) = the_one_notification(&resend);
+    assert_eq!(subject, "[thirdshift] acme/widgets Security run: merged");
+    assert!(
+        body.contains(&format!("Closed: Finding 0 by {pr_url}")),
+        "{body}"
+    );
+    assert!(!body.contains("Private candidate write-up."), "{body}");
+}
+
+#[test]
+fn a_merged_fix_with_closing_allowed_closes_the_finding_issue_naming_its_pull_request() {
+    let scenario = with_reproduced_findings(&["high"]);
+    let mut state = scenario.gh_state();
+    state["private"] = json!(true);
+    state["bodies"]["7"] = state["advisories"][0]["description"].clone();
+    state["labels"]["7"] = json!(["security-finding", "needs-triage"]);
+    scenario.write_gh_state(&state);
+    scenario.agent_does_for(
+        7,
+        &implement_fix()
+            .replace("issue-8", "issue-7")
+            .replace("#8", "#7"),
+    );
+    scenario.agent_does_in_session(2, &close_check_script("passes"));
+    let result = scenario.run(&["secure", "security-fix", "security-close", "merge"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    let pr_url = state["prs"][0]["url"].as_str().unwrap().to_string();
+    // The merged fix already closed its issue: the close still names the
+    // pull request in the record and in a comment.
+    assert_eq!(state["issues"]["7"], "CLOSED");
+    let body = state["bodies"]["7"].as_str().unwrap();
+    assert!(body.contains(&format!("Closed by: {pr_url}")), "{body}");
+    assert!(
+        state["comments"]["7"].to_string().contains(&pr_url),
+        "{}",
+        state["comments"]["7"]
+    );
+    assert!(
+        result
+            .stderr
+            .contains(&format!("closed issue #7 by {pr_url}")),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_failing_close_check_leaves_the_advisory_open_with_a_note_and_tells_the_day_shift() {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
+    scenario.agent_does_for(8, implement_fix());
+    scenario.agent_does_in_session(3, &close_check_script("fails: the bound still overflows"));
+    let result = scenario.run(&["secure", "security-fix", "security-close", "merge"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let state = scenario.gh_state();
+    assert_eq!(state["prs"][0]["state"], "MERGED");
+    let record = &state["advisories"][0];
+    assert_eq!(record["state"], "draft");
+    let body = record["description"].as_str().unwrap();
+    assert!(
+        body.contains("Security close left open: the proof-of-concept test did not pass"),
+        "{body}"
+    );
+    assert!(!body.contains("Closed by:"), "{body}");
+    assert!(
+        result.stderr.contains("left GHSA-finding-0 open"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        result.stdout,
+        format!("{}\n", state["prs"][0]["url"].as_str().unwrap())
+    );
+}
+
+#[test]
+fn closing_follows_the_setting_unless_the_command_overrides_it() {
+    for (config, words, merged, closed) in [
+        (
+            "[security]\nfix = true\nclose = true\n[merge]\nalways = true\n",
+            Vec::new(),
+            true,
+            true,
+        ),
+        (
+            "[security]\nfix = true\nclose = true\n[merge]\nalways = true\n",
+            vec!["no-security-close"],
+            true,
+            false,
+        ),
+        (
+            "[security]\nfix = true\n[merge]\nalways = true\n",
+            vec!["security-close"],
+            true,
+            true,
+        ),
+        (
+            "[security]\nfix = true\nclose = true\n",
+            Vec::new(),
+            false,
+            false,
+        ),
+    ] {
+        let scenario = with_reproduced_findings(&["medium"]);
+        scenario.user_config_is(config);
+        scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
+        scenario.agent_does_for(8, implement_fix());
+        scenario.agent_does_in_session(3, &close_check_script("passes"));
+        let mut args = vec!["secure"];
+        args.extend(words.clone());
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(0), "{words:?}: {}", result.stderr);
+        let state = scenario.gh_state();
+        assert_eq!(
+            state["prs"][0]["state"].as_str().unwrap(),
+            if merged { "MERGED" } else { "OPEN" },
+            "{words:?}"
+        );
+        assert_eq!(
+            state["advisories"][0]["state"].as_str().unwrap(),
+            if closed { "closed" } else { "draft" },
+            "{words:?}"
+        );
+    }
+}
+
 #[test]
 fn an_audit_goes_on_to_one_reproduced_fix_when_fixing_is_allowed() {
     let scenario = Scenario::new();

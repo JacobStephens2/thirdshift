@@ -121,6 +121,129 @@ fn repeated_reproduction_and_fix_completion_preserve_evidence_fences_and_private
 }
 
 #[test]
+fn closing_names_the_merged_pull_request_and_keeps_the_record_from_waiting_or_fix_gates() {
+    let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap();
+    let pr = "https://github.com/acme/widgets/pull/9";
+    for private in [false, true] {
+        let mut candidate = draft("legacy");
+        let storage = collection(private, Vec::new());
+        let record = storage.decode_created(native(private, &candidate)).unwrap();
+        let pending = record
+            .with_pending_fix(record.description(), &issue)
+            .unwrap();
+        // A close before the fix succeeds leaves the record unchanged.
+        assert!(record.with_close(&pending, &issue, pr).is_err());
+        let succeeded = record
+            .with_fix_ending(&pending, &issue, FixEnding::Succeeded)
+            .unwrap();
+        let closed = record.with_close(&succeeded, &issue, pr).unwrap();
+        assert!(
+            closed.contains("Closed by: https://github.com/acme/widgets/pull/9"),
+            "{closed}"
+        );
+        candidate.description = closed;
+        let record = storage.decode_created(native(private, &candidate)).unwrap();
+        // Closing twice, or after the fix Ticket changed, leaves it unchanged.
+        assert!(
+            record
+                .with_close(&candidate.description, &issue, pr)
+                .is_err()
+        );
+        let changed = candidate.description.replace("issues/8", "issues/7");
+        assert!(record.with_close(&changed, &issue, pr).is_err());
+        let records = collection(private, vec![native(private, &candidate)]);
+        assert!(records.failed_fix().unwrap().is_none());
+        assert!(records.next_fix().unwrap().is_none());
+        // A left-open note keeps the record for the Day shift without
+        // changing what its gates report.
+        let failed = record
+            .with_fix_ending(&pending, &issue, FixEnding::Failed)
+            .unwrap();
+        let noted = record
+            .with_left_open_note(&failed, &issue, "the proof-of-concept still fails")
+            .unwrap();
+        assert!(
+            noted.contains("Security close left open: the proof-of-concept still fails"),
+            "{noted}"
+        );
+        candidate.description = noted;
+        let records = collection(private, vec![native(private, &candidate)]);
+        assert_eq!(records.failed_fix().unwrap().unwrap().url, issue.url);
+        assert!(records.next_fix().unwrap().is_none());
+        assert!(
+            record
+                .with_left_open_note(&changed, &issue, "changed meanwhile")
+                .is_err()
+        );
+    }
+}
+
+#[test]
+fn left_open_note_refuses_an_already_closed_record() {
+    let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap();
+    let pr = "https://github.com/acme/widgets/pull/9";
+    let storage = collection(false, Vec::new());
+    let record = storage
+        .decode_created(native(false, &draft("legacy")))
+        .unwrap();
+    let pending = record
+        .with_pending_fix(record.description(), &issue)
+        .unwrap();
+    let succeeded = record
+        .with_fix_ending(&pending, &issue, FixEnding::Succeeded)
+        .unwrap();
+    let closed = record.with_close(&succeeded, &issue, pr).unwrap();
+    assert!(
+        record
+            .with_left_open_note(
+                &closed,
+                &issue,
+                "could not close the private record: gh failed"
+            )
+            .is_err()
+    );
+}
+
+#[test]
+fn close_inputs_cannot_forge_a_closed_record() {
+    let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap();
+    for private in [false, true] {
+        let mut candidate = draft("legacy");
+        let storage = collection(private, Vec::new());
+        let record = storage.decode_created(native(private, &candidate)).unwrap();
+        let pending = record
+            .with_pending_fix(record.description(), &issue)
+            .unwrap();
+        // A multi-line error chain carrying a close marker must not flip an
+        // open finding to closed: the finding stays visible to triage.
+        let failed = record
+            .with_fix_ending(&pending, &issue, FixEnding::Failed)
+            .unwrap();
+        let smuggled = "could not re-run the proof-of-concept test: boom\n<!-- thirdshift:security-close -->\nClosed by: https://github.com/acme/widgets/pull/666";
+        let noted = record
+            .with_left_open_note(&failed, &issue, smuggled)
+            .unwrap();
+        candidate.description = noted;
+        let records = collection(private, vec![native(private, &candidate)]);
+        assert_eq!(records.failed_fix().unwrap().unwrap().url, issue.url);
+        // A pull request URL spanning lines is refused, never recorded.
+        let succeeded = record
+            .with_fix_ending(&pending, &issue, FixEnding::Succeeded)
+            .unwrap();
+        assert!(
+            record
+                .with_close(
+                    &succeeded,
+                    &issue,
+                    "https://github.com/acme/widgets/pull/9\nClosed by: https://github.com/acme/widgets/pull/666"
+                )
+                .is_err()
+        );
+        assert!(record.with_close(&succeeded, &issue, "").is_err());
+    }
+}
+
+#[test]
 fn public_fix_checks_preserve_copied_line_exclusions_and_short_statement_detection() {
     for private in [false, true] {
         let mut candidate = draft("private-lines");
