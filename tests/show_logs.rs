@@ -661,6 +661,45 @@ fn show_keeps_the_latest_event_when_otlp_escaping_expands_a_record_past_64_kib()
 }
 
 #[test]
+fn show_keeps_the_last_tool_call_after_large_session_trace_results() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\n{OPENS_PR}",
+        scenario.path("started").display(),
+        scenario.path("release").display()
+    ));
+    let held = scenario.run_until(&[&scenario.issue_url(7)], &[], "started");
+    let status = scenario.run(&["status", "--json"]);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    let session = std::path::Path::new(status["commands"][0]["session_log"].as_str().unwrap());
+    let records = session.with_extension("logs.jsonl");
+    fs::remove_file(&records).unwrap();
+    let tool = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo test"}}]}}"#;
+    // Enough trailing results to fill the encoded window, while the tool call
+    // remains well inside the old raw window after a long Session's history.
+    let contents = format!(
+        "{}\n{tool}\n{}",
+        "older diagnostic\n".repeat(20_000),
+        support::session_trace::large_result_tail()
+    );
+    fs::write(session, &contents).unwrap();
+    let raw = scenario.run(&["show", "widgets#7", "--json"]);
+    fs::write(&records, support::session_trace::records(&contents)).unwrap();
+    let trace = scenario.run(&["show", "widgets#7", "--json"]);
+    let text = scenario.run(&["show", "widgets#7"]);
+    fs::write(scenario.path("release"), "").unwrap();
+    let ended = held.finish();
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    for output in [raw, trace] {
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let shown: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(shown["command"]["latest_event"], "Bash: cargo test");
+    }
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    assert!(text.stdout.contains("Bash: cargo test"), "{}", text.stdout);
+}
+
+#[test]
 fn show_names_one_command_and_logs_prints_its_exact_output() {
     let scenario = Scenario::new();
     scenario.issue_titled(7, "Make widgets");
