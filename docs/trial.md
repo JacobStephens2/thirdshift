@@ -5,6 +5,8 @@ repository through the same session code as a Run. This internal flag is hidden
 from `help`. Initially only the Spec review is supported; Code review is #1016.
 Both Arms' builds must support this protocol: the first Experiment's Baseline
 must be the first release that ships the flag, or a later release.
+The current Experiment supervises their raw Session logs for plan-limit
+warnings even when an Arm build has no warning detector of its own.
 
 The caller prepares an isolated repository at the required commit, its branch
 and local Base branch, and a `.thirdshift-issue.md` containing the Spec's title,
@@ -64,6 +66,10 @@ The result version is independently identified by `version: 1`.
   login or connection failure, a provider server error before work, a Harness
   that exits before work without a diagnostic, or a provider usage/rate limit.
   The Experiment's Bar decides which Void causes to retry or exclude.
+  A live Claude plan-limit warning or rejection, or a Codex quota report at
+  85% in either window, stops the session and makes the Trial void with
+  `usage_limit`. Ordinary Runs keep running. Codex's retained token-count
+  reports are checked while the session runs when exec does not stream them.
   The Experiment's code Grader also marks a changed repository as void with
   `repository_changed`, before running any Eval task checks. This compares the
   session's starting and ending HEAD, refs, index, tracked and untracked file

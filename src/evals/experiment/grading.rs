@@ -68,6 +68,7 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
                     stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
                 },
                 Instant::now() + Duration::from_secs(bar.timeout_seconds),
+                &|| Ok(()),
             );
             crate::interrupt::check()?;
             let (passed, reason) = match result {

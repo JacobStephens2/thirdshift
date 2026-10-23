@@ -199,6 +199,100 @@ fn a_failed_trial_keeps_its_session_id_diagnostic_and_model_evidence() {
 }
 
 #[test]
+fn a_live_plan_limit_cuts_short_a_trial_and_keeps_its_evidence() {
+    for (harness, event, session_id) in [
+        (
+            "claude",
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day"}}"#,
+            "fake-session-1",
+        ),
+        (
+            "claude",
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour"}}"#,
+            "fake-session-1",
+        ),
+        (
+            "codex",
+            r#"{"type":"token_count","rate_limits":{"primary":{"used_percent":85}}}"#,
+            "fake-thread-1",
+        ),
+    ] {
+        let scenario = Scenario::new();
+        let request = request(&scenario);
+        let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+        document["harness"] = json!(harness);
+        fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
+        let escaped = scenario.path("continued-past-warning");
+        scenario.agent_does(&format!(
+            "echo '{event}'\nsleep 0.5\ntouch '{}'\n",
+            escaped.display()
+        ));
+
+        let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let output: Value = serde_json::from_str(&result.stdout).unwrap();
+        assert_eq!(output["outcome"], "void", "{harness}: {output}");
+        assert_eq!(output["void_cause"], "usage_limit", "{output}");
+        assert_eq!(output["session_id"], session_id);
+        assert!(output["cause"].as_str().unwrap().contains("plan-limit"));
+        assert!(PathBuf::from(output["model_evidence"].as_str().unwrap()).is_file());
+        assert!(
+            fs::read_to_string(output["log"].as_str().unwrap())
+                .unwrap()
+                .contains(event)
+        );
+        assert!(
+            !escaped.exists(),
+            "{harness} kept working after its warning"
+        );
+    }
+}
+
+#[test]
+fn codex_quota_reports_are_read_live_from_the_current_sessions_native_file() {
+    let scenario = Scenario::new();
+    let request = request(&scenario);
+    let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    document["harness"] = json!("codex");
+    fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
+    let escaped = scenario.path("continued-after-native-warning");
+    scenario.agent_does(&format!(r#"
+mkdir -p "$HOME/.codex/sessions/2026/10/23"
+native="$HOME/.codex/sessions/2026/10/23/rollout-fixture-fake-thread-1.jsonl"
+printf '{{"type":"session_meta","payload":{{"id":"fake-thread-1","cwd":"%s"}}}}\n' "$PWD" > "$native"
+printf '{{"timestamp":"2000-01-01T00:00:00Z","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"primary":{{"used_percent":99}}}}}}}}\n' >> "$native"
+sleep 1.1
+touch '{}'
+timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '{{"timestamp":"%s","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"secondary":{{"used_percent":85}}}}}}}}\n' "$timestamp" >> "$native"
+sleep 0.5
+touch '{}'
+"#, scenario.path("ignored-old-native-warning").display(), escaped.display()));
+
+    let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(output["outcome"], "void", "{output}");
+    assert_eq!(output["void_cause"], "usage_limit");
+    assert_eq!(output["session_id"], "fake-thread-1");
+    assert!(
+        scenario.path("ignored-old-native-warning").exists(),
+        "an old report stopped the new session"
+    );
+    assert!(
+        !escaped.exists(),
+        "the native warning was not read while stdout was idle"
+    );
+    assert!(
+        fs::read_to_string(output["log"].as_str().unwrap())
+            .unwrap()
+            .contains("used_percent")
+    );
+}
+
+#[test]
 fn unavailable_sessions_and_provider_limits_are_void_trials() {
     for (script, expected, diagnostic) in [
         ("exit 3".to_string(), "session_unavailable", "claude exited 3"),

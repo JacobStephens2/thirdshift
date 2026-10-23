@@ -3,6 +3,7 @@
 
 mod grading;
 mod integrity;
+mod limits;
 mod options;
 mod store;
 mod workers;
