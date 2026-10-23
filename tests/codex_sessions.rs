@@ -422,7 +422,7 @@ fn a_resume_that_ends_the_same_way_gets_no_second_resume_and_a_later_failure_nam
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[0],
         format!(
-            "thirdshift: failed run (implement session {ending}, and a later step failed: no PR found)"
+            "thirdshift: failed ticket run (implement session {ending}, and a later step failed: no PR found)"
         )
     );
 }
@@ -503,7 +503,7 @@ fn an_interrupt_sends_a_codex_session_sigint_and_the_run_ends_as_interrupted() {
     assert_eq!(fs::read_to_string(&signals).unwrap(), "INT\n");
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[0],
-        "thirdshift: failed run (interrupted)"
+        "thirdshift: failed ticket run (interrupted)"
     );
     assert_eq!(
         scenario.origin_file("issue-7", "wip.txt"),
@@ -527,7 +527,7 @@ fn a_codex_session_that_outlasts_sigint_is_sent_sigterm_after_it() {
     assert_eq!(fs::read_to_string(&signals).unwrap(), "INT\nTERM\n");
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[0],
-        "thirdshift: failed run (interrupted)"
+        "thirdshift: failed ticket run (interrupted)"
     );
 }
 

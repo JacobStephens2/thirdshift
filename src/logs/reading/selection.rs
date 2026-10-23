@@ -255,8 +255,8 @@ impl Selection<'_> {
     pub(in crate::logs) fn stop_target(self, input: &str) -> Result<PathBuf> {
         if let Some(owner) = self.child_owner {
             bail!(
-                "cannot stop {input}: child Run; stop {} {} instead",
-                owner.record.kind,
+                "cannot stop {input}: child Ticket run; stop {} {} instead",
+                crate::logs::display_name(&owner.record.kind),
                 owner.record.name
             );
         }

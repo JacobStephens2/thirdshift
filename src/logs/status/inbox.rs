@@ -280,7 +280,10 @@ fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, Stri
                 .clone()
                 .unwrap_or_else(|| "(title unavailable)".into()),
         ),
-        None => (format!("{name} on {repository}"), String::new()),
+        None => (
+            format!("{} on {repository}", crate::logs::display_name(name)),
+            String::new(),
+        ),
     }
 }
 

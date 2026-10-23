@@ -6,12 +6,12 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | --- | --- | --- |
 | Claim | `src/claim.rs` — `Claim`, `make`, `end` | Inline tests; `tests/pickup_run.rs` |
 | Ready issue, Claim limit, Sweep | `src/ready.rs` — `ReadyIssue`, `first`, `refresh`; `src/pickup.rs` — `gates`, `sweep`; `src/pickup/reservation.rs` — cross-machine Pickup reservation | Inline tests; `tests/pickup_run.rs` |
-| Run, Continuation, Issue branch | `src/run.rs`; `src/branch.rs` | `tests/fresh_run.rs`, `tests/continuation.rs`, `tests/numbered_branches.rs` |
+| Ticket run, Continuation, Issue branch | `src/run.rs`; `src/branch.rs` | `tests/fresh_run.rs`, `tests/continuation.rs`, `tests/numbered_branches.rs` |
 | Worktree | `src/worktree.rs` and `src/worktree/` | `src/worktree/acquisition_tests.rs`, `src/worktree/cleanup_tests.rs` |
 | Spec run, Spec branch, Spec PR | `src/spec_run.rs` | `tests/spec_run.rs` |
 | Ticket board, Tickets checklist, Unready Ticket, Startable Ticket | `src/spec_run/ticket_board.rs` — `TicketBoard`, `next_to_start`; `src/spec_run.rs` — `unstartable`, shared with `src/ready.rs`; `src/labels.rs` | Inline tests; `tests/spec_run.rs` |
 | Delivery, Repair loop, Foreign commit | `src/delivery.rs` — `Delivery`; `src/delivery/repair_loop.rs`; Delivery stage: `src/delivery/stage.rs` — `Stage`, `Tracker`, its table to the `Stopped at:` and Command record stages | Inline tests; `tests/merge_run.rs` |
-| Failed run | `src/failed_run.rs` | `tests/failed_run.rs` |
+| Failed ticket run | `src/failed_run.rs` | `tests/failed_run.rs` |
 | Recovery | `src/recovery.rs` — `Recovery`, its add-a-fact methods and `lines` | Inline tests in `src/recovery.rs`; `tests/failed_run.rs`, `tests/spec_run.rs` |
 | CI watch, Check re-run, Abandoned job, Declined CI fix | `src/ci.rs` — `Watch`, `assess`, `after_repair`; Delivery constructs one watch in `src/delivery.rs` — `RunOutside`; `src/delivery/repair_loop.rs` requests assessments and reports completed CI-fix Repairs | Inline CI assessment and Repair loop tests; `src/github/execution_tests.rs`; `tests/ci.rs` |
 | Inherited failure, check-state reading, Base fix | `src/ci.rs` — `reading` of each `Conclusion` the GitHub adapter (`src/github.rs`, `checks_on`) reports; `src/base_fix.rs` | Inline tests; `src/github/execution_tests.rs`; `tests/ci.rs`, `tests/base_fix.rs` |
@@ -21,7 +21,7 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | Trusted account, the issue a session gets | `src/trust.rs` — `issue_trust`, `ticket_trust`, `untrusted_edit` over `Reads`; the GitHub adapter's trust reads, `src/github/trust.rs`; `src/github/session_issue.rs` — `issue_for_session`; `src/delivery.rs` — `hand_over_issue` | Inline tests, including `src/trust.rs` and `src/prompt.rs`; `tests/fresh_run.rs`, `tests/pickup_run.rs` |
 | Session trace, Resume | `src/session.rs` and `src/session/`; `src/session/kind.rs` — `Kind`, `Logged`: every session kind, its Session-trace token, the Command record stage it enters and its `--session` rule (`selects`) | `src/session/execution_tests.rs`, inline tests in `src/session/kind.rs`, `tests/background_work.rs` |
 | OTLP JSON Lines (Session-trace file format) | `src/otlp_jsonl.rs` — application-independent requests, `Writer`, `Reader`; `src/otlp_jsonl/value.rs` — attribute values and byte encoding | `src/otlp_jsonl/tests.rs`; official examples and local Collector config in `src/otlp_jsonl/fixtures/` |
-| Session trace recording and Trace ancestry | `src/session/trace.rs` — streaming records, ended spans and retained amendments; `src/logs/trace.rs` — deterministic Command, Run and stage identities | `tests/session_traces.rs`, `src/session/recording/tests.rs`, `src/logs/recording/tests.rs` |
+| Session trace recording and Trace ancestry | `src/session/trace.rs` — streaming records, ended spans and retained amendments; `src/logs/trace.rs` — deterministic Command, Ticket run and stage identities | `tests/session_traces.rs`, `src/session/recording/tests.rs`, `src/logs/recording/tests.rs` |
 | Whole Trace export | `src/logs/export.rs` — Command record ancestry and local OTLP JSON Lines export | `tests/export_trace.rs` |
 | Session trace reading | `src/logs/session.rs` — readable file selection and raw-event unwrapping for the Console, `show`, Silent and heartbeat | `tests/console.rs`, `tests/show_logs.rs`, `tests/run_health.rs`, `console/tests/logs.test.cjs`, `console/tests/inbox.test.cjs` |
 | Command log, Activity log | `src/logs.rs`; `src/logs/recording.rs` — `Record` | `src/logs/recording/tests.rs`, `tests/command_logs.rs`, `tests/activity_log.rs` |
@@ -42,7 +42,7 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | Stop | `src/logs/reading.rs` — `retained_work` reload by captured record; `src/logs/reading/selection.rs` — `Selection::stop_target`; `src/logs/stop.rs` — shared request, signaling, waiting and inspection; `src/console/stop.rs` — confirmation and authenticated Console action; `src/claim.rs` — Stop endings | `src/logs/reading/tests.rs`, `tests/stop.rs`, `tests/console/stop.rs`, `console/tests/stop.test.cjs`; inline Claim and Stop tests |
 | User config, Setup | `src/config.rs`; `src/setup.rs` | `tests/user_config.rs`, `tests/setup.rs` |
 | Architecture review, Architect run | `src/architect.rs` | `tests/architect_run.rs` |
-| Security audit, Security review, Security run | `src/security.rs` and `src/security/`; which Runs run a Security review, and what every child Run is handed: `src/child_run/asks.rs` — `ChildAsks` | Inline tests; `tests/security_review.rs`, `tests/security_run.rs` |
+| Security audit, Security review, Security run | `src/security.rs` and `src/security/`; which Ticket runs run a Security review, and what every child Ticket run is handed: `src/child_run/asks.rs` — `ChildAsks` | Inline tests; `tests/security_review.rs`, `tests/security_run.rs` |
 
 For example, `rg -n 'Claim|TicketBoard|RunNotification' src/claim.rs src/spec_run/ticket_board.rs src/notification.rs` locates the owners of Claim, Ticket board and Run notification without reading the whole glossary or README. Ticket board is an implementation term; the glossary defines its Spec run and Ticket vocabulary.
 

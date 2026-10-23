@@ -390,7 +390,7 @@ fn time_pages_name_the_command_kind_without_repeating_it_for_commands_without_is
         let html = console.get(page).text().unwrap();
         for heading in [
             "Pickup run · acme/widgets#7",
-            "Run · acme/widgets#7",
+            "Ticket run · acme/widgets#7",
             "Security run on acme/widgets",
             "Spec run · acme/widgets#9",
         ] {
@@ -497,7 +497,7 @@ fn stages_distinguishes_dispatch_from_insufficient_usual_range_samples() {
     }
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get("/?page=stages").text().unwrap();
-    for name in ["dispatched Run", "dispatched Spec run"] {
+    for name in ["dispatched Ticket run", "dispatched Spec run"] {
         let row = html
             .split("<tr>")
             .find(|row| row.starts_with(&format!("<th scope=\"row\">{name}<br>")))

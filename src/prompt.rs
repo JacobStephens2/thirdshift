@@ -251,8 +251,8 @@ pub fn architecture_review(base: &str, focus: Option<&str>) -> String {
 }
 
 /// The conflict Repair prompt, for a merge of `origin/<merging>` left in
-/// progress with conflicts: the Base branch, or in a Merge run the Issue
-/// branch with Foreign commits on it.
+/// progress with conflicts: the Base branch, or in a Ticket run asked to merge,
+/// the Issue branch with Foreign commits on it.
 pub fn conflict_repair(issue: &IssueUrl, merging: &str, branch: &str, pr_url: &str) -> String {
     format!(
         "/thirdshift-resolving-merge-conflicts\n\
@@ -314,8 +314,9 @@ pub fn ci_fix_repair(
     )
 }
 
-/// The review Repair prompt, for Foreign commits a Merge run has merged into
-/// the Issue branch on top of `own_head`, the head it last knew as its own.
+/// The review Repair prompt, for Foreign commits a Ticket run asked to merge
+/// has merged into the Issue branch on top of `own_head`, the head it last
+/// knew as its own.
 pub fn review_repair(issue: &IssueUrl, branch: &str, pr_url: &str, own_head: &str) -> String {
     let review = ReviewInstruction::ForeignCommits;
     format!(
@@ -379,7 +380,7 @@ pub fn security_audit(
     )
 }
 
-/// One guidance session on the Run's change, before Delivery pushes and
+/// One guidance session on the Ticket run's change, before Delivery pushes and
 /// enters the Repair loop. The separate Security audit remains a full audit.
 pub const SECURITY_REVIEW_REPORT_FILE: &str = "<private report file>";
 pub const SECURITY_REVIEW_MERGE_BASE: &str = "<merge base commit>";
@@ -443,7 +444,7 @@ pub fn security_fix(base: &str, url: &str, finding: &str) -> String {
          On a public repository, stage the proposed public issue text instead of creating any public issue directly: do not run `gh issue create` yourself. thirdshift validates the staged text and creates the `needs-triage` top issue and its Tickets from it. On a private repository, reuse the finding's issue as the top issue and preserve its body and evidence; add the bigger fix's Tickets as its native sub-issues. Only a private bigger fix publishes its issues itself.\n\
          Every new issue is terse: it says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record. This overrides the skills' templates.\n\
          A Spec's Tickets must be new, open, labelled `ready-for-agent`, linked as native sub-issues with their native blocking links, and have no sub-issues of their own. On a public repository thirdshift makes those links from the staged text; read the staged blocking edges back before finishing.\n\
-         This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks every issue, marks the top issue ready, labels all fix issues security-fix and dispatches its Run or Spec run.\n\
+         This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks every issue, marks the top issue ready, labels all fix issues security-fix and dispatches its Ticket run or Spec run.\n\
          End your final message for a single public fix with exactly:\n{STAGED_PROPOSAL_MARKER}\n{STAGED_TITLE_MARKER} <title>\n{STAGED_BODY_MARKER}\n<body>\nFor a public spec, end with exactly:\n{STAGED_SPEC_MARKER}\n{STAGED_TITLE_MARKER} <spec title>\n{STAGED_BODY_MARKER}\n<spec body>\n{STAGED_TICKET_MARKER} <ticket 1 title>\n{STAGED_BODY_MARKER}\n<ticket 1 body>\n{STAGED_BLOCKED_BY_MARKER} none\n{STAGED_TICKET_MARKER} <ticket 2 title>\n{STAGED_BODY_MARKER}\n<ticket 2 body>\n{STAGED_BLOCKED_BY_MARKER} 1\nwith each later Ticket naming the 1-based positions of the Tickets that block it, or none. For a private bigger fix, end with exactly `{SECURITY_FIX_SPEC_LINE}<Issue URL>`, naming the top issue.\n\n\
          Private record:\n{finding}\n\n{HEADLESS}"
     )

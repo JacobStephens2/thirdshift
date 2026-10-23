@@ -19,7 +19,14 @@ function pretty(text) {
   try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; }
 }
 const quote = text => `'${text.replaceAll("'", "'\\''")}'`;
-const kindName = { cmd: 'Command', run: 'Run', stage: 'stage', sess: 'session', model: 'model call', tool: 'tool call', turn: 'turn', agent: 'sub-agent' };
+const kindName = { cmd: 'Command', run: 'Ticket run', stage: 'stage', sess: 'session', model: 'model call', tool: 'tool call', turn: 'turn', agent: 'sub-agent' };
+
+// Translate record-derived labels only when rendering; span JSON stays stable.
+function spanName(span) {
+  if (span.kind === 'cmd' || span.kind === 'run') return span.name.replace(/^Run · /, 'Ticket run · ');
+  if (span.kind === 'stage' && span.name === 'dispatched Run') return 'dispatched Ticket run';
+  return span.name;
+}
 
 export function initSpanTree({ openCommand, openDetails }) {
   const tree = document.getElementById('span-tree');
@@ -101,7 +108,7 @@ export function initSpanTree({ openCommand, openDetails }) {
     for (const span of calls) {
       const li = el('li'), reveal = button('', () => revealSpan(span.id));
       reveal.dataset.revealSpan = span.id;
-      reveal.append(el('span', 'span-rank', `#${ranks.get(span.id)}`), el('span', 'slow-name', `${span.kind} · ${span.name}`), el('span', 'slow-clock', `${clock(span.start)} → ${span.status === 'running' ? 'now' : clock(span.end)}`), el('span', 'slow-duration', durationText(span)));
+      reveal.append(el('span', 'span-rank', `#${ranks.get(span.id)}`), el('span', 'slow-name', `${span.kind} · ${spanName(span)}`), el('span', 'slow-clock', `${clock(span.start)} → ${span.status === 'running' ? 'now' : clock(span.end)}`), el('span', 'slow-duration', durationText(span)));
       const parent = nodes.get(span.parent_id);
       const fraction = parent && elapsed(parent) > 0 ? `${Math.round(elapsed(span) / elapsed(parent) * 100)}% of its ${kindName[parent.kind]}` : 'Parent duration unknown';
       reveal.append(el('span', 'slow-where', `${fraction}${span.run ? ` · #${span.run}` : ''}${span.session_kind ? ` · ${span.session_kind} session` : ''}`));
@@ -139,7 +146,7 @@ export function initSpanTree({ openCommand, openDetails }) {
       twist.setAttribute('aria-hidden', 'true'); twist.dataset.discloseSpan = span.id;
       label.append(twist, el('span', 'span-kind', span.kind));
       if (ranks.has(span.id)) label.append(el('span', 'span-rank', `#${ranks.get(span.id)}`));
-      const name = el('span', 'span-name', span.name); name.title = span.name; label.append(name);
+      const name = el('span', 'span-name', spanName(span)); name.title = spanName(span); label.append(name);
       if (span.error !== null || span.status === 'running') {
         const mark = el('span', span.error !== null ? 'span-status-error' : 'span-status-running', span.error !== null ? '✕' : '●');
         mark.title = span.error ?? 'running'; mark.setAttribute('aria-label', span.error ?? 'running'); label.append(mark);
@@ -164,7 +171,7 @@ export function initSpanTree({ openCommand, openDetails }) {
       const tick = el('span', '', `+${duration((axis.end - axis.start) * fraction)}`); tick.style.left = `${fraction * 100}%`; return tick;
     }));
     const notice = document.getElementById('span-zoom'); notice.hidden = !zoom; notice.replaceChildren();
-    if (zoom) notice.append(el('b', '', `Timeline zoomed around ${nodes.get(zoom).name}: ${clock(axis.start)} → ${clock(axis.end)} (${duration(axis.end - axis.start)})`), button('Zoom out to whole Command', () => zoomTo(null)));
+    if (zoom) notice.append(el('b', '', `Timeline zoomed around ${spanName(nodes.get(zoom))}: ${clock(axis.start)} → ${clock(axis.end)} (${duration(axis.end - axis.start)})`), button('Zoom out to whole Command', () => zoomTo(null)));
   }
   function render() { setAxis(); rankCalls(); renderAxis(); renderTree(); if (detail) renderDetails(); }
   function centerRow(id) {
@@ -174,6 +181,12 @@ export function initSpanTree({ openCommand, openDetails }) {
       const bottom = innerWidth <= 760 && !peek.hidden ? peek.getBoundingClientRect().top : innerHeight;
       const rect = row.getBoundingClientRect();
       window.scrollBy({ top: rect.top + rect.height / 2 - (top + bottom) / 2, behavior: 'instant' });
+      // Scrolling can pin the sticky axis. Keep the row inside the final
+      // visible space rather than the axis's position before that scroll.
+      const settled = row.getBoundingClientRect();
+      const visibleTop = Math.max(0, header.getBoundingClientRect().bottom);
+      if (settled.bottom > bottom) window.scrollBy({ top: settled.bottom - bottom, behavior: 'instant' });
+      else if (settled.top < visibleTop) window.scrollBy({ top: settled.top - visibleTop, behavior: 'instant' });
     });
   }
   function choose(id, focus = true) { selected = id; renderTree(); if (focus) rowFor(id)?.focus({ preventScroll: true }); }
@@ -190,10 +203,10 @@ export function initSpanTree({ openCommand, openDetails }) {
     content.dataset.detailSpanId = span.id;
     const card = el('article', 'span-card'), path = el('nav', 'span-path'); path.setAttribute('aria-label', 'Span ancestors');
     for (const parent of ancestors(span)) {
-      const link = el('a', '', parent.name); link.href = `#span-${parent.id}`;
+      const link = el('a', '', spanName(parent)); link.href = `#span-${parent.id}`;
       link.addEventListener('click', event => { event.preventDefault(); revealSpan(parent.id); }); path.append(link);
     }
-    card.append(path, el('h2', '', `${span.kind} · ${span.name}`), el('p', '', `${span.status}${span.error !== null ? ` · ${span.error}` : ''} · ${clock(span.start)} → ${span.status === 'running' ? 'now' : clock(span.end)}${span.estimated ? ' · estimated*' : ''}`));
+    card.append(path, el('h2', '', `${span.kind} · ${spanName(span)}`), el('p', '', `${span.status}${span.error !== null ? ` · ${span.error}` : ''} · ${clock(span.start)} → ${span.status === 'running' ? 'now' : clock(span.end)}${span.estimated ? ' · estimated*' : ''}`));
     const tiles = el('div', 'span-tiles');
     const tile = (label, value) => {
       if (value === null || value === undefined) return;
