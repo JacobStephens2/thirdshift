@@ -3428,6 +3428,92 @@ fn failed_security_audits_send_one_notification_with_a_safe_status() {
     }
 }
 
+fn assert_base_branch_pre_audit_cause(
+    scenario: &Scenario,
+    args: &[&str],
+    diagnostic: &str,
+    cause: &str,
+) {
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(args, &resend_env(&resend));
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(result.stderr.contains(diagnostic), "{}", result.stderr);
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.codex_calls().is_empty());
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(
+        subject,
+        "[thirdshift] acme/widgets Security run: pre-audit failed"
+    );
+    assert!(text.contains("Result:       pre-audit failed"), "{text}");
+    assert!(text.contains("Audit:        not started"), "{text}");
+    assert!(text.contains(&format!("Cause:        {cause}")), "{text}");
+    assert!(
+        text.contains("Diagnostics:  Check this command's stderr on "),
+        "{text}"
+    );
+    for private in [
+        diagnostic,
+        "PRIVATE-BRANCH",
+        "PRIVATE-COMMIT",
+        "create or obtain",
+        "git push",
+        "pre-audit checks failed",
+    ] {
+        assert!(
+            !resend.requests()[0].body.to_string().contains(private),
+            "{text}"
+        );
+    }
+}
+
+#[test]
+fn missing_base_branch_reports_a_safe_pre_audit_cause() {
+    let scenario = Scenario::new();
+    assert_base_branch_pre_audit_cause(
+        &scenario,
+        &[
+            "secure",
+            "base",
+            "PRIVATE-BRANCH",
+            "email",
+            "me@example.com",
+        ],
+        "base branch PRIVATE-BRANCH does not exist on origin or locally",
+        "Base branch not found",
+    );
+}
+
+#[test]
+fn other_base_branch_preparation_failures_report_safe_pre_audit_causes() {
+    for (setup, diagnostic, cause) in [
+        (
+            &["checkout", "-q", "-b", "PRIVATE-BRANCH"][..],
+            "base branch PRIVATE-BRANCH does not exist on origin; push it first",
+            "Base branch not on origin",
+        ),
+        (
+            &["checkout", "-q", "--detach"][..],
+            "HEAD is detached; check out the branch",
+            "Base branch not selected",
+        ),
+        (
+            &["commit", "--allow-empty", "-qm", "PRIVATE-COMMIT"][..],
+            "local main is 1 commit(s) ahead of origin/main; push them first",
+            "Base branch ahead of origin",
+        ),
+    ] {
+        let scenario = Scenario::new();
+        scenario.launch_git(setup);
+        assert_base_branch_pre_audit_cause(
+            &scenario,
+            &["secure", "email", "me@example.com"],
+            diagnostic,
+            cause,
+        );
+    }
+}
+
 #[test]
 fn pre_audit_github_failures_report_a_safe_cause_without_claiming_an_audit_ran() {
     for (diagnostic, expected_cause) in [
@@ -4551,6 +4637,10 @@ fn review_acquisition_failure_is_pre_audit() {
         result.stderr
     );
     assert!(text.contains("Audit:        not started"), "{text}");
+    assert!(
+        text.contains("Cause:        pre-audit checks failed"),
+        "{text}"
+    );
 }
 
 #[test]
