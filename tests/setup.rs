@@ -11,7 +11,9 @@ use std::fs;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
-use support::{CTRL_C, Keystrokes, Scenario, TerminalResult, TerminalStep, write_executable};
+#[cfg(target_os = "linux")]
+use support::write_executable;
+use support::{CTRL_C, Keystrokes, Scenario, TerminalResult, TerminalStep};
 
 /// The agent commits its work and opens a PR that closes issue #7, into
 /// `main`.
