@@ -270,11 +270,13 @@ fn body(
         text += &command_lines(command, repo);
     }
     if let Some(findings) = account.security_findings {
-        let audit = match &account.ended {
-            Err(_) if account.pre_audit_failure.is_some() => "not started",
-            Err(_) if account.failed_reproduction.is_some() => "audit complete",
-            Ok(line) => line.as_str(),
-            Err(_) => account.outcome,
+        // A fix's ending is told by the Result and Pull request lines.
+        let audit = match (&account.security_fix, &account.ended) {
+            (Some(fix), _) => fix.audit.as_deref().unwrap_or("not run"),
+            (None, Err(_)) if account.pre_audit_failure.is_some() => "not started",
+            (None, Err(_)) if account.failed_reproduction.is_some() => "audit complete",
+            (None, Ok(line)) => line.as_str(),
+            (None, Err(_)) => account.outcome,
         };
         text += &format!("Audit:        {audit}\n");
         if let Some(number) = account.failed_reproduction {
@@ -293,8 +295,30 @@ fn body(
             };
             text += &format!("Reproduction: {number} {status}\n");
         }
-        if !findings.is_empty() {
-            text += "\nSecurity findings:\n";
+        // A dispatched fix addresses one finding; the audit's others are
+        // listed apart from it.
+        let sections = match &account.security_fix {
+            Some(fix) => vec![
+                (
+                    if account.ended.is_ok() {
+                        "Addressed by the pull request"
+                    } else {
+                        "Fix attempted, not fixed"
+                    },
+                    vec![fix.finding],
+                ),
+                ("Recorded, waiting for the Day shift", fix.waiting.clone()),
+                ("Also recorded by the audit", fix.recorded.clone()),
+            ],
+            None => vec![("Security findings", findings.iter().collect())],
+        };
+        let mut listed = false;
+        for (heading, findings) in sections {
+            if findings.is_empty() {
+                continue;
+            }
+            listed = true;
+            text += &format!("\n{heading}:\n");
             for finding in findings {
                 let severity = finding
                     .severity
@@ -303,6 +327,8 @@ fn body(
                     .unwrap_or_default();
                 text += &format!("- {severity}{}: {}\n", finding.title, finding.url);
             }
+        }
+        if listed {
             text += "\n";
         }
     }
@@ -426,6 +452,7 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -448,6 +475,7 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
