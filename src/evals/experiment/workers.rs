@@ -229,7 +229,7 @@ fn run_trial(
         store::write(
             &request,
             &json!({
-                "version": 1, "repository": prepared_repo.repository, "session_kind": "spec-review",
+                "version": 1, "repository": prepared_repo.repository, "session_kind": trial.task.manifest.session,
                 "inputs": inputs, "harness": setup.harness, "model": setup.model, "effort": setup.effort,
                 "output_dir": attempt.join("session")
             }),
@@ -365,7 +365,9 @@ fn prepare_branches(repository: &Path, task: &Task) -> Result<()> {
         "-m",
         "Eval change",
     ])?;
-    git.run(&["push", "origin", &inputs.base, &inputs.branch])?;
+    if task.manifest.session == super::super::format::Session::SpecReview {
+        git.run(&["push", "origin", &inputs.base, &inputs.branch])?;
+    }
     Ok(())
 }
 

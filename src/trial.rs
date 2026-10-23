@@ -32,6 +32,7 @@ struct Request {
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
 enum SessionKind {
+    CodeReview,
     SpecReview,
 }
 
@@ -173,6 +174,10 @@ pub fn run(path: &Path) -> Result<String> {
         chosen_by: ChosenBy::Command,
     };
     let (kind, prompt) = match request.session_kind {
+        SessionKind::CodeReview => (
+            Kind::CodeReview,
+            prompt::code_review(&issue, &request.inputs.base, &request.inputs.branch),
+        ),
         SessionKind::SpecReview => (
             Kind::SpecReview,
             prompt::spec_review(

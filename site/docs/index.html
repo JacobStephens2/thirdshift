@@ -415,7 +415,8 @@ documents the manifests with made-up data and the Arm record.</p>
 <p>On the host holding #429&#39;s material, <code>thirdshift evals import-replays</code> reads
 the private replay manifests, cached original issue bodies and grading index
 under <code>~/.thirdshift/replays/</code> into the code-review and Spec-review suites.
-Rerunning adds only missing Eval tasks. The format document also describes the
+Rerunning adds missing Eval tasks and completes missing Code review Trial inputs,
+preserving local edits. The format document also describes the
 grading index to prepare on that host; private material stays outside the repository.</p>
 </div></details>
 <details class="fold"><summary><h3>Experiments</h3></summary>
@@ -429,7 +430,10 @@ Harness, Model or Effort comparison with the same build in both Arms.</p>
 or the corresponding <code>--candidate-*</code> flag, followed by a value. Unspecified
 choices follow the User config, then the Harness defaults. Both builds must
 support the <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/trial.md">versioned Trial protocol</a>.
-Spec-review Eval tasks run now; Code-review Trials arrive with #1016.</p>
+Both Code review and Spec review Eval tasks run. Code review Trials use the
+production code-review Factory skill on the historical diff and retain both
+axis reports without fixing or publishing anything. Spec review Trials keep
+the ordinary Spec review prompt.</p>
 <p>The Bar is saved before the first Trial: margin <code>-0.10</code>, credible level <code>0.95</code>,
 prior <code>1</code>, seed <code>0</code>, <code>20000</code> draws, each suite&#39;s Trials per Eval task, an
 <code>1800</code>-second per-Trial timeout, and up to two fresh retries for Void Trials.
@@ -461,6 +465,10 @@ or three). Any failed suite fails the Experiment; otherwise any inconclusive
 suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
 also makes it inconclusive. Results include the suite intervals, the Bar and
 each Arm&#39;s minutes across all attempts, including Void Trials and timeouts.
+The code-review suite runs three Trials per Arm per Eval task by default; the
+Spec-review suite runs one. For three-Trial suites, <code>experiments --json</code> reports
+<code>pass_cubed</code>: the share of retained Eval tasks where all three Trials passed,
+separately for each Arm.
 Provider usage/rate limits pause scheduling until the same Experiment is
 started again, consuming the same fresh-retry budget across resumes. Completed
 attempts count toward minutes and per-Arm Void totals even while paused or

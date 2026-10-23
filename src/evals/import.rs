@@ -204,6 +204,7 @@ pub(super) fn replays(home: &Path) -> Result<Imported> {
             let entry = entry?;
             let target = destination.join("tasks").join(entry.file_name());
             if target.try_exists()? {
+                complete_trial_inputs(&target, &entry.path())?;
                 result.skipped += 1;
             } else {
                 fs::rename(entry.path(), target)?;
@@ -212,6 +213,28 @@ pub(super) fn replays(home: &Path) -> Result<Imported> {
         }
     }
     Ok(result)
+}
+
+/// Older imports predate Code review execution. Add only its missing table,
+/// preserving local criteria, formatting and any caller-supplied Trial inputs.
+fn complete_trial_inputs(target: &Path, staged: &Path) -> Result<()> {
+    let existing = Task::load(target)?;
+    if existing.session != Session::CodeReview || existing.trial.is_some() {
+        return Ok(());
+    }
+    let Some(inputs) = Task::load(staged)?.trial else {
+        return Ok(());
+    };
+    let path = target.join("task.toml");
+    let mut contents = fs::read_to_string(&path)?;
+    contents.push('\n');
+    contents.push_str(&toml::to_string(&BTreeMap::from([("trial", inputs)]))?);
+    let temporary = tempfile::NamedTempFile::new_in(target)?;
+    fs::write(temporary.path(), contents)?;
+    temporary
+        .persist(path)
+        .context("could not complete Code review Trial inputs")?;
+    Ok(())
 }
 
 fn bug_task(
@@ -246,7 +269,18 @@ fn bug_task(
             criteria: format!("{criteria}\nReport no wrong findings."),
             checks: Vec::new(),
             inputs: inputs(),
-            trial: None,
+            // These replay bugs all belong to this project. Code review is
+            // read-only: its branch names are local and its PR URL is unused.
+            trial: Some(crate::trial::Inputs {
+                issue_url: format!(
+                    "{}/issues/{}",
+                    env!("CARGO_PKG_REPOSITORY"),
+                    pr.implements_issue
+                ),
+                base: "main".into(),
+                branch: format!("issue-{}", pr.implements_issue),
+                pr_url: format!("{}/pull/{}", env!("CARGO_PKG_REPOSITORY"), pr.number),
+            }),
         },
         &context(dated, "thirdshift", pr.implements_issue)?,
     )?;

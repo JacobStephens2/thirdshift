@@ -2,7 +2,7 @@
 
 `thirdshift --trial /absolute/path/request.json` runs one session in a prepared
 repository through the same session code as a Run. This internal flag is hidden
-from `help`. Initially only the Spec review is supported; Code review is #1016.
+from `help`. `session_kind` accepts `code-review` and `spec-review`.
 Both Arms' builds must support this protocol: the first Experiment's Baseline
 must be the first release that ships the flag, or a later release.
 The current Experiment supervises their raw Session logs for plan-limit
@@ -11,9 +11,16 @@ warnings even when an Arm build has no warning detector of its own.
 The caller prepares an isolated repository at the required commit, its branch
 and local Base branch, and a `.thirdshift-issue.md` containing the Spec's title,
 body and only comments from Trusted accounts. The caller supplies the draft
-Spec PR URL. The Trial uses the ordinary Spec review Session prompt, including
-its commit and PR-edit instructions: use fixture services or disposable PRs
-when the Trial must not change a production PR. It does not acquire a Worktree,
+Spec PR URL for a Spec review. That Trial uses the ordinary Spec review Session
+prompt, including its commit and PR-edit instructions: use fixture services or
+disposable PRs when the Trial must not change a production PR.
+A Code review uses the new review-only Session prompt and the production
+code-review Factory skill on `base...HEAD`, with the implement session's
+sub-agent rules. The caller must commit the reviewed patch on `branch` first.
+The Code review writes both axis reports and leaves repository files, refs and
+the index unchanged; it fixes and publishes nothing. Its `pr_url` input remains
+required by version 1 but is unused.
+A Trial does not acquire a Worktree,
 make a Claim, fetch the issue, push, watch CI, or perform Delivery itself.
 
 ## Request
@@ -108,7 +115,7 @@ The result version is independently identified by `version: 1`.
 
 Killed background work gets the Run's one Resume, retaining its Harness,
 Model, Effort and review-report directory. Resume artifacts use
-`trial-spec-review-resume` as their stem; the result points to the last session's
+`trial-<session_kind>-resume` as their stem; the result points to the last session's
 artifacts. Earlier artifacts remain in `output_dir`. A Resume that also leaves
 killed work gets no further Resume, as in a Run.
 
