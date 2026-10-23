@@ -1473,7 +1473,7 @@ fn two_tickets_with_the_same_inherited_failure() -> Scenario {
 /// issue, so neither meets a Spec branch already fixed.
 const BOTH_TICKETS_HAVE_LOOKED: &str = r#"
 for _ in $(seq 200); do
-    looked="$(grep -A1 '"issue",' "$FAKE_GH_RECORD" | grep -c '"list",' || true)"
+    looked="$(grep -Fc 'repos/acme/widgets/issues?state=open&labels=base-fix&' "$FAKE_GH_RECORD" || true)"
     [ "$looked" -ge 2 ] && break
     sleep 0.05
 done

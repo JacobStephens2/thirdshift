@@ -343,8 +343,9 @@ impl GitHub {
     }
 
     /// Every open issue labelled `label` in the repository `repo`, an
-    /// `owner/repo`, newest first. They come from GitHub's issue list, not its
-    /// search, whose index can be a while behind an issue just opened.
+    /// `owner/repo`, newest first. Read every page of the repository REST
+    /// issues endpoint: `gh issue list --label` uses search, whose index can
+    /// be a while behind an issue just opened. Pull requests are excluded.
     pub fn open_issues_labelled(&self, repo: &str, label: Label) -> Result<Vec<ListedIssue>> {
         self.issues_labelled(repo, label, "open")
     }
@@ -358,37 +359,26 @@ impl GitHub {
     /// Every issue labelled `label` in the repository `repo` whose state is
     /// `state`, `open` or `closed`, newest first.
     fn issues_labelled(&self, repo: &str, label: Label, state: &str) -> Result<Vec<ListedIssue>> {
-        let json = self.gh_json(&[
-            "issue",
-            "list",
-            "--state",
-            state,
-            "--repo",
-            repo,
-            "--label",
-            label.name(),
-            "--json",
-            "url,title,labels",
-            "--limit",
-            "1000",
-        ])?;
-        json.as_array()
-            .context(CommandFailure::InvalidResponse(
-                "gh issue list did not return a list".into(),
-            ))?
+        let labels = serde_urlencoded::to_string([("labels", label.name())])?;
+        let issues = self.gh_api_items(
+            &format!(
+                "repos/{repo}/issues?state={state}&{labels}&sort=created&direction=desc&per_page=100"
+            ),
+            "",
+        )?;
+        issues
             .iter()
+            .filter(|listed| listed.get("pull_request").is_none())
             .map(|listed| {
                 let field = |name: &str| {
                     listed[name].as_str().with_context(|| {
-                        CommandFailure::InvalidResponse(format!(
-                            "gh issue list output has no {name}"
-                        ))
+                        CommandFailure::InvalidResponse(format!("gh api output has no {name}"))
                     })
                 };
                 Ok(ListedIssue {
-                    issue: IssueUrl::parse(field("url")?).context(
+                    issue: IssueUrl::parse(field("html_url")?).context(
                         CommandFailure::InvalidResponse(
-                            "gh issue list output has an invalid issue URL".into(),
+                            "gh api output has an invalid issue URL".into(),
                         ),
                     )?,
                     title: field("title")?.to_string(),

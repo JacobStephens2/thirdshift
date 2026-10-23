@@ -3880,7 +3880,10 @@ fn pre_audit_github_failures_report_a_safe_cause_without_claiming_an_audit_ran()
             "GitHub dependency failure",
         ),
     ] {
-        for call in ["issue list", "api --paginate"] {
+        for call in [
+            "api --paginate --jq .[] repos/acme/widgets/issues?state=open&labels=ready-for-agent&sort=created&direction=desc&per_page=100",
+            "api --paginate --jq .[] repos/acme/widgets/security-advisories?per_page=100",
+        ] {
             let scenario = Scenario::new();
             scenario.user_config_is(&format!(
                 "[harness.codex]\nmodel = \"gpt-6.1-sol\"\neffort = \"high\"\n[logs]\ndir = {:?}\n",
@@ -4010,13 +4013,13 @@ fn assert_pre_audit_response_dependency_cause(response: &str, diagnostic: &str) 
 fn malformed_pre_audit_github_response_has_dependency_cause() {
     assert_pre_audit_response_dependency_cause(
         "PRIVATE-INVALID-JSON",
-        "gh issue list returned invalid JSON",
+        "gh api repos/acme/widgets/issues?state=open&labels=ready-for-agent&sort=created&direction=desc&per_page=100 returned invalid JSON",
     );
 }
 
 #[test]
 fn invalid_schema_pre_audit_github_response_has_dependency_cause() {
-    assert_pre_audit_response_dependency_cause("{}", "gh issue list did not return a list");
+    assert_pre_audit_response_dependency_cause("{}", "gh api output has no html_url");
 }
 
 #[test]
