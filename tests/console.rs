@@ -27,6 +27,9 @@ mod waterfall;
 #[path = "console/spans.rs"]
 mod spans;
 
+#[path = "console/metrics.rs"]
+mod metrics;
+
 #[cfg(unix)]
 #[path = "console/cronjobs.rs"]
 mod cronjobs;
