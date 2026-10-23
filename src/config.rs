@@ -897,8 +897,8 @@ quiet_skips = false   # a skipped Pass prints nothing, leaving only its Activity
 parallel = 3   # how many Tickets a Spec run runs at once; default 3
 
 [resources]
-min_available_memory_mb = 0   # delay new sessions below this available RAM in MB; 0 disables
-max_load_per_cpu_percent = 0  # delay new sessions above this one-minute load per logical CPU (%); 0 disables
+min_available_memory_mb = 0   # delay new sessions below this available RAM in MB; 0 disables; default 0
+max_load_per_cpu_percent = 0  # delay new sessions above this one-minute load per logical CPU (%); 0 disables; default 0
 
 [pickup]
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
@@ -1104,6 +1104,8 @@ mod tests {
                 "console.hidden_sections",
                 "activity.quiet_skips",
                 "spec.parallel",
+                "resources.min_available_memory_mb",
+                "resources.max_load_per_cpu_percent",
                 "pickup.limit",
                 "pickup.wait_minutes",
                 "harness.default",
