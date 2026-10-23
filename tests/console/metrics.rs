@@ -10,10 +10,12 @@ fn peek_shows_retained_run_metrics_and_marks_missing_signals() {
         "outcome": "merged", "repairs": 0, "ci_rounds": 2,
         "unaddressed_findings": {"standards": 1, "spec": 0, "security": null},
         "total_minutes": 12.5,
+        "session_signals": null,
         "stages": [{
             "name": "implement", "seconds": 750.0, "minutes": 12.5,
             "usual_range": null, "position": "too_few_runs",
-            "review_findings": {"standards": 3, "spec": null}
+            "review_findings": {"standards": 3, "spec": null},
+            "session_signals": null
         }]
     });
     write_record(home.path(), 7, &value);
