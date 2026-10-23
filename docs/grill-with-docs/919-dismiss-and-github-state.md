@@ -1,7 +1,7 @@
 # Grilling: #919, dismissing Inbox items, and reading GitHub's state
 
 Issue: https://github.com/JacobStephens2/thirdshift/issues/919
-Research: #1083 (Ready for review never empties), #711's Q37 in [711-live-runs.md](711-live-runs.md), [ADR-0016](../adr/0016-the-console-is-a-long-running-reader.md) and its #698 Q6.9 amendment, [focus-theme-attention.md](../research/focus-theme-attention.md), #739 (GitHub quota), #1142 (one Console for every machine)
+Research: #1083 (Ready for review never empties; in review as PR #1180), #711's Q37 in [711-live-runs.md](711-live-runs.md), [ADR-0016](../adr/0016-the-console-is-a-long-running-reader.md) and its #698 Q6.9 amendment, [ADR-0023](../adr/0023-the-inbox-reads-github-to-learn-the-day-shift-acted.md) (written from Round 2), [focus-theme-attention.md](../research/focus-theme-attention.md), #739 (GitHub quota), #1142 (one Console for every machine), [triage-labels.md](../agents/triage-labels.md) (publishing a Spec)
 
 ## Round 1 (answered)
 
@@ -59,7 +59,7 @@ The billing failures and the other failed Security run are what dismissal is for
 
 *Checked:* A Ready for review row can be a dispatched Run, which has no record of its own: it lives inside its Pickup run's or Architect run's record, and the Inbox gives it that record's path (`src/logs/reading.rs:263-276`). So a dismissal kept beside a record has to say which of the record's rows it covers.
 
-## Round 2 (open)
+## Round 2 (answered)
 
 **Q2.1 - What brings a dismissed row back.** Q1.2 lets you dismiss any row in Needs you or Ready for review, live ones included, and a live Command can go on to do something new. A failed Security run also hides its waiting findings behind its failure (see Research results). The options:
 - (a) **A kind of row it wasn't when dismissed.** A Run dismissed as Slow comes back if it goes Silent, and any dismissed live Command comes back if it then dies, fails or ends ready for review. A failed Security run whose findings still wait comes back as a Finding. Each kind counts once: a Run dismissed while Silent stays dismissed through later silences, though it comes back if it turns Slow.
@@ -69,7 +69,7 @@ The billing failures and the other failed Security run are what dismissal is for
 
 *Recommended:* (a). You judged what you saw, and something new needs a new look. A Run that dies after you dismissed it as Slow is the row Needs you most needs to show, and (b) would hide it. (c) would bring a long Spec run back at every stage that runs past its Usual range. (d) brings rows back on a clock, whatever the Run did. A second silence isn't hidden under (a) either: the Run's row in Working says "silent 12 min".
 
-*Answer:* 
+*Answer:* agree 
 
 **Q2.2 - A row that stands for many Commands.** The Inbox folds Failed rows with the same cause into one. On `stephens`, one row stands for 48 chart35 Architect runs and another for 7. On `thirdshift`, #972's stands for 10. The options:
 - (a) **Dismissing the row dismisses every Command it stands for.** A later Command that fails the same way starts the row again.
@@ -78,7 +78,7 @@ The billing failures and the other failed Security run are what dismissal is for
 
 *Recommended:* (a). The row is what you see and judge, so it's what you dismiss. (b) would take 48 dismissals to clear one row. (c) is a mute: a billing failure that comes back after you dismissed it is news that the factory is still failing for that reason, and worth hearing until it's fixed.
 
-*Answer:* 
+*Answer:* agree
 
 **Q2.3 - Which GitHub facts move a row.** Q1.3 settled two: a ready Command leaves Ready for review once its pull request is merged or closed, and an ended problem leaves Needs you once its issue is closed. Three cases sit outside those words:
 - An Architect run or Security run records no issue of its own. The Run it dispatched does: its plan, or its fix.
@@ -91,7 +91,9 @@ The options:
 
 *Recommended:* (a). A merged pull request is finished work whether or not its issue closed with it. The dispatched Run is the only way GitHub can tell anything about most Architect and Security rows: on `stephens` it shows two of them finished, and four plans or fixes still open and claimed (see Research results). A pull request closed unmerged leaves a failed Run's issue claimed, so that row should stay until you relabel or close the issue. Once `needs-triage` is off, a Triage row's question is answered. Rows with no record are at least six days old and age out within days, so reading GitHub for them would buy little. Findings are Q2.8.
 
-*Answer:* 
+*Answer:* agree
+
+*Checked:* An Architect run or Security run dispatches at most one Run. Each dispatch adds one to its record (`src/logs/recording.rs:348-362`), and no Command on either machine has two. So "the Run it dispatched" is always one Run.
 
 **Q2.4 - Who reads GitHub, and how often.** Q1.3 settled that GitHub is read on its own schedule and kept, never on the Console's one-second render. Both machines' Consoles run as systemd services that can find `gh`, though nothing in the Console calls it today. Pickup runs, whose Sweep already reads GitHub, start every 2 minutes on `thirdshift` and every 10 on each of `stephens`'s 18 repositories, but none sweeps while a Run holds its repository. The options:
 - (a) **The Console, once a minute.** A background task looks up every row's issue and pull request in one batched query and keeps the answer in a file on the machine. `thirdshift status` reads the same file, and asks GitHub itself first when no Console has refreshed it in the last few minutes, so the two always show the same groups. About 60 GraphQL points an hour per machine.
@@ -101,7 +103,9 @@ The options:
 
 *Recommended:* (a). The issue's complaint is a pull request you merged by hand still sitting in Ready for review. Under (b) that's likeliest while the factory is busy on the same repository, which is exactly when its Pickup runs skip. (c) makes `status` wait on GitHub whenever it runs more than a minute after the last read. (d) is the most live, but needs setting up on 19 repositories, opens a new door into the Console, and still needs (a)'s poll. (a) changes what ADR 0016 says the Console reads; see Q2.9.
 
-*Answer:* 
+*Answer:* agree
+
+*Checked:* `gh` on `thirdshift`, on `stephens` and on this laptop is signed in as the same account, JacobStephens2. So the factory on both machines and both Consoles share one GraphQL quota and one REST quota, and the two Consoles together would spend about 120 GraphQL points an hour. At 21:00 UTC on 2026-10-23, 3,883 of the hour's 5,000 GraphQL points and 4,694 of its 5,000 REST requests were left. How the Consoles give way to the factory is Q3.2.
 
 **Q2.5 - Whether age still moves a row GitHub says is waiting.** Today an ended problem leaves Needs you after `inbox.days`, 7 by default, and #1083 gives Ready for review the same limit. Age stands in for knowing whether the Day shift has acted. With GitHub read, it can become the fallback. The options:
 - (a) **No, in either group.** A row whose issue or pull request GitHub shows still open stays until GitHub shows it finished, a later Command starts on its issue, or you dismiss it. Age moves only the rows GitHub can't speak for: those with no issue or pull request at all, such as an Architect run whose review failed before it planned anything; rows with no record; and any row GitHub hasn't been read for.
@@ -110,7 +114,9 @@ The options:
 
 *Recommended:* (a). An open pull request, or a failure whose issue is still open and claimed, still waits on you however old it is, and an Inbox that hides it after a week can't be trusted to be complete. It would have kept no extra row so far: the 13 failures that aged out of Needs you with an issue recorded all have that issue closed now. clave's and bountywell's open, claimed plans are the kind it would keep. Dismissal handles the ones you mean to leave. This narrows #1083's age limit, as Q1.1 allowed.
 
-*Answer:* 
+*Answer:* agree, so this inbox then starts to function more like a mailbox inbox
+
+*Checked:* Yes. Needs you and Ready for review now keep a row until someone deals with it, as mail stays in an inbox until it's answered or archived: GitHub shows it finished, a later Command takes up its issue, or you dismiss it. Age clears only what GitHub can't speak for. The glossary's Inbox and Needs you entries now say so. Three questions follow, in Round 3: how long GitHub has to be read for a row (Q3.3), where a row goes once it leaves after waiting past `inbox.days` (Q3.4), and whether you'll want to dismiss many rows at once (Q3.9).
 
 **Q2.6 - The command, and taking a dismissal back.** ADR 0016 wants a CLI command with `--json` for every Console action. `stop` and `show` name a Command as `repo#number`, an Issue URL, a Pass's `kind-stamp`, or a record's path. The options:
 - (a) **`thirdshift dismiss <command> [--json]`, with `--undo` to take it back.** It names Commands as `stop` does, and dismisses the whole row its Command is in (Q2.2). It asks for no reason. It refuses, saying why, a row outside Needs you and Ready for review, and one with no record. The Console offers both, and the Activity log records both.
@@ -118,16 +124,18 @@ The options:
 
 *Recommended:* (a). A misclick in the Console shouldn't hide a problem for good, and taking a dismissal back is cheap: the dismissal beside the record goes, and the Activity log says who took it back.
 
-*Answer:* 
+*Answer:* agree
 
 **Q2.7 - Where a row goes once it leaves.** Whether you dismissed it or GitHub moved it. The options:
-- (a) **Where it would be without the problem, saying why it left.** A live Command goes to Working or Landing. An ended one goes to Done if it ended in the last day, then Resolved, then History, by the usual rules. Its row says "dismissed by <who>", or what GitHub showed, such as "pull request merged".
+- (a) **Where it would be without the problem, saying why it left.** A live Command goes to Working or Landing. An ended one goes to Done if it ended in the last day, then Resolved, then History, by the usual rules. Its row says `"dismissed by <who>"`, or what GitHub showed, such as "pull request merged".
 - (b) **A new group, Dismissed,** after Resolved.
 - (c) **Straight to History.**
 
 *Recommended:* (a). The groups already sort by how recent, and Resolved already means "older, with nothing waiting", which is what a dismissal says. The reason on the row keeps a dismissed failure in Done from reading as a success. (b) adds an eighth group. (c) hides what you did a minute ago.
 
-*Answer:* 
+*Answer:* agree
+
+*Checked:* The usual rules go by when the Command ended. Done holds the last day, Resolved runs until `inbox.days`, and anything older is only on the History page, which the Inbox leaves out (`src/logs/reading/inbox.rs:209-224`, `src/logs/status/inbox.rs:202`). Under Q2.5 a row can wait longer than `inbox.days`, so dealing with it would send it straight to the History page. That's Q3.4.
 
 **Q2.8 - Findings and GitHub.** A Finding row has no issue or pull request of its own. The glossary says a finding stops waiting once the Day shift triages it on GitHub, but the Inbox never looks, so a triaged finding stays in Needs you until it ages out or is dismissed. The check a Security run makes before it starts, whether any finding still waits, could tell from one list of the repository's findings (`src/github/advisories.rs:500-515`). The options:
 - (a) **A Finding leaves once none of its findings still waits,** by the Security run's own check, on the same schedule as the rest: one list per repository with a Finding row, from the REST quota rather than GraphQL.
@@ -135,7 +143,7 @@ The options:
 
 *Recommended:* (a). It makes the Inbox agree with the glossary, and a Finding has nothing else GitHub can tell it by. It reads only what the Security run already reads, and the row shows what it shows today.
 
-*Answer:* 
+*Answer:* agree
 
 **Q2.9 - Writing down the reversal.** Reading GitHub reverses #711's Q37 and changes what ADR 0016 says the Console reads. It would be hard to undo once the Inbox depends on it, a reader of ADR 0016 wouldn't expect it, and it was a real trade-off, so it meets the bar for an ADR. The options:
 - (a) **A new ADR, 0022,** written once Q2.4 is answered, with a line in ADR 0016 pointing to it.
@@ -143,6 +151,115 @@ The options:
 - (c) **No ADR.** This file and the Spec are enough.
 
 *Recommended:* (a). It decides where the Inbox's facts come from, with costs of its own (quota, staleness, what happens when GitHub can't be reached), not how the Console runs. Its own ADR has room for the options weighed here, where ADR 0016's amendments are one-line permissions.
+
+*Answer:* agree
+
+*Checked:* ADR 0022 has since been taken on `main`, by #1101's Ticket runs and plain schedules, so this one is [ADR 0023](../adr/0023-the-inbox-reads-github-to-learn-the-day-shift-acted.md), "The Inbox reads GitHub to learn the Day shift has acted". It's written, and ADR 0016 now points to it. Round 3's answers on failures, the quota and how long GitHub is read for a row (Q3.1 to Q3.3) will go in its Consequences.
+
+## Round 3 (open)
+
+**Q3.1 - When GitHub can't be read.** Q2.4 has the Console read GitHub once a minute, and Q2.5 lets a row wait in Needs you or Ready for review for as long as GitHub shows its work open. A read can fail: the network is down, `gh` is signed out, the quota is spent (#739), or a repository has been renamed, deleted or hidden from the account. Nothing warns about GitHub today. The Inbox has one warning line, shown by `status` and the Console, which today only says when one setting contradicts another (see Research results). The options:
+- (a) **Keep the last answer, and say how old it is.** A row keeps the group its last-read facts give it, however old they are. A row GitHub hasn't been read for yet goes by age, as Q2.5 says, and so does one whose issue or pull request GitHub says doesn't exist or can't be seen. Once the last good read is more than 5 minutes old, the warning line says when GitHub last answered and why the latest read failed. `status` asks GitHub itself only when the kept answer is more than 5 minutes old, and if that fails too, it shows the kept answer with the same warning.
+- (b) **(a), until a day has passed without a good read.** After that, every row goes by age, as if GitHub had never been read.
+- (c) **Forget the answer when a read fails,** so every row goes by age until GitHub answers again.
+
+*Recommended:* (a). The last answer stays right for nearly every row, since a merged pull request stays merged, and the warning says when it might not be. Under (b) or (c), an outage would put every row GitHub had finished back by age: a week of finished failures would reappear in Needs you at once, then leave again when GitHub came back. Five minutes is five missed reads, long enough to ride out a blip and short enough to notice.
+
+*Answer:* 
+
+**Q3.2 - Leaving the quota to the factory.** Every reader here signs in as JacobStephens2, so the factory on both machines and both Consoles share one GraphQL quota of 5,000 points an hour and one REST quota of 5,000 requests (Q2.4's check). The Consoles would spend about 120 points an hour between them, plus a REST list a minute for each repository with findings to check. The factory ran the GraphQL quota out by itself on 2026-10-17 (#739). Each read can ask how much is left at no extra cost. The options:
+- (a) **The Console steps aside when the quota runs low.** If its last read showed fewer than 500 GraphQL points or 500 REST requests left, a tenth of each, it skips its reads until the quota resets, and the warning line says so. `status` does the same.
+- (b) **Always read.** 120 points an hour is under 3% of the quota.
+- (c) **Read less often as the quota falls,** such as every 5 minutes once less than half is left.
+
+*Recommended:* (a). The factory's reads do work, and the Inbox's only tidy it, so when there isn't enough for both, the factory should have it. Below a tenth, the factory is close to failing anyway (#739), and an Inbox a few minutes behind is the cheaper loss. (b) could take a Run's last points. (c) is a second rule to tune for little gain.
+
+*Answer:* 
+
+**Q3.3 - How long GitHub is read for a row.** Q2.3 lets GitHub's latest state count, so a reopened issue brings back a row GitHub had moved out. That means reading GitHub for rows it has already moved, and since Q2.5, no age limit ends a row GitHub can speak for, so nothing would stop a row being read for good. Each read would then grow with the machine's history, by thousands of rows within months. The options:
+- (a) **Until the row reaches the History page.** GitHub is read for every row in Needs you and Ready for review, and for every row that has left them, while it's in Done or Resolved. On the History page a row keeps what GitHub last showed, and reopening its issue no longer brings it back.
+- (b) **Only while the row is in Needs you or Ready for review.** Once GitHub moves a row out, it stays out. This takes back the part of Q2.3 about reopened issues.
+- (c) **Every row with a record, for good.**
+
+*Recommended:* (a). An issue is usually reopened soon after it's closed, while its row is still in Done or Resolved; Q3.4 decides how long that is. After that, a reopened issue that needs the factory gets `ready-for-agent`, and the new Command takes over from the old row. (b) loses what Q2.3 settled, and (c) makes every read bigger every day.
+
+*Answer:* 
+
+**Q3.4 - Where a row goes when it leaves late.** Q2.7 sends a row that leaves to Done, Resolved or History by the usual rules, and those go by when its Command ended: Done for a day, Resolved until `inbox.days`, then only the History page, which the Inbox leaves out (Q2.7's check). Q2.5 lets a row wait past `inbox.days`. When you then dismiss it, or merge its pull request, it goes straight to the History page, and in the Console its Undo goes with it. The options:
+- (a) **Resolved counts from when the row stopped waiting.** Done still holds the Commands that ended in the last day. Resolved holds older ones until `inbox.days` after they stopped waiting: when they ended, for most, or when they left Needs you or Ready for review. A pull request merged today on a Run that ended ten days ago shows in Resolved for a week, saying "pull request merged".
+- (b) **By when the Command ended, as today.** It goes straight to the History page.
+- (c) **A day in Done from when it left,** then the usual rules.
+
+*Recommended:* (a). Resolved already means "older, with nothing waiting", so its clock should start when the waiting ended. It keeps what you just did in view, with its Undo, and changes nothing for a row that never waited. (b) hides a row the moment you deal with it, which is why Q2.7 turned down sending rows straight to History. (c) mixes old work into Done, beside the last day's, then drops it out of the Inbox a day later.
+
+*Answer:* 
+
+**Q3.5 - Live rows and GitHub.** Q1.3 and Q2.3 move a row once GitHub shows its work finished. A Silent or Slow row is live: its Run is still going. If you merge a live Run's pull request by hand, as happened with #88, or close its issue, the Run carries on until Delivery finds the pull request merged (`src/delivery.rs:174-184`), or until someone stops it. The options:
+- (a) **GitHub moves only ended rows.** A Silent or Slow row stays until its Run logs again, its stage ends, its Command ends, or someone stops or dismisses it, whatever GitHub shows. Once it ends, GitHub's facts apply as for any ended row.
+- (b) **GitHub moves live rows too.** A Slow Run whose pull request you merged leaves Needs you while it runs.
+
+*Recommended:* (a). A Run still going on a closed issue or a merged pull request is spending time on finished work, so its silence or slowness is worth seeing while Stop is a click away. Once it ends, GitHub's facts take its row out if the work is done.
+
+*Answer:* 
+
+**Q3.6 - Where the Console offers Dismiss.** #917 will decide the Inbox's layout, but it's parked, and the Spec needs Dismiss somewhere now. Stop is in a row's Command details: its button opens a page that asks you to confirm, with `thirdshift stop …` beside it (`src/console/peek.html:3`, `src/console/stop.html`). The options:
+- (a) **In Command details, beside Stop, with no confirming page.** One click dismisses the row, with `thirdshift dismiss …` beside the button. Once it's dismissed, the same place offers Undo, with `thirdshift dismiss --undo …`. #917 can move both onto the row later.
+- (b) **The same, with a confirming page,** as Stop has.
+- (c) **A button on every row** in Needs you and Ready for review, without opening Command details.
+
+*Recommended:* (a). Stop asks first because it can't be undone, and a dismissal can. (c) changes the rows themselves, which is #917's work.
+
+*Answer:* 
+
+**Q3.7 - Settings.** In #711 you wanted `inbox.days` in the User config. Reading GitHub brings three numbers of its own: the minute between reads (Q2.4), the 5 minutes before a warning (Q3.1), and the reserve left to the factory (Q3.2). The options:
+- (a) **No new settings.** The numbers are fixed, and every machine reads GitHub.
+- (b) **One setting to turn reading GitHub off,** on by default. With it off, the Inbox works as before #919, by age and dismissal.
+- (c) **(b), plus a setting for each number.**
+
+*Recommended:* (a). Every machine already needs `gh` signed in to run the factory, so there's no machine where reading can't work, and Q3.2 guards the quota. A switch can come later if a machine needs one. (b) and (c) add modes for `status`, the Console and their tests to cover.
+
+*Answer:* 
+
+**Q3.8 - What a waiting row shows of GitHub.** The issue asks whether to get live GitHub status updates. So far GitHub's state only moves rows (Q1.3), and a row that leaves says why (Q2.7). A row still waiting shows what it shows today. The options:
+- (a) **Nothing more.** The Inbox as a whole says when GitHub was last read, once that's more than 5 minutes ago (Q3.1).
+- (b) **Each waiting row also shows its issue's and pull request's state,** such as "pull request open, changes requested" or "pull request closed, issue still claimed", from the same query.
+- (c) **(b), plus its checks,** passing or failing.
+
+*Recommended:* (a). A waiting row is one GitHub shows open, so most rows would say the same thing, and its issue and pull request are a click away. (b) and (c) are a view of GitHub in the Inbox, a feature of its own, which could be a new issue if you want one.
+
+*Answer:* 
+
+**Q3.9 - Dismissing several rows at once.** With the Inbox working like a mail inbox (Q2.5), a row GitHub can speak for stays until it's dealt with. Mail apps let you archive many messages at once. `stop` takes one Command, and Q2.2 already lets one dismissal clear a row that stands for 48. The options:
+- (a) **One row at a time,** in the Console and the CLI, as with Stop.
+- (b) **`thirdshift dismiss` takes several Commands,** and the Console lets you tick rows and dismiss them together.
+- (c) **(b), plus Dismiss all for a group.**
+
+*Recommended:* (a). Few rows will be left for a dismissal. On the two machines today, the rows GitHub can't settle are the billing failures of chart35's and horarium's Architect runs and one row with no record, all of which still leave by age. Every other row that GitHub doesn't take out waits on work that's still open, and each is worth a look. Dismiss all would hide new problems along with old ones. (b) can come later if the Inbox shows a need.
+
+*Answer:* 
+
+**Q3.10 - The issue's "(title unavailable)".** The issue's example row said "(title unavailable)". Every row with a record that says so, 30 on `thirdshift` and 10 on `stephens` today, is a Pickup run whose own record has its issue's number but not its title, while the Run it dispatched recorded the title. The Inbox reads the Pickup run's (`src/logs/status/inbox.rs:274-284`). The other 45 are rows with no record, whose Activity log line never had a title. The options:
+- (a) **A standalone Ticket, labelled `ready-for-agent`:** a Pickup run's row shows the title its dispatched Run recorded. It's filed alongside #919's Spec but outside it, so a Pickup run can take it at once.
+- (b) **A Ticket inside #919's Spec.**
+- (c) **Fill in missing titles from GitHub's read,** in the same query.
+
+*Recommended:* (a). The title is already on the machine, so the fix needs nothing from GitHub, and it's a bug of its own that needn't wait for the Spec. (c) would leave titles missing whenever GitHub can't be read.
+
+*Answer:* 
+
+**Q3.11 - Publishing #919.** Once this round is answered, the design is settled, and `docs/agents/triage-labels.md` says to decide first whether Tickets will follow. #711 and #981 were each grilled, then retitled "Spec: …", with their Tickets as sub-issues labelled `ready-for-agent`. A Spec labelled `ready-for-agent` is taken by a Pickup run and built by one Spec run into one pull request (ADR 0006). #981 is `ready-for-human`, so it waits for you to start it. #919 is `ready-for-human` now. The options:
+- (a) **#919 becomes the Spec, with Tickets, and the factory builds it.** Retitle it "Spec: …", rewrite its body from this file, and publish its Tickets as sub-issues with their blocking links, keeping it `needs-triage` until all are in place, then labelling it `ready-for-agent`. Roughly, the Tickets are:
+  1. `thirdshift dismiss` and `--undo`, kept beside the record, with their Activity log lines and the Inbox rules of Q2.1, Q2.2 and Q2.7;
+  2. the Console's Dismiss and Undo (Q3.6), after Ticket 1;
+  3. the Console reading GitHub, with `status` sharing its answer (Q3.1, Q3.2, Q3.7);
+  4. GitHub moving rows (Q2.3, Q2.5, Q3.3 to Q3.5), after Ticket 3 and #1083;
+  5. Findings leaving once triaged (Q2.8), after Ticket 3.
+
+  Each corrects the site pages it changes.
+- (b) **The same, but #919 ends `ready-for-human`,** as #981 is, and you start its Spec run when you choose.
+- (c) **A new Spec issue,** with #919 closed in its favour.
+
+*Recommended:* (a). Each Ticket is one session, and none needs you once the design is settled. (b) suits a Spec you want to pace yourself. (c) splits #919's history from the work. You approve the Tickets' exact text before they're published.
 
 *Answer:* 
 
@@ -154,16 +271,25 @@ The options:
 - **Each Console dismisses only its own machine's Commands,** since each machine serves its own Console. One Console for every machine is #1142.
 - **`thirdshift status`, `status --json` and the Console Inbox keep agreeing on every row's group,** as #711's Q39 and #1083 require. Anything that moves a row, whether a dismissal or a fact from GitHub, moves it in all three.
 - **A row that leaves Needs you also leaves the tab title's count, the urgent icon and browser notifications,** since all three count the rendered Needs you rows. A move GitHub causes reaches open pages like any other change, through the one-second observer.
-- **#1083 lands first, as its own issue** (Q1.1). It stays `ready-for-agent` and unchanged. #919 builds on its two ways out of Ready for review, and Q2.5 decides whether GitHub narrows its age limit.
+- **#1083 lands first, as its own issue** (Q1.1), and is in review as PR #1180. #919 builds on its two ways out of Ready for review, then narrows its age limit (Q2.5): a ready Command whose pull request GitHub shows open stays in Ready for review however old it is. #1180 also writes into the glossary that the Inbox reads only the machine, and #919's Spec takes that back.
 - **Dismissal is the only new action** (Q1.2). There is no Acknowledge: nothing stays in Needs you but stops counting.
 - **Every row in Needs you or Ready for review can be dismissed, live ones included** (Q1.2). Rows in Landing, Working, Done, Resolved and History can't. A Landing row's "see Needs you" line points to the row to dismiss.
 - **A dismissal changes only the Inbox.** It never stops, starts or changes a Command, its Runs, its issue, its labels, its Claim or its pull request, and it never writes to GitHub (Q1.4). A dismissed Silent Run keeps running, and Stop still ends it.
 - **A dismissal is kept beside its Command's record** (Q1.4), saying who, when, from the CLI or the Console, and which of the record's rows it covers, since a dispatched Run shares its Pickup run's record.
 - **A row with no record can't be dismissed** (Q1.4). These are Commands from before records began on 2026-10-19, rebuilt from the Activity log. Round 1 called them History rows, but they're not the History group, so from Round 2 this file calls them rows with no record. They leave by age: those in Needs you within a day, those in Ready for review once #1083 lands.
-- **GitHub is read in batches, on its own schedule, and kept,** never at the Console's one-second render (Q1.3). Q2.4 decides who reads it. What the Inbox does when GitHub can't be read, and how it gives way to the factory's quota (#739), wait on that answer.
+- **Each machine's Console reads GitHub once a minute** (Q2.4), never at its one-second render (Q1.3). One batched GraphQL query covers every row's issue and pull request, including those of an Architect run's or Security run's dispatched Run (Q2.3), and one REST list per repository covers each Security run whose findings were waiting (Q2.8). The answer goes in one file on the machine, as Q2.4 says. It's a copy of GitHub, not something a Command did, so it doesn't sit among a Command's files, and losing it costs one read. `thirdshift status` reads the same file. Failures, the quota (#739) and how long a row is read for are Q3.1 to Q3.3.
 - **The issue's own kind of row leaves by itself.** All 13 rows that failed with "PR … is merged, not open" have closed issues (Q1.3's first check). Whether such a Run should count as failed at all is outside #919.
-- **The glossary is rewritten.** It now has **Dismissal**, and its Console, Inbox, Needs you and Activity log entries mention it. The Needs you entry no longer says "Nothing else clears it". "Alerts", the issue's word, is one the glossary avoids for Needs you, so this file says "items" or "rows".
-- **#917 decides where the button sits.** Its parked layout work (one-line rows and the peek) owns how the Inbox looks. This grill decides what the action does.
+- **The glossary is rewritten.** It now has **Dismissal**, which says what brings a dismissed row back and that a dismissal can be taken back, and its Console, Inbox, Needs you and Activity log entries mention it. The Needs you and Inbox entries now say how GitHub settles a row, and that age clears only rows GitHub can't speak for. "Alerts", the issue's word, is one the glossary avoids for Needs you, so this file says "items" or "rows".
+- **#917 decides how the Inbox looks.** Its parked layout work (one-line rows and the peek) owns the rows, and Q3.6 places Dismiss until then. This grill decides what the action does.
+- **Needs you and Ready for review work like a mail inbox** (Q2.5). A row stays until GitHub shows it finished, a later Command starts on its issue, or someone dismisses it. Age clears only rows GitHub can't speak for: those with no issue or pull request, theirs or their dispatched Run's; rows with no record; and rows GitHub hasn't been read for yet. `inbox.days` keeps its name and its default of 7, and still sets how long Resolved lasts.
+- **A dismissal holds until its row turns into a kind it wasn't, or someone takes it back** (Q2.1, Q2.6). Nothing GitHub does ends it: a reopened issue brings back a row GitHub moved out, not one you dismissed. Each kind counts once for the whole row, so a Spec run dismissed while one Ticket's Run was Silent stays dismissed if another Ticket's Run goes Silent. That Run's row in Working says so.
+- **A collapsed row that comes back counts only the failures since** (Q2.2). Dismissing the row dismisses the 48 Commands it stands for, and a 49th failure with the same cause starts a row of one.
+- **A row GitHub moves follows GitHub's latest state, and nothing is written.** Nothing goes beside the record, and the Activity log gets no line: it records what people and the factory did, and GitHub's state is read, not decided.
+- **`thirdshift dismiss --undo` works wherever the dismissed row now is,** and refuses a row that isn't dismissed (Q2.6). Taken back, the row goes where GitHub's facts and the other rules put it, so a row whose pull request has merged since stays out of Ready for review.
+- **A failed Security run's findings outlast its dismissal** (Q2.1, Q2.8). Dismiss the failure, and the row comes back as a Finding while any of its findings still waits. Once they're all triaged, it doesn't come back.
+- **A row that comes back to Needs you notifies like a new one.** A browser notifies whenever the count of Needs you rows rises, and keeps no list of rows it has seen, so a row brought back by a new kind, a reopened issue or your own Undo counts as new (see Research results).
+- **A row that leaves says why, wherever it goes** (Q2.7): "dismissed by" and who, or what GitHub showed, such as "pull request merged", "issue closed", "`needs-triage` taken off" or "findings triaged". `status`, `status --json`, the Console and the History page all show it. The exact words are the Spec's.
+- **Reading GitHub never writes to it** (ADR 0023). Taking `in-progress` off a closed issue stays the Sweep's job (`src/pickup.rs:259-292`).
 
 ## Research results (2026-10-23)
 
@@ -199,8 +325,18 @@ The options:
 - **The Console runs on one thread** (`src/console.rs:304-310`) and renders pages off it (`src/console.rs:482-488`). Its only background tasks are the one-second Inbox observer and the restart and account watcher (`src/console.rs:322-347`). Confirmed by source.
 - **How a Console action is paired with the CLI.** Every route sits in one table beside the commands it matches (`src/console.rs:93`). `every_console_route_has_a_cli_equivalent` (`src/console.rs:729-731`) fails if a route names none, or one that doesn't parse. Stop's page and its POST each pair four `thirdshift stop` forms. Confirmed by source.
 - **How a Command is named.** `stop` and `show` take `repo#number`, with just the repository's name when that's unambiguous on the machine, an Issue URL, a Pass's `kind-stamp` such as `architect-…`, or a record's absolute path (`src/logs/reading/selection.rs:21-55`). Confirmed by source.
-- **How Stop records who asked.** The Console checks the session and a CSRF token on every POST (`src/console/auth.rs:82-146`) and writes the account's email into `<record>.stop.json`. The Activity log then gets "<subject> stopped from the Console by <email>" (`src/logs/recording.rs:278-289`). From the CLI, the name is the Unix user's. The Console log has no Stop event. Confirmed by source.
+- **How Stop records who asked.** The Console checks the session and a CSRF token on every POST (`src/console/auth.rs:82-146`) and writes the account's email into `<record>.stop.json`. The Activity log then gets `<subject> stopped from the Console by <email>` (`src/logs/recording.rs:278-289`). From the CLI, the name is the Unix user's. The Console log has no Stop event. Confirmed by source.
 - **The Sweep reads one list per Pickup run:** closed issues still labelled `in-progress` (`src/pickup.rs:262-291`). Only a Pickup run not skipped for the lock makes one, so a Run holding a repository stops its Sweep. Confirmed by source and `GLOSSARY.md`.
+- **Every reader shares one GitHub account.** `gh` on `thirdshift`, on `stephens` and on this laptop is signed in as JacobStephens2, so the factory on both machines and both Consoles draw on one GraphQL quota and one REST quota. At 21:00 UTC on 2026-10-23, 3,883 of 5,000 GraphQL points and 4,694 of 5,000 REST requests were left in the hour. Confirmed by `gh api user` and `rateLimit` on each machine.
+- **An Architect run or Security run dispatches at most one Run.** Each dispatch adds one to its record (`src/logs/recording.rs:348-362`), and no Command on either machine has two. Confirmed by source and `status --json`.
+- **Done, Resolved and History go by when the Command ended.** Done is the last day, Resolved lasts until `inbox.days`, and older Commands are only on the History page: the Inbox asks for no History rows (`src/logs/reading/inbox.rs:209-224`, `src/logs/status/inbox.rs:202`). Confirmed by source.
+- **Notifications fire when the count rises.** A browser notifies when there are more Needs you rows than at its last look and no other tab has already notified (`src/console/assets/notifications.js:44-46`). It keeps no list of rows it has seen. Confirmed by source.
+- **The Inbox has one warning line,** shown by `status` and as "Warning: …" at the top of the Console's Inbox. Today it only says that the waiting-line setting contradicts the silent time (`src/logs/status/inbox.rs:14`, `:269`; `src/console/inbox.html:39`). Nothing warns about GitHub. Confirmed by source.
+- **Stop sits in a row's Command details,** a button that opens a page asking you to confirm, with the CLI form beside it (`src/console/peek.html:3`, `src/console/stop.html`). Confirmed by source.
+- **"(title unavailable)" comes from a Pickup run's own record.** All 40 rows with a record that show it, 30 on `thirdshift` and 10 on `stephens`, are Pickup runs whose record has the issue's number but not its title, while the Run each dispatched recorded the title (`src/logs/status/inbox.rs:274-284`). The other 45 are rows with no record. Confirmed by `status --json` on each machine.
+- **#1083 is in review** as PR #1180, "Age ready Commands out of Ready for review like ended Needs you rows". Its glossary change says a pull request merged or closed by hand stays in Ready for review until a later Command or age, "since the Inbox reads only the machine". Confirmed by `gh`.
+- **How grilled issues became Specs.** #711 and #981 were each retitled "Spec: …", and their Tickets are sub-issues labelled `ready-for-agent`. #981 itself is `ready-for-human`. A Ticket inside a Spec is never a Ready issue: its Spec run reaches it (`GLOSSARY.md`, Ready issue). `docs/agents/triage-labels.md` publishes a multi-session Spec as `needs-triage`, and labels it `ready-for-agent` once every Ticket and blocking link is in place. Confirmed by `gh` and docs.
+- **ADR 0022 is taken.** `main` has `0022-ticket-runs-and-plain-schedules.md` (#1101), and no branch has an 0023, so #919's ADR is 0023. Confirmed by `git ls-tree` on every branch.
 
 ## Waiting on research
 

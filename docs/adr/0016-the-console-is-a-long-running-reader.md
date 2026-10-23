@@ -5,7 +5,7 @@ ADR 0009 rejected a long-running `thirdshift watch`: it has to be kept alive, it
 - **It survives updates.** It re-executes itself when `thirdshift update` replaces the binary.
 - **A hang costs no work.** A Console that hangs loses no Run; the next request shows it's down.
 
-It reads what each Command writes about itself, its **Command record** and its logs, so it remembers nothing that a restart would lose, except sign-ins.
+It reads what each Command writes about itself, its **Command record** and its logs, so it remembers nothing that a restart would lose, except sign-ins. It also reads GitHub once a minute, to learn whether the **Day shift** has acted on a row in **Needs you** or Ready for review, and keeps the answer in a file: see [ADR 0023](0023-the-inbox-reads-github-to-learn-the-day-shift-acted.md) (amended 2026-10-23, #919 Q2.9).
 
 ## Considered Options
 
