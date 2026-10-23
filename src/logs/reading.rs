@@ -46,6 +46,19 @@ impl Snapshot {
         now: DateTime<Local>,
         silent: std::time::Duration,
     ) -> Result<Self> {
+        Self::load_records(root, now, silent, false)
+    }
+
+    pub(super) fn load_metrics(root: &Path, now: DateTime<Local>) -> Result<Self> {
+        Self::load_records(root, now, std::time::Duration::from_secs(600), true)
+    }
+
+    fn load_records(
+        root: &Path,
+        now: DateTime<Local>,
+        silent: std::time::Duration,
+        past_metrics: bool,
+    ) -> Result<Self> {
         let mut records = BTreeMap::new();
         let mut commands = Vec::new();
         let mut idle_passes = Vec::new();
@@ -54,7 +67,7 @@ impl Snapshot {
                 let mut covered = HashSet::new();
                 idle_passes.extend(read_idle_passes(&repo)?);
                 for folder in directories(&repo.join("commands"))? {
-                    for (path, tree) in read_records(&folder)? {
+                    for (path, tree) in read_records(&folder, past_metrics)? {
                         let record = &tree.command;
                         if record.parent_record.is_none() {
                             covered.insert(command_log(&path));
@@ -114,7 +127,10 @@ impl Snapshot {
 
 /// Reload only the captured Command's folder, after Stop cleanup has finished.
 pub(super) fn retained_work(path: &Path, now: DateTime<Local>) -> Result<RetainedWork> {
-    let mut records = read_records(path.parent().context("Command record has no directory")?)?;
+    let mut records = read_records(
+        path.parent().context("Command record has no directory")?,
+        false,
+    )?;
     anyhow::ensure!(records.contains_key(path), "Command record is unavailable");
     let command = tree(path, &mut records, &now);
     let mut work = RetainedWork::default();
@@ -212,12 +228,12 @@ impl Command {
 pub(super) fn repository_records(root: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
     let mut records = BTreeMap::new();
     for folder in directories(&root.join("commands"))? {
-        records.extend(read_records(&folder)?);
+        records.extend(read_records(&folder, false)?);
     }
     Ok(records)
 }
 
-fn read_records(folder: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
+fn read_records(folder: &Path, past_metrics: bool) -> Result<BTreeMap<PathBuf, CommandTree>> {
     let mut records = BTreeMap::new();
     for entry in entries(folder)? {
         let name = entry.file_name();
@@ -235,6 +251,15 @@ fn read_records(folder: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
         };
         let record = &mut tree.command;
         if !matches!(record.version, 1 | 2) {
+            continue;
+        }
+        if past_metrics {
+            for record in std::iter::once(&mut tree.command).chain(&mut tree.dispatched) {
+                if record.run_metrics.is_none() && record.outcome.is_some() {
+                    record.run_metrics = Some(super::run_metrics::RunMetrics::historical(record));
+                }
+            }
+            records.insert(path, tree);
             continue;
         }
         // Records written before completion times existed were last

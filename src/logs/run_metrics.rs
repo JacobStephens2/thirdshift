@@ -1,4 +1,4 @@
-//! Facts captured by a Run's own process at completion, never recomputed by readers.
+//! Completion facts, saved by their owner or reconstructed from older records.
 
 use std::collections::HashSet;
 
@@ -10,33 +10,33 @@ use super::usual_range::{UsualRange, UsualRanges};
 
 #[derive(Serialize, Deserialize)]
 pub(super) struct RunMetrics {
-    outcome: String,
-    repairs: usize,
-    ci_rounds: usize,
-    stages: Vec<StageMetrics>,
-    total_minutes: Option<f64>,
+    pub(super) outcome: String,
+    pub(super) repairs: usize,
+    pub(super) ci_rounds: usize,
+    pub(super) stages: Vec<StageMetrics>,
+    pub(super) total_minutes: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize)]
-struct StageMetrics {
-    name: String,
-    seconds: Option<f64>,
-    minutes: Option<f64>,
-    usual_range: Option<UsualRange>,
-    position: Position,
+pub(super) struct StageMetrics {
+    pub(super) name: String,
+    pub(super) seconds: Option<f64>,
+    pub(super) minutes: Option<f64>,
+    pub(super) usual_range: Option<UsualRange>,
+    pub(super) position: Position,
     // Only the first stage referencing a Session holds its review counts.
-    review_findings: Option<ReviewFindings>,
+    pub(super) review_findings: Option<ReviewFindings>,
 }
 
 #[derive(Serialize, Deserialize)]
-struct ReviewFindings {
-    standards: Option<u64>,
-    spec: Option<u64>,
+pub(super) struct ReviewFindings {
+    pub(super) standards: Option<u64>,
+    pub(super) spec: Option<u64>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum Position {
+pub(super) enum Position {
     Below,
     Within,
     Above,
@@ -48,6 +48,24 @@ impl RunMetrics {
         record: &CommandRecord,
         ranges: &UsualRanges,
         outside: &mut impl super::effects::Outside,
+    ) -> Self {
+        Self::calculate(record, ranges, |log| {
+            outside
+                .review_summary(log)
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        })
+    }
+
+    /// Old records have no saved review counts or Usual ranges. Do not infer
+    /// those from sidecars or today's history, or write anything back.
+    pub(super) fn historical(record: &CommandRecord) -> Self {
+        Self::calculate(record, &UsualRanges::default(), |_| None)
+    }
+
+    fn calculate(
+        record: &CommandRecord,
+        ranges: &UsualRanges,
+        mut review: impl FnMut(&std::path::Path) -> Option<ReviewFindings>,
     ) -> Self {
         let mut sessions = HashSet::new();
         let count = |name: StageName| {
@@ -86,8 +104,7 @@ impl RunMetrics {
                             .session_log
                             .as_deref()
                             .filter(|log| sessions.insert(log.to_path_buf()))
-                            .and_then(|log| outside.review_summary(log))
-                            .and_then(|bytes| serde_json::from_slice(&bytes).ok()),
+                            .and_then(&mut review),
                     }
                 })
                 .collect(),

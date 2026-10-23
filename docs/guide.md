@@ -228,6 +228,21 @@ Both JSON views add `health` to recorded Commands: `{"state":"ok"}`, `{"state":"
 
 At completion, each Run, Base fix and Spec run writes `run_metrics` into its own Command record (version 2). Ticket Runs retain their own metrics. The field holds `outcome`, `repairs` (the number of Repair stages), `ci_rounds` (CI watch stages), `total_minutes` from launch to completion, and a `stages` array with each stage's `name`, `seconds`, `minutes`, `usual_range` and `position`. Position is `below`, `within`, `above` or `too_few_runs`; the last has a null range. The saved ranges use the same repository history as health, excluding the record being finished. They remain fixed as later Runs finish. `show --json` includes these retained metrics; older records without the field remain readable, with null metrics.
 
+### Run metrics and weekly trends
+
+`thirdshift metrics <command> [--json]` reads one Run's metrics, or a Spec run together with its Ticket Runs and Base fixes. It accepts the same Command names as `show`. Saved completion metrics stay fixed. For older Command records, metrics are computed when read, without writing back: outcome, Repairs, CI rounds and the stage times the record holds. Missing completion times, review counts and saved Usual ranges remain missing. Live Runs have no completion metrics yet.
+
+`thirdshift metrics [--json]` reads this machine's Command records across repositories, including child Runs exactly once. It groups Runs by their start week (Monday in UTC), repository, Harness, requested Model and Effort, and kind of Run. Session-stage rows add the kind of session; Run totals have a null `session_kind`, so totals are never repeated for every session. Records without completion metrics contribute missing values. It neither reads another machine nor contacts GitHub. Session-trace signals and Harness versions are not yet collected by this command.
+
+```sh
+thirdshift metrics 'widgets#7' --json
+thirdshift metrics --from 2026-10-05 --through 2026-10-19 --repo acme/widgets --json
+```
+
+`--from` and `--through` select inclusive Monday week-start dates (`YYYY-MM-DD`); omit either for an open end. Repeat `--repo owner/repository` to select several repositories. These filters apply only to trends. Without filters, all recorded weeks and repositories are included.
+
+The version 1 JSON has `version`, `hostname` and either `command` or `weeks`. A Command has its identity, `metrics` and `children`. Each weekly row identifies its group and includes `runs`, separate numeric signal summaries (`observed`, `missing`, `sum`, `mean`), outcome counts, and stage summaries. A summary with no observations has null `sum` and `mean`; zero is reserved for an observed zero. Stage summaries keep times, Usual-range bounds, position counts and Standards and Spec review counts separate. Text shows the same signals, spelling null as `missing`. No view combines signals into a score.
+
 `show --json` is a versioned API, usable outside a repository. Version 1 wraps the selected Command in this shape:
 
 ```json
