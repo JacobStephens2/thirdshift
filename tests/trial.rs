@@ -8,6 +8,10 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 use support::{RunResult, Scenario, leaves_running};
 
+/// Where a sandboxed Trial's fake Harness scripts and records live: inside the
+/// prepared repository, the one path the sandbox keeps.
+const TRIAL_FAKES: &str = ".trial-fakes";
+
 /// Whether the Trial sandbox can run here.
 fn bwrap_present() -> bool {
     std::process::Command::new("bwrap")
@@ -29,7 +33,7 @@ fn run_trial(scenario: &Scenario, request: &Path, extra: &[(&str, &str)]) -> Run
         env.extend_from_slice(extra);
         return scenario.run_with_env(&args, &env);
     }
-    let dir = scenario.launch_dir().join(".trial-fakes");
+    let dir = scenario.launch_dir().join(TRIAL_FAKES);
     fs::create_dir_all(&dir).unwrap();
     for entry in fs::read_dir(scenario.path("")).unwrap() {
         let entry = entry.unwrap();
@@ -76,7 +80,7 @@ fn run_trial(scenario: &Scenario, request: &Path, extra: &[(&str, &str)]) -> Run
 /// The fake Harness calls a sandboxed Trial recorded, beside the scripts it
 /// ran. Without bwrap the Trial runs unsandboxed, recording at fixed paths.
 fn trial_calls(scenario: &Scenario, file: &str) -> Vec<Value> {
-    let redirected = scenario.launch_dir().join(".trial-fakes").join(file);
+    let redirected = scenario.launch_dir().join(TRIAL_FAKES).join(file);
     if redirected.exists() {
         return serde_json::from_str(&fs::read_to_string(redirected).unwrap()).unwrap();
     }

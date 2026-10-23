@@ -86,7 +86,9 @@ in place. Grok Trials share a Trials home of their own at
 down to its login and lock; Grok Trials run one at a time, and the Grok binary
 is bound outside that home. An OpenCode Trial's provider key comes only from
 `opencode.api_key` in the Credentials, through its environment; it never sees
-production's `opencode.db`. A Trial whose sandbox cannot start is void with
+production's `opencode.db`. The Trial's config sets that provider's `apiKey`
+to `{env:…}` naming the variable, so the Trial's Model names its provider as
+`<provider>/<model>`. A Trial whose sandbox cannot start is void with
 `sandbox_unavailable`; one whose Harness has no login (a missing Grok login or
 OpenCode key) fails before its session starts and is void with
 `session_unavailable`. `THIRDSHIFT_TRIAL_NO_SANDBOX`, when set and not empty,

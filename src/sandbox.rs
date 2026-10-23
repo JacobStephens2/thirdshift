@@ -254,14 +254,24 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
         )
     })?;
     let mut binds = Binds::default();
+    let mut environment = Environment::default();
     // The prepared repository, read-write, at its own path so the session's
     // working directory is unchanged.
     binds.read_write(request.repository, request.repository);
     binds.read_only(request.skills_dir, request.skills_dir);
-    for toolchain in toolchains(request.home) {
-        binds.read_only(&toolchain, &toolchain);
+    let roots = toolchains(request.home);
+    for root in &roots {
+        binds.read_only(root, root);
+        // A toolchain's own `bin` directory carries its shims: `cargo` lives
+        // in `~/.cargo/bin`, and its name resolves at the same path inside.
+        let bin = root.join("bin");
+        if bin.is_dir() {
+            environment.prepend_path(&bin);
+        }
     }
-    let mut environment = Environment::default();
+    for bin in tool_bin_dirs(&roots) {
+        environment.prepend_path(&bin);
+    }
     let _grok = home_into(request, &mut binds, &mut environment)?;
     let program = harness_into(request, &mut binds, &mut environment, &binary);
     let mut argv = base_argv();
@@ -423,6 +433,44 @@ fn toolchains(home: &Path) -> Vec<PathBuf> {
     seen
 }
 
+/// The `bin` directories of known tools that resolve under a bound toolchain
+/// root: versioned layouts (`~/.rustup/toolchains/<name>/bin`,
+/// `~/.nvm/versions/node/<version>/bin`) carry no top-level `bin` of their
+/// own. Only directories under a bound root are named, so every named path is
+/// visible inside at the same path.
+fn tool_bin_dirs(roots: &[PathBuf]) -> Vec<PathBuf> {
+    tool_bin_dirs_on(
+        &std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect::<Vec<_>>(),
+        roots,
+    )
+}
+
+fn tool_bin_dirs_on(path_dirs: &[PathBuf], roots: &[PathBuf]) -> Vec<PathBuf> {
+    const TOOLS: [&str; 6] = ["cargo", "rustc", "node", "npm", "python3", "php"];
+    let mut bins = Vec::new();
+    for tool in TOOLS {
+        let Some(path) = path_dirs
+            .iter()
+            .map(|directory| directory.join(tool))
+            .find(|path| is_executable(path))
+        else {
+            continue;
+        };
+        let Ok(canonical) = path.canonicalize() else {
+            continue;
+        };
+        if roots.iter().any(|root| canonical.starts_with(root))
+            && let Some(parent) = canonical.parent()
+        {
+            let parent = parent.to_path_buf();
+            if !bins.contains(&parent) {
+                bins.push(parent);
+            }
+        }
+    }
+    bins
+}
+
 /// Bind the fresh home and everything it holds: the Harness's login, and the
 /// user-level instructions, rules, settings and hooks a Run's session reads,
 /// those read-only. Returns the held Grok Trial, if this is one.
@@ -460,7 +508,7 @@ fn home_into(
                 request,
                 binds,
                 environment,
-                "CODEX_HOME",
+                Some("CODEX_HOME"),
                 ".codex",
                 "auth.json",
             )?;
@@ -470,22 +518,16 @@ fn home_into(
         Harness::Muse => {
             // Each file is bound read-write in place, since Muse writes its
             // login in place (#1009).
-            login_into(
-                request,
-                binds,
-                environment,
-                "XDG_CONFIG_HOME",
-                ".config",
-                "muse/auth.json",
-            )?;
-            login_into(
-                request,
-                binds,
-                environment,
-                "XDG_CONFIG_HOME",
-                ".config",
-                "muse/auth.json.lock",
-            )?;
+            for login in ["muse/auth.json", "muse/auth.json.lock"] {
+                login_into(
+                    request,
+                    binds,
+                    environment,
+                    Some("XDG_CONFIG_HOME"),
+                    ".config",
+                    login,
+                )?;
+            }
             user_file(request, binds, ".config/muse/settings.json");
         }
         Harness::Agy => {
@@ -495,7 +537,7 @@ fn home_into(
                 request,
                 binds,
                 environment,
-                "",
+                None,
                 ".gemini/antigravity-cli",
                 "antigravity-oauth-token",
             )?;
@@ -524,20 +566,17 @@ fn login_into(
     request: &Request<'_>,
     binds: &mut Binds,
     environment: &mut Environment,
-    override_env: &str,
+    override_env: Option<&str>,
     default_dir: &str,
     file: &str,
 ) -> Result<()> {
-    let (source_dir, overridden) = match (!override_env.is_empty())
-        .then(|| std::env::var_os(override_env))
-        .flatten()
-        .filter(|dir| !dir.is_empty())
-    {
-        Some(dir) => (PathBuf::from(dir), true),
-        None => (request.home.join(default_dir), false),
-    };
+    let (source_dir, override_env) =
+        match override_env.and_then(|env| std::env::var_os(env).filter(|dir| !dir.is_empty())) {
+            Some(dir) => (PathBuf::from(dir), override_env),
+            None => (request.home.join(default_dir), None),
+        };
     let source = source_dir.join(file);
-    let dest = if overridden {
+    let dest = if override_env.is_some() {
         // Keep the override's meaning, pointed at the fresh home.
         request.fresh_home.join(default_dir).join(file)
     } else {
@@ -554,8 +593,13 @@ fn login_into(
     if source.is_file() {
         binds.read_write(&source, &dest);
     }
-    if overridden {
-        environment.set(override_env, dest.parent().unwrap_or(request.fresh_home));
+    if let Some(env) = override_env {
+        // The override names the directory the file sits `depth` levels
+        // under: one for `CODEX_HOME/auth.json`, two for
+        // `XDG_CONFIG_HOME/muse/auth.json`.
+        let depth = Path::new(file).components().count();
+        let dir = dest.ancestors().nth(depth).unwrap_or(request.fresh_home);
+        environment.set(env, dir);
     }
     Ok(())
 }
@@ -1229,6 +1273,128 @@ mod tests {
         );
         assert!(stdout.contains("/sandbox/harness/grok"), "{stdout}");
         assert!(!stdout.contains("downloads"), "{stdout}");
+    }
+
+    #[test]
+    fn a_bound_toolchain_is_reachable_on_the_session_path() {
+        if !bwrap_or_skip("toolchain PATH") {
+            return;
+        }
+        let layout = Layout::new();
+        let bin = layout.home.join(".cargo/bin");
+        fs::create_dir_all(&bin).unwrap();
+        let tool = bin.join("fake-tool");
+        fs::write(&tool, "#!/bin/sh\necho toolchain-tool\n").unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        let request = layout.request(Harness::Codex, "fake-tool", Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "bound toolchain not on PATH: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "toolchain-tool"
+        );
+    }
+
+    #[test]
+    fn a_muse_login_under_an_overridden_config_home_is_found_in_place() {
+        if !bwrap_or_skip("muse XDG_CONFIG_HOME") {
+            return;
+        }
+        let layout = Layout::new();
+        let config_home = layout.home.join("xdg-config");
+        fs::create_dir_all(config_home.join("muse")).unwrap();
+        fs::write(config_home.join("muse/auth.json"), "{\"login\": \"xdg\"}\n").unwrap();
+        // NOTE: mutates process env; run serially with other env-touching tests.
+        let saved = std::env::var_os("XDG_CONFIG_HOME");
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &config_home) };
+        let prepared = prepare(&layout.request(
+            Harness::Muse,
+            "cat \"$XDG_CONFIG_HOME/muse/auth.json\"",
+            Secrets::default(),
+            None,
+            &[],
+        ));
+        match saved {
+            Some(value) => unsafe { std::env::set_var("XDG_CONFIG_HOME", value) },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+        }
+        let prepared = prepared.unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "muse login missed under overridden XDG_CONFIG_HOME: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "{\"login\": \"xdg\"}"
+        );
+    }
+
+    #[test]
+    fn tool_bin_dirs_names_only_bound_roots() {
+        let root = tempfile::TempDir::new().unwrap();
+        let toolchain = root.path().join("toolchain");
+        let deep = toolchain.join("toolchains/stable/bin");
+        fs::create_dir_all(&deep).unwrap();
+        let tool = deep.join("cargo");
+        fs::write(&tool, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        let path_dirs = vec![deep.clone(), PathBuf::from("/usr/bin")];
+
+        assert_eq!(
+            tool_bin_dirs_on(&path_dirs, std::slice::from_ref(&toolchain)),
+            vec![deep]
+        );
+        assert!(tool_bin_dirs_on(&path_dirs, &[root.path().join("elsewhere")]).is_empty());
+        assert!(tool_bin_dirs_on(&[], &[toolchain]).is_empty());
+    }
+
+    #[test]
+    fn a_signal_through_bwrap_ends_the_session_and_its_orphans() {
+        if !bwrap_or_skip("signals") {
+            return;
+        }
+        let layout = Layout::new();
+        let script = "sleep 60 & echo $! > signal.pid; wait";
+        let request = layout.request(Harness::Codex, script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+        let mut child = prepared
+            .launch()
+            .command(&[])
+            .current_dir(&layout.repo)
+            .spawn()
+            .expect("sandboxed session did not start");
+        let mut pid = None;
+        for _ in 0..100 {
+            if let Ok(text) = fs::read_to_string(layout.repo.join("signal.pid"))
+                && let Ok(found) = text.trim().parse::<i32>()
+            {
+                pid = Some(found);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let pid = pid.expect("sandboxed session never started its orphan");
+        // SAFETY: SIGINT asks the sandbox to end its session, as an
+        // interrupted Trial's Harness stop does.
+        let terminated = unsafe { libc::kill(child.id() as i32, libc::SIGINT) == 0 };
+        assert!(terminated);
+        let status = child.wait().expect("sandboxed session did not end");
+        assert!(!status.success());
+        // SAFETY: kill with signal 0 sends nothing; it only reports an error.
+        let alive = unsafe { libc::kill(pid, 0) == 0 };
+        assert!(!alive, "orphaned sleep {pid} outlived its sandbox");
+        fs::remove_file(layout.repo.join("signal.pid")).unwrap();
     }
 
     #[test]
