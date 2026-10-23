@@ -5,15 +5,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use chrono::{DateTime, Datelike, Days, Utc};
 use serde::Serialize;
 
+use super::super::command_record::StageName;
 use super::super::reading::{Command, Entry, Snapshot};
 use super::super::run_metrics::{Position, StageMetrics};
 use crate::args::MetricsArgs;
+use crate::session::recording::SessionModels;
 
 #[derive(Default, PartialEq, Eq, PartialOrd, Ord, Clone, Serialize)]
 struct Group {
     week: String,
     repository: String,
-    harness: String,
+    harness: Option<String>,
     model: Option<String>,
     effort: Option<String>,
     kind: String,
@@ -136,7 +138,7 @@ fn collect(command: &Command, asked: &MetricsArgs, weeks: &mut BTreeMap<Group, W
     let group = Group {
         week: week.to_string(),
         repository: record.repository.clone(),
-        harness: record.harness.clone(),
+        harness: Some(record.harness.clone()),
         model: record.model.clone(),
         effort: record.effort.clone(),
         kind: record.kind.clone(),
@@ -158,29 +160,35 @@ fn collect(command: &Command, asked: &MetricsArgs, weeks: &mut BTreeMap<Group, W
         .add(metrics.and_then(|metrics| metrics.total_minutes));
     let Some(metrics) = metrics else { return };
     let mut session_kinds = BTreeSet::new();
-    for stage in &metrics.stages {
+    for (index, stage) in metrics.stages.iter().enumerate() {
         // Session stages are separate rows. Delivery stages stay with Run totals.
-        let session = matches!(
-            stage.name.as_str(),
-            "implement"
-                | "Resume"
-                | "Repair"
-                | "Spec review"
-                | "Security review"
-                | "Architecture review"
-                | "Security audit"
-                | "Security reproduction"
-                | "Security fix publishing"
-        );
-        let row = if session {
-            let row = weeks
-                .entry(Group {
-                    session_kind: Some(stage.name.clone()),
-                    ..group.clone()
-                })
-                .or_default();
+        let row = if StageName::is_session(&stage.name) {
+            let mut session_group = Group {
+                session_kind: Some(stage.name.clone()),
+                ..group.clone()
+            };
+            // A Security review may use another setup (ADR 0021). Without
+            // its evidence, the owning Command cannot tell us which one.
+            if stage.name == StageName::SecurityReview.name() {
+                session_group.harness = None;
+                session_group.model = None;
+                session_group.effort = None;
+            }
+            if let Some(setup) = record
+                .stages
+                .get(index)
+                .filter(|recorded| recorded.name == stage.name)
+                .and_then(|recorded| recorded.session_log.as_deref())
+                .and_then(|log| SessionModels::for_session(log, &command.command_log))
+            {
+                session_group.harness = Some(setup.harness);
+                session_group.model = setup.requested;
+                session_group.effort = setup.effort;
+            }
+            let first = session_kinds.insert(session_group.clone());
+            let row = weeks.entry(session_group).or_default();
             // A Run may have several Repairs; count it once per session kind.
-            row.runs += usize::from(session_kinds.insert(&stage.name));
+            row.runs += usize::from(first);
             row
         } else {
             weeks.get_mut(&group).expect("Run group exists")

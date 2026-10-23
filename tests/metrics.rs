@@ -7,6 +7,61 @@ use support::Scenario;
 
 const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
+#[test]
+fn security_review_trends_use_the_sessions_own_setup() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        r#"
+[harness]
+default = "codex"
+[harness.codex]
+model = "gpt-6.1-sol"
+effort = "low"
+[harness.claude]
+model = "claude-opus-5-5"
+effort = "high"
+[security]
+harness = "claude"
+"#,
+    );
+    scenario.agent_does_for(7, r#"
+if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'guidance mode'; then
+printf '%s' "$FAKE_CLAUDE_PROMPT" > review-prompt.txt
+report=$(sed -n 's/^Private report file: `\(.*\)`\.$/\1/p' review-prompt.txt)
+test -n "$report"
+printf '[]\n' > "$report"
+printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+else
+echo feature > feature.txt
+git add feature.txt
+git commit -qm 'Add feature'
+gh pr create --base main --head issue-7 --title 'Add feature' --body 'Closes #7'
+fi
+"#);
+    let ended = scenario.run(&[&scenario.issue_url(7), "security-review"]);
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let sidecar = scenario
+        .entries(LOGS)
+        .into_iter()
+        .find(|name| name.ends_with("-security-review.models.json"))
+        .unwrap();
+    let evidence: Value =
+        serde_json::from_slice(&fs::read(scenario.path(LOGS).join(sidecar)).unwrap()).unwrap();
+    assert_eq!(evidence["harness"], "claude");
+    assert_eq!(evidence["requested"], "claude-opus-5-5");
+    assert_eq!(evidence["effort"], "high");
+    let result = metrics(&scenario, &["metrics", "--json"]);
+    let review = result["weeks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["session_kind"] == "Security review")
+        .unwrap();
+    assert_eq!(review["harness"], evidence["harness"], "{review:#}");
+    assert_eq!(review["model"], evidence["requested"], "{review:#}");
+    assert_eq!(review["effort"], evidence["effort"], "{review:#}");
+}
+
 fn record(number: u32) -> Value {
     json!({
         "version": 1, "kind": "Run", "repository": "acme/widgets",
@@ -237,6 +292,24 @@ fn absent_completion_times_and_live_metrics_stay_missing() {
         json!({"observed": 1, "missing": 1, "sum": 0.0, "mean": 0.0})
     );
     assert_eq!(row["missing_outcomes"], 1);
+}
+
+#[test]
+fn an_unrecorded_security_setup_stays_missing_instead_of_copying_the_commands() {
+    let scenario = Scenario::new();
+    let mut past = record(7);
+    past["stages"][0]["name"] = "Security review".into();
+    write(&scenario, "7-fixture.command.json", &past);
+    let trends = metrics(&scenario, &["metrics", "--json"]);
+    let review = trends["weeks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["session_kind"] == "Security review")
+        .unwrap();
+    assert_eq!(review["harness"], Value::Null);
+    assert_eq!(review["model"], Value::Null);
+    assert_eq!(review["effort"], Value::Null);
 }
 
 #[test]
