@@ -10,7 +10,7 @@ use crate::harness::Choice;
 use crate::issue::IssueUrl;
 
 /// A Pass owns its dispatched work in the same process and atomic record.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct CommandTree {
     #[serde(flatten)]
     pub command: CommandRecord,
@@ -27,7 +27,7 @@ impl CommandTree {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct CommandRecord {
     pub version: u32,
     pub kind: String,
@@ -80,14 +80,14 @@ impl From<&IssueUrl> for Issue {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct TicketRecord {
     pub issue: Issue,
     pub state: TicketState,
     pub blockers: Vec<Issue>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum TicketState {
     Running,
@@ -98,7 +98,7 @@ pub(crate) enum TicketState {
     NotStarted,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Stage {
     pub name: String,
     pub began_at: String,

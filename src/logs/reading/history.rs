@@ -1,10 +1,9 @@
 //! Recover Commands that predate records, without inventing stages or liveness.
 
 use std::collections::{BTreeMap, HashSet};
-use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, FixedOffset, NaiveDateTime, NaiveTime};
 use serde::Serialize;
 
@@ -67,7 +66,7 @@ impl Command {
 struct Started {
     subject: String,
     offset: FixedOffset,
-    log: String,
+    log: std::sync::Arc<str>,
     command: Command,
 }
 
@@ -325,10 +324,6 @@ fn sessions(
     Ok(groups.into_values().collect())
 }
 
-fn read_optional(path: &Path) -> Result<String> {
-    match fs::read_to_string(path) {
-        Ok(text) => Ok(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(error) => Err(error).with_context(|| format!("could not read {}", path.display())),
-    }
+fn read_optional(path: &Path) -> Result<std::sync::Arc<str>> {
+    super::cache::text(path)
 }

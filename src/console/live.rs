@@ -1,5 +1,5 @@
-//! One reader per Console; slow browsers only need the latest change notice.
-use std::{convert::Infallible, time::Duration};
+//! Slow browsers only need the latest change notice; no rendering while idle.
+use std::convert::Infallible;
 
 use axum::Extension;
 use axum::extract::State;
@@ -7,53 +7,37 @@ use axum::response::{
     IntoResponse, Response, Sse,
     sse::{Event, KeepAlive},
 };
-use tokio::sync::watch;
-use tokio_stream::{StreamExt, wrappers::WatchStream};
-
-pub(super) fn observe(initial: String) -> (watch::Receiver<u64>, tokio::task::JoinHandle<()>) {
-    let (sender, changes) = watch::channel(0);
-    let observer = tokio::spawn(async move {
-        let mut previous = initial;
-        loop {
-            tokio::time::sleep(Duration::from_secs(1)).await;
-            match super::render_inbox("thirdshift status").await {
-                Ok(html) if html != previous => {
-                    previous = html;
-                    sender.send_modify(|revision| *revision += 1);
-                }
-                Ok(_) => {}
-                Err(error) => eprintln!("thirdshift Console: can't observe Inbox: {error:#}"),
-            }
-        }
-    });
-    (changes, observer)
-}
-
 pub(super) async fn events(
-    State(changes): State<watch::Receiver<u64>>,
+    State(changes): State<super::changes::Receiver>,
     Extension(viewer): Extension<super::auth::Viewer>,
 ) -> Response {
-    // WatchStream emits immediately, so every reconnect also catches up.
+    // Every reconnect catches up even if its last notice was lost.
     let stream = futures_util::stream::unfold(
-        (WatchStream::new(changes), viewer),
-        |(mut changes, viewer)| async move {
+        (changes, viewer, None),
+        |(mut changes, viewer, mut seen): (_, _, Option<super::changes::Revision>)| async move {
             loop {
-                let signed_in = viewer.clone();
-                match tokio::task::spawn_blocking(move || signed_in.still_allowed()).await {
-                    Ok(Ok(true)) => {}
-                    Ok(Ok(false)) => return None,
-                    error => {
-                        eprintln!("thirdshift Console: can't authorize Inbox stream: {error:?}");
-                        return None;
+                if seen.is_some() && changes.changed().await.is_err() {
+                    return None;
+                }
+                let current = *changes.borrow_and_update();
+                if seen.is_none_or(|old| old.accounts != current.accounts) {
+                    let signed_in = viewer.clone();
+                    match tokio::task::spawn_blocking(move || signed_in.still_allowed()).await {
+                        Ok(Ok(true)) => {}
+                        Ok(Ok(false)) => return None,
+                        error => {
+                            eprintln!(
+                                "thirdshift Console: can't authorize Inbox stream: {error:?}"
+                            );
+                            return None;
+                        }
                     }
                 }
-                match tokio::time::timeout(Duration::from_millis(250), changes.next()).await {
-                    Ok(Some(_)) => {
-                        let event = Event::default().event("commands").data("changed");
-                        return Some((Ok::<_, Infallible>(event), (changes, viewer)));
-                    }
-                    Ok(None) => return None,
-                    Err(_) => {}
+                let commands_changed = seen.is_none_or(|old| old.commands != current.commands);
+                seen = Some(current);
+                if commands_changed {
+                    let event = Event::default().event("commands").data("changed");
+                    return Some((Ok::<_, Infallible>(event), (changes, viewer, seen)));
                 }
             }
         },

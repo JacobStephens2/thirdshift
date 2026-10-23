@@ -27,6 +27,10 @@ mod waterfall;
 #[path = "console/spans.rs"]
 mod spans;
 
+#[cfg(target_os = "linux")]
+#[path = "console/idle.rs"]
+mod idle;
+
 #[cfg(unix)]
 #[path = "console/cronjobs.rs"]
 mod cronjobs;
