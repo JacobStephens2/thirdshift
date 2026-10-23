@@ -5,6 +5,8 @@
 //! the key it is given here too. Only they call it, so a broken Credentials
 //! file can't block a Run that sends no email, nor `update`, `version` or
 //! `help`; a first Run's Setup offer, once accepted, is Setup, and reads it.
+//! The same Credentials also keep `claude.setup_token`, reserved for Trials;
+//! ordinary Runs never receive it.
 
 use std::fmt;
 use std::io::Write;
@@ -46,7 +48,7 @@ impl ResendKey {
     /// read only when `RESEND_API_KEY` is unset or empty; a missing file
     /// holds no key, and one that others can read is used with a warning.
     /// Fails, naming the file and the key, on Credentials that aren't TOML
-    /// or hold anything but a string `resend.key`, so a typo can't quietly
+    /// or hold unknown keys or non-string secrets, so a typo can't quietly
     /// leave a Run without its notification.
     pub fn find() -> Result<Option<Self>> {
         match from_environment() {
@@ -78,18 +80,23 @@ fn environment_key(value: Option<String>) -> Option<ResendKey> {
     })
 }
 
-/// The Credentials, as read: the file's text, if there is one, and the key
-/// it holds, if any. Setup reads them before asking anything, so it can
-/// refuse a broken file, and edits them to save the key it is given.
+/// The Credentials, as read: text and secrets, if any. Setup reads them before
+/// asking anything, so it can refuse a broken file and retain saved secrets.
 pub struct Credentials {
     path: PathBuf,
     text: Option<String>,
+    secrets: Secrets,
+}
+
+#[derive(Default)]
+struct Secrets {
     key: Option<String>,
+    claude_setup_token: Option<String>,
 }
 
 impl Credentials {
     /// Read the Credentials, as strictly as [`ResendKey::find`] does, with
-    /// the same warning if others can read them. A missing file is no key.
+    /// the same warning if others can read them. A missing file has no secrets.
     pub fn read() -> Result<Self> {
         let path = path()?;
         let text = match std::fs::read_to_string(&path) {
@@ -98,7 +105,7 @@ impl Credentials {
                 return Ok(Credentials {
                     path,
                     text: None,
-                    key: None,
+                    secrets: Secrets::default(),
                 });
             }
             Err(error) => {
@@ -106,12 +113,12 @@ impl Credentials {
             }
         };
         let source = Source::Credentials(path.clone());
-        let key = parse(&text, &source)?;
+        let secrets = parse(&text, &source)?;
         warn_if_others_can_read(&path, &source);
         Ok(Credentials {
             path,
             text: Some(text),
-            key,
+            secrets,
         })
     }
 
@@ -123,20 +130,36 @@ impl Credentials {
 
     /// The key these Credentials hold, if any.
     fn key(&self) -> Option<ResendKey> {
-        self.key.clone().map(|secret| ResendKey {
+        self.secrets.key.clone().map(|secret| ResendKey {
             secret,
             source: Source::Credentials(self.path.clone()),
         })
     }
 
-    /// Save `secret` as `resend.key`. With no file yet, it is created with
-    /// mode 0600, and `~/.thirdshift` with it if missing, holding just the
-    /// key. Otherwise the file is edited in place: its comments and anything
-    /// else in it stay, and only `resend.key` changes.
-    pub fn save(&self, secret: &str) -> Result<()> {
+    /// Whether Enter in Setup will keep a saved Claude setup token. Its
+    /// value is never exposed to Setup's prompts or ordinary Runs.
+    pub fn has_claude_setup_token(&self) -> bool {
+        self.secrets.claude_setup_token.is_some()
+    }
+
+    /// Save the supplied secrets together, retaining omitted values and
+    /// comments. New files and replacements have mode 0600.
+    pub fn save(&self, key: Option<&str>, claude_setup_token: Option<&str>) -> Result<()> {
+        let mut text = self.text.clone().unwrap_or_default();
+        if let Some(key) = key {
+            text = with_secret(&text, "resend", "key", key)?;
+        }
+        if let Some(token) = claude_setup_token {
+            text = with_secret(&text, "claude", "setup_token", token)?;
+        }
         let written = match &self.text {
-            None => create(&self.path, &with_key("", secret)?),
-            Some(text) => config::replace(&self.path, &with_key(text, secret)?),
+            None => create(&self.path, &text),
+            Some(_) => {
+                // config::replace preserves permissions; restrict them before
+                // replacing so neither the old nor new file remains exposed.
+                std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(0o600))
+                    .and_then(|()| config::replace(&self.path, &text))
+            }
         };
         written.with_context(|| format!("can't write {}", self.path.display()))
     }
@@ -153,14 +176,14 @@ pub fn is_key(text: &str) -> bool {
     text.starts_with("re_")
 }
 
-/// `text`, Credentials that parse, with `resend.key` set to `secret`,
-/// keeping the spacing and comment around the old key, if there was one.
-/// With no `[resend]` section, one goes after the last line of `text`.
-fn with_key(text: &str, secret: &str) -> Result<String> {
-    let mut document: DocumentMut = text.parse().context("can't parse the Credentials")?;
-    let Some(resend) = document.get_mut("resend") else {
+/// Set one secret, keeping its decor or appending a missing section.
+fn with_secret(text: &str, section_name: &str, key: &str, secret: &str) -> Result<String> {
+    let mut document: DocumentMut = text
+        .parse()
+        .map_err(|_| anyhow!("can't parse the Credentials: invalid TOML (contents hidden)"))?;
+    let Some(settings) = document.get_mut(section_name) else {
         let mut section = DocumentMut::new();
-        section["resend"]["key"] = toml_edit::value(secret);
+        section[section_name][key] = toml_edit::value(secret);
         let mut text = text.to_string();
         if !text.trim().is_empty() {
             if !text.ends_with('\n') {
@@ -171,17 +194,17 @@ fn with_key(text: &str, secret: &str) -> Result<String> {
         text.push_str(&section.to_string());
         return Ok(text);
     };
-    let resend = resend
+    let settings = settings
         .as_table_like_mut()
-        .context("resend must be a section in the Credentials")?;
-    match resend.get_mut("key").and_then(Item::as_value_mut) {
+        .with_context(|| format!("{section_name} must be a section in the Credentials"))?;
+    match settings.get_mut(key).and_then(Item::as_value_mut) {
         Some(old) => {
             let decor = old.decor().clone();
             *old = secret.into();
             *old.decor_mut() = decor;
         }
         None => {
-            resend.insert("key", toml_edit::value(secret));
+            settings.insert(key, toml_edit::value(secret));
         }
     }
     Ok(document.to_string())
@@ -207,29 +230,43 @@ fn path() -> Result<PathBuf> {
 }
 
 /// `resend.key` in `text`, the contents of `file`, if it is there and not
-/// empty. Any other section or key is an error, as in the User config.
-fn parse(text: &str, file: &Source) -> Result<Option<String>> {
+/// empty. Also accepts `claude.setup_token`, reserved for Trials. Any other
+/// section or key is an error, as in the User config.
+fn parse(text: &str, file: &Source) -> Result<Secrets> {
     let table: Table = text
         .parse()
-        .map_err(|error| anyhow!("{error}"))
-        .with_context(|| format!("can't parse {file}"))?;
-    let mut found = None;
+        .map_err(|_| anyhow!("can't parse {file}: invalid TOML (contents hidden)"))?;
+    let mut found = Secrets::default();
     for (section, value) in &table {
         let settings = match (section.as_str(), value) {
-            ("resend", Value::Table(settings)) => settings,
-            ("resend", _) => bail!("resend must be the section [resend] in {file}"),
+            ("resend" | "claude", Value::Table(settings)) => settings,
+            ("resend" | "claude", _) => {
+                bail!("{section} must be the section [{section}] in {file}")
+            }
             (_, Value::Table(_)) => bail!("unknown section [{section}] in {file}"),
             _ => bail!("unknown key {section} in {file}"),
         };
         for (key, value) in settings {
-            match (key.as_str(), value) {
-                ("key", Value::String(key)) => found = Some(key.clone()),
-                ("key", _) => bail!("resend.key must be a quoted Resend API key in {file}"),
-                _ => bail!("unknown key resend.{key} in {file}"),
+            match (section.as_str(), key.as_str(), value) {
+                ("resend", "key", Value::String(key)) => found.key = nonempty(key),
+                ("resend", "key", _) => {
+                    bail!("resend.key must be a quoted Resend API key in {file}")
+                }
+                ("claude", "setup_token", Value::String(token)) => {
+                    found.claude_setup_token = nonempty(token);
+                }
+                ("claude", "setup_token", _) => {
+                    bail!("claude.setup_token must be a quoted Claude setup token in {file}")
+                }
+                _ => bail!("unknown key {section}.{key} in {file}"),
             }
         }
     }
-    Ok(found.filter(|key| !key.is_empty()))
+    Ok(found)
+}
+
+fn nonempty(secret: &str) -> Option<String> {
+    (!secret.is_empty()).then(|| secret.to_owned())
 }
 
 /// Warn when `file`, at `path`, can be read by anyone but the user.
@@ -276,11 +313,13 @@ mod tests {
         let file = Source::Credentials(PathBuf::from("/home/me/.thirdshift/credentials.toml"));
 
         assert_eq!(
-            parse("[resend]\nkey = \"re_file_456\"\n", &file).unwrap(),
+            parse("[resend]\nkey = \"re_file_456\"\n", &file)
+                .unwrap()
+                .key,
             Some("re_file_456".to_string())
         );
         for text in ["", "[resend]\n", "[resend]\nkey = \"\"\n"] {
-            assert_eq!(parse(text, &file).unwrap(), None, "{text:?}");
+            assert_eq!(parse(text, &file).unwrap().key, None, "{text:?}");
         }
     }
 
@@ -289,19 +328,19 @@ mod tests {
         let saved = "# My secrets.\n[resend]\n# Rotated monthly.\nkey = \"re_saved_456\"   # from the dashboard\n";
 
         assert_eq!(
-            with_key(saved, "re_secret_123").unwrap(),
+            with_secret(saved, "resend", "key", "re_secret_123").unwrap(),
             "# My secrets.\n[resend]\n# Rotated monthly.\nkey = \"re_secret_123\"   # from the dashboard\n"
         );
     }
 
     #[test]
     fn a_key_is_added_after_credentials_that_hold_none() {
-        let text = with_key("# Keys go here.\n", "re_secret_123").unwrap();
+        let text = with_secret("# Keys go here.\n", "resend", "key", "re_secret_123").unwrap();
 
         assert!(text.starts_with("# Keys go here.\n"), "{text}");
         let file = Source::Credentials(PathBuf::from("/home/me/.thirdshift/credentials.toml"));
         assert_eq!(
-            parse(&text, &file).unwrap().as_deref(),
+            parse(&text, &file).unwrap().key.as_deref(),
             Some("re_secret_123")
         );
     }
@@ -318,7 +357,7 @@ mod tests {
             ("[email]\n", "unknown section [email]"),
             ("key = \"re_file_456\"\n", "unknown key key"),
         ] {
-            let error = format!("{:#}", parse(text, &file).unwrap_err());
+            let error = format!("{:#}", parse(text, &file).err().unwrap());
             for part in [named, path] {
                 assert!(error.contains(part), "{text:?}: no {part:?} in {error}");
             }
