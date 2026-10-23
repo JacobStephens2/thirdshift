@@ -8,6 +8,8 @@ use crate::issue::IssueUrl;
 use crate::scoring::PullRequest;
 use crate::security::fixing::SECURITY_FIX;
 
+mod packet;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MergedPullRequest {

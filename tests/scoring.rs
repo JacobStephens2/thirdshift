@@ -38,8 +38,159 @@ fn pr(number: u64, repo: &str, harness: &str, model: &str, security: bool) -> Va
 }
 
 #[test]
+fn packets_are_blind_and_keep_the_issue_and_repository_at_merge() {
+    for harness in ["claude", "codex"] {
+        let scenario = scenario();
+        scenario.origin_has_commit(
+            "main",
+            "feature.txt",
+            "merged work\n",
+            "Secret commit message\n\nCo-Authored-By: Claude <claude@example.com>",
+        );
+        let merged = scenario
+            .origin_git(&["rev-parse", "main"])
+            .trim()
+            .to_string();
+        scenario.origin_has_commit("main", "later-fix.txt", "future fix\n", "Future fix");
+        let mut candidate = pr(1, "acme/widgets", harness, "model", false);
+        candidate["title"] = "Deliver the feature".into();
+        candidate["body"] = format!("Closes #7\nBuilt with {harness} · model · high <!-- thirdshift:built-with -->\n🤖 Generated with [Claude Code](https://claude.ai/code)\nKeep this claim.\n").into();
+        candidate["mergeCommit"] = serde_json::json!({"oid": merged});
+        candidate["headRefOid"] = merged.clone().into();
+        let at = DateTime::parse_from_rfc3339(candidate["mergedAt"].as_str().unwrap()).unwrap();
+        let before = (at - chrono::TimeDelta::hours(1)).to_rfc3339();
+        let after = (at + chrono::TimeDelta::hours(1)).to_rfc3339();
+        let mut state = scenario.gh_state();
+        state["scoring_prs"] = serde_json::json!([candidate]);
+        state["titles"] = serde_json::json!({"7": "Later title"});
+        state["bodies"] = serde_json::json!({"7": "Later body"});
+        state["edits"] = serde_json::json!({"7": [
+            {"kind":"body", "at":before, "diff":"Original request"},
+            {"kind":"body", "at":after, "diff":"Later body"},
+            {"kind":"title", "at":after, "previousTitle":"Original title", "currentTitle":"Later title"}
+        ]});
+        state["checks"] = serde_json::json!({merged: [{"name":"tests", "conclusion":"success", "url":"https://example.com/identifying-job", "id":99}]});
+        scenario.write_gh_state(&state);
+        let run = scenario.run(&["score"]);
+        assert_eq!(run.code, Some(0), "{}", run.stderr);
+        let week = weeks(&scenario).remove(0);
+        let packet_dir = scenario
+            .path("home/.thirdshift/evals/scoring")
+            .join(week["packets"].as_str().expect("saved packet directory"))
+            .join("0");
+        let text = std::fs::read_to_string(packet_dir.join("packet.json")).unwrap();
+        let packet: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            packet["issues"],
+            serde_json::json!([{"title":"Original title", "body":"Original request"}])
+        );
+        assert_eq!(packet["pull_request"]["title"], "Deliver the feature");
+        assert!(
+            packet["pull_request"]["body"]
+                .as_str()
+                .unwrap()
+                .contains("Keep this claim.")
+        );
+        assert_eq!(
+            packet["ci"],
+            serde_json::json!([{"name":"tests", "conclusion":"success"}])
+        );
+        for forbidden in [
+            "Built with",
+            "thirdshift:built-with",
+            "Generated with",
+            "Secret commit message",
+            "Co-Authored-By",
+            "identifying-job",
+            "Later body",
+            "Later title",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "packet leaked {forbidden}: {text}"
+            );
+        }
+        assert!(packet["diff"].as_str().unwrap().contains("+merged work"));
+        assert_eq!(
+            std::fs::read_to_string(packet_dir.join("repository/feature.txt")).unwrap(),
+            "merged work\n"
+        );
+        assert!(!packet_dir.join("repository/later-fix.txt").exists());
+        assert!(
+            !packet_dir.join("repository/.git").exists(),
+            "Git metadata would expose commit messages and remote access"
+        );
+    }
+}
+
+#[test]
+fn deleted_merge_time_revision_fails_without_advancing_the_window() {
+    let scenario = scenario();
+    let candidate = pr(1, "acme/widgets", "codex", "model", false);
+    let at = candidate["mergedAt"].as_str().unwrap();
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([candidate.clone()]);
+    state["edits"] = serde_json::json!({"7": [
+        {"kind":"body", "at":"2020-01-01T00:00:00Z", "diff":"Obsolete request"},
+        {"kind":"body", "at":at, "diff":null, "deletedAt":at}
+    ]});
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("revision was deleted"),
+        "{}",
+        run.stderr
+    );
+    assert!(weeks(&scenario).is_empty());
+    assert_eq!(
+        std::fs::read_dir(scenario.path("home/.thirdshift/evals/scoring"))
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn packet_history_reads_past_a_page_of_later_edits() {
+    let scenario = scenario();
+    let candidate = pr(1, "acme/widgets", "codex", "model", false);
+    let at = DateTime::parse_from_rfc3339(candidate["mergedAt"].as_str().unwrap()).unwrap();
+    let mut edits: Vec<_> = (1..=101)
+        .rev()
+        .map(|hour| {
+            serde_json::json!({
+                "kind":"body", "at": (at + chrono::TimeDelta::hours(hour)).to_rfc3339(),
+                "diff":"Later request"
+            })
+        })
+        .collect();
+    edits.push(serde_json::json!({"kind":"body", "at":at.to_rfc3339(), "diff":"Request at merge"}));
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([candidate]);
+    state["edits"] = serde_json::json!({"7":edits});
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let week = weeks(&scenario).remove(0);
+    let packet: Value = serde_json::from_slice(
+        &std::fs::read(
+            scenario
+                .path("home/.thirdshift/evals/scoring")
+                .join(week["packets"].as_str().unwrap())
+                .join("0/packet.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(packet["issues"][0]["body"], "Request at merge");
+}
+
+#[test]
 fn sample_spreads_across_harness_and_model_pairs_and_excludes_security_fixes() {
     let scenario = scenario();
+    // Both sampled repositories use this fixture's local origin.
+    scenario.set_origin_url("https://github.com/other/repository.git");
     scenario
         .user_config_is("[scoring]\nowners = [\"acme\", \"other\", \"acme\"]\nsample_size = 3\n");
     let mut state = scenario.gh_state();
@@ -296,9 +447,10 @@ fn first_window_looks_back_seven_days_and_is_a_recorded_command() {
         0o700
     );
     for entry in std::fs::read_dir(sample_dir).unwrap() {
+        let metadata = entry.unwrap().metadata().unwrap();
         assert_eq!(
-            entry.unwrap().metadata().unwrap().permissions().mode() & 0o777,
-            0o600
+            metadata.permissions().mode() & 0o777,
+            if metadata.is_dir() { 0o700 } else { 0o600 }
         );
     }
     let activity = std::fs::read_to_string(

@@ -231,6 +231,9 @@ use std::sync::Mutex;
 use crate::json::{self, Array, Bool, Json, Null, number, object, string};
 use crate::{die, git, python_list};
 
+#[path = "gh/scoring.rs"]
+mod scoring;
+
 static LOCK: Mutex<Option<File>> = Mutex::new(None);
 
 /// Wait for the state's lock and hold it until `unlock` or exit.
@@ -307,6 +310,17 @@ fn check_repo_is(state: &Json, repo: Option<&str>) {
         && repo != "{owner}/{repo}"
         && Path::new(repo) != origin_repo()
         && repo.to_lowercase() != state.at("repo").str().to_lowercase()
+        && !state
+            .get("scoring_prs")
+            .map(Json::items)
+            .unwrap_or_default()
+            .iter()
+            .any(|pr| {
+                pr.at("repository")
+                    .at("nameWithOwner")
+                    .str()
+                    .eq_ignore_ascii_case(repo)
+            })
     {
         die(&format!("fake gh: unknown repo {repo}"), 1);
     }
@@ -1956,6 +1970,9 @@ fn record_run(state: &mut Json, mut run: Json) {
 fn graphql(state: &Json, args: &[&str]) {
     let mut variables = api_fields(args);
     let query = variables.remove("query").unwrap_or_default();
+    if scoring::packet(state, &query, &variables) {
+        return;
+    }
     if query.contains("ScoringPullRequests") {
         scoring_search(state, &variables);
         return;
