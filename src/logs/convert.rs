@@ -382,11 +382,11 @@ fn convert(root: &Path, source: &Path, snapshot: &Snapshot, session: &mut Sessio
     // expected latest event matches the trace's whole Session, as conversation does.
     let mut expected = before;
     if !amendments.is_empty() {
-        let combined = format!("{}\n{amendments}", original.trim_end());
+        let amended = format!("{}\n{amendments}", original.trim_end());
         expected.conversation =
-            crate::console::conversation::render(&combined, super::catalog::Kind::Session);
-        let combined_events: Vec<String> = super::session::events(&combined).collect();
-        expected.show = super::reading::latest_session_event(&combined_events, harness);
+            crate::console::conversation::render(&amended, super::catalog::Kind::Session);
+        let amended_events: Vec<String> = super::session::events(&amended).collect();
+        expected.show = super::reading::latest_session_event(&amended_events, harness);
     }
     session.readers = expected.compare(&after);
     ensure!(
