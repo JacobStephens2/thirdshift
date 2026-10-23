@@ -1154,41 +1154,42 @@ fn a_staged_proposal_is_validated_before_any_public_issue_is_created() {
 }
 
 #[test]
-fn a_dispatched_fix_still_waits_without_permission_until_its_ticket_is_closed() {
+fn a_dispatched_fix_holds_off_no_audit_and_is_not_dispatched_again() {
     let scenario = with_reproduced_findings(&["high"]);
     scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
     scenario.agent_does_for(8, implement_fix());
     let fixed = scenario.run(&["secure", "security-fix"]);
     assert_eq!(fixed.code, Some(0), "{}", fixed.stderr);
-    let waiting = scenario.run(&["secure"]);
-    assert_eq!(waiting.code, Some(0), "{}", waiting.stderr);
-    assert!(
-        waiting
-            .stderr
-            .contains("a Security finding is waiting for the Day shift"),
-        "{}",
-        waiting.stderr
-    );
-    assert_eq!(scenario.claude_calls().len(), 2);
-    let mut state = scenario.gh_state();
-    state["issues"]["8"] = json!("CLOSED");
-    scenario.write_gh_state(&state);
-    // Once fixed, the next run may audit the Base branch again.
-    scenario.agent_does(&audit_script("[]"));
-    let after = scenario.run(&["secure"]);
-    assert_eq!(after.code, Some(0), "{}", after.stderr);
-    assert!(
-        !after
-            .stderr
-            .contains("a Security finding is waiting for the Day shift")
-    );
+    let issues = scenario.gh_state()["issues"].clone();
+    // Its fix Ticket is still open, and its finding still waits for the Day shift.
+    scenario.agent_does(&audit_script(&json!([finding("finding-0")]).to_string()));
+    for args in [vec!["secure"], vec!["secure", "security-fix"]] {
+        scenario.origin_has_commit(
+            "main",
+            &format!("{}.txt", args.len()),
+            "new work",
+            "Move Base branch",
+        );
+        let audited = scenario.run(&args);
+        assert_eq!(audited.code, Some(0), "{args:?}: {}", audited.stderr);
+        assert!(
+            audited
+                .stderr
+                .contains("0 new finding(s), 1 already recorded"),
+            "{args:?}: {}",
+            audited.stderr
+        );
+    }
+    assert_eq!(scenario.claude_calls().len(), 4);
+    assert_eq!(scenario.gh_state()["issues"], issues);
 }
 
 #[test]
-fn reproduced_findings_wait_without_permission_even_after_severity_is_written() {
+fn reproduced_findings_without_permission_are_not_fixed_and_hold_off_no_audit() {
     for config in ["", "[security]\nfix = false\n", "[security]\nfix = true\n"] {
         let scenario = with_reproduced_findings(&["high"]);
         scenario.user_config_is(config);
+        scenario.agent_does(&audit_script("[]"));
         let args = if config.contains("true") {
             vec!["secure", "no-security-fix"]
         } else {
@@ -1199,11 +1200,11 @@ fn reproduced_findings_wait_without_permission_even_after_severity_is_written() 
         assert!(
             result
                 .stderr
-                .contains("a Security finding is waiting for the Day shift"),
+                .contains("0 new finding(s), 0 already recorded"),
             "{}",
             result.stderr
         );
-        assert!(scenario.claude_calls().is_empty());
+        assert_eq!(scenario.claude_calls().len(), 1);
         assert_eq!(scenario.gh_state()["issues"].as_object().unwrap().len(), 1);
     }
 }
@@ -2265,7 +2266,7 @@ printf '%s\n' 'Security audit: complete' > "$FAKE_CLAUDE_FINAL_MESSAGE"
     )
 }
 
-/// A finding recorded during the audit is first seen after the waiting gate.
+/// A finding recorded during the audit is first seen after the gates.
 fn audit_script_with_records(scenario: &Scenario, findings: &str, records: &Value) -> String {
     fs::write(
         scenario.path("audit-records.json"),
@@ -2327,57 +2328,52 @@ fn an_unchanged_base_skips_after_a_completed_audit_and_resumes_when_origin_moves
 }
 
 #[test]
-fn waiting_findings_skip_quietly_once_and_triage_allows_the_next_audit() {
-    for triage in [
-        "closed",
-        "published",
-        "severity",
-        "private-closed",
-        "private-labelled",
-    ] {
+fn waiting_findings_hold_off_no_audit_and_keep_their_completed_reproductions() {
+    for private in [false, true] {
         let scenario = Scenario::new();
-        scenario.user_config_is("[activity]\nquiet_skips = true\n");
-        scenario.agent_does(&audit_script("[]"));
         let mut github = scenario.gh_state();
-        let private = triage.starts_with("private-");
+        github["private"] = json!(private);
+        scenario.write_gh_state(&github);
+        scenario.agent_does(&audit_script(
+            &json!([finding("input-size"), finding("storage-bound")]).to_string(),
+        ));
+        let first = scenario.run(&["secure"]);
+        assert_eq!(first.code, Some(0), "{}", first.stderr);
+        assert_eq!(scenario.claude_calls().len(), 3);
+        // Both findings are not reproduced and still wait for the Day shift.
+        let waiting = scenario.gh_state();
+        scenario.origin_has_commit("main", "new-work.txt", "new work", "Move Base branch");
+        let second = scenario.run(&["secure"]);
+        assert_eq!(second.code, Some(0), "{private}: {}", second.stderr);
+        assert!(
+            second
+                .stderr
+                .contains("0 new finding(s), 2 already recorded"),
+            "{}",
+            second.stderr
+        );
+        assert_eq!(
+            second
+                .stderr
+                .matches("keeping the completed Security reproduction of ")
+                .count(),
+            2,
+            "{}",
+            second.stderr
+        );
         if private {
-            github["private"] = json!(true);
-            github["labels"]["7"] = json!(["security-finding", "Needs-Triage"]);
-        } else {
-            github["advisories"] = json!([{"state":"draft", "severity":null, "summary":"Private title", "description":"Private evidence"}]);
+            for issue in ["issue #8", "issue #9"] {
+                assert!(
+                    second.stderr.contains(&format!(
+                        "keeping the completed Security reproduction of {issue}: not reproduced"
+                    )),
+                    "{}",
+                    second.stderr
+                );
+            }
         }
-        scenario.write_gh_state(&github);
-        assert_two_quiet_skips_send_no_email(&scenario);
-        assert!(scenario.claude_calls().is_empty());
-        assert!(
-            !scenario
-                .path("home/.thirdshift/logs/acme/widgets/commands")
-                .exists()
-        );
-        assert!(
-            !scenario
-                .path("home/.thirdshift/logs/acme/widgets/audits")
-                .exists()
-        );
-        let log =
-            fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
-                .unwrap();
-        assert_eq!(log.lines().count(), 1, "{log}");
-        assert!(
-            log.contains("Security run skipped: a Security finding is waiting for the Day shift")
-        );
-        assert!(!log.contains("Private"));
-        assert_eq!(scenario.gh_state(), github);
-        match triage {
-            "private-closed" => github["issues"]["7"] = json!("CLOSED"),
-            "private-labelled" => github["labels"]["7"] = json!(["security-finding"]),
-            "severity" => github["advisories"][0]["severity"] = json!("high"),
-            state => github["advisories"][0]["state"] = json!(state),
-        }
-        scenario.write_gh_state(&github);
-        let next = scenario.run(&["secure"]);
-        assert_eq!(next.code, Some(0), "{triage}: {}", next.stderr);
-        assert_eq!(scenario.claude_calls().len(), 1, "{triage}");
+        assert_eq!(scenario.claude_calls().len(), 4);
+        assert_eq!(scenario.gh_state(), waiting);
     }
 }
 
@@ -2736,6 +2732,8 @@ fn another_pass_holds_the_security_run_and_its_skip_is_logged() {
     );
     scenario.agent_does(&waiting);
     let first = scenario.run_until(&["secure"], &[], "started");
+    // Another Pass goes before a Ready issue.
+    scenario.issue_labelled(7, &["ready-for-agent"]);
     let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
     let second =
         scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
@@ -2748,6 +2746,11 @@ fn another_pass_holds_the_security_run_and_its_skip_is_logged() {
         assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
         assert!(
             skipped.stderr.contains("another Pass is already running"),
+            "{}",
+            skipped.stderr
+        );
+        assert!(
+            !skipped.stderr.contains("Ready issue"),
             "{}",
             skipped.stderr
         );

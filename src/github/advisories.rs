@@ -8,7 +8,7 @@ use serde_json::{Value, json};
 use super::{GitHub, check_read};
 use crate::issue::IssueUrl;
 use crate::labels::{Label, NEEDS_TRIAGE};
-use crate::security::reproduction::{FixSize, Reproduction, Severity};
+use crate::security::reproduction::{FixSize, Outcome, Reproduction, Severity};
 
 mod description;
 use description::Description;
@@ -108,44 +108,6 @@ impl SecurityRecords {
     fn values_mut(&mut self) -> &mut Vec<Value> {
         match &mut self.storage {
             RecordStorage::Advisories(records) | RecordStorage::Issues(records) => records,
-        }
-    }
-
-    /// An unreproduced, untriaged finding still needs the Day shift's call.
-    pub fn waiting_for_day_shift(&self, fixing: bool) -> bool {
-        match &self.storage {
-            RecordStorage::Advisories(records) => records.iter().any(|record| {
-                record["state"] == "draft"
-                    && (Description(record["description"].as_str().unwrap_or_default())
-                        .reproduced_outcome()
-                        .is_some()
-                        && !fixing
-                        && record["security_fix_closed"] != true
-                        || Description(record["description"].as_str().unwrap_or_default())
-                            .reproduced_outcome()
-                            .is_none()
-                            && record["severity"].is_null())
-            }),
-            RecordStorage::Issues(records) => records.iter().any(|record| {
-                record["state"]
-                    .as_str()
-                    .is_some_and(|state| state.eq_ignore_ascii_case("open"))
-                    && (Description(record["body"].as_str().unwrap_or_default())
-                        .reproduced_outcome()
-                        .is_some()
-                        && !fixing
-                        && record["security_fix_closed"] != true
-                        || Description(record["body"].as_str().unwrap_or_default())
-                            .reproduced_outcome()
-                            .is_none()
-                            && record["labels"].as_array().is_some_and(|labels| {
-                                labels.iter().any(|label| {
-                                    label["name"]
-                                        .as_str()
-                                        .is_some_and(|name| NEEDS_TRIAGE.is_named(name))
-                                })
-                            }))
-            }),
         }
     }
 
@@ -332,6 +294,11 @@ impl SecurityRecord {
             .reproduced_outcome()
             .map(|(_, size)| size)
             .context("the Security finding has no reproduced fix size")
+    }
+
+    /// A completed reproduction's outcome, kept when an audit finds the record again.
+    pub fn completed_reproduction(&self) -> Option<Outcome> {
+        Description(self.description()).completed_reproduction()
     }
 
     /// A Day-shift decision is the finding's grade; a repeated fingerprint

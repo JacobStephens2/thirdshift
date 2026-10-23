@@ -11,7 +11,7 @@ A public write-up of a vulnerability already on a public repository's **Base bra
 
 ## Consequences
 
-- The Day shift triages the private record, not an issue, and its triage ends a finding's wait: closing the draft advisory, publishing it or giving it a severity, or taking `needs-triage` off the private issue.
+- The Day shift triages the private record, not an issue: closing the draft advisory, publishing it or giving it a severity, or taking `needs-triage` off the private issue. A finding waiting for that triage holds off no later **Security audit**, so findings can pile up untriaged; a later audit that finds one again keeps its completed reproduction instead of running another (amended 2026-10-23, #1043: triage first ended the wait that held off audits).
 - GitHub keeps repository security advisories for public repositories, so a private repository's finding is an issue, private along with its repository.
 - A Run notification passes through Resend, a third party, so it carries a finding's severity, title and link, never its write-up.
 - A **Security review** that meets a vulnerability already on the Base branch sends it to the same private record, out of its Run's pull request.
