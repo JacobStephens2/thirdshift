@@ -351,8 +351,7 @@ fn review_fixture(script: &str) -> Fixture {
     let fixture = Fixture::new("");
     for harness in Harness::ALL {
         let cli = fixture.path(&format!("bin/{}", harness.name()));
-        fs::write(&cli, cli_script(script)).unwrap();
-        fs::set_permissions(cli, fs::Permissions::from_mode(0o755)).unwrap();
+        crate::test_support::write_executable(&cli, &cli_script(script));
     }
     fixture
 }

@@ -8,7 +8,7 @@
 mod support;
 
 use support::resend::{ResendStandIn, assert_one_issue_line, assert_saved_notification};
-use support::{Scenario, WAIT_BOUND, leaves_running};
+use support::{Scenario, WAIT_BOUND, leaves_running, write_executable};
 
 const SPEC: u32 = 20;
 const SPEC_TITLE: &str = "Widgets, all of them";
@@ -798,15 +798,12 @@ const REPLACEMENT_RAN: &str = "replacement-ran";
 /// update` and `cargo install` each put a new binary in place.
 #[cfg(target_os = "linux")]
 fn rename_a_replacement_over(scenario: &Scenario, installed: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-
     let script = format!(
         "#!/bin/sh\ntouch {}\nexit 1\n",
         scenario.path(REPLACEMENT_RAN).display()
     );
     let new = installed.with_extension("new");
-    std::fs::write(&new, script).unwrap();
-    std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&new, &script);
     std::fs::rename(&new, installed).unwrap();
 }
 
@@ -3182,7 +3179,6 @@ fn failed_ticket_reports_execution_progress_and_retains_the_child_cause() {
 
 #[test]
 fn issue_588_spec_existing_remote_survives_initial_push_failure() {
-    use std::os::unix::fs::PermissionsExt;
     let scenario = linear_spec();
     scenario.agent_does_for(SPEC, "exit 1\n");
     let first = scenario.run(&[&spec_url(&scenario)]);
@@ -3194,11 +3190,10 @@ fn issue_588_spec_existing_remote_survives_initial_push_failure() {
     assert_eq!(spec_pr(&scenario)["state"], "OPEN");
 
     let shim = scenario.path("bin/git");
-    std::fs::write(
+    write_executable(
         &shim,
         "#!/bin/sh\ncase \" $* \" in *\" push \"*) echo 'fatal: simulated push transport failure' >&2; exit 1;; esac\nPATH=\"${PATH#*:}\" exec git \"$@\"\n",
-    ).unwrap();
-    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
 
     let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
     let result = run_emailing(
