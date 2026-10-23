@@ -27,6 +27,7 @@
       {% for run in lane %}
       <article class="command time-run" data-live="{{ run.state == "live" }}" data-command="{{ run.selector }}" data-peek="{{ run.peek_url }}" data-log="{{ run.log_url }}">
         <h3><a class="peek-link" href="{{ run.peek_url }}">{{ run.subject }}</a> · {{ run.state }}</h3><p>{{ run.title }}</p>
+        {% match run.issue_url %}{% when Some with (url) %}<p><a href="{{ url }}">{{ run.issue_label }}</a></p>{% when None %}{% endmatch %}
         <svg class="timeline" width="100%" height="28" aria-hidden="true">
           {% for stage in run.stages %}<svg x="{{ stage.left }}%" width="{{ stage.width }}%" height="28"><rect width="100%" height="28"/><text x="4" y="19">{{ crate::logs::display_name(stage.name) }}</text></svg>{% endfor %}
         </svg>
@@ -42,7 +43,7 @@
     {% for grid in views.grids %}
     <table class="stage-grid">
       <caption>{{ grid.repository }}</caption>
-      <thead><tr><th scope="col">Stage<br>Usual range</th>{% for run in grid.runs %}<th scope="col" class="command" data-live="{{ run.state == "live" }}" data-command="{{ run.selector }}" data-peek="{{ run.peek_url }}" data-log="{{ run.log_url }}"><a class="peek-link" href="{{ run.peek_url }}">{{ run.subject }}</a><br>{{ run.state }}<br>{{ run.title }}</th>{% endfor %}</tr></thead>
+      <thead><tr><th scope="col">Stage<br>Usual range</th>{% for run in grid.runs %}<th scope="col" class="command" data-live="{{ run.state == "live" }}" data-command="{{ run.selector }}" data-peek="{{ run.peek_url }}" data-log="{{ run.log_url }}"><a class="peek-link" href="{{ run.peek_url }}">{{ run.subject }}</a><br>{{ run.state }}<br>{{ run.title }}{% match run.issue_url %}{% when Some with (url) %}<br><a href="{{ url }}">{{ run.issue_label }}</a>{% when None %}{% endmatch %}</th>{% endfor %}</tr></thead>
       <tbody>{% for row in grid.rows %}<tr><th scope="row">{{ crate::logs::display_name(row.name) }}<br><span class="usual">Usual range: {{ row.usual }}</span></th>{% for cell in row.cells %}<td {% if cell.running %}class="running-stage"{% endif %}><span class="cell-run">{{ grid.runs[loop.index0].subject }}: </span>{{ cell.text }}</td>{% endfor %}</tr>{% endfor %}</tbody>
     </table>
     {% if grid.rows.is_empty() %}<p>No stage times retained.</p>{% endif %}
