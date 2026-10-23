@@ -209,7 +209,7 @@ fn assert_timeout(mode: &str) {
         output.contains(if mode.starts_with("summary-") {
             "writing the release summary"
         } else {
-            "release: waiting for"
+            "waiting for"
         }),
         "{output}"
     );

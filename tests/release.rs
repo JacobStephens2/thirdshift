@@ -707,6 +707,31 @@ fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
 }
 
+/// The stderr of `output`, with each progress line's `HH:MM:SS` stamp checked
+/// and taken out, so `release: 18:20:32 opened …` reads `release: opened …`.
+/// Other lines are kept as they are.
+fn unstamped(output: &Output) -> String {
+    stderr(output)
+        .lines()
+        .map(|line| match line.strip_prefix("release: ") {
+            Some(rest) => format!("release: {}\n", stamp_and_message(line, rest).1),
+            None => format!("{line}\n"),
+        })
+        .collect()
+}
+
+/// The `HH:MM:SS` stamp at the start of `rest`, the part of progress `line`
+/// after its prefix, and the message after it.
+fn stamp_and_message<'a>(line: &str, rest: &'a str) -> (chrono::NaiveTime, &'a str) {
+    let (stamp, message) = rest
+        .split_once(' ')
+        .unwrap_or_else(|| panic!("no stamp in {line:?}"));
+    assert_eq!(stamp.len(), 8, "no HH:MM:SS stamp in {line:?}");
+    let stamp = chrono::NaiveTime::parse_from_str(stamp, "%H:%M:%S")
+        .unwrap_or_else(|_| panic!("no HH:MM:SS stamp in {line:?}"));
+    (stamp, message)
+}
+
 #[cfg(target_os = "linux")]
 fn with_input(command: &mut Command, input: &str) -> Output {
     support::child_lifetime::FixtureChild::spawn(command, input).wait(support::WAIT_BOUND)
@@ -1079,7 +1104,7 @@ fn a_failed_or_blank_selected_harness_falls_back_without_trying_claude() {
 
         assert!(output.status.success(), "{}", stderr(&output));
         assert!(release.agent_calls().is_empty());
-        assert!(stderr(&output).contains("release: warning: the agent summary is unavailable"));
+        assert!(unstamped(&output).contains("release: warning: the agent summary is unavailable"));
         let body = release.pr_body("release-0.2.0");
         assert!(
             summary_and_rest(&body)
@@ -1215,7 +1240,7 @@ fn when_the_agent_fails_the_summary_is_the_generated_notes() {
     let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    let err = stderr(&output);
+    let err = unstamped(&output);
     assert!(
         err.lines()
             .any(|line| line.starts_with("release: warning:") && line.contains("agent summary")),
@@ -1260,8 +1285,35 @@ fn the_summary_is_the_agents_unless_it_fails_or_prints_only_blank_space() {
 
         assert!(output.status.success(), "{agent}: {}", stderr(&output));
         assert_eq!(stdout(&output), summary, "{agent}");
-        let warned = stderr(&output).contains("release: warning: the agent summary is unavailable");
+        let warned =
+            unstamped(&output).contains("release: warning: the agent summary is unavailable");
         assert_eq!(warned, summary == notes, "{agent}: {}", stderr(&output));
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_progress_line_is_stamped_with_the_local_time_it_was_printed() {
+    use chrono::Timelike;
+
+    let before = chrono::Local::now().time().with_nanosecond(0).unwrap();
+    let output = with_functions_of("release.sh", "progress waiting on 100% of '%s' runs");
+    let after = chrono::Local::now().time();
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    let rest = err
+        .strip_prefix("release: ")
+        .and_then(|rest| rest.strip_suffix('\n'))
+        .unwrap_or_else(|| panic!("not one progress line: {err:?}"));
+    let (stamp, message) = stamp_and_message(&err, rest);
+    assert_eq!(message, "waiting on 100% of %s runs");
+    // A run across midnight wraps the clock, so only a forward span is bounded.
+    if before <= after {
+        assert!(
+            before <= stamp && stamp <= after,
+            "{stamp} not in {before}..{after}"
+        );
     }
 }
 
@@ -1291,7 +1343,7 @@ fn each_step_prints_a_progress_line_on_stderr() {
         ),
         format!("release: released v0.2.0 at {}", release_url()),
     ];
-    let err = stderr(&output);
+    let err = unstamped(&output);
     let lines: Vec<&str> = err.lines().collect();
     let mut at = 0;
     for line in &expected {
@@ -1318,7 +1370,7 @@ fn after_the_tag_the_script_waits_for_the_release_workflow_run_to_be_listed_and_
     let run = release.release_run();
     assert_eq!(run["hidden_polls"], 0);
     assert_eq!(run["pending_polls"], 0);
-    let err = stderr(&output);
+    let err = unstamped(&output);
     let waiting = [
         "release: waiting for the release workflow on v0.2.0 to start".to_owned(),
         format!(
@@ -1455,9 +1507,11 @@ fn review_prints_the_summary_and_yes_carries_on_with_it_as_written() {
     let output = release.run_script_with(&["--review", "0.2.0"], "y\n", &[]);
 
     assert!(output.status.success(), "{}", stderr(&output));
-    let err = stderr(&output);
+    let err = unstamped(&output);
     let summary_at = err.find(AGENT_SUMMARY).expect(&err);
-    let prompt_at = err.find("[y]es / [e]dit / [n]o").expect(&err);
+    let prompt_at = err
+        .find("release: open the PR with this summary? [y]es / [e]dit / [n]o")
+        .expect(&err);
     assert!(summary_at < prompt_at, "{err}");
     let body = release.pr_body("release-0.2.0");
     assert_eq!(
@@ -2107,7 +2161,7 @@ fn a_rerun_after_the_pr_was_opened_merges_and_tags_without_a_second_pr_or_bump()
     let merge = release.origin(&["rev-parse", "main"]);
     assert_eq!(release.origin(&["rev-parse", &format!("{merge}^2")]), head);
     assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
-    let err = stderr(&output);
+    let err = unstamped(&output);
     assert!(
         err.contains("release: waiting for CI on https://github.com/"),
         "{err}"
@@ -2130,7 +2184,7 @@ fn a_rerun_after_the_merge_tags_the_merge_commit_and_pushes_the_tag() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(release.origin_tag("v0.2.0"), Some(merge.clone()));
     assert_eq!(release.prs_from("release-0.2.0").len(), 1);
-    let err = stderr(&output);
+    let err = unstamped(&output);
     assert!(
         err.contains(&format!(
             "release: tagged v0.2.0 on {} and pushed the tag",
@@ -2154,7 +2208,7 @@ fn a_rerun_once_the_release_workflow_succeeded_prints_the_release_and_changes_no
     let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    let err = stderr(&output);
+    let err = unstamped(&output);
     assert!(err.contains("v0.2.0 is already tagged"), "{err}");
     assert_eq!(
         err.lines().last(),

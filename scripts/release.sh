@@ -37,8 +37,9 @@
 # must also be exactly the version bump in Cargo.toml and Cargo.lock from
 # its merge base, or it is refused before merging or tagging.
 #
-# Prints a progress line on stderr for each step, with the release workflow
-# run's URL once it waits for that run, and the GitHub Release's URL last.
+# Prints a progress line on stderr for each step, stamped with the local time
+# as HH:MM:SS, with the release workflow run's URL once it waits for that run,
+# and the GitHub Release's URL last.
 # Exits 0 once the release workflow run for the tag has succeeded: the GitHub
 # Release is published with its final body and the crate is on crates.io. It
 # exits 1 with nothing more pushed if it refuses or the review says no, exits
@@ -301,8 +302,12 @@ release_run() {
 		--jq '.[] | "\(.databaseId) \(.url) \(.status) \(.conclusion)"'
 }
 
+# progress <message>
+# Prints <message> on stderr as a progress line, stamped with the local time
+# it was printed as HH:MM:SS, as thirdshift stamps its own, so a long wait can
+# be told from a stalled one.
 progress() {
-	echo "release: $*" >&2
+	printf 'release: %(%H:%M:%S)T %s\n' -1 "$*" >&2
 }
 
 # refuse <reason>
@@ -459,7 +464,7 @@ review_summary() {
 	local answer file status
 	printf '\n%s\n\n' "$1" >&2
 	while :; do
-		printf 'release: open the PR with this summary? [y]es / [e]dit / [n]o ' >&2
+		printf 'release: %(%H:%M:%S)T open the PR with this summary? [y]es / [e]dit / [n]o ' -1 >&2
 		read -r answer || return
 		case $answer in
 		y | yes)
