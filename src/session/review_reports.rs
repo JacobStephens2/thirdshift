@@ -1,4 +1,4 @@
-//! Opaque review reports, named in the prompt and kept beside the Session trace.
+//! Opaque review reports and summary, kept beside the Session trace.
 
 use std::fs;
 use std::io::ErrorKind;
@@ -36,17 +36,21 @@ impl ReviewReports {
     pub fn keep(&self, log: &Path) -> Vec<String> {
         let mut lines = Vec::new();
         let mut found = false;
-        for axis in ["standards", "spec"] {
-            let report = self.0.path().join(format!("{axis}.md"));
+        for (name, file, extension) in [
+            ("standards", "standards.md", "standards"),
+            ("spec", "spec.md", "spec"),
+            ("summary", "summary.json", "review-summary.json"),
+        ] {
+            let report = self.0.path().join(file);
             match fs::metadata(&report) {
                 Err(error) if error.kind() == ErrorKind::NotFound => continue,
                 Err(error) => {
-                    lines.push(format!("could not find {axis} report: {error}"));
+                    lines.push(format!("could not find {name} report: {error}"));
                     continue;
                 }
                 Ok(_) => found = true,
             }
-            let kept = crate::logs::session::original(log).with_extension(axis);
+            let kept = crate::logs::session::original(log).with_extension(extension);
             if let Err(error) = fs::copy(&report, &kept) {
                 lines.push(format!("could not keep {}: {error}", kept.display()));
             }
