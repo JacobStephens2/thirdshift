@@ -26,6 +26,7 @@ pub struct Recording {
     /// A Trial explicitly has no Command owner. Allocation failures in a
     /// Command remain errors; they must never select the Trial's storage.
     owner: std::result::Result<Option<Owner>, String>,
+    trial_context: Option<logs::trace::Context>,
 }
 
 /// The Session prompt and the Harness-specific way it receives input.
@@ -41,12 +42,18 @@ impl Recording {
     pub fn capture() -> Self {
         Self {
             owner: logs::captured_owner().map(Some),
+            trial_context: None,
         }
     }
 
     /// Trial artifacts have their own empty output directory and no Command.
     pub fn for_trial() -> Self {
-        Self { owner: Ok(None) }
+        Self {
+            owner: Ok(None),
+            trial_context: std::env::var(logs::trace::TRIAL_CONTEXT)
+                .ok()
+                .and_then(|json| serde_json::from_str(&json).ok()),
+        }
     }
 
     /// Construct from captured facts; fixtures need no process-global changes.
@@ -58,6 +65,7 @@ impl Recording {
                 .map(|log| Owner::fixture(Some(log), stamp))
                 .map(Some)
                 .ok_or_else(|| "no owner in fixture".into()),
+            trial_context: None,
         }
     }
 
@@ -113,6 +121,7 @@ impl Recording {
         stream: Interpretation,
     ) -> Result<Ended> {
         let adapter = choice.harness.adapter();
+        command.env_remove(logs::trace::TRIAL_CONTEXT);
         if matches!(self.owner, Ok(None)) {
             // A Trial must not lend a caller's stale Command identity to
             // the Harness or to thirdshift processes it might start.
@@ -125,7 +134,10 @@ impl Recording {
         let mut log_file =
             File::create(log).with_context(|| format!("could not create {}", log.display()))?;
         let started = Instant::now();
-        let context = logs::trace_context()
+        let context = self
+            .trial_context
+            .clone()
+            .or_else(logs::trace_context)
             .or_else(|| self.owner().map(logs::trace::Context::of_owner))
             .unwrap_or_else(|| logs::trace::Context::of_session(log));
         let trace = Arc::new(Mutex::new(super::trace::Trace::create(

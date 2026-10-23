@@ -484,7 +484,13 @@ reports its saved results. A changed Bar is refused after the first Trial.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
-minutes. The text view shows Baseline and Candidate minutes beside the Verdict.
+minutes. Both views also show each Arm's tokens by observed Model and its cost
+in USD where the Harness reports one. JSON keeps these under `usage.baseline`
+and `usage.candidate`, with `models` and `cost_usd`; missing measurements are
+`null`, and tokens without a reported Model are grouped under `unknown`.
+Input tokens include cache reads and writes, which are also shown separately.
+Totals include all attempts and Resume sessions; Grader usage is not charged
+to either Arm. The text view shows usage beside each Arm's minutes.
 
 Each invocation that does work keeps a Command record, Command log and Activity
 log lines under `<logs.dir>/JacobStephens2/thirdshift/commands/experiment/`
@@ -493,6 +499,13 @@ the Bar and moves through Arm builds, Eval tasks and Trials. It appears in the
 Inbox: a pass goes in Done, and a fail or inconclusive Verdict goes in Needs you.
 Use the name from `status` with `thirdshift stop <command>` to Stop it.
 The individual Trials keep no factory Command records.
+Their Session traces and code Grader spans join the invocation's Command Trace.
+Export it with `thirdshift logs <command> --export <dir>`; the private Trial
+artifacts stay under the Experiment's Eval folder. On resume, each invocation's
+Trace keeps the attempts it started, while Arm totals cover the whole Experiment.
+Older Arms with Session traces are joined after completion; Arms predating
+Session traces contribute minutes only. Model Grader sessions follow with model
+grading.
 
 `version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr. `architect` follows it too: stdout carries the pull request's URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with `--plan-only`, or its idea when the review published no plan. A skipped Architect run prints nothing there when [another is still running](#one-at-a-time), the URL of each Architect plan that is [still open](#one-architect-plan-at-a-time), the URL of each [Architect idea waiting for triage](#an-architect-idea-waits-for-triage), and the URL of the [Ready issue, or issue still settling, that goes first](#a-ready-issue-goes-first). `pickup` follows it as well: stdout carries the pull request's URL of the run it dispatches, and nothing when the [Pickup run](#pickup-runs) is skipped. So does `secure`: stdout carries the pull request's URL of a fix it dispatches, and nothing otherwise.
 

@@ -18,7 +18,9 @@ pub(crate) fn id<const N: usize>(parts: &[&[u8]]) -> Id<N> {
     Id(digest[..N].try_into().expect("ID fits SHA-256"))
 }
 
-#[derive(Clone)]
+pub(crate) const TRIAL_CONTEXT: &str = "THIRDSHIFT_TRIAL_TRACE_CONTEXT";
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Context {
     pub trace: TraceId,
     pub command: SpanId,

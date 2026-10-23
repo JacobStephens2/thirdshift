@@ -35,6 +35,7 @@ struct View<'a> {
     results: Vec<TrialResult>,
     verdict: &'a Option<super::grading::Verdict>,
     minutes: Minutes,
+    usage: super::usage::Arms,
 }
 
 #[derive(Default, Serialize)]
@@ -154,6 +155,7 @@ impl Stored {
             results,
             verdict: &self.verdict,
             minutes,
+            usage: super::usage::Arms::read(&self.directory)?,
         })
     }
 
@@ -163,7 +165,7 @@ impl Stored {
             Ok(serde_json::to_string(&view)?)
         } else {
             Ok(format!(
-                "{} · {} · {} → {} · {} Trial results · Verdict: {} · Baseline: {:.3} minutes · Candidate: {:.3} minutes",
+                "{} · {} · {} → {} · {} Trial results · Verdict: {} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}",
                 self.description.id,
                 self.state,
                 self.description.baseline.commit,
@@ -173,7 +175,9 @@ impl Stored {
                     .as_ref()
                     .map_or("pending", |verdict| verdict.outcome()),
                 view.minutes.baseline,
-                view.minutes.candidate
+                view.usage.baseline(),
+                view.minutes.candidate,
+                view.usage.candidate()
             ))
         }
     }
