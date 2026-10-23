@@ -174,6 +174,12 @@ export function initSpanTree({ openCommand, openDetails }) {
       const bottom = innerWidth <= 760 && !peek.hidden ? peek.getBoundingClientRect().top : innerHeight;
       const rect = row.getBoundingClientRect();
       window.scrollBy({ top: rect.top + rect.height / 2 - (top + bottom) / 2, behavior: 'instant' });
+      // Scrolling can pin the sticky axis. Keep the row inside the final
+      // visible space rather than the axis's position before that scroll.
+      const settled = row.getBoundingClientRect();
+      const visibleTop = Math.max(0, header.getBoundingClientRect().bottom);
+      if (settled.bottom > bottom) window.scrollBy({ top: settled.bottom - bottom, behavior: 'instant' });
+      else if (settled.top < visibleTop) window.scrollBy({ top: settled.top - visibleTop, behavior: 'instant' });
     });
   }
   function choose(id, focus = true) { selected = id; renderTree(); if (focus) rowFor(id)?.focus({ preventScroll: true }); }

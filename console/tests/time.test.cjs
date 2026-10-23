@@ -145,7 +145,10 @@ test('Stages pins live Runs, matches CLI order and opens the selected child Run 
   const flatten = command => [command, ...(command.dispatched ?? []).flatMap(flatten), ...(command.children ?? []).flatMap(flatten)];
   const runs = status.commands.flatMap(flatten);
   runs.sort((a, b) => (a.state !== 'live') - (b.state !== 'live') || Date.parse(b.ended_at ?? b.started_at) - Date.parse(a.ended_at ?? a.started_at));
-  assert.deepEqual(await page.locator('thead .peek-link').allTextContents(), runs.map(run => run.issue ? `${run.kind} · ${run.repository}#${run.issue.number}` : `${run.kind} on ${run.repository}`));
+  assert.deepEqual(await page.locator('thead .peek-link').allTextContents(), runs.map(run => {
+    const kind = run.kind === 'Run' ? 'Ticket run' : run.kind;
+    return run.issue ? `${kind} · ${run.repository}#${run.issue.number}` : `${kind} on ${run.repository}`;
+  }));
   assert.equal(await page.locator('thead .command').first().getAttribute('data-command'), runs[0].record_path ?? `${join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json')}::pickup-fixture`);
   assert.match(await page.locator('.stage-grid').first().textContent(), /Running ·/);
   assert.match(await page.locator('.stage-grid').first().textContent(), /Usual range: 10–10 min/);

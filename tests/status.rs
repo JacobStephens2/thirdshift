@@ -296,7 +296,7 @@ fn an_ended_pickup_run_shows_its_outcome_and_one_that_died_names_its_dispatch() 
     );
     assert!(ended.ends_with(" · ready for review"), "{ended}");
     let dead = pickup_row_after(died);
-    assert!(dead.ends_with(" · died at dispatched Run"), "{dead}");
+    assert!(dead.ends_with(" · died at dispatched Ticket run"), "{dead}");
 }
 
 #[test]

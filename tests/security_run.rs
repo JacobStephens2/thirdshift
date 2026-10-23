@@ -519,7 +519,7 @@ fn status_tracks_security_stages_and_nests_the_dispatched_fix() {
                 .lines()
                 .find(|line| line.starts_with("Security run "))
                 .expect(&text.stdout);
-            assert!(row.contains(" · dispatched Run · "), "{row}");
+            assert!(row.contains(" · dispatched Ticket run · "), "{row}");
             assert_eq!(active["issue"]["number"], 8);
             assert!(
                 text.stdout.contains("\n  Ticket run acme/widgets#8"),
