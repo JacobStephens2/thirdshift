@@ -206,11 +206,13 @@ fn assert_timeout(mode: &str) {
         assert!(output.contains(expected), "{mode}: {output}");
     }
     assert!(
-        output.contains(if mode.starts_with("summary-") {
-            "writing the release summary"
+        if mode.starts_with("summary-") {
+            output.contains("writing the release summary")
         } else {
-            "release: waiting for"
-        }),
+            output.lines().any(|line| {
+                stamped(line).is_some_and(|(_, message)| message.starts_with("waiting for"))
+            })
+        },
         "{output}"
     );
 }
