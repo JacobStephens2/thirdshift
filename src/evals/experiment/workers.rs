@@ -39,6 +39,13 @@ impl Arm {
             Self::Candidate => "candidate",
         }
     }
+
+    pub fn from_trial_key(key: &str) -> Option<Self> {
+        let name = key.split("--").nth(1)?;
+        [Self::Baseline, Self::Candidate]
+            .into_iter()
+            .find(|arm| arm.name() == name)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -121,6 +128,7 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
         }
     }
     logs::stage(logs::Stage::Trials);
+    let context = logs::trace_context().context("Experiment has no Trace context")?;
     progress::step(format!("Trials: {} remaining, two workers", queue.len()));
     let queue = Mutex::new(queue);
     let stopped = AtomicBool::new(false);
@@ -141,7 +149,7 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
                     let Some(trial) = trial else {
                         return Ok(());
                     };
-                    if let Err(error) = run_trial(experiment, &trial, prepared, &signal) {
+                    if let Err(error) = run_trial(experiment, &trial, prepared, &signal, &context) {
                         stopped.store(true, Ordering::SeqCst);
                         return Err(error);
                     }
@@ -168,6 +176,7 @@ fn run_trial(
     trial: &Trial<'_>,
     prepared: &arms::Prepared,
     signal: &Path,
+    context: &logs::trace::Context,
 ) -> Result<()> {
     let (arm, setup) = match trial.arm {
         Arm::Baseline => (&prepared.baseline, &experiment.description.baseline),
@@ -246,14 +255,19 @@ fn run_trial(
             &setup.choice(),
         ));
         let started = Instant::now();
-        let output = execute(
-            experiment,
-            arm,
-            trial.arm,
-            &request,
-            Duration::from_secs(bar.timeout_seconds),
-            signal,
-            &monitor,
+        let mut trace = super::trace::Attempt::start(&attempt, &trial.key(), context)?;
+        let mut command = trial_command(experiment, arm, trial.arm, &request, signal)?;
+        trace.inherit(&mut command)?;
+        let output = process::output_until(
+            &mut command,
+            None,
+            Control {
+                name: "Trial",
+                interruption: Interruption::Ordinary,
+                stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
+            },
+            Instant::now() + Duration::from_secs(bar.timeout_seconds),
+            &|| monitor.borrow_mut().check(signal),
         );
         interrupt::check()?;
         let mut protocol = match output {
@@ -303,12 +317,11 @@ fn run_trial(
         let void_cause = protocol.void_cause;
         let paused = pauses(&protocol);
         result.outcome = outcome;
-        result.score = Some(grading::score(
-            trial.task,
-            &prepared_repo.repository,
-            &protocol,
-            bar,
-        )?);
+        result.score = Some(
+            trace
+                .grade(|| grading::score(trial.task, &prepared_repo.repository, &protocol, bar))?,
+        );
+        trace.outcome(outcome);
         let retry = outcome == Outcome::Void
             && void_cause.is_some_and(|cause| bar.void_rules.causes.contains(&cause));
         result.attempts.push(protocol);
@@ -371,32 +384,22 @@ fn prepare_branches(repository: &Path, task: &Task) -> Result<()> {
     Ok(())
 }
 
-fn execute(
+fn trial_command(
     experiment: &store::Stored,
     arm: &arms::Arm,
     name: Arm,
     request: &Path,
-    timeout: Duration,
     signal: &Path,
-    monitor: &RefCell<super::limits::Monitor>,
-) -> Result<std::process::Output> {
+) -> Result<Command> {
     let directory = experiment.directory.join("harnesses").join(name.name());
     let path = std::env::join_paths(std::iter::once(directory).chain(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     )))?;
-    process::output_until(
-        Command::new(&arm.binary)
-            .arg("--trial")
-            .arg(request)
-            .env(limits::SIGNAL_ENV, signal)
-            .env("PATH", path),
-        None,
-        Control {
-            name: "Trial",
-            interruption: Interruption::Ordinary,
-            stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
-        },
-        Instant::now() + timeout,
-        &|| monitor.borrow_mut().check(signal),
-    )
+    let mut command = Command::new(&arm.binary);
+    command
+        .arg("--trial")
+        .arg(request)
+        .env(limits::SIGNAL_ENV, signal)
+        .env("PATH", path);
+    Ok(command)
 }

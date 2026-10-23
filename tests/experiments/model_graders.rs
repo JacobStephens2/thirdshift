@@ -58,6 +58,23 @@ fn model_grader_timeout_keeps_trace_and_resume_reuses_trials() {
     assert_eq!(fixture.experiment()["state"], "completed");
     assert_eq!(fixture.trial_calls().len(), 2, "resume reran Trials");
     assert_eq!(fixture.grader_calls().len(), 2);
+    let folder = "home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment";
+    let records = fixture.scenario.log_files(folder, "json");
+    assert_eq!(records.len(), 2);
+    let mut grader_ids = Vec::new();
+    for file in records {
+        let record: Value =
+            serde_json::from_slice(&fs::read(fixture.scenario.path(folder).join(file)).unwrap())
+                .unwrap();
+        let spans = export_spans(&fixture, &record);
+        let graders: Vec<_> = spans
+            .iter()
+            .filter(|span| span["name"] == "invoke_agent model Grader")
+            .collect();
+        assert_eq!(graders.len(), 1, "each Command must export its own Grader");
+        grader_ids.push(graders[0]["spanId"].clone());
+    }
+    assert_ne!(grader_ids[0], grader_ids[1]);
 }
 
 #[test]
@@ -95,6 +112,34 @@ fn model_grader_sessions_keep_otlp_traces() {
         }
         assert!(requests > 0, "Grader {suffix} trace is empty");
     }
+    let record = fixture
+        .scenario
+        .command_record("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment");
+    let spans = export_spans(&fixture, &record);
+    let graders: Vec<_> = spans
+        .iter()
+        .filter(|span| span["name"] == "invoke_agent model Grader")
+        .collect();
+    assert_eq!(graders.len(), 1, "model Grader missing from Command Trace");
+    assert!(
+        spans.iter().any(|span| {
+            span["name"] == "Trials" && span["spanId"] == graders[0]["parentSpanId"]
+        })
+    );
+}
+
+fn export_spans(fixture: &Fixture, record: &Value) -> Vec<Value> {
+    let export = fixture
+        .scenario
+        .path(&format!("exports/{}", record["name"].as_str().unwrap()));
+    let exported = fixture.scenario.run(&[
+        "logs",
+        record["name"].as_str().unwrap(),
+        "--export",
+        export.to_str().unwrap(),
+    ]);
+    assert_eq!(exported.code, Some(0), "{}", exported.stderr);
+    trace_spans(&export.join("spans.jsonl"))
 }
 
 #[test]

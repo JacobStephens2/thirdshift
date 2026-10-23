@@ -7,6 +7,8 @@ mod limits;
 mod model_grader;
 mod options;
 mod store;
+mod trace;
+mod usage;
 mod workers;
 
 use std::collections::BTreeMap;
