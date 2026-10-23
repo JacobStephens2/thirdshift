@@ -170,6 +170,7 @@ pub(super) fn replays(home: &Path) -> Result<Imported> {
                 criteria,
                 checks: Vec::new(),
                 inputs: inputs(),
+                trial: None,
             },
             &context(&dated, &spec.repo, spec.spec_issue)?,
         )?;
@@ -245,6 +246,7 @@ fn bug_task(
             criteria: format!("{criteria}\nReport no wrong findings."),
             checks: Vec::new(),
             inputs: inputs(),
+            trial: None,
         },
         &context(dated, "thirdshift", pr.implements_issue)?,
     )?;

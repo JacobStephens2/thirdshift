@@ -37,7 +37,7 @@ impl Dependencies {
 #[serde(deny_unknown_fields)]
 pub(super) struct Manifest {
     format: u32,
-    trials_per_arm: NonZeroUsize,
+    pub(super) trials_per_arm: NonZeroUsize,
     dependencies: Dependencies,
 }
 
@@ -117,7 +117,7 @@ pub(super) fn touched(root: &Path, paths: &[String]) -> Result<Vec<String>> {
     Ok(selected)
 }
 
-fn directories(root: &Path) -> Result<Vec<(String, PathBuf)>> {
+pub(super) fn directories(root: &Path) -> Result<Vec<(String, PathBuf)>> {
     let entries = match std::fs::read_dir(root) {
         Ok(entries) => entries,
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),

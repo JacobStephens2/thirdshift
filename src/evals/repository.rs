@@ -14,7 +14,7 @@ use crate::process::{self, Control, Interruption};
 
 #[derive(Serialize)]
 pub(super) struct Prepared {
-    repository: PathBuf,
+    pub repository: PathBuf,
     origin: Option<PathBuf>,
 }
 

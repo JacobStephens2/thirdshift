@@ -390,6 +390,8 @@ thirdshift evals touched &lt;path&gt;...  # select suites from their declared so
 thirdshift evals prepare &lt;suite&gt; &lt;task&gt; &lt;destination&gt;  # prepare a throwaway repository at its base
 thirdshift evals verify &lt;repository&gt; &lt;base&gt;  # refuse history beyond the base commit
 thirdshift evals prepare-arms &lt;repository&gt; &lt;baseline-commit&gt; &lt;baseline-harness&gt; &lt;candidate-commit&gt; &lt;candidate-harness&gt; &lt;record.json&gt;  # cache builds and record fixed Harness paths
+thirdshift experiment &lt;candidate&gt; [--baseline &lt;ref&gt;] [--suite &lt;name&gt;] [--json]  # run or resume an Experiment
+thirdshift experiments [&lt;id&gt;] [--json]  # list Experiments or show one
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift &lt;version&gt;
 thirdshift help                     # print a compact command and option reference
@@ -415,6 +417,42 @@ the private replay manifests, cached original issue bodies and grading index
 under <code>~/.thirdshift/replays/</code> into the code-review and Spec-review suites.
 Rerunning adds only missing Eval tasks. The format document also describes the
 grading index to prepare on that host; private material stays outside the repository.</p>
+</div></details>
+<details class="fold"><summary><h3>Experiments</h3></summary>
+<div class="manual-content" id="experiments">
+<p>From a local thirdshift clone, <code>thirdshift experiment &lt;candidate&gt;</code> compares a
+branch or commit with its merge-base with <code>main</code>. Use <code>--baseline &lt;ref&gt;</code> to name
+another Baseline. Suites default to those touched by the change, using their
+declarations; repeat <code>--suite &lt;name&gt;</code> to select them explicitly, including for a
+Harness, Model or Effort comparison with the same build in both Arms.</p>
+<p>Each Arm accepts <code>--baseline-harness</code>, <code>--baseline-model</code>, <code>--baseline-effort</code>
+or the corresponding <code>--candidate-*</code> flag, followed by a value. Unspecified
+choices follow the User config, then the Harness defaults. Both builds must
+support the <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/trial.md">versioned Trial protocol</a>.
+Spec-review Eval tasks run now; Code-review Trials arrive with #1016.</p>
+<p>The Bar is saved before the first Trial: margin <code>-0.10</code>, credible level <code>0.95</code>,
+prior <code>1</code>, seed <code>0</code>, <code>20000</code> draws, each suite&#39;s Trials per Eval task, an
+<code>1800</code>-second per-Trial timeout, and up to two fresh retries for Void Trials.
+Override these with <code>--margin</code>, <code>--credible-level</code>, <code>--prior</code>, <code>--seed</code>,
+<code>--draws</code>, <code>--trials-per-task</code>, <code>--timeout</code> (seconds), or <code>--void-retries</code>.
+Timeouts count as failed Trials. Void causes are recorded; usage/rate limits
+pause scheduling until the same Experiment is started again. Other Void Trials
+retry up to the Bar&#39;s limit and remain void if exhausted.</p>
+<p>Two workers take alternating Baseline and Candidate Trials, each in a fresh
+prepared repository. Trial artifacts and one result per finished Trial live
+privately in <code>~/.thirdshift/evals/experiments/&lt;id&gt;/</code>. Trials currently run
+without a sandbox; #1014 adds isolation. Grading and Verdict publication are
+separate work; a completed Experiment here reports its Trial results.</p>
+<p>The same Arms and suite names identify the same Experiment. Running it again
+skips finished Trials and re-runs interrupted ones; a completed Experiment only
+reports its saved results. A changed Bar is refused after the first Trial.
+<code>thirdshift experiments --json</code> lists them and <code>thirdshift experiments &lt;id&gt; --json</code> shows one. The starting command&#39;s <code>--json</code> prints one result document.</p>
+<p>Each invocation that does work keeps a Command record, Command log and Activity
+log lines under <code>&lt;logs.dir&gt;/JacobStephens2/thirdshift/commands/experiment/</code>
+(the Activity log is at the repository level). The record names both Arms and
+the Bar and moves through Arm builds, Eval tasks and Trials. It appears in the
+Inbox; use the name from <code>status</code> with <code>thirdshift stop &lt;command&gt;</code> to Stop it.
+The individual Trials keep no factory Command records.</p>
 <p><code>version</code> and <code>help</code> print to stdout and exit <code>0</code>. <code>update</code>, <code>setup</code> and <code>email-test</code> follow the Run&#39;s rule: stdout stays empty, messages go to stderr. <code>architect</code> follows it too: stdout carries the pull request&#39;s URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with <code>--plan-only</code>, or its idea when the review published no plan. A skipped Architect run prints nothing there when <a href="#one-at-a-time">another is still running</a>, the URL of each Architect plan that is <a href="#one-architect-plan-at-a-time">still open</a>, the URL of each <a href="#an-architect-idea-waits-for-triage">Architect idea waiting for triage</a>, and the URL of the <a href="#a-ready-issue-goes-first">Ready issue, or issue still settling, that goes first</a>. <code>pickup</code> follows it as well: stdout carries the pull request&#39;s URL of the run it dispatches, and nothing when the <a href="#pickup-runs">Pickup run</a> is skipped. So does <code>secure</code>: stdout carries the pull request&#39;s URL of a fix it dispatches, and nothing otherwise.</p>
 <p>Uncommitted changes in your clone are fine: the Run works in its own worktree from <code>origin</code>, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Run stops.</p>
 </div></details>

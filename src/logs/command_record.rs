@@ -61,6 +61,8 @@ pub(super) struct CommandRecord {
     pub security_findings_waiting: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub security_findings: Vec<crate::security::RecordedFinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experiment: Option<crate::evals::experiment::Description>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -137,6 +139,9 @@ pub enum StageName {
     SecurityAudit,
     SecurityReproduction,
     SecurityFixPublishing,
+    ArmBuilds,
+    EvalTasks,
+    Trials,
     /// A Pickup run or Security run waiting on the Run it dispatched.
     DispatchedRun,
     /// A Pickup run or Security run waiting on the Spec run it dispatched.
@@ -160,6 +165,9 @@ impl StageName {
             Self::SecurityAudit => "Security audit",
             Self::SecurityReproduction => "Security reproduction",
             Self::SecurityFixPublishing => "Security fix publishing",
+            Self::ArmBuilds => "Arm builds",
+            Self::EvalTasks => "Eval tasks",
+            Self::Trials => "Trials",
             Self::DispatchedRun => "dispatched Run",
             Self::DispatchedSpecRun => "dispatched Spec run",
         }
@@ -173,7 +181,8 @@ impl StageName {
             | Work::BaseFix(_)
             | Work::PickupRun(_)
             | Work::ArchitectRun(_)
-            | Work::SecurityRun(_) => Self::DispatchedRun,
+            | Work::SecurityRun(_)
+            | Work::Experiment(_) => Self::DispatchedRun,
         }
     }
 
@@ -202,6 +211,9 @@ impl StageName {
             Self::SecurityAudit,
             Self::SecurityReproduction,
             Self::SecurityFixPublishing,
+            Self::ArmBuilds,
+            Self::EvalTasks,
+            Self::Trials,
             Self::DispatchedRun,
             Self::DispatchedSpecRun,
         ]
@@ -277,6 +289,7 @@ impl CommandRecord {
             Work::ArchitectRun(_) => format!("architect-{stamp}"),
             Work::SecurityRun(_) => format!("secure-{stamp}"),
             Work::PickupRun(_) => format!("pickup-{stamp}"),
+            Work::Experiment(_) => format!("experiment-{stamp}"),
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => {
                 format!("{}#{}", issue.repo_slug(), issue.number)
             }
@@ -310,6 +323,7 @@ impl CommandRecord {
             tickets: Vec::new(),
             security_findings_waiting: false,
             security_findings: Vec::new(),
+            experiment: None,
         }
     }
 

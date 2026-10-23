@@ -6,7 +6,7 @@ use std::process::{Child, ChildStdout, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -70,8 +70,38 @@ pub(crate) fn output(
     input: Option<&[u8]>,
     control: Control<'_>,
 ) -> Result<Output> {
+    captured(command, input, control, None)
+}
+
+/// A Trial deadline includes pipe draining and uses the same whole-tree cleanup.
+pub(crate) fn output_until(
+    command: &mut Command,
+    input: Option<&[u8]>,
+    control: Control<'_>,
+    deadline: Instant,
+) -> Result<Output> {
+    captured(command, input, control, Some(deadline))
+}
+
+#[derive(Debug)]
+pub(crate) struct TimedOut;
+
+impl std::fmt::Display for TimedOut {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Trial timed out")
+    }
+}
+
+impl std::error::Error for TimedOut {}
+
+fn captured(
+    command: &mut Command,
+    input: Option<&[u8]>,
+    control: Control<'_>,
+    deadline: Option<Instant>,
+) -> Result<Output> {
     let cli = control.name.to_owned();
-    let (execution, _) = execute(command, input, control, true, move |pipe| {
+    let (execution, _) = execute(command, input, control, true, deadline, move |pipe| {
         read(pipe).with_context(|| format!("could not read {cli}'s stdout"))
     });
     let (status, stdout, stderr) = execution?;
@@ -104,7 +134,7 @@ pub(crate) fn streaming<T: Send + 'static>(
     // One send fits without waiting for the caller, which must first finish
     // supervising and joining all workers, including on transport failure.
     let (completed, recovered) = mpsc::sync_channel(1);
-    let (execution, started) = execute(command, input, control, false, move |pipe| {
+    let (execution, started) = execute(command, input, control, false, None, move |pipe| {
         let result = consume(pipe, &mut state);
         let _ = completed.send(state);
         result
@@ -131,6 +161,7 @@ fn execute<T: Send + 'static>(
     input: Option<&[u8]>,
     control: Control<'_>,
     capture_stderr: bool,
+    deadline: Option<Instant>,
     consume: impl FnOnce(ChildStdout) -> Result<T> + Send + 'static,
 ) -> (Result<(ExitStatus, T, Vec<u8>)>, bool) {
     let Control {
@@ -165,6 +196,7 @@ fn execute<T: Send + 'static>(
         // Install ownership immediately: every fallible step after spawn is
         // covered, including pipe extraction and starting workers.
         let mut owned = Execution {
+            deadline,
             control,
             child,
             awakened,
@@ -265,6 +297,7 @@ fn execute<T: Send + 'static>(
 }
 
 struct Execution<'a, T> {
+    deadline: Option<Instant>,
     control: Control<'a>,
     child: Child,
     awakened: mpsc::Receiver<()>,
@@ -280,6 +313,12 @@ impl<T> Execution<'_, T> {
         loop {
             if self.control.interruption.requested() {
                 bail!("interrupted");
+            }
+            if self
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                return Err(TimedOut.into());
             }
             if status.is_none() {
                 status = self
