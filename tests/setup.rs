@@ -223,6 +223,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[console]",
             "[activity]",
             "[spec]",
+            "[resources]",
             "[pickup]",
             "[harness]",
             "[harness.claude]",
@@ -257,6 +258,14 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     );
     assert_eq!(config["activity"]["quiet_skips"].as_bool(), Some(false));
     assert_eq!(config["spec"]["parallel"].as_integer(), Some(3));
+    assert_eq!(
+        config["resources"]["min_available_memory_mb"].as_integer(),
+        Some(0)
+    );
+    assert_eq!(
+        config["resources"]["max_load_per_cpu_percent"].as_integer(),
+        Some(0)
+    );
     assert_eq!(config["pickup"]["limit"].as_integer(), Some(3));
     assert_eq!(config["pickup"]["wait_minutes"].as_integer(), Some(30));
     assert_eq!(config["security"]["fix"].as_bool(), Some(false));
@@ -325,6 +334,7 @@ effort = 'high' # my Effort
             "[otlp]",
             "[inbox]",
             "[console]",
+            "[resources]",
             "[harness.agy]",
             "[harness.grok]",
             "[harness.muse]",
