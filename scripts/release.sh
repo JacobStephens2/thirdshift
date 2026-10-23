@@ -303,11 +303,17 @@ release_run() {
 }
 
 # progress <message>
-# Prints <message> on stderr as a progress line, stamped with the local time
-# it was printed as HH:MM:SS, as thirdshift stamps its own, so a long wait can
-# be told from a stalled one.
+# Prints <message> on stderr as a progress line.
 progress() {
-	printf 'release: %(%H:%M:%S)T %s\n' -1 "$*" >&2
+	{ stamp && printf '%s\n' "$*"; } >&2
+}
+
+# stamp
+# What every progress line starts with: the prefix, then the local time it was
+# printed as HH:MM:SS, as thirdshift stamps its own, so a long wait can be told
+# from a stalled one.
+stamp() {
+	printf 'release: %(%H:%M:%S)T ' -1
 }
 
 # refuse <reason>
@@ -464,7 +470,7 @@ review_summary() {
 	local answer file status
 	printf '\n%s\n\n' "$1" >&2
 	while :; do
-		printf 'release: %(%H:%M:%S)T open the PR with this summary? [y]es / [e]dit / [n]o ' -1 >&2
+		{ stamp && printf 'open the PR with this summary? [y]es / [e]dit / [n]o '; } >&2
 		read -r answer || return
 		case $answer in
 		y | yes)

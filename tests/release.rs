@@ -713,23 +713,25 @@ fn stderr(output: &Output) -> String {
 fn unstamped(output: &Output) -> String {
     stderr(output)
         .lines()
-        .map(|line| match line.strip_prefix("release: ") {
-            Some(rest) => format!("release: {}\n", stamp_and_message(line, rest).1),
+        .map(|line| match stamped(line) {
+            Some((_, message)) => format!("release: {message}\n"),
             None => format!("{line}\n"),
         })
         .collect()
 }
 
-/// The `HH:MM:SS` stamp at the start of `rest`, the part of progress `line`
-/// after its prefix, and the message after it.
-fn stamp_and_message<'a>(line: &str, rest: &'a str) -> (chrono::NaiveTime, &'a str) {
+/// The `HH:MM:SS` stamp of progress `line` and the message after it, or
+/// `None` if `line` is not a progress line. Panics on a progress line with no
+/// stamp.
+fn stamped(line: &str) -> Option<(chrono::NaiveTime, &str)> {
+    let rest = line.strip_prefix("release: ")?;
     let (stamp, message) = rest
         .split_once(' ')
         .unwrap_or_else(|| panic!("no stamp in {line:?}"));
     assert_eq!(stamp.len(), 8, "no HH:MM:SS stamp in {line:?}");
     let stamp = chrono::NaiveTime::parse_from_str(stamp, "%H:%M:%S")
         .unwrap_or_else(|_| panic!("no HH:MM:SS stamp in {line:?}"));
-    (stamp, message)
+    Some((stamp, message))
 }
 
 #[cfg(target_os = "linux")]
@@ -1296,17 +1298,23 @@ fn the_summary_is_the_agents_unless_it_fails_or_prints_only_blank_space() {
 fn a_progress_line_is_stamped_with_the_local_time_it_was_printed() {
     use chrono::Timelike;
 
-    let before = chrono::Local::now().time().with_nanosecond(0).unwrap();
-    let output = with_functions_of("release.sh", "progress waiting on 100% of '%s' runs");
-    let after = chrono::Local::now().time();
+    // Kiritimati keeps UTC+14 all year, so its clock is never the host's or UTC's.
+    let kiritimati = chrono::FixedOffset::east_opt(14 * 3600).unwrap();
+    let now = || chrono::Utc::now().with_timezone(&kiritimati).time();
+    let before = now().with_nanosecond(0).unwrap();
+    let output = with_functions_of(
+        "release.sh",
+        "TZ=Pacific/Kiritimati progress waiting on 100% of '%s' runs",
+    );
+    let after = now();
 
     assert!(output.status.success(), "{}", stderr(&output));
     let err = stderr(&output);
-    let rest = err
-        .strip_prefix("release: ")
-        .and_then(|rest| rest.strip_suffix('\n'))
-        .unwrap_or_else(|| panic!("not one progress line: {err:?}"));
-    let (stamp, message) = stamp_and_message(&err, rest);
+    let line = err
+        .strip_suffix('\n')
+        .filter(|line| !line.contains('\n'))
+        .unwrap_or_else(|| panic!("not one line: {err:?}"));
+    let (stamp, message) = stamped(line).unwrap_or_else(|| panic!("not a progress line: {err:?}"));
     assert_eq!(message, "waiting on 100% of %s runs");
     // A run across midnight wraps the clock, so only a forward span is bounded.
     if before <= after {
@@ -1715,8 +1723,11 @@ fn assert_refused_by(
     let output = run();
 
     assert_eq!(output.status.code(), Some(1), "{case} was not refused");
-    let err = stderr(&output);
-    assert!(err.contains("refusing to release"), "{case}: {err}");
+    let err = unstamped(&output);
+    assert!(
+        err.contains("release: refusing to release"),
+        "{case}: {err}"
+    );
     for reason in reasons {
         assert!(err.contains(reason), "{case}: no {reason:?} in {err}");
     }
