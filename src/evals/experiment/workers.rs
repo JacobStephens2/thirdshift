@@ -5,6 +5,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::fs;
 use std::os::unix::fs::symlink;
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{
@@ -184,6 +185,10 @@ fn run_trial(
     let directory = experiment.directory.join("trials").join(trial.key());
     fs::create_dir_all(&directory)?;
     let pending = directory.join("pending.json");
+    let terminal = experiment
+        .directory
+        .join("results")
+        .join(format!("{}.json", trial.key()));
     let mut result = if pending.exists() {
         serde_json::from_slice(&fs::read(&pending)?)?
     } else {
@@ -198,14 +203,7 @@ fn run_trial(
         }
     };
     let bar = &experiment.description.bar;
-    while result.outcome == Outcome::Void
-        && result
-            .attempts
-            .iter()
-            .filter(|attempt| !pauses(attempt))
-            .count()
-            <= bar.void_rules.retries
-    {
+    while result.outcome == Outcome::Void && result.attempts.len() <= bar.void_rules.retries {
         interrupt::check()?;
         limits::check(signal)?;
         let attempt = tempfile::Builder::new()
@@ -240,7 +238,7 @@ fn run_trial(
         store::write(
             &request,
             &json!({
-                "version": 1, "repository": prepared_repo.repository, "session_kind": "spec-review",
+                "version": 1, "repository": prepared_repo.repository, "session_kind": trial.task.manifest.session,
                 "inputs": inputs, "harness": setup.harness, "model": setup.model, "effort": setup.effort,
                 "output_dir": attempt.join("session")
             }),
@@ -276,20 +274,27 @@ fn run_trial(
             Ok(output) => {
                 fs::write(attempt.join("stdout"), &output.stdout)?;
                 fs::write(attempt.join("stderr"), &output.stderr)?;
-                if !output.status.success() {
-                    bail!(
-                        "Arm Trial protocol failed ({}): {}",
-                        output.status,
-                        String::from_utf8_lossy(&output.stderr)
-                    );
+                if output.status.signal() == Some(libc::SIGKILL) {
+                    Output::failed(
+                        started.elapsed().as_millis(),
+                        "Trial process killed (SIGKILL); external cause unknown",
+                    )
+                } else {
+                    if !output.status.success() {
+                        bail!(
+                            "Arm Trial protocol failed ({}): {}",
+                            output.status,
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                    let protocol: Output =
+                        serde_json::from_slice(&output.stdout).context("invalid Trial result")?;
+                    ensure!(protocol.version == 1, "unsupported Trial result");
+                    protocol
                 }
-                let protocol: Output =
-                    serde_json::from_slice(&output.stdout).context("invalid Trial result")?;
-                ensure!(protocol.version == 1, "unsupported Trial result");
-                protocol
             }
             Err(error) if error.is::<process::TimedOut>() => {
-                Output::timed_out(u128::from(bar.timeout_seconds) * 1000)
+                Output::failed(u128::from(bar.timeout_seconds) * 1000, "Trial timed out")
             }
             Err(error) if error.is::<limits::Reached>() => monitor
                 .into_inner()
@@ -298,9 +303,11 @@ fn run_trial(
         };
         let after = integrity::snapshot(&prepared_repo.repository);
         interrupt::check()?;
-        // A limit stop remains a pause even if the cut-short Trial also
-        // changed its repository; it must not spend the fresh-retry budget.
-        if !pauses(&protocol) && !after.as_ref().is_ok_and(|after| after == &before) {
+        // Keep known failures and external Void causes, including limit
+        // stops. Repository changes invalidate an otherwise successful Trial.
+        if protocol.outcome == Outcome::Succeeded
+            && !after.as_ref().is_ok_and(|after| after == &before)
+        {
             protocol.outcome = Outcome::Void;
             protocol.void_cause = Some(VoidCause::RepositoryChanged);
             protocol.cause = Some("Trial repository changed during its session".into());
@@ -322,6 +329,11 @@ fn run_trial(
         // short. A resume keeps the original Bar's remaining retry budget.
         store::write(&pending, &result)?;
         if paused {
+            // A provider limit still stops scheduling, including on the last
+            // attempt. Publish exhaustion so resume cannot grant more retries.
+            if result.attempts.len() > bar.void_rules.retries {
+                store::write(&terminal, &result)?;
+            }
             bail!(
                 "Trial {} paused: {:?}; run the Experiment again to resume",
                 trial.key(),
@@ -332,13 +344,7 @@ fn run_trial(
             break;
         }
     }
-    store::write(
-        &experiment
-            .directory
-            .join("results")
-            .join(format!("{}.json", trial.key())),
-        &result,
-    )?;
+    store::write(&terminal, &result)?;
     progress::step(format!("Trial {} {}", trial.key(), result.outcome));
     Ok(())
 }
@@ -372,7 +378,9 @@ fn prepare_branches(repository: &Path, task: &Task) -> Result<()> {
         "-m",
         "Eval change",
     ])?;
-    git.run(&["push", "origin", &inputs.base, &inputs.branch])?;
+    if task.manifest.session == super::super::format::Session::SpecReview {
+        git.run(&["push", "origin", &inputs.base, &inputs.branch])?;
+    }
     Ok(())
 }
 

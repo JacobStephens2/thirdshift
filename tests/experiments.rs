@@ -451,6 +451,10 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::with_session("spec-review", 1)
+    }
+
+    fn with_session(session: &str, trials: usize) -> Self {
         let scenario = Scenario::new();
         for name in ["claude", "codex"] {
             let harness = scenario.path(&format!("bin/{name}"));
@@ -477,20 +481,22 @@ impl Fixture {
             fs::create_dir_all(&build).unwrap();
             fs::copy(env!("CARGO_BIN_EXE_thirdshift"), build.join("thirdshift")).unwrap();
         }
-        let suite = scenario.path("home/.thirdshift/evals/suites/spec-review");
+        let suite = scenario.path(&format!("home/.thirdshift/evals/suites/{session}"));
         let task = suite.join("tasks/fixture");
         fs::create_dir_all(&task).unwrap();
         fs::write(
             suite.join("suite.toml"),
-            r#"format = 1
-trials_per_arm = 1
+            format!(
+                r#"format = 1
+trials_per_arm = {trials}
 [dependencies]
 factory_skills = []
 session_prompts = ["src/prompt.rs"]
 harness_defaults = []
 model_defaults = []
 effort_defaults = []
-"#,
+"#
+            ),
         )
         .unwrap();
         fs::write(
@@ -498,15 +504,20 @@ effort_defaults = []
             "# Fixture Spec\n\nReview this invented change.\n",
         )
         .unwrap();
+        let change = if session == "code-review" {
+            &candidate
+        } else {
+            &baseline
+        };
         fs::write(
             task.join("task.toml"),
             format!(
                 r#"format = 1
 state = "approved"
-session = "spec-review"
+session = "{session}"
 repository = {:?}
 base = "{baseline}"
-change = "{baseline}"
+change = "{change}"
 criteria = "Report the invented finding."
 [inputs]
 ".thirdshift-issue.md" = "spec.md"
@@ -544,6 +555,161 @@ pr_url = "https://github.com/acme/widgets/pull/1"
     }
 }
 
+fn review_reports_prelude() -> &'static str {
+    r#"
+reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
+test -n "$reports"
+printf 'Standards report\n' > "$reports/standards.md"
+"#
+}
+
+#[test]
+fn code_review_runs_three_trials_per_arm_on_the_reviewed_diff_and_reports_pass_cubed() {
+    let fixture = Fixture::with_session("code-review", 3);
+    let task = fixture
+        .scenario
+        .path("home/.thirdshift/evals/suites/code-review/tasks/fixture/task.toml");
+    let manifest = fs::read_to_string(&task).unwrap();
+    fs::write(&task, manifest.replace("[inputs]", "checks = [[\"sh\", \"-c\", 'grep -q caught \"$THIRDSHIFT_TRIAL_SPEC_REPORT\"']]\n[inputs]")).unwrap();
+    fixture.scenario.agent_does(&format!(
+        r#"
+test "$(git diff --name-only main...HEAD)" = src/prompt.rs
+test "$(git show HEAD:src/prompt.rs)" = 'candidate prompt'
+test "$(git rev-list --count main..HEAD)" = 1
+test -z "$(git remote)"
+{reports}
+case "$PWD" in
+  *--candidate--1/*) printf 'missed\n' > "$reports/spec.md" ;;
+  *) printf 'caught\n' > "$reports/spec.md" ;;
+esac
+"#,
+        reports = review_reports_prelude()
+    ));
+
+    let run = fixture.run(&[]);
+
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment: Value = serde_json::from_str(run.stdout.lines().last().unwrap()).unwrap();
+    assert_eq!(experiment["bar"]["trials_per_task"]["code-review"], 3);
+    let results = experiment["results"].as_array().unwrap();
+    assert_eq!(results.len(), 6);
+    for arm in ["baseline", "candidate"] {
+        for trial in 0..3 {
+            let result = results
+                .iter()
+                .find(|r| r["arm"] == arm && r["trial"] == trial)
+                .unwrap();
+            assert_eq!(result["outcome"], "succeeded", "{result}");
+            assert_eq!(result["score"]["passed"], arm == "baseline" || trial != 1);
+            assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
+            let attempt = &result["attempts"][0];
+            assert!(
+                attempt["log"]
+                    .as_str()
+                    .unwrap()
+                    .ends_with("trial-code-review.jsonl")
+            );
+            for axis in ["standards", "spec"] {
+                assert!(std::path::Path::new(attempt["reports"][axis].as_str().unwrap()).is_file());
+            }
+        }
+    }
+    assert_eq!(
+        experiment["verdict"]["suites"]["code-review"]["pass_cubed"],
+        json!({"baseline": 1.0, "candidate": 0.0})
+    );
+    let shown = fixture.experiment();
+    assert_eq!(shown["verdict"], experiment["verdict"]);
+    for call in fixture.scenario.claude_calls() {
+        assert!(
+            call["prompt"]
+                .as_str()
+                .unwrap()
+                .starts_with("/thirdshift-code-review main\n")
+        );
+    }
+    assert!(fixture.scenario.gh_calls().is_empty());
+}
+
+#[test]
+fn imported_code_review_suite_runs_three_trials_per_arm_and_reports_pass_cubed() {
+    let fixture = Fixture::with_session("code-review", 3);
+    fs::remove_dir_all(
+        fixture
+            .scenario
+            .path("home/.thirdshift/evals/suites/code-review"),
+    )
+    .unwrap();
+    let repository = fixture.scenario.path("home/repos/thirdshift");
+    fs::create_dir_all(repository.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(fixture.scenario.launch_dir(), &repository).unwrap();
+    let replays = fixture.scenario.path("home/.thirdshift/replays");
+    for (name, value) in [
+        (
+            "inputs-2026-10-07/manifest.json",
+            json!({
+                "timing_bugs": [{
+                    "id": 7,
+                    "introducing_pr": {
+                        "number": 17,
+                        "merge_base": fixture.baseline,
+                        "head_as_merged": fixture.candidate,
+                        "implements_issue": 7
+                    }
+                }],
+                "spec_reviews": []
+            }),
+        ),
+        ("2026-10-09/inputs/manifest.json", json!({"codex_bugs": []})),
+        (
+            "2026-10-09/grading/eval-import.json",
+            json!({"bugs": {"7": "Catch the invented defect."}, "specs": {}}),
+        ),
+        (
+            "2026-10-09/context/thirdshift/7.json",
+            json!({
+                "title": "Invented change",
+                "body": "Original issue.",
+                "parent": null,
+                "tickets": []
+            }),
+        ),
+    ] {
+        let path = replays.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+    }
+    let imported = fixture.scenario.run(&["evals", "import-replays"]);
+    assert_eq!(imported.code, Some(0), "{}", imported.stderr);
+    fixture.scenario.agent_does(&format!(
+        r#"
+test "$(git diff --name-only main...HEAD)" = src/prompt.rs
+test -z "$(git remote)"
+{reports}
+printf 'Spec report\n' > "$reports/spec.md"
+"#,
+        reports = review_reports_prelude()
+    ));
+    let run = fixture.run(&["--suite", "code-review"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment: Value = serde_json::from_str(run.stdout.lines().last().unwrap()).unwrap();
+    assert_eq!(experiment["bar"]["trials_per_task"]["code-review"], 3);
+    let results = experiment["results"].as_array().unwrap();
+    assert_eq!(results.len(), 6);
+    for result in results {
+        assert_eq!(result["outcome"], "succeeded", "{result}");
+        assert_eq!(result["score"]["passed"], true, "{result}");
+        let attempt = &result["attempts"][0];
+        for axis in ["standards", "spec"] {
+            assert!(std::path::Path::new(attempt["reports"][axis].as_str().unwrap()).is_file());
+        }
+    }
+    assert_eq!(
+        experiment["verdict"]["suites"]["code-review"]["pass_cubed"],
+        json!({"baseline": 1.0, "candidate": 1.0})
+    );
+}
+
 #[test]
 fn mechanical_scores_determine_the_verdict_inbox_and_arm_minutes() {
     for (passing_arm, decision, group) in [
@@ -558,14 +724,16 @@ fn mechanical_scores_determine_the_verdict_inbox_and_arm_minutes() {
         fs::write(&task, manifest.replace("[inputs]", &format!(
             "checks = [[\"sh\", \"-c\", 'grep -q {passing_arm} \"$THIRDSHIFT_TRIAL_SPEC_REPORT\"']]\n[inputs]"
         ))).unwrap();
-        fixture.scenario.agent_does(r#"
-reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
-printf 'Standards report\n' > "$reports/standards.md"
+        fixture.scenario.agent_does(&format!(
+            r#"
+{reports}
 case "$PWD" in
   *--candidate--*) printf 'candidate\n' > "$reports/spec.md" ;;
   *) printf 'baseline\n' > "$reports/spec.md" ;;
 esac
-"#);
+"#,
+            reports = review_reports_prelude()
+        ));
         let run = fixture.run(&["--prior", "0.01"]);
         assert_eq!(run.code, Some(0), "{}", run.stderr);
         let last = run.stdout.lines().last().unwrap();
@@ -1004,7 +1172,7 @@ esac
 }
 
 #[test]
-fn a_plan_limit_pause_keeps_its_retry_budget_even_if_the_repository_changed() {
+fn a_plan_limit_pause_spends_its_retry_budget_even_if_the_repository_changed() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does(
         r#"
@@ -1016,7 +1184,6 @@ sleep 0.2
     let paused = fixture.run(&["--void-retries", "0"]);
     assert_eq!(paused.code, Some(1), "{}", paused.stderr);
     assert_eq!(fixture.experiment()["state"], "paused");
-    let calls = fixture.scenario.claude_calls().len();
     fixture.scenario.agent_does("true");
     let resumed = fixture.run(&["--void-retries", "0"]);
     assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
@@ -1024,11 +1191,13 @@ sleep 0.2
     assert_eq!(experiment["state"], "completed");
     for result in experiment["results"].as_array().unwrap() {
         assert_eq!(
-            result["outcome"], "succeeded",
-            "a plan-limit pause must not exhaust fresh retries: {experiment}"
+            result["outcome"], "void",
+            "a plan-limit stop must respect the Bar's zero retries: {experiment}"
         );
+        assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(result["attempts"][0]["void_cause"], "usage_limit");
     }
-    assert_eq!(fixture.scenario.claude_calls().len(), calls + 2);
+    assert_eq!(fixture.scenario.claude_calls().len(), 2);
 }
 
 #[test]
@@ -1079,11 +1248,12 @@ rmdir "$state/lock"
 }
 
 #[test]
-fn a_timed_out_trial_counts_as_failed_and_its_descendants_end() {
+fn a_timeout_is_failed_even_after_repository_changes_and_its_descendants_end() {
     let fixture = Fixture::new();
     let escaped = fixture.scenario.path("escaped-after-timeout");
     fixture.scenario.agent_does(&format!(
         r#"
+printf changed > changed-by-agent.txt
 (sleep 3; echo escaped > '{}') &
 while true; do sleep 0.05; done
 "#,
@@ -1102,16 +1272,27 @@ while true; do sleep 0.05; done
 }
 
 #[test]
-fn void_trials_retry_twice_in_fresh_repositories_and_keep_every_cause() {
+fn login_failures_retry_twice_fresh_drop_both_arms_and_show_causes() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does(r#"
-echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["connection refused"]}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+case "$PWD" in *--candidate--*)
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["login expired"]}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+;; esac
 "#);
     let result = fixture.run(&[]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let experiment = fixture.experiment();
     assert_eq!(experiment["results"].as_array().unwrap().len(), 2);
+    assert_eq!(experiment["verdict"]["verdict"], "inconclusive");
+    let suite = &experiment["verdict"]["suites"]["spec-review"];
+    assert_eq!(suite["dropped_tasks"], 1);
+    assert_eq!(suite["retained_tasks"], 0);
     for result in experiment["results"].as_array().unwrap() {
+        if result["arm"] == "baseline" {
+            assert_eq!(result["outcome"], "succeeded");
+            assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
+            continue;
+        }
         assert_eq!(result["outcome"], "void");
         assert_eq!(result["attempts"].as_array().unwrap().len(), 3);
         for attempt in result["attempts"].as_array().unwrap() {
@@ -1119,12 +1300,234 @@ echo '{"type":"result","subtype":"error_during_execution","is_error":true,"error
         }
     }
     let calls = fixture.scenario.claude_calls();
-    assert_eq!(calls.len(), 6);
+    assert_eq!(calls.len(), 4);
     let repositories: std::collections::BTreeSet<_> = calls
         .iter()
         .map(|call| call["cwd"].as_str().unwrap())
         .collect();
-    assert_eq!(repositories.len(), 6);
+    assert_eq!(repositories.len(), 4);
+    assert_eq!(experiment["voids"]["baseline"]["count"], 0);
+    assert_eq!(experiment["voids"]["candidate"]["count"], 3);
+    assert_eq!(
+        experiment["voids"]["candidate"]["causes"]["session_unavailable"],
+        3
+    );
+    let shown = fixture
+        .scenario
+        .run(&["experiments", experiment["id"].as_str().unwrap()]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    assert!(
+        shown.stdout.contains("Baseline: 0 Void Trials"),
+        "{}",
+        shown.stdout
+    );
+    assert!(
+        shown
+            .stdout
+            .contains("Candidate: 3 Void Trials (session_unavailable: 3)"),
+        "{}",
+        shown.stdout
+    );
+}
+
+#[test]
+fn provider_limit_pauses_consume_the_fixed_retry_budget_across_resumes() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(r#"
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["quota exceeded"]}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+"#);
+    for _ in 0..3 {
+        let paused = fixture.run(&[]);
+        assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    }
+    let finished = fixture.run(&[]);
+    assert_eq!(finished.code, Some(0), "{}", finished.stderr);
+    let experiment = fixture.experiment();
+    assert_eq!(experiment["state"], "completed");
+    assert_eq!(
+        experiment["verdict"]["suites"]["spec-review"]["dropped_tasks"],
+        1
+    );
+    for arm in ["baseline", "candidate"] {
+        assert_eq!(experiment["voids"][arm]["count"], 3);
+        assert_eq!(experiment["voids"][arm]["causes"]["usage_limit"], 3);
+    }
+    assert_eq!(fixture.scenario.claude_calls().len(), 6);
+}
+
+#[test]
+fn an_unexplained_trial_process_kill_fails_without_a_retry() {
+    let fixture = Fixture::new();
+    for commit in [&fixture.baseline, &fixture.candidate] {
+        fs::write(
+            fixture.scenario.path(&format!(
+                "home/.thirdshift/evals/builds/{commit}/thirdshift"
+            )),
+            "#!/bin/sh\nkill -KILL $$\n",
+        )
+        .unwrap();
+    }
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    for result in experiment["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "failed", "{result}");
+        assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(result["attempts"][0]["void_cause"], Value::Null);
+    }
+    assert_eq!(
+        experiment["verdict"]["suites"]["spec-review"]["dropped_tasks"],
+        0
+    );
+}
+
+#[test]
+fn an_agent_killing_its_own_harness_fails_without_a_retry() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does("kill -KILL \"$PPID\"");
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    for result in experiment["results"].as_array().unwrap() {
+        assert_eq!(
+            result["outcome"], "failed",
+            "agent action must count against its Arm: {result}"
+        );
+        assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
+    }
+    assert_eq!(
+        experiment["verdict"]["suites"]["spec-review"]["dropped_tasks"],
+        0
+    );
+}
+
+#[test]
+fn resuming_an_experiment_preserves_its_preexisting_void_rules() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(r#"
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["quota exceeded"]}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+"#);
+    let paused = fixture.run(&[]);
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    let experiment = fixture.experiment();
+    assert_eq!(experiment["state"], "paused");
+    let metadata = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}/experiment.json",
+        experiment["id"].as_str().unwrap()
+    ));
+    // A version-1 Experiment saved before the additional external causes.
+    let old_causes = json!([
+        "session_unavailable",
+        "usage_limit",
+        "rate_limit",
+        "interrupted",
+        "repository_changed"
+    ]);
+    let mut saved: Value = serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
+    saved["bar"]["void_rules"]["causes"] = old_causes.clone();
+    fs::write(&metadata, serde_json::to_vec(&saved).unwrap()).unwrap();
+    fixture.scenario.agent_does("true");
+    let resumed = fixture.run(&[]);
+    assert_eq!(
+        resumed.code,
+        Some(0),
+        "the same command must resume its saved Bar: {}",
+        resumed.stderr
+    );
+    let after = fixture.experiment();
+    assert_eq!(after["state"], "completed");
+    assert_eq!(after["bar"]["void_rules"]["causes"], old_causes);
+}
+
+#[test]
+fn externally_reported_host_kills_retry_fresh_and_keep_the_cause() {
+    let fixture = Fixture::new();
+    let output = json!({
+        "version": 1, "outcome": "void", "void_cause": "host_killed",
+        "cause": "Outer launcher reported a host kill",
+        "timings": {"total_ms": 50, "session_ms": 40},
+        "session_id": null, "log": null, "model_evidence": null,
+        "reports": {"standards": null, "spec": null}
+    });
+    for commit in [&fixture.baseline, &fixture.candidate] {
+        fs::write(
+            fixture.scenario.path(&format!(
+                "home/.thirdshift/evals/builds/{commit}/thirdshift"
+            )),
+            format!("#!/bin/sh\ncat <<'TRIAL_RESULT'\n{output}\nTRIAL_RESULT\n"),
+        )
+        .unwrap();
+    }
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    for result in fixture.experiment()["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "void");
+        assert_eq!(result["attempts"].as_array().unwrap().len(), 3);
+        for attempt in result["attempts"].as_array().unwrap() {
+            assert_eq!(attempt["void_cause"], "host_killed");
+        }
+    }
+}
+
+#[test]
+fn the_bar_never_allows_more_than_two_void_retries() {
+    let fixture = Fixture::new();
+    let run = fixture.run(&["--void-retries", "3"]);
+    assert_eq!(run.code, Some(2), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("Void Trials allow at most two fresh retries"),
+        "{}",
+        run.stderr
+    );
+    assert!(fixture.scenario.claude_calls().is_empty());
+}
+
+#[test]
+fn trial_only_memory_caps_are_counted_per_arm_and_repeated_caps_are_findings() {
+    for (retries, count, repeated) in [("0", 1, false), ("2", 3, true)] {
+        let fixture = Fixture::new();
+        // The outer launcher reports a cap from outside the agent's sandbox.
+        // An agent's own out-of-memory diagnostic is covered at the Trial seam.
+        let output = json!({
+            "version": 1, "outcome": "void", "void_cause": "memory_cap",
+            "cause": "Trial scope memory.events reported an oom_kill",
+            "timings": {"total_ms": 50, "session_ms": 40},
+            "session_id": null, "log": null, "model_evidence": null,
+            "reports": {"standards": null, "spec": null}
+        });
+        fs::write(
+            fixture.scenario.path(&format!(
+                "home/.thirdshift/evals/builds/{}/thirdshift",
+                fixture.candidate
+            )),
+            format!("#!/bin/sh\ncat <<'TRIAL_RESULT'\n{output}\nTRIAL_RESULT\n"),
+        )
+        .unwrap();
+        let run = fixture.run(&["--void-retries", retries]);
+        assert_eq!(run.code, Some(0), "{}", run.stderr);
+        let experiment = fixture.experiment();
+        assert_eq!(experiment["voids"]["baseline"]["count"], 0);
+        assert_eq!(experiment["voids"]["candidate"]["count"], count);
+        assert_eq!(
+            experiment["voids"]["candidate"]["causes"]["memory_cap"],
+            count
+        );
+        let findings = experiment["findings"].as_array().unwrap();
+        assert_eq!(!findings.is_empty(), repeated, "{experiment}");
+        let shown = fixture
+            .scenario
+            .run(&["experiments", experiment["id"].as_str().unwrap()]);
+        assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+        assert_eq!(
+            shown
+                .stdout
+                .contains("Finding: Candidate Arm repeatedly hit its memory cap (3 Void Trials)"),
+            repeated,
+            "{}",
+            shown.stdout
+        );
+    }
 }
 
 #[test]

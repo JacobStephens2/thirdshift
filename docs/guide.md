@@ -429,7 +429,8 @@ documents the manifests with made-up data and the Arm record.
 On the host holding #429's material, `thirdshift evals import-replays` reads
 the private replay manifests, cached original issue bodies and grading index
 under `~/.thirdshift/replays/` into the code-review and Spec-review suites.
-Rerunning adds only missing Eval tasks. The format document also describes the
+Rerunning adds missing Eval tasks and completes missing Code review Trial inputs,
+preserving local edits. The format document also describes the
 grading index to prepare on that host; private material stays outside the repository.
 
 ### Experiments
@@ -444,20 +445,28 @@ Each Arm accepts `--baseline-harness`, `--baseline-model`, `--baseline-effort`
 or the corresponding `--candidate-*` flag, followed by a value. Unspecified
 choices follow the User config, then the Harness defaults. Both builds must
 support the [versioned Trial protocol](https://github.com/JacobStephens2/thirdshift/blob/main/docs/trial.md).
-Spec-review Eval tasks run now; Code-review Trials arrive with #1016.
+Both Code review and Spec review Eval tasks run. Code review Trials use the
+production code-review Factory skill on the historical diff and retain both
+axis reports without fixing or publishing anything. Spec review Trials keep
+the ordinary Spec review prompt.
 
 The Bar is saved before the first Trial: margin `-0.10`, credible level `0.95`,
 prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
 `1800`-second per-Trial timeout, and up to two fresh retries for Void Trials.
 Override these with `--margin`, `--credible-level`, `--prior`, `--seed`,
 `--draws`, `--trials-per-task`, `--timeout` (seconds), or `--void-retries`.
-Timeouts count as failed Trials. Void causes are recorded; usage/rate limits
-pause scheduling until the same Experiment is started again. Claude's warning
-and rejection events also pause it immediately, as do Codex quota reports at
+`--void-retries` accepts zero, one or two. A sandbox that cannot start, a
+provider connection or login failure, a provider server error before work, a
+plan-limit stop, or a host kill or Trial-only memory cap makes a Trial void.
+Timeouts, context-window overflow, refusals and agent failures count as failed
+Trials. Void Trials retry fresh up to the Bar's limit and remain void if
+exhausted. A task still void in either Arm drops out of both Arms.
+
+Usage/rate limits pause scheduling until the same Experiment is started again.
+Claude's warning and rejection events also pause it immediately, as do Codex quota reports at
 85% usage in either window. A Trial cut short by a warning is void; a Trial
 already running on the other worker may finish, but neither worker starts
-another Trial or retry. Ordinary Runs do not stop at these warnings. Other Void Trials
-retry up to the Bar's limit and remain void if exhausted.
+another Trial or retry. Ordinary Runs do not stop at these warnings.
 The Experiment watches each Trial with the current detectors, including when
 an Arm's build predates warning detection.
 
@@ -475,8 +484,14 @@ or three). Any failed suite fails the Experiment; otherwise any inconclusive
 suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
 also makes it inconclusive. Results include the suite intervals, the Bar and
 each Arm's minutes across all attempts, including Void Trials and timeouts.
-Completed attempts that pause for provider limits count too, both while paused
-and after resume, without consuming the Bar's fresh-retry budget.
+The code-review suite runs three Trials per Arm per Eval task by default; the
+Spec-review suite runs one. For three-Trial suites, `experiments --json` reports
+`pass_cubed`: the share of retained Eval tasks where all three Trials passed,
+separately for each Arm.
+Provider usage/rate limits pause scheduling until the same Experiment is
+started again, consuming the same fresh-retry budget across resumes. Completed
+attempts count toward minutes and per-Arm Void totals even while paused or
+after resume. Stop preserves completed attempts and the remaining budget.
 
 The same Arms and suite names identify the same Experiment. Running it again
 skips finished Trials and re-runs interrupted ones; a completed Experiment only
@@ -491,6 +506,8 @@ and `usage.candidate`, with `models` and `cost_usd`; missing measurements are
 Input tokens include cache reads and writes, which are also shown separately.
 Totals include all attempts and Resume sessions; Grader usage is not charged
 to either Arm. The text view shows usage beside each Arm's minutes.
+Both views show Void counts and causes per Arm, and report repeated
+Trial-only memory-cap stops as a finding against that Arm.
 
 Each invocation that does work keeps a Command record, Command log and Activity
 log lines under `<logs.dir>/JacobStephens2/thirdshift/commands/experiment/`
