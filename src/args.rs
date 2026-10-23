@@ -14,6 +14,7 @@ use crate::child_run::{self, Given};
 use crate::harness::{self, Harness};
 use crate::issue::{IssueInput, IssueUrl};
 use crate::notification::NotificationAsk;
+use crate::ready::PickupOrder;
 use crate::run::Goal;
 
 /// What thirdshift was asked to do.
@@ -126,6 +127,10 @@ pub struct PassArgs {
     /// Run notification, the rest for a run the Pass dispatches. The
     /// Security run also uses `security-fix` for its own choice of work.
     pub flags: Flags,
+    /// What `lowest-first` or `highest-first` asked for, on a Pickup run:
+    /// which end of the issue numbers it takes its Ready issue from. None
+    /// leaves it to the User config. A Security run takes neither.
+    pub order: Option<PickupOrder>,
 }
 
 /// The word that lets a Run start a Base fix, which the command a Base fix
@@ -657,16 +662,36 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
 
 /// Parse the arguments after `pickup` or `secure`: shared flags, at most once, in any
 /// order, and nothing else. `base` must be followed by the Base branch.
+/// `lowest-first` and `highest-first` are a Pickup run's only: they say
+/// which end of the issue numbers it takes its Ready issue from, over the
+/// User config.
 fn parse_pass(args: &[String], command: &str) -> Result<PassArgs> {
     let mut base = None;
     let mut flags = Flags::default();
+    let mut order = None;
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
+        if command == "pickup" && take_pickup_order(&mut order, arg)? {
+            continue;
+        }
         if !take_pass_flag(&mut base, &mut flags, arg, &mut args)? {
             bail!("unexpected argument after {command}: {arg}");
         }
     }
-    Ok(PassArgs { base, flags })
+    Ok(PassArgs { base, flags, order })
+}
+
+/// Record in `order` what the Pickup flag `arg` asks for, if it is one of
+/// the order words, with or without its dashes. False, taking nothing, if
+/// `arg` is none of them.
+fn take_pickup_order(order: &mut Option<PickupOrder>, arg: &str) -> Result<bool> {
+    let asked = match arg {
+        "lowest-first" | "--lowest-first" => PickupOrder::LowestFirst,
+        "highest-first" | "--highest-first" => PickupOrder::HighestFirst,
+        _ => return Ok(false),
+    };
+    ask_once(order, asked, arg, ORDER_FLAGS)?;
+    Ok(true)
 }
 
 /// Take a Pass's shared words: its Base branch and the flags for its
@@ -771,6 +796,7 @@ fn take_flag<'a>(
     Ok(true)
 }
 
+const ORDER_FLAGS: &str = "lowest-first and highest-first";
 const MERGE_FLAGS: &str = "merge and no-merge";
 const EMAIL_FLAGS: &str = "email and no-email";
 const BASE_FIX_FLAGS: &str = "base-fix and no-base-fix";
@@ -1590,6 +1616,7 @@ mod tests {
         let none = PassArgs {
             base: None,
             flags: Flags::default(),
+            order: None,
         };
         assert_eq!(pickup_args(&["pickup"]), none);
         let all = PassArgs {
@@ -1610,6 +1637,7 @@ mod tests {
                     },
                 },
             },
+            order: None,
         };
         for args in [
             vec![
@@ -1661,6 +1689,7 @@ mod tests {
                 base_fix: Some(BaseFixAsk::Forbid),
                 harness: harness::Asked::default(),
             },
+            order: None,
         };
         for args in [
             ["pickup", "no-merge", "no-base-fix", "no-email"],
@@ -1671,6 +1700,67 @@ mod tests {
         let bare_email = pickup_args(&["pickup", "email", "merge"]);
         assert_eq!(bare_email.flags.email, Some(NotificationAsk::Send(None)));
         assert_eq!(bare_email.flags.goal, Some(Goal::Merged));
+    }
+
+    #[test]
+    fn pickup_takes_an_order_word_with_or_without_dashes() {
+        for (word, expected) in [
+            ("lowest-first", PickupOrder::LowestFirst),
+            ("--lowest-first", PickupOrder::LowestFirst),
+            ("highest-first", PickupOrder::HighestFirst),
+            ("--highest-first", PickupOrder::HighestFirst),
+        ] {
+            assert_eq!(
+                pickup_args(&["pickup", word]).order,
+                Some(expected),
+                "{word}"
+            );
+        }
+        assert_eq!(pickup_args(&["pickup"]).order, None);
+        assert_eq!(
+            pickup_args(&["pickup", "highest-first", "merge"]).order,
+            Some(PickupOrder::HighestFirst)
+        );
+    }
+
+    #[test]
+    fn pickup_rejects_repeated_and_contradictory_order_words() {
+        for (args, error) in [
+            (
+                vec!["pickup", "highest-first", "lowest-first"],
+                "lowest-first and highest-first can't be used together",
+            ),
+            (
+                vec!["pickup", "lowest-first", "--lowest-first"],
+                "repeated argument: --lowest-first",
+            ),
+            (
+                vec!["pickup", "highest-first", "highest-first"],
+                "repeated argument: highest-first",
+            ),
+        ] {
+            assert_eq!(rejection(&args), error, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn order_words_are_rejected_after_secure_and_an_issue_url() {
+        for (args, error) in [
+            (
+                vec!["secure", "highest-first"],
+                "unexpected argument after secure: highest-first",
+            ),
+            (
+                vec!["secure", "--lowest-first"],
+                "unexpected argument after secure: --lowest-first",
+            ),
+            (
+                vec![URL, "highest-first"],
+                "unexpected argument after the Issue URL: highest-first",
+            ),
+        ] {
+            assert_eq!(rejection(&args), error, "{args:?}");
+        }
     }
 
     #[test]

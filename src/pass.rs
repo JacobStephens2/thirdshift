@@ -28,7 +28,7 @@ use crate::labels::{Edit, Label};
 use crate::launch::{BaseBranch, LaunchDirectory};
 use crate::logs::{self, Pass, Work};
 use crate::progress;
-use crate::ready::{self, PriorityIssue, ReadyIssue};
+use crate::ready::{self, PickupOrder, PriorityIssue, ReadyIssue};
 use crate::run::{self, Ended, StartedBy};
 use crate::session::{Kind, Logs, Purpose, Sessions};
 use crate::worktree::ReviewWorktree;
@@ -68,9 +68,10 @@ pub trait Outside {
     fn apply(&mut self, edit: &Edit) -> Result<()>;
     /// Whether the run was interrupted.
     fn interrupted(&mut self) -> bool;
-    /// The repository's lowest-numbered Ready issue, if it has one, by the
-    /// Ready issue search, with its lines on the issues passed over.
-    fn ready_issue(&mut self) -> Result<Option<ReadyIssue>>;
+    /// The repository's Ready issue at `order`'s end of the issue numbers,
+    /// if it has one, by the Ready issue search, with its lines on the
+    /// issues passed over.
+    fn ready_issue(&mut self, order: PickupOrder) -> Result<Option<ReadyIssue>>;
     /// The lowest-numbered issue that goes before an Architect run: Ready
     /// or meeting every Ready issue condition except settling.
     fn before_architect(&mut self) -> Result<Option<PriorityIssue>>;
@@ -208,8 +209,8 @@ impl Outside for LaunchAndGitHub<'_> {
         interrupt::requested()
     }
 
-    fn ready_issue(&mut self) -> Result<Option<ReadyIssue>> {
-        ready::first(self.launch.git(), self.repo, self.config.pickup_wait)
+    fn ready_issue(&mut self, order: PickupOrder) -> Result<Option<ReadyIssue>> {
+        ready::first(self.launch.git(), self.repo, self.config.pickup_wait, order)
     }
 
     fn before_architect(&mut self) -> Result<Option<PriorityIssue>> {
@@ -457,7 +458,7 @@ mod in_memory {
     use crate::issue::{IssueUrl, Repo};
     use crate::labels::{Edit, Label, Labels};
     use crate::logs::{Pass, Work};
-    use crate::ready::ReadyIssue;
+    use crate::ready::{PickupOrder, ReadyIssue};
     use crate::run::{Ended, Goal, Reached};
     use crate::security::reproduction::{Outcome, Reproduction};
     use serde_json::{Value, json};
@@ -834,7 +835,7 @@ mod in_memory {
             self.interrupted
         }
 
-        fn ready_issue(&mut self) -> Result<Option<ReadyIssue>> {
+        fn ready_issue(&mut self, _order: PickupOrder) -> Result<Option<ReadyIssue>> {
             self.calls.push(Call::ReadySearch);
             Ok(self.ready.clone().map(|(listed, is_spec)| ReadyIssue {
                 listed,
@@ -844,7 +845,9 @@ mod in_memory {
         }
 
         fn before_architect(&mut self) -> Result<Option<super::PriorityIssue>> {
-            Ok(self.ready_issue()?.map(super::PriorityIssue::Ready))
+            Ok(self
+                .ready_issue(PickupOrder::LowestFirst)?
+                .map(super::PriorityIssue::Ready))
         }
 
         fn step(&mut self, line: String) {

@@ -15,6 +15,7 @@ use toml::{Table, Value};
 use toml_edit::{DocumentMut, Item};
 
 use crate::harness::{self, Harness, ModelAndEffort};
+use crate::ready::PickupOrder;
 
 pub mod console;
 pub use console::{ConsoleAccess, ConsoleSettings};
@@ -59,6 +60,9 @@ pub struct UserConfig {
     /// issue becomes a Ready issue, by default 30 minutes. Zero disables
     /// the settling window.
     pub pickup_wait: TimeDelta,
+    /// `pickup.order`: which end of the issue numbers a Pickup run takes
+    /// its Ready issue from, by default the lowest-numbered one.
+    pub pickup_order: PickupOrder,
     /// The `[harness]` section: the Harness every Command runs its sessions
     /// on, and a Model and Effort for each Harness.
     pub harness: harness::Settings,
@@ -127,6 +131,7 @@ impl UserConfig {
             spec_parallel: NonZeroUsize::new(3).unwrap(),
             pickup_limit: NonZeroUsize::new(3).unwrap(),
             pickup_wait: TimeDelta::minutes(30),
+            pickup_order: PickupOrder::LowestFirst,
             harness: harness::Settings::default(),
             security_harness: None,
             security_fix: None,
@@ -247,6 +252,19 @@ impl UserConfig {
                                      within the supported range in {file}"
                                 )
                             })?;
+                    }
+                    ("pickup", "order", Value::String(order)) => {
+                        config.pickup_order =
+                            PickupOrder::parse(order.trim()).with_context(|| {
+                                format!(
+                                    "pickup.order must be {} or {}, not {order:?}, in {file}",
+                                    PickupOrder::LowestFirst,
+                                    PickupOrder::HighestFirst,
+                                )
+                            })?;
+                    }
+                    ("pickup", "order", _) => {
+                        bail!("pickup.order must be a quoted order in {file}")
                     }
                     ("security", "review", Value::Boolean(review)) => {
                         config.security_review = *review
@@ -890,6 +908,7 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 [pickup]
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 wait_minutes = 30   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 30
+order = "lowest-first"   # which Ready issue a Pickup run takes, lowest-first or highest-first; default lowest-first
 
 [harness]
 default = "claude"   # the Harness every Ticket run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
@@ -1073,6 +1092,7 @@ mod tests {
                 "spec.parallel",
                 "pickup.limit",
                 "pickup.wait_minutes",
+                "pickup.order",
                 "harness.default",
                 "harness.claude.model",
                 "harness.claude.effort",
@@ -1260,6 +1280,30 @@ mod tests {
         assert_eq!(config.pickup_limit.get(), 1);
         for text in ["", "[pickup]\n"] {
             assert_eq!(parse(text).unwrap().pickup_limit.get(), 3, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn pickup_order_is_read_and_defaults_to_lowest_first() {
+        use crate::ready::PickupOrder;
+
+        let config = parse("[pickup]\norder = \"highest-first\"\n").unwrap();
+        assert_eq!(config.pickup_order, PickupOrder::HighestFirst);
+        let config = parse("[pickup]\norder = \"lowest-first\"\n").unwrap();
+        assert_eq!(config.pickup_order, PickupOrder::LowestFirst);
+        for text in ["", "[pickup]\n"] {
+            assert_eq!(
+                parse(text).unwrap().pickup_order,
+                PickupOrder::LowestFirst,
+                "{text:?}"
+            );
+        }
+        for value in ["\"lowest\"", "\"highest\"", "\"\"", "true", "3"] {
+            let error = parse(&format!("[pickup]\norder = {value}\n")).unwrap_err();
+            assert!(
+                error.to_string().contains("pickup.order must be"),
+                "{error:#}"
+            );
         }
     }
 
