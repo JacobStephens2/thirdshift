@@ -184,6 +184,9 @@ Lanes shows each Command and its child Runs on a shared time axis, over the last
 3.5, 12 or 24 hours. The window is kept in `hours=`; bars clip to that window,
 while their text retains the whole stage's time. Older Commands are on History.
 Stages keeps live Runs first across repositories, then finished Runs newest first.
+Rows follow the Command record's stage order: implement through cleanup, then
+the stages of other Command kinds. Unrecognised stage names follow all known
+stages in alphabetical order.
 Tables continue when the repository changes or three columns are filled, so
 each stage's Usual range belongs to that table's repository. On phones each
 stage stacks its labelled cells. Historical Runs without stage metadata show
