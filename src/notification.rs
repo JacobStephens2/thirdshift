@@ -16,14 +16,18 @@ use crate::issue::{IssueUrl, Repo};
 use crate::launch;
 use crate::logs;
 use crate::progress;
+use crate::run::Goal;
 use crate::run_ending::Account;
 
 /// Whether a Run or a Pass emails its Run notification, by its command or,
-/// without `email` or `no-email`, by the User config.
+/// without `email`, `email-unless-merged` or `no-email`, by the User config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NotificationAsk {
     /// Send one, to this address, else to `email.to`.
     Send(Option<String>),
+    /// Send one as [`NotificationAsk::Send`] does, unless the command ended
+    /// merged: then save it without emailing it.
+    SendUnlessMerged(Option<String>),
     /// Save it without emailing it.
     Skip,
 }
@@ -76,6 +80,8 @@ impl Subject {
 /// when requested.
 pub struct RunNotification {
     resend: Option<Resend>,
+    /// Whether the email is left unsent when the command ended merged.
+    unless_merged: bool,
     started: Instant,
     started_at: chrono::DateTime<chrono::Utc>,
     subject: Subject,
@@ -94,8 +100,11 @@ impl RunNotification {
     pub fn new(ask: NotificationAsk, settings: &EmailSettings, about: About) -> Result<Self> {
         let started = Instant::now();
         let started_at = chrono::Utc::now();
+        let unless_merged = matches!(ask, NotificationAsk::SendUnlessMerged(_));
         let resend = match ask {
-            NotificationAsk::Send(to) => Some(Resend::new(to, settings)?),
+            NotificationAsk::Send(to) | NotificationAsk::SendUnlessMerged(to) => {
+                Some(Resend::new(to, settings)?)
+            }
             NotificationAsk::Skip => None,
         };
         let subject = match about {
@@ -119,6 +128,7 @@ impl RunNotification {
         };
         Ok(RunNotification {
             resend,
+            unless_merged,
             started,
             started_at,
             subject,
@@ -145,7 +155,8 @@ impl RunNotification {
     }
 
     /// Save the one notification for the command that ended as `account`
-    /// tells, and email it if asked. A Pickup run that took no issue has
+    /// tells, and email it if asked, unless asked only for a command that
+    /// did not end merged and it did. A Pickup run that took no issue has
     /// nothing to tell, as a skipped pass, which has no account, does not
     /// either. A failed write or send is only a warning: it never changes
     /// the command's outcome.
@@ -187,7 +198,8 @@ impl RunNotification {
                 ));
             }
         }
-        if let Some(resend) = self.resend
+        let merged = account.outcome == Goal::Merged.outcome();
+        if let Some(resend) = self.resend.filter(|_| !(self.unless_merged && merged))
             && let Err(error) = resend.send(&subject, &text)
         {
             progress::step(format_args!(

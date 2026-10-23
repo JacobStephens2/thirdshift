@@ -1197,6 +1197,7 @@ pull = true
 
 [email]
 always = true
+unless_merged = false
 to = \"mine@example.net\"
 from = \"ts@acme.dev\"
 

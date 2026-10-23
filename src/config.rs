@@ -82,6 +82,9 @@ pub struct EmailSettings {
     /// `email.always`: every Run, and every Architect run, sends a Run
     /// notification unless told `no-email`.
     pub always: bool,
+    /// `email.unless_merged`: the Run notification `email.always` asks for
+    /// is saved but not emailed when the command ended merged.
+    pub unless_merged: bool,
     /// `email.to`: the address email goes to when the command names none.
     pub to: Option<String>,
     /// `email.from`: the sender, in place of Resend's shared test sender.
@@ -223,6 +226,12 @@ impl UserConfig {
                     }
                     ("email", "always", Value::Boolean(always)) => config.email.always = *always,
                     ("email", "always", _) => bail!("email.always must be true or false in {file}"),
+                    ("email", "unless_merged", Value::Boolean(unless_merged)) => {
+                        config.email.unless_merged = *unless_merged
+                    }
+                    ("email", "unless_merged", _) => {
+                        bail!("email.unless_merged must be true or false in {file}")
+                    }
                     ("email", "to", Value::String(to)) => config.email.to = Some(to.clone()),
                     ("email", "from", Value::String(from)) => {
                         config.email.from = Some(from.clone())
@@ -859,6 +868,7 @@ pull = false     # every Ticket run first fast-forwards your checkout of the Bas
 
 [email]
 always = false                  # every Ticket run sends a Run notification, without the email word; default false
+unless_merged = false           # with always, a Ticket run that merged emails none, as the email-unless-merged word asks; default false
 # to = "you@example.com"        # where email goes when the command names no address; no default
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 
@@ -1056,6 +1066,7 @@ mod tests {
                 "base.fix",
                 "launch.pull",
                 "email.always",
+                "email.unless_merged",
                 "email.to",
                 "email.from",
                 "logs.dir",
@@ -1271,6 +1282,18 @@ mod tests {
         assert_eq!(parse("[email]\n").unwrap().email, EmailSettings::default());
         assert!(parse("[email]\nalways = true\n").unwrap().email.always);
         assert!(!parse("[email]\nalways = false\n").unwrap().email.always);
+        assert!(
+            parse("[email]\nunless_merged = true\n")
+                .unwrap()
+                .email
+                .unless_merged
+        );
+        assert!(
+            !parse("[email]\nalways = true\n")
+                .unwrap()
+                .email
+                .unless_merged
+        );
     }
 
     #[test]
@@ -1380,6 +1403,10 @@ mod tests {
             (
                 "[email]\nalways = \"yes\"\n",
                 "email.always must be true or false",
+            ),
+            (
+                "[email]\nunless_merged = 1\n",
+                "email.unless_merged must be true or false",
             ),
             (
                 "[email]\nto = 1\n",

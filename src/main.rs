@@ -109,6 +109,7 @@ merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
 Shared options (before or after the Issue URL or number, or after a Pass command):
   merge / no-merge                    Merge the pull request / leave it for review
   email [<address>] / no-email        Send a Run notification / skip it
+  email-unless-merged [<address>]     Send a Run notification unless it ended merged
   base-fix / no-base-fix              Allow / forbid fixing inherited CI failures
   parallel <n>                       Run up to <n> Tickets at once (Spec runs; default 3)
   harness <name>                     Choose claude, codex, agy, grok, muse, opencode
@@ -123,7 +124,7 @@ cannot be combined. Command options override the User config's defaults.
 Pass commands: architect, pickup, secure (no Issue URL).
   base <branch>                      Use an origin branch, whatever is checked out
   --plan-only                        architect only; stops before dispatching a Ticket run
-With --plan-only, only base, email and no-email apply.
+With --plan-only, only base, email, email-unless-merged and no-email apply.
 
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting.
 For workflow details, settings, Harness setup, email, logs and scheduling, see the manual:
