@@ -85,6 +85,13 @@ pub(super) fn prepare(directory: &Path, task: &Task, destination: &Path) -> Resu
             "--no-textconv",
             "--binary",
             "--full-index",
+            "--no-color",
+            "--unified=3",
+            "--no-relative",
+            "--src-prefix=a/",
+            "--dst-prefix=b/",
+            "--submodule=short",
+            "--ignore-submodules=none",
             &task.base,
             &task.change,
             "--",
@@ -92,7 +99,7 @@ pub(super) fn prepare(directory: &Path, task: &Task, destination: &Path) -> Resu
         None,
     )?;
     if !patch.is_empty() {
-        bytes(repo, &["apply", "--binary", "-"], Some(&patch))?;
+        bytes(repo, &["apply", "--index", "--binary", "-"], Some(&patch))?;
     }
     copy_inputs(directory, task, repo)?;
     prune(repo)?;

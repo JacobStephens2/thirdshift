@@ -100,8 +100,12 @@ changed paths. With no changed paths it returns `[]`.
 `prepare` requires an approved Eval task and a destination that does not exist.
 It creates an independent Git repository in a temporary sibling folder, fetches
 only the base's ancestry from the local source, and checks out a detached base.
-It applies the binary-capable `base..change` patch without importing the change's
-commit objects, then copies the declared inputs. No source worktree, configuration,
+It stages the binary-capable `base..change` patch in the index without importing
+the change's commit objects, then copies the declared inputs. The reviewed change,
+including added files and submodule commit updates, is visible with
+`git diff --cached HEAD`; copied inputs may also be untracked or unstaged.
+Patch generation uses fixed prefixes, plain output and submodule commit IDs,
+independently of the source's display settings. No source worktree, configuration,
 hooks, alternate object store, tags or branches are copied. Reflogs are expired
 and unreachable objects pruned. Before publishing the destination, preparation
 uses `verify` to compare **all** visible history with the base's ancestry. A

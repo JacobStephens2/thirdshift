@@ -70,8 +70,12 @@ impl Fixture {
         }
     }
 
+    fn suite(&self, name: &str) -> PathBuf {
+        self.home.join(".thirdshift/evals/suites").join(name)
+    }
+
     fn task(&self, session: &str, state: &str) -> PathBuf {
-        let suite = self.home.join(".thirdshift/evals/suites/reviews");
+        let suite = self.suite("reviews");
         let task = suite.join("tasks/example");
         fs::create_dir_all(&task).unwrap();
         fs::write(
@@ -192,15 +196,8 @@ fn proposals_are_listed_but_cannot_be_prepared() {
 #[test]
 fn suite_declarations_select_changed_paths_across_all_dependency_categories() {
     let fixture = Fixture::new();
-    let task = fixture.task("code-review", "approved");
-    let specs = task
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("specs");
+    fixture.task("code-review", "approved");
+    let specs = fixture.suite("specs");
     fs::create_dir(&specs).unwrap();
     fs::write(
         specs.join("suite.toml"),
@@ -301,8 +298,8 @@ fn spec_review_gets_an_independent_bare_origin_and_can_push() {
 #[test]
 fn refuses_wildcard_dependencies_instead_of_silently_missing_changes() {
     let fixture = Fixture::new();
-    let task = fixture.task("code-review", "approved");
-    let manifest = task.parent().unwrap().parent().unwrap().join("suite.toml");
+    fixture.task("code-review", "approved");
+    let manifest = fixture.suite("reviews").join("suite.toml");
     let text = fs::read_to_string(&manifest).unwrap();
     fs::write(
         manifest,
@@ -312,4 +309,81 @@ fn refuses_wildcard_dependencies_instead_of_silently_missing_changes() {
     let output = fixture.evals(&["touched", "skills/thirdshift-code-review/SKILL.md"]);
     assert!(!output.status.success());
     assert!(String::from_utf8_lossy(&output.stderr).contains("wildcard"));
+}
+
+#[test]
+fn preparation_ignores_source_diff_prefix_setting() {
+    let fixture = Fixture::new();
+    git(&fixture.source, &["config", "diff.noprefix", "true"]);
+    fixture.task("code-review", "approved");
+    success(fixture.prepare());
+    assert_eq!(
+        fs::read_to_string(fixture.destination.join("code.txt")).unwrap(),
+        "review this\n"
+    );
+}
+
+#[test]
+fn preparation_preserves_changed_submodule_commit() {
+    let mut fixture = Fixture::new();
+    let sub = fixture._root.path().join("submodule-source");
+    fs::create_dir(&sub).unwrap();
+    git(&sub, &["init", "-q"]);
+    fs::write(sub.join("code.txt"), "before\n").unwrap();
+    git(&sub, &["add", "."]);
+    git(&sub, &["commit", "-qm", "Submodule base"]);
+    let old = git(&sub, &["rev-parse", "HEAD"]);
+    fs::write(sub.join("code.txt"), "after\n").unwrap();
+    git(&sub, &["commit", "-qam", "Submodule change"]);
+    let new = git(&sub, &["rev-parse", "HEAD"]);
+    git(
+        &fixture.source,
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            sub.to_str().unwrap(),
+            "module",
+        ],
+    );
+    let checkout = fixture.source.join("module");
+    git(&checkout, &["checkout", "-q", &old]);
+    git(&fixture.source, &["add", "."]);
+    git(&fixture.source, &["commit", "-qm", "Base with module"]);
+    fixture.base = git(&fixture.source, &["rev-parse", "HEAD"]);
+    git(&checkout, &["checkout", "-q", &new]);
+    git(&fixture.source, &["add", "module"]);
+    git(&fixture.source, &["commit", "-qm", "Change module"]);
+    fixture.change = git(&fixture.source, &["rev-parse", "HEAD"]);
+    fixture.task("code-review", "approved");
+    success(fixture.prepare());
+    let diff = git(
+        &fixture.destination,
+        &["diff", "HEAD", "--submodule=short", "--", "module"],
+    );
+    assert!(
+        diff.contains(&format!("+Subproject commit {new}")),
+        "reviewed submodule change disappeared: {diff:?}"
+    );
+}
+
+#[test]
+fn preparation_ignores_source_zero_context_setting() {
+    let mut fixture = Fixture::new();
+    fs::write(fixture.source.join("code.txt"), "first\nbefore\nlast\n").unwrap();
+    git(&fixture.source, &["add", "code.txt"]);
+    git(&fixture.source, &["commit", "-qm", "Base with context"]);
+    fixture.base = git(&fixture.source, &["rev-parse", "HEAD"]);
+    fs::write(fixture.source.join("code.txt"), "first\nafter\nlast\n").unwrap();
+    git(&fixture.source, &["commit", "-qam", "Change middle line"]);
+    fixture.change = git(&fixture.source, &["rev-parse", "HEAD"]);
+    git(&fixture.source, &["config", "diff.context", "0"]);
+    fixture.task("code-review", "approved");
+    success(fixture.prepare());
+    assert_eq!(
+        fs::read_to_string(fixture.destination.join("code.txt")).unwrap(),
+        "first\nafter\nlast\n"
+    );
 }
