@@ -214,6 +214,44 @@ fn a_second_address_is_an_argument_error() {
 const CREDENTIALS: &str = "[resend]\nkey = \"re_file_456\"\n";
 
 #[test]
+fn a_claude_setup_token_can_share_the_credentials_without_being_sent_or_printed() {
+    let scenario = Scenario::new();
+    let token = "sk-ant-oat01-private-trial-token";
+    scenario.credentials_are(&format!(
+        "{CREDENTIALS}\n[claude]\nsetup_token = '{token}'\n"
+    ));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = email_test(&scenario, &resend, &["me@example.com"], None);
+
+    let request = the_one_request(&resend, &result);
+    assert_eq!(request.authorization.as_deref(), Some("Bearer re_file_456"));
+    for output in [result.stdout, result.stderr, request.body.to_string()] {
+        assert!(!output.contains(token), "token leaked");
+    }
+}
+
+#[test]
+fn malformed_credentials_never_echo_the_claude_setup_token() {
+    let scenario = Scenario::new();
+    let token = "sk-ant-oat01-private-trial-token";
+    let path = scenario.credentials_are(&format!("[claude]\nsetup_token = '{token}' broken\n"));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = email_test(&scenario, &resend, &["me@example.com"], None);
+
+    assert_eq!(result.code, Some(1));
+    assert!(result.stderr.contains("can't parse"));
+    assert!(result.stderr.contains(&path.display().to_string()));
+    assert!(
+        !result.stderr.contains(token),
+        "token leaked in parse diagnostic"
+    );
+    assert!(!result.stdout.contains(token));
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
 fn without_resend_api_key_it_sends_with_the_key_in_the_credentials() {
     for key in [None, Some("")] {
         let scenario = Scenario::new();
@@ -301,6 +339,12 @@ fn broken_credentials_stop_it_naming_the_file_and_the_key() {
         ("[resnd]\nkey = \"re_file_456\"\n", "[resnd]"),
         ("key = \"re_file_456\"\n", "key"),
         ("[resend]\nkey = 456\n", "resend.key"),
+        ("[claude]\nsetup_token = 456\n", "claude.setup_token"),
+        (
+            "[claude]\nsetup_token = 'private'\ntoken = 'typo'\n",
+            "claude.token",
+        ),
+        ("claude = 456\n", "claude must be the section [claude]"),
     ] {
         let scenario = Scenario::new();
         let path = scenario.credentials_are(credentials);
