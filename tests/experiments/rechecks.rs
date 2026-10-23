@@ -275,16 +275,28 @@ fn completed_experiments_saved_before_rechecks_acquire_the_pending_gate() {
     assert_eq!(fixture.run(&["--prior", "0.01"]).code, Some(0));
     let experiment = fixture.experiment();
     let id = experiment["id"].as_str().unwrap();
-    let path = fixture.scenario.path(&format!("home/.thirdshift/evals/experiments/{id}/experiment.json"));
+    let path = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{id}/experiment.json"
+    ));
     let mut legacy: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     legacy.as_object_mut().unwrap().remove("rechecks");
     legacy.as_object_mut().unwrap().remove("pending_rechecks");
-    legacy["verdict"].as_object_mut().unwrap().remove("provisional_verdict");
+    legacy["verdict"]
+        .as_object_mut()
+        .unwrap()
+        .remove("provisional_verdict");
     legacy["verdict"]["verdict"] = json!("pass");
     fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
     assert_eq!(fixture.experiment(), experiment);
     let trial = experiment["pending_rechecks"][0]["id"].as_str().unwrap();
-    let check = fixture.scenario.run(&["recheck", id, trial, "pass", "--reason", "Rechecked the historical Score."]);
+    let check = fixture.scenario.run(&[
+        "recheck",
+        id,
+        trial,
+        "pass",
+        "--reason",
+        "Rechecked the historical Score.",
+    ]);
     assert_eq!(check.code, Some(0), "{}", check.stderr);
     assert_eq!(fixture.experiment()["verdict"]["verdict"], "pass");
 }
@@ -292,17 +304,37 @@ fn completed_experiments_saved_before_rechecks_acquire_the_pending_gate() {
 #[test]
 fn dropped_void_tasks_have_no_rechecks_and_refuse_human_scores() {
     let fixture = Fixture::new();
-    fixture.scenario.agent_does("printf changed >> .thirdshift-issue.md");
+    fixture
+        .scenario
+        .agent_does("printf changed >> .thirdshift-issue.md");
     assert_eq!(fixture.run(&[]).code, Some(0));
     let experiment = fixture.experiment();
     assert_eq!(experiment["verdict"]["verdict"], "inconclusive");
     assert_eq!(experiment["pending_rechecks"], json!([]));
     let id = experiment["id"].as_str().unwrap();
-    let results = fixture.scenario.path(&format!("home/.thirdshift/evals/experiments/{id}/results"));
-    let trial = fs::read_dir(results).unwrap().next().unwrap().unwrap().path();
+    let results = fixture
+        .scenario
+        .path(&format!("home/.thirdshift/evals/experiments/{id}/results"));
+    let trial = fs::read_dir(results)
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
     let trial = trial.file_stem().unwrap().to_str().unwrap();
-    let check = fixture.scenario.run(&["recheck", id, trial, "pass", "--reason", "Cannot revive a Void task."]);
+    let check = fixture.scenario.run(&[
+        "recheck",
+        id,
+        trial,
+        "pass",
+        "--reason",
+        "Cannot revive a Void task.",
+    ]);
     assert_ne!(check.code, Some(0));
-    assert!(check.stderr.contains("Void Eval tasks cannot be rechecked"), "{}", check.stderr);
+    assert!(
+        check.stderr.contains("Void Eval tasks cannot be rechecked"),
+        "{}",
+        check.stderr
+    );
     assert_eq!(fixture.experiment(), experiment);
 }
