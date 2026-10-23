@@ -6,6 +6,7 @@ use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 
 use super::command_record::{CommandRecord, StageName};
+use super::session_signals::{SessionSignals, Summary};
 use super::usual_range::{UsualRange, UsualRanges};
 
 #[derive(Serialize, Deserialize)]
@@ -17,6 +18,8 @@ pub(super) struct RunMetrics {
     pub(super) unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
     pub(super) stages: Vec<StageMetrics>,
     pub(super) total_minutes: Option<f64>,
+    #[serde(default)]
+    pub(super) session_signals: Option<std::collections::BTreeMap<String, Summary>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -28,6 +31,8 @@ pub(super) struct StageMetrics {
     pub(super) position: Position,
     // Only the first stage referencing a Session holds its review counts.
     pub(super) review_findings: Option<ReviewFindings>,
+    #[serde(default)]
+    pub(super) session_signals: Option<SessionSignals>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -46,17 +51,43 @@ pub(super) enum Position {
 }
 
 impl RunMetrics {
+    pub(super) fn add_session_signals(
+        &mut self,
+        record: &CommandRecord,
+        mut read: impl FnMut(&std::path::Path) -> Option<SessionSignals>,
+    ) {
+        if self.session_signals.is_some() {
+            return;
+        }
+        let mut seen = HashSet::new();
+        let mut summaries = std::collections::BTreeMap::<String, Summary>::new();
+        for (stage, metric) in record.stages.iter().zip(&mut self.stages) {
+            if let Some(log) = stage.session_log.as_deref()
+                && seen.insert(super::session::original(log))
+            {
+                metric.session_signals = read(log);
+                summaries
+                    .entry(stage.name.clone())
+                    .or_default()
+                    .add(metric.session_signals.as_ref());
+            }
+        }
+        self.session_signals = Some(summaries);
+    }
+
     pub(super) fn of(
         record: &CommandRecord,
         ranges: &UsualRanges,
         outside: &mut impl super::effects::Outside,
         unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
     ) -> Self {
-        Self::calculate(record, ranges, unaddressed_findings, |log| {
+        let mut metrics = Self::calculate(record, ranges, unaddressed_findings, |log| {
             outside
                 .review_summary(log)
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        })
+        });
+        metrics.add_session_signals(record, |log| outside.session_signals(log));
+        metrics
     }
 
     /// Old records have no saved review counts or Usual ranges. Do not infer
@@ -110,6 +141,7 @@ impl RunMetrics {
                             .as_deref()
                             .filter(|log| sessions.insert(log.to_path_buf()))
                             .and_then(&mut review),
+                        session_signals: None,
                     }
                 })
                 .collect(),
@@ -119,6 +151,7 @@ impl RunMetrics {
                 let milliseconds = ended.signed_duration_since(began).num_milliseconds();
                 (milliseconds >= 0).then_some(milliseconds as f64 / 60_000.0)
             }),
+            session_signals: None,
         }
     }
 }

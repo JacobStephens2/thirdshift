@@ -258,6 +258,12 @@ fn read_records(folder: &Path, past_metrics: bool) -> Result<BTreeMap<PathBuf, C
                 if record.run_metrics.is_none() && record.outcome.is_some() {
                     record.run_metrics = Some(super::run_metrics::RunMetrics::historical(record));
                 }
+                if let Some(mut metrics) = record.run_metrics.take() {
+                    metrics.add_session_signals(record, |log| {
+                        super::session_signals::read(log).ok().flatten()
+                    });
+                    record.run_metrics = Some(metrics);
+                }
             }
             records.insert(path, tree);
             continue;

@@ -8,6 +8,40 @@ use support::Scenario;
 const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
 #[test]
+fn a_run_records_session_trace_signals_at_completion() {
+    let scenario = Scenario::new();
+    scenario.agent_does(r#"
+echo '{"type":"assistant","message":{"id":"m1","model":"reported-model","content":[],"usage":{"input_tokens":8,"output_tokens":4,"cache_read_input_tokens":2,"cache_creation_input_tokens":3}}}'
+echo work > work.txt
+git add work.txt
+git commit -qm 'Make widgets'
+gh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7'
+"#);
+    let ended = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let saved = scenario.command_record(LOGS);
+    let summary = &saved["run_metrics"]["session_signals"]["implement"];
+    assert_eq!(summary["observed_sessions"], 1);
+    assert_eq!(summary["missing_sessions"], 0);
+    assert_eq!(
+        summary["signals"]["tokens_by_model"],
+        serde_json::json!([{
+            "model":"reported-model", "input_tokens":13, "output_tokens":4,
+            "cache_read_tokens":2, "cache_write_tokens":3
+        }])
+    );
+    for name in scenario.entries(LOGS) {
+        if name.ends_with(".logs.jsonl") || name.ends_with(".spans.jsonl") {
+            fs::remove_file(scenario.path(LOGS).join(name)).unwrap();
+        }
+    }
+    let shown = scenario.run(&["metrics", "widgets#7", "--json"]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
+    assert_eq!(shown["command"]["metrics"], saved["run_metrics"]);
+}
+
+#[test]
 fn spec_review_nested_evidence_heading_preserves_the_findings_axis() {
     let scenario = Scenario::new();
     scenario.agent_does(
