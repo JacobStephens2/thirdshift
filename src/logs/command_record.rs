@@ -258,6 +258,7 @@ impl CommandRecord {
         account: &crate::run_ending::Account<'_>,
         outside: &mut impl super::effects::Outside,
         ranges: &super::usual_range::UsualRanges,
+        unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
     ) {
         self.ended_at = Some(outside.now().to_rfc3339());
         self.outcome = Some(account.outcome.into());
@@ -270,7 +271,12 @@ impl CommandRecord {
         self.security_findings_waiting = account.security_findings_waiting;
         self.security_findings = account.security_findings.unwrap_or_default().to_vec();
         if matches!(self.kind.as_str(), "Run" | "Spec run" | "Base fix") {
-            self.run_metrics = Some(super::run_metrics::RunMetrics::of(self, ranges, outside));
+            self.run_metrics = Some(super::run_metrics::RunMetrics::of(
+                self,
+                ranges,
+                outside,
+                unaddressed_findings,
+            ));
         }
     }
 

@@ -13,6 +13,8 @@ pub(super) struct RunMetrics {
     outcome: String,
     repairs: usize,
     ci_rounds: usize,
+    #[serde(default)]
+    unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
     stages: Vec<StageMetrics>,
     total_minutes: Option<f64>,
 }
@@ -48,6 +50,7 @@ impl RunMetrics {
         record: &CommandRecord,
         ranges: &UsualRanges,
         outside: &mut impl super::effects::Outside,
+        unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
     ) -> Self {
         let mut sessions = HashSet::new();
         let count = |name: StageName| {
@@ -64,6 +67,7 @@ impl RunMetrics {
                 .expect("a finished Run has an outcome"),
             repairs: count(StageName::Repair),
             ci_rounds: count(StageName::CiWatch),
+            unaddressed_findings,
             stages: record
                 .stage_times(None)
                 .map(|timing| {

@@ -10,6 +10,9 @@ use crate::harness::Choice;
 use crate::issue::IssueUrl;
 use crate::{poll, progress};
 
+mod findings;
+pub(crate) use findings::UnaddressedFindings;
+
 /// Immutable information for reporting and confirmed Self-merge finishing.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Identified {
@@ -49,6 +52,7 @@ pub(crate) struct PullRequest<A = GitHub> {
     base: String,
     identified: Option<Identified>,
     scope: CaptureScope,
+    security_review_count: Option<usize>,
     adapter: A,
 }
 
@@ -66,6 +70,7 @@ impl<A: Adapter> PullRequest<A> {
             base: base.to_string(),
             identified: None,
             scope: CaptureScope::Delivery,
+            security_review_count: None,
             adapter,
         }
     }
@@ -277,6 +282,32 @@ impl<A: Adapter> PullRequest<A> {
     /// identity captured only by Failed run completion discovery.
     pub fn info(&self) -> Option<Identified> {
         self.identified.clone()
+    }
+
+    /// Read only the captured PR, after publication and any Repairs. Completion
+    /// reads also work after interruption or a merge; metrics grant no authority.
+    pub fn unaddressed_findings(&mut self) -> Option<UnaddressedFindings> {
+        let pr = self.identified.as_ref()?;
+        let mut counts = match self.adapter.body(&self.issue, pr.number, true) {
+            Ok(body) => UnaddressedFindings::from_body(&body),
+            Err(error) => {
+                progress::step(format!(
+                    "warning: could not read Unaddressed findings for Run metrics: {error:#}"
+                ));
+                return self
+                    .security_review_count
+                    .map(UnaddressedFindings::from_security_review);
+            }
+        };
+        if let Some(count) = self.security_review_count {
+            counts.include_security_review(count);
+        }
+        Some(counts)
+    }
+
+    /// The review's own count survives a failed body write or later publication.
+    pub fn security_reviewed(&mut self, count: usize) {
+        self.security_review_count = Some(count);
     }
 
     /// Every unknown-mergeability poll repeats all readiness checks on one

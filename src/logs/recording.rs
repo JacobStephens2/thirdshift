@@ -37,6 +37,7 @@ pub(super) struct Record<O: Outside> {
     parent_record: Option<PathBuf>,
     parent_dispatch: Option<String>,
     record_warned: bool,
+    unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
 }
 
 enum Log<W> {
@@ -88,6 +89,7 @@ impl<O: Outside> Record<O> {
             parent_record: None,
             parent_dispatch: None,
             record_warned: false,
+            unaddressed_findings: None,
         }
     }
 
@@ -329,10 +331,22 @@ impl<O: Outside> Record<O> {
         self.write_record();
     }
 
+    pub(super) fn unaddressed_findings(
+        &mut self,
+        counts: Option<crate::pull_request::UnaddressedFindings>,
+    ) {
+        self.unaddressed_findings = counts;
+    }
+
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
         let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record {
-            tree.command.finish(account, &mut self.outside, &ranges);
+            tree.command.finish(
+                account,
+                &mut self.outside,
+                &ranges,
+                self.unaddressed_findings.take(),
+            );
             self.write_record();
         }
     }
@@ -342,7 +356,12 @@ impl<O: Outside> Record<O> {
         if let Some((_, tree)) = &mut self.command_record
             && let Some(dispatched) = tree.dispatched.last_mut()
         {
-            dispatched.finish(account, &mut self.outside, &ranges);
+            dispatched.finish(
+                account,
+                &mut self.outside,
+                &ranges,
+                self.unaddressed_findings.take(),
+            );
             self.write_record();
         }
     }
