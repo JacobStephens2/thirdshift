@@ -80,7 +80,7 @@ pub struct RunNotification {
     started_at: chrono::DateTime<chrono::Utc>,
     subject: Subject,
     /// The command's configured Harness, Model and Effort, once known.
-    configured: Option<String>,
+    configured: Option<Choice>,
 }
 
 impl RunNotification {
@@ -141,7 +141,7 @@ impl RunNotification {
     /// Name the configured Harness, Model and Effort without claiming
     /// that the Harness confirmed which Model executed.
     pub fn built_with(&mut self, harness: &Choice) {
-        self.configured = Some(format!("{harness} (configured)"));
+        self.configured = Some(harness.clone());
     }
 
     /// Save the one notification for the command that ended as `account`
@@ -155,10 +155,19 @@ impl RunNotification {
         };
         let host = host::name();
         let command_log = logs::command_log_path();
+        // Detection happens during sessions, after the choice was configured.
+        let configured = self.configured.as_ref().map(|choice| {
+            if account.pre_audit_failure.is_some() {
+                return format!("{choice} (configured)");
+            }
+            let version = crate::harness::version::detected(choice.harness, command_log.as_deref());
+            let line = choice.built_with(&version);
+            format!("{} (configured)", line.strip_prefix("Built with ").unwrap())
+        });
         let mut text = body(
             &self.subject,
             account,
-            self.configured.as_deref(),
+            configured.as_deref(),
             command_log.as_deref(),
             host.as_deref().unwrap_or("unknown host"),
             self.started.elapsed(),
