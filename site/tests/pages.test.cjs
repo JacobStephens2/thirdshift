@@ -129,6 +129,18 @@ test("every public page identifies its canonical URL, purpose and share metadata
   assert.match(await page.title(), /GitHub issues.*pull requests/);
 });
 
+test("hand-written pages describe the current share card in both alt tags", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  for (const path of ["/", "/how-it-works/", "/architecture/"]) {
+    await page.goto(`${origin}${path}`);
+    for (const selector of ['meta[property="og:image:alt"]', 'meta[name="twitter:image:alt"]']) {
+      const alt = await page.locator(selector).getAttribute("content");
+      assert.match(alt, /Your issues become pull requests overnight\./, `${path}: ${selector}`);
+      assert.doesNotMatch(alt, /go to press|FEEDER|DELIVERY PILE|units [1-4]/i, `${path}: ${selector}`);
+    }
+  }
+});
+
 test("robots advertises a valid sitemap of reachable canonical pages", async (t) => {
   const page = await pageForTest(t, { javaScriptEnabled: false });
   const robots = await page.request.get(`${origin}/robots.txt`);
