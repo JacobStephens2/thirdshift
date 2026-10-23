@@ -12,7 +12,7 @@ Every Ticket of the Spec <Spec URL> has landed on branch <Spec branch>, its Spec
 Review with the `thirdshift-code-review` skill using <base> as the fixed point and <Spec URL> as the spec.
 
 For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with, using the `thirdshift-tdd` skill where it fits, and commit.
-Write the reviewers' reports, with each axis's final files-read list, to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec).
+Write the reviewers' reports, with each axis's final files-read list, to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec). Write `<review reports directory>/summary.json` beside them with the finding counts, following the `thirdshift-code-review` skill's summary format.
 
 Do not push: thirdshift pushes branch <Spec branch> after the optional Security review. Do not rebase or force-push.
 

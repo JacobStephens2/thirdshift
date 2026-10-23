@@ -37,6 +37,7 @@ pub(super) struct Record<O: Outside> {
     parent_record: Option<PathBuf>,
     parent_dispatch: Option<String>,
     record_warned: bool,
+    unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
 }
 
 enum Log<W> {
@@ -88,6 +89,7 @@ impl<O: Outside> Record<O> {
             parent_record: None,
             parent_dispatch: None,
             record_warned: false,
+            unaddressed_findings: None,
         }
     }
 
@@ -329,18 +331,37 @@ impl<O: Outside> Record<O> {
         self.write_record();
     }
 
+    pub(super) fn unaddressed_findings(
+        &mut self,
+        counts: Option<crate::pull_request::UnaddressedFindings>,
+    ) {
+        self.unaddressed_findings = counts;
+    }
+
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
+        let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record {
-            tree.command.finish(account, self.outside.now());
+            tree.command.finish(
+                account,
+                &mut self.outside,
+                &ranges,
+                self.unaddressed_findings.take(),
+            );
             self.write_record();
         }
     }
 
     pub(super) fn dispatch_ended(&mut self, account: &crate::run_ending::Account<'_>) {
+        let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record
             && let Some(dispatched) = tree.dispatched.last_mut()
         {
-            dispatched.finish(account, self.outside.now());
+            dispatched.finish(
+                account,
+                &mut self.outside,
+                &ranges,
+                self.unaddressed_findings.take(),
+            );
             self.write_record();
         }
     }
@@ -359,6 +380,30 @@ impl<O: Outside> Record<O> {
             facts.process_start = tree.command.process_start.clone();
             tree.dispatched.push(facts);
             self.write_record();
+        }
+    }
+
+    fn usual_ranges(&mut self) -> super::usual_range::UsualRanges {
+        let Some((path, tree)) = &self.command_record else {
+            return super::usual_range::UsualRanges::default();
+        };
+        let root = self
+            .logs_dir
+            .as_ref()
+            .unwrap()
+            .join(&tree.command.repository);
+        match self.outside.command_records(&root) {
+            Ok(mut records) => {
+                // The Run being finished must not supply its own comparison times.
+                records.remove(path);
+                super::usual_range::UsualRanges::from_records(&records)
+            }
+            Err(error) => {
+                self.step(format_args!(
+                    "warning: could not read Usual ranges for Run metrics: {error:#}"
+                ));
+                super::usual_range::UsualRanges::default()
+            }
         }
     }
 

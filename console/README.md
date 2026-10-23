@@ -210,6 +210,9 @@ applicable timing, usage, cost, call and error facts, relative-position bars,
 input/output and attributes, plus a conversation link and Copy CLI. Conversation
 links open the Session because that reader does not yet anchor individual
 records. Command details opens the existing Peek with Stop, logs and the PR.
+Its Run metrics come from the same details as `thirdshift show <command> --json`,
+including nested Runs. Recorded zeroes stay zero; unavailable signals say
+Missing, including older Runs without retained metrics.
 
 Zoom fits a parent span or a padded window around a call. The sticky axis keeps
 the zoom notice and Zoom out control visible; the slowest calls re-rank within
