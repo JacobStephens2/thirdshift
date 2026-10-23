@@ -45,8 +45,8 @@ pub(super) fn start(pid: u32) -> String {
     format!("{}:{}", info.pbi_start_tvsec, info.pbi_start_tvusec)
 }
 
-pub(super) fn live_record(home: &Path, pid: u32) -> Value {
-    let mut fixture = record(home, 81, None, 0);
+pub(super) fn live_record(home: &Path, number: u64, pid: u32) -> Value {
+    let mut fixture = record(home, number, None, 0);
     fixture["process_id"] = json!(pid);
     fixture["process_start"] = json!(start(pid));
     fixture
@@ -57,7 +57,7 @@ fn process_death_finishes_the_existing_reader_without_a_record_write() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
     let mut work = FixtureProcess(Command::new("sleep").arg("60").spawn().unwrap());
-    let fixture = live_record(home.path(), work.0.id());
+    let fixture = live_record(home.path(), 81, work.0.id());
     write_record(home.path(), 81, &fixture);
     let path = home
         .path()
@@ -93,7 +93,7 @@ fn a_silent_transition_wakes_the_inbox_without_a_file_change() {
         "[console]\nport = 0\n[inbox]\nsilent_minutes = 1\n",
     )
     .unwrap();
-    let mut fixture = live_record(home.path(), std::process::id());
+    let mut fixture = live_record(home.path(), 81, std::process::id());
     fixture["stages"][0]["began_at"] =
         json!((chrono::Local::now() - chrono::Duration::minutes(2)).to_rfc3339());
     write_record(home.path(), 81, &fixture);

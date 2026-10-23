@@ -167,7 +167,7 @@ fn live_commands_never_show_the_idle_notice_even_in_needs_you_or_hidden_sections
 #[cfg(unix)]
 #[test]
 fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status() {
-    use super::watching::{FixtureProcess, start};
+    use super::watching::{FixtureProcess, live_record};
     use super::write_record;
     use serde_json::json;
 
@@ -176,9 +176,7 @@ fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status()
     let work = FixtureProcess(Command::new("sleep").arg("60").spawn().unwrap());
     let pid = work.0.id();
     for (number, stage) in [(1, "CI watch"), (2, "implement"), (3, "implement")] {
-        let mut fixture = record(home.path(), number, None, 0);
-        fixture["process_id"] = json!(pid);
-        fixture["process_start"] = json!(start(pid));
+        let mut fixture = live_record(home.path(), number, pid);
         fixture["stages"][0]["name"] = json!(stage);
         write_record(home.path(), number, &fixture);
     }

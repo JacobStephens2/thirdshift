@@ -218,7 +218,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     // the full tree in history/show without duplicating DOM IDs.
                     row.children
                         .retain(|child| !ready_selectors.contains(&child.selector));
-                    row.state = item.state().into();
+                    row.state = item.state_word().into();
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
                     Ok(row)
