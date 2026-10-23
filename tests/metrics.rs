@@ -7,12 +7,18 @@ use support::Scenario;
 
 const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
-fn trace(scenario: &Scenario, name: &str, version: &str, events: Value) -> std::path::PathBuf {
+fn trace(
+    scenario: &Scenario,
+    name: &str,
+    harness: &str,
+    version: &str,
+    events: Value,
+) -> std::path::PathBuf {
     let path = scenario.path(LOGS).join(format!("{name}.logs.jsonl"));
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, serde_json::to_string(&json!({
         "resourceLogs": [{"resource": {"attributes": [
-            {"key":"thirdshift.harness", "value":{"stringValue":"codex"}},
+            {"key":"thirdshift.harness", "value":{"stringValue":harness}},
             {"key":"thirdshift.harness.version", "value":{"stringValue":version}}
         ]}, "scopeLogs":[{"logRecords":[{"attributes":[{
             "key":"thirdshift.events", "value":{"stringValue":serde_json::to_string(&events).unwrap()}
@@ -27,6 +33,7 @@ fn session_signals_sum_by_kind_and_trends_split_by_trace_harness_version() {
     let first = trace(
         &scenario,
         "first",
+        "codex",
         "1.0",
         json!([
             {"type":"turn_ended", "id":"t", "usage":{"input":100,"output":7,"cache_read":20}, "outcome":"succeeded"},
@@ -36,6 +43,7 @@ fn session_signals_sum_by_kind_and_trends_split_by_trace_harness_version() {
     let second = trace(
         &scenario,
         "second",
+        "codex",
         "2.0",
         json!([
             {"type":"turn_ended", "id":"t", "usage":{"input":200,"output":9,"cache_read":40}, "outcome":"succeeded"},
@@ -90,21 +98,19 @@ fn session_signals_sum_by_kind_and_trends_split_by_trace_harness_version() {
 #[test]
 fn converted_session_traces_supply_signals_without_rewriting_past_metrics() {
     let scenario = Scenario::new();
-    let trace = scenario.path(LOGS).join("converted-implement.logs.jsonl");
+    let trace = trace(
+        &scenario,
+        "converted-implement",
+        "codex",
+        "1.2.3",
+        json!([
+            {"type":"turn_ended", "id":"turn-1", "usage":{"input":100,"output":7,"cache_read":20}, "outcome":"succeeded"}
+        ]),
+    );
     let mut past = record(7);
     past["stages"][0]["session_log"] = json!(trace.with_file_name("converted-implement.jsonl"));
     let path = write(&scenario, "7-fixture.command.json", &past);
     let original = fs::read(&path).unwrap();
-    fs::write(&trace, serde_json::to_string(&json!({
-        "resourceLogs": [{"resource": {"attributes": [
-            {"key": "thirdshift.harness", "value": {"stringValue": "codex"}},
-            {"key": "thirdshift.harness.version", "value": {"stringValue": "1.2.3"}}
-        ]}, "scopeLogs": [{"logRecords": [{"attributes": [{
-            "key": "thirdshift.events", "value": {"stringValue": serde_json::to_string(&json!([
-                {"type":"turn_ended", "id":"turn-1", "usage":{"input":100,"output":7,"cache_read":20}, "outcome":"succeeded"}
-            ])).unwrap()}
-        }]}]}]}]
-    })).unwrap() + "\n").unwrap();
     let result = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
     let signals = &result["command"]["metrics"]["session_signals"]["implement"];
     assert_eq!(signals["observed_sessions"], 1);
@@ -128,6 +134,62 @@ fn converted_session_traces_supply_signals_without_rewriting_past_metrics() {
     assert_eq!(
         absent["command"]["metrics"]["session_signals"]["implement"]["signals"],
         Value::Null
+    );
+}
+
+#[test]
+fn killed_tools_and_subagents_count_with_or_without_companion_work_events() {
+    let scenario = Scenario::new();
+    let mut events = json!([
+        {"type":"tool_call_ended", "id":"command-1", "parent_id":null,
+         "tool":"command_execution", "input":{"command":"sleep 100"},
+         "result":null, "outcome":"killed", "amended":false},
+        {"type":"subagent_ended", "id":"agent-1", "outcome":"killed", "result":null}
+    ]);
+    let log = trace(&scenario, "killed", "codex", "1.0", events.clone());
+    let mut past = record(7);
+    past["stages"][0]["session_log"] = json!(log);
+    write(&scenario, "7-fixture.command.json", &past);
+    let shown = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert_eq!(
+        shown["command"]["metrics"]["session_signals"]["implement"]["signals"]["killed_work"],
+        2
+    );
+    events.as_array_mut().unwrap().extend([
+        json!({"type":"work_ended", "id":"command-1", "outcome":"killed"}),
+        json!({"type":"work_ended", "id":"agent-1", "outcome":"killed"}),
+    ]);
+    trace(&scenario, "killed", "codex", "1.0", events);
+    let shown = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert_eq!(
+        shown["command"]["metrics"]["session_signals"]["implement"]["signals"]["killed_work"],
+        2
+    );
+}
+
+#[test]
+fn session_usage_keeps_its_reported_model() {
+    let scenario = Scenario::new();
+    let log = trace(
+        &scenario,
+        "agy",
+        "agy",
+        "1.0",
+        json!([
+            {"type":"usage", "scope":"session", "model":"gemini-test",
+             "usage":{"input":100,"output":7,"cache_read":20,"cache_write":0}, "cost_usd":0.25}
+        ]),
+    );
+    let mut past = record(7);
+    past["stages"][0]["session_log"] = json!(log);
+    write(&scenario, "7-fixture.command.json", &past);
+    let shown = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert_eq!(
+        shown["command"]["metrics"]["session_signals"]["implement"]["signals"]["tokens_by_model"],
+        json!([{
+            "model":"gemini-test", "input_tokens":100, "output_tokens":7,
+            "cache_read_tokens":20, "cache_write_tokens":0
+        }])
     );
 }
 

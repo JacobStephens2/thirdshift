@@ -120,10 +120,7 @@ impl Trace {
             locations: BTreeMap::new(),
             model_usage: BTreeMap::new(),
             model_scopes: BTreeMap::new(),
-            input_excludes_cache: matches!(
-                choice.harness,
-                crate::harness::Harness::Claude | crate::harness::Harness::Grok
-            ),
+            input_excludes_cache: choice.harness.input_excludes_cache(),
         })
     }
 

@@ -70,58 +70,41 @@ echo '{"type":"result","subtype":"success","permission_denials":[{"tool_use_id":
 
 #[test]
 fn session_signals_from_each_harness_fixture_keep_reported_usage_and_cost() {
-    use serde_json::{Value, json};
-    for (harness, model, input, output, read, write, cost, killed) in [
+    use serde_json::json;
+    for (harness, expected) in [
         (
             Harness::Claude,
-            Some("claude-opus-4-8"),
-            Some(13),
-            Some(4),
-            Some(2),
-            Some(3),
-            Some(0.0),
-            0,
+            json!({"tokens_by_model":[{"model":"claude-opus-4-8",
+            "input_tokens":13,"output_tokens":4,"cache_read_tokens":2,"cache_write_tokens":3}],
+            "cost_usd":0.0,"killed_work":0}),
         ),
         (
             Harness::Codex,
-            None,
-            Some(100),
-            Some(7),
-            Some(20),
-            None,
-            None,
-            2,
+            json!({"tokens_by_model":[{"model":null,
+            "input_tokens":100,"output_tokens":7,"cache_read_tokens":20,"cache_write_tokens":null}],
+            "cost_usd":null,"killed_work":2}),
         ),
         (
             Harness::Agy,
-            Some("gemini-test"),
-            Some(8),
-            Some(4),
-            None,
-            None,
-            None,
-            0,
+            json!({"tokens_by_model":[{"model":"gemini-test",
+            "input_tokens":8,"output_tokens":4,"cache_read_tokens":null,"cache_write_tokens":null}],
+            "cost_usd":null,"killed_work":0}),
         ),
         (
             Harness::Grok,
-            Some("grok-4.7"),
-            Some(25),
-            Some(6),
-            Some(2),
-            Some(3),
-            None,
-            0,
+            json!({"tokens_by_model":[{"model":"grok-4.7",
+            "input_tokens":25,"output_tokens":6,"cache_read_tokens":2,"cache_write_tokens":3}],
+            "cost_usd":null,"killed_work":0}),
         ),
-        (Harness::Muse, None, None, None, None, None, None, 0),
+        (
+            Harness::Muse,
+            json!({"tokens_by_model":[],"cost_usd":null,"killed_work":0}),
+        ),
         (
             Harness::OpenCode,
-            None,
-            Some(7515),
-            Some(23),
-            Some(7424),
-            Some(0),
-            Some(0.02),
-            0,
+            json!({"tokens_by_model":[{"model":null,
+            "input_tokens":7515,"output_tokens":23,"cache_read_tokens":7424,"cache_write_tokens":0}],
+            "cost_usd":0.02,"killed_work":0}),
         ),
     ] {
         let fixture = Fixture::new();
@@ -144,30 +127,14 @@ fn session_signals_from_each_harness_fixture_keep_reported_usage_and_cost() {
         );
         let measured = crate::logs::session_signals::read(&log).unwrap().unwrap();
         let measured = serde_json::to_value(measured).unwrap();
-        let expected_tokens = if input.is_some() {
-            json!([{"model":model, "input_tokens":input, "output_tokens":output,
-                "cache_read_tokens":read, "cache_write_tokens":write}])
-        } else {
-            json!([])
-        };
-        assert_eq!(
-            measured["signals"]["tokens_by_model"],
-            expected_tokens,
-            "{}",
-            harness.name()
-        );
-        assert_eq!(
-            measured["signals"]["cost_usd"],
-            cost.map_or(Value::Null, |cost| json!(cost)),
-            "{}",
-            harness.name()
-        );
-        assert_eq!(
-            measured["signals"]["killed_work"],
-            killed,
-            "{}",
-            harness.name()
-        );
+        for field in ["tokens_by_model", "cost_usd", "killed_work"] {
+            assert_eq!(
+                measured["signals"][field],
+                expected[field],
+                "{}: {field}",
+                harness.name()
+            );
+        }
         for counter in ["tool_errors", "permission_denials", "repeated_tool_calls"] {
             assert_eq!(
                 measured["signals"][counter],

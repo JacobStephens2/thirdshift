@@ -83,15 +83,7 @@ impl ModelTokens {
     fn of(model: Option<String>, usage: &Usage, excludes_cache: bool) -> Self {
         Self {
             model,
-            input_tokens: usage.input.map(|input| {
-                if excludes_cache {
-                    input
-                        .saturating_add(usage.cache_read.unwrap_or(0))
-                        .saturating_add(usage.cache_write.unwrap_or(0))
-                } else {
-                    input
-                }
-            }),
+            input_tokens: usage.input_including_cache(excludes_cache),
             output_tokens: usage.output,
             cache_read_tokens: usage.cache_read,
             cache_write_tokens: usage.cache_write,
@@ -142,7 +134,10 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
             }
         }
     }
-    let excludes_cache = matches!(harness.as_deref(), Some("claude" | "grok"));
+    let excludes_cache = harness
+        .as_deref()
+        .and_then(crate::harness::Harness::named)
+        .is_some_and(crate::harness::Harness::input_excludes_cache);
     let mut turns = BTreeMap::new();
     let mut session_usage = None;
     let mut calls = BTreeMap::new();
@@ -170,11 +165,11 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
             }
             Event::Usage {
                 scope: UsageScope::Session,
+                model,
                 usage,
                 cost_usd,
-                ..
             } => {
-                session_usage = Some((usage, cost_usd));
+                session_usage = Some((model, usage, cost_usd));
             }
             Event::WorkEnded {
                 id,
@@ -226,8 +221,8 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
     }
     if signals.tokens_by_model.is_empty() {
         let mut tokens = ModelTokens::default();
-        if let Some((usage, _)) = &session_usage {
-            tokens = ModelTokens::of(None, usage, excludes_cache);
+        if let Some((model, usage, _)) = &session_usage {
+            tokens = ModelTokens::of(model.clone(), usage, excludes_cache);
         } else {
             for usage in turns.values() {
                 tokens.add(&ModelTokens::of(None, usage, excludes_cache));
@@ -241,12 +236,26 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
             signals.tokens_by_model.push(tokens);
         }
     }
-    if let Some((_, Some(cost))) = session_usage {
+    if let Some((_, _, Some(cost))) = session_usage {
         signals.cost_usd = Some(cost);
     }
-    signals.killed_work = killed.len() as u64;
     let mut inputs = HashSet::new();
     for event in calls.values() {
+        if let Event::ToolCallEnded {
+            id,
+            outcome: Outcome::Killed,
+            ..
+        }
+        | Event::SubagentEnded {
+            id,
+            outcome: Outcome::Killed,
+            ..
+        } = event
+        {
+            signals.killed_work += 1;
+            // Some normalizers also emit WorkEnded for the same work.
+            killed.remove(id);
+        }
         match event {
             Event::ToolCallStarted { tool, input, .. }
             | Event::ToolCallEnded { tool, input, .. } => {
@@ -261,6 +270,7 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
             _ => {}
         }
     }
+    signals.killed_work += killed.len() as u64;
     Ok(Some(SessionSignals {
         harness,
         harness_version,
