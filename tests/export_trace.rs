@@ -149,9 +149,22 @@ fn trace_only_sessions_export_once_even_when_the_record_names_the_old_log() {
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let shown = scenario.run(&["show", "widgets#7", "--json"]);
     let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
-    for session in shown["command"]["session_logs"].as_array().unwrap() {
-        fs::remove_file(session.as_str().unwrap()).unwrap();
+    let record_path =
+        Path::new(shown["command"]["command_log"].as_str().unwrap()).with_extension("command.json");
+    let mut record: Value = serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+    // Converted records retain the former raw filename, while only the trace
+    // files exist. Exercise that reference without deleting the records file.
+    record["session_log"] = record["session_log"]
+        .as_str()
+        .unwrap()
+        .replace(".logs.jsonl", ".jsonl")
+        .into();
+    for stage in record["stages"].as_array_mut().unwrap() {
+        if let Some(path) = stage["session_log"].as_str() {
+            stage["session_log"] = path.replace(".logs.jsonl", ".jsonl").into();
+        }
     }
+    fs::write(record_path, serde_json::to_vec(&record).unwrap()).unwrap();
     let dir = scenario.path("export");
     let result = scenario.run(&["logs", "widgets#7", "--export", dir.to_str().unwrap()]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
