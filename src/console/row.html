@@ -5,6 +5,7 @@
   {% if !row.harness.is_empty() %}<p class="harness">{{ row.harness }}</p>{% endif %}
   {% if !row.pull_request.is_empty() %}<p class="pr">{{ row.pull_request|linkify }}</p>{% endif %}
   {% if row.count > 1 %}<p>{{ row.count }} Commands with this cause: {{ row.cause|linkify }}</p>{% else if !row.cause.is_empty() %}<p>{{ row.cause|linkify }}</p>{% endif %}
+  {% if !row.left.is_empty() %}<p class="left">{{ row.left }}</p>{% endif %}
   {% if !row.tickets.is_empty() %}<ul class="plan" aria-label="Tickets">{% for ticket in row.tickets %}<li>{{ ticket|linkify }}</li>{% endfor %}</ul>{% endif %}
   <p><a class="peek-link" href="{{ row.peek_url() }}">Details</a> · <a href="{{ row.log_url() }}">Full log</a></p>
   {% if !row.findings.is_empty() %}<ul aria-label="Security findings">{% for finding in row.findings %}<li>{{ finding.title }} · {% match finding.severity %}{% when Some with (severity) %}{{ severity }}{% when None %}ungraded{% endmatch %} · {{ finding.url|linkify }}</li>{% endfor %}</ul>{% endif %}

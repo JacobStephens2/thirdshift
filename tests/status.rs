@@ -590,6 +590,121 @@ fn inbox_clears_ended_problems_on_a_later_local_start_or_the_configured_age() {
 }
 
 #[test]
+fn resolved_counts_superseded_rows_from_the_later_command_start() {
+    let scenario = Scenario::new();
+    let now = chrono::Local::now();
+    // Second precision: the Inbox reprints the later start from its parsed
+    // time, which drops fractional seconds.
+    let stamp = |time: chrono::DateTime<chrono::Local>| {
+        time.to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+    };
+    let days_ago = |days: i64| stamp(now - chrono::Duration::days(days));
+    let old = days_ago(10);
+    let later = stamp(now - chrono::Duration::hours(12));
+    // Record 20 failed on issue 20 ten days ago; record 30 took issue 20
+    // up twelve hours ago. Record 21 was ready on issue 21 ten days ago;
+    // record 31 took issue 21 up twelve hours ago. Record 22 merged on
+    // issue 22 ten days ago and record 32 took issue 22 up: it never
+    // waited, so it still goes by when it ended. Record 23 failed ten days
+    // ago with no later Command: it aged out. Record 24 merged two days
+    // ago: never waited, still in view by its own end.
+    for (number, issue, start, end) in [
+        (20, 20, old.clone(), old.clone()),
+        (21, 21, old.clone(), old.clone()),
+        (22, 22, old.clone(), old.clone()),
+        (23, 23, old.clone(), old.clone()),
+        (24, 24, days_ago(2), days_ago(2)),
+        (30, 20, later.clone(), later.clone()),
+        (31, 21, later.clone(), later.clone()),
+        (32, 22, later.clone(), later.clone()),
+    ] {
+        write_record(&scenario, number, &start, Some(&end));
+        change_record(&scenario, number, |record| {
+            record["issue"] = serde_json::json!({
+                "number": issue,
+                "url": scenario.issue_url(issue),
+                "title": "Fixture",
+            });
+            match number {
+                20 | 23 => record["outcome"] = "failed".into(),
+                21 => {
+                    record["outcome"] = "ready for review".into();
+                    record["pull_request"] =
+                        format!("https://github.com/acme/widgets/pull/{number}").into();
+                }
+                _ => record["outcome"] = "merged".into(),
+            }
+        });
+    }
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    let rows: Vec<_> = commands
+        .iter()
+        .map(|row| {
+            (
+                row["issue"]["number"].as_u64().unwrap(),
+                row["group"].as_str().unwrap().to_owned(),
+            )
+        })
+        .collect();
+    // The superseded failure and ready row stay in Resolved; the later
+    // Commands are in Done; the never-waited superseded row and the aged
+    // out failure are only in History.
+    assert!(rows.contains(&(20, "resolved".to_string())), "{status}");
+    assert!(rows.contains(&(21, "resolved".to_string())), "{status}");
+    assert!(rows.contains(&(24, "resolved".to_string())), "{status}");
+    assert!(rows.contains(&(20, "done".to_string())), "{status}");
+    assert!(!rows.contains(&(22, "resolved".to_string())), "{status}");
+    assert!(!rows.contains(&(23, "resolved".to_string())), "{status}");
+    let row_in = |issue: u64, group: &str| {
+        commands
+            .iter()
+            .find(|row| row["issue"]["number"] == issue && row["group"] == group)
+            .unwrap()
+            .clone()
+    };
+    for (issue, from) in [(20, "needs you"), (21, "ready for review")] {
+        let row = row_in(issue, "resolved");
+        assert_eq!(row["left_reason"], "taken up by a later Command", "{row}");
+        assert_eq!(row["left_from"], from, "{row}");
+        assert_eq!(row["left_at"], later.as_str(), "{row}");
+    }
+    let unmoved = row_in(24, "resolved");
+    assert!(
+        unmoved.get("left_reason").is_none_or(Value::is_null),
+        "{unmoved}"
+    );
+    let all = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(all.code, Some(0), "{}", all.stderr);
+    let status: Value = serde_json::from_str(&all.stdout).unwrap();
+    let commands = status["commands"].as_array().unwrap();
+    for issue in [22, 23] {
+        let row = commands
+            .iter()
+            .find(|row| row["issue"]["number"] == issue && row["started_at"] == old.as_str())
+            .unwrap();
+        assert_eq!(row["group"], "history", "{row}");
+        assert!(row.get("left_reason").is_none_or(Value::is_null), "{row}");
+    }
+    let text = scenario.run(&["status"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    assert!(
+        text.stdout
+            .contains("left needs you: taken up by a later Command started at"),
+        "{}",
+        text.stdout
+    );
+    assert!(
+        text.stdout
+            .contains("left ready for review: taken up by a later Command started at"),
+        "{}",
+        text.stdout
+    );
+}
+
+#[test]
 fn inbox_puts_live_problems_first_and_points_to_silent_landing_without_duplicating_it() {
     let scenario = Scenario::new();
     scenario.issue_titled(99, "Held fixture");

@@ -116,6 +116,11 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                     Observation::Record(command) => print_command(command, item.state_word(), ""),
                     Observation::History(command) => print_history(command),
                 }
+                if let (Some(from), Some(reason), Some(at)) =
+                    (&item.left_from, &item.left_reason, &item.left_at)
+                {
+                    println!("  left {from}: {reason} started at {at}");
+                }
                 if item.count > 1 {
                     let cause = item.cause().unwrap_or_default();
                     println!("  {} Commands with this cause: {cause}", item.count);

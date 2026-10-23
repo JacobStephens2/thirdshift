@@ -151,7 +151,7 @@ thirdshift --no-merge https://github.com/acme/widgets/issues/7</code></pre>
       <pre class="guide-command"><code>thirdshift status
 thirdshift show https://github.com/acme/widgets/issues/7
 thirdshift logs https://github.com/acme/widgets/issues/7 --follow</code></pre>
-      <p>The <strong>Console</strong> shows this machine's Commands, opening on its <strong>Inbox</strong>. Beside the CLI, you can watch their stages and logs there. For this machine on localhost, start it with:</p>
+      <p>The <strong>Console</strong> shows this machine's Commands, opening on its <strong>Inbox</strong>. Beside the CLI, you can watch their stages and logs there. When a later Command takes up an issue, the earlier row stays in Resolved for <code>inbox.days</code> from that Command's start, saying why it left. For this machine on localhost, start it with:</p>
       <p>When no Commands are running, the Inbox shows the last recorded skipped Pass reasons, points to work waiting for you, and links to Cron jobs to help diagnose launch failures. If no reason was recorded, it says so.</p>
       <pre class="guide-command"><code>thirdshift console --no-sign-in</code></pre>
       <p>For a server, <code>thirdshift console install</code> prints an installation script to read and run with <code>sudo</code>, putting its Console behind a sign-in. <a href="/docs/#console-installation">Console installation</a> and <a href="/docs/#machine-status">machine status</a>.</p>

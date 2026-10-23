@@ -79,6 +79,10 @@ impl NeedsYouKind {
     }
 }
 
+/// Why a row left Needs you or Ready for review through the exit this
+/// machine knows: a later Command starting on the same issue.
+pub(in crate::logs) const TAKEN_UP_REASON: &str = "taken up by a later Command";
+
 #[derive(Serialize)]
 pub(in crate::logs) struct InboxItem<'a> {
     #[serde(flatten)]
@@ -91,6 +95,15 @@ pub(in crate::logs) struct InboxItem<'a> {
     pub count: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub collapsed: Vec<InboxItem<'a>>,
+    /// Which waiting group the row left, when it did so through the
+    /// later-Command exit. `None` for rows that never waited or that aged out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub left_from: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub left_reason: Option<String>,
+    /// The later Command's start, RFC 3339: when the row stopped waiting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub left_at: Option<String>,
 }
 
 impl InboxItem<'_> {
@@ -176,8 +189,13 @@ pub(super) fn next_change(
     now: DateTime<Local>,
     days: i64,
 ) -> Option<DateTime<Local>> {
-    observations(entries)
-        .filter_map(|observation| {
+    let observations: Vec<_> = observations(entries).collect();
+    let starts: Vec<_> = observations.iter().copied().map(issue_starts).collect();
+    let starts_by_issue = all_starts(&starts);
+    observations
+        .into_iter()
+        .zip(&starts)
+        .filter_map(|(observation, starts)| {
             let facts = observation.facts();
             if facts.state == "live" {
                 return None;
@@ -187,7 +205,12 @@ pub(super) fn next_change(
             let retained = ended
                 .or_else(|| time(Some(facts.started_at)))
                 .and_then(|at| at.checked_add_signed(chrono::Duration::days(days)));
-            [recent, retained]
+            // A row taken up by a later Command stays in Resolved until
+            // inbox.days after that Command started, so its new boundary
+            // wakes open pages too.
+            let taken_up = superseded_at(starts, &starts_by_issue)
+                .and_then(|at| at.checked_add_signed(chrono::Duration::days(days)));
+            [recent, retained, taken_up]
                 .into_iter()
                 .flatten()
                 // Grouping includes the exact cutoff; cross it before waking.
@@ -210,6 +233,7 @@ pub(super) fn list(
     let cutoff = now.checked_sub_signed(chrono::Duration::days(days));
     let observations: Vec<_> = observations(entries).collect();
     let starts: Vec<_> = observations.iter().copied().map(issue_starts).collect();
+    let starts_by_issue = all_starts(&starts);
     let mut latest = BTreeMap::new();
     for starts in &starts {
         for (issue, start) in starts {
@@ -254,6 +278,25 @@ pub(super) fn list(
                 .iter()
                 .any(|(issue, start)| latest.get(issue).is_some_and(|latest| latest > start));
         let needs_you_kind = live_problem.or_else(|| problem.filter(|_| held));
+        // When this row stopped waiting through the later-Command exit:
+        // the earliest later start on any of its issues. Only rows that
+        // waited (ended problems and ready Commands) leave through it, so
+        // a Command that never waited keeps going by when it ended, and a
+        // row that ages out keeps going straight to History.
+        let waited = problem.is_some() || facts.ready;
+        let taken_up = if waited {
+            superseded_at(starts, &starts_by_issue)
+        } else {
+            None
+        };
+        let from = if problem.is_some() {
+            Some("needs you")
+        } else if facts.ready {
+            Some("ready for review")
+        } else {
+            None
+        };
+        let left = taken_up.filter(|_| from.is_some());
         let group = if needs_you_kind.is_some() {
             Group::NeedsYou
         } else if facts.ready && held {
@@ -264,7 +307,11 @@ pub(super) fn list(
             Group::Working
         } else if ended.is_some_and(|time| time >= now - chrono::Duration::days(1)) {
             Group::Done
-        } else if ended.is_some_and(|time| cutoff.is_none_or(|cutoff| time >= cutoff)) {
+        } else if ended.is_some_and(|time| cutoff.is_none_or(|cutoff| time >= cutoff))
+            || left.is_some_and(|taken| {
+                cutoff.is_none_or(|cutoff| taken.with_timezone(&Local) >= cutoff)
+            })
+        {
             Group::Resolved
         } else {
             Group::History
@@ -278,6 +325,9 @@ pub(super) fn list(
                 stopping,
                 count: 1,
                 collapsed: Vec::new(),
+                left_from: left.map(|_| from.expect("left rows waited").to_string()),
+                left_reason: left.map(|_| TAKEN_UP_REASON.to_string()),
+                left_at: left.map(|taken| taken.to_rfc3339()),
             });
         }
     }
@@ -337,6 +387,37 @@ fn is_landing(command: &Command) -> bool {
             .iter()
             .chain(&command.children)
             .any(is_landing)
+}
+
+/// Every start on the machine per issue, oldest first.
+fn all_starts(
+    starts: &[BTreeMap<(String, u64), DateTime<FixedOffset>>],
+) -> BTreeMap<(String, u64), Vec<DateTime<FixedOffset>>> {
+    let mut all: BTreeMap<(String, u64), Vec<DateTime<FixedOffset>>> = BTreeMap::new();
+    for starts in starts {
+        for (issue, start) in starts {
+            all.entry(issue.clone()).or_default().push(*start);
+        }
+    }
+    for times in all.values_mut() {
+        times.sort();
+    }
+    all
+}
+
+/// The earliest start on any of this row's issues after its own start:
+/// when a later Command took it up. `None` when no later Command started.
+fn superseded_at(
+    starts: &BTreeMap<(String, u64), DateTime<FixedOffset>>,
+    all: &BTreeMap<(String, u64), Vec<DateTime<FixedOffset>>>,
+) -> Option<DateTime<FixedOffset>> {
+    starts
+        .iter()
+        .filter_map(|(issue, start)| {
+            all.get(issue)
+                .and_then(|times| times.iter().find(|time| **time > *start).copied())
+        })
+        .min()
 }
 
 fn issue_starts(entry: Observation<'_>) -> BTreeMap<(String, u64), DateTime<FixedOffset>> {
