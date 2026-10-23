@@ -257,6 +257,13 @@ impl Interpretation {
         self.models.names().to_vec()
     }
 
+    /// The stream decoder's ID alone, without retained-record recovery or
+    /// completion policy. Saved streams can supply this metadata even when
+    /// interruption deliberately suppressed recovery during supervision.
+    pub fn into_session_id(self) -> Option<String> {
+        self.decoder.complete().ended.session_id
+    }
+
     /// Unknown or malformed lines produce no progress, never an error.
     pub fn condense(&mut self, raw: &str) -> Vec<String> {
         let decoded = self.read(raw);

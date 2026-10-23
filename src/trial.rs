@@ -2,6 +2,7 @@
 //! with a Run: a Trial has no Command, Claim, Worktree acquisition or Delivery.
 
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
@@ -46,14 +47,31 @@ struct Inputs {
 #[derive(Serialize)]
 struct Output {
     version: u64,
-    outcome: &'static str,
+    outcome: Outcome,
     timings: Timings,
-    void_cause: Option<&'static str>,
+    void_cause: Option<VoidCause>,
     cause: Option<String>,
     session_id: Option<String>,
     log: Option<PathBuf>,
     model_evidence: Option<PathBuf>,
     reports: Reports,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Outcome {
+    Succeeded,
+    Failed,
+    Void,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+enum VoidCause {
+    Interrupted,
+    SessionUnavailable,
+    UsageLimit,
+    RateLimit,
 }
 
 #[derive(Serialize)]
@@ -128,19 +146,35 @@ pub fn run(path: &Path) -> Result<String> {
             .map(|log| log.with_extension(extension))
             .filter(|path| path.is_file())
     };
+    let recorded_session_id = || {
+        let file = fs::File::open(log.as_ref()?).ok()?;
+        let mut stream = choice
+            .harness
+            .adapter()
+            .interpretation(&repository, &prompt)
+            .without_retained();
+        for line in BufReader::new(file).lines() {
+            let Ok(line) = line else {
+                break;
+            };
+            drop(stream.condense(&line));
+        }
+        stream.into_session_id()
+    };
     let (outcome, session_id, cause, void_cause) = match ended {
-        Ok(ended) => ("succeeded", ended.session_id, None, None),
+        Ok(ended) => (Outcome::Succeeded, ended.session_id, None, None),
         Err(error) => {
             let void_cause = void_cause(&error);
             (
                 if void_cause.is_some() {
-                    "void"
+                    Outcome::Void
                 } else {
-                    "failed"
+                    Outcome::Failed
                 },
                 error
                     .downcast_ref::<SessionFailure>()
-                    .and_then(|failure| failure.session_id.clone()),
+                    .and_then(|failure| failure.session_id.clone())
+                    .or_else(recorded_session_id),
                 Some(format!("{error:#}")),
                 void_cause,
             )
@@ -166,16 +200,16 @@ pub fn run(path: &Path) -> Result<String> {
     serde_json::to_string(&output).context("could not serialize Trial result")
 }
 
-fn void_cause(error: &anyhow::Error) -> Option<&'static str> {
+fn void_cause(error: &anyhow::Error) -> Option<VoidCause> {
     if interrupt::requested() {
-        return Some("interrupted");
+        return Some(VoidCause::Interrupted);
     }
     let Some(failure) = error.downcast_ref::<SessionFailure>() else {
-        return Some("session_unavailable");
+        return Some(VoidCause::SessionUnavailable);
     };
     match failure.diagnostic.as_deref().map(ErrorKind::from_text) {
-        Some(ErrorKind::UsageLimit) => Some("usage_limit"),
-        Some(ErrorKind::RateLimit) => Some("rate_limit"),
+        Some(ErrorKind::UsageLimit) => Some(VoidCause::UsageLimit),
+        Some(ErrorKind::RateLimit) => Some(VoidCause::RateLimit),
         _ => {
             let diagnostic = failure
                 .diagnostic
@@ -208,7 +242,7 @@ fn void_cause(error: &anyhow::Error) -> Option<&'static str> {
                     ]
                     .iter()
                     .any(|text| diagnostic.contains(text)));
-            (unavailable || startup).then_some("session_unavailable")
+            (unavailable || startup).then_some(VoidCause::SessionUnavailable)
         }
     }
 }

@@ -405,3 +405,30 @@ fn factory_skill_temporary_files_are_removed_after_success_or_failure() {
         );
     }
 }
+
+#[test]
+fn an_interrupted_trial_keeps_an_already_observed_session_id() {
+    let scenario = Scenario::new();
+    let request = request(&scenario);
+    let log = scenario.path("trial-output/trial-spec-review.jsonl");
+    scenario.agent_does(&format!(
+        "until grep -q 'fake-session-1' '{}'; do sleep 0.01; done\n\
+         touch '{}'\n\
+         exec sleep 60\n",
+        log.display(),
+        scenario.path("session-id-observed").display()
+    ));
+
+    let result = scenario.run_and_signal(
+        &["--trial", request.to_str().unwrap()],
+        "session-id-observed",
+        "INT",
+    );
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let line: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(line["outcome"], "void");
+    assert_eq!(line["void_cause"], "interrupted");
+    assert!(fs::read_to_string(&log).unwrap().contains("fake-session-1"));
+    assert_eq!(line["session_id"], "fake-session-1", "{line}");
+}
