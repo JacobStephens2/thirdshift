@@ -71,19 +71,19 @@ pub(in crate::console) async fn code(
     }
     // Availability is independent of the address. Do not wait for any work
     // that depends on allowlist membership, including hashing and delivery.
-    let found = tokio::task::spawn_blocking(|| -> Result<(bool, UserConfig)> {
+    let loaded = tokio::task::spawn_blocking(|| -> Result<(bool, UserConfig)> {
         Ok((ResendKey::find()?.is_some(), UserConfig::load()?))
     })
     .await;
-    let (email_enabled, config) = match found {
-        Ok(Ok(found)) => found,
+    let (email_enabled, config) = match loaded {
+        Ok(Ok(loaded)) => loaded,
         error => return failed(error),
     };
     let page = CodePage {
         theme: config.console.theme.clone(),
         email_enabled,
     };
-    if email_enabled {
+    let status = if email_enabled {
         tokio::task::spawn_blocking(move || {
             let result = (|| -> Result<()> {
                 Accounts::load()?.send_code(&form.email, |code| {
@@ -97,16 +97,15 @@ pub(in crate::console) async fn code(
                 eprintln!("thirdshift Console: can't send password code: {error:#}");
             }
         });
-    }
-    let status = if email_enabled {
         StatusCode::OK
     } else {
         StatusCode::SERVICE_UNAVAILABLE
     };
-    match page.render() {
-        Ok(html) => (status, axum::response::Html(html)).into_response(),
-        Err(error) => failed(error),
+    let mut response = crate::console::page(Ok(page.render().map_err(Into::into)));
+    if response.status().is_success() {
+        *response.status_mut() = status;
     }
+    response
 }
 
 pub(in crate::console) async fn set_password(

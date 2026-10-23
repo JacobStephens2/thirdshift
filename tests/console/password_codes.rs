@@ -170,16 +170,36 @@ fn email_code_creates_and_resets_an_account_without_revealing_the_allowlist() {
 #[test]
 fn the_code_page_uses_the_console_theme_and_stylesheet() {
     let home = configured();
+    let config = home.path().join(".thirdshift/config.toml");
+    let themed = fs::read_to_string(&config)
+        .unwrap()
+        .replace("[console]\n", "[console]\ntheme = \"garden-dark\"\n");
+    fs::write(&config, themed).unwrap();
     let resend = ResendStandIn::replying(200, "{}");
-    let console = start(home.path(), &resend, true);
-    let response = post(&console, "/set-password/code", &[("email", EMAIL)]);
-    assert_eq!(response.status(), 200);
-    let html = response.text().unwrap();
-    assert!(html.contains("data-theme=\"focus-auto\""), "{html}");
-    assert!(html.contains("href=\"/assets/console.css\""), "{html}");
-    assert!(html.contains("a code has been sent"), "{html}");
-    assert!(html.contains("href=\"/set-password\""), "{html}");
-    wait_for_email(&resend);
+    for (environment_key, status, text) in [
+        (true, 200, "a code has been sent"),
+        (false, 503, "thirdshift console password"),
+    ] {
+        let console = start(home.path(), &resend, environment_key);
+        // Without a key /set-password has no form; the sign-in form's CSRF serves.
+        let page = get(&console, "/sign-in", "");
+        let cookie = cookie(&page);
+        let csrf = csrf(&page.text().unwrap());
+        let response = client()
+            .post(format!("{}/set-password/code", console.address))
+            .header("cookie", cookie)
+            .form(&[("email", EMAIL), ("csrf", &csrf)])
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), status);
+        let html = response.text().unwrap();
+        assert!(html.contains("data-theme=\"garden-dark\""), "{html}");
+        assert!(html.contains("href=\"/assets/console.css\""), "{html}");
+        assert!(html.contains(text), "{html}");
+        if environment_key {
+            wait_for_email(&resend);
+        }
+    }
 }
 
 #[test]
