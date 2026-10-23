@@ -870,7 +870,7 @@ The prompt was a one-word reply. No login's contents were printed or recorded, o
 
   | Harness | Login bound | Result | Written back |
   |---|---|---|---|
-  | Claude Code 2.1.309 | none; `CLAUDE_CODE_OAUTH_TOKEN` from the Credentials' `claude.setup_token` | 401, "OAuth access token is invalid". The same outside the sandbox, so the saved token is bad, not the sandbox: it is 76 characters, most likely half of a wrapped paste. | — |
+  | Claude Code 2.1.309 | none; `CLAUDE_CODE_OAUTH_TOKEN` from the Credentials' `claude.setup_token` | First 401, "OAuth access token is invalid", the same outside the sandbox. So the saved token was bad, not the sandbox: it was 76 characters, most likely half of a wrapped paste. Saved again, at 108 characters, it answered. | Nothing to write: no file is bound. |
   | Codex 0.163.0 | `~/.codex/auth.json`, a ChatGPT login | Answered. | No. Its access token expires on 2026-10-24 at 20:27, so no refresh was due. |
   | Grok Build 1.0.62, then 1.0.67 | `~/.grok/auth.json` and `auth.json.lock` | 1.0.62 signed in, then got 402, "Grok Build usage balance exhausted". After the balance was topped up, 1.0.67 answered. | Not inside the sandbox, though 1.0.62 rewrote the lock in place. Outside it, at 15:09, the host's `auth.json` was replaced: it has a new inode. |
   | Muse Code 1.4.12 | `~/.config/muse/auth.json` and `.auth.json.lock` | Answered. | No. |
@@ -878,6 +878,7 @@ The prompt was a one-word reply. No login's contents were printed or recorded, o
   | OpenCode 2.0.24 | `opencode.json`, then also a copy of `~/.local/share/opencode/opencode.db` | With the config alone: "No api key passed in". Its PrimaLabs key isn't in a file. `opencode auth list` says it's stored, and the database has a `credential` table beside its sessions. With a copy of the database, it answered on PrimaLabs' MiMo-V2.6-Pro. The copy was deleted afterwards. | — (an API key doesn't refresh) |
 
   What follows:
+  - **Claude needs no file,** as §4 expected: a setup token in its environment is enough. `thirdshift setup` saved a broken token without complaint, so a check there would catch the next one [interpretation].
   - **Single-file binds work for Codex, Muse and agy.** Every write seen inside the sandbox was in place. A test file confirmed both halves of §4's rule: an in-place write through a single-file bind reaches the host's file, and a rename onto it fails with "Device or resource busy".
   - **Grok saves its login by rename.** Its `auth.json` got a new inode when its login was renewed outside the sandbox. So a Grok that renews its login inside the sandbox can't save it through a single-file bind. Binding `~/.grok` instead would show the Trial Grok's sessions and memory. #1012 needs a third way [interpretation]:
     - renew Grok's login before each Trial;
@@ -894,7 +895,7 @@ The prompt was a one-word reply. No login's contents were printed or recorded, o
 
   | Harness | Hosts |
   |---|---|
-  | Claude Code | `api.anthropic.com`. The token was refused, so any hosts after sign-in are missing. |
+  | Claude Code | `api.anthropic.com`, and `http-intake.logs.us5.datadoghq.com` (telemetry) |
   | Codex | `chatgpt.com`, `ab.chatgpt.com`, and `sdmntprcentralus`, `sdmntprnorthcentralus` and `sdmntprsouthcentralus.oaiusercontent.com`. With no refresh, `auth.openai.com` wasn't contacted. Unlike §10, no GitHub host was contacted. |
   | Grok Build | `api.x.ai`, `cli-chat-proxy.grok.com`, `grok.com`, and `api.mixpanel.com` (analytics). 1.0.62 also contacted `auth.x.ai`. |
   | Muse Code | `api.meta.ai`, `lookaside.facebook.com` |
@@ -915,7 +916,7 @@ The prompt was a one-word reply. No login's contents were printed or recorded, o
     - Muse 56 MiB;
     - agy 199 to 216 MiB;
     - OpenCode 252 MiB;
-    - Claude 133 MiB, before it failed.
+    - Claude 147 MiB.
 
     §10's 480 MiB for a long Claude session is the higher figure to plan on.
   - **thirdshift's build:** a fresh `cargo test --no-run --locked` took 228 seconds and about 11 minutes of CPU. Its peak was 1535 MiB of anonymous memory. Counting page cache, it was 3722 MiB, which is mostly reclaimable.
@@ -935,7 +936,6 @@ The prompt was a one-word reply. No login's contents were printed or recorded, o
   So the launcher should sample `anon` in `memory.stat` itself. From a cron job wasn't tried.
 - **Harnesses update themselves (Q7.2), again.** Since §10, Claude Code has gone from 2.1.307 to 2.1.309. Grok Build went from 1.0.62 to 1.0.67 between two runs of this check.
 - **Still open:**
-  - Claude with a working setup token: save it again with `thirdshift setup`, then rerun its row;
   - OpenCode with only its key, by either of the two ways above;
   - a sandboxed Codex refresh, after 20:22 on 2026-10-24.
 
