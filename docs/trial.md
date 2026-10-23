@@ -70,17 +70,26 @@ The result version is independently identified by `version: 1`.
 - `outcome`: `succeeded` means the Harness session finished successfully; it is
   not a Score. `failed` includes refusals, context-window failures and other
   failures attributable to the Arm. `void` identifies an interruption, a known
-  login or connection failure, a provider server error before work, a Harness
-  that exits before work without a diagnostic, or a provider usage/rate limit.
+  login or connection failure, a provider server error before any Trial work
+  (including work before Resume), a sandbox
+  that could not start, a host kill, a Trial-only memory cap, or a provider
+  usage/rate limit. An unexplained nonzero exit is a failure, even before work.
+  `memory_cap` must come from the outer launcher's evidence of the Trial-only
+  cap, rather than an agent's own out-of-memory error, which is a failure.
+  A signal alone cannot establish an external cause: an unexplained SIGKILL
+  stays failed. `host_killed` also requires the outer launcher's evidence.
+  Isolation and the actual cap launcher follow in #1014;
+  version-1 results can already report their distinct causes.
   The Experiment's Bar decides which Void causes to retry or exclude.
   A live Claude plan-limit warning or rejection, or a Codex quota report at
   85% in either window, stops the session and makes the Trial void with
   `usage_limit`. Ordinary Runs keep running. Codex's retained token-count
   reports are checked while the session runs when exec does not stream them.
   The Experiment's code Grader also marks a changed repository as void with
-  `repository_changed`, before running any Eval task checks. This compares the
-  session's starting and ending HEAD, refs, index, tracked and untracked file
-  contents, including ignored files and its excluded issue input. Only the
+  `repository_changed`, before running any Eval task checks, unless the Trial
+  already failed (for example, on a timeout). Known failures stay failed. This
+  compares the session's starting and ending HEAD, refs, index, tracked and
+  untracked file contents, including ignored files and its excluded issue input. Only the
   session-generated Factory skill symlinks are omitted; report scratch is
   removed by session completion. Harness instruction fallback links are created
   before the comparison, so later edits to them still invalidate the Trial.
@@ -88,8 +97,13 @@ The result version is independently identified by `version: 1`.
 - `timings`: elapsed wall time in integer milliseconds. `total_ms` includes
   request preparation; `session_ms` includes skills setup, the session and any
   Resume, and report preservation.
-- `void_cause`: `interrupted`, `session_unavailable`, `usage_limit` or
-  `rate_limit` for a Void Trial; otherwise `null`.
+- `void_cause`: `interrupted`, `session_unavailable`, `usage_limit`,
+  `rate_limit`, `sandbox_unavailable`, `host_killed`, `memory_cap` or
+  `repository_changed` for a Void Trial; otherwise `null`.
+  An Experiment retries up to twice under the fixed Bar, keeps every cause per
+  Arm and drops an exhausted task from both Arms. More than a tenth dropped
+  makes the Verdict inconclusive. Repeated `memory_cap` stops produce an Arm
+  finding in `thirdshift experiments <id>`.
 - `cause`: failure diagnostic, or `null` on success.
 - `session_id`: the last session's Harness ID if available, otherwise `null`.
 - `log`: absolute path to the last session's raw event log, otherwise `null`.
