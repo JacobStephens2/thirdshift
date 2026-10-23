@@ -81,10 +81,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
-       thirdshift evals list                          List private Eval suites and tasks as JSON
-       thirdshift evals touched [<path>...]            Select suites by source dependencies
-       thirdshift evals prepare <suite> <task> <dir>   Prepare an approved Eval task repository
-       thirdshift evals verify <repository> <base>    Check that no later history survives
+       thirdshift evals <list|touched|prepare|verify>   Manage private Eval data; see the manual
        thirdshift status [--all] [--json]             List this machine's Commands
        thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
@@ -122,8 +119,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   security-review / no-security-review  Enable / disable a Run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings
 
-Options also accept a -- prefix. Each option may be given once; opposite options
-cannot be combined. Command options override the User config's defaults.
+Options accept -- prefixes, once each, without opposites; commands override User config defaults.
 
 Pass commands: architect, pickup, secure (no Issue URL).
   base <branch>                      Use an origin branch, whatever is checked out
