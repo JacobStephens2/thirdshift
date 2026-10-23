@@ -85,7 +85,7 @@ pub(crate) fn render(lines: &str, kind: Kind) -> String {
 }
 
 fn record_parts(record: LogRecord) -> Vec<Part> {
-    let Some(AnyValue::String(raw)) = record.body else {
+    let Some(raw) = crate::logs::session::raw_event(record.body) else {
         return Vec::new();
     };
     // Backfilled Sessions retain the presentation of their original events.

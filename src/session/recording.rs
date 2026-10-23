@@ -303,7 +303,7 @@ fn follow(
         trace
             .lock()
             .unwrap()
-            .record(&raw, &decoded.events)
+            .record(&line, &decoded.events)
             .with_context(|| format!("could not write Session trace {}", log.display()))?;
         for condensed in decoded.progress {
             progress::step(format_args!("{kind}: {condensed}"));

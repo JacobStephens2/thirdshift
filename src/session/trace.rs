@@ -127,17 +127,18 @@ impl Trace {
         })
     }
 
-    pub fn record(&mut self, raw: &str, events: &[Event]) -> io::Result<()> {
-        self.record_at(raw, events, now())
+    pub fn record(&mut self, raw: impl AsRef<[u8]>, events: &[Event]) -> io::Result<()> {
+        self.record_at(raw.as_ref(), events, now())
     }
 
     pub(crate) fn record_at(
         &mut self,
-        raw: &str,
+        bytes: &[u8],
         events: &[Event],
         observed: u64,
     ) -> io::Result<()> {
-        let envelope: Value = serde_json::from_str(raw).unwrap_or(Value::Null);
+        let raw = String::from_utf8_lossy(bytes);
+        let envelope: Value = serde_json::from_str(&raw).unwrap_or(Value::Null);
         self.record_version(&envelope);
         let time = event_time(&envelope);
         let mut attrs = Vec::new();
@@ -199,7 +200,10 @@ impl Trace {
                     log_records: vec![LogRecord {
                         time_unix_nano: time.unwrap_or_default(),
                         observed_time_unix_nano: observed,
-                        body: Some(AnyValue::String(raw.trim_end_matches(['\r', '\n']).into())),
+                        body: Some(match std::str::from_utf8(bytes) {
+                            Ok(raw) => AnyValue::String(raw.trim_end_matches(['\r', '\n']).into()),
+                            Err(_) => AnyValue::Bytes(bytes.to_vec()),
+                        }),
                         event_name: name.into(),
                         trace_id: Some(self.context.trace),
                         span_id,

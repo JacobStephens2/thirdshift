@@ -99,10 +99,17 @@ pub(crate) fn tail_events(log: &Path) -> io::Result<Vec<String>> {
 /// A request can contain several resources, scopes and records. Keep their file
 /// order, preserving raw Harness events inside the OTLP bodies.
 pub(crate) fn events(lines: &str) -> impl Iterator<Item = String> + '_ {
-    records(lines).filter_map(|record| match record.body {
+    records(lines).filter_map(|record| raw_event(record.body))
+}
+
+/// Preserve byte bodies on disk, while displaying malformed Harness output as
+/// text through the same reader used for ordinary string bodies.
+pub(crate) fn raw_event(body: Option<AnyValue>) -> Option<String> {
+    match body {
         Some(AnyValue::String(raw)) => Some(raw),
+        Some(AnyValue::Bytes(raw)) => Some(String::from_utf8_lossy(&raw).into_owned()),
         _ => None,
-    })
+    }
 }
 
 /// Keep normalized attributes available to readers that understand them.

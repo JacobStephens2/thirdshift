@@ -964,6 +964,23 @@ fn claude_and_codex_conversations_keep_tools_thinking_and_unknown_events() {
 }
 
 #[test]
+fn session_trace_byte_bodies_render_as_escaped_diagnostics() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let folder = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(folder.join("7-20261003T120000-0400-implement.logs.jsonl"),
+        "{\"resourceLogs\":[{\"scopeLogs\":[{\"logRecords\":[{\"body\":{\"bytesValue\":\"YmFkIP8gPHVuc2FmZT4K\"}}]}]}]}\n").unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let link = console.log_link("-implement.logs.jsonl");
+    let html = console.get(&link).text().unwrap();
+    assert!(html.contains("bad � &#60;unsafe&#62;"), "{html}");
+    assert!(!html.contains("<unsafe>"));
+}
+
+#[test]
 fn all_six_harness_session_traces_render_normalized_conversations() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

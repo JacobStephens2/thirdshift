@@ -247,20 +247,46 @@ fn still_logs_the_whole_stream() {
     assert_eq!(result.code, Some(0), "{}", result.stderr);
 
     let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
-    let log = std::fs::read(
+    let log = std::fs::read_to_string(
         scenario
             .path("home/.thirdshift/logs/acme/widgets/commands/issue")
             .join(&logs[0]),
     )
     .unwrap();
-    let raw = b"not json at all\n\xffunknown\0\n{\"type\":\n";
-    assert!(log.windows(raw.len()).any(|bytes| bytes == raw), "{log:?}");
-    let result_event = br#""type": "result""#;
+    let bodies: Vec<serde_json::Value> = log
+        .lines()
+        .flat_map(|line| {
+            let request: serde_json::Value = serde_json::from_str(line).unwrap();
+            request["resourceLogs"][0]["scopeLogs"][0]["logRecords"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|record| record["body"].clone())
+                .collect::<Vec<_>>()
+        })
+        .collect();
     assert!(
-        log.windows(result_event.len())
-            .any(|bytes| bytes == result_event),
-        "{log:?}"
+        bodies
+            .iter()
+            .any(|body| body["stringValue"] == "not json at all")
     );
+    // The original invalid UTF-8 and NUL survive exactly in an OTLP byte body.
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body["bytesValue"] == "/3Vua25vd24ACg=="),
+        "{bodies:?}"
+    );
+    assert!(
+        bodies
+            .iter()
+            .any(|body| body["stringValue"] == "{\"type\":")
+    );
+    assert!(bodies.iter().any(|body| {
+        body["stringValue"]
+            .as_str()
+            .is_some_and(|raw| raw.contains(r#""type": "result""#))
+    }));
 }
 
 #[test]
