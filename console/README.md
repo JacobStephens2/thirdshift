@@ -225,6 +225,9 @@ applicable timing, usage, cost, call and error facts, relative-position bars,
 input/output and attributes, plus a conversation link and Copy CLI. Conversation
 links open the Session because that reader does not yet anchor individual
 records. Command details opens the existing Peek with Stop, logs and the PR.
+That Peek's Copy CLI copies its `thirdshift show '<command>' --json` line; if
+the browser refuses the clipboard, the line is selected to copy by keyboard,
+and stays selected through live refresh.
 
 Zoom fits a parent span or a padded window around a call. The sticky axis keeps
 the zoom notice and Zoom out control visible; the slowest calls re-rank within
