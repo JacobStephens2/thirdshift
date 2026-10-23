@@ -18,7 +18,7 @@ fn idle_inbox_explains_missing_activity_before_the_folded_sections() {
         "{html}"
     );
     assert!(
-        notice.contains("No skipped Pass reason has been recorded."),
+        notice.contains("No Pass is currently recorded as skipped."),
         "{html}"
     );
     assert!(notice.contains("href=\"/cronjobs\""), "{html}");
@@ -75,12 +75,31 @@ fn idle_inbox_surfaces_recorded_skip_reasons_and_waiting_work() {
         "{notice}"
     );
     assert!(!notice.contains("<script>unsafe</script>"));
-    assert!(!notice.contains("No skipped Pass reason"));
+    assert!(!notice.contains("No Pass is currently recorded as skipped."));
     assert!(notice.contains("href=\"#group-1\""), "{notice}");
     assert!(notice.contains("href=\"#group-2\""), "{notice}");
     assert!(
         !html.contains("aria-label=\"Idle Passes\""),
         "skip reasons should appear only once"
+    );
+}
+
+#[test]
+fn idle_inbox_does_not_deny_skips_recorded_before_a_later_run() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let repo = home.path().join(".thirdshift/logs/acme/widgets");
+    fs::create_dir_all(&repo).unwrap();
+    fs::write(repo.join("activity.log"), "2026-01-01 12:00:00 Pickup run skipped: no Ready issue on acme/widgets\n2026-01-01 12:01:00 Pickup run #7 started: commands/pickup/7-fixture.log, on codex\n2026-01-01 12:02:00 Pickup run #7 ended: merged\n").unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/").text().unwrap();
+    assert!(
+        html.contains("No Pass is currently recorded as skipped."),
+        "{html}"
+    );
+    assert!(
+        !html.contains("No skipped Pass reason has been recorded."),
+        "{html}"
     );
 }
 
