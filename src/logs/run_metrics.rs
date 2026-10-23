@@ -11,6 +11,8 @@ pub(super) struct RunMetrics {
     outcome: String,
     repairs: usize,
     ci_rounds: usize,
+    #[serde(default)]
+    unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
     stages: Vec<StageMetrics>,
     total_minutes: Option<f64>,
 }
@@ -34,7 +36,11 @@ enum Position {
 }
 
 impl RunMetrics {
-    pub(super) fn of(record: &CommandRecord, ranges: &UsualRanges) -> Self {
+    pub(super) fn of(
+        record: &CommandRecord,
+        ranges: &UsualRanges,
+        unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
+    ) -> Self {
         let count = |name: StageName| {
             record
                 .stages
@@ -49,6 +55,7 @@ impl RunMetrics {
                 .expect("a finished Run has an outcome"),
             repairs: count(StageName::Repair),
             ci_rounds: count(StageName::CiWatch),
+            unaddressed_findings,
             stages: record
                 .stage_times(None)
                 .map(|timing| {

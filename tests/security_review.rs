@@ -804,6 +804,35 @@ gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]
 }
 
 #[test]
+fn run_metrics_include_the_security_reviews_count_even_if_its_body_write_fails() {
+    for fail_write in [false, true] {
+        let scenario = Scenario::new();
+        scenario.agent_does_in_session(1, OPENS_PR);
+        scenario.agent_does_in_session(
+            2,
+            &format!(
+                "{}\n{}",
+                if fail_write {
+                    "gh fake fails 'api --method PATCH repos/acme/widgets/pulls/1'"
+                } else {
+                    "true"
+                },
+                review_script(&json!([]), &["Cross-tenant read", "Unchecked input"])
+            ),
+        );
+        let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        let record = scenario.command_record("home/.thirdshift/logs/acme/widgets/commands/issue");
+        assert_eq!(
+            record["run_metrics"]["unaddressed_findings"],
+            json!({"standards": 0, "spec": 0, "security": 2}),
+            "fail_write={fail_write}: {}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
 fn an_unaddressed_introduced_finding_holds_self_merge_with_the_pr_ready() {
     let scenario = Scenario::new();
     scenario.agent_does_in_session(1, OPENS_PR);
