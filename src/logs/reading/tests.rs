@@ -136,7 +136,7 @@ fn pass_dispatches_and_equal_numbered_children_keep_exact_ownership() {
     assert_eq!(child.child_owner.unwrap().record.name, "acme/widgets#30");
     assert_eq!(
         child.stop_target("widgets#21").unwrap_err().to_string(),
-        "cannot stop widgets#21: child Run; stop Run acme/widgets#30 instead"
+        "cannot stop widgets#21: child Ticket run; stop Ticket run acme/widgets#30 instead"
     );
     // A child's durable outcome does not end following its outer process.
     assert!(!child.process_exited());
@@ -232,7 +232,7 @@ fn ticket_session_inventory_includes_stage_current_resume_and_numbered_repairs()
     assert_eq!(selected.observation.session("repair-1").unwrap(), previous);
     assert_eq!(
         selected.stop_target("widgets#21").unwrap_err().to_string(),
-        "cannot stop widgets#21: child Run; stop Spec run acme/widgets#20 instead"
+        "cannot stop widgets#21: child Ticket run; stop Spec run acme/widgets#20 instead"
     );
 }
 

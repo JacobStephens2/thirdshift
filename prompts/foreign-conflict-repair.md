@@ -2,7 +2,7 @@
 
 # Conflict Repair, on Foreign commits
 
-In a Merge run, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.
+In a Ticket run that Self-merges, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.
 
 ```
 /thirdshift-resolving-merge-conflicts

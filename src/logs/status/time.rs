@@ -65,6 +65,7 @@ fn timestamp(value: &str) -> Option<i64> {
 }
 
 fn subject(kind: &str, repository: &str, issue: Option<&Issue>) -> String {
+    let kind = crate::logs::display_name(kind);
     issue.map_or_else(
         || format!("{kind} on {repository}"),
         |issue| format!("{kind} · {repository}#{}", issue.number),

@@ -1270,7 +1270,7 @@ fn an_untrusted_edit_before_the_security_review_fails_the_run() {
     let result = scenario.run(&[&scenario.issue_url(7), "security-review", "no-merge"]);
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert!(
-        result.stderr.contains("#7 body edited since the Run started by an account that is not a Trusted account; starting no further session"),
+        result.stderr.contains("#7 body edited since the Ticket run started by an account that is not a Trusted account; starting no further session"),
         "{}", result.stderr
     );
     assert!(

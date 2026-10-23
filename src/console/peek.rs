@@ -71,6 +71,9 @@ impl Fact {
     fn new(label: String, value: Value) -> Self {
         let text = match &value {
             Value::Null => "None".into(),
+            Value::String(text) if label == "kind" || label == "name" => {
+                crate::logs::display_name(text).to_owned()
+            }
             Value::String(text) => text.clone(),
             Value::Array(items) if items.is_empty() => "None".into(),
             Value::Object(items) if items.is_empty() => "None".into(),

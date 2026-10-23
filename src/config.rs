@@ -837,16 +837,16 @@ fn is_commented_out_email_to(line: &str) -> bool {
 /// each with what it does and that default. `email.to` has no default, so it
 /// is the one key written commented out.
 pub const DEFAULTS: &str = r#"[merge]
-always = false   # every Run is a Merge run, without the merge word; default false
+always = false   # every Ticket run Self-merges, without the merge word; default false
 
 [base]
-fix = false      # every Run may start a Base fix, without the base-fix word; default false
+fix = false      # every Ticket run may start a Base fix, without the base-fix word; default false
 
 [launch]
-pull = false     # every Run first fast-forwards your checkout of the Base branch; default false
+pull = false     # every Ticket run first fast-forwards your checkout of the Base branch; default false
 
 [email]
-always = false                  # every Run sends a Run notification, without the email word; default false
+always = false                  # every Ticket run sends a Run notification, without the email word; default false
 # to = "you@example.com"        # where email goes when the command names no address; no default
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 
@@ -859,7 +859,7 @@ endpoint = ""   # optional OTLP/HTTP traces URL, including /v1/traces; default b
 
 [inbox]
 days = 7             # days to keep ended problems and Resolved; default 7
-silent_minutes = 10   # minutes without growth in either log before a Run is Silent; default 10
+silent_minutes = 10   # minutes without growth in either log before a Ticket run is Silent; default 10
 
 [console]
 address = ""        # HTTPS address for console install, e.g. https://console.example.com; default blank
@@ -880,7 +880,7 @@ limit = 3   # how many open issues labelled in-progress stop a Pickup run taking
 wait_minutes = 30   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 30
 
 [harness]
-default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
+default = "claude"   # the Harness every Ticket run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
 
 [harness.claude]
 model = ""    # the Model Claude Code's sessions run on; default blank, for Claude Code's own
@@ -908,7 +908,7 @@ effort = ""   # the Model's variant, passed as #effort; default blank, for OpenC
 
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
-review = false   # Runs review their change for Security findings; default false
+review = false   # Ticket runs review their change for Security findings; default false
 harness = ""   # the Harness for Security runs, unless the command names one, and for every Security review; default blank; blank or missing leaves Security runs on harness.default, or Claude Code if that is missing, and Security reviews on their Command's Harness
 "#;
 

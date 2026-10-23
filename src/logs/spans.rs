@@ -37,6 +37,19 @@ pub(crate) struct Span {
     pub session_kind: Option<String>,
 }
 
+impl Span {
+    fn display_name(&self) -> String {
+        match self.kind {
+            SpanKind::Cmd | SpanKind::Run => self.name.split_once(" · ").map_or_else(
+                || self.name.clone(),
+                |(kind, subject)| format!("{} · {subject}", super::display_name(kind)),
+            ),
+            SpanKind::Stage => super::display_name(&self.name).to_owned(),
+            _ => self.name.clone(),
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub(crate) struct Tree {
     pub command: String,
@@ -64,14 +77,20 @@ pub(crate) fn show(input: &str, selected: Option<&str>, json: bool) -> Result<()
         if json {
             println!("{}", serde_json::to_string_pretty(span)?);
         } else {
-            println!("{} {} · {}", span.kind, span.name, span.status);
+            println!("{} {} · {}", span.kind, span.display_name(), span.status);
             println!("{}", serde_json::to_string_pretty(span)?);
         }
     } else if json {
         println!("{}", serde_json::to_string_pretty(&view.tree)?);
     } else {
         for span in &view.tree.spans {
-            println!("{} {} {} · {}", span.id, span.kind, span.name, span.status);
+            println!(
+                "{} {} {} · {}",
+                span.id,
+                span.kind,
+                span.display_name(),
+                span.status
+            );
         }
     }
     Ok(())

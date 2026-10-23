@@ -82,6 +82,7 @@ test('span tree, summary Peek, zoom and keyboard work at laptop and 390 px', asy
     await page.goto(`${origin}/waterfall?command=widgets%237`);
     const tree = page.getByRole('tree', { name: 'Command spans' });
     await tree.waitFor();
+    assert.match(await tree.locator('.span-name').allTextContents().then(names => names.join('\n')), /Ticket run · acme\/widgets#99/);
     assert.equal(await tree.getByRole('treeitem').count(), 7, 'calls stay out of the DOM while their session is folded');
     const sess = tree.locator(`[data-span-id="${ids.session}"]`);
     assert.equal(await sess.getAttribute('aria-expanded'), 'false');

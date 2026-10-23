@@ -59,7 +59,7 @@ fn print(command: Observation<'_>) -> Result<()> {
 fn print_details(command: &Command, indent: &str) -> Result<()> {
     println!(
         "{indent}{} {} · {}",
-        command.record.kind,
+        crate::logs::display_name(&command.record.kind),
         command.record.name,
         super::stage_text(command)
     );
@@ -75,7 +75,11 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
             .get(&stage.name)
             .map(|range| format!(" · usual {}", range.text()))
             .unwrap_or_default();
-        println!("{indent}  {} · {}{usual}", stage.name, stage.began_at);
+        println!(
+            "{indent}  {} · {}{usual}",
+            crate::logs::display_name(&stage.name),
+            stage.began_at
+        );
     }
     for path in command.sessions()? {
         println!("{indent}Session trace: {}", path.display());

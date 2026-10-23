@@ -1947,8 +1947,10 @@ fn status_nests_the_architect_plans_run_or_spec_run_under_its_pass() {
             assert_eq!(dispatched["children"][0]["stage"]["name"], "implement");
             assert_eq!(dispatched["children"][0]["state"], "live");
         }
+        let display_kind = if kind == "Run" { "Ticket run" } else { kind };
         assert!(
-            text.stdout.contains(&format!("\n  {kind} acme/widgets#8")),
+            text.stdout
+                .contains(&format!("\n  {display_kind} acme/widgets#8")),
             "{}",
             text.stdout
         );

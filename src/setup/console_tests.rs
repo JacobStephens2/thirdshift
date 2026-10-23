@@ -5,11 +5,11 @@ use super::*;
 const HOME: &str = "/home/me";
 const PATH: &str = "/home/me/.thirdshift/config.toml";
 const NO_NOTIFICATIONS: &[(&str, &str)] = &[
-    ("Merge run?", ""),
-    ("Every Run may start a Base fix", ""),
+    ("Self-merges?", ""),
+    ("Every Ticket run may start a Base fix", ""),
     ("fast-forwards", ""),
     ("Security runs may fix", ""),
-    ("Runs review", ""),
+    ("Ticket runs review", ""),
     ("Run notifications", "n"),
 ];
 

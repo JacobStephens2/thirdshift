@@ -22,13 +22,13 @@ gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
 const PR_URL: &str = "https://github.com/acme/widgets/pull/1";
 
 const OFFER: &str = "Set your defaults now? [Y/n]";
-const HARNESS: &str = "Harness for every Run's sessions";
+const HARNESS: &str = "Harness for every Ticket run's sessions";
 const MODEL: &str = "Model for claude";
 const EFFORT: &str = "Effort for claude";
-const MERGE: &str = "Merge run?";
-const BASE_FIX: &str = "Every Run may start a Base fix when the Base branch's CI is red?";
+const MERGE: &str = "Self-merges?";
+const BASE_FIX: &str = "Every Ticket run may start a Base fix when the Base branch's CI is red?";
 const PULL: &str = "fast-forward";
-const SECURITY_REVIEW: &str = "Runs review their change for Security findings?";
+const SECURITY_REVIEW: &str = "Ticket runs review their change for Security findings?";
 const SECURITY_FIX: &str = "Security runs may fix reproduced findings?";
 const NOTIFY: &str = "Run notifications, an email";
 const KEY: &str = "re_secret_123";
