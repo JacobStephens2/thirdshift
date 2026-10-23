@@ -116,9 +116,11 @@ impl LaunchDirectory {
         let directory = Self::open(current_dir()?, Opening::Run)?;
         if !issue.matches_origin(&directory.origin) {
             bail!(
-                "origin mismatch: {} is not in the repository at origin {}",
+                "origin mismatch: {} is not in the repository at origin {}; \
+                 start it from a clone of {}",
                 issue.url,
-                directory.origin
+                directory.origin,
+                issue.repo_slug()
             );
         }
         if !GitHub::new().issue_is_open(issue)? {
