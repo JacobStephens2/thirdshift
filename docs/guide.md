@@ -399,6 +399,7 @@ thirdshift evals import-replays     # import #429's private manifests and gradin
 thirdshift evals touched <path>...  # select suites from their declared source dependencies
 thirdshift evals prepare <suite> <task> <destination>  # prepare a throwaway repository at its base
 thirdshift evals verify <repository> <base>  # refuse history beyond the base commit
+thirdshift evals prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>  # cache builds and record fixed Harness paths
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print a compact command and option reference
@@ -415,8 +416,13 @@ those declarations. `evals list` includes proposed Eval tasks, while `evals
 prepare` refuses them until approved. Preparation keeps only base history, applies
 the change under review without its commit objects, and gives Spec-review Eval
 tasks a local bare origin. These commands write JSON and start no agent sessions.
+`evals prepare-arms` prepares both Arms before Trials: it caches release builds
+by commit under `~/.thirdshift/evals/builds/` and records their commits, binaries,
+and each Harness's real path and version in a new JSON file. A failed build or
+version lookup stops preparation. Trials use the recorded Harness path so an
+installation's symlink update cannot change the Harness between Arms.
 The [Eval task format](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md)
-documents the manifests with made-up data.
+documents the manifests with made-up data and the Arm record.
 
 On the host holding #429's material, `thirdshift evals import-replays` reads
 the private replay manifests, cached original issue bodies and grading index

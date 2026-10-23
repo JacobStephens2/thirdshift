@@ -389,6 +389,7 @@ thirdshift evals import-replays     # import #429&#39;s private manifests and gr
 thirdshift evals touched &lt;path&gt;...  # select suites from their declared source dependencies
 thirdshift evals prepare &lt;suite&gt; &lt;task&gt; &lt;destination&gt;  # prepare a throwaway repository at its base
 thirdshift evals verify &lt;repository&gt; &lt;base&gt;  # refuse history beyond the base commit
+thirdshift evals prepare-arms &lt;repository&gt; &lt;baseline-commit&gt; &lt;baseline-harness&gt; &lt;candidate-commit&gt; &lt;candidate-harness&gt; &lt;record.json&gt;  # cache builds and record fixed Harness paths
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift &lt;version&gt;
 thirdshift help                     # print a compact command and option reference
@@ -402,8 +403,13 @@ default dependencies, plus Trials per Arm. <code>evals touched</code> selects su
 those declarations. <code>evals list</code> includes proposed Eval tasks, while <code>evals prepare</code> refuses them until approved. Preparation keeps only base history, applies
 the change under review without its commit objects, and gives Spec-review Eval
 tasks a local bare origin. These commands write JSON and start no agent sessions.
+<code>evals prepare-arms</code> prepares both Arms before Trials: it caches release builds
+by commit under <code>~/.thirdshift/evals/builds/</code> and records their commits, binaries,
+and each Harness&#39;s real path and version in a new JSON file. A failed build or
+version lookup stops preparation. Trials use the recorded Harness path so an
+installation&#39;s symlink update cannot change the Harness between Arms.
 The <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md">Eval task format</a>
-documents the manifests with made-up data.</p>
+documents the manifests with made-up data and the Arm record.</p>
 <p>On the host holding #429&#39;s material, <code>thirdshift evals import-replays</code> reads
 the private replay manifests, cached original issue bodies and grading index
 under <code>~/.thirdshift/replays/</code> into the code-review and Spec-review suites.

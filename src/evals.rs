@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
+mod arms;
 mod format;
 mod import;
 mod repository;
@@ -21,6 +22,11 @@ pub enum Action {
     Verify {
         repository: PathBuf,
         base: String,
+    },
+    PrepareArms {
+        repository: PathBuf,
+        arms: [arms::Requested; 2],
+        record: PathBuf,
     },
 }
 
@@ -50,8 +56,24 @@ pub fn parse(args: &[String]) -> Result<Action> {
                 base: base.clone(),
             })
         }
+        [
+            action,
+            repository,
+            baseline,
+            baseline_harness,
+            candidate,
+            candidate_harness,
+            record,
+        ] if action == "prepare-arms" => Ok(Action::PrepareArms {
+            repository: repository.into(),
+            arms: [
+                arms::Requested::new(baseline, baseline_harness)?,
+                arms::Requested::new(candidate, candidate_harness)?,
+            ],
+            record: record.into(),
+        }),
         _ => bail!(
-            "usage: thirdshift evals list | import-replays | touched [<path>...] | prepare <suite> <task> <destination> | verify <repository> <base>"
+            "usage: thirdshift evals list | import-replays | touched [<path>...] | prepare <suite> <task> <destination> | verify <repository> <base> | prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>"
         ),
     }
 }
@@ -85,5 +107,10 @@ pub fn execute(action: Action) -> Result<String> {
             repository::verify(&repository, &base)?;
             Ok(r#"{"safe":true}"#.into())
         }
+        Action::PrepareArms {
+            repository,
+            arms,
+            record,
+        } => arms::prepare(&repository, arms, &record),
     }
 }
