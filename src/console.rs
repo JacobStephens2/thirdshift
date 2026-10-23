@@ -17,6 +17,7 @@ mod peek;
 mod restart;
 mod stop;
 mod time;
+mod watching;
 mod waterfall;
 
 use std::io::Write;
@@ -314,44 +315,44 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             .await
             .context("can't listen for the Console on localhost")?;
         let watched = executable.clone();
-        let (changes, observer) = changes::observe(&config, &executable)?;
+        let (changes, notifier, observer) = changes::observe(&config, &executable)?;
         let mut control = changes.clone();
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
-        axum::serve(listener, router(no_sign_in, changes))
-            .with_graceful_shutdown(async move {
-                let mut accounts_revision = 0;
-                loop {
-                    if control.changed().await.is_err() {
-                        break;
-                    }
-                    if watched.changed() {
-                        break;
-                    }
-                    // Revoke removed accounts even when nobody makes a request,
-                    // so re-adding an address cannot revive its old sessions.
-                    let revision = control.borrow_and_update().accounts;
-                    if !no_sign_in && revision != accounts_revision {
-                        accounts_revision = revision;
-                        match tokio::task::spawn_blocking(|| accounts::Accounts::load().map(drop))
-                            .await
-                        {
-                            Ok(Ok(())) => {}
-                            error => {
-                                eprintln!(
-                                    "thirdshift Console: can't reconcile allowlist: {error:?}"
-                                )
-                            }
+        axum::serve(
+            listener,
+            router(no_sign_in, changes).layer(axum::Extension(notifier)),
+        )
+        .with_graceful_shutdown(async move {
+            let mut accounts_revision = 0;
+            loop {
+                if control.changed().await.is_err() {
+                    break;
+                }
+                if watched.changed() {
+                    break;
+                }
+                // Revoke removed accounts even when nobody makes a request,
+                // so re-adding an address cannot revive its old sessions.
+                let revision = control.borrow_and_update().accounts;
+                if !no_sign_in && revision != accounts_revision {
+                    accounts_revision = revision;
+                    match tokio::task::spawn_blocking(|| accounts::Accounts::load().map(drop)).await
+                    {
+                        Ok(Ok(())) => {}
+                        error => {
+                            eprintln!("thirdshift Console: can't reconcile allowlist: {error:?}")
                         }
                     }
                 }
-                // Dropping the sole sender closes every SSE response before
-                // graceful shutdown waits for the connections to finish.
-                observer.abort();
-                let _ = observer.await;
-            })
-            .await
-            .context("Console server failed")?;
+            }
+            // Dropping the sole sender closes every SSE response before
+            // graceful shutdown waits for the connections to finish.
+            observer.abort();
+            let _ = observer.await;
+        })
+        .await
+        .context("Console server failed")?;
         Ok::<_, anyhow::Error>(())
     })?;
     // Drop the runtime (and its sockets) before replacing the process.

@@ -141,6 +141,7 @@ fn read_lines(log: &Log, offset: u64, budget: usize) -> Result<Lines> {
 pub(super) async fn stream(
     Path((id, offset)): Path<(String, u64)>,
     Extension(changes): Extension<super::changes::Receiver>,
+    Extension(notifier): Extension<super::changes::Notifier>,
     Extension(viewer): Extension<super::auth::Viewer>,
     headers: HeaderMap,
 ) -> Response {
@@ -178,6 +179,7 @@ pub(super) async fn stream(
             offset,
             done: false,
             viewer,
+            _following: notifier.follow(changes.clone()),
             changes,
             accounts_revision: None,
         })
@@ -256,4 +258,5 @@ struct LogStream {
     viewer: super::auth::Viewer,
     changes: super::changes::Receiver,
     accounts_revision: Option<u64>,
+    _following: std::sync::Arc<super::watching::Following>,
 }

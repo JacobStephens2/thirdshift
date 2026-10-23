@@ -3,7 +3,7 @@
 //! recovers lost notifications and observations of process death or elapsed time.
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::time::{Duration, SystemTime};
 
 use anyhow::Result;
@@ -18,6 +18,28 @@ pub(super) struct Revision {
 }
 
 pub(super) type Receiver = watch::Receiver<Revision>;
+
+#[derive(Clone)]
+pub(super) struct Notifier {
+    pending: watch::Sender<Revision>,
+    following: Arc<Mutex<Weak<super::watching::Following>>>,
+}
+
+impl Notifier {
+    pub fn commands(&self) {
+        self.pending.send_modify(|revision| revision.commands += 1);
+    }
+
+    pub fn follow(&self, changes: Receiver) -> Arc<super::watching::Following> {
+        let mut current = self.following.lock().unwrap();
+        if let Some(following) = current.upgrade() {
+            return following;
+        }
+        let following = Arc::new(super::watching::follow(self.clone(), changes));
+        *current = Arc::downgrade(&following);
+        following
+    }
+}
 
 #[derive(PartialEq)]
 struct Registration {
@@ -126,13 +148,17 @@ impl Paths {
 pub(super) fn observe(
     config: &crate::config::UserConfig,
     executable: &super::restart::Executable,
-) -> Result<(Receiver, tokio::task::JoinHandle<()>)> {
+) -> Result<(Receiver, Notifier, tokio::task::JoinHandle<()>)> {
     let paths = Arc::new(RwLock::new(Paths {
         root: crate::config::home()?.join(".thirdshift"),
         logs: config.logs_dir.clone(),
         executable: executable.path.clone(),
     }));
     let (pending, mut notifications) = watch::channel(Revision::default());
+    let notifier = Notifier {
+        pending: pending.clone(),
+        following: Arc::default(),
+    };
     let observed = paths.clone();
     let mut watcher = notify::recommended_watcher(move |event| {
         pending.send_if_modified(|revision| {
@@ -184,7 +210,7 @@ pub(super) fn observe(
                 previous = revision;
             }
         });
-    Ok((changes, observer))
+    Ok((changes, notifier, observer))
 }
 
 fn reconcile(

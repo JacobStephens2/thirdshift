@@ -46,22 +46,10 @@ fn unchanged_requests_reuse_retained_records_but_replacements_are_visible() {
     assert!(console.get("/").text().unwrap().contains("Changed title"));
 }
 
-fn event(stream: &mut impl BufRead) -> String {
-    let mut message = String::new();
-    loop {
-        let mut line = String::new();
-        assert!(stream.read_line(&mut line).unwrap() > 0, "stream closed");
-        if line.trim().is_empty() && !message.is_empty() {
-            return message;
-        }
-        message.push_str(&line);
-    }
-}
-
-fn live_fixture(home: &Path) {
+fn live_fixture(home: &Path, pid: u32) {
     let mut fixture = record(home, 81, None, 0);
-    fixture["process_id"] = json!(std::process::id());
-    let stat = fs::read_to_string("/proc/self/stat").unwrap();
+    fixture["process_id"] = json!(pid);
+    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
     let ticks = stat
         .rsplit_once(") ")
         .unwrap()
@@ -79,7 +67,7 @@ fn idle_viewers_sleep_and_log_appends_and_completion_wake_the_reader() {
     use std::io::Write;
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
-    live_fixture(home.path());
+    live_fixture(home.path(), std::process::id());
     let path = home
         .path()
         .join(".thirdshift/logs/acme/widgets/commands/issue/81-fixture.log");
@@ -95,7 +83,7 @@ fn idle_viewers_sleep_and_log_appends_and_completion_wake_the_reader() {
         .send()
         .unwrap();
     let mut reader = BufReader::new(response);
-    assert!(event(&mut reader).contains("first line"));
+    assert!(sse_event(&mut reader).contains("first line"));
     std::thread::sleep(Duration::from_millis(200));
     let before = rchar(&console);
     std::thread::sleep(Duration::from_secs(3));
@@ -108,7 +96,7 @@ fn idle_viewers_sleep_and_log_appends_and_completion_wake_the_reader() {
         .unwrap()
         .write_all(b"second line\n")
         .unwrap();
-    assert!(event(&mut reader).contains("second line"));
+    assert!(sse_event(&mut reader).contains("second line"));
     assert!(
         began.elapsed() < Duration::from_secs(2),
         "log append was not delivered promptly"
@@ -116,7 +104,7 @@ fn idle_viewers_sleep_and_log_appends_and_completion_wake_the_reader() {
     let mut fixture = record(home.path(), 81, Some("merged"), 0);
     fixture["ended_at"] = json!(chrono::Local::now().to_rfc3339());
     write_record(home.path(), 81, &fixture);
-    assert!(event(&mut reader).contains("\"done\":true"));
+    assert!(sse_event(&mut reader).contains("\"done\":true"));
 }
 
 #[test]
@@ -137,10 +125,10 @@ fn replacing_the_log_root_keeps_future_inbox_changes_live() {
         .send()
         .unwrap();
     let mut stream = BufReader::new(response);
-    assert!(event(&mut stream).contains("event: commands"));
+    assert!(sse_event(&mut stream).contains("event: commands"));
     fixture["issue"]["title"] = json!("Changed after replacing the root");
     write_record(home.path(), 82, &fixture);
-    assert!(event(&mut stream).contains("event: commands"));
+    assert!(sse_event(&mut stream).contains("event: commands"));
     assert!(
         console
             .get("/")

@@ -15,12 +15,15 @@ final-status-level = "slow"
 # - the non-Linux skills directory handle (src/skills/directory.rs);
 # - the `cfg!(target_os = "linux")` branches in child Run handling
 #   (src/child_run.rs), started from the executable's path by a Spec run.
+# - native Console process-exit notifications (src/console/watching.rs),
+#   exercised through HTTP by tests/console/watching.rs.
 # The console installer's Linux-only refusal (src/console/install.rs) has no
 # test that runs off Linux, so nothing here covers it.
 [profile.macos-gate]
 default-filter = """
 (binary_id(thirdshift::bin/thirdshift) & test(/^(logs|skills|child_run)::/))
 | binary_id(thirdshift::stop)
+| (binary_id(thirdshift::console) & test(/^watching::/))
 | (binary_id(thirdshift::spec_run) & (
     test(=a_linear_spec_lands_each_ticket_in_order_then_opens_a_ready_spec_pr)
     | test(=a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as_interrupted)

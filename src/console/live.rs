@@ -10,11 +10,18 @@ use axum::response::{
 pub(super) async fn events(
     State(changes): State<super::changes::Receiver>,
     Extension(viewer): Extension<super::auth::Viewer>,
+    Extension(notifier): Extension<super::changes::Notifier>,
 ) -> Response {
+    let following = notifier.follow(changes.clone());
     // Every reconnect catches up even if its last notice was lost.
     let stream = futures_util::stream::unfold(
-        (changes, viewer, None),
-        |(mut changes, viewer, mut seen): (_, _, Option<super::changes::Revision>)| async move {
+        (changes, viewer, None, following),
+        |(mut changes, viewer, mut seen, following): (
+            _,
+            _,
+            Option<super::changes::Revision>,
+            _,
+        )| async move {
             loop {
                 if seen.is_some() && changes.changed().await.is_err() {
                     return None;
@@ -37,7 +44,10 @@ pub(super) async fn events(
                 seen = Some(current);
                 if commands_changed {
                     let event = Event::default().event("commands").data("changed");
-                    return Some((Ok::<_, Infallible>(event), (changes, viewer, seen)));
+                    return Some((
+                        Ok::<_, Infallible>(event),
+                        (changes, viewer, seen, following),
+                    ));
                 }
             }
         },

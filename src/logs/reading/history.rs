@@ -124,7 +124,7 @@ pub(in crate::logs) fn read(repo: &Path, covered: &HashSet<PathBuf>) -> Result<V
         repo.file_name().unwrap_or_default().to_string_lossy()
     );
     let mut starts: Vec<Started> = Vec::new();
-    for line in read_optional(&repo.join("activity.log"))?.lines() {
+    for line in super::cache::text(&repo.join("activity.log"))?.lines() {
         let Some((time, text)) = line.split_once(' ').and_then(|(date, rest)| {
             let (clock, text) = rest.split_once(' ')?;
             Some((
@@ -265,7 +265,7 @@ fn start(
     Ok(Some(Started {
         subject: subject.into(),
         offset: *stamp.offset(),
-        log: read_optional(&path)?,
+        log: super::cache::text(&path)?,
         command,
     }))
 }
@@ -322,8 +322,4 @@ fn sessions(
         command.session_logs.sort();
     }
     Ok(groups.into_values().collect())
-}
-
-fn read_optional(path: &Path) -> Result<std::sync::Arc<str>> {
-    super::cache::text(path)
 }
