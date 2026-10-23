@@ -5,9 +5,7 @@ use super::*;
 
 pub(super) fn packet(state: &Json, query: &str, variables: &BTreeMap<String, String>) -> bool {
     let n = variables.get("number").map(String::as_str).unwrap_or("");
-    let field;
-    let node;
-    if query.contains("ScoringPacket") {
+    let (field, node) = if query.contains("ScoringPacket") {
         let pr = state
             .at("scoring_prs")
             .items()
@@ -19,7 +17,12 @@ pub(super) fn packet(state: &Json, query: &str, variables: &BTreeMap<String, Str
             })
             .expect("sampled PR");
         let tip = || string(origin_tip("main").unwrap());
-        node = object([
+        let base = || {
+            let output = git(&origin_repo(), &["rev-list", "--max-parents=0", "main"]);
+            assert!(output.status.success());
+            string(String::from_utf8(output.stdout).unwrap().trim())
+        };
+        let node = object([
             (
                 "title",
                 pr.get("title")
@@ -28,6 +31,10 @@ pub(super) fn packet(state: &Json, query: &str, variables: &BTreeMap<String, Str
             ),
             ("body", pr.at("body").clone()),
             ("headRefName", pr.at("headRefName").clone()),
+            (
+                "baseRefOid",
+                pr.get("baseRefOid").cloned().unwrap_or_else(base),
+            ),
             (
                 "headRefOid",
                 pr.get("headRefOid").cloned().unwrap_or_else(tip),
@@ -43,7 +50,7 @@ pub(super) fn packet(state: &Json, query: &str, variables: &BTreeMap<String, Str
                 pr.at("closingIssuesReferences").clone(),
             ),
         ]);
-        field = "pullRequest";
+        ("pullRequest", node)
     } else if query.contains("ScoringBody") || query.contains("ScoringTitle") {
         let body = query.contains("ScoringBody");
         let kind = if body { "body" } else { "title" };
@@ -81,7 +88,7 @@ pub(super) fn packet(state: &Json, query: &str, variables: &BTreeMap<String, Str
             .and_then(|bodies| bodies.get(n))
             .cloned()
             .unwrap_or_else(|| string("Request"));
-        node = object([
+        let node = object([
             ("title", title),
             ("body", body),
             (
@@ -98,10 +105,10 @@ pub(super) fn packet(state: &Json, query: &str, variables: &BTreeMap<String, Str
                 ]),
             ),
         ]);
-        field = "issue";
+        ("issue", node)
     } else {
         return false;
-    }
+    };
     println!(
         "{}",
         object([("data", object([("repository", object([(field, node)]))]))])

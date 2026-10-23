@@ -7,6 +7,179 @@ use support::Scenario;
 
 const LOGS: &str = "home/.thirdshift/logs/JacobStephens2/thirdshift/commands/scoring";
 
+#[test]
+fn packet_diff_includes_every_commit_in_a_rebased_pull_request() {
+    let scenario = scenario();
+    scenario.origin_has_commit("main", "first.txt", "first PR change\n", "First PR commit");
+    scenario.origin_has_commit(
+        "main",
+        "second.txt",
+        "second PR change\n",
+        "Second PR commit",
+    );
+    let merged = scenario
+        .origin_git(&["rev-parse", "main"])
+        .trim()
+        .to_string();
+    let mut candidate = pr(1, "acme/widgets", "codex", "model", false);
+    // A two-commit rebase merge points mergeCommit at the second commit.
+    candidate["mergeCommit"] = serde_json::json!({"oid": merged});
+    candidate["headRefOid"] = merged.clone().into();
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([candidate]);
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let week = weeks(&scenario).remove(0);
+    let packet_dir = scenario
+        .path("home/.thirdshift/evals/scoring")
+        .join(week["packets"].as_str().unwrap())
+        .join("0");
+    let packet: Value =
+        serde_json::from_slice(&std::fs::read(packet_dir.join("packet.json")).unwrap()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(packet_dir.join("repository/first.txt")).unwrap(),
+        "first PR change\n"
+    );
+    let diff = packet["diff"].as_str().unwrap();
+    assert!(diff.contains("+second PR change"), "{diff}");
+    assert!(
+        diff.contains("+first PR change"),
+        "first PR commit missing from merged diff: {diff}"
+    );
+}
+
+#[test]
+fn packet_repository_removes_attribution_for_every_harness() {
+    for harness in ["claude", "codex"] {
+        let scenario = scenario();
+        scenario.origin_has_commit(
+            "main",
+            "feature.txt",
+            &format!("implemented work\nBuilt with {harness} · model · high <!-- thirdshift:built-with -->\nGenerated with Claude Code\n"),
+            "Feature",
+        );
+        let mut state = scenario.gh_state();
+        state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", harness, "model", false)]);
+        scenario.write_gh_state(&state);
+        let run = scenario.run(&["score"]);
+        assert_eq!(run.code, Some(0), "{}", run.stderr);
+        let week = weeks(&scenario).remove(0);
+        let packet_dir = scenario
+            .path("home/.thirdshift/evals/scoring")
+            .join(week["packets"].as_str().unwrap())
+            .join("0");
+        let source = std::fs::read_to_string(packet_dir.join("repository/feature.txt")).unwrap();
+        assert!(source.contains("implemented work"));
+        for forbidden in [
+            "Built with",
+            "thirdshift:built-with",
+            "Generated with Claude Code",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{harness} packet repository leaked {forbidden}: {source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn packet_blinding_preserves_source_binary_files_and_symlinks() {
+    use std::os::unix::fs::PermissionsExt;
+    let scenario = scenario();
+    let source = "const MARKER: &str = \"<!-- thirdshift:built-with -->\";\nconst FOOTER: &str = \"Generated with Claude Code\";\n";
+    scenario.commit_locally("source.rs", source, "Source containing attribution syntax");
+    let binary = b"\xff\0Built with test\n";
+    std::fs::write(scenario.launch_dir().join("binary"), binary).unwrap();
+    std::fs::write(scenario.path("outside.txt"), "Built with outside\n").unwrap();
+    std::os::unix::fs::symlink(
+        scenario.path("outside.txt"),
+        scenario.launch_dir().join("link"),
+    )
+    .unwrap();
+    std::fs::write(
+        scenario.launch_dir().join("executable"),
+        "#!/bin/sh\n# keep me\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        scenario.launch_dir().join("executable"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    scenario.launch_git(&["add", "."]);
+    scenario.launch_git(&["commit", "-m", "Repository file kinds"]);
+    scenario.launch_git(&["push", "origin", "main"]);
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "codex", "model", false)]);
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let week = weeks(&scenario).remove(0);
+    let repository = scenario
+        .path("home/.thirdshift/evals/scoring")
+        .join(week["packets"].as_str().unwrap())
+        .join("0/repository");
+    assert_eq!(
+        std::fs::read_to_string(repository.join("source.rs")).unwrap(),
+        source
+    );
+    assert_eq!(std::fs::read(repository.join("binary")).unwrap(), binary);
+    assert_eq!(
+        std::fs::read_link(repository.join("link")).unwrap(),
+        scenario.path("outside.txt")
+    );
+    assert_eq!(
+        std::fs::read_to_string(scenario.path("outside.txt")).unwrap(),
+        "Built with outside\n"
+    );
+    assert_eq!(
+        std::fs::metadata(repository.join("executable"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o111,
+        0o111
+    );
+}
+
+#[test]
+fn packet_diff_excludes_changes_already_on_the_pull_requests_base() {
+    let scenario = scenario();
+    scenario.launch_git(&["checkout", "-b", "feature"]);
+    scenario.commit_locally("feature.txt", "PR change\n", "Feature");
+    scenario.launch_git(&["checkout", "main"]);
+    scenario.commit_locally("base.txt", "Earlier base change\n", "Base advances");
+    let base = scenario
+        .launch_git(&["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+    scenario.launch_git(&["merge", "--no-ff", "feature", "-m", "Merge feature"]);
+    scenario.launch_git(&["push", "origin", "main"]);
+    let mut candidate = pr(1, "acme/widgets", "codex", "model", false);
+    candidate["baseRefOid"] = base.into();
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([candidate]);
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let week = weeks(&scenario).remove(0);
+    let packet: Value = serde_json::from_slice(
+        &std::fs::read(
+            scenario
+                .path("home/.thirdshift/evals/scoring")
+                .join(week["packets"].as_str().unwrap())
+                .join("0/packet.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let diff = packet["diff"].as_str().unwrap();
+    assert!(diff.contains("+PR change"), "{diff}");
+    assert!(!diff.contains("Earlier base change"), "{diff}");
+}
+
 fn scenario() -> Scenario {
     let scenario = Scenario::new();
     scenario.user_config_is("[scoring]\nowners = [\"acme\"]\nsample_size = 3\n");

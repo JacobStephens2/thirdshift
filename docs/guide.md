@@ -1327,7 +1327,8 @@ per sampled pull request: `packet.json` and `repository/`. The JSON holds the
 issue title and body from its edit history at merge time, the merged diff, the
 pull request title and body, and CI check names and conclusions. Built-with and
 Claude Code's Generated-with lines are removed from this text for every Harness.
-The repository contains the merge commit's files with Git metadata removed, so
+The repository contains the merge commit's files with Git metadata and
+attribution lines removed, so
 neither commit messages nor later history reach the Grader. Unavailable
 historical issue text fails the Command rather than substituting a later
 revision. Grader sessions and criterion Scores are separate work.

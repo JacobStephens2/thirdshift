@@ -3,12 +3,13 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 
-use super::{Connection, GitHub, PullRequest};
+use super::{Connection, GitHub, PullRequest, issue_branch};
 use crate::issue::IssueUrl;
 use crate::scoring::packet::{Check, Text};
 
 pub(crate) struct PacketInput {
     pub merge_commit: String,
+    pub base_commit: String,
     pub issues: Vec<Text>,
     pub pull_request: Text,
     pub ci: Vec<Check>,
@@ -20,6 +21,7 @@ struct Metadata {
     title: String,
     body: String,
     merge_commit: Commit,
+    base_ref_oid: String,
     head_ref_oid: String,
     head_ref_name: String,
     closing_issues_references: Connection<LinkedIssue>,
@@ -54,16 +56,7 @@ impl GitHub {
             .into_iter()
             .map(|issue| IssueUrl::parse(&issue.url))
             .collect::<Result<_>>()?;
-        if let Some(number) = metadata
-            .head_ref_name
-            .strip_prefix("issue-")
-            .and_then(|name| name.split("-branch-").next())
-            .filter(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
-        {
-            let issue = IssueUrl::parse(&format!(
-                "https://github.com/{}/issues/{number}",
-                pr.repository
-            ))?;
+        if let Some(issue) = issue_branch(&pr.repository, &metadata.head_ref_name)? {
             if !linked
                 .iter()
                 .any(|other| other.identity() == issue.identity())
@@ -96,6 +89,7 @@ impl GitHub {
         }
         Ok(PacketInput {
             merge_commit: metadata.merge_commit.oid,
+            base_commit: metadata.base_ref_oid,
             issues,
             pull_request: Text {
                 title: metadata.title,
@@ -162,7 +156,7 @@ fn time(value: &serde_json::Value, field: &str) -> Result<DateTime<Utc>> {
 const METADATA: &str = r#"query ScoringPacket($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
     pullRequest(number: $number) {
-      title body headRefName headRefOid mergeCommit { oid }
+      title body baseRefOid headRefName headRefOid mergeCommit { oid }
       closingIssuesReferences(first: 100) { pageInfo { hasNextPage } nodes { url } }
     }
   }
