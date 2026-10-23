@@ -28,7 +28,7 @@ Every session runs on the **Harness** you choose: Claude Code by default, or Cod
 From a clone of the issue's repository, `thirdshift <Issue URL>`:
 
 1. Checks that the Ticket run makes sense, before creating anything:
-   - the **Origin match**: the **Issue URL** must belong to the same GitHub repository as the `origin` remote of the directory you run it from;
+   - the **Origin match**: the **Issue URL** must belong to the same GitHub repository as the `origin` remote of the directory you run it from, and a mismatch says to start it from a clone of the issue's repository instead;
    - the issue is open;
    - the **Base branch** is well defined: HEAD is not detached, the branch exists on `origin`, and your local copy is not ahead of it, so unpushed commits can't leak into the pull request;
    - a local Issue branch, if you have one, points at the same commit as its copy on `origin`, so local-only commits are never destroyed.
