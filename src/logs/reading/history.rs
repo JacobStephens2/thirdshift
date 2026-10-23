@@ -1,10 +1,9 @@
 //! Recover Commands that predate records, without inventing stages or liveness.
 
 use std::collections::{BTreeMap, HashSet};
-use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::{DateTime, FixedOffset, NaiveDateTime, NaiveTime};
 use serde::Serialize;
 
@@ -67,7 +66,7 @@ impl Command {
 struct Started {
     subject: String,
     offset: FixedOffset,
-    log: String,
+    log: std::sync::Arc<str>,
     command: Command,
 }
 
@@ -125,7 +124,7 @@ pub(in crate::logs) fn read(repo: &Path, covered: &HashSet<PathBuf>) -> Result<V
         repo.file_name().unwrap_or_default().to_string_lossy()
     );
     let mut starts: Vec<Started> = Vec::new();
-    for line in read_optional(&repo.join("activity.log"))?.lines() {
+    for line in super::cache::text(&repo.join("activity.log"))?.lines() {
         let Some((time, text)) = line.split_once(' ').and_then(|(date, rest)| {
             let (clock, text) = rest.split_once(' ')?;
             Some((
@@ -266,7 +265,7 @@ fn start(
     Ok(Some(Started {
         subject: subject.into(),
         offset: *stamp.offset(),
-        log: read_optional(&path)?,
+        log: super::cache::text(&path)?,
         command,
     }))
 }
@@ -323,12 +322,4 @@ fn sessions(
         command.session_logs.sort();
     }
     Ok(groups.into_values().collect())
-}
-
-fn read_optional(path: &Path) -> Result<String> {
-    match fs::read_to_string(path) {
-        Ok(text) => Ok(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
-        Err(error) => Err(error).with_context(|| format!("could not read {}", path.display())),
-    }
 }

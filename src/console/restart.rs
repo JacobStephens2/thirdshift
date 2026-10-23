@@ -14,7 +14,7 @@ struct Identity {
 
 #[derive(Clone)]
 pub(super) struct Executable {
-    path: PathBuf,
+    pub(super) path: PathBuf,
     identity: Identity,
 }
 

@@ -140,7 +140,8 @@ fn read_lines(log: &Log, offset: u64, budget: usize) -> Result<Lines> {
 
 pub(super) async fn stream(
     Path((id, offset)): Path<(String, u64)>,
-    Extension(executable): Extension<super::restart::Executable>,
+    Extension(changes): Extension<super::changes::Receiver>,
+    Extension(notifier): Extension<super::changes::Notifier>,
     Extension(viewer): Extension<super::auth::Viewer>,
     headers: HeaderMap,
 ) -> Response {
@@ -172,66 +173,71 @@ pub(super) async fn stream(
             offset <= std::fs::metadata(log.path)?.len(),
             "invalid log offset"
         );
-        Ok((
-            std::sync::Arc::new(config),
+        Ok(LogStream {
+            config: std::sync::Arc::new(config),
             id,
             offset,
-            false,
-            executable,
+            done: false,
             viewer,
-        ))
+            _following: notifier.follow(changes.clone()),
+            changes,
+            accounts_revision: None,
+        })
     })
     .await;
     let state = match checked {
         Ok(Ok(state)) => state,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
-    let events = futures_util::stream::unfold(
-        state,
-        |(config, id, mut offset, done, executable, viewer)| async move {
-            if done {
+    let events = futures_util::stream::unfold(state, |mut state| async move {
+        if state.done {
+            return None;
+        }
+        loop {
+            if state.changes.has_changed().is_err() {
                 return None;
             }
-            loop {
-                let root = config.clone();
-                let selected = id.clone();
-                let watched = executable.clone();
-                let signed_in = viewer.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    if watched.changed() || !signed_in.still_allowed()? {
-                        return Ok(None);
-                    }
-                    appended(&root, &selected, offset).map(Some)
-                })
-                .await;
-                match result {
-                    Ok(Ok(None)) => return None,
-                    Ok(Ok(Some(batch))) if batch.offset != offset || batch.done => {
-                        offset = batch.offset;
-                        let done = batch.done;
-                        let event = Event::default()
-                            .event("lines")
-                            .id(offset.to_string())
-                            .data(serde_json::to_string(&batch).expect("serializable log batch"));
-                        return Some((
-                            Ok::<_, Infallible>(event),
-                            (config, id, offset, done, executable, viewer),
-                        ));
-                    }
-                    Ok(Ok(Some(_))) => {
-                        tokio::time::sleep(std::time::Duration::from_millis(250)).await
-                    }
-                    error => {
-                        eprintln!("thirdshift Console: log stream: {error:?}");
-                        let event = Event::default()
-                            .event("log-error")
-                            .data("Can't read log; reopen the reader. Check the Console's stderr.");
-                        return Some((Ok(event), (config, id, offset, true, executable, viewer)));
+            let revision = state.changes.borrow_and_update().accounts;
+            let authorize = state.accounts_revision != Some(revision);
+            state.accounts_revision = Some(revision);
+            let root = state.config.clone();
+            let selected = state.id.clone();
+            let signed_in = state.viewer.clone();
+            let offset = state.offset;
+            let result = tokio::task::spawn_blocking(move || {
+                if authorize && !signed_in.still_allowed()? {
+                    return Ok(None);
+                }
+                appended(&root, &selected, offset).map(Some)
+            })
+            .await;
+            match result {
+                Ok(Ok(None)) => return None,
+                Ok(Ok(Some(batch))) if batch.offset != state.offset || batch.done => {
+                    state.offset = batch.offset;
+                    state.done = batch.done;
+                    let event = Event::default()
+                        .event("lines")
+                        .id(state.offset.to_string())
+                        .data(serde_json::to_string(&batch).expect("serializable log batch"));
+                    return Some((Ok::<_, Infallible>(event), state));
+                }
+                Ok(Ok(Some(_))) => {
+                    if state.changes.changed().await.is_err() {
+                        return None;
                     }
                 }
+                error => {
+                    eprintln!("thirdshift Console: log stream: {error:?}");
+                    let event = Event::default()
+                        .event("log-error")
+                        .data("Can't read log; reopen the reader. Check the Console's stderr.");
+                    state.done = true;
+                    return Some((Ok(event), state));
+                }
             }
-        },
-    );
+        }
+    });
     let mut response = Sse::new(events)
         .keep_alive(KeepAlive::default())
         .into_response();
@@ -242,4 +248,15 @@ pub(super) async fn stream(
         .headers_mut()
         .insert("cache-control", "no-store".parse().unwrap());
     response
+}
+
+struct LogStream {
+    config: std::sync::Arc<UserConfig>,
+    id: String,
+    offset: u64,
+    done: bool,
+    viewer: super::auth::Viewer,
+    changes: super::changes::Receiver,
+    accounts_revision: Option<u64>,
+    _following: std::sync::Arc<super::watching::Following>,
 }

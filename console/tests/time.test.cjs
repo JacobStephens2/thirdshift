@@ -110,6 +110,25 @@ test('Lanes scales every window, nests child Runs and fits 390 px without CSP vi
   assert.deepEqual(errors, []);
 });
 
+test('a live Lanes push preserves an unsubmitted hours selection', async t => {
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  const page = await context.newPage();
+  await page.goto(`${origin}/?page=lanes&hours=24`);
+  await page.locator('[name="hours"]').selectOption('12');
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/3-fixture.command.json');
+  const before = await readFile(path, 'utf8');
+  const fixture = JSON.parse(before);
+  fixture.issue.title = 'Changed while the Lanes filter is being edited';
+  try {
+    await writeFile(path, JSON.stringify(fixture));
+    await page.getByText(fixture.issue.title, { exact: true }).waitFor();
+    assert.equal(await page.locator('[name="hours"]').inputValue(), '12');
+    await page.getByRole('button', { name: 'Show', exact: true }).click();
+    await page.waitForURL('**hours=12');
+  } finally { await writeFile(path, before); }
+});
+
 test('time headings distinguish a live Pickup run and its Run and name kinds once at 390 px', { skip: process.platform !== 'linux' }, async t => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
   t.after(() => context.close());

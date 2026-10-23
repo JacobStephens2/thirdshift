@@ -108,7 +108,10 @@ function morphTimePage(html) {
   const selection = selected?.dataset.command;
   const focused = timePage.contains(document.activeElement);
   const position = [scrollX, scrollY];
+  const hours = timePage.querySelector('[name="hours"]')?.value;
   Idiomorph.morph(timePage, replacement);
+  // A push refreshes the rows while the person may still be editing this form.
+  if (hours !== undefined) timePage.querySelector('[name="hours"]').value = hours;
   if (selection) {
     const row = [...timePage.querySelectorAll('.command')].find(row => row.dataset.command === selection);
     select(row, { scroll: false });
