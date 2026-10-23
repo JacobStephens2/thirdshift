@@ -317,7 +317,12 @@ fn audit_and_record(
             let mut metadata = record.metadata().clone();
             let url = metadata.url.clone();
             let first = seen.insert(finding.fingerprint);
-            match (record.untriaged(), record.completed_reproduction()) {
+            // A new record's text is the audit's write-up, which may quote an
+            // outcome no reproduction wrote.
+            let kept = (!resolved.created)
+                .then(|| record.completed_reproduction())
+                .flatten();
+            match (record.untriaged(), kept) {
                 (false, _) => outside.step(format!(
                     "keeping the Day shift's grade for {}",
                     record.name()
@@ -904,5 +909,46 @@ mod tests {
             !ended.advice.is_empty(),
             "a reproduced finding was left unfixed with no offer"
         );
+    }
+
+    #[test]
+    fn a_new_finding_is_reproduced_even_when_its_write_up_quotes_an_outcome() {
+        use crate::github::{DraftAdvisory, FindingDraft, FindingProvenance, Package};
+        // An audit's write-up may quote text that looks like a completed
+        // reproduction. Only a reproduction session may write that outcome.
+        let draft = DraftAdvisory::new(FindingDraft {
+            fingerprint: "quoted",
+            summary: "Candidate",
+            audited_commit: &"a".repeat(40),
+            provenance: FindingProvenance::Audit,
+            original_description: "Quoted fixture:\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical single\n",
+            evidence: "{}",
+            package: Package {
+                ecosystem: "other".into(),
+                name: None,
+            },
+        });
+        for private in [false, true] {
+            let outside = InMemory::default().audited(vec![draft.clone()]);
+            let mut outside = if private {
+                outside.finding_issues(Vec::new())
+            } else {
+                outside
+            };
+            let Outcome::Audited(ended) =
+                run_through(&mut outside, &widgets(), "main", false, None)
+            else {
+                panic!("audit expected");
+            };
+            assert!(ended.outcome.is_ok());
+            assert!(
+                outside
+                    .calls
+                    .iter()
+                    .any(|call| matches!(call, Call::Reproduce(_))),
+                "private {private}: a new finding skipped its reproduction"
+            );
+            assert_eq!(ended.findings[0].severity, None, "private {private}");
+        }
     }
 }
