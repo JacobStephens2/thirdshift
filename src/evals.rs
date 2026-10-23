@@ -106,6 +106,10 @@ pub fn execute(action: Action) -> Result<String> {
             repository,
             arms,
             record,
-        } => arms::prepare(&repository, arms, &record),
+        } => Ok(serde_json::to_string_pretty(&arms::prepare(
+            &repository,
+            arms,
+            &record,
+        )?)?),
     }
 }

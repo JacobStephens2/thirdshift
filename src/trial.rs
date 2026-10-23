@@ -44,46 +44,78 @@ pub(crate) struct Inputs {
     pub pr_url: String,
 }
 
-#[derive(Serialize)]
-struct Output {
-    version: u64,
-    outcome: Outcome,
-    timings: Timings,
-    void_cause: Option<VoidCause>,
-    cause: Option<String>,
-    session_id: Option<String>,
-    log: Option<PathBuf>,
-    model_evidence: Option<PathBuf>,
-    reports: Reports,
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Output {
+    pub version: u64,
+    pub outcome: Outcome,
+    pub timings: Timings,
+    pub void_cause: Option<VoidCause>,
+    pub cause: Option<String>,
+    pub session_id: Option<String>,
+    pub log: Option<PathBuf>,
+    pub model_evidence: Option<PathBuf>,
+    pub reports: Reports,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum Outcome {
+pub(crate) enum Outcome {
     Succeeded,
     Failed,
     Void,
 }
 
-#[derive(Serialize)]
+impl std::fmt::Display for Outcome {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Void => "void",
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum VoidCause {
+pub(crate) enum VoidCause {
     Interrupted,
     SessionUnavailable,
     UsageLimit,
     RateLimit,
 }
 
-#[derive(Serialize)]
-struct Timings {
-    total_ms: u128,
-    session_ms: u128,
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Timings {
+    pub total_ms: u128,
+    pub session_ms: u128,
 }
 
-#[derive(Serialize)]
-struct Reports {
-    standards: Option<PathBuf>,
-    spec: Option<PathBuf>,
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Reports {
+    pub standards: Option<PathBuf>,
+    pub spec: Option<PathBuf>,
+}
+
+impl Output {
+    pub fn timed_out(total_ms: u128) -> Self {
+        Self {
+            version: 1,
+            outcome: Outcome::Failed,
+            timings: Timings {
+                total_ms,
+                session_ms: total_ms,
+            },
+            void_cause: None,
+            cause: Some("Trial timed out".into()),
+            session_id: None,
+            log: None,
+            model_evidence: None,
+            reports: Reports {
+                standards: None,
+                spec: None,
+            },
+        }
+    }
 }
 
 /// Invalid requests are CLI failures. An accepted Trial returns exactly one

@@ -49,7 +49,7 @@ pub(crate) struct Prepared {
     pub(super) candidate: Arm,
 }
 
-pub(super) fn prepare(repository: &Path, arms: [Requested; 2], record: &Path) -> Result<String> {
+pub(super) fn prepare(repository: &Path, arms: [Requested; 2], record: &Path) -> Result<Prepared> {
     if record.try_exists()? {
         bail!("Arm record already exists: {}", record.display());
     }
@@ -88,7 +88,7 @@ pub(super) fn prepare(repository: &Path, arms: [Requested; 2], record: &Path) ->
     temporary
         .persist_noclobber(record)
         .with_context(|| format!("can't publish Arm record {}", record.display()))?;
-    Ok(json)
+    Ok(prepared)
 }
 
 fn fixed_harness(harness: Harness) -> Result<FixedHarness> {

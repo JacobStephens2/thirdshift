@@ -11,12 +11,14 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use store::State;
 
 use super::{arms, format, suite};
 use crate::config::UserConfig;
 use crate::git::Git;
 use crate::harness::{Choice, ChosenBy, Harness};
 use crate::issue::Repo;
+use crate::trial::VoidCause;
 use crate::{interrupt, logs, progress};
 
 pub use options::{Options, parse};
@@ -50,7 +52,7 @@ fn decimal<'de, D: serde::Deserializer<'de>>(
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 struct VoidRules {
     retries: usize,
-    causes: Vec<String>,
+    causes: Vec<VoidCause>,
 }
 
 impl Default for Bar {
@@ -67,12 +69,11 @@ impl Default for Bar {
             void_rules: VoidRules {
                 retries: 2,
                 causes: [
-                    "session_unavailable",
-                    "usage_limit",
-                    "rate_limit",
-                    "interrupted",
+                    VoidCause::SessionUnavailable,
+                    VoidCause::UsageLimit,
+                    VoidCause::RateLimit,
+                    VoidCause::Interrupted,
                 ]
-                .map(String::from)
                 .into(),
             },
         }
@@ -176,7 +177,7 @@ pub fn run(options: Options) -> Result<()> {
     let mut experiment = store::Stored::open(&root.join("experiments"), description, || {
         tasks(&suites_root, &selected)
     })?;
-    if experiment.state == "completed" {
+    if experiment.state == State::Completed {
         println!("{}", experiment.render(options.json)?);
         return Ok(());
     }
@@ -192,7 +193,7 @@ pub fn run(options: Options) -> Result<()> {
     );
     logs::experiment(&experiment.description);
     let result = (|| {
-        experiment.state = "running".into();
+        experiment.state = State::Running;
         experiment.save()?;
         logs::stage(logs::Stage::ArmBuilds);
         if experiment.description.prepared.is_none() {
@@ -209,18 +210,15 @@ pub fn run(options: Options) -> Result<()> {
                 experiment.description.prepared =
                     Some(serde_json::from_slice(&std::fs::read(record)?)?);
             } else {
-                experiment.description.prepared = Some(serde_json::from_str(&arms::prepare(
-                    &repository,
-                    requested,
-                    &record,
-                )?)?);
+                experiment.description.prepared =
+                    Some(arms::prepare(&repository, requested, &record)?);
             }
             experiment.save()?;
             logs::experiment(&experiment.description);
         }
         logs::stage(logs::Stage::EvalTasks);
         workers::run(&experiment)?;
-        experiment.state = "completed".into();
+        experiment.state = State::Completed;
         Ok(())
     })();
     let cause = result
@@ -229,11 +227,10 @@ pub fn run(options: Options) -> Result<()> {
         .map(|error: &anyhow::Error| format!("{error:#}"));
     if result.is_err() {
         experiment.state = if interrupt::requested() {
-            "interrupted"
+            State::Interrupted
         } else {
-            "paused"
-        }
-        .into();
+            State::Paused
+        };
     }
     let saved = experiment.save();
     if result.is_ok() && saved.is_ok() {

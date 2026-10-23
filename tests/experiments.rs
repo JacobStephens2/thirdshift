@@ -439,3 +439,80 @@ ln -sf /nonexistent/updated-codex '{}'
         );
     }
 }
+
+#[test]
+fn distinct_suite_task_pairs_keep_distinct_trial_results() {
+    let fixture = Fixture::new();
+    let suites = fixture.scenario.path("home/.thirdshift/evals/suites");
+    let source = suites.join("spec-review");
+    for (suite, task) in [("alpha", "beta--gamma"), ("alpha--beta", "gamma")] {
+        let target = suites.join(suite);
+        let directory = target.join("tasks").join(task);
+        fs::create_dir_all(&directory).unwrap();
+        fs::copy(source.join("suite.toml"), target.join("suite.toml")).unwrap();
+        fs::copy(
+            source.join("tasks/fixture/task.toml"),
+            directory.join("task.toml"),
+        )
+        .unwrap();
+        fs::copy(
+            source.join("tasks/fixture/spec.md"),
+            directory.join("spec.md"),
+        )
+        .unwrap();
+    }
+    let result = fixture.run(&["--suite", "alpha", "--suite", "alpha--beta"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let experiment: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(experiment["state"], "completed");
+    assert_eq!(fixture.scenario.claude_calls().len(), 4);
+    assert_eq!(
+        experiment["results"].as_array().unwrap().len(),
+        4,
+        "each suite/task/Arm Trial needs its own saved result: {experiment}"
+    );
+}
+
+#[test]
+fn resuming_a_cut_short_retry_keeps_the_bars_void_retry_budget() {
+    let fixture = Fixture::new();
+    let void = r#"echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["connection refused"]}' >> "$FAKE_CLAUDE_AFTER_RESULT""#;
+    fixture.scenario.agent_does_in_session(1, void);
+    fixture.scenario.agent_does_in_session(2, void);
+    fixture.scenario.agent_does(&format!(
+        r#"
+case "$PWD" in *--baseline--*) arm=baseline ;; *) arm=candidate ;; esac
+touch '{root}/blocked-'"$arm"
+while [ ! -f '{root}/blocked-baseline' ] || [ ! -f '{root}/blocked-candidate' ]; do sleep 0.01; done
+touch '{root}/started'
+while true; do sleep 0.05; done
+"#,
+        root = fixture.scenario.path("").display()
+    ));
+    let mut held =
+        fixture
+            .scenario
+            .run_until(&["experiment", "candidate", "--json"], &[], "started");
+    let status = fixture.scenario.run(&["status", "--json"]);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    let name = status["commands"][0]["name"].as_str().unwrap();
+    let stopped = fixture.scenario.run(&["stop", name, "--json"]);
+    if stopped.code != Some(0) {
+        held.signal("TERM");
+    }
+    let ended = held.finish();
+    assert_eq!(stopped.code, Some(0), "{}", stopped.stderr);
+    assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+    assert_eq!(fixture.scenario.claude_calls().len(), 4);
+    fixture.scenario.agent_does(void);
+    let resumed = fixture.run(&[]);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    assert_eq!(
+        fixture.scenario.claude_calls().len(),
+        8,
+        "each Arm already completed one Void Trial attempt before Stop"
+    );
+    for result in fixture.experiment()["results"].as_array().unwrap() {
+        assert_eq!(result["attempts"].as_array().unwrap().len(), 3);
+    }
+}

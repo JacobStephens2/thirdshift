@@ -15,7 +15,7 @@ pub(super) struct Stored {
     format: u32,
     #[serde(flatten)]
     pub description: Description,
-    pub state: String,
+    pub state: State,
     created_at: String,
     pub tasks: Vec<Task>,
     #[serde(skip)]
@@ -28,9 +28,31 @@ pub(super) struct Stored {
 struct View<'a> {
     #[serde(flatten)]
     description: &'a Description,
-    state: &'a str,
+    state: State,
     created_at: &'a str,
     results: Vec<TrialResult>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub(super) enum State {
+    Prepared,
+    Running,
+    Completed,
+    Interrupted,
+    Paused,
+}
+
+impl std::fmt::Display for State {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(match self {
+            Self::Prepared => "prepared",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Interrupted => "interrupted",
+            Self::Paused => "paused",
+        })
+    }
 }
 
 impl Stored {
@@ -60,7 +82,7 @@ impl Stored {
             Self {
                 format: 1,
                 description,
-                state: "prepared".into(),
+                state: State::Prepared,
                 created_at: chrono::Local::now().to_rfc3339(),
                 tasks: tasks()?,
                 directory: PathBuf::new(),
@@ -84,7 +106,7 @@ impl Stored {
         }
         Ok(View {
             description: &self.description,
-            state: &self.state,
+            state: self.state,
             created_at: &self.created_at,
             results,
         })

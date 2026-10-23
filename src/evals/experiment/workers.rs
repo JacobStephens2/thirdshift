@@ -14,10 +14,12 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
+use sha2::{Digest, Sha256};
 
 use super::{Task, arms, store};
 use crate::process::{self, Control, Interruption};
+use crate::trial::{Outcome, Output, VoidCause};
 use crate::{interrupt, logs, progress};
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
@@ -42,8 +44,8 @@ pub(super) struct TrialResult {
     task: String,
     arm: Arm,
     trial: usize,
-    outcome: String,
-    pub attempts: Vec<Value>,
+    outcome: Outcome,
+    pub attempts: Vec<Output>,
 }
 
 struct Trial<'a> {
@@ -54,13 +56,14 @@ struct Trial<'a> {
 
 impl Trial<'_> {
     fn key(&self) -> String {
-        format!(
-            "{}--{}--{}--{}",
-            self.task.suite,
-            self.task.name,
-            self.arm.name(),
-            self.index
-        )
+        // Names cannot contain NUL. Hash the delimited tuple so names with
+        // `--` stay distinct and long names cannot exceed a filename limit.
+        let task = Sha256::new()
+            .chain_update(self.task.suite.as_bytes())
+            .chain_update([0])
+            .chain_update(self.task.name.as_bytes())
+            .finalize();
+        format!("{task:x}--{}--{}", self.arm.name(), self.index)
     }
 }
 
@@ -151,16 +154,21 @@ fn run_trial(
     };
     let directory = experiment.directory.join("trials").join(trial.key());
     fs::create_dir_all(&directory)?;
-    let mut result = TrialResult {
-        suite: trial.task.suite.clone(),
-        task: trial.task.name.clone(),
-        arm: trial.arm,
-        trial: trial.index,
-        outcome: String::new(),
-        attempts: Vec::new(),
+    let pending = directory.join("pending.json");
+    let mut result = if pending.exists() {
+        serde_json::from_slice(&fs::read(&pending)?)?
+    } else {
+        TrialResult {
+            suite: trial.task.suite.clone(),
+            task: trial.task.name.clone(),
+            arm: trial.arm,
+            trial: trial.index,
+            outcome: Outcome::Void,
+            attempts: Vec::new(),
+        }
     };
     let bar = &experiment.description.bar;
-    for _ in 0..=bar.void_rules.retries {
+    while result.outcome == Outcome::Void && result.attempts.len() <= bar.void_rules.retries {
         interrupt::check()?;
         let attempt = tempfile::Builder::new()
             .prefix("attempt-")
@@ -211,43 +219,38 @@ fn run_trial(
                         String::from_utf8_lossy(&output.stderr)
                     );
                 }
-                let protocol: Value =
+                let protocol: Output =
                     serde_json::from_slice(&output.stdout).context("invalid Trial result")?;
-                ensure!(
-                    protocol["version"] == 1
-                        && matches!(
-                            protocol["outcome"].as_str(),
-                            Some("succeeded" | "failed" | "void")
-                        ),
-                    "unsupported Trial result"
-                );
+                ensure!(protocol.version == 1, "unsupported Trial result");
                 protocol
             }
             Err(error) if error.is::<process::TimedOut>() => {
-                json!({ "version": 1, "outcome": "failed", "cause": "Trial timed out", "void_cause": null, "timings": {"total_ms": bar.timeout_seconds * 1000}, "log": null })
+                Output::timed_out(u128::from(bar.timeout_seconds) * 1000)
             }
             Err(error) => return Err(error),
         };
         store::write(&attempt.join("result.json"), &protocol)?;
-        let outcome = protocol["outcome"].as_str().unwrap();
-        let void_cause = protocol["void_cause"].as_str();
-        if outcome == "void"
+        let outcome = protocol.outcome;
+        let void_cause = protocol.void_cause;
+        if outcome == Outcome::Void
             && matches!(
                 void_cause,
-                Some("usage_limit" | "rate_limit" | "interrupted")
+                Some(VoidCause::UsageLimit | VoidCause::RateLimit | VoidCause::Interrupted)
             )
         {
             bail!(
-                "Trial {} paused: {}; run the Experiment again to resume",
+                "Trial {} paused: {:?}; run the Experiment again to resume",
                 trial.key(),
                 void_cause.unwrap()
             );
         }
-        result.outcome = outcome.into();
-        let retry = outcome == "void"
-            && void_cause
-                .is_some_and(|cause| bar.void_rules.causes.iter().any(|rule| rule == cause));
+        result.outcome = outcome;
+        let retry = outcome == Outcome::Void
+            && void_cause.is_some_and(|cause| bar.void_rules.causes.contains(&cause));
         result.attempts.push(protocol);
+        // Preserve completed void attempts even if Stop cuts the next retry
+        // short. A resume keeps the original Bar's remaining retry budget.
+        store::write(&pending, &result)?;
         if !retry {
             break;
         }
