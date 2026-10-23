@@ -1956,6 +1956,10 @@ fn record_run(state: &mut Json, mut run: Json) {
 fn graphql(state: &Json, args: &[&str]) {
     let mut variables = api_fields(args);
     let query = variables.remove("query").unwrap_or_default();
+    if query.contains("ScoringPullRequests") {
+        scoring_search(state, &variables);
+        return;
+    }
     let asks_for = |fields: &[&str]| fields.iter().all(|field| query.contains(field));
     let is_candidate = asks_for(&["parent", "subIssues", "blockedBy", "timelineItems"]);
     let is_comments = asks_for(&["comments(", "authorAssociation"]);
@@ -2013,6 +2017,70 @@ fn graphql(state: &Json, args: &[&str]) {
     };
     let answer = object([("data", object([("repository", object([("issue", issue)]))]))]);
     println!("{answer}");
+}
+
+/// Owner-scoped merged PR search, paginated like GitHub. Tests supply
+/// GraphQL-shaped nodes in `scoring_prs`, independently of live Run PRs.
+fn scoring_search(state: &Json, variables: &BTreeMap<String, String>) {
+    if let Some(script) = state.get("on_scoring_search").and_then(Json::as_str) {
+        let status = Command::new("bash")
+            .args(["-e", "-c", script])
+            .status()
+            .unwrap();
+        if !status.success() {
+            die("scoring search hook failed", 1);
+        }
+    }
+    let search = &variables["search"];
+    let owner = search
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("user:"))
+        .unwrap();
+    let range = search
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("merged:"))
+        .unwrap();
+    let (start, end) = range.split_once("..").unwrap();
+    let nodes: Vec<Json> = state
+        .get("scoring_prs")
+        .map(Json::items)
+        .unwrap_or(&[])
+        .iter()
+        .filter(|pr| {
+            let repo = pr.at("repository").at("nameWithOwner").str();
+            let merged = pr.at("mergedAt").str();
+            repo.split('/').next().unwrap().eq_ignore_ascii_case(owner)
+                && merged >= start
+                && merged <= end
+                && pr.at("body").str().contains("thirdshift:built-with")
+        })
+        .cloned()
+        .collect();
+    let offset: usize = variables
+        .get("after")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let end = (offset + 50).min(nodes.len());
+    println!(
+        "{}",
+        object([(
+            "data",
+            object([(
+                "search",
+                object([
+                    ("issueCount", number(nodes.len())),
+                    ("nodes", Array(nodes[offset..end].to_vec())),
+                    (
+                        "pageInfo",
+                        object([
+                            ("hasNextPage", Bool(end < nodes.len())),
+                            ("endCursor", string(end.to_string())),
+                        ])
+                    ),
+                ])
+            )])
+        )])
+    );
 }
 
 /// The list `map` holds for issue `key`, empty if it holds none.

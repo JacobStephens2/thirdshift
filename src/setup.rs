@@ -1234,6 +1234,14 @@ effort = \"\"
 [harness.opencode]
 model = \"\"
 effort = \"\"
+
+[scoring]
+owners = []
+sample_size = 10
+harness = \"claude\"
+model = \"\"
+fallback_harness = \"codex\"
+fallback_model = \"\"
 ";
         let mut outside = Scripted {
             user_config: Some(mine.to_string()),

@@ -392,6 +392,8 @@ thirdshift pickup                   # take the lowest-numbered Ready issue in th
 thirdshift pickup base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
 thirdshift secure                   # audit the Base branch and record findings privately (see Security runs)
 thirdshift secure base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
+thirdshift score                    # sample merged factory pull requests (see Scoring runs)
+thirdshift scores [--json]          # list the sample by week
 thirdshift email-test [<address>]   # send a test email through Resend (see Email)
 thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
 thirdshift update                   # update to the latest release (see Updating)
@@ -1292,6 +1294,50 @@ The command's flags and the User config decide what a pass does with the issue i
 An issue whose run failed [keeps its Claim](#when-the-claim-ends) and waits for the **Day shift**: it stays `in-progress`, with the Issue branch and any draft pull request the run left, no later pass takes it, and it counts towards the Claim limit until it is closed or you take the label off. To send it round again by hand, run `thirdshift <Issue URL>` from the clone, with the Base branch checked out, since that command takes no `base <branch>`: it picks up where the failed run stopped, as a [Continuation](#continuation) does. To hand it back to Pickup instead, remove `in-progress` and then apply `ready-for-agent`: after settling, a pass can continue it if every other Ready issue gate still permits it. Applying the ready label before the last Claim ends does not hand it back. For an ordinary Run, the one failure a later pass does retry is one that left nothing on `origin`, such as a usage limit or an expired login: its Claim is released, so the issue is a Ready issue again once it has settled. A failed Security fix is always left for the Day shift, even with nothing on `origin`.
 
 When shaping issues with `to-spec` and `to-tickets` from [mattpocock/skills](https://github.com/mattpocock/skills), keep a **Spec** labelled `needs-triage` until every **Ticket** is published, attached as a sub-issue and linked to its blockers; then replace it with `ready-for-agent`. A Spec with no Tickets yet looks exactly like a standalone Ticket, so a pass would start a plain Run on it. This repository's Day shift follows the publication procedure in [`docs/agents/triage-labels.md`](agents/triage-labels.md), required by [`AGENTS.md`](../AGENTS.md), which overrides the imported skills' defaults and survives their updates. The settling window (thirty minutes by default) is only a second line of defence: it covers Tickets attached within minutes of the label, not a Spec left labelled and without Tickets for longer.
+
+## Scoring runs
+
+`thirdshift score` starts a Scoring run from any directory. It searches the
+configured GitHub owners for merged pull requests whose bodies contain the
+`<!-- thirdshift:built-with -->` marker, excluding work whose issue carries
+`security-fix`. Its first window looks back seven days; each later window starts
+at the previous saved window's end and ends at this Command's start. Boundaries
+are inclusive at the start and exclusive at the end, so work is sampled once.
+
+Configure the owners before the first run. Setup writes these defaults and
+preserves existing values; it does not ask Scoring questions:
+
+```toml
+[scoring]
+owners = []                 # GitHub users or organizations; configure before score
+sample_size = 10            # maximum sample size
+harness = "claude"          # Grader's Harness
+model = ""                  # blank uses that Harness's default
+fallback_harness = "codex"   # second Grader, when the first matches the Run's Model
+fallback_model = ""         # blank uses the second Harness's default
+```
+
+The sample is drawn randomly across the Harness and Model pairs in the Built-with
+lines. Each saved window records its seed and sampled pull requests, including
+their repository, merge date, Harness, Model, Effort and version when present.
+Samples are private under `~/.thirdshift/evals/scoring/`. `thirdshift scores`
+lists them by ISO week; `thirdshift scores --json` returns the saved windows and
+their samples. This command currently collects samples; Grader sessions and
+criterion Scores are separate work.
+
+The Command record and Command log live under
+`<logs.dir>/JacobStephens2/thirdshift/commands/scoring/`, with start and end lines
+in that repository's Activity log. The Command appears in the Inbox, can be
+Stopped with `thirdshift stop <command>`, and a failure lands in Needs you.
+Another Scoring run on the machine is skipped without recording a Command.
+A failed or interrupted search advances no window. Searches exceeding GitHub's
+1,000-result limit fail visibly rather than saving an incomplete window.
+
+Your operating system can schedule it weekly, for example:
+
+```cron
+0 3 * * 1 /usr/local/bin/thirdshift score >> /tmp/thirdshift-cron.log 2>&1
+```
 
 ## Building from source
 

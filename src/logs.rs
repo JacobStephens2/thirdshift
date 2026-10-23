@@ -49,6 +49,7 @@ pub enum CommandKind {
     Architect,
     Pickup,
     Secure,
+    Scoring,
 }
 
 impl CommandKind {
@@ -58,6 +59,7 @@ impl CommandKind {
             Self::Architect => "architect",
             Self::Pickup => "pickup",
             Self::Secure => "secure",
+            Self::Scoring => "scoring",
         }
     }
 
@@ -67,6 +69,7 @@ impl CommandKind {
             "architect" => Some(Self::Architect),
             "pickup" => Some(Self::Pickup),
             "secure" => Some(Self::Secure),
+            "scoring" => Some(Self::Scoring),
             _ => None,
         }
     }
@@ -85,6 +88,7 @@ pub enum Begin<'a> {
     /// `thirdshift pickup`, a pass.
     PickupRun,
     SecurityRun,
+    ScoringRun,
 }
 
 /// The work a command starts.
@@ -102,6 +106,7 @@ pub enum Work<'a> {
     ArchitectRun(&'a Repo),
     /// A Security run, on its repository.
     SecurityRun(&'a Repo),
+    ScoringRun(&'a Repo),
 }
 
 /// A Pass, a command that may be skipped before it starts work.
@@ -320,6 +325,7 @@ impl<'a> Work<'a> {
             Work::Run(_) | Work::BaseFix(_) => Some(Stage::Implement),
             Work::SpecRun(_) => Some(Stage::Tickets),
             Work::ArchitectRun(_) => Some(Stage::ArchitectureReview),
+            Work::ScoringRun(_) => Some(Stage::Sampling),
             Work::PickupRun(_) | Work::SecurityRun(_) => None,
         }
     }
@@ -329,7 +335,9 @@ impl<'a> Work<'a> {
         match self {
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => issue.repo(),
             Work::PickupRun(listed) => listed.issue.repo(),
-            Work::ArchitectRun(repo) | Work::SecurityRun(repo) => repo.clone(),
+            Work::ArchitectRun(repo) | Work::SecurityRun(repo) | Work::ScoringRun(repo) => {
+                repo.clone()
+            }
         }
     }
 
@@ -341,6 +349,7 @@ impl<'a> Work<'a> {
             Work::PickupRun(_) => Kind::Pass(Pass::Pickup),
             Work::ArchitectRun(_) => Kind::Pass(Pass::Architect),
             Work::SecurityRun(_) => Kind::Pass(Pass::Security),
+            Work::ScoringRun(_) => Kind::ScoringRun,
         }
     }
 
@@ -349,7 +358,7 @@ impl<'a> Work<'a> {
         match self {
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => Some(issue),
             Work::PickupRun(listed) => Some(&listed.issue),
-            Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
+            Work::ArchitectRun(_) | Work::SecurityRun(_) | Work::ScoringRun(_) => None,
         }
     }
 

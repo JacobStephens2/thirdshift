@@ -17,6 +17,7 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | Inherited failure, check-state reading, Base fix | `src/ci.rs` — `reading` of each `Conclusion` the GitHub adapter (`src/github.rs`, `checks_on`) reports; `src/base_fix.rs` | Inline tests; `src/github/execution_tests.rs`; `tests/ci.rs`, `tests/base_fix.rs` |
 | Run notification | `src/notification.rs` — `RunNotification`; `src/email.rs` | `tests/run_notification.rs`, `tests/email_test.rs` |
 | Harness, Model, Effort | `src/harness.rs` and `src/harness/` | `tests/harness_choice.rs`, `tests/harness.rs` |
+| Built-with line | `src/harness/built_with.rs` — retained attribution reader, formatter and marker; `src/pull_request.rs` — PR body annotation | `tests/scoring.rs`, inline Harness and pull-request tests |
 | Session prompt, Factory skills | `src/prompt.rs`; `src/skills.rs`; `skills/` | `src/skills/tests.rs`, `tests/packaging.rs` |
 | Trusted account, the issue a session gets | `src/trust.rs` — `issue_trust`, `ticket_trust`, `untrusted_edit` over `Reads`; the GitHub adapter's trust reads, `src/github/trust.rs`; `src/github/session_issue.rs` — `issue_for_session`; `src/delivery.rs` — `hand_over_issue` | Inline tests, including `src/trust.rs` and `src/prompt.rs`; `tests/fresh_run.rs`, `tests/pickup_run.rs` |
 | Session log, Resume | `src/session.rs` and `src/session/`; `src/session/kind.rs` — `Kind`, `Logged`: every session kind, its Session-log token, the Command record stage it enters and its `--session` rule (`selects`) | `src/session/execution_tests.rs`, inline tests in `src/session/kind.rs`, `tests/background_work.rs` |
@@ -40,6 +41,7 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | Console Cron jobs, crontab inventory | `src/cronjobs.rs` — read-only account crontab and CLI; `src/console/cronjobs.rs`, `src/console/cronjobs.html` — page rendering | `tests/console/cronjobs.rs`, `console/tests/cronjobs.test.cjs` |
 | Stop | `src/logs/reading.rs` — `retained_work` reload by captured record; `src/logs/reading/selection.rs` — `Selection::stop_target`; `src/logs/stop.rs` — shared request, signaling, waiting and inspection; `src/console/stop.rs` — confirmation and authenticated Console action; `src/claim.rs` — Stop endings | `src/logs/reading/tests.rs`, `tests/stop.rs`, `tests/console/stop.rs`, `console/tests/stop.test.cjs`; inline Claim and Stop tests |
 | User config, Setup | `src/config.rs`; `src/setup.rs` | `tests/user_config.rs`, `tests/setup.rs` |
+| Scoring run, weekly sample | `src/scoring.rs` — machine lock, window checkpoint and sample; `src/github/scoring.rs` — merged PR search; `src/config/scoring.rs` — Grader and sampling defaults | `tests/scoring.rs` |
 | Architecture review, Architect run | `src/architect.rs` | `tests/architect_run.rs` |
 | Security audit, Security review, Security run | `src/security.rs` and `src/security/`; which Runs run a Security review, and what every child Run is handed: `src/child_run/asks.rs` — `ChildAsks` | Inline tests; `tests/security_review.rs`, `tests/security_run.rs` |
 

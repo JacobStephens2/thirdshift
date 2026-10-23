@@ -98,6 +98,7 @@ impl<O: Outside> Record<O> {
             Begin::ArchitectRun => CommandKind::Architect,
             Begin::PickupRun => CommandKind::Pickup,
             Begin::SecurityRun => CommandKind::Secure,
+            Begin::ScoringRun => CommandKind::Scoring,
         };
         let (starting, quiet) = match begin {
             Begin::ChildRun(stamp, _) => {
@@ -109,6 +110,7 @@ impl<O: Outside> Record<O> {
             Begin::ArchitectRun => ("Architect run starting".into(), true),
             Begin::PickupRun => ("Pickup run starting".into(), true),
             Begin::SecurityRun => ("Security run starting".into(), true),
+            Begin::ScoringRun => ("Scoring run starting".into(), false),
         };
         let now = self.outside.now();
         self.stamp

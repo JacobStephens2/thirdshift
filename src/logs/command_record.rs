@@ -137,6 +137,7 @@ pub enum StageName {
     SecurityAudit,
     SecurityReproduction,
     SecurityFixPublishing,
+    Sampling,
     /// A Pickup run or Security run waiting on the Run it dispatched.
     DispatchedRun,
     /// A Pickup run or Security run waiting on the Spec run it dispatched.
@@ -160,6 +161,7 @@ impl StageName {
             Self::SecurityAudit => "Security audit",
             Self::SecurityReproduction => "Security reproduction",
             Self::SecurityFixPublishing => "Security fix publishing",
+            Self::Sampling => "sampling",
             Self::DispatchedRun => "dispatched Run",
             Self::DispatchedSpecRun => "dispatched Spec run",
         }
@@ -173,7 +175,8 @@ impl StageName {
             | Work::BaseFix(_)
             | Work::PickupRun(_)
             | Work::ArchitectRun(_)
-            | Work::SecurityRun(_) => Self::DispatchedRun,
+            | Work::SecurityRun(_)
+            | Work::ScoringRun(_) => Self::DispatchedRun,
         }
     }
 
@@ -202,6 +205,7 @@ impl StageName {
             Self::SecurityAudit,
             Self::SecurityReproduction,
             Self::SecurityFixPublishing,
+            Self::Sampling,
             Self::DispatchedRun,
             Self::DispatchedSpecRun,
         ]
@@ -276,6 +280,7 @@ impl CommandRecord {
         let name = match work {
             Work::ArchitectRun(_) => format!("architect-{stamp}"),
             Work::SecurityRun(_) => format!("secure-{stamp}"),
+            Work::ScoringRun(_) => format!("scoring-{stamp}"),
             Work::PickupRun(_) => format!("pickup-{stamp}"),
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => {
                 format!("{}#{}", issue.repo_slug(), issue.number)

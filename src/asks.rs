@@ -272,6 +272,7 @@ mod tests {
     /// default.
     fn no_settings() -> UserConfig {
         UserConfig {
+            scoring: crate::config::scoring::Settings::default(),
             console: crate::config::ConsoleSettings::default(),
             merge_always: false,
             base_fix: false,

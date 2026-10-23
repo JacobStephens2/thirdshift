@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use crate::failed_run::PolicyRefusal;
 use crate::github::{GitHub, Mergeable, PrSnapshot, PrState};
 use crate::harness::Choice;
+use crate::harness::built_with::MARKER as BUILT_WITH_MARKER;
 use crate::issue::IssueUrl;
 use crate::{poll, progress};
 
@@ -609,8 +610,6 @@ fn with_checklist(body: &str, checklist: &str) -> String {
     }
     format!("{}\n\n{checklist}", body.trim_end())
 }
-
-const BUILT_WITH_MARKER: &str = "<!-- thirdshift:built-with -->";
 
 /// Preserve unrelated text and replace only thirdshift's annotation line.
 fn with_built_with(body: &str, line: &str) -> String {

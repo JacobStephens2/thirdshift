@@ -1,9 +1,13 @@
-//! The pull request's attribution, also used by the Run notification.
-
+//! The retained Built-with format, shared by PR/notification writers and
+//! Scoring's reader. Accept both legacy and version-bearing Harness names.
 use std::fmt;
 use std::str::FromStr;
 
 use super::{Choice, Harness};
+
+pub(crate) const MARKER: &str = "<!-- thirdshift:built-with -->";
+const PREFIX: &str = "Built with ";
+const SEPARATOR: char = '·';
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct BuiltWith {
@@ -11,6 +15,23 @@ pub(crate) struct BuiltWith {
     pub version: Option<String>,
     pub model: String,
     pub effort: String,
+}
+
+pub(super) fn describe(choice: &Choice, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    write!(
+        f,
+        "{} {SEPARATOR} {} {SEPARATOR} {}",
+        choice.harness.name(),
+        choice.model.as_deref().unwrap_or("default model"),
+        choice.effort.as_deref().unwrap_or("default effort")
+    )
+}
+
+pub(crate) fn read(body: &str) -> Option<BuiltWith> {
+    let line = body
+        .lines()
+        .find_map(|line| line.trim().strip_suffix(MARKER))?;
+    line.parse().ok()
 }
 
 impl BuiltWith {
@@ -26,11 +47,11 @@ impl BuiltWith {
 
 impl fmt::Display for BuiltWith {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Built with {}", self.harness.name())?;
+        write!(f, "{PREFIX}{}", self.harness.name())?;
         if let Some(version) = &self.version {
             write!(f, " {version}")?;
         }
-        write!(f, " · {} · {}", self.model, self.effort)
+        write!(f, " {SEPARATOR} {} {SEPARATOR} {}", self.model, self.effort)
     }
 }
 
@@ -45,29 +66,27 @@ impl FromStr for BuiltWith {
             return Err("expected one Built-with line");
         }
         let text = line
-            .strip_suffix("<!-- thirdshift:built-with -->")
+            .strip_suffix(MARKER)
             .unwrap_or(line)
             .trim_end()
-            .strip_prefix("Built with ")
+            .strip_prefix(PREFIX)
             .ok_or("missing Built-with prefix")?;
-        let parts: Vec<_> = text.split(" · ").collect();
+        let parts: Vec<_> = text.split(SEPARATOR).map(str::trim).collect();
         let [harness, model, effort] = parts.as_slice() else {
             return Err("expected Harness, Model and Effort");
         };
-        let (harness, version) = harness
-            .split_once(' ')
-            .map_or((*harness, None), |(harness, version)| {
-                (harness, Some(version.trim()))
-            });
-        if model.trim().is_empty() || effort.trim().is_empty() || version.is_some_and(str::is_empty)
-        {
+        let mut harness = harness.split_whitespace();
+        let name =
+            Harness::named(harness.next().ok_or("missing Harness")?).ok_or("unknown Harness")?;
+        let version = harness.collect::<Vec<_>>().join(" ");
+        if model.is_empty() || effort.is_empty() {
             return Err("empty Built-with field");
         }
         Ok(Self {
-            harness: Harness::named(harness).ok_or("unknown Harness")?,
-            version: version.map(str::to_owned),
-            model: model.trim().into(),
-            effort: effort.trim().into(),
+            harness: name,
+            version: (!version.is_empty()).then_some(version),
+            model: (*model).into(),
+            effort: (*effort).into(),
         })
     }
 }

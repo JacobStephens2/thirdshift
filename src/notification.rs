@@ -38,6 +38,7 @@ pub enum About<'a> {
     PickupRun,
     /// A Security run, from the Launch directory.
     SecurityRun,
+    ScoringRun,
 }
 
 /// What a Run notification's subject names.
@@ -56,6 +57,7 @@ enum Subject {
     ArchitectRun(Option<Repo>),
     /// A Security run, with its repository if origin names one.
     SecurityRun(Option<Repo>),
+    ScoringRun,
     /// A Pass whose notification subject has not been established yet.
     Pending,
 }
@@ -67,6 +69,7 @@ impl Subject {
         match self {
             Subject::ArchitectRun(repo) => Some(("Architect run", repo.as_ref())),
             Subject::SecurityRun(repo) => Some(("Security run", repo.as_ref())),
+            Subject::ScoringRun => Some(("Scoring run", None)),
             Subject::Issue { .. } | Subject::Pending => None,
         }
     }
@@ -116,6 +119,7 @@ impl RunNotification {
             About::ArchitectRun => Subject::ArchitectRun(launch::repo().ok()),
             About::PickupRun => Subject::Pending,
             About::SecurityRun => Subject::SecurityRun(launch::repo().ok()),
+            About::ScoringRun => Subject::ScoringRun,
         };
         Ok(RunNotification {
             resend,

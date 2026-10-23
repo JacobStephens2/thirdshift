@@ -234,7 +234,8 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[harness.grok]",
             "[harness.muse]",
             "[harness.opencode]",
-            "[security]"
+            "[security]",
+            "[scoring]"
         ],
         "{text}"
     );
@@ -264,6 +265,15 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(config["pickup"]["wait_minutes"].as_integer(), Some(30));
     assert_eq!(config["security"]["fix"].as_bool(), Some(false));
     assert_eq!(config["security"]["harness"].as_str(), Some(""));
+    assert!(config["scoring"]["owners"].as_array().unwrap().is_empty());
+    assert_eq!(config["scoring"]["sample_size"].as_integer(), Some(10));
+    assert_eq!(config["scoring"]["harness"].as_str(), Some("claude"));
+    assert_eq!(config["scoring"]["model"].as_str(), Some(""));
+    assert_eq!(
+        config["scoring"]["fallback_harness"].as_str(),
+        Some("codex")
+    );
+    assert_eq!(config["scoring"]["fallback_model"].as_str(), Some(""));
     assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
     for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
         for key in ["model", "effort"] {
@@ -333,6 +343,7 @@ effort = 'high' # my Effort
             "[harness.muse]",
             "[harness.opencode]",
             "[security]",
+            "[scoring]",
         ],
         "{text}"
     );

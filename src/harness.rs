@@ -326,13 +326,7 @@ impl fmt::Display for Choice {
     /// high`, saying `default model` or `default effort` for one left to the
     /// Harness.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{} · {} · {}",
-            self.harness.name(),
-            self.model.as_deref().unwrap_or("default model"),
-            self.effort.as_deref().unwrap_or("default effort")
-        )
+        built_with::describe(self, f)
     }
 }
 

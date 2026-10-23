@@ -17,12 +17,14 @@ use toml_edit::{DocumentMut, Item};
 use crate::harness::{self, Harness, ModelAndEffort};
 
 pub mod console;
+pub mod scoring;
 pub use console::{ConsoleAccess, ConsoleSettings};
 
 /// The settings a User config can hold. Each is what a Run does when its
 /// command says nothing about it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct UserConfig {
+    pub scoring: scoring::Settings,
     pub console: ConsoleSettings,
     /// `merge.always`: every Run is a Merge run unless told `no-merge`.
     pub merge_always: bool,
@@ -110,6 +112,7 @@ impl UserConfig {
     /// What a Run does with no User config under `home`.
     fn defaults(home: &Path) -> Self {
         UserConfig {
+            scoring: scoring::Settings::default(),
             console: ConsoleSettings::default(),
             merge_always: false,
             base_fix: false,
@@ -142,6 +145,17 @@ impl UserConfig {
             .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::defaults(home);
         for (section, value) in &table {
+            if section == "scoring" {
+                config.scoring = value
+                    .clone()
+                    .try_into()
+                    .with_context(|| format!("invalid [scoring] in {file}"))?;
+                config
+                    .scoring
+                    .validate()
+                    .with_context(|| format!("invalid [scoring] in {file}"))?;
+                continue;
+            }
             if section == "console" {
                 config.console = value
                     .clone()
@@ -910,6 +924,14 @@ effort = ""   # the Model's variant, passed as #effort; default blank, for OpenC
 fix = false   # Security runs may fix reproduced findings; default false
 review = false   # Runs review their change for Security findings; default false
 harness = ""   # the Harness for Security runs, unless the command names one, and for every Security review; default blank; blank or missing leaves Security runs on harness.default, or Claude Code if that is missing, and Security reviews on their Command's Harness
+
+[scoring]
+owners = []   # GitHub owners whose repositories Scoring runs search; default [] (configure before score)
+sample_size = 10   # maximum pull requests per sample, spread across Harness and Model pairs; default 10
+harness = "claude"   # the Grader's Harness; default claude
+model = ""   # the Grader's Model; default blank, for the Harness's own
+fallback_harness = "codex"   # the second Grader's Harness when the first matches the Run's Model; default codex
+fallback_model = ""   # the second Grader's Model; default blank, for the second Harness's own
 "#;
 
 /// The line `DEFAULTS` holds for `email.to`, which has no default.
@@ -1074,6 +1096,12 @@ mod tests {
                 "security.fix",
                 "security.review",
                 "security.harness",
+                "scoring.owners",
+                "scoring.sample_size",
+                "scoring.harness",
+                "scoring.model",
+                "scoring.fallback_harness",
+                "scoring.fallback_model",
             ]
         );
         let commented_out: Vec<&str> = DEFAULTS
