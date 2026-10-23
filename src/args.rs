@@ -25,6 +25,10 @@ pub enum Command {
     Version,
     Update,
     Setup,
+    Score,
+    Scores {
+        json: bool,
+    },
     CronJobs {
         json: bool,
     },
@@ -504,6 +508,19 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 [] => Ok(Command::CronJobs { json: false }),
                 [flag] if flag == "--json" => Ok(Command::CronJobs { json: true }),
                 _ => bail!("usage: thirdshift cronjobs [--json]"),
+            };
+        }
+        Some("score") => {
+            return match &args[1..] {
+                [] => Ok(Command::Score),
+                _ => bail!("usage: thirdshift score"),
+            };
+        }
+        Some("scores") => {
+            return match &args[1..] {
+                [] => Ok(Command::Scores { json: false }),
+                [flag] if flag == "--json" => Ok(Command::Scores { json: true }),
+                _ => bail!("usage: thirdshift scores [--json]"),
             };
         }
         Some("status") => {

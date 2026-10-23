@@ -607,7 +607,7 @@ fn with_checklist(body: &str, checklist: &str) -> String {
     format!("{}\n\n{checklist}", body.trim_end())
 }
 
-const BUILT_WITH_MARKER: &str = "<!-- thirdshift:built-with -->";
+pub(crate) const BUILT_WITH_MARKER: &str = "<!-- thirdshift:built-with -->";
 
 /// Preserve unrelated text and replace only thirdshift's annotation line.
 fn with_built_with(body: &str, choice: &Choice) -> String {

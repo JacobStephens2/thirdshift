@@ -38,6 +38,7 @@ mod recovery;
 mod resend_key;
 mod run;
 mod run_ending;
+mod scoring;
 mod security;
 mod session;
 mod setup;
@@ -78,6 +79,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift pickup base <branch>                Use <branch> as the Base branch
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
+       thirdshift score                               Sample merged factory pull requests
+       thirdshift scores [--json]                      List the sample by week
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
        thirdshift status [--all] [--json]             List this machine's Commands
@@ -151,6 +154,8 @@ fn main() -> ExitCode {
         }
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
+        Ok(Command::Score) => return score(),
+        Ok(Command::Scores { json }) => return printed(scoring::show(json)),
         Ok(Command::CronJobs { json }) => return printed(cronjobs::show(json)),
         Ok(Command::ConsoleInstall { output: None }) => {
             return match console::install() {
@@ -390,6 +395,29 @@ fn secure(args: PassArgs) -> ExitCode {
         security::Outcome::Audited(audited) => Ending::Security(audited),
         security::Outcome::Fixed { ended, findings } => Ending::SecurityFix { ended, findings },
     })
+}
+
+fn score() -> ExitCode {
+    let _lock = match scoring::lock() {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            progress::step("Scoring run skipped: another Scoring run is running on this machine");
+            return ExitCode::SUCCESS;
+        }
+        Err(error) => return failure(&error),
+    };
+    let started_at = chrono::Utc::now();
+    let (config, started) = match command::start(
+        Begin::ScoringRun,
+        |_| notification::NotificationAsk::Skip,
+        About::ScoringRun,
+    ) {
+        Ok(started) => started,
+        Err(failure) => return failure,
+    };
+    started.finish(Ending::Scoring(
+        scoring::sample(&config, started_at).map_err(Into::into),
+    ))
 }
 
 /// The release script's internal interface: the prompt on stdin, only the

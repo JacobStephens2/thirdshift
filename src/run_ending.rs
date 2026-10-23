@@ -33,6 +33,26 @@ const BASE_FIX: &str = "Base fix: ";
 /// skipped pass, which reads no further, its skip.
 pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
     match ending {
+        Ending::Scoring(result) => Ok(match result {
+            Ok(count) => Account {
+                outcome: "sampled",
+                ended: Ok(format!("sampled {count} pull requests")),
+                interrupted: false,
+                pr_url: None,
+                advice: &[],
+                base_fix: None,
+                log: None,
+                ticket_lines: &[],
+                review: None,
+                security_findings: None,
+                security_findings_waiting: false,
+                failed_reproduction: None,
+                pre_audit_failure: None,
+                recovery: None,
+                urls: Vec::new(),
+            },
+            Err(failed) => Account::of_failure(failed, "failed"),
+        }),
         Ending::Run(ended) => Ok(Account::of_run(ended)),
         Ending::SecurityFix { ended, findings } => Ok(Account {
             security_findings: Some(findings),
