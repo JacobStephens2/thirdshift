@@ -491,7 +491,8 @@ fn inbox_groups_ended_commands_and_adds_only_old_history_with_all() {
 fn ready_commands_leave_ready_for_review_on_a_later_local_start_or_the_configured_age() {
     let scenario = Scenario::new();
     let now = chrono::Local::now();
-    // #7 is old; #8 was replaced by #9 on the same issue; #10 still waits.
+    // Record 7 is older than inbox.days; record 9 replaced record 8 on issue 8;
+    // record 10 still waits.
     for (number, issue, hours) in [(7, 7, 8 * 24 + 1), (8, 8, 2), (9, 8, 1), (10, 10, 1)] {
         let time = (now - chrono::Duration::hours(hours)).to_rfc3339();
         write_record(&scenario, number, &time, Some(&time));

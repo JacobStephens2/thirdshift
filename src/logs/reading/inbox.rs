@@ -225,18 +225,18 @@ pub(super) fn list(
             _ => None,
         };
         let landing = matches!(command, Observation::Record(command) if is_landing(command));
-        // An ended Command waits on the Day shift until a later Command on the
-        // same issue starts here, or until it is older than the Inbox period.
-        let waiting = ended
+        // The Inbox holds an ended problem or ready Command until a later
+        // Command on the same issue starts here, or it outlives the period.
+        let held = ended
             .or_else(|| time(Some(facts.started_at)))
             .is_some_and(|time| cutoff.is_none_or(|cutoff| time >= cutoff))
             && !starts
                 .iter()
                 .any(|(issue, start)| latest.get(issue).is_some_and(|latest| latest > start));
-        let needs_you_kind = live_problem.or_else(|| problem.filter(|_| waiting));
+        let needs_you_kind = live_problem.or_else(|| problem.filter(|_| held));
         let group = if needs_you_kind.is_some() {
             Group::NeedsYou
-        } else if facts.ready && waiting {
+        } else if facts.ready && held {
             Group::ReadyForReview
         } else if landing {
             Group::Landing
