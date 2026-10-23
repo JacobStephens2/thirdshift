@@ -857,6 +857,88 @@ Q3.6 settled file binds only, sharing the host's network and PID namespace.
   - how to turn agy's web search off;
   - a Trial's memory beside two building Runs.
 
+## 11. Live checks with the real logins, 2026-10-23
+
+The rest of #1009, on the `thirdshift` host. Each Harness ran in the §10 sandbox:
+- `bwrap --unshare-all --new-session`, with a fresh home at `/home/jacob`;
+- the real login file bound read-write at its own path, and nothing else of the real home but the Harness's binary, and for OpenCode, its config;
+- the network only through the relay, to a proxy that allowed every host and logged each one.
+
+The prompt was a one-word reply. No login's contents were printed or recorded, only each file's inode, size and modification time, before and after. Claude's token went from the Credentials into the sandbox's environment, never onto a command line.
+
+- **Logins inside bwrap (§4, §9).**
+
+  | Harness | Login bound | Result | Written back |
+  |---|---|---|---|
+  | Claude Code 2.1.309 | none; `CLAUDE_CODE_OAUTH_TOKEN` from the Credentials' `claude.setup_token` | 401, "OAuth access token is invalid". The same outside the sandbox, so the saved token is bad, not the sandbox: it is 76 characters, most likely half of a wrapped paste. | — |
+  | Codex 0.163.0 | `~/.codex/auth.json`, a ChatGPT login | Answered. | No. Its access token expires on 2026-10-24 at 20:27, so no refresh was due. |
+  | Grok Build 1.0.62, then 1.0.67 | `~/.grok/auth.json` and `auth.json.lock` | 1.0.62 signed in, then got 402, "Grok Build usage balance exhausted". After the balance was topped up, 1.0.67 answered. | Not inside the sandbox, though 1.0.62 rewrote the lock in place. Outside it, at 15:09, the host's `auth.json` was replaced: it has a new inode. |
+  | Muse Code 1.4.12 | `~/.config/muse/auth.json` and `.auth.json.lock` | Answered. | No. |
+  | agy 1.3.3 | `~/.gemini/antigravity-cli/antigravity-oauth-token`, with no D-Bus | Answered. | Yes: it refreshed through `oauth2.googleapis.com` and wrote the file in place, keeping its inode, while its size went from 1688 to 571 bytes. agy outside the sandbox still signed in with it afterwards. |
+  | OpenCode 2.0.24 | `opencode.json`, then also a copy of `~/.local/share/opencode/opencode.db` | With the config alone: "No api key passed in". Its PrimaLabs key isn't in a file. `opencode auth list` says it's stored, and the database has a `credential` table beside its sessions. With a copy of the database, it answered on PrimaLabs' MiMo-V2.6-Pro. The copy was deleted afterwards. | — (an API key doesn't refresh) |
+
+  What follows:
+  - **Single-file binds work for Codex, Muse and agy.** Every write seen inside the sandbox was in place. A test file confirmed both halves of §4's rule: an in-place write through a single-file bind reaches the host's file, and a rename onto it fails with "Device or resource busy".
+  - **Grok saves its login by rename.** Its `auth.json` got a new inode when its login was renewed outside the sandbox. So a Grok that renews its login inside the sandbox can't save it through a single-file bind. Binding `~/.grok` instead would show the Trial Grok's sessions and memory. #1012 needs a third way [interpretation]:
+    - renew Grok's login before each Trial;
+    - or give Grok a `GROK_HOME` of its own, holding only the login and its lock.
+  - **Bind the lock files too.** Grok and Muse keep one beside the login. A lock left in the fresh home would lock nothing against the factory's own sessions [interpretation].
+  - **Codex needs its release folder.** It looks for `codex-code-mode-host` beside its binary, and says code mode fails closed without it. So the sandbox binds the binary's folder, not the binary alone.
+  - **OpenCode can't be given just its login.** Its credentials share a database with its sessions, so the copy used here also carried its sessions. A Trial mustn't get that. `OPENCODE_AUTH_CONTENT`, which §4 relied on, is no longer in its binary, though `OPENCODE_DB` is. Two ways remain [interpretation]:
+    - give the Trial's config the key through OpenCode's `{env:…}` substitution;
+    - or give it a database of its own through `OPENCODE_DB`.
+  - **Codex's refresh wasn't seen.** Its source writes in place (§4), and the bind carries in-place writes, but a sandboxed refresh still needs a run after 20:22 on 2026-10-24.
+
+  Confirmed by each Harness's output and exit status, `stat` before and after, and the same Claude token failing outside bwrap.
+- **Hosts with the real logins (§3.2, §9).** From the proxy's log. These are the inputs to #1013's allowlist.
+
+  | Harness | Hosts |
+  |---|---|
+  | Claude Code | `api.anthropic.com`. The token was refused, so any hosts after sign-in are missing. |
+  | Codex | `chatgpt.com`, `ab.chatgpt.com`, and `sdmntprcentralus`, `sdmntprnorthcentralus` and `sdmntprsouthcentralus.oaiusercontent.com`. With no refresh, `auth.openai.com` wasn't contacted. Unlike §10, no GitHub host was contacted. |
+  | Grok Build | `api.x.ai`, `cli-chat-proxy.grok.com`, `grok.com`, and `api.mixpanel.com` (analytics). 1.0.62 also contacted `auth.x.ai`. |
+  | Muse Code | `api.meta.ai`, `lookaside.facebook.com` |
+  | agy | `daily-cloudcode-pa.googleapis.com` and `aicode.googleapis.com` (the API), `oauth2.googleapis.com` (the refresh), `www.googleapis.com`, `play.googleapis.com`, `lh3.googleusercontent.com`, `antigravity-unleash.goog`, and `antigravity-cli-auto-updater-974169037036.us-central1.run.app` |
+  | OpenCode | `api.primalabs.ai`, `models.opencode.ai`, with the provider configured here |
+
+  An allowlist can refuse the analytics and updater hosts. Whether each Harness carries on without them wasn't tested.
+- **agy's web search can't be turned off (§10).** agy ran its `search_web` tool and answered with Rust's version. It did so in print mode without `--dangerously-skip-permissions`, in each of these setups:
+  - its default `request-review` preset;
+  - `permissions.deny` holding `read_url(*)` and `execute_url(*)` ([permissions](https://antigravity.google/docs/permissions/));
+  - the `strict` preset.
+
+  agy's log showed it had read each `settings.json`. Naming the tool fails: it logs "ignoring invalid deny entry" for `search_web`, and "unknown action" for `search_web(*)`. The search goes through its API host, `daily-cloudcode-pa.googleapis.com`, so no allowlist can separate it from the model's own calls. So an agy Trial always has web search [interpretation]. A suite that must keep later fixes out has two choices: leave agy out, or void any agy Trial whose stream shows a `search_web` call. Confirmed by agy's `stream-json` output and its log.
+- **A Trial's memory (§7.2, §9).** From each systemd scope's `anon` in `memory.stat`, sampled every half second:
+  - **A Harness session**, through a one-word reply, including the proxy:
+    - Codex 101 MiB;
+    - Grok 55 MiB;
+    - Muse 56 MiB;
+    - agy 199 to 216 MiB;
+    - OpenCode 252 MiB;
+    - Claude 133 MiB, before it failed.
+
+    §10's 480 MiB for a long Claude session is the higher figure to plan on.
+  - **thirdshift's build:** a fresh `cargo test --no-run --locked` took 228 seconds and about 11 minutes of CPU. Its peak was 1535 MiB of anonymous memory. Counting page cache, it was 3722 MiB, which is mostly reclaimable.
+  - **The test run that follows,** `cargo test --locked`, passed. It peaked at 257 MiB, or 406 MiB with page cache. It took 3457 seconds, because it ran beside the Run below at a load average near 20.
+  - **Beside a building Run.** While Ticket run #1082 was in its implement stage, and the test run above was going, the host kept these over a minute of samples:
+    - at least 5447 MiB available;
+    - swap use unchanged;
+    - a load average of about 21 on 4 cores.
+
+    No moment with two building Runs came up.
+
+  So a Trial of the implement suite needs about 2 GiB at its build's peak [interpretation]. Two building Runs at the same peak add about 3 GiB, which fits in 7.7 GiB with 4 GiB of swap. CPU, not memory, is what a Trial beside two Runs runs short of. That bears on #1015 and #1152.
+- **`systemd-run --user` works (§9).** With lingering on, a `--user` scope and a `--user` service both started, and the user manager has the memory controller. Two catches for #1015:
+  - `systemd-run --wait --collect` reported "Memory peak: 0B";
+  - `memory.peak` counts page cache.
+
+  So the launcher should sample `anon` in `memory.stat` itself. From a cron job wasn't tried.
+- **Harnesses update themselves (Q7.2), again.** Since §10, Claude Code has gone from 2.1.307 to 2.1.309. Grok Build went from 1.0.62 to 1.0.67 between two runs of this check.
+- **Still open:**
+  - Claude with a working setup token: save it again with `thirdshift setup`, then rerun its row;
+  - OpenCode with only its key, by either of the two ways above;
+  - a sandboxed Codex refresh, after 20:22 on 2026-10-24.
+
 ## Sources
 
 thirdshift:
