@@ -1,14 +1,13 @@
 //! Failed run preservation through Worktree, with real local Git and origin.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use super::*;
 use crate::interrupt;
-use crate::test_support::{git_fault, with_recorded_signal};
+use crate::test_support::{git_fault, with_recorded_signal, write_executable};
 
 const BRANCH: &str = "issue-7";
 
@@ -19,8 +18,7 @@ fn fixture() -> (tempfile::TempDir, Git, Worktree) {
 }
 
 fn rejecting_hook(path: &Path) {
-    fs::write(path, "#!/bin/sh\necho 'hook says no' >&2\nexit 1\n").unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(path, "#!/bin/sh\necho 'hook says no' >&2\nexit 1\n");
 }
 
 fn unfinished_merge(git: &Git) {

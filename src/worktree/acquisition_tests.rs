@@ -1,6 +1,7 @@
 //! Acquisition through Worktree, with real local Git and origin.
 
 use super::*;
+use crate::test_support::write_executable;
 use std::os::unix::fs::PermissionsExt;
 
 const BRANCH: &str = "issue-7";
@@ -57,12 +58,10 @@ impl AcquisitionKind {
 
 fn checkout_hook(temp: &tempfile::TempDir, script: &str) {
     let path = temp.path().join("hooks/post-checkout");
-    std::fs::write(
+    write_executable(
         &path,
-        format!("#!/bin/sh\nset -e\n{script}\necho 'checkout hook refused' >&2\nexit 1\n"),
-    )
-    .unwrap();
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        &format!("#!/bin/sh\nset -e\n{script}\necho 'checkout hook refused' >&2\nexit 1\n"),
+    );
 }
 
 #[test]
@@ -554,7 +553,9 @@ fn a_rejected_branch_removal_keeps_the_branch_and_original_acquisition_cause() {
     let (temp, launch, start) = AcquisitionKind::Fresh.prepare();
     checkout_hook(&temp, "");
     let hook = temp.path().join("hooks/reference-transaction");
-    std::fs::write(&hook, r#"#!/bin/sh
+    write_executable(
+        &hook,
+        r#"#!/bin/sh
 if test "$1" = prepared; then
   while read old new reference; do
     if test "$reference" = refs/heads/issue-7 && test "$new" = 0000000000000000000000000000000000000000; then
@@ -563,8 +564,8 @@ if test "$1" = prepared; then
     fi
   done
 fi
-"#).unwrap();
-    std::fs::set_permissions(hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+"#,
+    );
 
     let error = AcquisitionKind::Fresh.acquire(&launch).unwrap_err();
 
@@ -665,7 +666,9 @@ fn a_ref_moved_between_inspection_and_deletion_survives() {
             .unwrap();
         assert!(real_git.status.success());
         let shim = temp.path().join("git");
-        std::fs::write(&shim, r#"#!/bin/sh
+        write_executable(
+            &shim,
+            r#"#!/bin/sh
 set -e
 if test "$1" = update-ref && test "$2" = --no-deref && test "$3" = -d && test ! -e "$THIRDSHIFT_RACE_MARKER"; then
   touch "$THIRDSHIFT_RACE_MARKER"
@@ -673,8 +676,8 @@ if test "$1" = update-ref && test "$2" = --no-deref && test "$3" = -d && test ! 
   "$THIRDSHIFT_REAL_GIT" update-ref "$4" "$changed" "$5"
 fi
 exec "$THIRDSHIFT_REAL_GIT" "$@"
-"#).unwrap();
-        std::fs::set_permissions(shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+"#,
+        );
         let search = std::env::var_os("PATH").unwrap();
         let path = std::env::join_paths(
             std::iter::once(temp.path().to_path_buf()).chain(std::env::split_paths(&search)),
@@ -801,9 +804,7 @@ fn tracked_work_hidden_by_index_flags_or_fsmonitor_survives_failure() {
                 }
                 "fsmonitor" => {
                     let monitor = temp.path().join("hooks/fsmonitor");
-                    std::fs::write(&monitor, "#!/bin/sh\nprintf 'token\\0'\n").unwrap();
-                    std::fs::set_permissions(&monitor, std::fs::Permissions::from_mode(0o755))
-                        .unwrap();
+                    write_executable(&monitor, "#!/bin/sh\nprintf 'token\\0'\n");
                     launch
                         .run(&["config", "core.fsmonitor", monitor.to_str().unwrap()])
                         .unwrap();

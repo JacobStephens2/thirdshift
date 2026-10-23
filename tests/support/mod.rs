@@ -40,6 +40,10 @@
 #[path = "../../src/test_support/guidance.rs"]
 pub mod guidance;
 
+#[path = "../../src/test_support/executable.rs"]
+mod executable;
+pub use executable::write_executable;
+
 pub mod fakes;
 pub mod resend;
 pub mod session_trace;
@@ -577,9 +581,6 @@ impl Scenario {
     ) -> RunResult {
         let copy = self.path("installed/thirdshift");
         fs::create_dir_all(copy.parent().unwrap()).unwrap();
-        // Copied by `cp`, not by this process: a file open for writing here
-        // would be inherited by whatever another test starts meanwhile, and
-        // can't be run until that has let go of it ("Text file busy").
         let copied = Command::new("cp")
             .arg(env!("CARGO_BIN_EXE_thirdshift"))
             .arg(&copy)
@@ -1295,8 +1296,7 @@ test -f {root}/{COPY_REPLACED}
         };
         fs::create_dir_all(&hooks).unwrap();
         let hook = hooks.join(name);
-        fs::write(&hook, script).unwrap();
-        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&hook, script);
     }
 
     /// Give the launch clone a `pre-push` hook that says "hook says no" and

@@ -11,7 +11,7 @@ use std::fs;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
-use support::{CTRL_C, Keystrokes, Scenario, TerminalResult, TerminalStep};
+use support::{CTRL_C, Keystrokes, Scenario, TerminalResult, TerminalStep, write_executable};
 
 /// The agent commits its work and opens a PR that closes issue #7, into
 /// `main`.
@@ -34,8 +34,7 @@ fn security_sandbox_start_failure_warns_and_still_writes_the_user_config() {
     let scenario = Scenario::new();
     scenario.user_config_is("[security]\nreview = true\n");
     let bwrap = scenario.path("bin/bwrap");
-    fs::write(&bwrap, "#!/bin/sh\nexit 1\n").unwrap();
-    fs::set_permissions(&bwrap, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&bwrap, "#!/bin/sh\nexit 1\n");
 
     let result = scenario.run(&["setup"]);
 
@@ -95,15 +94,13 @@ fn security_sandbox_runs_only_for_the_saved_security_settings() {
         scenario.user_config_is(&format!("[security]\nreview = {review}\nfix = {fix}\n"));
         let marker = scenario.path("probe-ran");
         let bwrap = scenario.path("bin/bwrap");
-        fs::write(
+        write_executable(
             &bwrap,
-            format!(
+            &format!(
                 "#!/bin/sh\nprintf probed > '{}'\nexit 1\n",
                 marker.display()
             ),
-        )
-        .unwrap();
-        fs::set_permissions(bwrap, fs::Permissions::from_mode(0o755)).unwrap();
+        );
         let result = scenario.run(&["setup"]);
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert_eq!(marker.exists(), review || fix);
@@ -120,8 +117,7 @@ fn security_sandbox_hung_bwrap_is_bounded_and_reaped() {
     let scenario = Scenario::new();
     scenario.user_config_is("[security]\nreview = true\n");
     let bwrap = scenario.path("bin/bwrap");
-    fs::write(&bwrap, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
-    fs::set_permissions(bwrap, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&bwrap, "#!/bin/sh\nexec /bin/sleep 30\n");
     let start = std::time::Instant::now();
     let result = scenario.run(&["setup"]);
     assert!(start.elapsed() < std::time::Duration::from_secs(8));
@@ -164,8 +160,7 @@ fn security_sandbox_checks_real_isolation_and_detects_each_removed_control() {
         let scenario = Scenario::new();
         scenario.user_config_is("[security]\nreview = true\n");
         let bwrap = scenario.path("bin/bwrap");
-        fs::write(&bwrap, format!("#!/bin/bash\n{wrapper}\n")).unwrap();
-        fs::set_permissions(bwrap, fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&bwrap, &format!("#!/bin/bash\n{wrapper}\n"));
         let before = fs::read_dir(scenario.path("tmp")).unwrap().count();
         let result = scenario.run(&["setup"]);
         assert_eq!(result.code, Some(0), "{}", result.stderr);

@@ -4,7 +4,7 @@ use std::fs;
 
 use serde_json::{Value, json};
 use support::resend::ResendStandIn;
-use support::{REPO, Scenario};
+use support::{REPO, Scenario, write_executable};
 
 fn resend_env(resend: &ResendStandIn) -> [(&str, &str); 2] {
     [
@@ -3971,13 +3971,10 @@ fn pre_audit_github_failures_report_a_safe_cause_without_claiming_an_audit_ran()
 }
 
 fn assert_pre_audit_response_dependency_cause(response: &str, diagnostic: &str) {
-    use std::os::unix::fs::PermissionsExt;
-
     let scenario = Scenario::new();
     let gh = scenario.path("bin/gh");
     fs::remove_file(&gh).unwrap();
-    fs::write(&gh, format!("#!/bin/sh\nprintf '%s\\n' '{response}'\n")).unwrap();
-    fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&gh, &format!("#!/bin/sh\nprintf '%s\\n' '{response}'\n"));
 
     let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
     let result = scenario.run_with_env(
@@ -4986,12 +4983,11 @@ fn review_acquisition_failure_is_pre_audit() {
 
 #[test]
 fn review_malformed_github_response_keeps_dependency_category() {
-    use std::os::unix::fs::PermissionsExt;
     let scenario = Scenario::new();
     fs::create_dir(scenario.path("bin/original")).unwrap();
     fs::rename(scenario.path("bin/gh"), scenario.path("bin/original/gh")).unwrap();
-    fs::write(
-        scenario.path("bin/gh"),
+    write_executable(
+        &scenario.path("bin/gh"),
         r#"#!/bin/sh
 if [ "$1" = api ] && [ "$2" = --paginate ]; then
   printf '%s' 'PRIVATE_RESPONSE_NOT_JSON'
@@ -4999,9 +4995,7 @@ if [ "$1" = api ] && [ "$2" = --paginate ]; then
 fi
 exec "$(dirname "$0")/original/gh" "$@"
 "#,
-    )
-    .unwrap();
-    fs::set_permissions(scenario.path("bin/gh"), fs::Permissions::from_mode(0o755)).unwrap();
+    );
     let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
     let result =
         scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
@@ -5020,20 +5014,20 @@ exec "$(dirname "$0")/original/gh" "$@"
 
 #[test]
 fn invalid_parent_issue_url_retains_github_dependency_cause() {
-    use std::os::unix::fs::PermissionsExt;
-
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["ready-for-agent"]);
     fs::create_dir(scenario.path("bin/original")).unwrap();
     fs::rename(scenario.path("bin/gh"), scenario.path("bin/original/gh")).unwrap();
-    fs::write(scenario.path("bin/gh"), r#"#!/bin/sh
+    write_executable(
+        &scenario.path("bin/gh"),
+        r#"#!/bin/sh
 if [ "$1" = api ] && [ "$2" = graphql ]; then
     printf '%s\n' '{"data":{"repository":{"issue":{"labelled":{"nodes":[],"pageInfo":{"hasNextPage":false}},"parent":{"url":"PRIVATE-INVALID-PARENT"}}}}}'
     exit 0
 fi
 exec "$(dirname "$0")/original/gh" "$@"
-"#).unwrap();
-    fs::set_permissions(scenario.path("bin/gh"), fs::Permissions::from_mode(0o755)).unwrap();
+"#,
+    );
 
     let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
     let result = scenario.run_with_env(

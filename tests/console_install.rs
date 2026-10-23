@@ -1,9 +1,12 @@
 //! Installation is exercised through the binary and its printed shell script.
 #![cfg(target_os = "linux")]
 
+mod support;
+
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::process::{Command, Output};
+
+use support::write_executable;
 
 struct Machine {
     root: tempfile::TempDir,
@@ -35,8 +38,7 @@ impl Machine {
 
     fn tool(&self, name: &str, script: &str) {
         let path = self.path(&format!("bin/{name}"));
-        fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&path, &format!("#!/bin/sh\n{script}\n"));
     }
 
     fn install(&self) -> Output {
@@ -395,7 +397,12 @@ fn unit_preserves_literal_paths_with_shell_and_systemd_metacharacters() {
     let home = machine.path("home space%$\"'\\");
     fs::rename(machine.path("home"), &home).unwrap();
     let binary = machine.path("thirdshift space%$binary");
-    fs::copy(env!("CARGO_BIN_EXE_thirdshift"), &binary).unwrap();
+    let copied = Command::new("cp")
+        .arg(env!("CARGO_BIN_EXE_thirdshift"))
+        .arg(&binary)
+        .status()
+        .unwrap();
+    assert!(copied.success());
     let output = Command::new(&binary)
         .args(["console", "install"])
         .env("HOME", &home)

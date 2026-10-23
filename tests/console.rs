@@ -1431,12 +1431,9 @@ fn console_requires_explicit_no_sign_in_and_rejects_invalid_settings() {
 #[cfg(unix)]
 #[test]
 fn replacing_the_binary_executes_the_replacement_with_the_original_arguments() {
-    use std::os::unix::fs::PermissionsExt;
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
     let binary = home.path().join("thirdshift");
-    // A child forked by another test can inherit fs::copy's writer and keep
-    // the executable "Text file busy". Only the copying process opens it here.
     let copied = Command::new("cp")
         .arg(env!("CARGO_BIN_EXE_thirdshift"))
         .arg(&binary)
@@ -1478,8 +1475,10 @@ fn replacing_the_binary_executes_the_replacement_with_the_original_arguments() {
         console.get(&format!("{link}/stream/0"))
     };
     let replacement = home.path().join("replacement");
-    fs::write(&replacement, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/reexec-args\"\nprintf 'replacement executed\\n'\n").unwrap();
-    fs::set_permissions(&replacement, fs::Permissions::from_mode(0o755)).unwrap();
+    support::write_executable(
+        &replacement,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/reexec-args\"\nprintf 'replacement executed\\n'\n",
+    );
     fs::rename(&replacement, &binary).unwrap();
     assert_eq!(
         console.lines.recv_timeout(Duration::from_secs(10)).unwrap(),
