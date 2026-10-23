@@ -30,9 +30,15 @@ pub enum FixAsk {
 pub enum Outcome {
     Skipped(Skipped),
     Audited(Ended),
+    /// A fix was dispatched for one Security finding.
     Fixed {
+        /// How the fix's Run ended.
         ended: crate::run::Ended,
-        findings: Vec<RecordedFinding>,
+        /// The Security finding the fix was dispatched for.
+        finding: RecordedFinding,
+        /// The audit this Security run completed before the fix, if it
+        /// audited; its findings include those left waiting for the Day shift.
+        audit: Option<Box<Ended>>,
     },
 }
 
@@ -44,7 +50,9 @@ pub struct Ended {
     /// A failed reproduction's number; its audit and private recording completed.
     pub failed_reproduction: Option<usize>,
     pub findings: Vec<RecordedFinding>,
-    pub findings_waiting: bool,
+    /// The private links of the findings whose records wait for the Day
+    /// shift's triage.
+    pub waiting: Vec<String>,
     pub advice: Vec<Advice>,
 }
 
@@ -55,7 +63,7 @@ impl From<anyhow::Error> for Ended {
             audit_started: false,
             failed_reproduction: None,
             findings: Vec::new(),
-            findings_waiting: false,
+            waiting: Vec::new(),
             advice: Vec::new(),
         }
     }
@@ -175,7 +183,9 @@ fn run_through(
     }
     if fixing {
         match records.next_fix() {
-            Ok(Some((record, metadata))) => return fix(outside, repo, base, record, metadata),
+            Ok(Some((record, metadata))) => {
+                return fix(outside, repo, base, record, metadata, None);
+            }
             Ok(None) => {}
             Err(error) => return Outcome::Audited(error.into()),
         }
@@ -196,14 +206,14 @@ fn run_through(
             .and_then(|records| records.next_fix())
         {
             Ok(Some((record, metadata))) => {
-                let outcome = fix(outside, repo, base, record, metadata);
-                if let Outcome::Fixed { ended, .. } = outcome {
-                    return Outcome::Fixed {
-                        ended,
-                        findings: audited.findings,
-                    };
-                }
-                return outcome;
+                return fix(
+                    outside,
+                    repo,
+                    base,
+                    record,
+                    metadata,
+                    Some(Box::new(audited)),
+                );
             }
             Ok(None) => {}
             Err(error) => {
@@ -217,12 +227,14 @@ fn run_through(
     Outcome::Audited(audited)
 }
 
+/// Dispatch the fix for `record`, after `audit` if this Security run audited.
 fn fix(
     outside: &mut impl Outside,
     repo: &Repo,
     base: &str,
     record: crate::github::SecurityRecord,
     metadata: RecordedFinding,
+    audit: Option<Box<Ended>>,
 ) -> Outcome {
     let mut log = None;
     let ended = (|| -> Result<crate::run::Ended> {
@@ -268,7 +280,8 @@ fn fix(
             base_fix: None,
             advice: Vec::new(),
         }),
-        findings: vec![metadata],
+        finding: metadata,
+        audit,
     }
 }
 
@@ -280,7 +293,7 @@ fn audit_and_record(
 ) -> Ended {
     let mut advice = Vec::new();
     let mut findings = Vec::new();
-    let mut findings_waiting = false;
+    let mut waiting = Vec::new();
     let mut log = None;
     let mut reproduction = None;
     let mut audit_started = false;
@@ -313,7 +326,9 @@ fn audit_and_record(
                 recorded.existing += 1;
             }
             let record = resolved.record;
-            findings_waiting |= record.untriaged();
+            if record.untriaged() {
+                waiting.push(record.metadata().url.clone());
+            }
             let mut metadata = record.metadata().clone();
             let url = metadata.url.clone();
             let first = seen.insert(finding.fingerprint);
@@ -379,7 +394,7 @@ fn audit_and_record(
         audit_started,
         failed_reproduction,
         findings,
-        findings_waiting,
+        waiting,
         advice,
     }
 }

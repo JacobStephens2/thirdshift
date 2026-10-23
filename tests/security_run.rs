@@ -460,6 +460,12 @@ gh pr create --base main --head issue-8 --title 'Bound accepted input' --body 'C
 "#
 }
 
+/// A staged proposal whose title copies the private write-up, which
+/// thirdshift rejects before creating any public issue.
+fn stage_private_title() -> &'static str {
+    "printf 'Proposed public issue:\\nTitle: Private candidate write-up.\\nBody:\\nReject oversized input. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n"
+}
+
 /// The #627 staged path: the session returns its proposed public issue text
 /// without running `gh issue create` itself.
 fn stage_fix(record: &str) -> String {
@@ -1014,12 +1020,170 @@ fn fixing_selects_the_most_severe_record_then_dispatches_one_ticket_before_audit
 }
 
 #[test]
-fn a_staged_ticket_title_cannot_copy_the_private_write_up() {
-    let scenario = with_reproduced_findings(&["high"]);
+fn an_audit_then_fix_notification_marks_the_fixed_finding_apart_from_those_waiting() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+    let mut other = finding("other-input");
+    other["title"] = json!("Unchecked header size");
     scenario.agent_does_in_session(
         1,
-        "printf 'Proposed public issue:\\nTitle: Private candidate write-up.\\nBody:\\nReject oversized input. Private record: https://github.com/acme/widgets/security/advisories/GHSA-finding-0\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+        &audit_script(&json!([finding("input-size"), other]).to_string()),
     );
+    scenario.agent_does_in_session(2, &reproduction_script("reproduced high single"));
+    scenario.agent_does_in_session(3, &reproduction_script("reproduced low single"));
+    scenario.agent_does_in_session(4, &stage_fix("GHSA-test-test-0001"));
+    scenario.agent_does_for(8, implement_fix());
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(
+        &["secure", "security-fix", "email", "me@example.com"],
+        &resend_env(&resend),
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let (_, text) = the_one_notification(&resend);
+    assert!(
+        text.contains(
+            "Audit:        Security audit recorded 2 new finding(s), 0 already recorded\n\
+             \n\
+             Addressed by the pull request:\n\
+             - high: Unchecked input size: https://github.com/acme/widgets/security/advisories/GHSA-test-test-0001\n\
+             \n\
+             Recorded, waiting for the Day shift:\n\
+             - low: Unchecked header size: https://github.com/acme/widgets/security/advisories/GHSA-test-test-0002\n\
+             \n\
+             Pull request: https://github.com/acme/widgets/pull/1\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("Security findings:"), "{text}");
+    // The findings the fix left waiting still need the Day shift.
+    let status = scenario.run(&["status", "--json"]);
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    assert_eq!(
+        status["commands"][0]["needs_you_kind"], "finding",
+        "{status}"
+    );
+}
+
+#[test]
+fn an_audit_then_fix_that_leaves_nothing_waiting_flags_no_finding() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+    scenario.agent_does_in_session(
+        1,
+        &audit_script(&json!([finding("input-size")]).to_string()),
+    );
+    scenario.agent_does_in_session(2, &reproduction_script("reproduced high single"));
+    scenario.agent_does_in_session(3, &stage_fix("GHSA-test-test-0001"));
+    scenario.agent_does_for(8, implement_fix());
+    let result = scenario.run(&["secure", "security-fix"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let status = scenario.run(&["status", "--json"]);
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    assert_ne!(
+        status["commands"][0]["needs_you_kind"], "finding",
+        "{status}"
+    );
+}
+
+#[test]
+fn an_audit_then_fix_notification_lists_a_graded_finding_apart_from_those_waiting() {
+    let scenario = Scenario::new();
+    scenario.repo_has_labels(&["needs-triage", "ready-for-agent"]);
+    let mut github = scenario.gh_state();
+    github["advisories"] = json!([{
+        "ghsa_id": "GHSA-graded", "state": "draft", "severity": "medium",
+        "summary": "Graded finding", "description": "Fingerprint: `graded`\nPrivate record.\n",
+        "html_url": "https://github.com/acme/widgets/security/advisories/GHSA-graded"
+    }]);
+    scenario.write_gh_state(&github);
+    scenario.agent_does_in_session(
+        1,
+        &audit_script(&json!([finding("graded"), finding("input-size")]).to_string()),
+    );
+    scenario.agent_does_in_session(2, &reproduction_script("reproduced high single"));
+    scenario.agent_does_in_session(3, &stage_fix("GHSA-test-test-0002"));
+    scenario.agent_does_for(8, implement_fix());
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(
+        &["secure", "security-fix", "email", "me@example.com"],
+        &resend_env(&resend),
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let (_, text) = the_one_notification(&resend);
+    assert!(
+        text.contains(
+            "Audit:        Security audit recorded 1 new finding(s), 1 already recorded\n\
+             \n\
+             Addressed by the pull request:\n\
+             - high: Unchecked input size: https://github.com/acme/widgets/security/advisories/GHSA-test-test-0002\n\
+             \n\
+             Also recorded by the audit:\n\
+             - medium: Graded finding: https://github.com/acme/widgets/security/advisories/GHSA-graded\n\
+             \n\
+             Pull request: https://github.com/acme/widgets/pull/1\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("Recorded, waiting"), "{text}");
+}
+
+#[test]
+fn a_fix_without_an_audit_notification_says_the_audit_did_not_run() {
+    let scenario = with_reproduced_findings(&["low", "critical"]);
+    scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-1"));
+    scenario.agent_does_for(8, implement_fix());
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(
+        &["secure", "security-fix", "email", "me@example.com"],
+        &resend_env(&resend),
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let (_, text) = the_one_notification(&resend);
+    assert!(
+        text.contains(
+            "Audit:        not run\n\
+             \n\
+             Addressed by the pull request:\n\
+             - critical: Finding 1: https://github.com/acme/widgets/security/advisories/GHSA-finding-1\n\
+             \n\
+             Pull request: https://github.com/acme/widgets/pull/1\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("Finding 0"), "{text}");
+    assert!(!text.contains("Recorded, waiting"), "{text}");
+}
+
+#[test]
+fn a_failed_fix_notification_marks_its_finding_attempted_not_fixed() {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(1, stage_private_title());
+    let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
+    let result = scenario.run_with_env(
+        &["secure", "security-fix", "email", "me@example.com"],
+        &resend_env(&resend),
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert_eq!(subject, "[thirdshift] acme/widgets Security run: failed");
+    assert!(
+        text.contains(
+            "Audit:        not run\n\
+             \n\
+             Fix attempted, not fixed:\n\
+             - high: Finding 0: https://github.com/acme/widgets/security/advisories/GHSA-finding-0\n"
+        ),
+        "{text}"
+    );
+    assert!(!text.contains("Addressed by"), "{text}");
+}
+
+#[test]
+fn a_staged_ticket_title_cannot_copy_the_private_write_up() {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(1, stage_private_title());
     let result = scenario.run(&["secure", "security-fix"]);
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert!(

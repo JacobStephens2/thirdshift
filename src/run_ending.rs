@@ -34,10 +34,38 @@ const BASE_FIX: &str = "Base fix: ";
 pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
     match ending {
         Ending::Run(ended) => Ok(Account::of_run(ended)),
-        Ending::SecurityFix { ended, findings } => Ok(Account {
-            security_findings: Some(findings),
-            ..Account::of_run(ended)
-        }),
+        Ending::SecurityFix {
+            ended,
+            finding,
+            audit,
+        } => {
+            let audit = audit.as_deref();
+            // The audit's other findings, those whose records wait for triage first.
+            let (waiting, recorded): (Vec<_>, Vec<_>) =
+                audit.map_or_else(Default::default, |audit| {
+                    audit
+                        .findings
+                        .iter()
+                        .filter(|other| other.url != finding.url)
+                        .partition(|other| audit.waiting.contains(&other.url))
+                });
+            Ok(Account {
+                security_findings: Some(
+                    audit.map_or(std::slice::from_ref(finding), |audit| &audit.findings),
+                ),
+                security_findings_waiting: !waiting.is_empty(),
+                security_fix: Some(SecurityFix {
+                    finding,
+                    audit: audit.map(|audit| match &audit.outcome {
+                        Ok(recorded) => recorded.to_string(),
+                        Err(failed) => failure_outcome(failed, "audit failed").to_string(),
+                    }),
+                    waiting,
+                    recorded,
+                }),
+                ..Account::of_run(ended)
+            })
+        }
         Ending::Architect { review, dispatched } => {
             Ok(Account::of_architect(review, dispatched.as_ref()))
         }
@@ -55,6 +83,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                     review: None,
                     security_findings: None,
                     security_findings_waiting: false,
+                    security_fix: None,
                     failed_reproduction: None,
                     pre_audit_failure: None,
                     recovery: None,
@@ -83,7 +112,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                 },
                 failed_reproduction: audited.failed_reproduction,
                 security_findings: Some(&audited.findings),
-                security_findings_waiting: audited.findings_waiting,
+                security_findings_waiting: !audited.waiting.is_empty(),
                 advice: &audited.advice,
                 ..account
             })
@@ -137,9 +166,28 @@ pub struct Account<'a> {
     /// Safe metadata from a Security run's private records, even if the audit failed.
     pub security_findings: Option<&'a [crate::security::RecordedFinding]>,
     pub security_findings_waiting: bool,
+    /// In a Security run that dispatched a fix, which finding it was
+    /// dispatched for and how the audit before it ended.
+    pub security_fix: Option<SecurityFix<'a>>,
     /// The URLs on stdout, a line each: the pull request's, or that of the
     /// issue an Architect run's review ended on.
     pub urls: Vec<&'a str>,
+}
+
+/// The fix a Security run dispatched, told apart from the findings its audit
+/// only recorded.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SecurityFix<'a> {
+    /// The Security finding the fix's pull request addresses.
+    pub finding: &'a crate::security::RecordedFinding,
+    /// How the audit before the fix ended; `None` when the Security run
+    /// fixed an earlier recorded finding without auditing.
+    pub audit: Option<String>,
+    /// The audit's other findings whose records wait for the Day shift's
+    /// triage.
+    pub waiting: Vec<&'a crate::security::RecordedFinding>,
+    /// The audit's other findings, already triaged.
+    pub recorded: Vec<&'a crate::security::RecordedFinding>,
 }
 
 /// How an Architect run's Architecture review ended.
@@ -210,6 +258,7 @@ impl<'a> Account<'a> {
                 review: None,
                 security_findings: None,
                 security_findings_waiting: false,
+                security_fix: None,
                 failed_reproduction: None,
                 pre_audit_failure: None,
                 recovery: None,
@@ -238,6 +287,7 @@ impl<'a> Account<'a> {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: failed.recovery.as_deref(),
@@ -270,6 +320,7 @@ impl<'a> Account<'a> {
                 review: None,
                 security_findings: None,
                 security_findings_waiting: false,
+                security_fix: None,
                 failed_reproduction: None,
                 pre_audit_failure: None,
                 recovery: None,
@@ -564,6 +615,7 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -586,6 +638,7 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -777,6 +830,7 @@ mod tests {
                     }),
                     security_findings: None,
                     security_findings_waiting: false,
+                    security_fix: None,
                     failed_reproduction: None,
                     pre_audit_failure: None,
                     recovery: None,
