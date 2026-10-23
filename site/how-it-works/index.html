@@ -132,7 +132,7 @@ thirdshift --no-merge https://github.com/acme/widgets/issues/7</code></pre>
       </figure>
       <p>Repair and upstream-move budgets keep the loop bounded. If a CI-fix Repair leaves the same failing head, that head gets one <strong>Check re-run</strong>; if its own checks stay red, the Run fails rather than spending more Repairs on unchanged code.</p>
       <p>An <strong>Inherited failure</strong> is a check that also failed under the same name on the Base branch commit last merged in. thirdshift does not ask a Repair to fix that on this Issue branch. It fails the Run, or, when allowed, starts a separate <strong>Base fix</strong> and waits before trying again.</p>
-      <p>An optional <strong>Security review</strong> runs after the opening session (or after the Spec review for a Spec PR). It uses the User config's <code>security.harness</code> when set, and the Command's Harness otherwise. It fixes reproduced vulnerabilities introduced by this change; an introduced finding left unfixed holds Self-merge. <a href="/docs/#security-review">Security review details</a>.</p>
+      <p>An optional <strong>Security review</strong> runs after the opening session, including each Ticket, and after the Spec review for a Spec PR. It uses the User config's <code>security.harness</code> when set, and the Command's Harness otherwise. Preflight checks its Harness; an unavailable review Harness falls back to the default Harness. A Harness error before the first turn can also trigger that fallback once. The review fixes reproduced vulnerabilities introduced by this change; an introduced finding left unfixed holds Self-merge. <a href="/docs/#security-review">Security review details</a>.</p>
       </div>
     </details>
   </section>

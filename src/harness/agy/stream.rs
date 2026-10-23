@@ -76,6 +76,13 @@ impl Decoder for AgyProgress {
             return StreamUpdate::default();
         };
         let mut evidence = Vec::new();
+        if event["event"] == "result"
+            && event["result"]["num_turns"]
+                .as_u64()
+                .is_some_and(|turns| turns > 0)
+        {
+            evidence.push(Evidence::WorkStarted);
+        }
         if event["event"] == "init"
             && let Some(name) = event["init"]["model"].as_str()
         {

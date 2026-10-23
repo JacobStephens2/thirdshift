@@ -828,6 +828,7 @@ mod tests {
                 ] {
                     let asks = Asks {
                         security_review_harness: None,
+                        security_review_default: None,
                         goal,
                         base_fix: base_fix.clone(),
                         tickets_at_once: NonZeroUsize::new(5).unwrap(),
