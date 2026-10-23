@@ -54,19 +54,11 @@ impl<'a> Description<'a> {
     /// The first recorded outcome; a failed or unfinished reproduction writes none.
     pub(super) fn completed_reproduction(&self) -> Option<Outcome> {
         let (_, reproduction) = self.0.split_once(REPRODUCTION_MARKER)?;
-        let outcome = reproduction
-            .lines()
-            .find_map(|line| line.strip_prefix("Outcome: "))?;
-        let (severity, size) = match outcome.split_whitespace().collect::<Vec<_>>().as_slice() {
-            ["not", "reproduced"] => return Some(Outcome::NotReproduced),
-            ["reproduced", severity, "single"] => (*severity, FixSize::Single),
-            ["reproduced", severity, "spec"] => (*severity, FixSize::Spec),
-            _ => return None,
-        };
-        Some(Outcome::Reproduced {
-            severity: Severity::parse(severity)?,
-            size,
-        })
+        Outcome::parse(
+            reproduction
+                .lines()
+                .find_map(|line| line.strip_prefix("Outcome: "))?,
+        )
     }
 
     pub(super) fn reproduced_outcome(&self) -> Option<(Severity, FixSize)> {

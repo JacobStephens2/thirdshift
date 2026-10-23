@@ -314,33 +314,28 @@ fn audit_and_record(
             }
             let record = resolved.record;
             findings_waiting |= record.untriaged();
-            // A completed reproduction is not repeated while the record waits.
-            let kept = record
-                .untriaged()
-                .then(|| record.completed_reproduction())
-                .flatten();
             let mut metadata = record.metadata().clone();
-            if let Some(outcome) = kept {
-                metadata.severity = outcome
-                    .severity()
-                    .map(|severity| severity.name().to_string());
-            }
             let url = metadata.url.clone();
-            findings.push(metadata);
-            if !record.untriaged() {
-                outside.step(format!(
+            let first = seen.insert(finding.fingerprint);
+            match (record.untriaged(), record.completed_reproduction()) {
+                (false, _) => outside.step(format!(
                     "keeping the Day shift's grade for {}",
                     record.name()
-                ));
-            } else if seen.insert(finding.fingerprint) {
-                match kept {
-                    Some(outcome) => outside.step(format!(
-                        "keeping the completed Security reproduction of {}: {outcome}",
-                        record.name()
-                    )),
-                    None => records.push((record, url)),
+                )),
+                // A completed reproduction is not repeated while the record waits.
+                (true, Some(outcome)) => {
+                    metadata.severity = listed_severity(&outcome, offer_command, &mut advice);
+                    if first {
+                        outside.step(format!(
+                            "keeping the completed Security reproduction of {}: {outcome}",
+                            record.name()
+                        ));
+                    }
                 }
+                (true, None) if first => records.push((record, url)),
+                (true, None) => {}
             }
+            findings.push(metadata);
         }
         for (index, (record, url)) in records.iter().enumerate() {
             let number = index + 1;
@@ -355,25 +350,9 @@ fn audit_and_record(
             }
             let reproduced = reproduced?;
             outside.update_security_record(record, &reproduced)?;
-            if reproduced.severity().is_some()
-                && let Some(command) = offer_command
-            {
-                advice = vec![
-                    Advice {
-                        label: "Allow fixing",
-                        value: command.to_string(),
-                    },
-                    Advice {
-                        label: "Or set",
-                        value: "fix = true under [security] in ~/.thirdshift/config.toml"
-                            .to_string(),
-                    },
-                ];
-            }
+            let severity = listed_severity(&reproduced.outcome, offer_command, &mut advice);
             for finding in findings.iter_mut().filter(|finding| finding.url == *url) {
-                finding.severity = reproduced
-                    .severity()
-                    .map(|severity| severity.name().to_string());
+                finding.severity = severity.clone();
             }
             outside.step(format!(
                 "Security reproduction {number}: {}",
@@ -398,6 +377,29 @@ fn audit_and_record(
         findings_waiting,
         advice,
     }
+}
+
+/// The severity a finding is listed with. A reproduced finding left unfixed
+/// offers fixing when neither the command nor the User config decided.
+fn listed_severity(
+    outcome: &reproduction::Outcome,
+    offer_command: Option<&str>,
+    advice: &mut Vec<Advice>,
+) -> Option<String> {
+    let severity = outcome.severity()?;
+    if let Some(command) = offer_command {
+        *advice = vec![
+            Advice {
+                label: "Allow fixing",
+                value: command.to_string(),
+            },
+            Advice {
+                label: "Or set",
+                value: "fix = true under [security] in ~/.thirdshift/config.toml".to_string(),
+            },
+        ];
+    }
+    Some(severity.name().to_string())
 }
 
 #[cfg(test)]
@@ -867,5 +869,40 @@ mod tests {
                 vec![Some("high"), None, None, None]
             );
         }
+    }
+
+    #[test]
+    fn a_kept_reproduced_finding_left_unfixed_still_offers_fixing() {
+        let body = "Fingerprint: `confirmed`\n\n<!-- thirdshift:security-reproduction -->\n## Reproduction\n\nOutcome: reproduced high single\n";
+        let mut outside = InMemory::default()
+            .audited(vec![crate::github::DraftAdvisory {
+                fingerprint: "confirmed".into(),
+                summary: "Candidate".into(),
+                description: "Fingerprint: `confirmed`".into(),
+                package: crate::github::Package {
+                    ecosystem: "other".into(),
+                    name: None,
+                },
+            }])
+            .finding_issues(vec![serde_json::json!({
+                "number": 1, "state": "open", "body": body, "title": "Candidate",
+                "html_url": "https://github.com/acme/widgets/issues/1",
+                "labels": [{"name": "security-finding"}, {"name": "needs-triage"}]
+            })]);
+        let Outcome::Audited(ended) = run_through(
+            &mut outside,
+            &widgets(),
+            "main",
+            false,
+            Some("thirdshift secure security-fix"),
+        ) else {
+            panic!("audit expected");
+        };
+        assert!(ended.outcome.is_ok());
+        assert_eq!(ended.findings[0].severity.as_deref(), Some("high"));
+        assert!(
+            !ended.advice.is_empty(),
+            "a reproduced finding was left unfixed with no offer"
+        );
     }
 }
