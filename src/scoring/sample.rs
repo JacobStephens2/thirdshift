@@ -6,8 +6,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use crate::harness::Harness;
-use crate::pull_request::BUILT_WITH_MARKER;
+use crate::harness::built_with;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct PullRequest {
@@ -29,32 +28,16 @@ impl PullRequest {
         merged_at: DateTime<Utc>,
         body: &str,
     ) -> Option<Self> {
-        let line = body
-            .lines()
-            .find_map(|line| line.trim().strip_suffix(BUILT_WITH_MARKER))?;
-        let mut parts = line
-            .trim()
-            .strip_prefix("Built with ")?
-            .split('·')
-            .map(str::trim);
-        let mut harness = parts.next()?.split_whitespace();
-        let name = harness.next()?;
-        Harness::named(name)?;
-        let version = harness.collect::<Vec<_>>().join(" ");
-        let model = parts.next()?.to_string();
-        let effort = parts.next()?.to_string();
-        if parts.next().is_some() || model.is_empty() || effort.is_empty() {
-            return None;
-        }
+        let built = built_with::read(body)?;
         Some(Self {
             repository,
             number,
             url,
             merged_at,
-            harness: name.into(),
-            harness_version: (!version.is_empty()).then_some(version),
-            model,
-            effort,
+            harness: built.harness.name().into(),
+            harness_version: built.harness_version,
+            model: built.model,
+            effort: built.effort,
         })
     }
 }

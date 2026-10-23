@@ -244,6 +244,34 @@ fn setup_completes_scoring_defaults_and_preserves_configured_choices() {
 }
 
 #[test]
+fn scoring_reads_the_built_with_line_written_by_a_factory_run() {
+    let scenario = scenario();
+    scenario.agent_does(
+        r#"
+echo feature > feature.txt
+git add feature.txt
+git commit -q -m 'Add feature'
+gh pr create --base main --head issue-7 --title 'Add feature' --body 'Closes #7'
+"#,
+    );
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let mut state = scenario.gh_state();
+    let mut candidate = pr(1, "acme/widgets", "claude", "opus", false);
+    candidate["body"] = state["prs"][0]["body"].clone();
+    state["scoring_prs"] = serde_json::json!([candidate]);
+    scenario.write_gh_state(&state);
+    let result = scenario.run(&["score"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let retained = weeks(&scenario);
+    let sample = retained[0]["sample"].as_array().unwrap();
+    assert_eq!(sample.len(), 1);
+    assert_eq!(sample[0]["harness"], "claude");
+    assert_eq!(sample[0]["model"], "default model");
+    assert_eq!(sample[0]["effort"], "default effort");
+}
+
+#[test]
 fn first_window_looks_back_seven_days_and_is_a_recorded_command() {
     let scenario = scenario();
     let result = scenario.run(&["score"]);

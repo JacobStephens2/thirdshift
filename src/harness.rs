@@ -13,6 +13,7 @@ use anyhow::{Context, Result, bail};
 
 mod adapter;
 pub(crate) mod agy;
+pub(crate) mod built_with;
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod grok;
@@ -223,7 +224,7 @@ impl Choice {
     /// The line thirdshift writes in a pull request's body and a Run
     /// notification, as in `Built with claude · claude-opus-5-5 · high`.
     pub fn built_with(&self) -> String {
-        format!("Built with {self}")
+        built_with::line(self)
     }
 
     // Compatibility for the existing argument tests; production callers
@@ -325,13 +326,7 @@ impl fmt::Display for Choice {
     /// high`, saying `default model` or `default effort` for one left to the
     /// Harness.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{} · {} · {}",
-            self.harness.name(),
-            self.model.as_deref().unwrap_or("default model"),
-            self.effort.as_deref().unwrap_or("default effort")
-        )
+        built_with::describe(self, f)
     }
 }
 
