@@ -112,6 +112,81 @@ fn findings_accept_markdown_axis_labels_and_do_not_count_none_as_a_finding() {
 }
 
 #[test]
+fn a_fake_review_keeps_its_finding_counts_in_the_runs_metrics() {
+    let scenario = Scenario::new();
+    scenario.agent_does(
+        r#"
+reports=$(printf '%s\n' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*`\([^`]*\)\/standards\.md`.*/\1/p')
+printf '{"standards":2,"spec":0}\n' > "$reports/summary.json"
+echo work > work.txt
+git add work.txt
+git commit -qm 'Make widgets'
+gh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7'
+"#,
+    );
+
+    let ended = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let shown = scenario.run(&["show", "widgets#7", "--json"]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
+    assert_eq!(
+        shown["command"]["run_metrics"]["stages"][0]["review_findings"],
+        serde_json::json!({"standards": 2, "spec": 0})
+    );
+    let metrics = &shown["command"]["run_metrics"];
+    assert_eq!(
+        metrics["stages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|stage| !stage["review_findings"].is_null())
+            .count(),
+        1,
+        "Delivery stages must not duplicate the same Session's counts"
+    );
+    for name in scenario.entries(LOGS) {
+        if name.ends_with(".review-summary.json") {
+            fs::remove_file(scenario.path(LOGS).join(name)).unwrap();
+        }
+    }
+    let later = scenario.run(&["show", "widgets#7", "--json"]);
+    assert_eq!(later.code, Some(0), "{}", later.stderr);
+    let later: Value = serde_json::from_str(&later.stdout).unwrap();
+    assert_eq!(later["command"]["run_metrics"], *metrics);
+}
+
+#[test]
+fn absent_or_invalid_review_summaries_keep_counts_missing() {
+    for summary in [None, Some("not JSON"), Some(r#"{"standards":-1,"spec":0}"#)] {
+        let scenario = Scenario::new();
+        let write_summary = summary.map_or_else(String::new, |summary| {
+            format!("printf '%s' '{summary}' > \"$reports/summary.json\"\n")
+        });
+        scenario.agent_does(&format!(
+            r#"
+reports=$(printf '%s\n' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*`\([^`]*\)\/standards\.md`.*/\1/p')
+printf 'Standards: 99 findings\n' > "$reports/standards.md"
+printf 'Spec: 88 findings\n' > "$reports/spec.md"
+{write_summary}
+echo work > work.txt
+git add work.txt
+git commit -qm 'Make widgets'
+gh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7'
+"#
+        ));
+        let ended = scenario.run(&[&scenario.issue_url(7)]);
+        assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+        let record = scenario.command_record(LOGS);
+        assert_eq!(
+            record["run_metrics"]["stages"][0].get("review_findings"),
+            Some(&Value::Null),
+            "summary {summary:?} must not become zero counts or parse report prose"
+        );
+    }
+}
+
+#[test]
 fn a_run_keeps_its_metrics_after_a_ci_fix_repair_and_show_returns_them() {
     let scenario = Scenario::new();
     scenario.agent_does(

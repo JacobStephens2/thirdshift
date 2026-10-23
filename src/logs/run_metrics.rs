@@ -1,5 +1,7 @@
 //! Facts captured by a Run's own process at completion, never recomputed by readers.
 
+use std::collections::HashSet;
+
 use chrono::DateTime;
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +26,14 @@ struct StageMetrics {
     minutes: Option<f64>,
     usual_range: Option<UsualRange>,
     position: Position,
+    // Only the first stage referencing a Session holds its review counts.
+    review_findings: Option<ReviewFindings>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct ReviewFindings {
+    standards: Option<u64>,
+    spec: Option<u64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -39,8 +49,10 @@ impl RunMetrics {
     pub(super) fn of(
         record: &CommandRecord,
         ranges: &UsualRanges,
+        outside: &mut impl super::effects::Outside,
         unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
     ) -> Self {
+        let mut sessions = HashSet::new();
         let count = |name: StageName| {
             record
                 .stages
@@ -73,6 +85,13 @@ impl RunMetrics {
                         minutes: seconds.map(|seconds| seconds / 60.0),
                         usual_range,
                         position,
+                        review_findings: timing
+                            .stage
+                            .session_log
+                            .as_deref()
+                            .filter(|log| sessions.insert(log.to_path_buf()))
+                            .and_then(|log| outside.review_summary(log))
+                            .and_then(|bytes| serde_json::from_slice(&bytes).ok()),
                     }
                 })
                 .collect(),

@@ -120,6 +120,15 @@ impl owner::Files for Scripted {
 }
 
 impl Outside for Scripted {
+    fn review_summary(&mut self, log: &Path) -> Option<Vec<u8>> {
+        self.0
+            .lock()
+            .unwrap()
+            .files
+            .get(&crate::logs::session::original(log).with_extension("review-summary.json"))
+            .map(|text| text.as_bytes().to_vec())
+    }
+
     fn command_records(&mut self, root: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
         Ok(self
             .0

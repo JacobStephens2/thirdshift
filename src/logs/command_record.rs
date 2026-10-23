@@ -256,11 +256,11 @@ impl CommandRecord {
     pub fn finish(
         &mut self,
         account: &crate::run_ending::Account<'_>,
-        now: DateTime<FixedOffset>,
+        outside: &mut impl super::effects::Outside,
         ranges: &super::usual_range::UsualRanges,
         unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
     ) {
-        self.ended_at = Some(now.to_rfc3339());
+        self.ended_at = Some(outside.now().to_rfc3339());
         self.outcome = Some(account.outcome.into());
         self.cause = account
             .ended
@@ -274,6 +274,7 @@ impl CommandRecord {
             self.run_metrics = Some(super::run_metrics::RunMetrics::of(
                 self,
                 ranges,
+                outside,
                 unaddressed_findings,
             ));
         }

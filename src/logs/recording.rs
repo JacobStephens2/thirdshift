@@ -343,7 +343,7 @@ impl<O: Outside> Record<O> {
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.finish(
                 account,
-                self.outside.now(),
+                &mut self.outside,
                 &ranges,
                 self.unaddressed_findings.take(),
             );
@@ -358,7 +358,7 @@ impl<O: Outside> Record<O> {
         {
             dispatched.finish(
                 account,
-                self.outside.now(),
+                &mut self.outside,
                 &ranges,
                 self.unaddressed_findings.take(),
             );
