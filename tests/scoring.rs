@@ -7,6 +7,234 @@ use support::Scenario;
 
 const LOGS: &str = "home/.thirdshift/logs/JacobStephens2/thirdshift/commands/scoring";
 
+#[test]
+fn packet_diff_preserves_trailing_whitespace_in_the_last_changed_line() {
+    let scenario = scenario();
+    scenario.origin_has_commit(
+        "main",
+        "trailing.txt",
+        "keep trailing spaces  \n",
+        "Whitespace fixture",
+    );
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "codex", "model", false)]);
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let week = weeks(&scenario).remove(0);
+    let packet: Value = serde_json::from_slice(
+        &std::fs::read(
+            scenario
+                .path("home/.thirdshift/evals/scoring")
+                .join(week["packets"].as_str().unwrap())
+                .join("0/packet.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let diff = packet["diff"].as_str().unwrap();
+    assert!(diff.ends_with("+keep trailing spaces  \n"), "{diff:?}");
+}
+
+#[test]
+fn packet_blinding_preserves_binary_files_with_valid_utf8_bytes() {
+    let scenario = scenario();
+    let binary = b"\0binary header\nBuilt with fixture\nbinary tail\0";
+    assert!(std::str::from_utf8(binary).is_ok());
+    std::fs::write(scenario.launch_dir().join("binary"), binary).unwrap();
+    scenario.launch_git(&["add", "binary"]);
+    scenario.launch_git(&["commit", "-m", "Binary fixture"]);
+    scenario.launch_git(&["push", "origin", "main"]);
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "codex", "model", false)]);
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let week = weeks(&scenario).remove(0);
+    let repository = scenario
+        .path("home/.thirdshift/evals/scoring")
+        .join(week["packets"].as_str().unwrap())
+        .join("0/repository");
+    assert_eq!(
+        std::fs::read(repository.join("binary")).unwrap(),
+        binary,
+        "blinding rewrote a binary repository blob"
+    );
+}
+
+#[test]
+fn packet_diff_includes_every_commit_in_a_rebased_pull_request() {
+    let scenario = scenario();
+    scenario.origin_has_commit("main", "first.txt", "first PR change\n", "First PR commit");
+    scenario.origin_has_commit(
+        "main",
+        "second.txt",
+        "second PR change\n",
+        "Second PR commit",
+    );
+    let merged = scenario
+        .origin_git(&["rev-parse", "main"])
+        .trim()
+        .to_string();
+    let mut candidate = pr(1, "acme/widgets", "codex", "model", false);
+    // A two-commit rebase merge points mergeCommit at the second commit.
+    candidate["mergeCommit"] = serde_json::json!({"oid": merged});
+    candidate["headRefOid"] = merged.clone().into();
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([candidate]);
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let week = weeks(&scenario).remove(0);
+    let packet_dir = scenario
+        .path("home/.thirdshift/evals/scoring")
+        .join(week["packets"].as_str().unwrap())
+        .join("0");
+    let packet: Value =
+        serde_json::from_slice(&std::fs::read(packet_dir.join("packet.json")).unwrap()).unwrap();
+    assert_eq!(
+        std::fs::read_to_string(packet_dir.join("repository/first.txt")).unwrap(),
+        "first PR change\n"
+    );
+    let diff = packet["diff"].as_str().unwrap();
+    assert!(diff.contains("+second PR change"), "{diff}");
+    assert!(
+        diff.contains("+first PR change"),
+        "first PR commit missing from merged diff: {diff}"
+    );
+}
+
+#[test]
+fn packet_repository_removes_attribution_for_every_harness() {
+    for harness in ["claude", "codex"] {
+        let scenario = scenario();
+        scenario.origin_has_commit(
+            "main",
+            "feature.txt",
+            &format!("implemented work\nBuilt with {harness} · model · high <!-- thirdshift:built-with -->\nGenerated with Claude Code\n"),
+            "Feature",
+        );
+        let mut state = scenario.gh_state();
+        state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", harness, "model", false)]);
+        scenario.write_gh_state(&state);
+        let run = scenario.run(&["score"]);
+        assert_eq!(run.code, Some(0), "{}", run.stderr);
+        let week = weeks(&scenario).remove(0);
+        let packet_dir = scenario
+            .path("home/.thirdshift/evals/scoring")
+            .join(week["packets"].as_str().unwrap())
+            .join("0");
+        let source = std::fs::read_to_string(packet_dir.join("repository/feature.txt")).unwrap();
+        assert!(source.contains("implemented work"));
+        for forbidden in [
+            "Built with",
+            "thirdshift:built-with",
+            "Generated with Claude Code",
+        ] {
+            assert!(
+                !source.contains(forbidden),
+                "{harness} packet repository leaked {forbidden}: {source}"
+            );
+        }
+    }
+}
+
+#[test]
+fn packet_blinding_preserves_source_binary_files_and_symlinks() {
+    use std::os::unix::fs::PermissionsExt;
+    let scenario = scenario();
+    let source = "const MARKER: &str = \"<!-- thirdshift:built-with -->\";\nconst FOOTER: &str = \"Generated with Claude Code\";\n";
+    scenario.commit_locally("source.rs", source, "Source containing attribution syntax");
+    let binary = b"\xff\0Built with test\n";
+    std::fs::write(scenario.launch_dir().join("binary"), binary).unwrap();
+    std::fs::write(scenario.path("outside.txt"), "Built with outside\n").unwrap();
+    std::os::unix::fs::symlink(
+        scenario.path("outside.txt"),
+        scenario.launch_dir().join("link"),
+    )
+    .unwrap();
+    std::fs::write(
+        scenario.launch_dir().join("executable"),
+        "#!/bin/sh\n# keep me\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        scenario.launch_dir().join("executable"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    scenario.launch_git(&["add", "."]);
+    scenario.launch_git(&["commit", "-m", "Repository file kinds"]);
+    scenario.launch_git(&["push", "origin", "main"]);
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "codex", "model", false)]);
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let week = weeks(&scenario).remove(0);
+    let repository = scenario
+        .path("home/.thirdshift/evals/scoring")
+        .join(week["packets"].as_str().unwrap())
+        .join("0/repository");
+    assert_eq!(
+        std::fs::read_to_string(repository.join("source.rs")).unwrap(),
+        source
+    );
+    assert_eq!(std::fs::read(repository.join("binary")).unwrap(), binary);
+    assert_eq!(
+        std::fs::read_link(repository.join("link")).unwrap(),
+        scenario.path("outside.txt")
+    );
+    assert_eq!(
+        std::fs::read_to_string(scenario.path("outside.txt")).unwrap(),
+        "Built with outside\n"
+    );
+    assert_eq!(
+        std::fs::metadata(repository.join("executable"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o111,
+        0o111
+    );
+}
+
+#[test]
+fn packet_diff_excludes_changes_already_on_the_pull_requests_base() {
+    let scenario = scenario();
+    scenario.launch_git(&["checkout", "-b", "feature"]);
+    scenario.commit_locally("feature.txt", "PR change\n", "Feature");
+    scenario.launch_git(&["checkout", "main"]);
+    scenario.commit_locally("base.txt", "Earlier base change\n", "Base advances");
+    let base = scenario
+        .launch_git(&["rev-parse", "HEAD"])
+        .trim()
+        .to_string();
+    scenario.launch_git(&["merge", "--no-ff", "feature", "-m", "Merge feature"]);
+    scenario.launch_git(&["push", "origin", "main"]);
+    let mut candidate = pr(1, "acme/widgets", "codex", "model", false);
+    candidate["baseRefOid"] = base.into();
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([candidate]);
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let week = weeks(&scenario).remove(0);
+    let packet: Value = serde_json::from_slice(
+        &std::fs::read(
+            scenario
+                .path("home/.thirdshift/evals/scoring")
+                .join(week["packets"].as_str().unwrap())
+                .join("0/packet.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let diff = packet["diff"].as_str().unwrap();
+    assert!(diff.contains("+PR change"), "{diff}");
+    assert!(!diff.contains("Earlier base change"), "{diff}");
+}
+
 fn scenario() -> Scenario {
     let scenario = Scenario::new();
     scenario.user_config_is("[scoring]\nowners = [\"acme\"]\nsample_size = 3\n");
@@ -38,8 +266,159 @@ fn pr(number: u64, repo: &str, harness: &str, model: &str, security: bool) -> Va
 }
 
 #[test]
+fn packets_are_blind_and_keep_the_issue_and_repository_at_merge() {
+    for harness in ["claude", "codex"] {
+        let scenario = scenario();
+        scenario.origin_has_commit(
+            "main",
+            "feature.txt",
+            "merged work\n",
+            "Secret commit message\n\nCo-Authored-By: Claude <claude@example.com>",
+        );
+        let merged = scenario
+            .origin_git(&["rev-parse", "main"])
+            .trim()
+            .to_string();
+        scenario.origin_has_commit("main", "later-fix.txt", "future fix\n", "Future fix");
+        let mut candidate = pr(1, "acme/widgets", harness, "model", false);
+        candidate["title"] = "Deliver the feature".into();
+        candidate["body"] = format!("Closes #7\nBuilt with {harness} · model · high <!-- thirdshift:built-with -->\n🤖 Generated with [Claude Code](https://claude.ai/code)\nKeep this claim.\n").into();
+        candidate["mergeCommit"] = serde_json::json!({"oid": merged});
+        candidate["headRefOid"] = merged.clone().into();
+        let at = DateTime::parse_from_rfc3339(candidate["mergedAt"].as_str().unwrap()).unwrap();
+        let before = (at - chrono::TimeDelta::hours(1)).to_rfc3339();
+        let after = (at + chrono::TimeDelta::hours(1)).to_rfc3339();
+        let mut state = scenario.gh_state();
+        state["scoring_prs"] = serde_json::json!([candidate]);
+        state["titles"] = serde_json::json!({"7": "Later title"});
+        state["bodies"] = serde_json::json!({"7": "Later body"});
+        state["edits"] = serde_json::json!({"7": [
+            {"kind":"body", "at":before, "diff":"Original request"},
+            {"kind":"body", "at":after, "diff":"Later body"},
+            {"kind":"title", "at":after, "previousTitle":"Original title", "currentTitle":"Later title"}
+        ]});
+        state["checks"] = serde_json::json!({merged: [{"name":"tests", "conclusion":"success", "url":"https://example.com/identifying-job", "id":99}]});
+        scenario.write_gh_state(&state);
+        let run = scenario.run(&["score"]);
+        assert_eq!(run.code, Some(0), "{}", run.stderr);
+        let week = weeks(&scenario).remove(0);
+        let packet_dir = scenario
+            .path("home/.thirdshift/evals/scoring")
+            .join(week["packets"].as_str().expect("saved packet directory"))
+            .join("0");
+        let text = std::fs::read_to_string(packet_dir.join("packet.json")).unwrap();
+        let packet: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            packet["issues"],
+            serde_json::json!([{"title":"Original title", "body":"Original request"}])
+        );
+        assert_eq!(packet["pull_request"]["title"], "Deliver the feature");
+        assert!(
+            packet["pull_request"]["body"]
+                .as_str()
+                .unwrap()
+                .contains("Keep this claim.")
+        );
+        assert_eq!(
+            packet["ci"],
+            serde_json::json!([{"name":"tests", "conclusion":"success"}])
+        );
+        for forbidden in [
+            "Built with",
+            "thirdshift:built-with",
+            "Generated with",
+            "Secret commit message",
+            "Co-Authored-By",
+            "identifying-job",
+            "Later body",
+            "Later title",
+        ] {
+            assert!(
+                !text.contains(forbidden),
+                "packet leaked {forbidden}: {text}"
+            );
+        }
+        assert!(packet["diff"].as_str().unwrap().contains("+merged work"));
+        assert_eq!(
+            std::fs::read_to_string(packet_dir.join("repository/feature.txt")).unwrap(),
+            "merged work\n"
+        );
+        assert!(!packet_dir.join("repository/later-fix.txt").exists());
+        assert!(
+            !packet_dir.join("repository/.git").exists(),
+            "Git metadata would expose commit messages and remote access"
+        );
+    }
+}
+
+#[test]
+fn deleted_merge_time_revision_fails_without_advancing_the_window() {
+    let scenario = scenario();
+    let candidate = pr(1, "acme/widgets", "codex", "model", false);
+    let at = candidate["mergedAt"].as_str().unwrap();
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([candidate.clone()]);
+    state["edits"] = serde_json::json!({"7": [
+        {"kind":"body", "at":"2020-01-01T00:00:00Z", "diff":"Obsolete request"},
+        {"kind":"body", "at":at, "diff":null, "deletedAt":at}
+    ]});
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert!(
+        run.stderr.contains("revision was deleted"),
+        "{}",
+        run.stderr
+    );
+    assert!(weeks(&scenario).is_empty());
+    assert_eq!(
+        std::fs::read_dir(scenario.path("home/.thirdshift/evals/scoring"))
+            .unwrap()
+            .count(),
+        0
+    );
+}
+
+#[test]
+fn packet_history_reads_past_a_page_of_later_edits() {
+    let scenario = scenario();
+    let candidate = pr(1, "acme/widgets", "codex", "model", false);
+    let at = DateTime::parse_from_rfc3339(candidate["mergedAt"].as_str().unwrap()).unwrap();
+    let mut edits: Vec<_> = (1..=101)
+        .rev()
+        .map(|hour| {
+            serde_json::json!({
+                "kind":"body", "at": (at + chrono::TimeDelta::hours(hour)).to_rfc3339(),
+                "diff":"Later request"
+            })
+        })
+        .collect();
+    edits.push(serde_json::json!({"kind":"body", "at":at.to_rfc3339(), "diff":"Request at merge"}));
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([candidate]);
+    state["edits"] = serde_json::json!({"7":edits});
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let week = weeks(&scenario).remove(0);
+    let packet: Value = serde_json::from_slice(
+        &std::fs::read(
+            scenario
+                .path("home/.thirdshift/evals/scoring")
+                .join(week["packets"].as_str().unwrap())
+                .join("0/packet.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(packet["issues"][0]["body"], "Request at merge");
+}
+
+#[test]
 fn sample_spreads_across_harness_and_model_pairs_and_excludes_security_fixes() {
     let scenario = scenario();
+    // Both sampled repositories use this fixture's local origin.
+    scenario.set_origin_url("https://github.com/other/repository.git");
     scenario
         .user_config_is("[scoring]\nowners = [\"acme\", \"other\", \"acme\"]\nsample_size = 3\n");
     let mut state = scenario.gh_state();
@@ -296,9 +675,10 @@ fn first_window_looks_back_seven_days_and_is_a_recorded_command() {
         0o700
     );
     for entry in std::fs::read_dir(sample_dir).unwrap() {
+        let metadata = entry.unwrap().metadata().unwrap();
         assert_eq!(
-            entry.unwrap().metadata().unwrap().permissions().mode() & 0o777,
-            0o600
+            metadata.permissions().mode() & 0o777,
+            if metadata.is_dir() { 0o700 } else { 0o600 }
         );
     }
     let activity = std::fs::read_to_string(

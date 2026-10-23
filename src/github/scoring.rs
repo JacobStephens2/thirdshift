@@ -8,6 +8,8 @@ use crate::issue::IssueUrl;
 use crate::scoring::PullRequest;
 use crate::security::fixing::SECURITY_FIX;
 
+mod packet;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct MergedPullRequest {
@@ -131,21 +133,11 @@ impl GitHub {
                     }
                     // GitHub does not infer closing links for every non-default
                     // Base branch. A factory Issue branch still names its issue.
-                    if let Some(number) = pr
-                        .head_ref_name
-                        .strip_prefix("issue-")
-                        .and_then(|rest| rest.split("-branch-").next())
-                        .filter(|number| {
-                            !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())
-                        })
+                    if let Some(issue) =
+                        issue_branch(&pr.repository.name_with_owner, &pr.head_ref_name)?
+                        && self.issue_labels(&issue)?.has(SECURITY_FIX)
                     {
-                        let issue = IssueUrl::parse(&format!(
-                            "https://github.com/{}/issues/{number}",
-                            pr.repository.name_with_owner
-                        ))?;
-                        if self.issue_labels(&issue)?.has(SECURITY_FIX) {
-                            continue;
-                        }
+                        continue;
                     }
                     if let Some(pr) = PullRequest::from_body(
                         pr.repository.name_with_owner,
@@ -174,4 +166,14 @@ impl GitHub {
         }
         Ok(prs)
     }
+}
+
+/// GitHub does not always supply closing links for a non-default Base branch.
+fn issue_branch(repository: &str, branch: &str) -> Result<Option<IssueUrl>> {
+    branch
+        .strip_prefix("issue-")
+        .and_then(|name| name.split("-branch-").next())
+        .filter(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()))
+        .map(|number| IssueUrl::parse(&format!("https://github.com/{repository}/issues/{number}")))
+        .transpose()
 }

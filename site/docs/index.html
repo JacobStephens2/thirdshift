@@ -1121,8 +1121,16 @@ lines. Each saved window records its seed and sampled pull requests, including
 their repository, merge date, Harness, Model, Effort and version when present.
 Samples are private under <code>~/.thirdshift/evals/scoring/</code>. <code>thirdshift scores</code>
 lists them by ISO week; <code>thirdshift scores --json</code> returns the saved windows and
-their samples. This command currently collects samples; Grader sessions and
-criterion Scores are separate work.</p>
+their samples. Each new window&#39;s <code>packets</code> directory holds one numbered folder
+per sampled pull request: <code>packet.json</code> and <code>repository/</code>. The JSON holds the
+issue title and body from its edit history at merge time, the merged diff, the
+pull request title and body, and CI check names and conclusions. Built-with and
+Claude Code&#39;s Generated-with lines are removed from this text for every Harness.
+The repository contains the merge commit&#39;s files with Git metadata and
+attribution lines removed, so
+neither commit messages nor later history reach the Grader. Unavailable
+historical issue text fails the Command rather than substituting a later
+revision. Grader sessions and criterion Scores are separate work.</p>
 <p>The Command record and Command log live under
 <code>&lt;logs.dir&gt;/JacobStephens2/thirdshift/commands/scoring/</code>, with start and end lines
 in that repository&#39;s Activity log. The Command appears in the Inbox, can be

@@ -2,7 +2,7 @@
 //! advancement; an atomic private sample file is the successful checkpoint.
 use std::fs::{self, File, TryLockError};
 use std::io::Write;
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -17,6 +17,7 @@ use crate::{interrupt, logs};
 
 mod sample;
 pub(crate) use sample::PullRequest;
+pub(crate) mod packet;
 
 pub fn lock() -> Result<Option<File>> {
     let dir = config::home()?.join(".thirdshift");
@@ -36,6 +37,8 @@ struct Week {
     window_end: DateTime<Utc>,
     seed: u64,
     sample: Vec<PullRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    packets: Option<String>,
 }
 
 fn directory() -> Result<PathBuf> {
@@ -85,17 +88,34 @@ pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
     }
     let candidates = GitHub::new().scoring_pull_requests(&config.scoring.owners, start, end)?;
     let seed = OsRng.next_u64();
-    let week = Week {
+    let mut week = Week {
         week: end.format("%G-W%V").to_string(),
         window_start: start,
         window_end: end,
         seed,
         sample: sample::draw(candidates, config.scoring.sample_size.get(), seed),
+        packets: None,
     };
     fs::DirBuilder::new()
         .recursive(true)
         .mode(0o700)
         .create(&dir)?;
+    let packets = tempfile::Builder::new()
+        .prefix("packets-")
+        .permissions(fs::Permissions::from_mode(0o700))
+        .tempdir_in(&dir)?;
+    for (index, pr) in week.sample.iter().enumerate() {
+        packet::write(&GitHub::new(), pr, &packets.path().join(index.to_string()))
+            .with_context(|| format!("can't build Scoring packet for {}", pr.url))?;
+    }
+    week.packets = Some(
+        packets
+            .path()
+            .file_name()
+            .context("packet directory has no name")?
+            .to_string_lossy()
+            .into_owned(),
+    );
     let mut file = tempfile::NamedTempFile::new_in(&dir)?;
     serde_json::to_writer_pretty(&mut file, &week)?;
     file.flush()?;
@@ -113,6 +133,7 @@ pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
     } else {
         path
     })?;
+    let _ = packets.keep();
     Ok(week.sample.len())
 }
 
