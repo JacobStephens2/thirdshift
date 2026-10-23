@@ -168,6 +168,21 @@ fn email_code_creates_and_resets_an_account_without_revealing_the_allowlist() {
 }
 
 #[test]
+fn the_code_page_uses_the_console_theme_and_stylesheet() {
+    let home = configured();
+    let resend = ResendStandIn::replying(200, "{}");
+    let console = start(home.path(), &resend, true);
+    let response = post(&console, "/set-password/code", &[("email", EMAIL)]);
+    assert_eq!(response.status(), 200);
+    let html = response.text().unwrap();
+    assert!(html.contains("data-theme=\"focus-auto\""), "{html}");
+    assert!(html.contains("href=\"/assets/console.css\""), "{html}");
+    assert!(html.contains("a code has been sent"), "{html}");
+    assert!(html.contains("href=\"/set-password\""), "{html}");
+    wait_for_email(&resend);
+}
+
+#[test]
 fn code_flow_requires_csrf_and_enforces_five_tries_and_send_throttling_over_http() {
     let home = configured();
     let resend = ResendStandIn::replying(200, "{}");
