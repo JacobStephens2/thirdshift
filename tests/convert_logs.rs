@@ -36,6 +36,71 @@ fn report(scenario: &Scenario) -> Value {
     .unwrap()
 }
 
+#[test]
+fn show_passes_a_codex_session_whose_recovered_diffs_overflow_the_tail_window() {
+    let scenario = Scenario::new();
+    let session = fixture(
+        &scenario,
+        "codex",
+        include_str!("fixtures/console-codex.jsonl"),
+    );
+    let native = scenario
+        .path("home/.codex/sessions/2026/10/01/rollout-2026-10-01T12-00-00-made-up-thread.jsonl");
+    fs::create_dir_all(native.parent().unwrap()).unwrap();
+    let directory = scenario.path("work/widgets");
+    // One recovered diff larger than the 64 KiB live tail: a tail-window
+    // `show` check would see only the amendment, while the whole Session
+    // still ends in the original's latest event.
+    let diff = format!(
+        "--- a/widgets.rs\n+++ b/widgets.rs\n@@ -1 +1 @@\n-old\n+new-{}\n",
+        "x".repeat(70_000)
+    );
+    let changes = json!({
+        directory.join("widgets.rs").to_str().unwrap():{"type":"update","unified_diff":diff,"move_path":null}
+    });
+    fs::write(
+        &native,
+        format!(
+            "{}\n{}\n",
+            json!({"type":"session_meta","payload":{"id":"made-up-thread","cwd":directory}}),
+            json!({"timestamp":"2026-10-01T12:00:40Z","type":"event_msg","payload":{"type":"patch_apply_end","success":true,"changes":changes}})
+        ),
+    )
+    .unwrap();
+    let result = scenario.run(&["logs", "--convert"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let report = report(&scenario);
+    assert_eq!(report["sessions"][0]["passed"], true, "{report}");
+    assert_eq!(report["sessions"][0]["readers"]["show"], true, "{report}");
+    assert_eq!(report["sessions"][0]["codex_diffs"], 1, "{report}");
+    assert!(session.exists());
+}
+
+#[test]
+fn show_passes_a_claude_session_ending_in_a_large_tool_call() {
+    let scenario = Scenario::new();
+    // The 64 KiB raw tail starts inside the tool call and drops that partial
+    // line, leaving only the progress-free result; the trace keeps whole
+    // records. The round-trip `show` check must compare the whole Session.
+    let tool = json!({"type": "assistant", "message": {"content": [{
+        "type": "tool_use", "id": "call-1", "name": "Bash",
+        "input": {"command": format!("cargo test {}", "x".repeat(40_000))}
+    }]}});
+    let final_result =
+        json!({"type": "result", "subtype": "success", "result": "y".repeat(30_000)});
+    let raw = format!(
+        "{}\n{tool}\n{final_result}\n",
+        json!({"type": "system", "subtype": "init"}),
+    );
+    let session = fixture(&scenario, "claude", &raw);
+    let result = scenario.run(&["logs", "--convert"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let report = report(&scenario);
+    assert_eq!(report["sessions"][0]["passed"], true, "{report}");
+    assert_eq!(report["sessions"][0]["readers"]["show"], true, "{report}");
+    assert_eq!(fs::read_to_string(session).unwrap(), raw);
+}
+
 fn records(path: &Path) -> Vec<Value> {
     fs::read_to_string(path)
         .unwrap()
