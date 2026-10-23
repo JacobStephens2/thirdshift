@@ -696,7 +696,7 @@ mod tests {
     const KEY_PROMPT: &str = "Resend API key (input hidden, Enter to skip): ";
     const KEPT: &str = "Resend API key (input hidden, Enter keeps the saved one): ";
     const SKIPPED: &str = "No Resend API key, so no email can go yet. To add one later, rerun \
-                           `thirdshift setup`, or set RESEND_API_KEY in the environment the Run \
+                           `thirdshift setup`, or set RESEND_API_KEY in the environment the Ticket run \
                            starts from.";
     const ENDED: &str = "Setup ended before its last answer; nothing written";
     const KEY: &str = "re_secret_123";
