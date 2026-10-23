@@ -62,6 +62,38 @@ creating its output directory. Unknown fields and unsupported session kinds
 are rejected too. An invalid request prints a clear message on stderr, emits
 no result and exits `1`.
 
+## Sandbox
+
+The Trial's session runs in bwrap with a process namespace of its own: it
+sees neither an unbound path nor the host's processes, and everything it
+starts ends with it. Only these are bound: the prepared repository, the
+Harness's binary (Codex's release folder, since Codex looks for
+`codex-code-mode-host` beside it), the Factory skills folder, a fresh home,
+and the toolchains the session needs, read-only. Harness flags stay as
+ADR 0013 has them. The network stays the host's here; #1013 gives the sandbox
+its own.
+
+The fresh home holds the login, and the user-level instructions, rules,
+settings and hooks a Run's session reads, those read-only. Codex's `auth.json`
+is bound read-write in place, so a refresh reaches the file production uses.
+Claude receives `CLAUDE_CODE_OAUTH_TOKEN` from the Credentials'
+`claude.setup_token`. Muse's `~/.config/muse/auth.json` and its
+`.auth.json.lock`, and agy's
+`~/.gemini/antigravity-cli/antigravity-oauth-token`, are each bound read-write
+in place. Grok Trials share a Trials home of their own at
+`~/.thirdshift/trials/grok`, signed in once with
+`GROK_HOME=~/.thirdshift/trials/grok grok login` and wiped before each Trial
+down to its login and lock; Grok Trials run one at a time, and the Grok binary
+is bound outside that home. An OpenCode Trial's provider key comes only from
+`opencode.api_key` in the Credentials, through its environment; it never sees
+production's `opencode.db`. A Trial whose sandbox cannot start is void with
+`sandbox_unavailable`; one whose Harness has no login (a missing Grok login or
+OpenCode key) fails before its session starts and is void with
+`session_unavailable`. `THIRDSHIFT_TRIAL_NO_SANDBOX`, when set and not empty,
+runs the Trial's sessions without the sandbox: the Experiment suite sets it so
+its fake Harnesses stay observable, and it is the emergency escape when bwrap
+breaks on a machine.
+
 ## Result
 
 Once a valid request starts, stdout is exactly one JSON line; progress is on

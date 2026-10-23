@@ -7,6 +7,10 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 use support::Scenario;
 
+/// Trials run without their sandbox across the Experiment suite, so its fake
+/// Harnesses stay observable at fixed scenario paths.
+const NO_SANDBOX: [(&str, &str); 1] = [("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")];
+
 #[path = "experiments/model_graders.rs"]
 mod model_graders;
 
@@ -561,7 +565,11 @@ pr_url = "https://github.com/acme/widgets/pull/1"
     fn run(&self, extra: &[&str]) -> support::RunResult {
         let mut args = vec!["experiment", "candidate", "--json"];
         args.extend_from_slice(extra);
-        self.scenario.run(&args)
+        // Trials run without their sandbox here: the Experiment suite's fake
+        // Harnesses stay observable at fixed scenario paths, as with
+        // THIRDSHIFT_TRIAL_NO_SANDBOX. The sandbox itself is covered by the
+        // sandbox module tests and the sandboxed Trial tests.
+        self.scenario.run_with_env(&args, &NO_SANDBOX)
     }
 
     fn experiment(&self) -> Value {
@@ -1001,7 +1009,7 @@ while true; do sleep 0.05; done
             "3",
             "--json",
         ],
-        &[],
+        &NO_SANDBOX,
         "started",
     );
     let status = fixture.scenario.run(&["status", "--json"]);
@@ -1600,29 +1608,32 @@ ln -sf /nonexistent/updated-codex '{}'
         fixture.scenario.path("bin/claude").display(),
         fixture.scenario.path("bin/codex").display()
     ));
-    let result = fixture.scenario.run(&[
-        "experiment",
-        "main",
-        "--baseline",
-        "main",
-        "--suite",
-        "spec-review",
-        "--baseline-harness",
-        "claude",
-        "--baseline-model",
-        "opus",
-        "--baseline-effort",
-        "high",
-        "--candidate-harness",
-        "codex",
-        "--candidate-model",
-        "gpt-6.1-sol",
-        "--candidate-effort",
-        "max",
-        "--trials-per-task",
-        "3",
-        "--json",
-    ]);
+    let result = fixture.scenario.run_with_env(
+        &[
+            "experiment",
+            "main",
+            "--baseline",
+            "main",
+            "--suite",
+            "spec-review",
+            "--baseline-harness",
+            "claude",
+            "--baseline-model",
+            "opus",
+            "--baseline-effort",
+            "high",
+            "--candidate-harness",
+            "codex",
+            "--candidate-model",
+            "gpt-6.1-sol",
+            "--candidate-effort",
+            "max",
+            "--trials-per-task",
+            "3",
+            "--json",
+        ],
+        &NO_SANDBOX,
+    );
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let experiment = fixture.experiment();
     assert_eq!(experiment["baseline"]["commit"], fixture.baseline);
@@ -1696,10 +1707,11 @@ while true; do sleep 0.05; done
 "#,
         root = fixture.scenario.path("").display()
     ));
-    let mut held =
-        fixture
-            .scenario
-            .run_until(&["experiment", "candidate", "--json"], &[], "started");
+    let mut held = fixture.scenario.run_until(
+        &["experiment", "candidate", "--json"],
+        &NO_SANDBOX,
+        "started",
+    );
     let status = fixture.scenario.run(&["status", "--json"]);
     let status: Value = serde_json::from_str(&status.stdout).unwrap();
     let name = status["commands"][0]["name"].as_str().unwrap();

@@ -153,6 +153,36 @@ impl<'a> Sessions<'a> {
         Self::checked_within(logs, worktree, harness, None, None, &|| Ok(()), steps)
     }
 
+    /// [`Sessions::within`], with every session run in `sandbox`: the
+    /// Trial's bwrap sandbox, prepared before its output directory's home.
+    /// The Factory skills are linked as usual; the sandbox binds them in.
+    pub fn within_sandboxed<T>(
+        logs: &'a Logs,
+        worktree: &'a Path,
+        harness: &'a Choice,
+        sandbox: &crate::sandbox::Prepared,
+        steps: impl FnOnce(&Self) -> Result<T>,
+    ) -> (Result<T>, Option<PathBuf>) {
+        let adapter = harness.harness.adapter();
+        if let Err(error) = skills::link_into(worktree, adapter)
+            .and_then(|()| adapter.link_instruction_fallback(worktree))
+        {
+            return (Err(error), None);
+        }
+        let on_machine = OnMachine {
+            worktree: worktree.to_path_buf(),
+            harness: harness.clone(),
+            adapter,
+            security_review: None,
+            security_review_default: None,
+            recording: logs.recording().clone(),
+            sandbox: Some(sandbox.launch()),
+        };
+        let (taken, log) =
+            Sessions::taking(logs, worktree, Box::new(on_machine), &|| Ok(()), steps);
+        (taken, log.filter(|log| log.exists()))
+    }
+
     /// [`Sessions::within`], checking `before_each` before each session
     /// starts, a Resume included: a session it fails is not started. A
     /// Security review, and its Resume, run on `security_review` instead of
@@ -185,6 +215,7 @@ impl<'a> Sessions<'a> {
             security_review,
             security_review_default: security_review_default.cloned(),
             recording: logs.recording().clone(),
+            sandbox: None,
         };
         let (taken, log) =
             Sessions::taking(logs, worktree, Box::new(on_machine), before_each, steps);
@@ -420,6 +451,7 @@ struct OnMachine {
     security_review: Option<(Choice, &'static dyn Adapter)>,
     security_review_default: Option<Choice>,
     recording: recording::Recording,
+    sandbox: Option<crate::sandbox::Launch>,
 }
 
 impl Outside for OnMachine {
@@ -491,8 +523,18 @@ impl Outside for OnMachine {
                 interpretation,
             ),
         };
-        let mut command = Command::new(adapter.name());
-        command.args(&invocation.args).current_dir(&self.worktree);
+        let mut command = match &self.sandbox {
+            Some(launch) => {
+                let mut command = launch.command(&invocation.args);
+                command.current_dir(&self.worktree);
+                command
+            }
+            None => {
+                let mut command = Command::new(adapter.name());
+                command.args(&invocation.args).current_dir(&self.worktree);
+                command
+            }
+        };
         // Keep the empty config alive until the process and descendants
         // finish. A fresh one on each launch also fences the Resume.
         let github_config = if matches!(purpose, Purpose::SecurityPublishing) {

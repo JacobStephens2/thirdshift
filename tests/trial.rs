@@ -3,10 +3,102 @@
 mod support;
 
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
-use support::{Scenario, leaves_running};
+use support::{RunResult, Scenario, leaves_running};
+
+/// Whether the Trial sandbox can run here.
+fn bwrap_present() -> bool {
+    std::process::Command::new("bwrap")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// Run `--trial` the way production does: inside the Trial sandbox, where it
+/// runs. The fake Harness's scripts and records move into the prepared
+/// repository, the one path the sandbox keeps, so the session stays
+/// observable. Where bwrap cannot run, the Trial runs without its sandbox, as
+/// it does with `THIRDSHIFT_TRIAL_NO_SANDBOX`, so the test still exercises
+/// the Trial itself.
+fn run_trial(scenario: &Scenario, request: &Path, extra: &[(&str, &str)]) -> RunResult {
+    let args = ["--trial", request.to_str().unwrap()];
+    if !bwrap_present() {
+        let mut env = vec![("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")];
+        env.extend_from_slice(extra);
+        return scenario.run_with_env(&args, &env);
+    }
+    let dir = scenario.launch_dir().join(".trial-fakes");
+    fs::create_dir_all(&dir).unwrap();
+    for entry in fs::read_dir(scenario.path("")).unwrap() {
+        let entry = entry.unwrap();
+        if entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.starts_with("claude-script.sh"))
+        {
+            fs::copy(entry.path(), dir.join(entry.file_name())).unwrap();
+        }
+    }
+    let names = [
+        "FAKE_CLAUDE_SCRIPT",
+        "FAKE_CLAUDE_RECORD",
+        "FAKE_CODEX_RECORD",
+        "FAKE_AGY_RECORD",
+        "FAKE_AGY_CHECK_RECORD",
+        "FAKE_GROK_RECORD",
+        "FAKE_MUSE_RECORD",
+        "FAKE_OPENCODE_RECORD",
+    ];
+    let files = [
+        "claude-script.sh",
+        "claude-calls.json",
+        "codex-calls.json",
+        "agy-calls.json",
+        "agy-checks.json",
+        "grok-calls.json",
+        "muse-calls.json",
+        "opencode-calls.json",
+    ];
+    let paths = files
+        .into_iter()
+        .map(|name| dir.join(name).to_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    let mut env: Vec<(&str, &str)> = names
+        .into_iter()
+        .zip(paths.iter().map(String::as_str))
+        .collect();
+    env.extend_from_slice(extra);
+    scenario.run_with_env(&args, &env)
+}
+
+/// The fake Harness calls a sandboxed Trial recorded, beside the scripts it
+/// ran. Without bwrap the Trial runs unsandboxed, recording at fixed paths.
+fn trial_calls(scenario: &Scenario, file: &str) -> Vec<Value> {
+    let redirected = scenario.launch_dir().join(".trial-fakes").join(file);
+    if redirected.exists() {
+        return serde_json::from_str(&fs::read_to_string(redirected).unwrap()).unwrap();
+    }
+    serde_json::from_str(&fs::read_to_string(scenario.path(file)).unwrap_or_default())
+        .unwrap_or_default()
+}
+
+/// Assert every sandboxed call found every Factory skill in its worktree.
+fn assert_trial_sessions_found_the_factory_skills(calls: Vec<Value>) {
+    assert!(!calls.is_empty(), "no session ran");
+    for call in calls {
+        for skill in support::FACTORY_SKILLS {
+            let skill_md = call["skill_files"][format!("{skill}/SKILL.md")].as_str();
+            assert!(
+                skill_md.is_some_and(|text| text.contains(&format!("name: {skill}\n"))),
+                "the session in {} with the prompt {} found no {skill}",
+                call["cwd"],
+                call["prompt"]
+            );
+        }
+    }
+}
 
 fn request(scenario: &Scenario) -> PathBuf {
     fs::write(
@@ -59,7 +151,7 @@ fn a_code_review_trial_reviews_the_prepared_diff_and_keeps_both_reports() {
     fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
     scenario.agent_does(write_reports());
 
-    let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+    let result = run_trial(&scenario, &request, &[]);
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let output: Value = serde_json::from_str(&result.stdout).unwrap();
@@ -78,7 +170,7 @@ fn a_code_review_trial_reviews_the_prepared_diff_and_keeps_both_reports() {
         assert!(path.starts_with(scenario.path("trial-output")));
         assert_eq!(fs::read_to_string(path).unwrap(), expected);
     }
-    let calls = scenario.codex_calls();
+    let calls = trial_calls(&scenario, "codex-calls.json");
     let prompt = calls[0]["prompt"].as_str().unwrap();
     assert!(
         prompt.starts_with("$thirdshift-code-review main"),
@@ -95,7 +187,7 @@ fn a_code_review_trial_reviews_the_prepared_diff_and_keeps_both_reports() {
     assert!(prompt.contains("only its own task and necessary evidence"));
     let argv = calls[0]["argv"].to_string();
     assert!(!argv.contains("agents.max_threads"), "{argv}");
-    scenario.assert_every_codex_session_found_the_factory_skills();
+    assert_trial_sessions_found_the_factory_skills(trial_calls(&scenario, "codex-calls.json"));
     assert!(scenario.gh_calls().is_empty());
     assert!(!scenario.path("home/.thirdshift/logs").exists());
 }
@@ -106,7 +198,7 @@ fn a_spec_review_trial_prints_one_complete_line_and_keeps_artifacts_outside_fact
     let request = request(&scenario);
     scenario.agent_does(write_reports());
 
-    let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+    let result = run_trial(&scenario, &request, &[]);
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(result.stdout.lines().count(), 1, "{}", result.stdout);
@@ -138,14 +230,14 @@ fn a_spec_review_trial_prints_one_complete_line_and_keeps_artifacts_outside_fact
     assert_eq!(models["command_log"], Value::Null);
     assert_eq!(models["requested"], "opus");
     assert_eq!(models["effort"], "high");
-    let calls = scenario.claude_calls();
+    let calls = trial_calls(&scenario, "claude-calls.json");
     assert_eq!(calls.len(), 1);
     assert_eq!(calls[0]["cwd"], scenario.launch_dir().to_str().unwrap());
     let prompt = calls[0]["prompt"].as_str().unwrap();
     assert!(prompt.contains("Every Ticket of the Spec"));
     assert!(prompt.contains("using main as the fixed point"));
     assert!(prompt.contains(".thirdshift-issue.md"));
-    scenario.assert_every_session_found_the_factory_skills();
+    assert_trial_sessions_found_the_factory_skills(trial_calls(&scenario, "claude-calls.json"));
     assert!(!scenario.path("home/.thirdshift/logs").exists());
     assert!(scenario.gh_calls().is_empty());
 }
@@ -156,7 +248,7 @@ fn an_unknown_request_version_is_refused_before_decoding_its_fields_or_starting_
     let request = scenario.path("request.json");
     fs::write(&request, r#"{"version":99,"session_kind":"future-kind"}"#).unwrap();
 
-    let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+    let result = run_trial(&scenario, &request, &[]);
 
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert!(result.stdout.is_empty());
@@ -167,7 +259,7 @@ fn an_unknown_request_version_is_refused_before_decoding_its_fields_or_starting_
         "{}",
         result.stderr
     );
-    assert!(scenario.claude_calls().is_empty());
+    assert!(trial_calls(&scenario, "claude-calls.json").is_empty());
     assert!(!scenario.path("trial-output").exists());
     assert!(!scenario.path("home/.thirdshift/logs").exists());
 }
@@ -206,11 +298,14 @@ fn trial_output_cannot_use_factory_logs_or_overwrite_an_earlier_trial() {
         document["output_dir"] = json!(output);
         fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
 
-        let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+        let result = run_trial(&scenario, &request, &[]);
 
         assert_eq!(result.code, Some(1), "{case}: {}", result.stderr);
         assert!(result.stdout.is_empty(), "{case}: {}", result.stdout);
-        assert!(scenario.claude_calls().is_empty(), "{case}");
+        assert!(
+            trial_calls(&scenario, "claude-calls.json").is_empty(),
+            "{case}"
+        );
         if case == "occupied" {
             assert!(result.stderr.contains("must be empty"), "{}", result.stderr);
             assert_eq!(
@@ -236,7 +331,7 @@ fn a_failed_trial_keeps_its_session_id_diagnostic_and_model_evidence() {
         r#"echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["review failed"]}' >> "$FAKE_CLAUDE_AFTER_RESULT""#,
     );
 
-    let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+    let result = run_trial(&scenario, &request, &[]);
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(result.stdout.lines().count(), 1);
@@ -275,13 +370,13 @@ fn a_live_plan_limit_cuts_short_a_trial_and_keeps_its_evidence() {
         let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
         document["harness"] = json!(harness);
         fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
-        let escaped = scenario.path("continued-past-warning");
+        let escaped = scenario.launch_dir().join("continued-past-warning");
         scenario.agent_does(&format!(
             "echo '{event}'\nsleep 0.5\ntouch '{}'\n",
             escaped.display()
         ));
 
-        let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+        let result = run_trial(&scenario, &request, &[]);
 
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         let output: Value = serde_json::from_str(&result.stdout).unwrap();
@@ -309,7 +404,7 @@ fn codex_quota_reports_are_read_live_from_the_current_sessions_native_file() {
     let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
     document["harness"] = json!("codex");
     fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
-    let escaped = scenario.path("continued-after-native-warning");
+    let escaped = scenario.launch_dir().join("continued-after-native-warning");
     scenario.agent_does(&format!(r#"
 mkdir -p "$HOME/.codex/sessions/2026/10/23"
 native="$HOME/.codex/sessions/2026/10/23/rollout-fixture-fake-thread-1.jsonl"
@@ -321,9 +416,16 @@ timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 printf '{{"timestamp":"%s","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"secondary":{{"used_percent":85}}}}}}}}\n' "$timestamp" >> "$native"
 sleep 0.5
 touch '{}'
-"#, scenario.path("ignored-old-native-warning").display(), escaped.display()));
+"#, scenario.launch_dir().join("ignored-old-native-warning").display(), escaped.display()));
 
-    let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+    // The native session file lives beside the login: point CODEX_HOME at the
+    // Trial's fresh home, which the sandbox keeps on both sides of its bind.
+    let codex_home = scenario
+        .path("trial-output/home/.codex")
+        .to_str()
+        .unwrap()
+        .to_owned();
+    let result = run_trial(&scenario, &request, &[("CODEX_HOME", &codex_home)]);
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let output: Value = serde_json::from_str(&result.stdout).unwrap();
@@ -331,7 +433,10 @@ touch '{}'
     assert_eq!(output["void_cause"], "usage_limit");
     assert_eq!(output["session_id"], "fake-thread-1");
     assert!(
-        scenario.path("ignored-old-native-warning").exists(),
+        scenario
+            .launch_dir()
+            .join("ignored-old-native-warning")
+            .exists(),
         "an old report stopped the new session"
     );
     assert!(
@@ -368,7 +473,7 @@ fn unavailable_sessions_and_provider_limits_are_void_trials() {
         let request = request(&scenario);
         scenario.agent_does(&script);
 
-        let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+        let result = run_trial(&scenario, &request, &[]);
 
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert_eq!(result.stdout.lines().count(), 1);
@@ -377,7 +482,7 @@ fn unavailable_sessions_and_provider_limits_are_void_trials() {
         assert_eq!(line["void_cause"], expected);
         assert_eq!(line["session_id"], "fake-session-1");
         assert!(line["cause"].as_str().unwrap().contains(diagnostic), "{line}");
-        assert_eq!(scenario.claude_calls().len(), 1);
+        assert_eq!(trial_calls(&scenario, "claude-calls.json").len(), 1);
         assert!(!scenario.path("home/.thirdshift/logs").exists());
     }
 }
@@ -392,8 +497,9 @@ fn a_trial_clears_inherited_ownership_and_resumes_killed_work_only_once_with_its
         leaves_running("cargo test"),
     ));
 
-    let result = scenario.run_with_env(
-        &["--trial", request.to_str().unwrap()],
+    let result = run_trial(
+        &scenario,
+        &request,
         &[("THIRDSHIFT_LOG_OWNER", "stale parent ownership")],
     );
 
@@ -413,7 +519,7 @@ fn a_trial_clears_inherited_ownership_and_resumes_killed_work_only_once_with_its
             .stderr
             .contains("carrying on, as it may have been abandoned")
     );
-    let calls = scenario.claude_calls();
+    let calls = trial_calls(&scenario, "claude-calls.json");
     assert_eq!(calls.len(), 2);
     let argv = calls[1]["argv"].as_array().unwrap();
     assert!(
@@ -443,7 +549,7 @@ fn a_trial_clears_inherited_ownership_and_resumes_killed_work_only_once_with_its
             .unwrap()
             .contains("in the foreground")
     );
-    scenario.assert_every_session_found_the_factory_skills();
+    assert_trial_sessions_found_the_factory_skills(trial_calls(&scenario, "claude-calls.json"));
     assert!(!scenario.path("home/.thirdshift/logs").exists());
 }
 
@@ -478,7 +584,7 @@ fn only_external_failures_are_void_and_provider_server_errors_require_no_work() 
             json!({"type":"result", "subtype":"error_during_execution", "is_error":true, "errors":[diagnostic], "num_turns":turns}),
         ));
 
-        let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+        let result = run_trial(&scenario, &request, &[]);
 
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         let line: Value = serde_json::from_str(&result.stdout).unwrap();
@@ -505,9 +611,14 @@ fn a_server_error_on_resume_after_trial_work_is_failed() {
 echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["provider server error"],"num_turns":0}' >> "$FAKE_CLAUDE_AFTER_RESULT"
 exit 3
 "#);
-    let run = scenario.run(&["--trial", request.to_str().unwrap()]);
+    let run = run_trial(&scenario, &request, &[]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
-    assert_eq!(scenario.claude_calls().len(), 2, "{}", run.stderr);
+    assert_eq!(
+        trial_calls(&scenario, "claude-calls.json").len(),
+        2,
+        "{}",
+        run.stderr
+    );
     let result: Value = serde_json::from_str(&run.stdout).unwrap();
     assert_eq!(
         result["outcome"], "failed",
@@ -533,7 +644,7 @@ fn a_codex_trial_uses_its_request_defaults_and_keeps_the_prepared_issue_out_of_g
         write_reports()
     ));
 
-    let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+    let result = run_trial(&scenario, &request, &[]);
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let line: Value = serde_json::from_str(&result.stdout).unwrap();
@@ -545,9 +656,9 @@ fn a_codex_trial_uses_its_request_defaults_and_keeps_the_prepared_issue_out_of_g
     assert_eq!(models["harness"], "codex");
     assert_eq!(models["requested"], Value::Null);
     assert_eq!(models["effort"], Value::Null);
-    assert_eq!(scenario.codex_calls().len(), 1);
-    assert!(scenario.claude_calls().is_empty());
-    scenario.assert_every_codex_session_found_the_factory_skills();
+    assert_eq!(trial_calls(&scenario, "codex-calls.json").len(), 1);
+    assert!(trial_calls(&scenario, "claude-calls.json").is_empty());
+    assert_trial_sessions_found_the_factory_skills(trial_calls(&scenario, "codex-calls.json"));
     assert!(PathBuf::from(line["reports"]["spec"].as_str().unwrap()).is_file());
     assert!(!scenario.path("home/.thirdshift/logs").exists());
 }
@@ -561,7 +672,14 @@ fn an_interrupted_trial_emits_a_void_result_after_stopping_its_harness() {
         scenario.path("started").display()
     ));
 
-    let result = scenario.run_and_signal(&["--trial", request.to_str().unwrap()], "started", "INT");
+    // The signal watch reads the scenario root, which the sandbox hides: this
+    // interruption runs without the sandbox, as the Experiment suite does.
+    let result = scenario.run_and_signal_with_env(
+        &["--trial", request.to_str().unwrap()],
+        &[("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")],
+        "started",
+        "INT",
+    );
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(result.stdout.lines().count(), 1);
@@ -579,7 +697,7 @@ fn factory_skill_temporary_files_are_removed_after_success_or_failure() {
         let request = request(&scenario);
         scenario.agent_does(script);
 
-        let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+        let result = run_trial(&scenario, &request, &[]);
 
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert!(
@@ -604,8 +722,10 @@ fn an_interrupted_trial_keeps_an_already_observed_session_id() {
         scenario.path("session-id-observed").display()
     ));
 
-    let result = scenario.run_and_signal(
+    // As above: the session-id watch lives outside the sandbox.
+    let result = scenario.run_and_signal_with_env(
         &["--trial", request.to_str().unwrap()],
+        &[("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")],
         "session-id-observed",
         "INT",
     );
@@ -616,4 +736,53 @@ fn an_interrupted_trial_keeps_an_already_observed_session_id() {
     assert_eq!(line["void_cause"], "interrupted");
     assert!(fs::read_to_string(&log).unwrap().contains("fake-session-1"));
     assert_eq!(line["session_id"], "fake-session-1", "{line}");
+}
+
+#[test]
+fn a_sandboxed_trial_hides_unbound_paths_and_keeps_its_working_directory() {
+    if !bwrap_present() {
+        println!("SKIPPED (sandboxed Trial): bwrap is not on PATH");
+        return;
+    }
+    let scenario = Scenario::new();
+    scenario.launch_git(&["checkout", "-b", "issue-7"]);
+    scenario.commit_locally("counter.txt", "off by one\n", "Reviewed change");
+    let request = request(&scenario);
+    let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    document["session_kind"] = json!("code-review");
+    document["harness"] = json!("codex");
+    fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
+    let beyond = scenario.path("beyond-the-sandbox");
+    fs::write(&beyond, "host only\n").unwrap();
+    scenario.agent_does(&format!(
+        "test ! -e '{}' || exit 41\ntest \"$(pwd)\" = '{}'\n{}",
+        beyond.display(),
+        scenario.launch_dir().display(),
+        write_reports(),
+    ));
+
+    let result = run_trial(&scenario, &request, &[]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(output["outcome"], "succeeded", "{output}");
+    let calls = trial_calls(&scenario, "codex-calls.json");
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0]["cwd"], scenario.launch_dir().to_str().unwrap());
+    assert_trial_sessions_found_the_factory_skills(calls);
+    assert!(!scenario.path("home/.thirdshift/logs").exists());
+}
+
+#[test]
+fn a_trial_without_its_sandbox_runs_its_session_directly() {
+    let scenario = Scenario::new();
+    let request = request(&scenario);
+    scenario.agent_does(write_reports());
+
+    let result = run_trial(&scenario, &request, &[("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(output["outcome"], "succeeded", "{output}");
+    assert_eq!(output["session_id"], "fake-session-1");
 }

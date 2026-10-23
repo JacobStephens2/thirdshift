@@ -5,8 +5,8 @@
 //! the key it is given here too. Only they call it, so a broken Credentials
 //! file can't block a Run that sends no email, nor `update`, `version` or
 //! `help`; a first Run's Setup offer, once accepted, is Setup, and reads it.
-//! The same Credentials also keep `claude.setup_token`, reserved for Trials;
-//! ordinary Runs never receive it.
+//! The same Credentials also keep `claude.setup_token` and `opencode.api_key`,
+//! reserved for Trials; ordinary Runs never receive them.
 
 use std::fmt;
 use std::io::Write;
@@ -92,6 +92,7 @@ pub struct Credentials {
 struct Secrets {
     key: Option<String>,
     claude_setup_token: Option<String>,
+    opencode_api_key: Option<String>,
 }
 
 impl Credentials {
@@ -142,15 +143,36 @@ impl Credentials {
         self.secrets.claude_setup_token.is_some()
     }
 
+    /// The saved Claude setup token, for a Trial's `CLAUDE_CODE_OAUTH_TOKEN`,
+    /// if there is one. Ordinary Runs never receive it.
+    pub fn claude_setup_token(&self) -> Option<String> {
+        self.secrets.claude_setup_token.clone()
+    }
+
+    /// The saved OpenCode provider key, for a Trial's environment, if there
+    /// is one. Ordinary Runs never receive it. Setup asking for it is a later
+    /// Ticket; a missing key fails an OpenCode Trial before its session.
+    pub fn opencode_api_key(&self) -> Option<String> {
+        self.secrets.opencode_api_key.clone()
+    }
+
     /// Save the supplied secrets together, retaining omitted values and
     /// comments. New files and replacements have mode 0600.
-    pub fn save(&self, key: Option<&str>, claude_setup_token: Option<&str>) -> Result<()> {
+    pub fn save(
+        &self,
+        key: Option<&str>,
+        claude_setup_token: Option<&str>,
+        opencode_api_key: Option<&str>,
+    ) -> Result<()> {
         let mut text = self.text.clone().unwrap_or_default();
         if let Some(key) = key {
             text = with_secret(&text, "resend", "key", key)?;
         }
         if let Some(token) = claude_setup_token {
             text = with_secret(&text, "claude", "setup_token", token)?;
+        }
+        if let Some(api_key) = opencode_api_key {
+            text = with_secret(&text, "opencode", "api_key", api_key)?;
         }
         let written = match &self.text {
             None => create(&self.path, &text),
@@ -182,8 +204,14 @@ fn with_secret(text: &str, section_name: &str, key: &str, secret: &str) -> Resul
         .parse()
         .map_err(|_| anyhow!("can't parse the Credentials: invalid TOML (contents hidden)"))?;
     let Some(settings) = document.get_mut(section_name) else {
+        // A new section must be a table header: assigning the key directly
+        // renders an inline value, which would file it under the previous
+        // section. Render the header separately and append it instead, so
+        // the existing text stays byte-identical.
         let mut section = DocumentMut::new();
-        section[section_name][key] = toml_edit::value(secret);
+        let mut table = toml_edit::Table::new();
+        table.insert(key, toml_edit::value(secret));
+        section[section_name] = Item::Table(table);
         let mut text = text.to_string();
         if !text.trim().is_empty() {
             if !text.ends_with('\n') {
@@ -230,8 +258,8 @@ fn path() -> Result<PathBuf> {
 }
 
 /// `resend.key` in `text`, the contents of `file`, if it is there and not
-/// empty. Also accepts `claude.setup_token`, reserved for Trials. Any other
-/// section or key is an error, as in the User config.
+/// empty. Also accepts `claude.setup_token` and `opencode.api_key`, reserved
+/// for Trials. Any other section or key is an error, as in the User config.
 fn parse(text: &str, file: &Source) -> Result<Secrets> {
     let table: Table = text
         .parse()
@@ -239,8 +267,8 @@ fn parse(text: &str, file: &Source) -> Result<Secrets> {
     let mut found = Secrets::default();
     for (section, value) in &table {
         let settings = match (section.as_str(), value) {
-            ("resend" | "claude", Value::Table(settings)) => settings,
-            ("resend" | "claude", _) => {
+            ("resend" | "claude" | "opencode", Value::Table(settings)) => settings,
+            ("resend" | "claude" | "opencode", _) => {
                 bail!("{section} must be the section [{section}] in {file}")
             }
             (_, Value::Table(_)) => bail!("unknown section [{section}] in {file}"),
@@ -257,6 +285,12 @@ fn parse(text: &str, file: &Source) -> Result<Secrets> {
                 }
                 ("claude", "setup_token", _) => {
                     bail!("claude.setup_token must be a quoted Claude setup token in {file}")
+                }
+                ("opencode", "api_key", Value::String(api_key)) => {
+                    found.opencode_api_key = nonempty(api_key);
+                }
+                ("opencode", "api_key", _) => {
+                    bail!("opencode.api_key must be a quoted OpenCode provider key in {file}")
                 }
                 _ => bail!("unknown key {section}.{key} in {file}"),
             }
@@ -354,6 +388,8 @@ mod tests {
             ("[resend]\nkye = \"re_file_456\"\n", "resend.kye"),
             ("[resend]\nkey = true\n", "resend.key"),
             ("resend = 1\n", "resend must be the section [resend]"),
+            ("[opencode]\napi_key = true\n", "opencode.api_key"),
+            ("[opencode]\nunknown = \"x\"\n", "opencode.unknown"),
             ("[email]\n", "unknown section [email]"),
             ("key = \"re_file_456\"\n", "unknown key key"),
         ] {
@@ -362,5 +398,55 @@ mod tests {
                 assert!(error.contains(part), "{text:?}: no {part:?} in {error}");
             }
         }
+    }
+
+    #[test]
+    fn trial_secrets_are_read_and_an_empty_one_is_none() {
+        let file = Source::Credentials(PathBuf::from("/home/me/.thirdshift/credentials.toml"));
+
+        let found = parse(
+            "[claude]\nsetup_token = \"sk-ant-oat01-secret\"\n[opencode]\napi_key = \"opencode-provider-key\"\n",
+            &file,
+        )
+        .unwrap();
+        assert_eq!(
+            found.claude_setup_token,
+            Some("sk-ant-oat01-secret".to_string())
+        );
+        assert_eq!(
+            found.opencode_api_key,
+            Some("opencode-provider-key".to_string())
+        );
+        for text in [
+            "",
+            "[opencode]\n",
+            "[opencode]\napi_key = \"\"\n",
+            "[claude]\nsetup_token = \"\"\n",
+        ] {
+            let found = parse(text, &file).unwrap();
+            assert_eq!(found.opencode_api_key, None, "{text:?}");
+            assert_eq!(found.claude_setup_token, None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn an_opencode_key_is_saved_alongside_the_other_secrets() {
+        let file = Source::Credentials(PathBuf::from("/home/me/.thirdshift/credentials.toml"));
+        let saved = with_secret(
+            "[resend]\nkey = \"re_saved_456\"\n",
+            "opencode",
+            "api_key",
+            "opencode-provider-key",
+        )
+        .unwrap();
+
+        assert_eq!(
+            parse(&saved, &file).unwrap().opencode_api_key.as_deref(),
+            Some("opencode-provider-key")
+        );
+        assert_eq!(
+            parse(&saved, &file).unwrap().key.as_deref(),
+            Some("re_saved_456")
+        );
     }
 }

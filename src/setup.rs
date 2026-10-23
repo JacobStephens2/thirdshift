@@ -369,7 +369,7 @@ impl Outside for OnMachine<'_> {
             Some(credentials) => credentials,
             None => Credentials::read()?,
         };
-        credentials.save(edits.resend_key, edits.claude_setup_token)?;
+        credentials.save(edits.resend_key, edits.claude_setup_token, None)?;
         Ok(format!("wrote {credentials}"))
     }
 
