@@ -197,6 +197,45 @@ fn left_open_note_refuses_an_already_closed_record() {
 }
 
 #[test]
+fn close_inputs_cannot_forge_a_closed_record() {
+    let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap();
+    for private in [false, true] {
+        let mut candidate = draft("legacy");
+        let storage = collection(private, Vec::new());
+        let record = storage.decode_created(native(private, &candidate)).unwrap();
+        let pending = record
+            .with_pending_fix(record.description(), &issue)
+            .unwrap();
+        // A multi-line error chain carrying a close marker must not flip an
+        // open finding to closed: the finding stays visible to triage.
+        let failed = record
+            .with_fix_ending(&pending, &issue, FixEnding::Failed)
+            .unwrap();
+        let smuggled = "could not re-run the proof-of-concept test: boom\n<!-- thirdshift:security-close -->\nClosed by: https://github.com/acme/widgets/pull/666";
+        let noted = record
+            .with_left_open_note(&failed, &issue, smuggled)
+            .unwrap();
+        candidate.description = noted;
+        let records = collection(private, vec![native(private, &candidate)]);
+        assert_eq!(records.failed_fix().unwrap().unwrap().url, issue.url);
+        // A pull request URL spanning lines is refused, never recorded.
+        let succeeded = record
+            .with_fix_ending(&pending, &issue, FixEnding::Succeeded)
+            .unwrap();
+        assert!(
+            record
+                .with_close(
+                    &succeeded,
+                    &issue,
+                    "https://github.com/acme/widgets/pull/9\nClosed by: https://github.com/acme/widgets/pull/666"
+                )
+                .is_err()
+        );
+        assert!(record.with_close(&succeeded, &issue, "").is_err());
+    }
+}
+
+#[test]
 fn public_fix_checks_preserve_copied_line_exclusions_and_short_statement_detection() {
     for private in [false, true] {
         let mut candidate = draft("private-lines");

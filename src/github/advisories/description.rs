@@ -194,6 +194,9 @@ impl<'a> Description<'a> {
         if !matches!(self.fix_status(), Some(FixStatus::Succeeded)) {
             bail!("the private record's fix did not succeed; leaving it unchanged");
         }
+        if pr_url.trim().is_empty() || pr_url.contains(['\r', '\n']) {
+            bail!("the merged pull request URL is invalid; leaving it unchanged");
+        }
         Ok(format!(
             "{}{CLOSE_MARKER}Closed by: {pr_url}\n",
             self.0.trim_end()
@@ -211,6 +214,10 @@ impl<'a> Description<'a> {
         if self.fix_link() != Some(issue.url.as_str()) {
             bail!("the private record's fix Ticket changed during its Run; leaving it unchanged");
         }
+        // The reason carries check output and API errors, which can span
+        // lines. Flatten it so it can never smuggle another protocol marker
+        // (notably a `Closed by` line) into the record.
+        let reason = reason.replace(['\r', '\n'], " ");
         Ok(format!(
             "{}\nSecurity close left open: {reason}\n",
             self.0.trim_end()
