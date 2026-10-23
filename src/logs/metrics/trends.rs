@@ -160,16 +160,21 @@ fn collect(command: &Command, asked: &MetricsArgs, weeks: &mut BTreeMap<Group, W
         .add(metrics.and_then(|metrics| metrics.total_minutes));
     let Some(metrics) = metrics else { return };
     let mut session_kinds = BTreeSet::new();
+    let mut security_session = None;
     for (index, stage) in metrics.stages.iter().enumerate() {
         // Session stages are separate rows. Delivery stages stay with Run totals.
         let row = if StageName::is_session(&stage.name) {
+            if stage.name != StageName::Resume.name() {
+                security_session = Some(stage.name == StageName::SecurityReview.name());
+            }
             let mut session_group = Group {
                 session_kind: Some(stage.name.clone()),
                 ..group.clone()
             };
             // A Security review may use another setup (ADR 0021). Without
-            // its evidence, the owning Command cannot tell us which one.
-            if stage.name == StageName::SecurityReview.name() {
+            // its evidence, the owning Command cannot tell us which one,
+            // including on its Resume. An orphan Resume is unknown too.
+            if security_session != Some(false) {
                 session_group.harness = None;
                 session_group.model = None;
                 session_group.effort = None;

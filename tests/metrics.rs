@@ -8,6 +8,25 @@ use support::Scenario;
 const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
 #[test]
+fn an_unrecorded_security_resume_setup_stays_missing() {
+    let scenario = Scenario::new();
+    let mut past = record(7);
+    past["stages"][0]["name"] = "Security review".into();
+    past["stages"][1]["name"] = "Resume".into();
+    write(&scenario, "7-fixture.command.json", &past);
+    let trends = metrics(&scenario, &["metrics", "--json"]);
+    let resume = trends["weeks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["session_kind"] == "Resume")
+        .unwrap();
+    assert_eq!(resume["harness"], Value::Null, "{resume:#}");
+    assert_eq!(resume["model"], Value::Null, "{resume:#}");
+    assert_eq!(resume["effort"], Value::Null, "{resume:#}");
+}
+
+#[test]
 fn security_review_trends_use_the_sessions_own_setup() {
     let scenario = Scenario::new();
     scenario.user_config_is(
