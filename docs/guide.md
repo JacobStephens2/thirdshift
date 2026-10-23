@@ -458,6 +458,14 @@ Timeouts, context-window overflow, refusals and agent failures count as failed
 Trials. Void Trials retry fresh up to the Bar's limit and remain void if
 exhausted. A task still void in either Arm drops out of both Arms.
 
+Usage/rate limits pause scheduling until the same Experiment is started again.
+Claude's warning and rejection events also pause it immediately, as do Codex quota reports at
+85% usage in either window. A Trial cut short by a warning is void; a Trial
+already running on the other worker may finish, but neither worker starts
+another Trial or retry. Ordinary Runs do not stop at these warnings.
+The Experiment watches each Trial with the current detectors, including when
+an Arm's build predates warning detection.
+
 Two workers take alternating Baseline and Candidate Trials, each in a fresh
 prepared repository. Trial artifacts and one result per finished Trial live
 privately in `~/.thirdshift/evals/experiments/<id>/`. Trials currently run

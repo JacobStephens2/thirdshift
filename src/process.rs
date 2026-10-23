@@ -70,7 +70,7 @@ pub(crate) fn output(
     input: Option<&[u8]>,
     control: Control<'_>,
 ) -> Result<Output> {
-    captured(command, input, control, None)
+    captured(command, input, control, None, &|| Ok(()))
 }
 
 /// A Trial deadline includes pipe draining and uses the same whole-tree cleanup.
@@ -79,8 +79,9 @@ pub(crate) fn output_until(
     input: Option<&[u8]>,
     control: Control<'_>,
     deadline: Instant,
+    check: &dyn Fn() -> Result<()>,
 ) -> Result<Output> {
-    captured(command, input, control, Some(deadline))
+    captured(command, input, control, Some(deadline), check)
 }
 
 #[derive(Debug)]
@@ -99,11 +100,18 @@ fn captured(
     input: Option<&[u8]>,
     control: Control<'_>,
     deadline: Option<Instant>,
+    check: &dyn Fn() -> Result<()>,
 ) -> Result<Output> {
     let cli = control.name.to_owned();
-    let (execution, _) = execute(command, input, control, true, deadline, move |pipe| {
-        read(pipe).with_context(|| format!("could not read {cli}'s stdout"))
-    });
+    let (execution, _) = execute(
+        command,
+        input,
+        control,
+        true,
+        deadline,
+        check,
+        move |pipe| read(pipe).with_context(|| format!("could not read {cli}'s stdout")),
+    );
     let (status, stdout, stderr) = execution?;
     Ok(Output {
         status,
@@ -134,11 +142,19 @@ pub(crate) fn streaming<T: Send + 'static>(
     // One send fits without waiting for the caller, which must first finish
     // supervising and joining all workers, including on transport failure.
     let (completed, recovered) = mpsc::sync_channel(1);
-    let (execution, started) = execute(command, input, control, false, None, move |pipe| {
-        let result = consume(pipe, &mut state);
-        let _ = completed.send(state);
-        result
-    });
+    let (execution, started) = execute(
+        command,
+        input,
+        control,
+        false,
+        None,
+        &|| Ok(()),
+        move |pipe| {
+            let result = consume(pipe, &mut state);
+            let _ = completed.send(state);
+            result
+        },
+    );
     let execution = execution.map(|(status, (), _)| status);
     control.interruption.check()?;
     if !started {
@@ -156,12 +172,13 @@ fn read(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn execute<T: Send + 'static>(
+fn execute<'a, T: Send + 'static>(
     command: &mut Command,
     input: Option<&[u8]>,
-    control: Control<'_>,
+    control: Control<'a>,
     capture_stderr: bool,
     deadline: Option<Instant>,
+    check: &'a dyn Fn() -> Result<()>,
     consume: impl FnOnce(ChildStdout) -> Result<T> + Send + 'static,
 ) -> (Result<(ExitStatus, T, Vec<u8>)>, bool) {
     let Control {
@@ -174,6 +191,7 @@ fn execute<T: Send + 'static>(
         if interruption.requested() {
             bail!("interrupted");
         }
+        check()?;
         let cli = name.to_owned();
         let (wake, awakened) = mpsc::channel();
         #[cfg(test)]
@@ -196,6 +214,7 @@ fn execute<T: Send + 'static>(
         // Install ownership immediately: every fallible step after spawn is
         // covered, including pipe extraction and starting workers.
         let mut owned = Execution {
+            check,
             deadline,
             control,
             child,
@@ -297,6 +316,7 @@ fn execute<T: Send + 'static>(
 }
 
 struct Execution<'a, T> {
+    check: &'a dyn Fn() -> Result<()>,
     deadline: Option<Instant>,
     control: Control<'a>,
     child: Child,
@@ -314,6 +334,7 @@ impl<T> Execution<'_, T> {
             if self.control.interruption.requested() {
                 bail!("interrupted");
             }
+            (self.check)()?;
             if self
                 .deadline
                 .is_some_and(|deadline| Instant::now() >= deadline)
@@ -347,6 +368,7 @@ impl<T> Execution<'_, T> {
                 if self.control.interruption.requested() {
                     bail!("interrupted");
                 }
+                (self.check)()?;
                 return Ok(status);
             }
             // Worker completion (including unwind) wakes us immediately.
