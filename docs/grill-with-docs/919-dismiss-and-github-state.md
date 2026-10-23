@@ -29,6 +29,15 @@ Research: #1083 (Ready for review never empties), #711's Q37 in [711-live-runs.m
 
 *Recommended:* (a). Saying again in the Console what you just did on GitHub is the chore #919 is about. The cost is real but small. GitHub has to be read on its own schedule and cached, since the Console re-renders the Inbox every second, and #739 shows the GraphQL quota can run out, so the research below is measuring what one batched lookup costs. It also amends ADR 0016, which says the Console reads only what each Command writes about itself. Which GitHub facts count, how often GitHub is read, and what the Inbox does when GitHub can't be reached are for Round 2, once that research reports.
 
+*Updated 2026-10-23:* The research is in, and its numbers back (a). The two machines' Inboxes hold 58 rows in Needs you and Ready for review today. GitHub already shows 36 of them done, from what their records hold: 12 by a merged pull request, and 24 more by a closed issue. The issue is the stronger signal, because a failed Run's record often leaves its pull request out. Of the other 22 rows, 8 are Architect runs with no issue recorded, which name a merged pull request or a closed issue only in their outcome text. The last 14 have nothing GitHub can clear:
+- 5 harness billing failures (`402 Payment Required`, or a spend limit);
+- 1 Security run that failed for another reason;
+- 3 Security runs whose findings really are still waiting;
+- 4 failures whose pull request and issue are both still open;
+- 1 live Slow Run.
+
+The billing failures and the other failed Security run are what dismissal is for. GitHub can't say they're settled, so they stay until someone says so or they age out. One GraphQL query that looked up 46 pull requests and issues across 10 repositories cost 1 point of the 5,000 an hour, so reading a whole Inbox once a minute would cost about 60 an hour.
+
 *Answer:* 
 
 **Q1.4 - Where a dismissal is kept.** Whatever Q1.2 calls it, the judgment has to be written where `thirdshift status` and the Console both read it. In #711 you weighed a folder of Console state in `~/.thirdshift`, and were wary of adding a new kind of state to the machine. The options:
@@ -37,6 +46,8 @@ Research: #1083 (Ready for review never empties), #711's Q37 in [711-live-runs.m
 - (c) **On GitHub,** as a label or comment, so every machine would see it.
 
 *Recommended:* (a). It isn't a new kind of state: the Inbox already reads a file beside each record to find Triage items. A dismissal belongs to one Command, so it should live and go with that Command's files, on the machine whose Console shows it. (c) would write to GitHub, and notify the issue's watchers, about a judgment that only concerns one machine's Inbox.
+
+*Updated 2026-10-23:* (a) can't dismiss a row that has no Command record. Those are History rows, rebuilt from the Activity log for Commands that predate records: 11 of the 19 rows on `thirdshift` today and 16 of the 39 on `stephens`. Each is at least 5.7 days old, since every newer Command has a record. The ones in Needs you age out within days, and the ones in Ready for review will once #1083 lands. Only (b) could dismiss them, by the row's id. The recommendation stands.
 
 *Answer:* 
 
@@ -61,7 +72,23 @@ Research: #1083 (Ready for review never empties), #711's Q37 in [711-live-runs.m
 - **The tab title, the urgent icon and browser notifications all count rendered Needs you rows** (`src/console/inbox.html:8-9`, `src/console/assets/notifications.js:41`). Confirmed by source.
 - **Why acknowledging was ruled out before.** #711's research (`docs/research/focus-theme-attention.md:39`, `:81`, `:129`) ruled out acknowledging and shelving only because the CLI had no such command. It notes that alarm systems shelve a nuisance alarm with a time-out and an audit trail. Confirmed by docs.
 - **GitHub quota.** #739 records the GraphQL quota running out on 2026-10-17, with 15 jobs a minute across seven repositories. Today `gh api rate_limit` showed 4,501 of 5,000 GraphQL points left. Confirmed by #739 and `gh`.
+- **What the two Inboxes hold today.** `thirdshift` has 17 rows in Needs you and 2 in Ready for review. `stephens` has 28 and 11. Per machine:
+  - `thirdshift`: 16 of 19 rows are done on GitHub, 4 by the recorded pull request and 12 by the issue. #981's live Slow Run and the failed Spec runs on #977 and #978, whose pull requests are open, rightly remain.
+  - `stephens`: 20 of 39 are done on GitHub by recorded fields, 8 by pull request and 12 by issue. 8 more Architect runs name a merged pull request or closed issue only in their text. 11 remain: 5 harness billing failures, 1 Security run that failed for another reason, 3 Security runs with findings still waiting (two of which also failed on billing), and 2 failures whose work is still open (a fix on thereish and a Base fix on drome).
+  - Ready for review on `stephens` still holds six Architect runs 18 days old and chart35#230 at 15 days. All their pull requests are merged.
+
+  Confirmed by `thirdshift status --json` on each machine and one GraphQL query per machine.
+- **One GraphQL query covers a whole Inbox for 1 point.** Queries that looked up 5, 20, 34 and 46 pull requests and issues by alias each cost 1 point; the last spanned 10 repositories. Confirmed by `rateLimit { cost }` in each query.
+- **thirdshift reads GitHub one item at a time today.** Every call is a `gh` subprocess from `src/github.rs`. GraphQL is used only for one issue's sub-issues, blockers and timeline (`src/github.rs:220-234`). Nothing batches several pull requests or issues, nothing caches, and rate-limit errors are recognised but not waited out (`src/github/check_read.rs:37-43`; that's #739). Confirmed by source.
+- **The Command record keeps the pull request's URL and the issue's number, URL and title, never their state** (`src/logs/command_record.rs:30-70`). Six records whose Run failed with "PR … is merged, not open" have no pull request recorded at all (#88 on `thirdshift`, and #701, #765, #786, #793 and #803 on `stephens`). A rule keyed on the recorded pull request misses them; one keyed on the issue catches them. Confirmed by source and `status --json`.
+- **A failed Security run hides its waiting findings.** In the Inbox, Failed outranks Finding (`src/logs/reading/inbox.rs:178-192`), so no row on either machine shows as a Finding. The three Security runs on `stephens` whose findings GitHub confirms are still waiting all show as Failed. Dismissing one of those failures would hide its findings too. Confirmed by source, `status --json`, and the findings' state on GitHub. Only counts were taken; no finding is named here.
+- **The Security run's own check could tell the Inbox whether a finding still waits.** `waiting_for_day_shift` (`src/github/advisories.rs:115-145`) is a pure check over the finding records. Loading them takes one paginated list per repository (draft advisories, or `security-finding` issues on a private repository), plus one read per fix Ticket. The record's own comment says "status never refreshes findings from GitHub" (`src/logs/command_record.rs:59`). Confirmed by source.
+- **One collapsed row can stand for many Commands.** On `stephens`, one chart35 Architect row stands for 48 failures with the same cause and another for 7. On `thirdshift`, #972's row stands for 10. Confirmed by `status --json`.
+- **The Console runs on one thread** (`src/console.rs:304-310`) and renders pages off it (`src/console.rs:482-488`). Its only background tasks are the one-second Inbox observer and the restart and account watcher (`src/console.rs:322-347`). Confirmed by source.
+- **How a Console action is paired with the CLI.** Every route sits in one table beside the commands it matches (`src/console.rs:93`). `every_console_route_has_a_cli_equivalent` (`src/console.rs:729-731`) fails if a route names none, or one that doesn't parse. Stop's page and its POST each pair four `thirdshift stop` forms. Confirmed by source.
+- **How Stop records who asked.** The Console checks the session and a CSRF token on every POST (`src/console/auth.rs:82-146`) and writes the account's email into `<record>.stop.json`. The Activity log then gets "<subject> stopped from the Console by <email>" (`src/logs/recording.rs:278-289`). From the CLI, the name is the Unix user's. The Console log has no Stop event. Confirmed by source.
+- **The Sweep reads one list per Pickup run:** closed issues still labelled `in-progress` (`src/pickup.rs:262-291`). Confirmed by source.
 
 ## Waiting on research
 
-- An agent is finding out how thirdshift calls GitHub (one `gh` call per item, or batched GraphQL), what one batched lookup of several pull requests and issues costs in quota, what the Command record keeps about its pull request, issue and findings, how a Security run decides a finding still waits, how the Console's Stop action is authorized and recorded, and what each live machine's Needs you and Ready for review hold today compared with GitHub. For Round 2: which GitHub facts count, how often GitHub is read, Findings, and the dismissal's command.
+- Nothing is running.
