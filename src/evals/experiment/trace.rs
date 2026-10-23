@@ -231,8 +231,49 @@ impl super::Description {
                 paths.extend(sessions(&attempt)?);
             }
         }
+        let graders = directory.join("graders");
+        if graders.is_dir() {
+            for grader in fs::read_dir(graders)? {
+                for workspace in fs::read_dir(grader?.path())? {
+                    let workspace = workspace?;
+                    if !workspace.file_type()?.is_dir()
+                        || !workspace
+                            .file_name()
+                            .to_string_lossy()
+                            .starts_with("session-")
+                    {
+                        continue;
+                    }
+                    let session = workspace.path().join("stdout.jsonl");
+                    if belongs_to(&session, context)? {
+                        paths.push(session);
+                    }
+                }
+            }
+        }
         Ok(paths)
     }
+}
+
+// Grader retries retain separate workspaces. Select only this invocation's
+// Sessions so a resumed Experiment never exports another Command's Trace.
+fn belongs_to(session: &Path, context: &Context) -> Result<bool> {
+    let path = session.with_extension("spans.jsonl");
+    if !path.exists() {
+        return Ok(false);
+    }
+    for request in Reader::<_, Spans>::new(BufReader::new(File::open(path)?)) {
+        if request?
+            .resource_spans
+            .into_iter()
+            .flat_map(|resource| resource.scope_spans)
+            .flat_map(|scope| scope.spans)
+            .any(|span| span.trace_id == Some(context.trace))
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn now() -> u64 {

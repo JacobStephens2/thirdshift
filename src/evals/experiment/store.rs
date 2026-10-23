@@ -271,7 +271,7 @@ pub(super) fn write(path: &Path, value: &impl Serialize) -> Result<()> {
     Ok(())
 }
 
-fn result_paths(directory: &Path) -> Result<Vec<PathBuf>> {
+pub(super) fn result_paths(directory: &Path) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
     let root = directory.join("results");
     if !root.exists() {

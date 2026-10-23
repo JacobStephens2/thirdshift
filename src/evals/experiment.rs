@@ -4,6 +4,7 @@
 mod grading;
 mod integrity;
 mod limits;
+mod model_grader;
 mod options;
 mod store;
 mod trace;
@@ -230,7 +231,9 @@ pub fn run(options: Options) -> Result<()> {
             logs::experiment(&experiment.description);
         }
         logs::stage(logs::Stage::EvalTasks);
+        model_grader::prepare(&experiment, &config.harness)?;
         workers::run(&experiment)?;
+        model_grader::run(&experiment)?;
         experiment.verdict = Some(grading::judge(
             &experiment.tasks,
             &experiment.results()?,

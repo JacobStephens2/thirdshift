@@ -29,11 +29,14 @@ pub struct Recording {
     trial_context: Option<logs::trace::Context>,
 }
 
-/// The Session prompt and the Harness-specific way it receives input.
+/// The Session prompt, its transport, and execution limits for private Graders.
 #[derive(Default)]
 pub struct Input<'a> {
     pub prompt: &'a str,
     pub stdin: Option<&'a str>,
+    pub deadline: Option<Instant>,
+    /// Keep decoded progress and completion text out of factory Command logs.
+    pub private: bool,
 }
 
 impl Recording {
@@ -153,11 +156,13 @@ impl Recording {
         let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());
         let choice_owned = choice.clone();
         let recording = self.clone();
+        let private = input.private;
         let stop_at_limit = matches!(self.owner, Ok(None));
         let executed = process::streaming(
             adapter,
             command,
             input.stdin,
+            input.deadline,
             stream,
             move |output, stream| {
                 let followed = follow(
@@ -167,7 +172,10 @@ impl Recording {
                     &log_owned,
                     stream,
                     &streaming_trace,
-                    stop_at_limit,
+                    StreamPolicy {
+                        stop_at_limit,
+                        private,
+                    },
                 );
                 // The process owner joins this reader before returning, including
                 // on interruption, when it deliberately suppresses state recovery.
@@ -211,6 +219,9 @@ impl Recording {
         warn_unfinished_trace(finished);
         if let Some(report) = completion.report {
             self.keep(kind, log, choice, report.models.clone());
+            if private {
+                return completion.outcome;
+            }
             for line in report.completion_progress {
                 progress::step(format_args!("{kind}: {line}"));
             }
@@ -321,8 +332,13 @@ struct SessionModels {
     observed: Vec<String>,
 }
 
-/// Copy every line of `stream` to `log_file` and print the progress lines it
-/// condenses to, until the stream ends.
+struct StreamPolicy {
+    stop_at_limit: bool,
+    private: bool,
+}
+
+/// Copy every line to the private transcript and trace. Ordinary sessions also
+/// print progress; Eval sessions stop at plan limits while preserving evidence.
 fn follow(
     kind: &str,
     mut stream: ChildStdout,
@@ -330,7 +346,7 @@ fn follow(
     log: &Path,
     progress: &mut Interpretation,
     trace: &Mutex<super::trace::Trace>,
-    stop_at_limit: bool,
+    policy: StreamPolicy,
 ) -> Result<()> {
     let mut pending = Vec::new();
     let mut buffer = [0u8; 8192];
@@ -342,7 +358,13 @@ fn follow(
             events: libc::POLLIN,
             revents: 0,
         };
-        let ready = unsafe { libc::poll(&mut descriptor, 1, if stop_at_limit { 100 } else { -1 }) };
+        let ready = unsafe {
+            libc::poll(
+                &mut descriptor,
+                1,
+                if policy.stop_at_limit { 100 } else { -1 },
+            )
+        };
         if ready < 0 {
             let error = std::io::Error::last_os_error();
             if error.kind() == std::io::ErrorKind::Interrupted {
@@ -366,13 +388,21 @@ fn follow(
                     .map_or(0, |index| index + 1)
             };
             for line in pending[..complete].split_inclusive(|byte| *byte == b'\n') {
-                record_line(kind, line, log_file, log, progress, trace)?;
+                record_line(kind, line, log_file, log, progress, trace, policy.private)?;
             }
             pending.drain(..complete);
         }
-        if stop_at_limit {
+        if policy.stop_at_limit {
             for raw in progress.limit_records() {
-                record_line(kind, raw.as_bytes(), log_file, log, progress, trace)?;
+                record_line(
+                    kind,
+                    raw.as_bytes(),
+                    log_file,
+                    log,
+                    progress,
+                    trace,
+                    policy.private,
+                )?;
             }
             if progress.plan_limit_reached() {
                 return super::limits::stop();
@@ -391,6 +421,7 @@ fn record_line(
     log: &Path,
     progress: &mut Interpretation,
     trace: &Mutex<super::trace::Trace>,
+    private: bool,
 ) -> Result<()> {
     log_file
         .write_all(line)
@@ -398,8 +429,10 @@ fn record_line(
     let raw = String::from_utf8_lossy(line);
     let decoded = progress.decode(&raw);
     trace.lock().unwrap().record(&raw, &decoded.events)?;
-    for condensed in decoded.progress {
-        progress::step(format_args!("{kind}: {condensed}"));
+    if !private {
+        for condensed in decoded.progress {
+            progress::step(format_args!("{kind}: {condensed}"));
+        }
     }
     Ok(())
 }

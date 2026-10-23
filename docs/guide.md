@@ -476,8 +476,25 @@ privately in `~/.thirdshift/evals/experiments/<id>/`. Trials currently run
 without a sandbox; #1014 adds isolation. Code Graders then score each Trial:
 a changed repository makes it void, a review with no reports fails, and the
 Eval task's mechanical checks must pass. Scores retain each check and its reason.
-Model grading of written success criteria follows separately; these Scores
-cover mechanical checks only and set no wrong-finding flags.
+Then a fresh model Grader scores one blind packet per Eval task against its
+written success criteria. Each packet holds every Trial's review reports with
+shuffled neutral labels and identifying Harness, Model, Effort and Arm lines
+removed. Graders see report text, never Trial paths or raw session streams.
+When an installed Harness has a configured Model different from both Arms,
+that Model grades; otherwise the User config's default choice grades. The
+Grader choice and executable are fixed before Trials start. Graders currently
+run without a sandbox too, until #1014.
+
+Each Trial retains the model's pass/fail, reason, wrong-finding flag and
+borderline mark beside its mechanical checks. A mechanical failure still fails
+the Trial. Wrong-finding flags enter the paired Verdict; the Verdict also shows
+the number of borderline Trials for rechecking, without changing the Bar.
+Packets, Grader session output and validated Scores stay in the private
+Experiment directory. Grader sessions retain OTLP log records and spans, model
+evidence and stderr there, including after interruption or timeout. A failed,
+incomplete or malformed Grader response pauses the Experiment; resuming retries
+grading without rerunning finished Trials,
+and reuses already validated Scores.
 
 Each suite gets a paired Verdict using its recorded Trials per Eval task (one
 or three). Any failed suite fails the Experiment; otherwise any inconclusive
@@ -516,13 +533,13 @@ the Bar and moves through Arm builds, Eval tasks and Trials. It appears in the
 Inbox: a pass goes in Done, and a fail or inconclusive Verdict goes in Needs you.
 Use the name from `status` with `thirdshift stop <command>` to Stop it.
 The individual Trials keep no factory Command records.
-Their Session traces and code Grader spans join the invocation's Command Trace.
-Export it with `thirdshift logs <command> --export <dir>`; the private Trial
-artifacts stay under the Experiment's Eval folder. On resume, each invocation's
-Trace keeps the attempts it started, while Arm totals cover the whole Experiment.
+Trial and model Grader Session traces and code Grader spans join the invocation's
+Command Trace. Export it with `thirdshift logs <command> --export <dir>`; the
+private Trial and Grader artifacts stay under the Experiment's Eval folder.
+On resume, each invocation's Trace keeps the Trial attempts and Grader sessions
+it started, while Arm totals cover the whole Experiment.
 Older Arms with Session traces are joined after completion; Arms predating
-Session traces contribute minutes only. Model Grader sessions follow with model
-grading.
+Session traces contribute minutes only.
 
 `version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr. `architect` follows it too: stdout carries the pull request's URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with `--plan-only`, or its idea when the review published no plan. A skipped Architect run prints nothing there when [another is still running](#one-at-a-time), the URL of each Architect plan that is [still open](#one-architect-plan-at-a-time), the URL of each [Architect idea waiting for triage](#an-architect-idea-waits-for-triage), and the URL of the [Ready issue, or issue still settling, that goes first](#a-ready-issue-goes-first). `pickup` follows it as well: stdout carries the pull request's URL of the run it dispatches, and nothing when the [Pickup run](#pickup-runs) is skipped. So does `secure`: stdout carries the pull request's URL of a fix it dispatches, and nothing otherwise.
 
