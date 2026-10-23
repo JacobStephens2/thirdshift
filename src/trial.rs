@@ -3,7 +3,6 @@
 
 use std::fs;
 use std::io::{BufRead, BufReader};
-use std::os::unix::process::ExitStatusExt;
 use std::path::{Component, Path, PathBuf};
 use std::time::Instant;
 
@@ -117,23 +116,15 @@ pub(crate) struct Reports {
 }
 
 impl Output {
-    pub fn timed_out(total_ms: u128) -> Self {
-        Self::without_session(total_ms, None, "Trial timed out")
-    }
-
-    pub fn without_session(total_ms: u128, void_cause: Option<VoidCause>, cause: &str) -> Self {
+    pub fn failed(total_ms: u128, cause: &str) -> Self {
         Self {
             version: 1,
-            outcome: if void_cause.is_some() {
-                Outcome::Void
-            } else {
-                Outcome::Failed
-            },
+            outcome: Outcome::Failed,
             timings: Timings {
                 total_ms,
                 session_ms: total_ms,
             },
-            void_cause,
+            void_cause: None,
             cause: Some(cause.into()),
             session_id: None,
             log: None,
@@ -269,9 +260,6 @@ fn void_cause(error: &anyhow::Error) -> Option<VoidCause> {
             .is::<std::io::Error>()
             .then_some(VoidCause::SessionUnavailable);
     };
-    if failure.status.signal() == Some(libc::SIGKILL) {
-        return Some(VoidCause::HostKilled);
-    }
     match failure.diagnostic.as_deref().map(ErrorKind::from_text) {
         Some(ErrorKind::UsageLimit) => Some(VoidCause::UsageLimit),
         Some(ErrorKind::RateLimit) => Some(VoidCause::RateLimit),

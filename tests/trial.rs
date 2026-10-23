@@ -345,6 +345,31 @@ fn only_external_failures_are_void_and_provider_server_errors_require_no_work() 
 }
 
 #[test]
+fn a_server_error_on_resume_after_trial_work_is_failed() {
+    let scenario = Scenario::new();
+    let request = request(&scenario);
+    scenario.agent_does_in_session(1, &format!(
+        "{}\n{}\n{}",
+        write_reports(),
+        r#"echo '{"type":"result","subtype":"success","is_error":false,"num_turns":1}' >> "$FAKE_CLAUDE_AFTER_RESULT""#,
+        leaves_running("cargo test"),
+    ));
+    scenario.agent_does_in_session(2, r#"
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["provider server error"],"num_turns":0}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+exit 3
+"#);
+    let run = scenario.run(&["--trial", request.to_str().unwrap()]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2, "{}", run.stderr);
+    let result: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(
+        result["outcome"], "failed",
+        "work before the Resume must count: {result}"
+    );
+    assert_eq!(result["void_cause"], Value::Null);
+}
+
+#[test]
 fn a_codex_trial_uses_its_request_defaults_and_keeps_the_prepared_issue_out_of_git() {
     let scenario = Scenario::new();
     let request = request(&scenario);

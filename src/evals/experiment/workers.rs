@@ -242,10 +242,9 @@ fn run_trial(
                 fs::write(attempt.join("stdout"), &output.stdout)?;
                 fs::write(attempt.join("stderr"), &output.stderr)?;
                 if output.status.signal() == Some(libc::SIGKILL) {
-                    Output::without_session(
+                    Output::failed(
                         started.elapsed().as_millis(),
-                        Some(VoidCause::HostKilled),
-                        "Trial process killed by host (SIGKILL)",
+                        "Trial process killed (SIGKILL); external cause unknown",
                     )
                 } else {
                     if !output.status.success() {
@@ -262,7 +261,7 @@ fn run_trial(
                 }
             }
             Err(error) if error.is::<process::TimedOut>() => {
-                Output::timed_out(u128::from(bar.timeout_seconds) * 1000)
+                Output::failed(u128::from(bar.timeout_seconds) * 1000, "Trial timed out")
             }
             Err(error) => return Err(error),
         };

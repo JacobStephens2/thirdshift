@@ -703,31 +703,77 @@ echo '{"type":"result","subtype":"error_during_execution","is_error":true,"error
 }
 
 #[test]
-fn host_kills_of_the_trial_or_its_harness_retry_fresh_and_keep_the_cause() {
-    for killed in ["trial", "harness"] {
-        let fixture = Fixture::new();
-        if killed == "trial" {
-            for commit in [&fixture.baseline, &fixture.candidate] {
-                fs::write(
-                    fixture.scenario.path(&format!(
-                        "home/.thirdshift/evals/builds/{commit}/thirdshift"
-                    )),
-                    "#!/bin/sh\nkill -KILL $$\n",
-                )
-                .unwrap();
-            }
-        } else {
-            fixture.scenario.agent_does("kill -KILL \"$PPID\"");
-        }
-        let run = fixture.run(&[]);
-        assert_eq!(run.code, Some(0), "{killed}: {}", run.stderr);
-        let experiment = fixture.experiment();
-        for result in experiment["results"].as_array().unwrap() {
-            assert_eq!(result["outcome"], "void", "{killed}: {result}");
-            assert_eq!(result["attempts"].as_array().unwrap().len(), 3);
-            for attempt in result["attempts"].as_array().unwrap() {
-                assert_eq!(attempt["void_cause"], "host_killed");
-            }
+fn an_unexplained_trial_process_kill_fails_without_a_retry() {
+    let fixture = Fixture::new();
+    for commit in [&fixture.baseline, &fixture.candidate] {
+        fs::write(
+            fixture.scenario.path(&format!(
+                "home/.thirdshift/evals/builds/{commit}/thirdshift"
+            )),
+            "#!/bin/sh\nkill -KILL $$\n",
+        )
+        .unwrap();
+    }
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    for result in experiment["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "failed", "{result}");
+        assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
+        assert_eq!(result["attempts"][0]["void_cause"], Value::Null);
+    }
+    assert_eq!(
+        experiment["verdict"]["suites"]["spec-review"]["dropped_tasks"],
+        0
+    );
+}
+
+#[test]
+fn an_agent_killing_its_own_harness_fails_without_a_retry() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does("kill -KILL \"$PPID\"");
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    for result in experiment["results"].as_array().unwrap() {
+        assert_eq!(
+            result["outcome"], "failed",
+            "agent action must count against its Arm: {result}"
+        );
+        assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
+    }
+    assert_eq!(
+        experiment["verdict"]["suites"]["spec-review"]["dropped_tasks"],
+        0
+    );
+}
+
+#[test]
+fn externally_reported_host_kills_retry_fresh_and_keep_the_cause() {
+    let fixture = Fixture::new();
+    let output = json!({
+        "version": 1, "outcome": "void", "void_cause": "host_killed",
+        "cause": "Outer launcher reported a host kill",
+        "timings": {"total_ms": 50, "session_ms": 40},
+        "session_id": null, "log": null, "model_evidence": null,
+        "reports": {"standards": null, "spec": null}
+    });
+    for commit in [&fixture.baseline, &fixture.candidate] {
+        fs::write(
+            fixture.scenario.path(&format!(
+                "home/.thirdshift/evals/builds/{commit}/thirdshift"
+            )),
+            format!("#!/bin/sh\ncat <<'TRIAL_RESULT'\n{output}\nTRIAL_RESULT\n"),
+        )
+        .unwrap();
+    }
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    for result in fixture.experiment()["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "void");
+        assert_eq!(result["attempts"].as_array().unwrap().len(), 3);
+        for attempt in result["attempts"].as_array().unwrap() {
+            assert_eq!(attempt["void_cause"], "host_killed");
         }
     }
 }

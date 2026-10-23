@@ -167,7 +167,7 @@ pub struct SessionFailure {
     pub before_first_turn: bool,
     /// Retained on failure too, so a Trial can identify the session it ran.
     pub session_id: Option<String>,
-    pub status: ExitStatus,
+    status: ExitStatus,
 }
 
 impl fmt::Display for SessionFailure {

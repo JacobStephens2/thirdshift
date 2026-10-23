@@ -61,20 +61,22 @@ The result version is independently identified by `version: 1`.
 - `outcome`: `succeeded` means the Harness session finished successfully; it is
   not a Score. `failed` includes refusals, context-window failures and other
   failures attributable to the Arm. `void` identifies an interruption, a known
-  login or connection failure, a provider server error before work, a sandbox
+  login or connection failure, a provider server error before any Trial work
+  (including work before Resume), a sandbox
   that could not start, a host kill, a Trial-only memory cap, or a provider
   usage/rate limit. An unexplained nonzero exit is a failure, even before work.
   `memory_cap` must come from the outer launcher's evidence of the Trial-only
   cap, rather than an agent's own out-of-memory error, which is a failure.
-  SIGKILL is recorded as a host kill; it does not establish that a memory cap
-  was responsible. Isolation and the actual cap launcher follow in #1014;
+  A signal alone cannot establish an external cause: an unexplained SIGKILL
+  stays failed. `host_killed` also requires the outer launcher's evidence.
+  Isolation and the actual cap launcher follow in #1014;
   version-1 results can already report their distinct causes.
   The Experiment's Bar decides which Void causes to retry or exclude.
   The Experiment's code Grader also marks a changed repository as void with
   `repository_changed`, before running any Eval task checks, unless the Trial
-  already failed (for example, on a timeout). Known failures stay failed. This compares the
-  session's starting and ending HEAD, refs, index, tracked and untracked file
-  contents, including ignored files and its excluded issue input. Only the
+  already failed (for example, on a timeout). Known failures stay failed. This
+  compares the session's starting and ending HEAD, refs, index, tracked and
+  untracked file contents, including ignored files and its excluded issue input. Only the
   session-generated Factory skill symlinks are omitted; report scratch is
   removed by session completion. Harness instruction fallback links are created
   before the comparison, so later edits to them still invalidate the Trial.

@@ -295,13 +295,22 @@ impl<'a> Sessions<'a> {
             self.step(format!(
                 "{label}: background work was killed as the session ended; resuming it once"
             ));
-            ended = self.start(
-                purpose,
-                Logged::resume_of(kind),
-                Some(session_id),
-                &resume_prompt,
-                reports.as_ref(),
-            )?;
+            ended = self
+                .start(
+                    purpose,
+                    Logged::resume_of(kind),
+                    Some(session_id),
+                    &resume_prompt,
+                    reports.as_ref(),
+                )
+                .map_err(|mut error| {
+                    // Work was observed before this Resume, even if its first
+                    // turn fails.
+                    if let Some(failure) = error.downcast_mut::<SessionFailure>() {
+                        failure.before_first_turn = false;
+                    }
+                    error
+                })?;
             ended_last = "Resume";
         }
         if !ended.killed.is_empty() {
