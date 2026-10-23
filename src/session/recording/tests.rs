@@ -44,6 +44,142 @@ impl Fixture {
 const MODEL: &str = r#"{"type":"assistant","message":{"model":"reported-model","content":[]}}"#;
 
 #[test]
+fn session_signals_count_calls_once_after_late_permission_metadata() {
+    let fixture = Fixture::new();
+    fixture.run("implement", r#"
+echo '{"type":"assistant","message":{"id":"m1","model":"model-a","content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"false","timeout":1}},{"type":"tool_use","id":"b","name":"Bash","input":{"timeout":1,"command":"false"}},{"type":"tool_use","id":"c","name":"Read","input":{"command":"false","timeout":1}}]}}'
+echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"a","is_error":true,"content":"failed"},{"type":"tool_result","tool_use_id":"b","is_error":true,"content":"opaque failure"},{"type":"tool_result","tool_use_id":"c","is_error":false,"content":"ok"}]}}'
+echo '{"type":"result","subtype":"success","permission_denials":[{"tool_use_id":"b","tool_name":"Bash"}],"usage":{"input_tokens":30,"output_tokens":8},"total_cost_usd":0.5,"modelUsage":{"model-a":{"inputTokens":10,"outputTokens":3,"cacheReadInputTokens":2,"cacheCreationInputTokens":1},"model-b":{"inputTokens":20,"outputTokens":5}}}'
+"#, &Choice::default()).unwrap();
+    let measured = crate::logs::session_signals::read(&fixture.log("implement"))
+        .unwrap()
+        .unwrap();
+    let signals = serde_json::to_value(measured).unwrap()["signals"].clone();
+    assert_eq!(signals["tool_errors"], 1);
+    assert_eq!(signals["permission_denials"], 1);
+    assert_eq!(signals["repeated_tool_calls"], 1);
+    assert_eq!(signals["cost_usd"], 0.5);
+    assert_eq!(
+        signals["tokens_by_model"],
+        serde_json::json!([
+            {"model":"model-a","input_tokens":13,"output_tokens":3,"cache_read_tokens":2,"cache_write_tokens":1},
+            {"model":"model-b","input_tokens":20,"output_tokens":5,"cache_read_tokens":null,"cache_write_tokens":null}
+        ])
+    );
+}
+
+#[test]
+fn session_signals_from_each_harness_fixture_keep_reported_usage_and_cost() {
+    use serde_json::{Value, json};
+    for (harness, model, input, output, read, write, cost, killed) in [
+        (
+            Harness::Claude,
+            Some("claude-opus-4-8"),
+            Some(13),
+            Some(4),
+            Some(2),
+            Some(3),
+            Some(0.0),
+            0,
+        ),
+        (
+            Harness::Codex,
+            None,
+            Some(100),
+            Some(7),
+            Some(20),
+            None,
+            None,
+            2,
+        ),
+        (
+            Harness::Agy,
+            Some("gemini-test"),
+            Some(8),
+            Some(4),
+            None,
+            None,
+            None,
+            0,
+        ),
+        (
+            Harness::Grok,
+            Some("grok-4.7"),
+            Some(25),
+            Some(6),
+            Some(2),
+            Some(3),
+            None,
+            0,
+        ),
+        (Harness::Muse, None, None, None, None, None, None, 0),
+        (
+            Harness::OpenCode,
+            None,
+            Some(7515),
+            Some(23),
+            Some(7424),
+            Some(0),
+            Some(0.02),
+            0,
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let protocol = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "tests/fixtures/normalized-{}.jsonl",
+            harness.name()
+        ));
+        let choice = Choice {
+            harness,
+            ..Choice::default()
+        };
+        let log = fixture.log("implement");
+        let _ = fixture.recording.run(
+            "implement",
+            &choice,
+            Command::new("cat").arg(protocol),
+            Input::default(),
+            &log,
+            harness.adapter().interpretation(fixture.root.path(), ""),
+        );
+        let measured = crate::logs::session_signals::read(&log).unwrap().unwrap();
+        let measured = serde_json::to_value(measured).unwrap();
+        let expected_tokens = if input.is_some() {
+            json!([{"model":model, "input_tokens":input, "output_tokens":output,
+                "cache_read_tokens":read, "cache_write_tokens":write}])
+        } else {
+            json!([])
+        };
+        assert_eq!(
+            measured["signals"]["tokens_by_model"],
+            expected_tokens,
+            "{}",
+            harness.name()
+        );
+        assert_eq!(
+            measured["signals"]["cost_usd"],
+            cost.map_or(Value::Null, |cost| json!(cost)),
+            "{}",
+            harness.name()
+        );
+        assert_eq!(
+            measured["signals"]["killed_work"],
+            killed,
+            "{}",
+            harness.name()
+        );
+        for counter in ["tool_errors", "permission_denials", "repeated_tool_calls"] {
+            assert_eq!(
+                measured["signals"][counter],
+                0,
+                "{}: {counter}",
+                harness.name()
+            );
+        }
+    }
+}
+
+#[test]
 fn all_harnesses_preserve_raw_events_only_in_otlp_session_traces() {
     use crate::otlp_jsonl::{Logs, Reader, Spans};
     use opentelemetry_proto::tonic::collector::{

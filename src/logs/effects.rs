@@ -24,6 +24,7 @@ pub(super) struct Tail {
 
 pub(super) trait Outside: owner::Files {
     fn review_summary(&mut self, log: &Path) -> Option<Vec<u8>>;
+    fn session_signals(&mut self, log: &Path) -> Option<super::session_signals::SessionSignals>;
     fn command_records(
         &mut self,
         root: &Path,
@@ -49,6 +50,10 @@ impl owner::Files for OnMachine {
 }
 
 impl Outside for OnMachine {
+    fn session_signals(&mut self, log: &Path) -> Option<super::session_signals::SessionSignals> {
+        super::session_signals::read(log).ok().flatten()
+    }
+
     fn review_summary(&mut self, log: &Path) -> Option<Vec<u8>> {
         std::fs::read(super::session::original(log).with_extension("review-summary.json")).ok()
     }

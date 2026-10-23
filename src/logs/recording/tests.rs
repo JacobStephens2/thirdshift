@@ -120,6 +120,13 @@ impl owner::Files for Scripted {
 }
 
 impl Outside for Scripted {
+    fn session_signals(
+        &mut self,
+        _log: &Path,
+    ) -> Option<crate::logs::session_signals::SessionSignals> {
+        None
+    }
+
     fn review_summary(&mut self, log: &Path) -> Option<Vec<u8>> {
         self.0
             .lock()

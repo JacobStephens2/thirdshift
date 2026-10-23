@@ -23,6 +23,7 @@ pub(crate) use reading::catalog;
 mod recording;
 mod run_metrics;
 pub(crate) mod session;
+pub(crate) mod session_signals;
 pub(crate) mod spans;
 pub mod status;
 pub mod stop;

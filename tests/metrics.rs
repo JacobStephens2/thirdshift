@@ -7,6 +7,130 @@ use support::Scenario;
 
 const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
+fn trace(scenario: &Scenario, name: &str, version: &str, events: Value) -> std::path::PathBuf {
+    let path = scenario.path(LOGS).join(format!("{name}.logs.jsonl"));
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, serde_json::to_string(&json!({
+        "resourceLogs": [{"resource": {"attributes": [
+            {"key":"thirdshift.harness", "value":{"stringValue":"codex"}},
+            {"key":"thirdshift.harness.version", "value":{"stringValue":version}}
+        ]}, "scopeLogs":[{"logRecords":[{"attributes":[{
+            "key":"thirdshift.events", "value":{"stringValue":serde_json::to_string(&events).unwrap()}
+        }]}]}]}]
+    })).unwrap() + "\n").unwrap();
+    path
+}
+
+#[test]
+fn session_signals_sum_by_kind_and_trends_split_by_trace_harness_version() {
+    let scenario = Scenario::new();
+    let first = trace(
+        &scenario,
+        "first",
+        "1.0",
+        json!([
+            {"type":"turn_ended", "id":"t", "usage":{"input":100,"output":7,"cache_read":20}, "outcome":"succeeded"},
+            {"type":"tool_call_ended", "id":"a", "parent_id":null, "tool":"bash", "input":{"command":"false"}, "result":null, "outcome":"failed", "amended":false}
+        ]),
+    );
+    let second = trace(
+        &scenario,
+        "second",
+        "2.0",
+        json!([
+            {"type":"turn_ended", "id":"t", "usage":{"input":200,"output":9,"cache_read":40}, "outcome":"succeeded"},
+            {"type":"tool_call_ended", "id":"a", "parent_id":null, "tool":"bash", "input":{"command":"false"}, "result":null, "outcome":"failed", "amended":false}
+        ]),
+    );
+    let mut past = record(7);
+    past["stages"] = json!([
+        {"name":"Repair", "began_at":"2026-10-19T03:30:00Z", "session_log":first},
+        {"name":"Repair", "began_at":"2026-10-19T03:40:00Z", "session_log":second},
+        {"name":"pull request", "began_at":"2026-10-19T03:50:00Z", "session_log":second}
+    ]);
+    write(&scenario, "7-fixture.command.json", &past);
+    let shown = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    let summary = &shown["command"]["metrics"]["session_signals"]["Repair"];
+    assert_eq!(summary["observed_sessions"], 2);
+    assert_eq!(
+        summary["signals"]["tokens_by_model"][0]["input_tokens"],
+        300
+    );
+    assert_eq!(summary["signals"]["tool_errors"], 2);
+    assert_eq!(
+        summary["signals"]["repeated_tool_calls"], 0,
+        "repetition never crosses sessions"
+    );
+    let trends = metrics(&scenario, &["metrics", "--json"]);
+    let repairs: Vec<_> = trends["weeks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["session_kind"] == "Repair")
+        .collect();
+    assert_eq!(repairs.len(), 2, "{trends:#}");
+    for (version, tokens) in [("1.0", 100.0), ("2.0", 200.0)] {
+        let row = repairs
+            .iter()
+            .find(|row| row["harness_version"] == version)
+            .unwrap();
+        assert_eq!(row["runs"], 1);
+        assert_eq!(
+            row["session_signals"]["tool_errors"],
+            json!({"observed":1,"missing":0,"sum":1.0,"mean":1.0})
+        );
+        assert_eq!(
+            row["session_signals"]["tokens_by_model"][0]["input_tokens"]["sum"],
+            tokens
+        );
+        assert_eq!(row["session_signals"]["cost_usd"]["missing"], 1);
+    }
+}
+
+#[test]
+fn converted_session_traces_supply_signals_without_rewriting_past_metrics() {
+    let scenario = Scenario::new();
+    let trace = scenario.path(LOGS).join("converted-implement.logs.jsonl");
+    let mut past = record(7);
+    past["stages"][0]["session_log"] = json!(trace.with_file_name("converted-implement.jsonl"));
+    let path = write(&scenario, "7-fixture.command.json", &past);
+    let original = fs::read(&path).unwrap();
+    fs::write(&trace, serde_json::to_string(&json!({
+        "resourceLogs": [{"resource": {"attributes": [
+            {"key": "thirdshift.harness", "value": {"stringValue": "codex"}},
+            {"key": "thirdshift.harness.version", "value": {"stringValue": "1.2.3"}}
+        ]}, "scopeLogs": [{"logRecords": [{"attributes": [{
+            "key": "thirdshift.events", "value": {"stringValue": serde_json::to_string(&json!([
+                {"type":"turn_ended", "id":"turn-1", "usage":{"input":100,"output":7,"cache_read":20}, "outcome":"succeeded"}
+            ])).unwrap()}
+        }]}]}]}]
+    })).unwrap() + "\n").unwrap();
+    let result = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    let signals = &result["command"]["metrics"]["session_signals"]["implement"];
+    assert_eq!(signals["observed_sessions"], 1);
+    assert_eq!(signals["missing_sessions"], 0);
+    assert_eq!(
+        signals["signals"]["tokens_by_model"],
+        json!([{
+            "model": null, "input_tokens":100, "output_tokens":7,
+            "cache_read_tokens":20, "cache_write_tokens":null
+        }])
+    );
+    assert_eq!(signals["signals"]["cost_usd"], Value::Null);
+    assert_eq!(signals["signals"]["tool_errors"], 0);
+    assert_eq!(fs::read(&path).unwrap(), original);
+    fs::remove_file(trace).unwrap();
+    let absent = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert_eq!(
+        absent["command"]["metrics"]["session_signals"]["implement"]["missing_sessions"],
+        1
+    );
+    assert_eq!(
+        absent["command"]["metrics"]["session_signals"]["implement"]["signals"],
+        Value::Null
+    );
+}
+
 #[test]
 fn unaddressed_findings_stay_separate_in_run_views_and_weekly_trends() {
     let scenario = Scenario::new();
@@ -293,6 +417,10 @@ fn a_spec_includes_ticket_runs_and_base_fixes_once_and_retains_saved_metrics() {
     let result = metrics(&scenario, &["metrics", "widgets#20", "--json"]);
     assert_eq!(result["command"]["children"].as_array().unwrap().len(), 1);
     let ticket_view = &result["command"]["children"][0];
+    ticket["run_metrics"]["session_signals"] = json!({
+        "implement": {"observed_sessions":0, "missing_sessions":1, "signals":null}
+    });
+    ticket["run_metrics"]["stages"][0]["session_signals"] = Value::Null;
     assert_eq!(ticket_view["metrics"], ticket["run_metrics"]);
     assert_eq!(ticket_view["children"][0]["kind"], "Base fix");
     let selected = metrics(&scenario, &["metrics", "widgets#21", "--json"]);

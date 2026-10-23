@@ -8,6 +8,7 @@ use serde::Serialize;
 use super::super::command_record::StageName;
 use super::super::reading::{Command, Entry, Snapshot};
 use super::super::run_metrics::{Position, StageMetrics};
+use super::super::session_signals::{ModelTokens, SessionSignals};
 use crate::args::MetricsArgs;
 use crate::session::recording::SessionModels;
 
@@ -16,6 +17,7 @@ struct Group {
     week: String,
     repository: String,
     harness: Option<String>,
+    harness_version: Option<String>,
     model: Option<String>,
     effort: Option<String>,
     kind: String,
@@ -34,6 +36,7 @@ pub(super) struct Week {
     total_minutes: Signal,
     unaddressed_findings: UnaddressedFindings,
     stages: BTreeMap<String, Stage>,
+    session_signals: TraceSignals,
 }
 
 #[derive(Default, Serialize)]
@@ -42,6 +45,80 @@ struct Signal {
     missing: usize,
     sum: Option<f64>,
     mean: Option<f64>,
+}
+
+#[derive(Default, Serialize)]
+struct TraceSignals {
+    tokens_by_model: Vec<ModelSignals>,
+    cost_usd: Signal,
+    tool_errors: Signal,
+    permission_denials: Signal,
+    killed_work: Signal,
+    repeated_tool_calls: Signal,
+    #[serde(skip)]
+    sessions: usize,
+}
+
+#[derive(Serialize)]
+struct ModelSignals {
+    model: Option<String>,
+    input_tokens: Signal,
+    output_tokens: Signal,
+    cache_read_tokens: Signal,
+    cache_write_tokens: Signal,
+}
+
+impl ModelSignals {
+    fn new(model: Option<String>, missing: usize) -> Self {
+        let signal = || Signal {
+            missing,
+            ..Default::default()
+        };
+        Self {
+            model,
+            input_tokens: signal(),
+            output_tokens: signal(),
+            cache_read_tokens: signal(),
+            cache_write_tokens: signal(),
+        }
+    }
+
+    fn add(&mut self, tokens: Option<&ModelTokens>) {
+        self.input_tokens
+            .add(tokens.and_then(|t| t.input_tokens).map(|n| n as f64));
+        self.output_tokens
+            .add(tokens.and_then(|t| t.output_tokens).map(|n| n as f64));
+        self.cache_read_tokens
+            .add(tokens.and_then(|t| t.cache_read_tokens).map(|n| n as f64));
+        self.cache_write_tokens
+            .add(tokens.and_then(|t| t.cache_write_tokens).map(|n| n as f64));
+    }
+}
+
+impl TraceSignals {
+    fn add(&mut self, session: Option<&SessionSignals>) {
+        let signals = session.map(|s| &s.signals);
+        self.cost_usd.add(signals.and_then(|s| s.cost_usd));
+        self.tool_errors.add(signals.map(|s| s.tool_errors as f64));
+        self.permission_denials
+            .add(signals.map(|s| s.permission_denials as f64));
+        self.killed_work.add(signals.map(|s| s.killed_work as f64));
+        self.repeated_tool_calls
+            .add(signals.map(|s| s.repeated_tool_calls as f64));
+        let tokens = signals
+            .map(|s| s.tokens_by_model.as_slice())
+            .unwrap_or_default();
+        for token in tokens {
+            if !self.tokens_by_model.iter().any(|t| t.model == token.model) {
+                self.tokens_by_model
+                    .push(ModelSignals::new(token.model.clone(), self.sessions));
+            }
+        }
+        for model in &mut self.tokens_by_model {
+            model.add(tokens.iter().find(|t| t.model == model.model));
+        }
+        self.sessions += 1;
+    }
 }
 
 impl Signal {
@@ -147,6 +224,7 @@ fn collect(command: &Command, asked: &MetricsArgs, weeks: &mut BTreeMap<Group, W
         week: week.to_string(),
         repository: record.repository.clone(),
         harness: Some(record.harness.clone()),
+        harness_version: None,
         model: record.model.clone(),
         effort: record.effort.clone(),
         kind: record.kind.clone(),
@@ -184,6 +262,7 @@ fn collect(command: &Command, asked: &MetricsArgs, weeks: &mut BTreeMap<Group, W
     );
     let Some(metrics) = metrics else { return };
     let mut session_kinds = BTreeSet::new();
+    let mut sessions = BTreeSet::new();
     let mut security_session = None;
     for (index, stage) in metrics.stages.iter().enumerate() {
         // Session stages are separate rows. Delivery stages stay with Run totals.
@@ -214,10 +293,22 @@ fn collect(command: &Command, asked: &MetricsArgs, weeks: &mut BTreeMap<Group, W
                 session_group.model = setup.requested;
                 session_group.effort = setup.effort;
             }
+            if let Some(signals) = &stage.session_signals {
+                session_group.harness = signals.harness.clone().or(session_group.harness);
+                session_group.harness_version = signals.harness_version.clone();
+            }
             let first = session_kinds.insert(session_group.clone());
             let row = weeks.entry(session_group).or_default();
             // A Run may have several Repairs; count it once per session kind.
             row.runs += usize::from(first);
+            if record
+                .stages
+                .get(index)
+                .and_then(|stage| stage.session_log.as_deref())
+                .is_none_or(|log| sessions.insert(super::super::session::original(log)))
+            {
+                row.session_signals.add(stage.session_signals.as_ref());
+            }
             row
         } else {
             weeks.get_mut(&group).expect("Run group exists")
