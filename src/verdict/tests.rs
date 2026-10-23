@@ -59,7 +59,7 @@ fn verdict_rules_include_a_sure_loss_inside_the_margin() {
 }
 
 #[test]
-fn void_tasks_leave_both_arms_and_more_than_a_tenth_forces_inconclusive() {
+fn void_eval_tasks_leave_both_arms_and_more_than_a_tenth_forces_inconclusive() {
     let bar = Bar::default();
     let mut gain = task(0, 3, 3);
     for score in &mut gain.baseline {
@@ -105,7 +105,7 @@ fn wrong_findings_reverse_the_sign_and_can_fail_an_accurate_candidate() {
 }
 
 #[test]
-fn pass_cubed_reports_all_three_successes_per_task_and_is_absent_for_one_trial() {
+fn pass_cubed_reports_all_three_successes_per_eval_task_and_is_absent_for_one_trial() {
     let mut scores = vec![task(2, 3, 3); 20];
     scores.extend(vec![task(3, 3, 3); 20]);
     let verdict = judge(&scores, &Bar::default()).unwrap();
@@ -126,7 +126,7 @@ fn pass_cubed_reports_all_three_successes_per_task_and_is_absent_for_one_trial()
 }
 
 #[test]
-fn small_gap_predicts_the_first_task_count_with_eighty_percent_assurance() {
+fn small_gap_predicts_the_first_eval_task_count_with_eighty_percent_assurance() {
     let mut scores = vec![task(3, 3, 3); 8];
     scores.push(task(3, 2, 3));
     let bar = Bar::default();
