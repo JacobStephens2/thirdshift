@@ -46,6 +46,7 @@ mod spec_run;
 mod terminal;
 #[cfg(test)]
 mod test_support;
+mod trial;
 mod trust;
 mod update;
 mod worktree;
@@ -248,6 +249,7 @@ fn main() -> ExitCode {
             };
         }
         Ok(Command::ReleaseSummary) => return release_summary(),
+        Ok(Command::Trial(request)) => return printed(trial::run(&request)),
         Ok(Command::EmailTest(to)) => {
             return outcome(
                 UserConfig::load().and_then(|config| email::send_test(to, &config.email)),

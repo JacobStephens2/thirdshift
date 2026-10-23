@@ -153,6 +153,7 @@ enum Failure {
         diagnostic: Option<String>,
         refusal: Option<SafeguardRefusal>,
         before_first_turn: bool,
+        session_id: Option<String>,
     },
 }
 
@@ -164,6 +165,8 @@ pub struct SessionFailure {
     pub diagnostic: Option<String>,
     /// No completed turn, tokens, assistant work or tool calls were observed.
     pub before_first_turn: bool,
+    /// Retained on failure too, so a Trial can identify the session it ran.
+    pub session_id: Option<String>,
     status: ExitStatus,
 }
 
@@ -199,12 +202,14 @@ impl Failure {
                 diagnostic,
                 refusal,
                 before_first_turn,
+                session_id,
             } => {
                 let error = anyhow::Error::new(SessionFailure {
                     harness: cli,
                     diagnostic,
                     status,
                     before_first_turn,
+                    session_id,
                 });
                 match refusal {
                     Some(refusal) => error.context(refusal),
@@ -344,6 +349,7 @@ impl Interpretation {
                         refusal,
                         before_first_turn: !self.work_started
                             && !facts.report.events.iter().any(work_started),
+                        session_id: facts.ended.session_id,
                     })
                 } else {
                     Ok(facts.ended)

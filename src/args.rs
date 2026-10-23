@@ -85,6 +85,8 @@ pub enum Command {
     },
     /// Internal interface for scripts/release.sh: prompt on stdin.
     ReleaseSummary,
+    /// Internal versioned session protocol for Evals.
+    Trial(std::path::PathBuf),
     /// `email-test`, with the address it was given, if any.
     EmailTest(Option<String>),
     Architect(ArchitectArgs),
@@ -277,6 +279,12 @@ pub(crate) fn shell_command(words: Vec<String>) -> String {
 /// given.
 pub fn parse(args: &[String]) -> Result<Command> {
     match args.first().map(String::as_str) {
+        Some("--trial") => {
+            let [_, request] = args else {
+                bail!("usage: thirdshift --trial <request.json>");
+            };
+            return Ok(Command::Trial(request.into()));
+        }
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
