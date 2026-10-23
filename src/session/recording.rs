@@ -25,11 +25,14 @@ pub struct Recording {
     owner: std::result::Result<Option<Owner>, String>,
 }
 
-/// The Session prompt and the Harness-specific way it receives input.
+/// The Session prompt, its transport, and execution limits for private Graders.
 #[derive(Default)]
 pub struct Input<'a> {
     pub prompt: &'a str,
     pub stdin: Option<&'a str>,
+    pub deadline: Option<Instant>,
+    /// Keep decoded progress and completion text out of factory Command logs.
+    pub private: bool,
 }
 
 impl Recording {
@@ -138,10 +141,12 @@ impl Recording {
         let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());
         let choice_owned = choice.clone();
         let recording = self.clone();
+        let private = input.private;
         let executed = process::streaming(
             adapter,
             command,
             input.stdin,
+            input.deadline,
             stream,
             move |output, stream| {
                 let followed = follow(
@@ -151,6 +156,7 @@ impl Recording {
                     &log_owned,
                     stream,
                     &streaming_trace,
+                    private,
                 );
                 // The process owner joins this reader before returning, including
                 // on interruption, when it deliberately suppresses state recovery.
@@ -194,6 +200,9 @@ impl Recording {
         warn_unfinished_trace(finished);
         if let Some(report) = completion.report {
             self.keep(kind, log, choice, report.models.clone());
+            if private {
+                return completion.outcome;
+            }
             for line in report.completion_progress {
                 progress::step(format_args!("{kind}: {line}"));
             }
@@ -313,6 +322,7 @@ fn follow(
     log: &Path,
     progress: &mut Interpretation,
     trace: &Mutex<super::trace::Trace>,
+    private: bool,
 ) -> Result<()> {
     let mut stream = BufReader::new(stream);
     let mut line = Vec::new();
@@ -331,8 +341,10 @@ fn follow(
         let raw = String::from_utf8_lossy(&line);
         let decoded = progress.decode(&raw);
         trace.lock().unwrap().record(&raw, &decoded.events)?;
-        for condensed in decoded.progress {
-            progress::step(format_args!("{kind}: {condensed}"));
+        if !private {
+            for condensed in decoded.progress {
+                progress::step(format_args!("{kind}: {condensed}"));
+            }
         }
     }
 }

@@ -101,7 +101,9 @@ pr_url = "https://github.com/acme/widgets/pull/1"
   `THIRDSHIFT_GRADER_PACKET` and `THIRDSHIFT_GRADER_SCORES` name those two files.
   Saved Trial Scores combine mechanical and model pass/fail and retain the
   model response separately. The Verdict counts borderline Trials and uses
-  wrong-finding flags in its existing paired assessment. Graders currently run
+  wrong-finding flags in its existing paired assessment. Each private Grader
+  session retains OTLP log records and spans, model evidence and stderr beside
+  its packet, including when interrupted or timed out. Graders currently run
   without a sandbox pending #1014; the Session prompt restricts them to the packet.
 - `inputs` maps destination paths in the prepared repository to files relative
   to the Eval task's folder. Use, for example, a Spec's body **as first

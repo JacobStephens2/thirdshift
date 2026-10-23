@@ -1,6 +1,135 @@
 use super::*;
 
 #[test]
+fn model_grader_output_stays_in_private_artifacts() {
+    let fixture = Fixture::new();
+    let script = fixture.scenario.path("claude-script.sh.grader");
+    let valid = fs::read_to_string(&script).unwrap();
+    fs::write(
+        &script,
+        format!(
+            "{valid}\nprintf 'private-model-grader-evidence' >&2\nprintf 'private-model-grader-evidence' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n"
+        ),
+    )
+    .unwrap();
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(!run.stdout.contains("private-model-grader-evidence"));
+    assert!(!run.stderr.contains("private-model-grader-evidence"));
+    let graders = fixture.grader_calls();
+    assert_eq!(graders.len(), 1);
+    let directory = PathBuf::from(graders[0]["cwd"].as_str().unwrap());
+    for file in ["stderr", "stdout.logs.jsonl"] {
+        assert!(
+            fs::read_to_string(directory.join(file))
+                .unwrap()
+                .contains("private-model-grader-evidence")
+        );
+    }
+    let folder = "home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment";
+    for log in fixture.scenario.log_files(folder, "log") {
+        let log = fs::read_to_string(fixture.scenario.path(folder).join(log)).unwrap();
+        assert!(!log.contains("private-model-grader-evidence"), "{log}");
+    }
+}
+
+#[test]
+fn model_grader_timeout_keeps_trace_and_resume_reuses_trials() {
+    let fixture = Fixture::new();
+    let script = fixture.scenario.path("claude-script.sh.grader");
+    let valid = fs::read_to_string(&script).unwrap();
+    fs::write(&script, format!("sleep 3\n{valid}")).unwrap();
+    let paused = fixture.run(&["--timeout", "1"]);
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    assert_eq!(fixture.experiment()["state"], "paused");
+    assert_eq!(fixture.trial_calls().len(), 2);
+    let graders = fixture.grader_calls();
+    assert_eq!(graders.len(), 1);
+    let directory = PathBuf::from(graders[0]["cwd"].as_str().unwrap());
+    for file in ["stdout.logs.jsonl", "stdout.spans.jsonl"] {
+        assert!(
+            !fs::read_to_string(directory.join(file)).unwrap().is_empty(),
+            "timeout lost Grader evidence in {file}"
+        );
+    }
+    fs::write(&script, valid).unwrap();
+    let resumed = fixture.run(&["--timeout", "1"]);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    assert_eq!(fixture.experiment()["state"], "completed");
+    assert_eq!(fixture.trial_calls().len(), 2, "resume reran Trials");
+    assert_eq!(fixture.grader_calls().len(), 2);
+}
+
+#[test]
+fn model_grader_sessions_keep_otlp_traces() {
+    let fixture = Fixture::new();
+    let run = fixture.run(&["--prior", "0.01"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let graders = fixture.grader_calls();
+    assert_eq!(graders.len(), 1);
+    let directory = PathBuf::from(graders[0]["cwd"].as_str().unwrap());
+    let files: Vec<_> = fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    for (suffix, resource_key) in [
+        (".logs.jsonl", "resourceLogs"),
+        (".spans.jsonl", "resourceSpans"),
+    ] {
+        let matching: Vec<_> = files
+            .iter()
+            .filter(|path| path.to_string_lossy().ends_with(suffix))
+            .collect();
+        assert!(
+            !matching.is_empty(),
+            "Grader session has no {suffix} Session trace in {}",
+            directory.display()
+        );
+        let mut requests = 0;
+        for path in matching {
+            for line in fs::read_to_string(path).unwrap().lines() {
+                let request: Value = serde_json::from_str(line).unwrap();
+                assert!(request[resource_key].is_array(), "{request}");
+                requests += 1;
+            }
+        }
+        assert!(requests > 0, "Grader {suffix} trace is empty");
+    }
+}
+
+#[test]
+fn metadata_rows_beneath_generic_table_headers_are_blinded() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(r#"
+reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
+case "$PWD" in
+  *--candidate--*) identity='candidate'; model='other-private-model' ;;
+  *) identity='baseline'; model='private-model' ;;
+esac
+printf '| Field | Value |\n| --- | --- |\n| Harness | claude |\n| Model | %s |\n| Effort | max |\n| Arm | %s |\n' "$model" "$identity" > "$reports/standards.md"
+printf 'Reported the invented finding.\n' > "$reports/spec.md"
+"#);
+    let run = fixture.run(&[
+        "--baseline-model",
+        "private-model",
+        "--candidate-model",
+        "other-private-model",
+        "--prior",
+        "0.01",
+    ]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let packet = fixture.grader_packet();
+    assert_eq!(packet["trials"].as_array().unwrap().len(), 2);
+    let text = packet.to_string().to_ascii_lowercase();
+    for identity in ["baseline", "candidate", "claude", "private-model", "max"] {
+        assert!(
+            !text.contains(identity),
+            "Grader packet leaked identifying metadata {identity}: {packet}"
+        );
+    }
+}
+
+#[test]
 fn finding_tables_preserve_harness_model_effort_and_arm_evidence() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does(r#"
@@ -16,20 +145,7 @@ EOF
 "#);
     let run = fixture.run(&["--prior", "0.01"]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
-    let calls = fixture.scenario.claude_calls();
-    let grader = calls
-        .iter()
-        .find(|call| {
-            call["prompt"]
-                .as_str()
-                .unwrap()
-                .starts_with("You are a Grader")
-        })
-        .unwrap();
-    let packet: Value = serde_json::from_slice(
-        &fs::read(PathBuf::from(grader["cwd"].as_str().unwrap()).join("packet.json")).unwrap(),
-    )
-    .unwrap();
+    let packet = fixture.grader_packet();
     for trial in packet["trials"].as_array().unwrap() {
         let report = trial["spec"].as_str().unwrap();
         for finding in [
@@ -67,21 +183,7 @@ printf 'Reported the invented finding.\n' > "$reports/spec.md"
         "0.01",
     ]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
-    let calls = fixture.scenario.claude_calls();
-    let graders: Vec<_> = calls
-        .iter()
-        .filter(|call| {
-            call["prompt"]
-                .as_str()
-                .unwrap()
-                .starts_with("You are a Grader")
-        })
-        .collect();
-    assert_eq!(graders.len(), 1);
-    let packet: Value = serde_json::from_slice(
-        &fs::read(PathBuf::from(graders[0]["cwd"].as_str().unwrap()).join("packet.json")).unwrap(),
-    )
-    .unwrap();
+    let packet = fixture.grader_packet();
     assert_eq!(packet["trials"].as_array().unwrap().len(), 2);
     let text = packet.to_string().to_ascii_lowercase();
     for identity in ["baseline", "candidate", "claude", "private-model", "max"] {
@@ -262,10 +364,7 @@ PY
             .iter()
             .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
     );
-    let packet: Value = serde_json::from_slice(
-        &fs::read(PathBuf::from(calls[0]["cwd"].as_str().unwrap()).join("packet.json")).unwrap(),
-    )
-    .unwrap();
+    let packet = fixture.grader_packet();
     let order: Vec<_> = packet["trials"]
         .as_array()
         .unwrap()

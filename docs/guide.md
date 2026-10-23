@@ -475,7 +475,9 @@ borderline mark beside its mechanical checks. A mechanical failure still fails
 the Trial. Wrong-finding flags enter the paired Verdict; the Verdict also shows
 the number of borderline Trials for rechecking, without changing the Bar.
 Packets, Grader session output and validated Scores stay in the private
-Experiment directory. A failed, incomplete or malformed Grader response pauses
+Experiment directory. Grader sessions retain OTLP log records and spans, model
+evidence and stderr there, including after interruption or timeout. A failed,
+incomplete or malformed Grader response pauses
 the Experiment; resuming retries grading without rerunning finished Trials,
 and reuses already validated Scores.
 

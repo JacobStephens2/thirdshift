@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 
 use super::{Task, arms, store, workers::TrialResult};
 use crate::harness::{Asked, Choice, ChosenBy, Harness, Settings};
-use crate::process::{self, Control, Interruption};
+use crate::session::recording::{Input, Recording};
 use crate::{interrupt, progress, prompt};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -228,8 +228,14 @@ fn packet(task: &Task, results: &[(std::path::PathBuf, TrialResult)]) -> Result<
 }
 
 fn blind(text: &str) -> String {
+    enum Table {
+        Identities,
+        KeyValue,
+        Findings,
+    }
+
     let fields = ["harness", "model", "effort", "arm"];
-    let mut identifying_table = None;
+    let mut table = None;
     let mut blinded = String::new();
     for line in text.lines() {
         let normalized = line.to_ascii_lowercase().replace(['*', '_', '`'], "");
@@ -238,20 +244,30 @@ fn blind(text: &str) -> String {
             .trim_start_matches(['#', '>', '-', ' '])
             .trim();
         if normalized.contains('|') {
-            // Classify the first row only: a findings table can name a
-            // Model or Harness in its data without identifying this Trial.
-            let identifying = identifying_table.get_or_insert_with(|| {
-                normalized
-                    .split('|')
-                    .any(|cell| fields.contains(&cell.trim()))
+            let cells: Vec<_> = normalized
+                .trim_matches('|')
+                .split('|')
+                .map(str::trim)
+                .collect();
+            // Findings can name a Model or Harness as evidence. Metadata
+            // tables instead identify Trials through columns or key/value rows.
+            let kind = table.get_or_insert_with(|| {
+                if cells.iter().any(|cell| fields.contains(cell)) {
+                    Table::Identities
+                } else if cells.len() == 2 && cells[1] == "value" {
+                    Table::KeyValue
+                } else {
+                    Table::Findings
+                }
             });
-            // Horizontal metadata tables put the identities in later rows.
-            // Drop the entire contiguous table, not just its field headings.
-            if *identifying {
+            if matches!(kind, Table::Identities)
+                || (matches!(kind, Table::KeyValue)
+                    && cells.first().is_some_and(|cell| fields.contains(cell)))
+            {
                 continue;
             }
         } else {
-            identifying_table = None;
+            table = None;
         }
         let identifying = fields.iter().any(|key| {
             normalized == *key
@@ -286,35 +302,28 @@ fn grade(grader: &Grader, directory: &Path, packet: &Packet, timeout: u64) -> Re
     let choice = grader.choice();
     let adapter = choice.harness.adapter();
     let invocation = adapter.session(&choice, None, &prompt);
-    let output = process::output_until(
+    let ended = Recording::for_trial().run(
+        "model Grader",
+        &choice,
         Command::new(&grader.harness.path)
             .args(invocation.args)
             .current_dir(&workspace)
-            .envs(adapter.environment().iter().copied())
+            .stderr(fs::File::create(workspace.join("stderr"))?)
             .env("THIRDSHIFT_GRADER_PACKET", &input)
             .env("THIRDSHIFT_GRADER_SCORES", &scores),
-        invocation.stdin.as_deref().map(str::as_bytes),
-        Control {
-            name: "model Grader",
-            interruption: Interruption::Ordinary,
-            stop: &|child| adapter.stop(child),
+        Input {
+            prompt: &prompt,
+            stdin: invocation.stdin.as_deref(),
+            deadline: Some(Instant::now() + Duration::from_secs(timeout)),
+            private: true,
         },
-        Instant::now() + Duration::from_secs(timeout),
+        &workspace.join("stdout.jsonl"),
+        adapter.interpretation(&workspace, &prompt),
     );
     interrupt::check()?;
-    let output = output.context("model Grader failed to complete")?;
-    fs::write(workspace.join("stdout.jsonl"), &output.stdout)?;
-    fs::write(workspace.join("stderr"), &output.stderr)?;
-    let mut interpretation = adapter.interpretation(&workspace, &prompt);
-    for line in String::from_utf8_lossy(&output.stdout).lines() {
-        interpretation.condense(line);
-    }
-    let ended = interpretation
-        .finish(Ok(output.status))
-        .outcome
-        .map_err(|_| {
-            anyhow::anyhow!("model Grader session failed; see private Grader artifacts")
-        })?;
+    let ended = ended.map_err(|_| {
+        anyhow::anyhow!("model Grader session failed; see private Grader artifacts")
+    })?;
     ensure!(
         ended.killed.is_empty(),
         "model Grader left unfinished background work"

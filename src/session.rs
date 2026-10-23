@@ -512,6 +512,7 @@ impl Outside for OnMachine {
             recording::Input {
                 prompt,
                 stdin: invocation.stdin.as_deref(),
+                ..Default::default()
             },
             log,
             interpretation,

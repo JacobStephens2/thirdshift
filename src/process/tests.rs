@@ -43,6 +43,7 @@ fn streamed_completion_preserves_raw_bytes_and_nonzero_status_in_consumer_state(
             interruption: Interruption::Ordinary,
             stop: &stop_fixture,
         },
+        None,
         (Vec::new(), "initial"),
         |pipe, state| {
             state.0 = read(pipe)?;
@@ -183,6 +184,7 @@ fn consumer_log_failure_cleans_up_even_with_a_blocked_prompt_writer() {
             interruption: Interruption::Ordinary,
             stop: &stop_fixture,
         },
+        None,
         b"initial".to_vec(),
         |mut pipe, state| {
             let mut bytes = [0; 5];
@@ -216,6 +218,7 @@ fn prompt_failure_retains_state_and_precedes_a_consumer_failure_during_cleanup()
             interruption: Interruption::Ordinary,
             stop: &stop_fixture,
         },
+        None,
         b"initial".to_vec(),
         |mut pipe, state| {
             pipe.read_to_end(state)?;
@@ -303,6 +306,7 @@ fn eof_does_not_finish_either_operation_before_the_child_exits() {
                     interruption: Interruption::Ordinary,
                     stop: &stop_fixture,
                 },
+                None,
                 Vec::new(),
                 |pipe, state| {
                     *state = read(pipe)?;
@@ -343,6 +347,7 @@ fn both_operations_wait_for_output_held_after_child_exit() {
                     interruption: Interruption::Ordinary,
                     stop: &stop_fixture,
                 },
+                None,
                 Vec::new(),
                 |pipe, state| {
                     *state = read(pipe)?;
@@ -384,6 +389,7 @@ fn normal_completion_leaves_background_work_without_owned_io_running() {
                     interruption: Interruption::Ordinary,
                     stop: &stop_fixture,
                 },
+                None,
                 (),
                 |pipe, _state| {
                     read(pipe)?;
@@ -452,6 +458,7 @@ fn assert_unread_prompt_interruptible(test_name: &str, captured: bool) {
                     interruption: Interruption::Ordinary,
                     stop: &stop_fixture,
                 },
+                None,
                 Vec::new(),
                 |pipe, state| {
                     *state = read(pipe)?;
@@ -532,6 +539,7 @@ fn completion_ignores_recorded_signals_without_permitting_ordinary_work() {
                     interruption: Interruption::Completion,
                     stop: &stop_fixture,
                 },
+                None,
                 Vec::new(),
                 |mut pipe, state| {
                     pipe.read_to_end(state)?;
@@ -557,6 +565,7 @@ fn completion_ignores_recorded_signals_without_permitting_ordinary_work() {
                     interruption: Interruption::Completion,
                     stop: &stop_fixture,
                 },
+                None,
                 (),
                 |mut pipe, _| {
                     pipe.read_exact(&mut [0; 5])?;
@@ -639,6 +648,7 @@ fn startup_failure_returns_no_state_even_when_the_consumer_has_returned() {
             interruption: Interruption::Ordinary,
             stop: &stop,
         },
+        None,
         Vec::new(),
         move |mut pipe, state| {
             let mut bytes = [0; 5];
@@ -842,6 +852,7 @@ fn interruption_during_cleanup_suppresses_retained_state_and_transport_failure()
                     interruption: Interruption::Ordinary,
                     stop: &stop,
                 },
+                None,
                 Vec::new(),
                 |mut pipe, state| {
                     pipe.read_to_end(state)?;
@@ -864,6 +875,7 @@ fn spawn_failure_returns_no_streamed_state_and_names_the_command() {
             interruption: Interruption::Ordinary,
             stop: &stop_fixture,
         },
+        None,
         "initial",
         |_, _| panic!("consumer must not run after spawn failure"),
     );

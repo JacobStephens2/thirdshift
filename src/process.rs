@@ -119,7 +119,7 @@ pub(crate) struct Streamed<T> {
     pub state: T,
 }
 
-/// Consume stdout concurrently with prompt I/O, inheriting stderr. Preserve
+/// Consume stdout concurrently with prompt I/O and an optional deadline. Preserve
 /// state after any normal consumer return, even when execution fails. Return
 /// only after completion or whole-tree cleanup and every worker is joined.
 /// A consumer panic or any startup failure returns no state. Recorded ordinary
@@ -128,13 +128,14 @@ pub(crate) fn streaming<T: Send + 'static>(
     command: &mut Command,
     input: Option<&[u8]>,
     control: Control<'_>,
+    deadline: Option<Instant>,
     mut state: T,
     consume: impl FnOnce(ChildStdout, &mut T) -> Result<()> + Send + 'static,
 ) -> Result<Streamed<T>> {
     // One send fits without waiting for the caller, which must first finish
     // supervising and joining all workers, including on transport failure.
     let (completed, recovered) = mpsc::sync_channel(1);
-    let (execution, started) = execute(command, input, control, false, None, move |pipe| {
+    let (execution, started) = execute(command, input, control, false, deadline, move |pipe| {
         let result = consume(pipe, &mut state);
         let _ = completed.send(state);
         result
@@ -178,19 +179,20 @@ fn execute<T: Send + 'static>(
         let (wake, awakened) = mpsc::channel();
         #[cfg(test)]
         let fault = faults::Fault::from(command);
-        let child = command
+        command
             .process_group(0)
             .stdin(if input.is_some() {
                 Stdio::piped()
             } else {
                 Stdio::null()
             })
-            .stdout(Stdio::piped())
-            .stderr(if capture_stderr {
-                Stdio::piped()
-            } else {
-                Stdio::inherit()
-            })
+            .stdout(Stdio::piped());
+        // Streaming callers can retain private stderr in a file. Otherwise a
+        // new Command's default already inherits it, as ordinary sessions do.
+        if capture_stderr {
+            command.stderr(Stdio::piped());
+        }
+        let child = command
             .spawn()
             .with_context(|| format!("could not run {cli}"))?;
         // Install ownership immediately: every fallible step after spawn is

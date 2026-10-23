@@ -153,6 +153,13 @@ struct Fixture {
     candidate: String,
 }
 
+fn is_grader(call: &Value) -> bool {
+    call["prompt"]
+        .as_str()
+        .unwrap()
+        .starts_with("You are a Grader")
+}
+
 impl Fixture {
     fn new() -> Self {
         let scenario = Scenario::new();
@@ -258,13 +265,27 @@ pr_url = "https://github.com/acme/widgets/pull/1"
         self.scenario
             .claude_calls()
             .into_iter()
-            .filter(|call| {
-                !call["prompt"]
-                    .as_str()
-                    .unwrap()
-                    .starts_with("You are a Grader")
-            })
+            .filter(|call| !is_grader(call))
             .collect()
+    }
+
+    fn grader_calls(&self) -> Vec<Value> {
+        self.scenario
+            .claude_calls()
+            .into_iter()
+            .chain(self.scenario.codex_calls())
+            .filter(is_grader)
+            .collect()
+    }
+
+    fn grader_packet(&self) -> Value {
+        let calls = self.grader_calls();
+        assert_eq!(calls.len(), 1, "expected one Eval task's Grader session");
+        serde_json::from_slice(
+            &fs::read(PathBuf::from(calls[0]["cwd"].as_str().unwrap()).join("packet.json"))
+                .unwrap(),
+        )
+        .unwrap()
     }
 }
 

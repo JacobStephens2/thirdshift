@@ -1,6 +1,7 @@
 //! Prepare Harness environment and stop behavior for the shared execution owner.
 
 use std::process::{ChildStdout, Command, Output};
+use std::time::Instant;
 
 use anyhow::Result;
 
@@ -27,6 +28,7 @@ pub(crate) fn streaming<T: Send + 'static>(
     adapter: &dyn Adapter,
     command: &mut Command,
     input: Option<&str>,
+    deadline: Option<Instant>,
     state: T,
     consume: impl FnOnce(ChildStdout, &mut T) -> Result<()> + Send + 'static,
 ) -> Result<Streamed<T>> {
@@ -38,6 +40,7 @@ pub(crate) fn streaming<T: Send + 'static>(
             interruption: Interruption::Ordinary,
             stop: &|child| adapter.stop(child),
         },
+        deadline,
         state,
         consume,
     )
