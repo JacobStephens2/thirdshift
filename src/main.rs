@@ -124,8 +124,7 @@ cannot be combined. Command options override the User config's defaults.
 
 Pass commands: architect, pickup, secure (no Issue URL).
   base <branch>                      Use an origin branch, whatever is checked out
-  --plan-only                        architect only; stops before dispatching a Ticket run
-With --plan-only, only base, email and no-email apply.
+  --plan-only                        architect only; publish and stop; only base, email and no-email apply
 
 Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting.
 For workflow details, settings, Harness setup, email, logs and scheduling, see the manual:
