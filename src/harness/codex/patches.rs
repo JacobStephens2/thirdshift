@@ -2,6 +2,8 @@
 //! format is deliberately fail-closed: no match leaves the stream untouched.
 //! Wire reference: openai/codex, rust-v0.160.0, protocol/src/protocol.rs
 //! (`PatchApplyEndEvent`, `FileChange`) and rollout/src/policy.rs.
+//! Codex 0.163.0 instead retains `item_completed` / `FileChange` records
+//! whose changes already contain unified diffs, including adds and deletes.
 use std::collections::BTreeMap;
 use std::fs;
 use std::ops::RangeInclusive;
@@ -75,7 +77,13 @@ impl Completion {
                     return None;
                 };
                 let changes = input.as_array()?;
-                let native = patch["payload"]["changes"].as_object()?;
+                let payload = &patch["payload"];
+                let native = if payload["type"] == "item_completed" {
+                    &payload["item"]["changes"]
+                } else {
+                    &payload["changes"]
+                }
+                .as_object()?;
                 if changes.is_empty() || changes.len() != native.len() {
                     return None;
                 }
@@ -172,6 +180,9 @@ fn read(
         match record["payload"]["type"].as_str() {
             Some("task_started" | "turn_started") => turns.push(Vec::new()),
             Some("patch_apply_end") => turns.last_mut()?.push(record),
+            Some("item_completed") if record["payload"]["item"]["type"] == "FileChange" => {
+                turns.last_mut()?.push(record);
+            }
             _ => {}
         }
     }
@@ -208,6 +219,9 @@ fn diff(path: &str, change: &Value) -> Option<String> {
     match change["type"].as_str()? {
         "update" => change["unified_diff"].as_str().map(String::from),
         "add" | "delete" => {
+            if let Some(diff) = change["unified_diff"].as_str() {
+                return Some(diff.to_owned());
+            }
             let content = change["content"].as_str()?;
             let count = content.lines().count();
             let start = usize::from(count > 0);

@@ -228,41 +228,54 @@ fn show_and_logs_find_one_session_after_removing_a_recorded_original() {
 }
 
 #[test]
-fn recovers_old_codex_diffs_from_the_matching_native_session_file() {
-    let scenario = Scenario::new();
-    let session = fixture(
-        &scenario,
-        "codex",
-        include_str!("fixtures/console-codex.jsonl"),
-    );
-    let native = scenario
-        .path("home/.codex/sessions/2026/10/01/rollout-2026-10-01T12-00-00-made-up-thread.jsonl");
-    fs::create_dir_all(native.parent().unwrap()).unwrap();
-    let directory = scenario.path("work/widgets");
-    let diff = "--- a/widgets.rs\n+++ b/widgets.rs\n@@ -1 +1 @@\n-old\n+new\n";
-    fs::write(&native, format!("{}\n{}\n", json!({"type":"session_meta","payload":{"id":"made-up-thread","cwd":directory}}),
-        json!({"timestamp":"2026-10-01T12:00:40Z","type":"event_msg","payload":{
-            "type":"patch_apply_end","success":true,"changes":{
-                directory.join("widgets.rs").to_str().unwrap():{"type":"update","unified_diff":diff,"move_path":null}
-            }
-        }})
-    )).unwrap();
-    let result = scenario.run(&["logs", "--convert"]);
-    assert_eq!(result.code, Some(0), "{}", result.stderr);
-    let report = report(&scenario);
-    assert_eq!(report["sessions"][0]["passed"], true, "{report}");
-    assert_eq!(report["sessions"][0]["codex_diffs"], 1, "{report}");
-    let logs = records(&session.with_extension("logs.jsonl"));
-    let amendment: Value = logs
-        .iter()
-        .filter_map(|record| {
-            serde_json::from_str::<Value>(record["body"]["stringValue"].as_str()?).ok()
-        })
-        .find(|event| event["result"]["source"] == "codex_session_file")
+fn recovers_codex_diffs_from_both_native_session_formats() {
+    for current_format in [false, true] {
+        let scenario = Scenario::new();
+        let session = fixture(
+            &scenario,
+            "codex",
+            include_str!("fixtures/console-codex.jsonl"),
+        );
+        let native = scenario.path(
+            "home/.codex/sessions/2026/10/01/rollout-2026-10-01T12-00-00-made-up-thread.jsonl",
+        );
+        fs::create_dir_all(native.parent().unwrap()).unwrap();
+        let directory = scenario.path("work/widgets");
+        let diff = "--- a/widgets.rs\n+++ b/widgets.rs\n@@ -1 +1 @@\n-old\n+new\n";
+        let changes = json!({
+            directory.join("widgets.rs").to_str().unwrap():{"type":"update","unified_diff":diff,"move_path":null}
+        });
+        let payload = if current_format {
+            json!({"type":"item_completed","item":{"type":"FileChange","id":"native-edit","status":"completed","changes":changes}})
+        } else {
+            json!({"type":"patch_apply_end","success":true,"changes":changes})
+        };
+        fs::write(
+            &native,
+            format!(
+                "{}\n{}\n",
+                json!({"type":"session_meta","payload":{"id":"made-up-thread","cwd":directory}}),
+                json!({"timestamp":"2026-10-01T12:00:40Z","type":"event_msg","payload":payload})
+            ),
+        )
         .unwrap();
-    assert_eq!(amendment["id"], "f1");
-    assert_eq!(amendment["result"]["changes"][0]["diff"], diff);
-    assert!(session.exists());
+        let result = scenario.run(&["logs", "--convert"]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let report = report(&scenario);
+        assert_eq!(report["sessions"][0]["passed"], true, "{report}");
+        assert_eq!(report["sessions"][0]["codex_diffs"], 1, "{report}");
+        let logs = records(&session.with_extension("logs.jsonl"));
+        let amendment: Value = logs
+            .iter()
+            .filter_map(|record| {
+                serde_json::from_str::<Value>(record["body"]["stringValue"].as_str()?).ok()
+            })
+            .find(|event| event["result"]["source"] == "codex_session_file")
+            .unwrap();
+        assert_eq!(amendment["id"], "f1");
+        assert_eq!(amendment["result"]["changes"][0]["diff"], diff);
+        assert!(session.exists());
+    }
 }
 
 #[test]
@@ -355,10 +368,10 @@ fn historical_codex_diff_belongs_to_the_original_turn_even_after_a_resume() {
         ("2026-10-01T12:00:30Z", original),
         ("2026-10-02T12:00:30Z", later),
     ] {
-        rows.push(json!({"timestamp":time,"type":"event_msg","payload":{"type":"task_started"}}));
-        rows.push(json!({"timestamp":time,"type":"event_msg","payload":{"type":"patch_apply_end","success":true,"changes":{
+        rows.push(json!({"timestamp":time,"type":"event_msg","payload":{"type":"turn_started"}}));
+        rows.push(json!({"timestamp":time,"type":"event_msg","payload":{"type":"item_completed","item":{"type":"FileChange","id":"native-edit","status":"completed","changes":{
             "/work/widgets/widgets.rs":{"type":"update","unified_diff":diff,"move_path":null}
-        }}}));
+        }}}}));
     }
     fs::write(
         native,
