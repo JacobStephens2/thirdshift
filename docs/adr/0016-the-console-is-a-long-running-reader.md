@@ -1,11 +1,11 @@
 # The Console runs all the time, but only reads and does what the CLI does
 
 ADR 0009 rejected a long-running `thirdshift watch`: it has to be kept alive, it keeps running the old binary after `thirdshift update`, and when it hangs nobody notices. The **Console** needs something listening, so `thirdshift console` runs all the time, on 127.0.0.1, behind the machine's own Caddy or Apache. It stays within the spirit of ADR 0009 for three reasons:
-- **It never starts work.** Every Command is still started by the operating system's scheduler or by a person. The Console's actions are **Stop**, which is the CLI's `thirdshift stop`, and setting its own look, which is `thirdshift console theme` and `thirdshift console sections` (amended 2026-10-19, #711 Q46). It also records judgments only a person makes: dismissing an item in **Needs you** (#919), and, for evals, scoring a sampled **Run**, confirming or correcting a **Bug origin**, and approving a proposed **Eval task**. Each is also a CLI command with `--json`, and none starts work (amended 2026-10-21, #698 Q6.9).
+- **It never starts work.** Every Command is still started by the operating system's scheduler or by a person. The Console's actions are **Stop**, which is the CLI's `thirdshift stop`, and setting its own look, which is `thirdshift console theme` and `thirdshift console sections` (amended 2026-10-19, #711 Q46). It also records judgments only a person makes: dismissing an item in **Needs you** or Ready for review (#919), and, for evals, scoring a sampled **Run**, confirming or correcting a **Bug origin**, and approving a proposed **Eval task**. Each is also a CLI command with `--json`, and none starts work (amended 2026-10-21, #698 Q6.9, and 2026-10-23, #919 Q1.2).
 - **It survives updates.** It re-executes itself when `thirdshift update` replaces the binary.
 - **A hang costs no work.** A Console that hangs loses no Run; the next request shows it's down.
 
-It reads what each Command writes about itself, its **Command record** and its logs, so it remembers nothing that a restart would lose, except sign-ins.
+It reads what each Command writes about itself, its **Command record** and its logs, so it remembers nothing that a restart would lose, except sign-ins. It also reads GitHub once a minute, to learn whether the **Day shift** has acted on a row in **Needs you** or Ready for review, and keeps the answer in a file: see [ADR 0023](0023-the-inbox-reads-github-to-learn-the-day-shift-acted.md) (amended 2026-10-23, #919 Q2.9).
 
 ## Considered Options
 
