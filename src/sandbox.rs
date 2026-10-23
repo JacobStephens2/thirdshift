@@ -1055,6 +1055,9 @@ mod tests {
 
     #[test]
     fn two_grok_trials_never_run_at_once() {
+        if !bwrap_or_skip("grok lock") {
+            return;
+        }
         let home = tempfile::TempDir::new().unwrap();
         let repo = home.path().join("repo");
         let skills = home.path().join("skills");
