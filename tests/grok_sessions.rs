@@ -145,7 +145,7 @@ echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"ru
         scenario.gh_state()["prs"][0]["body"]
             .as_str()
             .unwrap()
-            .contains("Built with grok · grok-4.7 · high")
+            .contains("Built with grok 9.8.7 · grok-4.7 · high")
     );
 }
 

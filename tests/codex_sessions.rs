@@ -298,7 +298,9 @@ fn a_runs_implement_session_and_its_repair_run_on_codex_with_the_model_and_effor
         .unwrap()
         .to_string();
     assert!(
-        body.ends_with("Built with codex · gpt-6.1-sol · max <!-- thirdshift:built-with -->\n"),
+        body.ends_with(
+            "Built with codex 9.8.7 · gpt-6.1-sol · max <!-- thirdshift:built-with -->\n"
+        ),
         "{body}"
     );
     let logs = scenario.log_files(&format!("{LOGS}/commands/issue"), "jsonl");

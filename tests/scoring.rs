@@ -267,6 +267,7 @@ gh pr create --base main --head issue-7 --title 'Add feature' --body 'Closes #7'
     let sample = retained[0]["sample"].as_array().unwrap();
     assert_eq!(sample.len(), 1);
     assert_eq!(sample[0]["harness"], "claude");
+    assert_eq!(sample[0]["harness_version"], "9.8.7");
     assert_eq!(sample[0]["model"], "default model");
     assert_eq!(sample[0]["effort"], "default effort");
 }

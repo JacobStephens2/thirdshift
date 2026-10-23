@@ -35,7 +35,7 @@ impl PullRequest {
             url,
             merged_at,
             harness: built.harness.name().into(),
-            harness_version: built.harness_version,
+            harness_version: built.version,
             model: built.model,
             effort: built.effort,
         })

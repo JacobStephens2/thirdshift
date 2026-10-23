@@ -222,9 +222,9 @@ impl Choice {
     }
 
     /// The line thirdshift writes in a pull request's body and a Run
-    /// notification, as in `Built with claude · claude-opus-5-5 · high`.
-    pub fn built_with(&self) -> String {
-        built_with::line(self)
+    /// notification, given the owning Command's detected Harness version.
+    pub fn built_with(&self, version: &str) -> String {
+        built_with::BuiltWith::new(self, version).to_string()
     }
 
     // Compatibility for the existing argument tests; production callers
@@ -488,7 +488,7 @@ mod tests {
 
     #[test]
     fn the_built_with_line_names_the_harness_model_and_effort_or_the_harnesss_default() {
-        for (chosen, line) in [
+        for (chosen, version, line) in [
             (
                 choice(
                     Harness::Claude,
@@ -496,18 +496,21 @@ mod tests {
                     "high",
                     ChosenBy::Command,
                 ),
-                "Built with claude · claude-opus-5-5 · high",
+                "2.1.11",
+                "Built with claude 2.1.11 · claude-opus-5-5 · high",
             ),
             (
                 Choice::default(),
-                "Built with claude · default model · default effort",
+                "unknown",
+                "Built with claude unknown · default model · default effort",
             ),
             (
                 choice(Harness::Codex, "", "max", ChosenBy::UserConfig),
-                "Built with codex · default model · max",
+                "codex-cli 0.160.0",
+                "Built with codex codex-cli 0.160.0 · default model · max",
             ),
         ] {
-            assert_eq!(chosen.built_with(), line);
+            assert_eq!(chosen.built_with(version), line);
         }
     }
 
