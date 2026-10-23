@@ -1263,7 +1263,7 @@ fn child_runs_nest_and_each_request_reads_current_records() {
         .split("href=\"")
         .skip(1)
         .filter_map(|part| part.split_once('"'))
-        .find(|(_, label)| label.starts_with(">Run and Session traces</a>"))
+        .find(|(_, label)| label.starts_with(">Command logs and Session traces</a>"))
         .unwrap()
         .0;
     let parent_logs = console.get(parent_link).text().unwrap();

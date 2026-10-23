@@ -201,7 +201,7 @@ has its kind, status, duration and bar on a shared axis. Errors carry their
 message, running calls extend to now with a hatched bar, and estimated timings
 are dotted and marked `*`. Converted Session tools keep the old scoped
 Command-log estimates, including unknown times. Commands without traces still
-show their Runs, stages and any retained legacy tool summaries.
+show their Runs and stages.
 
 The open Slowest calls list ranks ten tool and model calls in the timeline's
 window; turns and sub-agents are excluded. Selecting a call reveals its row
@@ -245,7 +245,7 @@ select a historical Command without a record; `logs --session` accepts an exact
 path from that Command's Session inventory as well as a session kind.
 Page 6, `/logs`, lists every Command log and Session trace in the current
 `commands/` layout, including Security logs, and marks the live ones. Every
-Command row links to its Run and Session traces, including child Ticket Runs.
+Command row links to its Command logs and Session traces, including child Ticket Runs.
 Older `sessions/` folders are not linked. The same inventory is available with
 `thirdshift logs` or `thirdshift logs --json`; `thirdshift logs --file <id>`
 reads an exact listed file and accepts `--follow`.

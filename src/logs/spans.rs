@@ -294,6 +294,12 @@ impl Builder<'_> {
             span.duration_ms = duration(span.start, span.end);
             self.spans.push(span);
         }
+        // Dispatchers can inventory their child's same-issue Sessions. Let
+        // descendants claim them first so each Session retains its actual Run.
+        for child in command.dispatched.iter().chain(&command.children) {
+            let parent = hex(context.child_parent(&command.record, &child.record));
+            self.record(child, parent)?;
+        }
         for path in Observation::Record(command).sessions()? {
             let original = super::session::original(&path);
             if !self.sessions.insert(original.clone()) {
@@ -326,19 +332,6 @@ impl Builder<'_> {
             if let Some(spans) = session::read(&path, &context, &template)? {
                 self.spans.extend(spans);
             }
-        }
-        for child in command.dispatched.iter().chain(&command.children) {
-            let parent = stages.iter().rev().find(|timing| {
-                timing.began.is_some_and(|began| {
-                    time(&child.record.started_at)
-                        .is_some_and(|start| start >= began.timestamp_millis())
-                })
-            });
-            let parent = parent.map_or_else(
-                || run_id.clone(),
-                |timing| hex(context.stage_id(timing.stage)),
-            );
-            self.record(child, parent)?;
         }
         Ok(())
     }

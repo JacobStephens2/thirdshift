@@ -97,6 +97,22 @@ impl Context {
         ])
     }
 
+    /// Both retained views place a child Run in the stage that dispatched it.
+    pub(super) fn child_parent(&self, record: &CommandRecord, child: &CommandRecord) -> SpanId {
+        let started = chrono::DateTime::parse_from_rfc3339(&child.started_at).ok();
+        record
+            .stages
+            .iter()
+            .rev()
+            .find(|stage| {
+                chrono::DateTime::parse_from_rfc3339(&stage.began_at)
+                    .ok()
+                    .zip(started)
+                    .is_some_and(|(began, started)| began <= started)
+            })
+            .map_or(self.run, |stage| self.stage_id(stage))
+    }
+
     pub(crate) fn of_owner(owner: &Owner) -> Self {
         let identity = owner.identity().to_string();
         Self::with_identity(identity)

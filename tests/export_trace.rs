@@ -226,4 +226,37 @@ fn a_pickup_commands_dispatched_spec_and_tickets_export_as_one_whole_trace() {
         source_lines.iter().map(String::as_str).collect()
     );
     assert_logs_belong_to_trace(&logs, &spans);
+    let tree = scenario.run(&[
+        "show",
+        outer["command_log"].as_str().unwrap(),
+        "--spans",
+        "--json",
+    ]);
+    assert_eq!(tree.code, Some(0), "{}", tree.stderr);
+    let tree: Value = serde_json::from_str(&tree.stdout).unwrap();
+    for node in tree["spans"].as_array().unwrap() {
+        let exported = spans
+            .iter()
+            .find(|span| {
+                let id: String = span
+                    .span_id
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                node["id"] == id
+            })
+            .unwrap();
+        let parent: String = exported
+            .parent_span_id
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(
+            node["parent_id"].as_str().unwrap_or_default(),
+            parent,
+            "export ancestry differs from the CLI/Console tree for {} {}",
+            node["kind"],
+            node["name"]
+        );
+    }
 }

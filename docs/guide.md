@@ -218,7 +218,7 @@ thirdshift logs 'widgets#7' --session implement
 thirdshift logs 'widgets#7' --session repair --follow
 ```
 
-`show` includes the Runs, stage history with start times and Usual ranges, outcomes, and Command and Session trace paths. Each live Run also gets its latest event, such as `Bash: cargo test`, from the last 64 KiB of its current Session trace. It uses the Harness's stream interpretation, including Claude and Codex, and ignores malformed or unknown lines. Missing or unreadable Session traces leave the event unavailable.
+`show` includes the Runs, stage history with start times and Usual ranges, outcomes, and paths to Command logs and Session traces. Each live Run also gets its latest event, such as `Bash: cargo test`, from the last 64 KiB of its current Session trace. It uses the Harness's stream interpretation, including Claude and Codex, and ignores malformed or unknown lines. Missing or unreadable Session traces leave the event unavailable.
 
 `status` and `show` describe live work as **Silent** when neither its Session trace nor its Command log has grown for `inbox.silent_minutes` (10 by default). Silence starts no earlier than the current stage. A dispatch stage is never Silent or Slow and has no Usual range: the dispatched Run or Spec run carries its own. At three times the threshold, the words escalate: `silent 45 min · past 30`. A fresh line in either log keeps the Run from being Silent. Missing logs use the stage's start time.
 
