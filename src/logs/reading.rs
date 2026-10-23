@@ -1,6 +1,7 @@
 //! Filesystem observations of Commands, their Runs and exact ownership.
 //! Loading uses one sampled time; reading never prints or performs Stop effects.
 
+mod cache;
 pub(crate) mod catalog;
 mod health;
 mod history;
@@ -32,6 +33,10 @@ pub(super) struct Snapshot {
 }
 
 impl Snapshot {
+    pub(super) fn next_inbox_change(&self, days: i64) -> Option<DateTime<Local>> {
+        inbox::next_change(&self.commands, self.now, days)
+    }
+
     pub(super) fn entries(&self) -> &[Entry] {
         &self.commands
     }
@@ -163,6 +168,8 @@ pub(super) struct Command {
     pub(super) command_log: PathBuf,
     pub(super) dispatched: Vec<Command>,
     pub(super) health: Option<Health>,
+    #[serde(skip)]
+    pub(super) next_health_change: Option<DateTime<Local>>,
     pub(super) usual_ranges: BTreeMap<String, UsualRange>,
 }
 
@@ -203,6 +210,7 @@ impl Command {
             source: "command_record",
             dispatched: Vec::new(),
             health: None,
+            next_health_change: None,
             usual_ranges: BTreeMap::new(),
         }
     }
@@ -219,9 +227,7 @@ fn read_records(folder: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
             continue;
         }
         let path = entry.path();
-        let bytes =
-            fs::read(&path).with_context(|| format!("could not read {}", path.display()))?;
-        let Ok(mut tree) = serde_json::from_slice::<CommandTree>(&bytes) else {
+        let Some(mut tree) = cache::record(&path)? else {
             continue;
         };
         let record = &mut tree.command;
@@ -301,13 +307,7 @@ fn children(
 
 fn read_idle_passes(repo: &Path) -> Result<Vec<IdlePass>> {
     let path = repo.join(activity::FILE);
-    let activity = match fs::read_to_string(&path) {
-        Ok(activity) => activity,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(error).with_context(|| format!("could not read {}", path.display()));
-        }
-    };
+    let activity = cache::text(&path)?;
     let repository = format!(
         "{}/{}",
         repo.parent()

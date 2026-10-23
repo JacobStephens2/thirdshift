@@ -27,6 +27,14 @@ mod waterfall;
 #[path = "console/spans.rs"]
 mod spans;
 
+#[cfg(target_os = "linux")]
+#[path = "console/idle.rs"]
+mod idle;
+
+#[cfg(unix)]
+#[path = "console/watching.rs"]
+mod watching;
+
 #[cfg(unix)]
 #[path = "console/cronjobs.rs"]
 mod cronjobs;
@@ -132,6 +140,18 @@ impl Drop for Console {
         let _ = self.child.kill();
         let _ = self.child.wait();
         self.reader.take().unwrap().join().unwrap();
+    }
+}
+
+fn sse_event(stream: &mut impl BufRead) -> String {
+    let mut message = String::new();
+    loop {
+        let mut line = String::new();
+        assert!(stream.read_line(&mut line).unwrap() > 0, "stream closed");
+        if line.trim().is_empty() && !message.is_empty() {
+            return message;
+        }
+        message.push_str(&line);
     }
 }
 

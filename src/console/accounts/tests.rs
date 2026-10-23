@@ -175,6 +175,36 @@ fn five_wrong_passwords_slow_the_address_to_one_attempt_per_minute() {
 }
 
 #[test]
+fn session_activity_is_saved_at_most_once_per_minute() {
+    let dir = tempfile::tempdir().unwrap();
+    let allowed = vec!["owner@example.test".into()];
+    let mut accounts = Accounts::open(dir.path(), &allowed, 1_000).unwrap();
+    accounts
+        .set_password("owner@example.test", "password")
+        .unwrap();
+    let token = signed_in(&mut accounts);
+    drop(accounts);
+    let path = dir.path().join("console-accounts.json");
+    let before = fs::read(&path).unwrap();
+    let mut accounts = Accounts::open(dir.path(), &allowed, 1_059).unwrap();
+    assert!(accounts.session(&token, true).unwrap().is_some());
+    drop(accounts);
+    assert!(
+        fs::read(&path).unwrap() == before,
+        "read-only activity rewrote the account store"
+    );
+    let mut accounts = Accounts::open(dir.path(), &allowed, 1_060).unwrap();
+    assert!(accounts.session(&token, true).unwrap().is_some());
+    drop(accounts);
+    assert!(fs::read(&path).unwrap() != before);
+    let mut accounts = Accounts::open(dir.path(), &allowed, 1_060 + LIFETIME - 1).unwrap();
+    assert!(accounts.session(&token, false).unwrap().is_some());
+    drop(accounts);
+    let mut accounts = Accounts::open(dir.path(), &allowed, 1_060 + LIFETIME).unwrap();
+    assert!(accounts.session(&token, false).unwrap().is_none());
+}
+
+#[test]
 fn sessions_expire_thirty_days_after_last_use_and_allowlist_removal_revokes_them() {
     let dir = tempfile::tempdir().unwrap();
     let allowed = vec!["owner@example.test".into()];
