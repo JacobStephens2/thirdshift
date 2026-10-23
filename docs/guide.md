@@ -451,13 +451,18 @@ prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
 `1800`-second per-Trial timeout, and up to two fresh retries for Void Trials.
 Override these with `--margin`, `--credible-level`, `--prior`, `--seed`,
 `--draws`, `--trials-per-task`, `--timeout` (seconds), or `--void-retries`.
-Timeouts count as failed Trials. Void causes are recorded; usage/rate limits
-pause scheduling until the same Experiment is started again. Claude's warning
-and rejection events also pause it immediately, as do Codex quota reports at
+`--void-retries` accepts zero, one or two. A sandbox that cannot start, a
+provider connection or login failure, a provider server error before work, a
+plan-limit stop, or a host kill or Trial-only memory cap makes a Trial void.
+Timeouts, context-window overflow, refusals and agent failures count as failed
+Trials. Void Trials retry fresh up to the Bar's limit and remain void if
+exhausted. A task still void in either Arm drops out of both Arms.
+
+Usage/rate limits pause scheduling until the same Experiment is started again.
+Claude's warning and rejection events also pause it immediately, as do Codex quota reports at
 85% usage in either window. A Trial cut short by a warning is void; a Trial
 already running on the other worker may finish, but neither worker starts
-another Trial or retry. Ordinary Runs do not stop at these warnings. Other Void Trials
-retry up to the Bar's limit and remain void if exhausted.
+another Trial or retry. Ordinary Runs do not stop at these warnings.
 The Experiment watches each Trial with the current detectors, including when
 an Arm's build predates warning detection.
 
@@ -475,8 +480,10 @@ or three). Any failed suite fails the Experiment; otherwise any inconclusive
 suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
 also makes it inconclusive. Results include the suite intervals, the Bar and
 each Arm's minutes across all attempts, including Void Trials and timeouts.
-Completed attempts that pause for provider limits count too, both while paused
-and after resume, without consuming the Bar's fresh-retry budget.
+Provider usage/rate limits pause scheduling until the same Experiment is
+started again, consuming the same fresh-retry budget across resumes. Completed
+attempts count toward minutes and per-Arm Void totals even while paused or
+after resume. Stop preserves completed attempts and the remaining budget.
 
 The same Arms and suite names identify the same Experiment. Running it again
 skips finished Trials and re-runs interrupted ones; a completed Experiment only
@@ -484,7 +491,9 @@ reports its saved results. A changed Bar is refused after the first Trial.
 `thirdshift experiments --json` lists them and `thirdshift experiments <id>
 --json` shows one. The starting command's `--json` ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
-minutes. The text view shows Baseline and Candidate minutes beside the Verdict.
+minutes. Both views show Void counts and causes per Arm, and report repeated
+Trial-only memory-cap stops as a finding against that Arm. The text view shows
+Baseline and Candidate minutes beside the Verdict.
 
 Each invocation that does work keeps a Command record, Command log and Activity
 log lines under `<logs.dir>/JacobStephens2/thirdshift/commands/experiment/`
