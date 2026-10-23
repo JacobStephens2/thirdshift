@@ -617,6 +617,8 @@ The session id comes from `sessionID` in the stream, and a Resume uses `-s <id>`
 
 The Command log's opening lines (`sessions run on claude · claude-opus-5-5 · high`), the Activity log's start line, the pull request's body and the Run notification each name the Harness, Model and Effort, `default model` or `default effort` where the Harness's own is used. In the pull request's body, the Spec PR's included, thirdshift writes the line itself once the opening session has ended, such as `Built with claude 2.1.11 · claude-opus-5-5 · high`, replacing any it wrote there before. The Harness version comes from the same detection as its Session trace: stream metadata when available, otherwise its version command, shared across the Command's sessions and child Runs. An unavailable version is `unknown`. Older Built-with lines without a version still read.
 
+If a Repair or Base fix reports a different Harness version, thirdshift refreshes the open pull request's line before Self-merge so the Run notification matches it.
+
 ### Email
 
 thirdshift sends email itself, with one HTTPS request to [Resend](https://resend.com)'s API, so it needs no mail server on the machine and works where SMTP ports are blocked ([ADR 0005](adr/0005-run-notifications-through-resend.md)). It needs a Resend account and an API key:

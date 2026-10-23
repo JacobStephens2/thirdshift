@@ -272,11 +272,10 @@ impl Route<'_> {
     /// warning if that fails, as the work is done without it. Nothing if
     /// there is no pull request: marking it ready says so.
     fn write_built_with(&self, outside: &mut impl Outside) {
-        let built_with = self.harness.built_with();
         if let Err(error) = outside.write_built_with(self.harness) {
             outside.warn(
                 &error,
-                format!("could not write \"{built_with}\" in the pull request's body"),
+                "could not write the Built-with line in the pull request's body".into(),
             );
         }
     }
@@ -674,6 +673,21 @@ struct RunOutside<'a> {
     ci_watch: ci::Watch<'a>,
 }
 
+impl RunOutside<'_> {
+    /// A Repair or Base fix may have reported a new Harness version. Refresh
+    /// attribution while the PR is still actionable, before any Self-merge.
+    fn refresh_built_with(&mut self) -> Result<()> {
+        self.pull_request.ensure_actionable(true)?;
+        if let Err(error) = self.pull_request.write_built_with(&self.child_asks.harness) {
+            progress::warn(
+                &error,
+                format_args!("could not write the Built-with line in the pull request's body"),
+            );
+        }
+        Ok(())
+    }
+}
+
 impl repair_loop::Outside for RunOutside<'_> {
     type Pending = PendingMerge;
 
@@ -744,8 +758,9 @@ impl repair_loop::Outside for RunOutside<'_> {
             Repair::Review { from } => prompt::review_repair(issue, branch, pr_url, from),
         };
         self.pull_request.ensure_actionable(true)?;
-        self.sessions.run(kind, &prompt)?;
-        self.pull_request.ensure_actionable(true)
+        let result = self.sessions.run(kind, &prompt);
+        self.refresh_built_with()?;
+        result
     }
 
     fn sees_inherited_failures(&mut self) -> bool {
@@ -758,8 +773,11 @@ impl repair_loop::Outside for RunOutside<'_> {
             issue: self.issue,
             asks: self.child_asks,
         };
-        self.base_fix
-            .fix(outside, self.pr_url, self.base, base_commit, failed)
+        let result = self
+            .base_fix
+            .fix(outside, self.pr_url, self.base, base_commit, failed);
+        self.refresh_built_with()?;
+        result
     }
 
     fn pr_mergeable(&mut self) -> Result<bool> {

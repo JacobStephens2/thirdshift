@@ -3,7 +3,7 @@
 use std::fmt;
 use std::str::FromStr;
 
-use super::{Choice, Harness, version};
+use super::{Choice, Harness};
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct BuiltWith {
@@ -13,15 +13,11 @@ pub(crate) struct BuiltWith {
     pub effort: String,
 }
 
-impl From<&Choice> for BuiltWith {
-    fn from(choice: &Choice) -> Self {
-        let owner = crate::logs::captured_owner().ok();
+impl BuiltWith {
+    pub fn new(choice: &Choice, version: &str) -> Self {
         Self {
             harness: choice.harness,
-            version: Some(version::detected(
-                choice.harness,
-                owner.as_ref().and_then(|owner| owner.log_path()),
-            )),
+            version: Some(version.into()),
             model: choice.model.as_deref().unwrap_or("default model").into(),
             effort: choice.effort.as_deref().unwrap_or("default effort").into(),
         }

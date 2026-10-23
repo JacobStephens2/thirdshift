@@ -209,12 +209,15 @@ impl<A: Adapter> PullRequest<A> {
         };
         self.validate(&snapshot, false)?;
         let body = self.adapter.body(&self.issue, snapshot.pr.number, false)?;
-        let written = with_built_with(&body, choice);
+        let owner = crate::logs::captured_owner().ok();
+        let version = crate::harness::version::detected(
+            choice.harness,
+            owner.as_ref().and_then(|owner| owner.log_path()),
+        );
+        let line = choice.built_with(&version);
+        let written = with_built_with(&body, &line);
         if written != body {
-            progress::step(format!(
-                "writing \"{}\" in the pull request's body",
-                choice.built_with()
-            ));
+            progress::step(format!("writing \"{line}\" in the pull request's body"));
             self.adapter
                 .set_body(&self.issue, snapshot.pr.number, &written, false)?;
         }
@@ -610,8 +613,8 @@ fn with_checklist(body: &str, checklist: &str) -> String {
 const BUILT_WITH_MARKER: &str = "<!-- thirdshift:built-with -->";
 
 /// Preserve unrelated text and replace only thirdshift's annotation line.
-fn with_built_with(body: &str, choice: &Choice) -> String {
-    let line = format!("{} {BUILT_WITH_MARKER}", choice.built_with());
+fn with_built_with(body: &str, line: &str) -> String {
+    let line = format!("{line} {BUILT_WITH_MARKER}");
     if body.contains(BUILT_WITH_MARKER) {
         return body
             .split_inclusive('\n')

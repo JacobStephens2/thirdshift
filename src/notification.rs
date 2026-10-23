@@ -160,7 +160,8 @@ impl RunNotification {
             if account.pre_audit_failure.is_some() {
                 return format!("{choice} (configured)");
             }
-            let line = choice.built_with();
+            let version = crate::harness::version::detected(choice.harness, command_log.as_deref());
+            let line = choice.built_with(&version);
             format!("{} (configured)", line.strip_prefix("Built with ").unwrap())
         });
         let mut text = body(
