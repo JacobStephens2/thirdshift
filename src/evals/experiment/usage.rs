@@ -8,6 +8,7 @@ use std::path::Path;
 use anyhow::Result;
 use serde::Serialize;
 
+use super::workers;
 use crate::otlp_jsonl::{AnyValue, KeyValue, Reader, Span, Spans};
 
 #[derive(Default, Serialize)]
@@ -22,7 +23,7 @@ pub(super) struct Arm {
     cost_usd: Option<f64>,
 }
 
-#[derive(Default, Serialize)]
+#[derive(Clone, Copy, Default, Serialize)]
 struct Measurement {
     input_tokens: Option<u64>,
     output_tokens: Option<u64>,
@@ -35,15 +36,15 @@ impl Arms {
     pub fn read(directory: &Path) -> Result<Self> {
         let mut arms = Self::default();
         for attempt in super::trace::attempts(directory)? {
-            let name = attempt
+            let key = attempt
                 .parent()
                 .unwrap()
                 .file_name()
                 .unwrap()
                 .to_string_lossy();
-            let arm = match name.split("--").nth(1) {
-                Some("baseline") => &mut arms.baseline,
-                Some("candidate") => &mut arms.candidate,
+            let arm = match workers::Arm::from_trial_key(&key) {
+                Some(workers::Arm::Baseline) => &mut arms.baseline,
+                Some(workers::Arm::Candidate) => &mut arms.candidate,
                 _ => continue,
             };
             for session in super::trace::sessions(&attempt)? {
@@ -104,6 +105,22 @@ impl Arm {
             }
         }
         if let Some(session) = session {
+            let total = Measurement::span(session);
+            let model = text(&session.attributes, "thirdshift.model").unwrap_or("unknown");
+            // A Session total can refine partial calls when all measured usage
+            // belongs to that Model. Keep multi-Model totals unattributed.
+            if total.reported()
+                && arm.models.len() == 1
+                && let Some(measurement) = arm.models.get_mut(model)
+            {
+                measurement.prefer_total(
+                    Measurement {
+                        cost_usd: None,
+                        ..total
+                    },
+                    false,
+                );
+            }
             if let Some(models) = text(&session.attributes, "thirdshift.model_usage") {
                 let models: BTreeMap<String, serde_json::Value> = serde_json::from_str(models)?;
                 for (model, event) in models {
@@ -129,9 +146,7 @@ impl Arm {
                     }
                 }
             }
-            let total = Measurement::span(session);
             if arm.models.is_empty() && total.reported() {
-                let model = text(&session.attributes, "thirdshift.model").unwrap_or("unknown");
                 arm.models.insert(
                     model.into(),
                     Measurement {

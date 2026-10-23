@@ -211,6 +211,32 @@ echo '{"event":"init","conversation_id":"reported","init":{"model":"gemini-obser
 }
 
 #[test]
+fn arm_usage_keeps_session_totals_when_model_calls_report_partial_usage() {
+    let fixture = Fixture::new();
+    let harness = fixture.scenario.path("bin/agy");
+    let real = harness.canonicalize().unwrap();
+    let fixed = fixture.scenario.path("versions/v1/agy");
+    fs::copy(real, &fixed).unwrap();
+    fs::remove_file(&harness).unwrap();
+    std::os::unix::fs::symlink(fixed, &harness).unwrap();
+    fixture.scenario.agent_does(
+        r#"
+echo '{"event":"init","conversation_id":"reported","init":{"model":"gemini-observed"}}'
+echo '{"event":"step_update","step_update":{"conversation_id":"reported","step_index":1,"step_type":"agent_response","state":"DONE","usage":{"output_tokens":2}}}'
+"#,
+    );
+    let run = fixture.run(&["--baseline-harness", "agy", "--candidate-harness", "agy"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    for arm in ["baseline", "candidate"] {
+        let model = &experiment["usage"][arm]["models"]["gemini-observed"];
+        assert_eq!(model["input_tokens"], 1200, "{model:#}");
+        assert_eq!(model["output_tokens"], 300, "{model:#}");
+        assert_eq!(model["cache_read_tokens"], 200, "{model:#}");
+    }
+}
+
+#[test]
 fn partial_model_input_total_includes_preserved_cache_tokens() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does(r#"

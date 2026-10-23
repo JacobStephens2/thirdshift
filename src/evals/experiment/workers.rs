@@ -38,6 +38,13 @@ impl Arm {
             Self::Candidate => "candidate",
         }
     }
+
+    pub fn from_trial_key(key: &str) -> Option<Self> {
+        let name = key.split("--").nth(1)?;
+        [Self::Baseline, Self::Candidate]
+            .into_iter()
+            .find(|arm| arm.name() == name)
+    }
 }
 
 #[derive(Serialize, Deserialize)]
