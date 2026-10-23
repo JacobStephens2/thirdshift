@@ -1651,6 +1651,38 @@ always = false # quiet, please
     }
 
     #[test]
+    fn unless_merged_alone_counts_as_notifications_on_and_answering_no_turns_it_off() {
+        let mut outside = Scripted {
+            user_config: Some("[email]\nunless_merged = true\n".to_string()),
+            key: Ok(Some(Source::Credentials(CREDENTIALS.into()))),
+            ..Scripted::answering(&[
+                (MERGE, ""),
+                (BASE_FIX, ""),
+                (PULL, ""),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
+                (NOTIFY, "n"),
+                (CLAUDE_TOKEN, ""),
+                (CONSOLE, "n"),
+            ])
+        };
+
+        setup(&mut outside).unwrap();
+
+        assert!(
+            outside
+                .prompts()
+                .iter()
+                .any(|prompt| prompt.contains(NOTIFY) && prompt.ends_with("[Y/n] ")),
+            "{:?}",
+            outside.prompts()
+        );
+        let config = table(&outside);
+        assert_eq!(config["email"]["always"].as_bool(), Some(false));
+        assert_eq!(config["email"]["unless_merged"].as_bool(), Some(false));
+    }
+
+    #[test]
     fn with_no_key_anywhere_skipping_it_saves_nothing_offers_no_test_email_and_says_how_to_add_one()
     {
         let mut outside = Scripted::answering(&notifications_on(&[

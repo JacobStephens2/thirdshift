@@ -228,19 +228,22 @@ impl Flags {
 
     /// What a run with these flags is asked about its own Run notification:
     /// what `email`, `email-unless-merged` or `no-email` asked for, else what
-    /// `config` says, `email.unless_merged` narrowing `email.always`. It is
-    /// a Run's ask, and a Pass's for the one
-    /// notification it sends itself.
+    /// `config` says, `email.unless_merged` with or without `email.always`
+    /// asking as `email-unless-merged` does. It is a Run's ask, and a Pass's
+    /// for the one notification it sends itself.
     pub fn notification(&self, config: &UserConfig) -> NotificationAsk {
-        self.email.clone().unwrap_or(match config.email {
-            EmailSettings {
-                always: true,
-                unless_merged: true,
-                ..
-            } => NotificationAsk::SendUnlessMerged(None),
-            EmailSettings { always: true, .. } => NotificationAsk::Send(None),
-            EmailSettings { always: false, .. } => NotificationAsk::Skip,
-        })
+        match (&self.email, &config.email) {
+            (Some(asked), _) => asked.clone(),
+            (
+                None,
+                EmailSettings {
+                    unless_merged: true,
+                    ..
+                },
+            ) => NotificationAsk::SendUnlessMerged(None),
+            (None, EmailSettings { always: true, .. }) => NotificationAsk::Send(None),
+            (None, _) => NotificationAsk::Skip,
+        }
     }
 
     /// The Harness, Model and Effort a command with these flags runs its
@@ -810,18 +813,22 @@ mod tests {
             ),
             (
                 None,
-                unless_merged(true),
+                unless_merged_with_always(true),
                 NotificationAsk::SendUnlessMerged(None),
             ),
-            (None, unless_merged(false), NotificationAsk::Skip),
+            (
+                None,
+                unless_merged_with_always(false),
+                NotificationAsk::SendUnlessMerged(None),
+            ),
             (
                 Some(NotificationAsk::Send(None)),
-                unless_merged(true),
+                unless_merged_with_always(true),
                 NotificationAsk::Send(None),
             ),
             (
                 Some(NotificationAsk::Skip),
-                unless_merged(true),
+                unless_merged_with_always(false),
                 NotificationAsk::Skip,
             ),
         ] {
@@ -836,7 +843,7 @@ mod tests {
 
     /// A User config with `email.unless_merged` set, and `email.always` as
     /// `always` says.
-    fn unless_merged(always: bool) -> UserConfig {
+    fn unless_merged_with_always(always: bool) -> UserConfig {
         UserConfig {
             email: EmailSettings {
                 always,

@@ -82,8 +82,9 @@ pub struct EmailSettings {
     /// `email.always`: every Run, and every Architect run, sends a Run
     /// notification unless told `no-email`.
     pub always: bool,
-    /// `email.unless_merged`: the Run notification `email.always` asks for
-    /// is saved but not emailed when the command ended merged.
+    /// `email.unless_merged`: every Run, and every Architect run, sends a
+    /// Run notification as if told `email-unless-merged`, with or without
+    /// `email.always`, unless told `email` or `no-email`.
     pub unless_merged: bool,
     /// `email.to`: the address email goes to when the command names none.
     pub to: Option<String>,
@@ -398,6 +399,9 @@ impl UserConfigDocument {
                 "always",
                 changes.notifications.is_some(),
             );
+            if changes.notifications.is_none() {
+                set(&mut document, "email", "unless_merged", false);
+            }
             if let Some(notifications) = &changes.notifications {
                 set(&mut document, "email", "from", notifications.from.as_str());
                 set_email_to(&mut document, &notifications.to);
@@ -868,7 +872,7 @@ pull = false     # every Ticket run first fast-forwards your checkout of the Bas
 
 [email]
 always = false                  # every Ticket run sends a Run notification, without the email word; default false
-unless_merged = false           # with always, a Ticket run that merged emails none, as the email-unless-merged word asks; default false
+unless_merged = false           # every Ticket run sends a Run notification unless it merged, without the email-unless-merged word; default false
 # to = "you@example.com"        # where email goes when the command names no address; no default
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 

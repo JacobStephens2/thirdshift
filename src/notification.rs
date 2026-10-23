@@ -16,7 +16,6 @@ use crate::issue::{IssueUrl, Repo};
 use crate::launch;
 use crate::logs;
 use crate::progress;
-use crate::run::Goal;
 use crate::run_ending::Account;
 
 /// Whether a Run or a Pass emails its Run notification, by its command or,
@@ -156,7 +155,7 @@ impl RunNotification {
 
     /// Save the one notification for the command that ended as `account`
     /// tells, and email it if asked, unless asked only for a command that
-    /// did not end merged and it did. A Pickup run that took no issue has
+    /// did not end merged and it merged with nothing waiting. A Pickup run that took no issue has
     /// nothing to tell, as a skipped pass, which has no account, does not
     /// either. A failed write or send is only a warning: it never changes
     /// the command's outcome.
@@ -198,8 +197,8 @@ impl RunNotification {
                 ));
             }
         }
-        let merged = account.outcome == Goal::Merged.outcome();
-        if let Some(resend) = self.resend.filter(|_| !(self.unless_merged && merged))
+        if let Some(resend) = self.resend
+            && !(self.unless_merged && account.merged_with_nothing_waiting())
             && let Err(error) = resend.send(&subject, &text)
         {
             progress::step(format_args!(

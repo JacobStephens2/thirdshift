@@ -804,7 +804,7 @@ fn merge_after_a_bare_flag_reaches_the_run_notification_as_the_goal() {
 }
 
 #[test]
-fn email_unless_merged_saves_a_merged_runs_notification_without_emailing_it() {
+fn email_unless_merged_saves_a_merged_ticket_runs_notification_without_emailing_it() {
     let scenario = Scenario::new();
     scenario.issue_titled(7, "Add export button");
     scenario.agent_does(AGENT_OPENS_PR);
@@ -836,7 +836,7 @@ fn email_unless_merged_saves_a_merged_runs_notification_without_emailing_it() {
 }
 
 #[test]
-fn email_unless_merged_emails_a_run_left_ready_for_review() {
+fn email_unless_merged_emails_a_ticket_run_left_ready_for_review() {
     let scenario = Scenario::new();
     scenario.issue_titled(7, "Add export button");
     scenario.agent_does(AGENT_OPENS_PR);
@@ -864,7 +864,7 @@ fn email_unless_merged_emails_a_run_left_ready_for_review() {
 }
 
 #[test]
-fn email_unless_merged_emails_a_failed_run() {
+fn email_unless_merged_emails_a_failed_ticket_run() {
     let scenario = Scenario::new();
     scenario.user_config_is("[email]\nto = \"config@example.com\"\n");
     scenario.agent_does("exit 3\n");
@@ -909,7 +909,7 @@ fn email_unless_merged_checks_for_a_key_before_any_work() {
 }
 
 #[test]
-fn email_unless_merged_in_the_user_config_emails_only_a_run_that_did_not_merge() {
+fn email_unless_merged_in_the_user_config_emails_only_a_ticket_run_that_did_not_merge() {
     for (goal, emailed) in [("merge", false), ("no-merge", true)] {
         let scenario = Scenario::new();
         scenario.user_config_is(
@@ -929,6 +929,22 @@ fn email_unless_merged_in_the_user_config_emails_only_a_run_that_did_not_merge()
         assert_eq!(resend.requests().len(), usize::from(emailed), "{goal}");
         saved_notification(&scenario, "issue");
     }
+}
+
+#[test]
+fn unless_merged_alone_in_the_user_config_emails_a_ticket_run_that_did_not_merge() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[email]\nunless_merged = true\nto = \"me@example.com\"\n");
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let result = run(
+        &scenario,
+        &resend,
+        &["no-merge", &scenario.issue_url(7)],
+        Some(KEY),
+    );
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(resend.requests().len(), 1, "{:?}", resend.requests());
 }
 
 #[test]

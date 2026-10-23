@@ -108,8 +108,7 @@ merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
 
 Shared options (before or after the Issue URL or number, or after a Pass command):
   merge / no-merge                    Merge the pull request / leave it for review
-  email [<address>] / no-email        Send a Run notification / skip it
-  email-unless-merged [<address>]     Send a Run notification unless it ended merged
+  email [<address>] / no-email        Send a Run notification / skip it (email-unless-merged [<address>]: unless merged)
   base-fix / no-base-fix              Allow / forbid fixing inherited CI failures
   parallel <n>                       Run up to <n> Tickets at once (Spec runs; default 3)
   harness <name>                     Choose claude, codex, agy, grok, muse, opencode
