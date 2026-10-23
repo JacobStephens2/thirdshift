@@ -287,6 +287,107 @@ while true; do sleep 0.05; done
 }
 
 #[test]
+fn plan_limit_warnings_pause_both_workers_and_rerunning_resumes_void_trials() {
+    for (harness, event) in [
+        (
+            "claude",
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day"}}"#,
+        ),
+        (
+            "codex",
+            r#"{"type":"token_count","rate_limits":{"secondary":{"used_percent":85}}}"#,
+        ),
+    ] {
+        let fixture = Fixture::new();
+        fixture
+            .scenario
+            .agent_does(&format!("echo '{event}'\nsleep 0.5\n"));
+        let args = [
+            "--trials-per-task",
+            "3",
+            "--baseline-harness",
+            harness,
+            "--candidate-harness",
+            harness,
+        ];
+        let paused = fixture.run(&args);
+        assert_eq!(paused.code, Some(1), "{harness}: {}", paused.stderr);
+        assert!(paused.stderr.contains("paused"), "{}", paused.stderr);
+        let before = fixture.experiment();
+        assert_eq!(before["state"], "paused");
+        assert!(before["results"].as_array().unwrap().is_empty(), "{before}");
+        let calls = || {
+            if harness == "claude" {
+                fixture.scenario.claude_calls()
+            } else {
+                fixture.scenario.codex_calls()
+            }
+        };
+        let started = calls().len();
+        assert!(
+            (1..=2).contains(&started),
+            "started {started} Trials after a warning"
+        );
+
+        fixture.scenario.agent_does("true");
+        let resumed = fixture.run(&args);
+        assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+        let after = fixture.experiment();
+        assert_eq!(after["id"], before["id"]);
+        assert_eq!(after["state"], "completed");
+        assert_eq!(after["results"].as_array().unwrap().len(), 6);
+        assert_eq!(calls().len(), started + 6, "void Trials must be retried");
+        for result in after["results"].as_array().unwrap() {
+            assert_eq!(result["outcome"], "succeeded");
+        }
+    }
+}
+
+#[test]
+fn a_warning_blocks_the_other_worker_while_the_warned_harness_is_stopping() {
+    let fixture = Fixture::new();
+    let warned = fixture.scenario.path("warning-emitted");
+    fixture.scenario.agent_does(&format!(
+        r#"
+case "$PWD" in
+  *--baseline--0/*)
+    trap 'sleep 1; exit 0' TERM
+    while [ ! -f '{}.peer' ]; do sleep 0.01; done
+    echo '{{"type":"rate_limit_event","rate_limit_info":{{"status":"allowed_warning"}}}}'
+    touch '{}'
+    while true; do sleep 0.05; done
+    ;;
+  *)
+    touch '{}.peer'
+    while [ ! -f '{}' ]; do sleep 0.01; done
+    sleep 0.2
+    ;;
+esac
+"#,
+        warned.display(),
+        warned.display(),
+        warned.display(),
+        warned.display()
+    ));
+    let paused = fixture.run(&["--trials-per-task", "3"]);
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    assert_eq!(fixture.experiment()["state"], "paused");
+    assert_eq!(
+        fixture.scenario.claude_calls().len(),
+        2,
+        "the other worker started work after the warning"
+    );
+    fixture.scenario.agent_does("true");
+    let resumed = fixture.run(&["--trials-per-task", "3"]);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    assert_eq!(
+        fixture.scenario.claude_calls().len(),
+        7,
+        "resume must keep the other worker's finished Trial"
+    );
+}
+
+#[test]
 fn two_workers_interleave_the_arms_without_exceeding_two_active_trials() {
     let fixture = Fixture::new();
     let directory = fixture.scenario.path("concurrency");

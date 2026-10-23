@@ -18,6 +18,7 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 
 use super::{Task, arms, store};
+use crate::harness::interpretation::limits;
 use crate::process::{self, Control, Interruption};
 use crate::trial::{Outcome, Output, VoidCause};
 use crate::{interrupt, logs, progress};
@@ -68,6 +69,12 @@ impl Trial<'_> {
 }
 
 pub(super) fn run(experiment: &store::Stored) -> Result<()> {
+    let signal = experiment.directory.join("plan-limit");
+    match fs::remove_file(&signal) {
+        Ok(()) => (),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+        Err(error) => return Err(error.into()),
+    }
     let prepared = experiment
         .description
         .prepared
@@ -116,12 +123,13 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
                             return Ok(());
                         }
                         interrupt::check()?;
+                        limits::check(&signal)?;
                         queue.pop_front()
                     };
                     let Some(trial) = trial else {
                         return Ok(());
                     };
-                    if let Err(error) = run_trial(experiment, &trial, prepared) {
+                    if let Err(error) = run_trial(experiment, &trial, prepared, &signal) {
                         stopped.store(true, Ordering::SeqCst);
                         return Err(error);
                     }
@@ -147,6 +155,7 @@ fn run_trial(
     experiment: &store::Stored,
     trial: &Trial<'_>,
     prepared: &arms::Prepared,
+    signal: &Path,
 ) -> Result<()> {
     let (arm, setup) = match trial.arm {
         Arm::Baseline => (&prepared.baseline, &experiment.description.baseline),
@@ -170,6 +179,7 @@ fn run_trial(
     let bar = &experiment.description.bar;
     while result.outcome == Outcome::Void && result.attempts.len() <= bar.void_rules.retries {
         interrupt::check()?;
+        limits::check(signal)?;
         let attempt = tempfile::Builder::new()
             .prefix("attempt-")
             .tempdir_in(&directory)?
@@ -199,6 +209,7 @@ fn run_trial(
             .create(true)
             .append(true)
             .open(experiment.directory.join("started"))?;
+        limits::check(signal)?;
         progress::step(format!("Trial {} starting", trial.key()));
         let output = execute(
             experiment,
@@ -206,6 +217,7 @@ fn run_trial(
             trial.arm,
             &request,
             Duration::from_secs(bar.timeout_seconds),
+            signal,
         );
         interrupt::check()?;
         let protocol = match output {
@@ -305,6 +317,7 @@ fn execute(
     name: Arm,
     request: &Path,
     timeout: Duration,
+    signal: &Path,
 ) -> Result<std::process::Output> {
     let directory = experiment.directory.join("harnesses").join(name.name());
     let path = std::env::join_paths(std::iter::once(directory).chain(std::env::split_paths(
@@ -314,6 +327,7 @@ fn execute(
         Command::new(&arm.binary)
             .arg("--trial")
             .arg(request)
+            .env(limits::SIGNAL_ENV, signal)
             .env("PATH", path),
         None,
         Control {

@@ -64,6 +64,10 @@ The result version is independently identified by `version: 1`.
   login or connection failure, a provider server error before work, a Harness
   that exits before work without a diagnostic, or a provider usage/rate limit.
   The Experiment's Bar decides which Void causes to retry or exclude.
+  A live Claude plan-limit warning or rejection, or a Codex quota report at
+  85% in either window, stops the session and makes the Trial void with
+  `usage_limit`. Ordinary Runs keep running. Codex's retained token-count
+  reports are checked while the session runs when exec does not stream them.
 - `timings`: elapsed wall time in integer milliseconds. `total_ms` includes
   request preparation; `session_ms` includes skills setup, the session and any
   Resume, and report preservation.

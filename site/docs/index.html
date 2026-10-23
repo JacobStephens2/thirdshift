@@ -436,7 +436,11 @@ prior <code>1</code>, seed <code>0</code>, <code>20000</code> draws, each suite&
 Override these with <code>--margin</code>, <code>--credible-level</code>, <code>--prior</code>, <code>--seed</code>,
 <code>--draws</code>, <code>--trials-per-task</code>, <code>--timeout</code> (seconds), or <code>--void-retries</code>.
 Timeouts count as failed Trials. Void causes are recorded; usage/rate limits
-pause scheduling until the same Experiment is started again. Other Void Trials
+pause scheduling until the same Experiment is started again. Claude&#39;s warning
+and rejection events also pause it immediately, as do Codex quota reports at
+85% usage in either window. A Trial cut short by a warning is void; a Trial
+already running on the other worker may finish, but neither worker starts
+another Trial or retry. Ordinary Runs do not stop at these warnings. Other Void Trials
 retry up to the Bar&#39;s limit and remain void if exhausted.</p>
 <p>Two workers take alternating Baseline and Candidate Trials, each in a fresh
 prepared repository. Trial artifacts and one result per finished Trial live
