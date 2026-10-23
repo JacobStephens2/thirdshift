@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::workers::TrialResult;
+use super::workers::{Arm, TrialResult};
 use super::{Description, Task};
 
 #[derive(Serialize, Deserialize)]
@@ -34,7 +34,27 @@ struct View<'a> {
     created_at: &'a str,
     results: Vec<TrialResult>,
     verdict: &'a Option<super::grading::Verdict>,
-    minutes: std::collections::BTreeMap<&'static str, f64>,
+    minutes: Minutes,
+}
+
+#[derive(Default, Serialize)]
+struct Minutes {
+    baseline: f64,
+    candidate: f64,
+}
+
+impl Minutes {
+    fn include(&mut self, result: &TrialResult) {
+        let arm = match result.arm {
+            Arm::Baseline => &mut self.baseline,
+            Arm::Candidate => &mut self.candidate,
+        };
+        *arm += result
+            .attempts
+            .iter()
+            .map(|attempt| attempt.timings.total_ms as f64 / 60_000.0)
+            .sum::<f64>();
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,11 +134,17 @@ impl Stored {
 
     fn view(&self) -> Result<View<'_>> {
         let results = self.results()?;
-        let mut minutes = std::collections::BTreeMap::from([("baseline", 0.0), ("candidate", 0.0)]);
-        for result in &results {
-            for attempt in &result.attempts {
-                *minutes.get_mut(result.arm.name()).unwrap() +=
-                    attempt.timings.total_ms as f64 / 60_000.0;
+        let mut minutes = Minutes::default();
+        let trials = self.directory.join("trials");
+        if trials.exists() {
+            for trial in fs::read_dir(trials)? {
+                let pending = trial?.path().join("pending.json");
+                if pending.is_file() {
+                    // Every completed attempt is retained here before a pause
+                    // or final publication. Read it once per Trial, so live
+                    // and paused Experiments include time already spent too.
+                    minutes.include(&serde_json::from_slice(&fs::read(pending)?)?);
+                }
             }
         }
         Ok(View {
@@ -146,8 +172,8 @@ impl Stored {
                 self.verdict
                     .as_ref()
                     .map_or("pending", |verdict| verdict.outcome()),
-                view.minutes["baseline"],
-                view.minutes["candidate"]
+                view.minutes.baseline,
+                view.minutes.candidate
             ))
         }
     }

@@ -469,6 +469,8 @@ or three). Any failed suite fails the Experiment; otherwise any inconclusive
 suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
 also makes it inconclusive. Results include the suite intervals, the Bar and
 each Arm's minutes across all attempts, including Void Trials and timeouts.
+Completed attempts that pause for provider limits count too, both while paused
+and after resume, without consuming the Bar's fresh-retry budget.
 
 The same Arms and suite names identify the same Experiment. Running it again
 skips finished Trials and re-runs interrupted ones; a completed Experiment only

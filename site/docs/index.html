@@ -450,7 +450,9 @@ cover mechanical checks only and set no wrong-finding flags.</p>
 or three). Any failed suite fails the Experiment; otherwise any inconclusive
 suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
 also makes it inconclusive. Results include the suite intervals, the Bar and
-each Arm&#39;s minutes across all attempts, including Void Trials and timeouts.</p>
+each Arm&#39;s minutes across all attempts, including Void Trials and timeouts.
+Completed attempts that pause for provider limits count too, both while paused
+and after resume, without consuming the Bar&#39;s fresh-retry budget.</p>
 <p>The same Arms and suite names identify the same Experiment. Running it again
 skips finished Trials and re-runs interrupted ones; a completed Experiment only
 reports its saved results. A changed Bar is refused after the first Trial.

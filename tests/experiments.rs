@@ -6,6 +6,144 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 use support::Scenario;
 
+#[test]
+fn spec_review_generated_instruction_fallbacks_do_not_void_trials() {
+    for harness_name in ["agy", "opencode"] {
+        let fixture = Fixture::new();
+        let harness = fixture.scenario.path(&format!("bin/{harness_name}"));
+        let real = harness.canonicalize().unwrap();
+        let fixed = fixture
+            .scenario
+            .path(&format!("versions/v1/{harness_name}"));
+        fs::copy(real, &fixed).unwrap();
+        fs::remove_file(&harness).unwrap();
+        std::os::unix::fs::symlink(fixed, &harness).unwrap();
+        let directory = fixture
+            .scenario
+            .path("home/.thirdshift/evals/suites/spec-review/tasks/fixture");
+        fs::write(
+            directory.join("instructions.md"),
+            "Read the supplied Spec.\n",
+        )
+        .unwrap();
+        let task = directory.join("task.toml");
+        let manifest = fs::read_to_string(&task).unwrap();
+        fs::write(
+            &task,
+            manifest.replace("[inputs]", "[inputs]\n\"CLAUDE.md\" = \"instructions.md\""),
+        )
+        .unwrap();
+        fixture.scenario.agent_does("true");
+        let run = fixture.run(&[
+            "--baseline-harness",
+            harness_name,
+            "--candidate-harness",
+            harness_name,
+        ]);
+        assert_eq!(run.code, Some(0), "{harness_name}: {}", run.stderr);
+        let experiment = fixture.experiment();
+        for result in experiment["results"].as_array().unwrap() {
+            assert_eq!(
+                result["outcome"], "succeeded",
+                "{harness_name}: generated fallback links must not invalidate an unchanged Trial"
+            );
+        }
+    }
+}
+
+#[test]
+fn spec_review_ignored_repository_changes_are_void() {
+    let fixture = Fixture::new();
+    let directory = fixture
+        .scenario
+        .path("home/.thirdshift/evals/suites/spec-review/tasks/fixture");
+    let task = directory.join("task.toml");
+    let manifest = fs::read_to_string(&task).unwrap();
+    fs::write(directory.join("ignore.txt"), "ignored-by-fixture.txt\n").unwrap();
+    fs::write(
+        &task,
+        manifest.replace("[inputs]", "[inputs]\n\".gitignore\" = \"ignore.txt\""),
+    )
+    .unwrap();
+
+    fixture
+        .scenario
+        .agent_does("printf changed > ignored-by-fixture.txt");
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+
+    let experiment = fixture.experiment();
+    for result in experiment["results"].as_array().unwrap() {
+        assert_eq!(
+            result["outcome"], "void",
+            "creating an ignored repository file must invalidate the Trial"
+        );
+    }
+}
+
+#[test]
+fn spec_review_arm_minutes_include_limit_paused_attempts_after_resume() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(
+        r#"
+sleep 0.1
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["quota exceeded"]}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+"#,
+    );
+    let paused = fixture.run(&[]);
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    let paused_view = fixture.experiment();
+    assert!(
+        paused_view["minutes"]["baseline"].as_f64().unwrap()
+            + paused_view["minutes"]["candidate"].as_f64().unwrap()
+            > 0.0,
+        "completed sessions must count while the Experiment is paused"
+    );
+
+    fixture.scenario.agent_does("true");
+    let resumed = fixture.run(&[]);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    let experiment = fixture.experiment();
+    let id = experiment["id"].as_str().unwrap();
+    let trials = fixture
+        .scenario
+        .path(&format!("home/.thirdshift/evals/experiments/{id}/trials"));
+    let mut expected =
+        std::collections::BTreeMap::from([("baseline", 0.0_f64), ("candidate", 0.0_f64)]);
+
+    for trial in fs::read_dir(trials).unwrap() {
+        let trial = trial.unwrap();
+        let name = trial.file_name().to_string_lossy().into_owned();
+        let arm = if name.contains("--baseline--") {
+            "baseline"
+        } else {
+            "candidate"
+        };
+        for attempt in fs::read_dir(trial.path()).unwrap() {
+            let attempt = attempt.unwrap();
+            if !attempt.file_type().unwrap().is_dir() {
+                continue;
+            }
+            let path = attempt.path().join("result.json");
+            if !path.is_file() {
+                continue;
+            }
+            let output: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+            *expected.get_mut(arm).unwrap() +=
+                output["timings"]["total_ms"].as_u64().unwrap() as f64 / 60_000.0;
+        }
+    }
+
+    for arm in ["baseline", "candidate"] {
+        let shown = experiment["minutes"][arm].as_f64().unwrap();
+        assert!(
+            shown + 1e-9 >= expected[arm],
+            "{arm}: displayed {shown} minutes, retained attempts consumed {}",
+            expected[arm]
+        );
+    }
+}
+
 struct Fixture {
     scenario: Scenario,
     baseline: String,

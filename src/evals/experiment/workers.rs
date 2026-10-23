@@ -69,6 +69,14 @@ impl Trial<'_> {
     }
 }
 
+fn pauses(output: &Output) -> bool {
+    output.outcome == Outcome::Void
+        && matches!(
+            output.void_cause,
+            Some(VoidCause::UsageLimit | VoidCause::RateLimit | VoidCause::Interrupted)
+        )
+}
+
 pub(super) fn run(experiment: &store::Stored) -> Result<()> {
     let prepared = experiment
         .description
@@ -171,7 +179,14 @@ fn run_trial(
         }
     };
     let bar = &experiment.description.bar;
-    while result.outcome == Outcome::Void && result.attempts.len() <= bar.void_rules.retries {
+    while result.outcome == Outcome::Void
+        && result
+            .attempts
+            .iter()
+            .filter(|attempt| !pauses(attempt))
+            .count()
+            <= bar.void_rules.retries
+    {
         interrupt::check()?;
         let attempt = tempfile::Builder::new()
             .prefix("attempt-")
@@ -187,6 +202,13 @@ fn run_trial(
             &crate::git::Git::new(&prepared_repo.repository),
             &format!("/{}", crate::prompt::ISSUE_FILE),
         )?;
+        // Establish the Harness's idempotent instruction fallback before the
+        // comparison. The session may read it, but editing it still voids a Trial.
+        setup
+            .choice()
+            .harness
+            .adapter()
+            .link_instruction_fallback(&prepared_repo.repository)?;
         let before = integrity::snapshot(&prepared_repo.repository)?;
         let inputs = trial
             .task
@@ -247,18 +269,7 @@ fn run_trial(
         store::write(&attempt.join("result.json"), &protocol)?;
         let outcome = protocol.outcome;
         let void_cause = protocol.void_cause;
-        if outcome == Outcome::Void
-            && matches!(
-                void_cause,
-                Some(VoidCause::UsageLimit | VoidCause::RateLimit | VoidCause::Interrupted)
-            )
-        {
-            bail!(
-                "Trial {} paused: {:?}; run the Experiment again to resume",
-                trial.key(),
-                void_cause.unwrap()
-            );
-        }
+        let paused = pauses(&protocol);
         result.outcome = outcome;
         result.score = Some(grading::score(
             trial.task,
@@ -272,6 +283,13 @@ fn run_trial(
         // Preserve completed void attempts even if Stop cuts the next retry
         // short. A resume keeps the original Bar's remaining retry budget.
         store::write(&pending, &result)?;
+        if paused {
+            bail!(
+                "Trial {} paused: {:?}; run the Experiment again to resume",
+                trial.key(),
+                void_cause.unwrap()
+            );
+        }
         if !retry {
             break;
         }

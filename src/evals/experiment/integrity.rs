@@ -28,23 +28,26 @@ pub(super) fn snapshot(repository: &Path) -> Result<Vec<u8>> {
     ] {
         hash(&mut digest, git.run(&args)?.as_bytes());
     }
-    let files = git.run(&[
-        "ls-files",
-        "--cached",
-        "--others",
-        "--exclude-standard",
-        "-z",
-    ])?;
+    // Deliberately omit Git's ignore policy: ignored files are repository
+    // contents too. Only the Factory skill links written by session setup
+    // are allowed to appear without invalidating a Trial.
+    let files = git.run(&["ls-files", "--cached", "--others", "-z"])?;
     let mut files: BTreeSet<_> = files.split('\0').filter(|path| !path.is_empty()).collect();
-    // Trial setup excludes the issue from Git, but changing this input still
-    // changes the repository. Factory skill links and report scratch are the
-    // only generated files excluded by ordinary session setup.
+    // Include a deleted issue input as well, so its absence is recorded.
     files.insert(prompt::ISSUE_FILE);
     for name in files {
-        hash(&mut digest, name.as_bytes());
         let path = repository.join(name);
+        let skill = name
+            .strip_prefix(".claude/skills/")
+            .or_else(|| name.strip_prefix(".agents/skills/"));
         match fs::symlink_metadata(&path) {
             Ok(metadata) => {
+                if metadata.is_symlink()
+                    && skill.is_some_and(|skill| crate::skills::SKILLS.get_dir(skill).is_some())
+                {
+                    continue;
+                }
+                hash(&mut digest, name.as_bytes());
                 hash(&mut digest, &metadata.permissions().mode().to_le_bytes());
                 if metadata.is_symlink() {
                     hash(
@@ -56,6 +59,7 @@ pub(super) fn snapshot(repository: &Path) -> Result<Vec<u8>> {
                 }
             }
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                hash(&mut digest, name.as_bytes());
                 hash(&mut digest, b"missing");
             }
             Err(error) => return Err(error.into()),
