@@ -467,6 +467,86 @@ fn time_pages_pair_with_all_status_stages_and_repository_usual_ranges() {
 }
 
 #[test]
+fn stages_orders_known_rows_by_run_progression_then_unknown_names() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    for (index, names) in [
+        vec!["z legacy stage", "A future stage"],
+        vec![
+            "Security audit",
+            "Security reproduction",
+            "Security fix publishing",
+            "Security close check",
+            "dispatched Run",
+            "dispatched Spec run",
+        ],
+        vec!["Architecture review", "Tickets", "Spec review"],
+        vec![
+            "implement",
+            "Resume",
+            "Security review",
+            "pull request",
+            "CI watch",
+            "Repair",
+            "CI watch",
+            "Self-merge",
+            "cleanup",
+        ],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let number = index as u64 + 1;
+        let mut value = record(home.path(), number, Some("merged"), 0);
+        value["stages"] = names
+            .into_iter()
+            .map(|name| json!({"name": name, "began_at": value["started_at"], "session_log": null}))
+            .collect();
+        write_record(home.path(), number, &value);
+    }
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for page in ["/stages", "/?page=stages"] {
+        let html = console.get(page).text().unwrap();
+        assert_eq!(html.matches("<tbody>").count(), 2, "{html}");
+        for table in html.split("<tbody>").skip(1) {
+            let names: Vec<_> = table
+                .split("</tbody>")
+                .next()
+                .unwrap()
+                .split("<th scope=\"row\">")
+                .skip(1)
+                .map(|row| row.split("<br>").next().unwrap())
+                .collect();
+            assert_eq!(
+                names,
+                [
+                    "implement",
+                    "Resume",
+                    "Security review",
+                    "pull request",
+                    "CI watch",
+                    "Repair",
+                    "Self-merge",
+                    "cleanup",
+                    "Architecture review",
+                    "Tickets",
+                    "Spec review",
+                    "Security audit",
+                    "Security reproduction",
+                    "Security fix publishing",
+                    "Security close check",
+                    "dispatched Ticket run",
+                    "dispatched Spec run",
+                    "A future stage",
+                    "z legacy stage",
+                ],
+                "{page}"
+            );
+        }
+    }
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn stages_distinguishes_dispatch_from_insufficient_usual_range_samples() {
     let home = tempfile::tempdir().unwrap();

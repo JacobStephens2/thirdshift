@@ -236,11 +236,15 @@ pub(crate) fn load(config: &UserConfig, hours: f64) -> Result<Views> {
         let runs = &repositories[repository];
         let names: BTreeSet<_> = runs
             .iter()
-            .flat_map(|run| run.stages.iter().map(|stage| stage.name.clone()))
+            .flat_map(|run| {
+                run.stages
+                    .iter()
+                    .map(|stage| (StageName::order(&stage.name), stage.name.clone()))
+            })
             .collect();
         let rows = names
             .iter()
-            .map(|name| GridRow {
+            .map(|(_, name)| GridRow {
                 name: name.clone(),
                 usual: runs
                     .iter()
