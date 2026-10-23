@@ -3,6 +3,18 @@ const assert = require("node:assert/strict");
 const { readFile, stat } = require("node:fs/promises");
 const { resolve, dirname } = require("node:path");
 
+test("notification documentation limits suppression to child Ticket runs", async () => {
+  const glossary = (await readFile(resolve(__dirname, "../../GLOSSARY.md"), "utf8"))
+    .split("\n**Run notification**:\n")[1].split("\n_Avoid_:")[0].replaceAll("**", "");
+  assert.doesNotMatch(glossary, /and a Ticket run never sends one of its own/,
+    "Notification suppression must be scoped to Ticket runs inside a Spec run");
+  for (const file of ["../../docs/guide.md", "../docs/index.html"]) {
+    const manual = await readFile(resolve(__dirname, file), "utf8");
+    assert.doesNotMatch(manual, /dispatched Ticket runs, Ticket runs and Base fixes write none of their own/,
+      "Notification sidecar suppression must be scoped to child Ticket runs");
+  }
+});
+
 test("Session trace documentation does not advertise retired conversion commands", async () => {
   for (const file of ["../../docs/guide.md", "../docs/index.html"]) {
     const source = await readFile(resolve(__dirname, file), "utf8");
