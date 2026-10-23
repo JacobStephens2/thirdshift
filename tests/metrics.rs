@@ -28,11 +28,11 @@ fn trace(
     path
 }
 
-fn spec_review_flags(command: &str) -> Value {
+fn destructive_flags(command: &str) -> Value {
     let scenario = Scenario::new();
     let log = trace(
         &scenario,
-        "spec-review",
+        "destructive-check",
         "claude",
         "1.0",
         json!([{
@@ -49,27 +49,27 @@ fn spec_review_flags(command: &str) -> Value {
 }
 
 #[test]
-fn spec_review_conditional_force_push_is_checked() {
+fn conditional_force_push_is_checked() {
     let command = "if true; then git push --force origin main; fi";
     assert_eq!(
-        spec_review_flags(command),
+        destructive_flags(command),
         json!([{"pattern":"force-push", "command":command}])
     );
 }
 
 #[test]
-fn spec_review_heredoc_text_is_not_a_shell_command() {
+fn heredoc_text_is_not_a_shell_command() {
     assert_eq!(
-        spec_review_flags("cat <<'EOF'\ngit push --force origin main\nEOF"),
+        destructive_flags("cat <<'EOF'\ngit push --force origin main\nEOF"),
         json!([])
     );
 }
 
 #[test]
-fn spec_review_subshell_cd_does_not_change_parent_directory() {
+fn subshell_cd_does_not_change_parent_directory() {
     let command = "(cd /worktree/build); rm -rf ../outside-cache";
     assert_eq!(
-        spec_review_flags(command),
+        destructive_flags(command),
         json!([{
             "pattern":"recursive-delete-outside-worktree", "command":command
         }])
@@ -77,13 +77,13 @@ fn spec_review_subshell_cd_does_not_change_parent_directory() {
 }
 
 #[test]
-fn spec_review_optioned_shared_history_rewrites_are_checked() {
+fn optioned_shared_history_rewrites_are_checked() {
     for command in [
         "git rebase --onto origin/main old-base release",
         "git update-ref -m rewrite refs/heads/release HEAD~1",
     ] {
         assert_eq!(
-            spec_review_flags(command),
+            destructive_flags(command),
             json!([{"pattern":"shared-history-rewrite", "command":command}]),
             "{command}"
         );
@@ -91,7 +91,7 @@ fn spec_review_optioned_shared_history_rewrites_are_checked() {
 }
 
 #[test]
-fn spec_review_trace_without_worktree_keeps_destructive_evidence_missing() {
+fn trace_without_worktree_keeps_destructive_evidence_missing() {
     let scenario = Scenario::new();
     let log = trace(
         &scenario,
