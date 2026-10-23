@@ -222,6 +222,16 @@ test("hand-written pages link directly to unique manual sections", async (t) => 
   }
 });
 
+test("homepage accessible names use steps in place of press units", async (t) => {
+  const page = await pageForTest(t);
+  await page.goto(`${origin}/`);
+  assert.equal(await page.getByRole("group", { name: "Ticket run steps", exact: true }).count(), 1);
+  for (const number of [1, 2, 3, 4]) {
+    assert.equal(await page.locator(`.unit-col .stderr-lines[aria-label="stderr lines from step ${number}"]`).count(), 1);
+  }
+  assert.equal(await page.getByRole("log", { name: "Terminal replay of the selected step's stderr lines", exact: true }).count(), 1);
+});
+
 test("the homepage explains Ticket runs and five workflows in plain words", async (t) => {
   const page = await pageForTest(t, { javaScriptEnabled: false });
   await page.goto(`${origin}/`);

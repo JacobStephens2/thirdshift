@@ -184,7 +184,7 @@
             </svg>
           </div>
 
-          <div class="press-controls" role="group" aria-label="Press line steps" hidden>
+          <div class="press-controls" role="group" aria-label="Ticket run steps" hidden>
             <button type="button" data-step="1" aria-label="Step 1 · Prepare">Step 1</button>
             <button type="button" data-step="2" aria-label="Step 2 · Implement">Step 2</button>
             <button type="button" data-step="3" aria-label="Step 3 · Review">Step 3</button>
@@ -195,7 +195,7 @@
             <article class="unit-col ink-c" aria-labelledby="unit-1">
               <h3 id="unit-1"><span class="tag" aria-hidden="true"></span>Step 1 · Prepare</h3>
               <p>Pre-flight checks the Origin match, the open issue, the Base branch and the selected Harness, plus Git’s commit identity. thirdshift picks the Issue branch, fresh or a Continuation, claims the issue with <code>in-progress</code>, and creates a worktree next to your clone. Here a scheduled Pickup run took the issue.</p>
-              <ol class="stderr-lines" aria-label="stderr lines from unit 1">
+              <ol class="stderr-lines" aria-label="stderr lines from step 1">
                 <li><span class="prefix">thirdshift: 00:21:01</span> Pickup run starting, 2026-10-12 -0400</li>
                 <li><span class="prefix">thirdshift: 00:21:05</span> taking Ready issue #663 "update https://thirdshift.app/ based on the latest which is part of thirdshift", as thirdshift https://github.com/JacobStephens2/thirdshift/issues/663 would</li>
                 <li><span class="prefix">thirdshift: 00:21:05</span> checking the Model and Effort against codex debug models</li>
@@ -210,7 +210,7 @@
               <h3 id="unit-2"><span class="tag" aria-hidden="true"></span>Step 2 · Implement</h3>
               <p>A headless session in the selected Harness, with the Factory skills loaded, implements the issue in the worktree, test-first where it can, and commits. The recorded Ticket run used Codex.</p>
               <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-thirdshift-implement">/thirdshift-implement</a></li><li><a href="/prompts/#skill-thirdshift-tdd">/thirdshift-tdd</a></li></ul>
-              <ol class="stderr-lines" aria-label="stderr lines from unit 2">
+              <ol class="stderr-lines" aria-label="stderr lines from step 2">
                 <li><span class="prefix">thirdshift: 00:21:10</span> logging the session to /home/jacob/.thirdshift/logs/JacobStephens2/thirdshift/commands/pickup/663-20261012T002101-0400-implement.jsonl</li>
                 <li><span class="prefix">thirdshift: 00:21:11</span> implement: session started</li>
                 <li><span class="prefix">thirdshift: 00:21:19</span> implement: $ pwd &amp;&amp; git status --short &amp;&amp; git branch --show-current &amp;&amp; cat /tmp/thirdshift-skills-OIZYKN/thirdshi…</li>
@@ -235,7 +235,7 @@
               <h3 id="unit-3"><span class="tag" aria-hidden="true"></span>Step 3 · Review</h3>
               <p>The same session reviews its work against the Base branch, fixes the Standards findings and Spec findings it agrees with, and lists the rest as Unaddressed findings in the pull request body. Behavior findings need a test or command that exercises them before the agent decides. It fixes reproduced failures and keeps the test. Then it opens the pull request, ready for review.</p>
               <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-thirdshift-code-review">/thirdshift-code-review</a></li><li><a href="/prompts/#skill-thirdshift-pr">/thirdshift-pr</a></li></ul>
-              <ol class="stderr-lines" aria-label="stderr lines from unit 3">
+              <ol class="stderr-lines" aria-label="stderr lines from step 3">
                 <li><span class="prefix">thirdshift: 00:26:05</span> implement: $ git status --short &amp;&amp; gh pr list --repo JacobStephens2/thirdshift --head issue-663 --state open --js…</li>
                 <li><span class="prefix">thirdshift: 00:26:26</span> implement: $ cargo fmt --check &amp;&amp; cargo clippy --all-targets -- -D warnings</li>
                 <li><span class="prefix">thirdshift: 00:26:27</span> implement: $ git check-ignore .thirdshift-review-ZgRuM9/standards.md; rg -n 'thirdshift-review' /home/jacob/repos…</li>
@@ -260,7 +260,7 @@
               <h3 id="unit-4"><span class="tag" aria-hidden="true"></span>Step 4 · Finish</h3>
               <p>An optional Security review checks the change first. Then thirdshift pushes, checks the pull request, merges the Base branch in and watches CI. A merge conflict or failing CI starts a Repair, at most 5. A Resume can happen in any session and isn't a Repair. The Ticket run ends once the pull request is open, ready, mergeable and passing CI. A Ticket run that Self-merges, requested with <code>thirdshift merge &lt;Issue URL&gt;</code> or the User config, then merges it. Here the Security review found nothing, main moved during CI and was merged in again, and no Repair was needed.</p>
               <ul class="factory-skills" aria-label="Factory skills"><li><a href="/prompts/#skill-thirdshift-resolving-merge-conflicts">/thirdshift-resolving-merge-conflicts</a> <span>in a Repair</span></li></ul>
-              <ol class="stderr-lines" aria-label="stderr lines from unit 4">
+              <ol class="stderr-lines" aria-label="stderr lines from step 4">
                 <li><span class="prefix">thirdshift: 00:47:13</span> Security review private report: /home/jacob/.thirdshift/logs/JacobStephens2/thirdshift/security-reviews/663-20261012T002101-0400-0eoBGA/pre-existing.json</li>
                 <li><span class="prefix">thirdshift: 00:47:13</span> logging the session to /home/jacob/.thirdshift/logs/JacobStephens2/thirdshift/commands/pickup/663-20261012T002101-0400-security-review.jsonl</li>
                 <li><span class="prefix">thirdshift: 00:47:14</span> security-review: session started</li>
@@ -302,7 +302,7 @@
               <span>stderr · issue #663 → <a href="https://github.com/JacobStephens2/thirdshift/pull/665">pull request #665</a></span>
               <button type="button" class="pause">Pause</button>
             </div>
-            <ol class="stderr-lines" role="log" aria-live="off" aria-label="Terminal replay of the lit unit's stderr lines"></ol>
+            <ol class="stderr-lines" role="log" aria-live="off" aria-label="Terminal replay of the selected step's stderr lines"></ol>
           </div>
         </div>
       </div>
