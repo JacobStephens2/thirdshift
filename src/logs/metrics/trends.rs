@@ -55,6 +55,7 @@ struct TraceSignals {
     permission_denials: Signal,
     killed_work: Signal,
     repeated_tool_calls: Signal,
+    destructive_commands: Signal,
     #[serde(skip)]
     sessions: usize,
 }
@@ -105,6 +106,11 @@ impl TraceSignals {
         self.killed_work.add(signals.map(|s| s.killed_work as f64));
         self.repeated_tool_calls
             .add(signals.map(|s| s.repeated_tool_calls as f64));
+        self.destructive_commands.add(
+            signals
+                .and_then(|s| s.destructive_commands.as_ref())
+                .map(|flags| flags.len() as f64),
+        );
         let tokens = signals
             .map(|s| s.tokens_by_model.as_slice())
             .unwrap_or_default();

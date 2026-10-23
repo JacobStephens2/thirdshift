@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use crate::harness::interpretation::event::{Event, Outcome, Usage, UsageScope};
 use crate::otlp_jsonl::{AnyValue, KeyValue, Logs};
 
+mod destructive;
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct Signals {
     pub tokens_by_model: Vec<ModelTokens>,
@@ -16,6 +18,8 @@ pub(crate) struct Signals {
     pub permission_denials: u64,
     pub killed_work: u64,
     pub repeated_tool_calls: u64,
+    #[serde(default)]
+    pub destructive_commands: Option<Vec<destructive::Flag>>,
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -70,6 +74,11 @@ impl Signals {
         self.permission_denials += other.permission_denials;
         self.killed_work += other.killed_work;
         self.repeated_tool_calls += other.repeated_tool_calls;
+        if let Some(flags) = &other.destructive_commands {
+            self.destructive_commands
+                .get_or_insert_default()
+                .extend(flags.iter().cloned());
+        }
     }
 }
 
@@ -119,6 +128,7 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
     };
     let mut harness = None;
     let mut harness_version = None;
+    let mut directory = None;
     let mut events = Vec::new();
     let mut work_aliases = BTreeMap::new();
     for request in requests {
@@ -127,6 +137,8 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
                 harness = text(&resource.attributes, "thirdshift.harness").or(harness);
                 harness_version =
                     text(&resource.attributes, "thirdshift.harness.version").or(harness_version);
+                directory =
+                    text(&resource.attributes, "thirdshift.harness.directory").or(directory);
             }
             for record in resource
                 .scope_logs
@@ -249,6 +261,7 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
     if let Some((_, _, Some(cost))) = session_usage {
         signals.cost_usd = Some(cost);
     }
+    signals.destructive_commands = Some(Vec::new());
     let mut inputs = HashSet::new();
     for event in calls.values() {
         if let Event::ToolCallEnded {
@@ -268,6 +281,15 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
         match event {
             Event::ToolCallStarted { tool, input, .. }
             | Event::ToolCallEnded { tool, input, .. } => {
+                signals
+                    .destructive_commands
+                    .as_mut()
+                    .unwrap()
+                    .extend(destructive::check(
+                        tool,
+                        input,
+                        directory.as_deref().map(Path::new),
+                    ));
                 if !inputs.insert(serde_json::to_string(&(tool, input))?) {
                     signals.repeated_tool_calls += 1;
                 }

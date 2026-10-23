@@ -1,0 +1,289 @@
+//! Advisory, literal shell-command patterns. Never execute inspected commands.
+
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::collections::HashSet;
+use std::path::{Component, Path, PathBuf};
+
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Flag {
+    pattern: String,
+    command: String,
+}
+
+struct Pattern {
+    name: &'static str,
+    matches: fn(&Command) -> bool,
+}
+
+struct Command<'a> {
+    words: &'a [String],
+    directory: Option<&'a Path>,
+    worktree: Option<&'a Path>,
+}
+
+// Keep each pattern and its name together: extending the check is one entry
+// here plus fixture cases, without changing metrics or Run control flow.
+const PATTERNS: &[Pattern] = &[
+    Pattern {
+        name: "force-push",
+        matches: |command| {
+            let words: Vec<_> = command.words.iter().map(String::as_str).collect();
+            words.starts_with(&["git", "push"])
+                && (words[2..]
+                    .iter()
+                    .take_while(|word| **word != "--")
+                    .any(|word| {
+                        matches!(*word, "--force" | "-f" | "--force-with-lease")
+                            || word.starts_with("--force-with-lease=")
+                            || (word.starts_with('-')
+                                && !word.starts_with("--")
+                                && word.contains('f'))
+                    })
+                    || words[2..].iter().any(|word| word.starts_with('+')))
+        },
+    },
+    Pattern {
+        name: "shared-history-rewrite",
+        matches: |command| {
+            let words: Vec<_> = command.words.iter().map(String::as_str).collect();
+            // Explicit branch/ref operands name refs shared by the repository's
+            // worktrees, unlike a normal rebase onto an upstream in this Worktree.
+            (words.starts_with(&["git", "branch"])
+                && words.len() >= 4
+                && words[2..]
+                    .iter()
+                    .any(|word| matches!(*word, "-f" | "--force")))
+                || (words.starts_with(&["git", "update-ref"])
+                    && words.len() >= 4
+                    && words[2].starts_with("refs/heads/"))
+                || (words.starts_with(&["git", "rebase"])
+                    && words.len() == 4
+                    && !words[2].starts_with('-')
+                    && !words[3].starts_with('-'))
+        },
+    },
+    Pattern {
+        name: "recursive-delete-outside-worktree",
+        matches: |command| {
+            if command.words.first().is_none_or(|word| word != "rm") {
+                return false;
+            }
+            let args = &command.words[1..];
+            let recursive = args.iter().take_while(|arg| *arg != "--").any(|arg| {
+                arg == "--recursive"
+                    || (arg.starts_with('-') && !arg.starts_with("--") && arg.contains(['r', 'R']))
+            });
+            let Some(worktree) = command.worktree else {
+                return false;
+            };
+            let mut options = true;
+            recursive
+                && args.iter().any(|arg| {
+                    if options && arg == "--" {
+                        options = false;
+                        return false;
+                    }
+                    if options && arg.starts_with('-') {
+                        return false;
+                    }
+                    resolve(arg, command.directory).is_some_and(|path| !path.starts_with(worktree))
+                })
+        },
+    },
+];
+
+pub(super) fn check(tool: &str, input: &Value, worktree: Option<&Path>) -> Vec<Flag> {
+    if !matches!(
+        tool,
+        "Bash"
+            | "bash"
+            | "command_execution"
+            | "run_command"
+            | "run_terminal_command"
+            | "run_shell_command"
+            | "exec_command"
+            | "shell"
+            | "shell_command"
+    ) {
+        return Vec::new();
+    }
+    let Some(command) = input["command"]
+        .as_str()
+        .or_else(|| input["CommandLine"].as_str())
+        .or_else(|| input["cmd"].as_str())
+    else {
+        return Vec::new();
+    };
+    let worktree = worktree.and_then(|path| resolve(path.to_str()?, None));
+    let directory = ["cwd", "workdir", "Cwd"]
+        .iter()
+        .find_map(|key| input[key].as_str())
+        .map(|path| resolve(path, worktree.as_deref()))
+        .unwrap_or_else(|| worktree.clone());
+    let mut matched = HashSet::new();
+    inspect(command, directory, worktree.as_deref(), 0, &mut matched);
+    PATTERNS
+        .iter()
+        .filter(|pattern| matched.contains(pattern.name))
+        .map(|pattern| Flag {
+            pattern: pattern.name.into(),
+            command: command.into(),
+        })
+        .collect()
+}
+
+fn inspect(
+    script: &str,
+    mut directory: Option<PathBuf>,
+    worktree: Option<&Path>,
+    depth: usize,
+    matched: &mut HashSet<&'static str>,
+) {
+    if depth > 16 {
+        return;
+    }
+    for words in commands(script) {
+        let words = unwrapped(words);
+        if words.first().is_some_and(|word| word == "cd") {
+            directory = words
+                .iter()
+                .skip(1)
+                .find(|word| *word != "--")
+                .and_then(|path| resolve(path, directory.as_deref()));
+            continue;
+        }
+        if words
+            .first()
+            .is_some_and(|word| matches!(word.as_str(), "bash" | "sh" | "zsh"))
+        {
+            if let Some(flag) = words
+                .iter()
+                .position(|word| matches!(word.as_str(), "-c" | "-lc"))
+                && let Some(script) = words.get(flag + 1)
+            {
+                inspect(script, directory.clone(), worktree, depth + 1, matched);
+            }
+            continue;
+        }
+        let invocation = Command {
+            words: &words,
+            directory: directory.as_deref(),
+            worktree,
+        };
+        for pattern in PATTERNS {
+            if (pattern.matches)(&invocation) {
+                matched.insert(pattern.name);
+            }
+        }
+    }
+}
+
+fn unwrapped(mut words: Vec<String>) -> Vec<String> {
+    while let Some(first) = words.first() {
+        let program = first.rsplit('/').next().unwrap_or(first);
+        if first.split_once('=').is_some_and(|(key, _)| {
+            !key.is_empty()
+                && key
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
+        }) {
+            words.remove(0);
+        } else if matches!(program, "env" | "sudo" | "command" | "exec") {
+            words.remove(0);
+            while words.first().is_some_and(|word| word.starts_with('-')) {
+                let option = words.remove(0);
+                if matches!(option.as_str(), "-u" | "-g" | "--user" | "--group")
+                    && !words.is_empty()
+                {
+                    words.remove(0);
+                }
+            }
+        } else {
+            words[0] = program.to_string();
+            break;
+        }
+    }
+    if words.first().is_some_and(|word| word == "git") {
+        while words.get(1).is_some_and(|word| word.starts_with('-')) {
+            let option = words.remove(1);
+            if matches!(option.as_str(), "-C" | "-c" | "--git-dir" | "--work-tree")
+                && words.len() > 1
+            {
+                words.remove(1);
+            }
+        }
+    }
+    words
+}
+
+// Lexical resolution keeps past traces readable after Worktree removal. Shell
+// expansions and symlinks are deliberately not evaluated against today's host.
+fn resolve(path: &str, directory: Option<&Path>) -> Option<PathBuf> {
+    if path.contains(['$', '`']) || path.starts_with('~') {
+        return None;
+    }
+    let path = Path::new(path);
+    let absolute = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        directory?.join(path)
+    };
+    let mut normalized = PathBuf::new();
+    for component in absolute.components() {
+        match component {
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::CurDir => {}
+            component => normalized.push(component.as_os_str()),
+        }
+    }
+    Some(normalized)
+}
+
+/// Split literal shell words and command separators while preserving quoted
+/// arguments. A quoted example in echo/printf remains an argument, not a call.
+fn commands(script: &str) -> Vec<Vec<String>> {
+    let mut commands = Vec::new();
+    let mut words = Vec::new();
+    let mut word = None::<String>;
+    let mut quote = None;
+    let mut chars = script.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' && quote != Some('\'') {
+            if let Some(escaped) = chars.next()
+                && escaped != '\n'
+            {
+                word.get_or_insert_default().push(escaped);
+            }
+        } else if quote == Some(ch) {
+            quote = None;
+        } else if quote.is_none() && matches!(ch, '\'' | '"') {
+            quote = Some(ch);
+            word.get_or_insert_default();
+        } else if quote.is_none() && ch == '#' && word.is_none() {
+            while chars.peek().is_some_and(|ch| *ch != '\n') {
+                chars.next();
+            }
+        } else if quote.is_none()
+            && (ch.is_whitespace() || matches!(ch, ';' | '|' | '&' | '(' | ')'))
+        {
+            if let Some(word) = word.take() {
+                words.push(word);
+            }
+            if matches!(ch, '\n' | ';' | '|' | '&' | '(' | ')') && !words.is_empty() {
+                commands.push(std::mem::take(&mut words));
+            }
+        } else {
+            word.get_or_insert_default().push(ch);
+        }
+    }
+    if let Some(word) = word {
+        words.push(word);
+    }
+    if !words.is_empty() {
+        commands.push(words);
+    }
+    commands
+}

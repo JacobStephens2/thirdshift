@@ -8,6 +8,78 @@ use support::Scenario;
 const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
 #[test]
+fn destructive_flags_preserve_success_and_failure_and_survive_trace_removal() {
+    for fails in [false, true] {
+        for flagged in [false, true] {
+            let scenario = Scenario::new();
+            let command = if flagged {
+                "rm -rf ../outside-cache"
+            } else {
+                "rm -rf local-cache"
+            };
+            // Emit a tool call, never execute the command being checked. A
+            // start, end and late amendment must still describe one flag.
+            let call = serde_json::json!({"type":"assistant", "message":{"id":"m1", "content":[
+                {"type":"tool_use", "id":"t1", "name":"Bash", "input":{"command":command}}
+            ]}});
+            let end = serde_json::json!({"type":"user", "message":{"content":[
+                {"type":"tool_result", "tool_use_id":"t1", "content":"done"}
+            ]}});
+            let amendment = serde_json::json!({"type":"result", "subtype":"success", "permission_denials":[
+                {"tool_use_id":"t1", "tool_name":"Bash", "tool_input":{"command":command}}
+            ]});
+            scenario.agent_does(&format!(
+                "echo '{call}'\necho '{end}'\necho '{amendment}'\n{}",
+                if fails { "exit 17\n" } else { "echo work > work.txt\ngit add work.txt\ngit commit -qm 'Make widgets'\ngh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7'\n" }
+            ));
+            let ended = scenario.run(&[&scenario.issue_url(7)]);
+            assert_eq!(
+                ended.code,
+                Some(if fails { 1 } else { 0 }),
+                "{}",
+                ended.stderr
+            );
+            let saved = scenario.command_record(LOGS);
+            assert_eq!(
+                saved["outcome"],
+                if fails { "failed" } else { "ready for review" }
+            );
+            let flags = &saved["run_metrics"]["session_signals"]["implement"]["signals"]["destructive_commands"];
+            let expected = if flagged {
+                serde_json::json!([{
+                    "pattern":"recursive-delete-outside-worktree", "command":command
+                }])
+            } else {
+                serde_json::json!([])
+            };
+            assert_eq!(*flags, expected);
+            let trends = scenario.run(&["metrics", "--json"]);
+            assert_eq!(trends.code, Some(0), "{}", trends.stderr);
+            let trends: Value = serde_json::from_str(&trends.stdout).unwrap();
+            let session = trends["weeks"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|row| row["session_kind"] == "implement")
+                .unwrap();
+            assert_eq!(
+                session["session_signals"]["destructive_commands"]["sum"],
+                if flagged { 1.0 } else { 0.0 }
+            );
+            for name in scenario.entries(LOGS) {
+                if name.ends_with(".logs.jsonl") || name.ends_with(".spans.jsonl") {
+                    fs::remove_file(scenario.path(LOGS).join(name)).unwrap();
+                }
+            }
+            let shown = scenario.run(&["metrics", "widgets#7", "--json"]);
+            assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+            let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
+            assert_eq!(shown["command"]["metrics"], saved["run_metrics"]);
+        }
+    }
+}
+
+#[test]
 fn a_run_records_session_trace_signals_at_completion() {
     let scenario = Scenario::new();
     scenario.agent_does(r#"

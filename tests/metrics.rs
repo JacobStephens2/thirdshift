@@ -19,12 +19,86 @@ fn trace(
     fs::write(&path, serde_json::to_string(&json!({
         "resourceLogs": [{"resource": {"attributes": [
             {"key":"thirdshift.harness", "value":{"stringValue":harness}},
+            {"key":"thirdshift.harness.directory", "value":{"stringValue":"/worktree"}},
             {"key":"thirdshift.harness.version", "value":{"stringValue":version}}
         ]}, "scopeLogs":[{"logRecords":[{"attributes":[{
             "key":"thirdshift.events", "value":{"stringValue":serde_json::to_string(&events).unwrap()}
         }]}]}]}]
     })).unwrap() + "\n").unwrap();
     path
+}
+
+#[test]
+fn destructive_command_patterns_flag_fixture_commands_but_not_near_misses() {
+    let scenario = Scenario::new();
+    let cases: Value =
+        serde_json::from_str(include_str!("fixtures/destructive-commands.json")).unwrap();
+    let events: Vec<_> = cases
+        .as_array()
+        .unwrap()
+        .iter()
+        .enumerate()
+        .map(|(i, case)| {
+            json!({"type":"tool_call_started", "id":i.to_string(), "parent_id":null,
+            "tool":case["tool"], "input":case["input"]})
+        })
+        .collect();
+    let log = trace(&scenario, "destructive", "claude", "1.0", json!(events));
+    let mut past = record(7);
+    past["stages"][0]["session_log"] = json!(log);
+    write(&scenario, "7-fixture.command.json", &past);
+    let shown = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    let flags = &shown["command"]["metrics"]["session_signals"]["implement"]["signals"]["destructive_commands"];
+    let expected: Vec<_> = cases
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|case| {
+            case["pattern"].as_str().map(|pattern| {
+                json!({
+                    "pattern":pattern, "command":case["input"]["command"]
+                })
+            })
+        })
+        .collect();
+    let mut actual = flags.as_array().expect("destructive command flags").clone();
+    actual.sort_by_key(|flag| flag["command"].to_string());
+    let mut expected = expected;
+    expected.sort_by_key(|flag| flag["command"].to_string());
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn shell_commands_from_each_harness_are_checked() {
+    for (harness, tool, key) in [
+        ("claude", "Bash", "command"),
+        ("codex", "command_execution", "command"),
+        ("agy", "run_command", "CommandLine"),
+        ("grok", "run_terminal_command", "command"),
+        ("muse", "bash", "command"),
+        ("opencode", "bash", "command"),
+    ] {
+        let scenario = Scenario::new();
+        let log = trace(
+            &scenario,
+            harness,
+            harness,
+            "1.0",
+            json!([
+                {"type":"tool_call_started", "id":"call", "parent_id":null,
+                 "tool":tool, "input":{key:"git push --force origin issue-7"}}
+            ]),
+        );
+        let mut past = record(7);
+        past["stages"][0]["session_log"] = json!(log);
+        write(&scenario, "7-fixture.command.json", &past);
+        let shown = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+        assert_eq!(
+            shown["command"]["metrics"]["session_signals"]["implement"]["signals"]["destructive_commands"],
+            json!([{"pattern":"force-push", "command":"git push --force origin issue-7"}]),
+            "{harness}"
+        );
+    }
 }
 
 #[test]

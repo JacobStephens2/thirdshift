@@ -15,7 +15,16 @@ fn peek_shows_retained_run_metrics_and_marks_missing_signals() {
             "name": "implement", "seconds": 750.0, "minutes": 12.5,
             "usual_range": null, "position": "too_few_runs",
             "review_findings": {"standards": 3, "spec": null},
-            "session_signals": null
+            "session_signals": {
+                "harness":"claude", "harness_version":"1.0",
+                "signals": {
+                    "tokens_by_model":[], "cost_usd":null, "tool_errors":0,
+                    "permission_denials":0, "killed_work":0, "repeated_tool_calls":0,
+                    "destructive_commands":[{
+                        "pattern":"force-push", "command":"git push --force origin main"
+                    }]
+                }
+            }
         }]
     });
     write_record(home.path(), 7, &value);
@@ -51,6 +60,9 @@ fn peek_shows_retained_run_metrics_and_marks_missing_signals() {
         "<dt>review findings</dt>",
         "<dt>standards</dt><dd>3",
         "<dt>spec</dt><dd>Missing",
+        "<dt>destructive commands</dt>",
+        "<dt>pattern</dt><dd>force-push",
+        "<dt>command</dt><dd>git push --force origin main",
     ] {
         assert!(metrics.contains(expected), "missing {expected}: {metrics}");
     }
