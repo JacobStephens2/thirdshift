@@ -202,12 +202,12 @@ printf '%s\n' '{{"type":"assistant","message":{{"model":"claude-opus-4-8","conte
     assert!(
         session_logs
             .iter()
-            .any(|name| name.ends_with("-security-audit.jsonl"))
+            .any(|name| name.ends_with("-security-audit.logs.jsonl"))
     );
     assert!(
         session_logs
             .iter()
-            .any(|name| name.ends_with("-security-reproduction-1.jsonl"))
+            .any(|name| name.ends_with("-security-reproduction-1.logs.jsonl"))
     );
     assert!(
         !scenario
@@ -291,8 +291,8 @@ fn refused_security_reproductions_keep_the_record_and_stop_before_the_next_findi
                 "Result:       reproduction failed",
                 "Audit:        audit complete",
                 "Reproduction: 1 refused",
-                "Session log:",
-                "security-reproduction-1.jsonl",
+                "Session trace:",
+                "security-reproduction-1.logs.jsonl",
                 "Command log:",
             ] {
                 assert!(text.contains(line), "missing {line}: {text}");
@@ -1939,7 +1939,7 @@ fn incomplete_reproductions_preserve_the_record_and_stop_before_the_next_session
             assert_eq!(result.code, Some(1), "{}", result.stderr);
             assert!(result.stderr.contains(cause), "{}", result.stderr);
             assert!(
-                result.stderr.contains("security-reproduction-1.jsonl"),
+                result.stderr.contains("security-reproduction-1.logs.jsonl"),
                 "{}",
                 result.stderr
             );
@@ -2834,7 +2834,7 @@ fn missing_final_line_or_invalid_reports_fail_without_recording() {
             "expected {cause}: {}",
             result.stderr
         );
-        assert!(result.stderr.contains("session log:"));
+        assert!(result.stderr.contains("session trace:"));
         assert!(scenario.gh_state()["advisories"].is_null());
         assert_eq!(scenario.entries("work"), vec![REPO]);
         let log =
@@ -3528,7 +3528,7 @@ fn pre_audit_github_failures_report_a_safe_cause_without_claiming_an_audit_ran()
                 );
             }
             for absent in [
-                "Session log:",
+                "Session trace:",
                 "Command log:",
                 "Reproduction:",
                 "Session models:",
@@ -3811,8 +3811,8 @@ fn a_reproduction_failure_notifies_recorded_metadata_without_private_evidence() 
                 "Result:       reproduction failed",
                 "Audit:        audit complete",
                 "Reproduction: 2 failed",
-                "Session log:",
-                "security-reproduction-2.jsonl",
+                "Session trace:",
+                "security-reproduction-2.logs.jsonl",
                 "Command log:",
             ] {
                 assert!(text.contains(line), "missing {line}: {text}");

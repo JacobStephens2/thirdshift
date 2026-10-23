@@ -71,7 +71,7 @@ pub struct Given {
     /// The start stamp of the command that started it, which its Session
     /// logs take.
     pub stamp: String,
-    /// The owning command, whose folder its Session logs inherit.
+    /// The owning command, whose folder its Session traces inherit.
     pub command: logs::CommandKind,
     /// What it is asked about a Base fix.
     pub base_fix: BaseFixAsk,
@@ -403,7 +403,7 @@ pub enum Ended {
         pr_url: Option<String>,
         base_fix: Option<String>,
     },
-    /// Why, and its session log, as it reported them.
+    /// Why, and its session trace, as it reported them.
     Failed {
         cause: String,
         log: Option<String>,
@@ -433,7 +433,7 @@ pub struct Handle {
 }
 
 /// Start a Run of `kind` on `issue` in a child `thirdshift`, from the same
-/// Launch directory, given this command's start stamp for its Session logs,
+/// Launch directory, given this command's start stamp for its Session traces,
 /// asked `base_fix` about a Base fix, and handed `asks`.
 pub fn start(
     issue: &IssueUrl,

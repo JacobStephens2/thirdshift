@@ -268,7 +268,7 @@ fn status_retains_merged_children_during_spec_review() {
         spec["session_log"]
             .as_str()
             .unwrap()
-            .ends_with("-spec-review.jsonl")
+            .ends_with("-spec-review.logs.jsonl")
     );
     assert!(
         spec["tickets"]
@@ -1348,19 +1348,17 @@ fn with_base_fix_a_tickets_inherited_failure_gets_a_base_fix_into_the_spec_branc
     assert_eq!(
         sessions,
         [
-            format!("20-{owner}-spec-review.jsonl"),
-            format!("21-{owner}-implement.jsonl"),
-            format!("22-{owner}-implement.jsonl")
+            format!("20-{owner}-spec-review.logs.jsonl"),
+            format!("21-{owner}-implement.logs.jsonl"),
+            format!("22-{owner}-implement.logs.jsonl")
         ]
     );
     for session in sessions {
         let evidence: serde_json::Value = serde_json::from_slice(
-            &std::fs::read(
-                scenario
-                    .path(folder)
-                    .join(session)
-                    .with_extension("models.json"),
-            )
+            &std::fs::read(support::session_trace::artifact(
+                &scenario.path(folder).join(session),
+                "models.json",
+            ))
             .unwrap(),
         )
         .unwrap();
@@ -1387,7 +1385,7 @@ fn a_tickets_run_offers_the_spec_runs_command_with_a_base_fix_and_the_spec_run_r
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     let cause = inherited_failure(&scenario, "issue-20");
     // The Ticket's Run says it on its own stderr, between its cause and its
-    // session log.
+    // session trace.
     assert_contains(
         &result.stderr,
         &format!(
@@ -1396,11 +1394,11 @@ fn a_tickets_run_offers_the_spec_runs_command_with_a_base_fix_and_the_spec_run_r
              thirdshift: #21: Retry with: thirdshift {spec_url} --email me@example.com parallel 1 base-fix\n\
              thirdshift: #21: Or set: base.fix = true in ~/.thirdshift/config.toml, \
              to allow a Base fix for every Run on this machine\n\
-             thirdshift: #21: session log: "
+             thirdshift: #21: session trace: "
         ),
     );
-    // What the Spec run reads back is the cause and the session log, as ever.
-    let failed = format!("#21 failed: {cause} (session log: ");
+    // What the Spec run reads back is the cause and the session trace, as ever.
+    let failed = format!("#21 failed: {cause} (session trace: ");
     assert_contains(&result.stderr, &format!("thirdshift: {failed}"));
     let (_, text) = the_one_notification(&resend);
     assert_contains(&text, &failed);
@@ -1813,7 +1811,7 @@ fn the_spec_review_is_logged_under_the_specs_name() {
     let logged = result
         .stderr
         .lines()
-        .find(|line| line.ends_with("-spec-review.jsonl"))
+        .find(|line| line.ends_with("-spec-review.logs.jsonl"))
         .unwrap_or_else(|| panic!("no Spec review log in: {}", result.stderr));
     assert_contains(logged, "/20-");
 }
@@ -1836,7 +1834,7 @@ fn a_failed_spec_review_ends_the_spec_run_without_marking_the_spec_pr_ready() {
         "stderr: {}",
         result.stderr
     );
-    assert_contains(&result.stderr, "thirdshift: session log: ");
+    assert_contains(&result.stderr, "thirdshift: session trace: ");
 }
 
 #[test]
@@ -2273,10 +2271,10 @@ fn a_failed_ticket_stops_only_its_dependents_and_is_not_started_again() {
         .rfind(|line| line.starts_with("thirdshift: #21 failed: "))
         .unwrap_or_else(|| panic!("no failed line for #21 in: {}", result.stderr));
     assert!(
-        failed.starts_with("thirdshift: #21 failed: claude exited 1 (session log: "),
+        failed.starts_with("thirdshift: #21 failed: claude exited 1 (session trace: "),
         "{failed}"
     );
-    let log = failed.rsplit("session log: ").next().unwrap();
+    let log = failed.rsplit("session trace: ").next().unwrap();
     assert!(
         std::path::Path::new(log.trim_end_matches(')')).exists(),
         "{failed}"
@@ -2657,7 +2655,7 @@ fn a_failed_spec_run_sends_one_notification_with_each_tickets_outcome() {
     );
     for part in [
         "Cause:        Tickets not done: #21, #22\n",
-        "#21 failed: claude exited 1 (session log: ",
+        "#21 failed: claude exited 1 (session trace: ",
         "#22 blocked by #21\n",
         "#23 landed with https://github.com/acme/widgets/pull/1\n",
     ] {
@@ -3078,7 +3076,7 @@ fn failed_spec_review_reports_preserved_progress_and_the_same_recovery_in_notifi
     assert_eq!(spec_pr(&scenario)["isDraft"], true);
     assert_contains(notification, "#21 landed");
     assert_contains(notification, "#22 landed");
-    assert_contains(notification, "Session log:");
+    assert_contains(notification, "Session trace:");
     assert_contains(notification, "Command log:");
 }
 
@@ -3368,7 +3366,7 @@ fn failed_spec_review_reports_the_same_recovery_in_terminal_and_notification_and
         "Cause:",
         "claude exited 1",
         "Pull request:",
-        "Session log:",
+        "Session trace:",
         "Command log:",
         "#21 landed with",
         "#22 landed with",

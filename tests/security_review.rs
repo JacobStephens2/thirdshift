@@ -111,7 +111,7 @@ fi
         let state = scenario.gh_state();
         let body = state["prs"][0]["body"].as_str().unwrap();
         assert!(
-            body.contains("- Security review on grok failed; see Session log\n"),
+            body.contains("- Security review on grok failed; see Session trace\n"),
             "{body}"
         );
         assert!(!body.contains("Not signed in."), "{body}");
@@ -120,7 +120,7 @@ fi
         let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
         let review_log = logs
             .iter()
-            .find(|name| name.ends_with("-security-review.jsonl"))
+            .find(|name| name.ends_with("-security-review.logs.jsonl"))
             .unwrap();
         let transcript = std::fs::read_to_string(scenario.path(&format!(
             "home/.thirdshift/logs/acme/widgets/commands/issue/{review_log}"
@@ -284,10 +284,9 @@ fi
     assert_eq!(result.stderr.matches("warning: Security review").count(), 1);
     assert_eq!(scenario.codex_calls().len(), 2);
     assert!(
-        result
-            .stderr
-            .lines()
-            .any(|line| line.contains("session log:") && line.contains("security-review-fallback")),
+        result.stderr.lines().any(
+            |line| line.contains("session trace:") && line.contains("security-review-fallback")
+        ),
         "{}",
         result.stderr
     );
@@ -306,7 +305,7 @@ fn security_review_failures_without_a_diagnostic_keep_the_generic_cause() {
         scenario.agent_does_in_session(2, script);
         let result = scenario.run(&[&scenario.issue_url(7), "security-review", "merge"]);
         assert_eq!(result.code, Some(1), "{}", result.stderr);
-        let cause = "Security review incomplete: session failed, ended early or omitted a valid final line; see Session log";
+        let cause = "Security review incomplete: session failed, ended early or omitted a valid final line; see Session trace";
         assert!(
             result.stderr.contains(&format!("thirdshift: {cause}\n")),
             "{}",
@@ -414,7 +413,7 @@ fn explicit_incomplete_reviews_still_validate_the_entire_private_report() {
         let state = scenario.gh_state();
         assert!(state["advisories"].is_null());
         let body = state["prs"][0]["body"].as_str().unwrap();
-        let generic = "Security review incomplete: session failed, ended early or omitted a valid final line; see Session log";
+        let generic = "Security review incomplete: session failed, ended early or omitted a valid final line; see Session trace";
         assert!(body.contains(generic), "{body}");
         assert!(result.stderr.contains(generic), "{}", result.stderr);
         assert_old_finding_stays_private(body, &result);
@@ -709,7 +708,7 @@ fn invalid_or_missing_final_lines_hold_self_merge_but_report_only_runs_continue(
                 result.stderr
             );
             assert!(
-                result.stderr.contains("Security review incomplete: session failed, ended early or omitted a valid final line; see Session log"),
+                result.stderr.contains("Security review incomplete: session failed, ended early or omitted a valid final line; see Session trace"),
                 "{}",
                 result.stderr
             );
@@ -720,7 +719,7 @@ fn invalid_or_missing_final_lines_hold_self_merge_but_report_only_runs_continue(
                 pr["body"]
                     .as_str()
                     .unwrap()
-                    .contains("Security review incomplete: session failed, ended early or omitted a valid final line; see Session log")
+                    .contains("Security review incomplete: session failed, ended early or omitted a valid final line; see Session trace")
             );
         }
     }
@@ -952,17 +951,17 @@ gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]
     );
     // The Repair ran after the review, so it is the most recent session.
     assert!(
-        result.stderr.contains("-repair-1.jsonl"),
+        result.stderr.contains("-repair-1.logs.jsonl"),
         "{}",
         result.stderr
     );
     let reported = result
         .stderr
         .lines()
-        .find_map(|line| line.split_once("session log: ").map(|(_, log)| log))
-        .unwrap_or_else(|| panic!("no session log line: {}", result.stderr));
+        .find_map(|line| line.split_once("session trace: ").map(|(_, log)| log))
+        .unwrap_or_else(|| panic!("no session trace line: {}", result.stderr));
     assert!(
-        reported.ends_with("-security-review.jsonl"),
+        reported.ends_with("-security-review.logs.jsonl"),
         "{}",
         result.stderr
     );
@@ -970,7 +969,7 @@ gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]
     assert_eq!(requests.len(), 1, "{requests:?}");
     let text = requests[0].body["text"].as_str().unwrap();
     assert!(
-        text.contains(&format!("Session log:  {reported}\n")),
+        text.contains(&format!("Session trace:  {reported}\n")),
         "{text}"
     );
 }
@@ -1008,14 +1007,18 @@ gh fake checks "$(git rev-parse origin/main)" '[{"name":"test","conclusion":"suc
     let reported = result
         .stderr
         .lines()
-        .find_map(|line| line.split_once("session log: ").map(|(_, log)| log))
-        .unwrap_or_else(|| panic!("no session log line: {}", result.stderr));
-    assert!(reported.ends_with("-repair-1.jsonl"), "{}", result.stderr);
+        .find_map(|line| line.split_once("session trace: ").map(|(_, log)| log))
+        .unwrap_or_else(|| panic!("no session trace line: {}", result.stderr));
+    assert!(
+        reported.ends_with("-repair-1.logs.jsonl"),
+        "{}",
+        result.stderr
+    );
     let requests = resend.requests();
     assert_eq!(requests.len(), 1, "{requests:?}");
     let text = requests[0].body["text"].as_str().unwrap();
     assert!(
-        text.contains(&format!("Session log:  {reported}\n")),
+        text.contains(&format!("Session trace:  {reported}\n")),
         "{text}"
     );
 }

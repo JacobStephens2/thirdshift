@@ -18,9 +18,6 @@ use crate::run::Goal;
 
 /// What thirdshift was asked to do.
 pub enum Command {
-    LogsConvert {
-        remove: bool,
-    },
     Help,
     Version,
     Update,
@@ -59,6 +56,11 @@ pub enum Command {
     },
     Show {
         command: String,
+        json: bool,
+    },
+    Spans {
+        command: String,
+        span: Option<String>,
         json: bool,
     },
     Stop {
@@ -398,6 +400,36 @@ pub fn parse(args: &[String]) -> Result<Command> {
             });
         }
         Some("show") => {
+            let usage = "usage: thirdshift show <command> [--spans | --span <id>] [--json]";
+            if args.iter().any(|arg| arg == "--spans" || arg == "--span") {
+                let command = args
+                    .get(1)
+                    .filter(|arg| !arg.starts_with('-'))
+                    .ok_or_else(|| anyhow::anyhow!(usage))?;
+                let (mut tree, mut span, mut json) = (false, None, false);
+                let mut flags = args[2..].iter();
+                while let Some(flag) = flags.next() {
+                    match flag.as_str() {
+                        "--json" if !json => json = true,
+                        "--spans" if !tree && span.is_none() => tree = true,
+                        "--span" if !tree && span.is_none() => {
+                            span = Some(
+                                flags
+                                    .next()
+                                    .filter(|id| !id.starts_with('-'))
+                                    .ok_or_else(|| anyhow::anyhow!(usage))?
+                                    .clone(),
+                            );
+                        }
+                        _ => bail!(usage),
+                    }
+                }
+                return Ok(Command::Spans {
+                    command: command.clone(),
+                    span,
+                    json,
+                });
+            }
             return match &args[1..] {
                 [command] if !command.starts_with('-') => Ok(Command::Show {
                     command: command.clone(),
@@ -414,11 +446,6 @@ pub fn parse(args: &[String]) -> Result<Command> {
         }
         Some("logs") => {
             match &args[1..] {
-                [flag] if flag == "--convert" || flag == "--remove-converted" => {
-                    return Ok(Command::LogsConvert {
-                        remove: flag == "--remove-converted",
-                    });
-                }
                 [] => {
                     return Ok(Command::LogsList {
                         json: false,

@@ -6,6 +6,6 @@
   {% for pr in pull_requests %}<p>Pull request left: {{ pr|linkify }}</p>{% endfor %}
   <code>{{ cli }}</code>
   <p><a href="{{ crate::logs::status::inspect::url("/log", command, None) }}">Full Command log</a></p>
-  {% for log in logs %}<p><a href="{{ log.url }}">Session log: {{ log.name }}</a></p>{% endfor %}
+  {% for log in logs %}<p><a href="{{ log.url }}">Session trace: {{ log.name }}</a></p>{% endfor %}
   <dl>{% for fact in facts %}{{ self.fact(fact)|safe }}{% endfor %}</dl>
 </section>

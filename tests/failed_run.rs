@@ -48,7 +48,7 @@ fn a_failing_session_pushes_a_failure_commit_with_the_uncommitted_work_saying_wh
 }
 
 /// What every Failed run shares: a non-zero exit, `stdout` (empty unless a PR
-/// exists), the session log path on stderr, and nothing left behind.
+/// exists), the session trace path on stderr, and nothing left behind.
 fn assert_failed(scenario: &Scenario, result: &RunResult, stdout: &str) {
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, stdout);

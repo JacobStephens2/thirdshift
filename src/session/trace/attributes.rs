@@ -2,6 +2,59 @@ use crate::harness::interpretation::event::{Event, Usage};
 use crate::otlp_jsonl::{AnyValue, KeyValue};
 use serde_json::Value;
 
+/// Pure call facts shared by the recorder and live reader. Both use the same
+/// causal key, including Harness-local IDs scoped by their parent call.
+pub(crate) struct Call<'a> {
+    pub kind: crate::logs::trace::SpanKind,
+    pub id: &'a str,
+    pub parent: Option<&'a str>,
+    pub completion: Option<crate::harness::interpretation::event::Outcome>,
+}
+
+impl<'a> Call<'a> {
+    pub fn of(event: &'a Event) -> Option<Self> {
+        use crate::logs::trace::SpanKind;
+        use Event::*;
+        let (kind, id, parent, completion) = match event {
+            ModelCallStarted { id, parent_id, .. } => {
+                (SpanKind::Model, id, parent_id.as_deref(), None)
+            }
+            ModelCallEnded {
+                id,
+                parent_id,
+                outcome,
+                ..
+            } => (SpanKind::Model, id, parent_id.as_deref(), Some(*outcome)),
+            ToolCallStarted { id, parent_id, .. } => {
+                (SpanKind::Tool, id, parent_id.as_deref(), None)
+            }
+            ToolCallEnded {
+                id,
+                parent_id,
+                outcome,
+                ..
+            } => (SpanKind::Tool, id, parent_id.as_deref(), Some(*outcome)),
+            TurnStarted { id } => (SpanKind::Turn, id, None, None),
+            TurnEnded { id, outcome, .. } => (SpanKind::Turn, id, None, Some(*outcome)),
+            SubagentStarted { id, parent_id, .. } => {
+                (SpanKind::Agent, id, parent_id.as_deref(), None)
+            }
+            SubagentEnded { id, outcome, .. } => (SpanKind::Agent, id, None, Some(*outcome)),
+            _ => return None,
+        };
+        Some(Self {
+            kind,
+            id,
+            parent,
+            completion,
+        })
+    }
+
+    pub fn key(&self) -> String {
+        serde_json::to_string(&(self.kind, self.parent, self.id)).unwrap()
+    }
+}
+
 pub(super) fn attribute(key: &str, value: impl ToString) -> KeyValue {
     KeyValue {
         key: key.into(),
@@ -51,7 +104,7 @@ fn usage_attributes(
     }
 }
 
-pub(super) fn event_attributes(event: &Event, input_excludes_cache: bool) -> Vec<KeyValue> {
+pub(crate) fn event_attributes(event: &Event, input_excludes_cache: bool) -> Vec<KeyValue> {
     use Event::*;
     let mut attrs = Vec::new();
     let json = serde_json::to_value(event).unwrap();

@@ -153,7 +153,7 @@ The available pages are Inbox (`1`), Lanes (`2`), Stages (`3`), Waterfall (`4`),
 History (`5`), Logs (`6`), Security (`7`) and Cron jobs (`8`). Inbox through Security links
 keep the page in `?page=`. History includes every ended Command, including old
 logs, and filters by outcome and repository. Security shows retained findings
-and Session logs. Older records without finding metadata still show their logs.
+and Session traces. Older records without finding metadata still show their logs.
 
 Cron jobs (`/cronjobs`, or `g` then `j`) shows schedules and commands from the
 Unix account running the Console's `crontab -l`. The same inventory is available
@@ -183,27 +183,51 @@ test checks their stage times and Usual ranges against the CLI; the Playwright
 time tests check scale in all windows, child selection, live ordering and 390 px.
 
 Waterfall chooses one retained Command with live, died and ended chips, keeping
-its exact selection in `command=`. Runs, stages and tool calls share one axis,
-including a Spec run's Ticket Runs. It pairs with `show --json` and `logs`:
-stage intervals come from the Command record. For a Session trace, each tool
-interval uses its span's start and end, including overlapping calls and fractions
-of a second. A running call uses its start record and extends to the current time
-while its Command is live. A call left open in an ended or died Command retains
-its start with “Time unknown” for its duration.
-Only sessions with an old Session log and no Session trace use Claude/Codex tool
-summaries matched to scoped `HH:MM:SS` Command-log lines in order, across midnight.
-Those estimated intervals extend to the next matched call or stage boundary and
-include waiting. Unmatched legacy calls stay visible with “Time unknown” and no
-bar. Session links open their retained evidence. The Waterfall browser test checks
-selection, span times, running calls, scale, unknown times, escaping and phone
-layout; Rust checks trace timing, legacy matching and CLI parity.
-The retained Spec-review checks are `python3 console/reproductions/waterfall-fractional.py`
-and `python3 console/reproductions/waterfall-stage.py` from the repo root after a build.
-The Rust router test walks the registered routes and checks their CLI pairs.
-The fractional Run/stage boundaries also run in the Rust integration tests.
-The retained Session-trace regression is
-`python3 console/reproductions/waterfall-trace-axis.py`; it checks that completed
-tool spans still draw bars after a Command dies without recording its end.
+its exact selection in `command=`. A span tree replaces the old Run sections:
+Command → Runs → stages → Sessions → model calls, turns, tools and sub-agents.
+Child Runs sit under the stage that started them; reused Sessions appear only
+under their first stage. Commands, Runs and stages start expanded, Sessions
+folded. Calls enter the DOM only after their Session is expanded.
+
+The same tree and selected span details are available from the CLI:
+
+```sh
+thirdshift show widgets#7 --spans --json
+thirdshift show widgets#7 --span <span-id> --json
+```
+
+The tree uses the recorder's stable Command, Run and stage span IDs. Each row
+has its kind, status, duration and bar on a shared axis. Errors carry their
+message, running calls extend to now with a hatched bar, and estimated timings
+are dotted and marked `*`. Converted Session tools keep the old scoped
+Command-log estimates, including unknown times. Commands without traces still
+show their Runs and stages.
+
+The open Slowest calls list ranks ten tool and model calls in the timeline's
+window; turns and sub-agents are excluded. Selecting a call reveals its row
+and summary Peek. Ancestors in the Peek select their own span. The card shows
+applicable timing, usage, cost, call and error facts, relative-position bars,
+input/output and attributes, plus a conversation link and Copy CLI. Conversation
+links open the Session because that reader does not yet anchor individual
+records. Command details opens the existing Peek with Stop, logs and the PR.
+
+Zoom fits a parent span or a padded window around a call. The sticky axis keeps
+the zoom notice and Zoom out control visible; the slowest calls re-rank within
+the window. Folds, selection, zoom and Peek disclosures survive live refresh.
+On a phone, labels fill one row, bars and durations the next; revealed rows
+stay between the sticky axis and the Peek bottom sheet.
+
+Within the tree, arrows and `j` / `k` move focus, Right expands or enters a
+child, Left folds or returns to the parent, Home/End reach either end, and
+Enter/Space opens the Peek. Outside the tree, the Console's usual keys apply.
+
+Rust route/CLI parity and timing tests live in `tests/console/spans.rs` and
+`tests/console/waterfall.rs`. The Playwright span and Waterfall tests cover
+folding at scale, keyboard navigation, Peek, zoom, live refresh, bar geometry,
+escaping and 390 px. Retained timing checks also run with
+`python3 console/reproductions/waterfall-fractional.py`,
+`python3 console/reproductions/waterfall-stage.py`, and
+`python3 console/reproductions/waterfall-trace-axis.py` after a build.
 
 `j` / `k` select headings and visible rows, wrapping at either end. `Space`
 folds a heading or toggles a row's peek; `Enter` opens that row's full Command
@@ -216,12 +240,12 @@ beside the list on a wide screen or at the bottom of a phone.
 
 For an exact older Command, `show` and `logs` also accept the absolute record
 or Command-log path. The Console adds `::name` to a record path to distinguish
-a dispatched Run from its enclosing Command. A retained Session-log path can
+a dispatched Run from its enclosing Command. A retained Session-trace path can
 select a historical Command without a record; `logs --session` accepts an exact
 path from that Command's Session inventory as well as a session kind.
-Page 6, `/logs`, lists every Command log and Session log in the current
+Page 6, `/logs`, lists every Command log and Session trace in the current
 `commands/` layout, including Security logs, and marks the live ones. Every
-Command row links to its Run and Session logs, including child Ticket Runs.
+Command row links to its Command logs and Session traces, including child Ticket Runs.
 Older `sessions/` folders are not linked. The same inventory is available with
 `thirdshift logs` or `thirdshift logs --json`; `thirdshift logs --file <id>`
 reads an exact listed file and accepts `--follow`.
@@ -231,7 +255,7 @@ logs as its Console link; the inventory's `owners` field lists those exact IDs.
 Command logs are plain text. Session traces from all six Harnesses render their
 normalized messages, tool calls and results as conversations with folded tool
 groups and Bash, Edit, Read and Grep views. Unfamiliar events stay visible as
-plain raw lines. Older Claude and Codex Session logs retain their conversation
+plain raw lines. Older Claude and Codex Session traces retain their conversation
 rendering and collapsed thinking. A live reader uses its own SSE stream
 to append escaped HTML from a byte offset. Reconnecting resumes from the last
 event's byte offset; incomplete live lines wait until their newline arrives.

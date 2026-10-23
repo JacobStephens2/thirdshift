@@ -20,7 +20,7 @@ fn malformed_final_messages_produce_a_public_incomplete_hold() {
         let result = Review::from_final_message(Some(final_message));
         assert!(result.is_err(), "accepted {final_message:?}");
         let outcome = Outcome::of(result, None);
-        let expected = "Security review incomplete: session failed, ended early or omitted a valid final line; see Session log";
+        let expected = "Security review incomplete: session failed, ended early or omitted a valid final line; see Session trace";
         assert_eq!(outcome.hold().unwrap().to_string(), expected);
         assert_eq!(outcome.entry(), format!("- {expected}\n"));
     }

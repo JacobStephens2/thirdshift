@@ -28,7 +28,7 @@ pub(super) enum Stage {
 impl Stage {
     /// The stage a Failed run's recovery lines report, and the Command
     /// record stage, if the Delivery records one. Implementation and Spec
-    /// review have none: their Session log names its stage.
+    /// review have none: their Session trace names its stage.
     fn records(self) -> (recovery::Stage, Option<CommandStage>) {
         match self {
             Self::Implementation => (recovery::Stage::Implementation, None),

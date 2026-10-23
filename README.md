@@ -105,6 +105,7 @@ Run `sudo nginx -t`, then `sudo systemctl restart nginx` on a systemd host. The 
 - [Machine status](docs/guide.md#machine-status), [showing Commands and reading logs](docs/guide.md#show-and-read-one-command), and [stopping a Command](docs/guide.md#stopping-a-command).
 - [The local Console](console/README.md): `thirdshift console --no-sign-in` serves the Inbox on localhost.
 - [Building and testing](docs/guide.md#building-from-source) and [releasing](docs/guide.md#releasing).
+- [Session traces](docs/guide.md#logs) retain each Harness event and timed work in OTLP JSON Lines, with Model evidence and review reports beside them.
 - [Exact prompts](prompts/README.md) and [Factory skills](skills/), also [readable on the site](https://thirdshift.app/prompts/).
 - [Domain vocabulary](GLOSSARY.md) and [architectural decisions](docs/adr/).
 - [Open issues](https://github.com/JacobStephens2/thirdshift/issues) for known gaps and planned work.

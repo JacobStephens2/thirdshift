@@ -49,7 +49,7 @@ pub enum Purpose {
     SecurityReview,
 }
 
-/// Where Session logs go: beside the owning Command log in
+/// Where Session traces go: beside the owning Command log in
 /// `commands/<command>/` under the repository's logs, under the User config's `logs.dir` or
 /// `~/.thirdshift/logs`, each named for what is run and stamped with the
 /// command's start stamp, which its Command log shares. Only once the logs
@@ -91,7 +91,7 @@ impl Logs {
     }
 
     /// Where a session's stream is logged:
-    /// `<root>/commands/<command>/<name>-<stamp>~<token>-<kind>.jsonl`.
+    /// `<root>/commands/<command>/<name>-<stamp>~<token>-<kind>.logs.jsonl`.
     pub fn path(&self, session: Logged) -> Result<PathBuf> {
         self.recording()
             .session_path(&self.dir, &self.name, &session.token())
@@ -540,7 +540,7 @@ mod tests {
             std::os::unix::fs::symlink(outside.path(), &dir).unwrap();
             let logs = Logs {
                 name: "670".into(),
-                dir: worktree.path().join("session-logs"),
+                dir: worktree.path().join("session-traces"),
                 recording: OnceCell::new(),
             };
             let choice = Choice {
@@ -674,7 +674,7 @@ mod tests {
             );
             for axis in ["standards", "spec"] {
                 assert_eq!(
-                    fs::read_to_string(log.with_extension(axis)).unwrap(),
+                    fs::read_to_string(logs::session::original(&log).with_extension(axis)).unwrap(),
                     format!("{marker} {axis}")
                 );
             }

@@ -25,7 +25,8 @@ const HEADLESS: &str = "You run headless: nobody is watching, and ending your tu
     other sessions on this machine run the same commands. \
     Never end your turn while a background task you depend on is still running: ending the turn kills it. \
     Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): \
-    a task still running when your turn ends is taken as work you were waiting on.\n";
+    a task still running when your turn ends is taken as work you were waiting on. \
+    thirdshift records this session as a Session trace, with Model evidence and any review reports beside it.\n";
 
 /// Shared by sessions that can work on a Delivery PR, including Resumes.
 const PR_LIFECYCLE: &str = "Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. \

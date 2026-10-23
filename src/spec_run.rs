@@ -367,7 +367,7 @@ impl Outside for ChildRunsAndGitHub<'_> {
 /// another error ended it first.
 struct Landing {
     lines: Vec<String>,
-    /// The Session log of the one failed Ticket's session the landing
+    /// The Session trace of the one failed Ticket's session the landing
     /// failed on, if just one failed.
     failed_log: Option<PathBuf>,
     progress: TicketProgress,
@@ -507,7 +507,7 @@ mod tests {
     /// The Spec PR's URL, once it is open.
     const SPEC_PR: &str = "https://github.com/acme/widgets/pull/2";
 
-    /// The Delivery's Session log.
+    /// The Delivery's Session trace.
     const DELIVERY_LOG: &str = "/logs/20-spec-review.jsonl";
 
     /// What the Spec run did outside itself, in the order it did it.
@@ -1112,7 +1112,7 @@ mod tests {
 
         assert_eq!(error(landed), "Tickets not done: #21, #22");
         let expected = [
-            "#21 failed: claude exited 1 (session log: /logs/session.jsonl)",
+            "#21 failed: claude exited 1 (session trace: /logs/session.jsonl)",
             "#22 blocked by #21",
             "#23 landed",
         ];
@@ -1486,7 +1486,7 @@ mod tests {
         assert_eq!(
             failed.ticket_lines,
             [
-                "#21 failed: claude exited 1 (session log: /logs/session.jsonl)",
+                "#21 failed: claude exited 1 (session trace: /logs/session.jsonl)",
                 "#22 landed"
             ]
         );

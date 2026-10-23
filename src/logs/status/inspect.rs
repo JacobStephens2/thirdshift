@@ -50,7 +50,7 @@ fn print(command: Observation<'_>) -> Result<()> {
     }
     if matches!(command, Observation::History(_)) {
         for path in command.sessions()? {
-            println!("Session log: {}", path.display());
+            println!("Session trace: {}", path.display());
         }
     }
     Ok(())
@@ -78,7 +78,7 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
         println!("{indent}  {} · {}{usual}", stage.name, stage.began_at);
     }
     for path in command.sessions()? {
-        println!("{indent}Session log: {}", path.display());
+        println!("{indent}Session trace: {}", path.display());
     }
     if let Some(event) = command.latest_event() {
         println!("{indent}{event}");

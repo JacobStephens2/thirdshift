@@ -256,7 +256,7 @@ fn red_ci_is_handed_to_a_ci_fix_repair_whose_fix_turns_it_green() {
          \n\
          Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.\n\
          \n\
-         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.\n"
+         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on. thirdshift records this session as a Session trace, with Model evidence and any review reports beside it.\n"
     );
     assert_eq!(calls[1]["cwd"], calls[0]["cwd"]);
     // thirdshift pushes the fix even though the Repair didn't.
@@ -270,7 +270,8 @@ fn red_ci_is_handed_to_a_ci_fix_repair_whose_fix_turns_it_green() {
     );
     let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
     assert!(
-        logs.iter().any(|name| name.ends_with("-repair-1.jsonl")),
+        logs.iter()
+            .any(|name| name.ends_with("-repair-1.logs.jsonl")),
         "logs: {logs:?}"
     );
     scenario.assert_cleaned_up("issue-7");
@@ -292,7 +293,8 @@ fn assert_session_log_is(result: &support::RunResult, kind: &str) {
         .last()
         .unwrap_or(&"");
     assert!(
-        last.starts_with("thirdshift: session log: ") && last.ends_with(&format!("-{kind}.jsonl")),
+        last.starts_with("thirdshift: session trace: ")
+            && last.ends_with(&format!("-{kind}.logs.jsonl")),
         "stderr: {}",
         result.stderr
     );
@@ -1166,7 +1168,7 @@ fn with_mixed_failures_the_repair_fixes_only_the_branchs_own_and_the_run_then_fa
          \n\
          Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.\n\
          \n\
-         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.\n"
+         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on. thirdshift records this session as a Session trace, with Model evidence and any review reports beside it.\n"
     );
     let base_commit = scenario.origin_git(&["rev-parse", "main"]);
     let cause = inherited_failure("test", &base_commit);

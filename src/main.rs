@@ -91,10 +91,10 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console theme import <file>        Import a Theme JSON document
        thirdshift console theme export <name>        Export a Theme as JSON
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
-       thirdshift show <command> [--json]             Show one Command in full
+       thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
        thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
        thirdshift logs [--command <id>] [--json]      List this machine's logs
-       thirdshift logs --file <id> [--follow]         Read a log; --convert / --remove-converted migrate old Sessions
+       thirdshift logs --file <id> [--follow]         Read a log
        thirdshift logs <command> [--session <kind>] [--follow]  Read a log; --export <dir> writes its whole Trace
        thirdshift update                              Update to the latest release
        thirdshift version                             Print the version
@@ -201,14 +201,18 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
-        Ok(Command::Show { command, json }) => {
-            return match logs::status::inspect::show(&command, json) {
+        Ok(Command::Spans {
+            command,
+            span,
+            json,
+        }) => {
+            return match logs::spans::show(&command, span.as_deref(), json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
         }
-        Ok(Command::LogsConvert { remove }) => {
-            return match logs::convert::run(remove) {
+        Ok(Command::Show { command, json }) => {
+            return match logs::status::inspect::show(&command, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
@@ -294,7 +298,7 @@ fn main() -> ExitCode {
 /// candidate and so published no plan to dispatch, puts the URL of the issue
 /// it ended on on stdout: the plan, the idea issue the review filed, or the
 /// issue that already covers its top recommendation. One whose review or
-/// plan fails puts the cause and the session log on stderr. One that is
+/// plan fails puts the cause and the session trace on stderr. One that is
 /// skipped says why on stderr, and is no failure: as another Pass on its
 /// repository is still running, it puts nothing on stdout,
 /// and as Architect plans are still open there, or Architect ideas wait for

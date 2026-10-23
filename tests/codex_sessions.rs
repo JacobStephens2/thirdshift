@@ -4,7 +4,7 @@
 //! no `AGENTS.md`, with the Factory skills linked into the worktree's
 //! `.agents/skills/` and its prompt loading its skill as
 //! `$thirdshift-<skill>`. Codex's stream gives the progress lines, the
-//! Session log, the session id a Resume continues and the final message, and
+//! Session trace, the session id a Resume continues and the final message, and
 //! a failed turn fails the Run with Codex's error. A session that leaves a
 //! command or sub-agent call running gets one Resume on its thread, as on
 //! Claude, and an interrupt sends a session SIGINT before SIGTERM. The Model
@@ -304,10 +304,11 @@ fn a_runs_implement_session_and_its_repair_run_on_codex_with_the_model_and_effor
     let logs = scenario.log_files(&format!("{LOGS}/commands/issue"), "jsonl");
     let implement = logs
         .iter()
-        .find(|log| log.ends_with("-implement.jsonl"))
-        .unwrap_or_else(|| panic!("no implement session log: {logs:?}"));
-    let log =
-        fs::read_to_string(scenario.path(&format!("{LOGS}/commands/issue/{implement}"))).unwrap();
+        .find(|log| log.ends_with("-implement.logs.jsonl"))
+        .unwrap_or_else(|| panic!("no implement session trace: {logs:?}"));
+    let log = support::session_trace::events(
+        scenario.path(&format!("{LOGS}/commands/issue/{implement}")),
+    );
     assert!(
         log.starts_with(r#"{"type": "thread.started", "thread_id": "fake-thread-1"}"#),
         "{log}"

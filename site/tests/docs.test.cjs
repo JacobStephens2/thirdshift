@@ -3,6 +3,13 @@ const assert = require("node:assert/strict");
 const { readFile, stat } = require("node:fs/promises");
 const { resolve, dirname } = require("node:path");
 
+test("Session trace documentation does not advertise retired conversion commands", async () => {
+  for (const file of ["../../docs/guide.md", "../docs/index.html"]) {
+    const source = await readFile(resolve(__dirname, file), "utf8");
+    assert.doesNotMatch(source, /thirdshift logs --(?:convert|remove-converted)\b/, file);
+  }
+});
+
 test("the README and manual's repository links reach files and section anchors", async () => {
   const { marked } = await import("marked");
   const { default: GithubSlugger } = await import("github-slugger");

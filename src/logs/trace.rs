@@ -1,5 +1,35 @@
 //! Deterministic Trace ancestry. No second copy of Command or stage times.
+use serde::Serialize;
 use sha2::{Digest, Sha256};
+
+/// The eight kinds in a Command's trace, including record-derived ancestors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum SpanKind {
+    Cmd,
+    Run,
+    Stage,
+    Sess,
+    Model,
+    Turn,
+    Tool,
+    Agent,
+}
+
+impl std::fmt::Display for SpanKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Cmd => "cmd",
+            Self::Run => "run",
+            Self::Stage => "stage",
+            Self::Sess => "sess",
+            Self::Model => "model",
+            Self::Turn => "turn",
+            Self::Tool => "tool",
+            Self::Agent => "agent",
+        })
+    }
+}
 
 use super::{
     command_record::{CommandRecord, Stage},
@@ -67,12 +97,28 @@ impl Context {
         ])
     }
 
+    /// Both retained views place a child Run in the stage that dispatched it.
+    pub(super) fn child_parent(&self, record: &CommandRecord, child: &CommandRecord) -> SpanId {
+        let started = chrono::DateTime::parse_from_rfc3339(&child.started_at).ok();
+        record
+            .stages
+            .iter()
+            .rev()
+            .find(|stage| {
+                chrono::DateTime::parse_from_rfc3339(&stage.began_at)
+                    .ok()
+                    .zip(started)
+                    .is_some_and(|(began, started)| began <= started)
+            })
+            .map_or(self.run, |stage| self.stage_id(stage))
+    }
+
     pub(crate) fn of_owner(owner: &Owner) -> Self {
         let identity = owner.identity().to_string();
         Self::with_identity(identity)
     }
 
-    /// Unowned callers still retain a Session log; preserve that behavior.
+    /// Unowned callers still retain a Session trace; preserve that behavior.
     /// A stamped path recovers grouping without borrowing another Command.
     pub(crate) fn of_session(path: &std::path::Path) -> Self {
         let identity = super::owner::decode(path)

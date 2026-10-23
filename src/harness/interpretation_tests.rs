@@ -352,11 +352,11 @@ fn a_transport_failure_preserves_recovered_usage_and_warnings_ahead_of_turn_fail
                 .interpretation(Path::new("/work"), "/thirdshift-implement issue-url");
             interpretation.condense(r#"{"stream":{"kind":"session","id":"s1"},"payload_type":"run.terminal.failed","payload":{"reason":"quota exceeded"}}"#);
             let completion = interpretation.finish(Err(anyhow::anyhow!(
-                "could not write the session log: Broken pipe"
+                "could not write the session trace: Broken pipe"
             )));
             assert_eq!(
                 completion.outcome.unwrap_err().to_string(),
-                "could not write the session log: Broken pipe"
+                "could not write the session trace: Broken pipe"
             );
             let report = completion.report.unwrap();
             assert_eq!(

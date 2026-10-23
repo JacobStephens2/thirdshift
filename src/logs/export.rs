@@ -105,7 +105,7 @@ pub fn export(input: &str, directory: &Path) -> Result<()> {
             {
                 ensure!(
                     log.trace_id == Some(context.trace),
-                    "Session log belongs to another Trace"
+                    "Session trace belongs to another Trace"
                 );
                 ancestry.references.extend(log.span_id);
             }
@@ -171,19 +171,16 @@ fn record_spans(
         Observation::Record(command)
             .sessions()?
             .iter()
-            .map(|session| {
-                match session
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .and_then(|name| name.strip_suffix(".logs.jsonl"))
-                {
-                    Some(stem) => session.with_file_name(format!("{stem}.jsonl")),
-                    None => session.clone(),
-                }
-            }),
+            .map(|session| super::session::original(session)),
     );
     for child in command.dispatched.iter().chain(&command.children) {
-        record_spans(child, outer, context.run, spans, sessions)?;
+        record_spans(
+            child,
+            outer,
+            context.child_parent(&command.record, &child.record),
+            spans,
+            sessions,
+        )?;
     }
     Ok(())
 }

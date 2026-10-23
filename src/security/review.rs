@@ -166,7 +166,7 @@ pub(crate) enum Ask {
     Forbid,
 }
 
-/// How a Security review ended, with the Session log of the session it ran,
+/// How a Security review ended, with the Session trace of the session it ran,
 /// which any Security hold it raises is reported with.
 pub(crate) struct Outcome {
     ended: Ended,
@@ -183,7 +183,7 @@ enum Ended {
 }
 
 impl Outcome {
-    /// The review that came to `result`, its session logged to `log`, its
+    /// The review that came to `result`, its session traceged to `log`, its
     /// Resume's if it got one, if it started one.
     pub fn of(result: Result<Review>, log: Option<PathBuf>) -> Self {
         let ended = match result {
@@ -204,7 +204,7 @@ impl Outcome {
                         diagnostic: diagnostic.to_string(),
                     }
                 } else {
-                    Ended::Incomplete("Security review incomplete: session failed, ended early or omitted a valid final line; see Session log".to_string())
+                    Ended::Incomplete("Security review incomplete: session failed, ended early or omitted a valid final line; see Session trace".to_string())
                 }
             }
         };
@@ -245,14 +245,14 @@ impl Outcome {
             // A failed result's diagnostic may be partial assistant output
             // with pre-existing vulnerability evidence. Keep it out of the PR.
             Ended::HarnessFailed { harness, .. } => {
-                format!("- Security review on {harness} failed; see Session log\n")
+                format!("- Security review on {harness} failed; see Session trace\n")
             }
         }
     }
 }
 
 /// Delivery has pushed and marked the PR ready before raising this hold.
-/// It is reported with `log`, the Security review's Session log, however
+/// It is reported with `log`, the Security review's Session trace, however
 /// many sessions ran after the review.
 #[derive(Debug)]
 pub(crate) struct Hold {
@@ -261,7 +261,7 @@ pub(crate) struct Hold {
 }
 
 impl Hold {
-    /// The Security review's Session log, if it started a session.
+    /// The Security review's Session trace, if it started a session.
     pub fn log(&self) -> Option<&Path> {
         self.log.as_deref()
     }

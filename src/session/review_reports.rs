@@ -1,4 +1,4 @@
-//! Opaque review reports, named in the prompt and kept beside the Session log.
+//! Opaque review reports, named in the prompt and kept beside the Session trace.
 
 use std::fs;
 use std::io::ErrorKind;
@@ -46,7 +46,7 @@ impl ReviewReports {
                 }
                 Ok(_) => found = true,
             }
-            let kept = log.with_extension(axis);
+            let kept = crate::logs::session::original(log).with_extension(axis);
             if let Err(error) = fs::copy(&report, &kept) {
                 lines.push(format!("could not keep {}: {error}", kept.display()));
             }

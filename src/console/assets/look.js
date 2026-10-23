@@ -38,7 +38,7 @@ reduced.addEventListener('change', motion);
 motion();
 
 export function activity() {
-  root.dataset.live = String(!!document.querySelector('.command[data-live="true"], #log-content[data-live="true"]'));
+  root.dataset.live = String(!!document.querySelector('.command[data-live="true"], #log-content[data-live="true"], #span-tree[data-live="true"]'));
 }
 
 function apply(settings) {

@@ -72,7 +72,10 @@ for (const requeue of [false, true]) {
         await page.locator('[data-group="working"] > summary').click();
         if (!requeue) await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
       }
-      await page.locator('.peek-link').first().click();
+      if (await page.locator('#span-tree').count()) {
+        await page.locator('.span-row').first().click();
+        await page.getByRole('button', { name: 'Command details', exact: true }).click();
+      } else await page.locator('.peek-link').first().click();
       await page.getByRole('button', { name: 'Stop', exact: true }).waitFor();
     }
     await page.getByRole('button', { name: 'Stop', exact: true }).click();
@@ -83,7 +86,8 @@ for (const requeue of [false, true]) {
     await page.goto(`${origin}/stop?command=widgets%237`);
     const observer = await context.newPage();
     await observer.goto(`${origin}/waterfall`);
-    await observer.locator('.peek-link').first().click();
+    await observer.locator('.span-row').first().click();
+    await observer.getByRole('button', { name: 'Command details', exact: true }).click();
     await observer.getByRole('button', { name: 'Stop', exact: true }).waitFor();
     assert.equal((await context.request.post(`${origin}/stop`, { form: { command: 'widgets#7', confirmed: 'yes', ending: 'triage' } })).status(), 403);
     await page.getByRole('button', { name: requeue ? 'Requeue instead' : 'Confirm Stop', exact: true }).click();
