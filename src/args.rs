@@ -26,6 +26,8 @@ pub enum Command {
     Update,
     Setup,
     Evals(crate::evals::Action),
+    Experiment(crate::evals::experiment::Options),
+    Experiments(Vec<String>),
     CronJobs {
         json: bool,
     },
@@ -290,6 +292,10 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
         Some("evals") => return crate::evals::parse(&args[1..]).map(Command::Evals),
+        Some("experiment") => {
+            return crate::evals::experiment::parse(&args[1..]).map(Command::Experiment);
+        }
+        Some("experiments") => return Ok(Command::Experiments(args[1..].to_vec())),
         Some("console") => {
             if args.get(1).is_some_and(|action| action == "theme") {
                 let json = args.last().is_some_and(|arg| arg == "--json");

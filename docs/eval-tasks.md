@@ -59,6 +59,12 @@ checks = [["cargo", "test", "counter_regression"]]
 
 [inputs]
 ".thirdshift-issue.md" = "first-spec.md"
+
+[trial]
+issue_url = "https://github.com/acme/widgets/issues/7"
+base = "main"
+branch = "issue-7"
+pr_url = "https://github.com/acme/widgets/pull/1"
 ```
 
 - `state` is `proposed` or `approved`. Proposals are listed with their state and
@@ -81,6 +87,13 @@ checks = [["cargo", "test", "counter_regression"]]
   Paths must stay within their respective folders, and cannot address `.git`.
   Only these input files are copied; the manifest, criteria and checks remain
   outside the prepared repository.
+- `trial` supplies the version-1 Trial's session inputs. It is optional for
+  standalone preparation, and required for approved tasks selected by an
+  Experiment. `base` and `branch` name distinct local branches; `issue_url`
+  and `pr_url` describe the fixture's issue and PR. Spec-review Experiments
+  create those local branches, commit the prepared change and push them to
+  the disposable bare origin. Supply fixture services or disposable PRs for
+  sessions that can reach GitHub, as described in the Trial protocol.
 
 ## Commands and repository preparation
 

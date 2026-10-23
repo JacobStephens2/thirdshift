@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::format;
 use crate::harness::Harness;
@@ -28,25 +28,25 @@ impl Requested {
     }
 }
 
-#[derive(Clone, Serialize)]
-struct FixedHarness {
-    name: &'static str,
-    path: PathBuf,
-    version: String,
+#[derive(Clone, Deserialize, Serialize)]
+pub(super) struct FixedHarness {
+    pub name: String,
+    pub path: PathBuf,
+    pub version: String,
 }
 
-#[derive(Serialize)]
-struct Arm {
-    commit: String,
-    binary: PathBuf,
-    harness: FixedHarness,
+#[derive(Clone, Deserialize, Serialize)]
+pub(super) struct Arm {
+    pub commit: String,
+    pub binary: PathBuf,
+    pub harness: FixedHarness,
 }
 
-#[derive(Serialize)]
-struct Prepared {
+#[derive(Clone, Deserialize, Serialize)]
+pub(crate) struct Prepared {
     format: u32,
-    baseline: Arm,
-    candidate: Arm,
+    pub(super) baseline: Arm,
+    pub(super) candidate: Arm,
 }
 
 pub(super) fn prepare(repository: &Path, arms: [Requested; 2], record: &Path) -> Result<String> {
@@ -118,7 +118,7 @@ fn fixed_harness(harness: Harness) -> Result<FixedHarness> {
         bail!("Arm Harness {name} reported an empty version");
     }
     Ok(FixedHarness {
-        name,
+        name: name.into(),
         path,
         version,
     })

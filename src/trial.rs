@@ -35,13 +35,13 @@ enum SessionKind {
     SpecReview,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Inputs {
-    issue_url: String,
-    base: String,
-    branch: String,
-    pr_url: String,
+pub(crate) struct Inputs {
+    pub issue_url: String,
+    pub base: String,
+    pub branch: String,
+    pub pr_url: String,
 }
 
 #[derive(Serialize)]

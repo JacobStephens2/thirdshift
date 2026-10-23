@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 
 mod arms;
+pub(crate) mod experiment;
 mod format;
 mod repository;
 mod suite;

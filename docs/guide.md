@@ -399,6 +399,8 @@ thirdshift evals touched <path>...  # select suites from their declared source d
 thirdshift evals prepare <suite> <task> <destination>  # prepare a throwaway repository at its base
 thirdshift evals verify <repository> <base>  # refuse history beyond the base commit
 thirdshift evals prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>  # cache builds and record fixed Harness paths
+thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json]  # run or resume an Experiment
+thirdshift experiments [<id>] [--json]  # list Experiments or show one
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print a compact command and option reference
@@ -422,6 +424,48 @@ version lookup stops preparation. Trials use the recorded Harness path so an
 installation's symlink update cannot change the Harness between Arms.
 The [Eval task format](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md)
 documents the manifests with made-up data and the Arm record.
+
+### Experiments
+
+From a local thirdshift clone, `thirdshift experiment <candidate>` compares a
+branch or commit with its merge-base with `main`. Use `--baseline <ref>` to name
+another Baseline. Suites default to those touched by the change, using their
+declarations; repeat `--suite <name>` to select them explicitly, including for a
+Harness, Model or Effort comparison with the same build in both Arms.
+
+Each Arm accepts `--baseline-harness`, `--baseline-model`, `--baseline-effort`
+or the corresponding `--candidate-*` flag, followed by a value. Unspecified
+choices follow the User config, then the Harness defaults. Both builds must
+support the [versioned Trial protocol](https://github.com/JacobStephens2/thirdshift/blob/main/docs/trial.md).
+Spec-review Eval tasks run now; Code-review Trials arrive with #1016.
+
+The Bar is saved before the first Trial: margin `-0.10`, credible level `0.95`,
+prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
+`1800`-second per-Trial timeout, and up to two fresh retries for Void Trials.
+Override these with `--margin`, `--credible-level`, `--prior`, `--seed`,
+`--draws`, `--trials-per-task`, `--timeout` (seconds), or `--void-retries`.
+Timeouts count as failed Trials. Void causes are recorded; usage/rate limits
+pause scheduling until the same Experiment is started again. Other Void Trials
+retry up to the Bar's limit and remain void if exhausted.
+
+Two workers take alternating Baseline and Candidate Trials, each in a fresh
+prepared repository. Trial artifacts and one result per finished Trial live
+privately in `~/.thirdshift/evals/experiments/<id>/`. Trials currently run
+without a sandbox; #1014 adds isolation. Grading and Verdict publication are
+separate work; a completed Experiment here reports its Trial results.
+
+The same Arms and suite names identify the same Experiment. Running it again
+skips finished Trials and re-runs interrupted ones; a completed Experiment only
+reports its saved results. A changed Bar is refused after the first Trial.
+`thirdshift experiments --json` lists them and `thirdshift experiments <id>
+--json` shows one. The starting command's `--json` prints one result document.
+
+Each invocation that does work keeps a Command record, Command log and Activity
+log lines under `<logs.dir>/JacobStephens2/thirdshift/commands/experiment/`
+(the Activity log is at the repository level). The record names both Arms and
+the Bar and moves through Arm builds, Eval tasks and Trials. It appears in the
+Inbox; use the name from `status` with `thirdshift stop <command>` to Stop it.
+The individual Trials keep no factory Command records.
 
 `version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Run's rule: stdout stays empty, messages go to stderr. `architect` follows it too: stdout carries the pull request's URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with `--plan-only`, or its idea when the review published no plan. A skipped Architect run prints nothing there when [another is still running](#one-at-a-time), the URL of each Architect plan that is [still open](#one-architect-plan-at-a-time), the URL of each [Architect idea waiting for triage](#an-architect-idea-waits-for-triage), and the URL of the [Ready issue, or issue still settling, that goes first](#a-ready-issue-goes-first). `pickup` follows it as well: stdout carries the pull request's URL of the run it dispatches, and nothing when the [Pickup run](#pickup-runs) is skipped. So does `secure`: stdout carries the pull request's URL of a fix it dispatches, and nothing otherwise.
 

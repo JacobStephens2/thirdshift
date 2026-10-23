@@ -6,21 +6,21 @@ use std::path::Path;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-#[derive(Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum State {
     Proposed,
     Approved,
 }
 
-#[derive(Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "kebab-case")]
 pub(super) enum Session {
     CodeReview,
     SpecReview,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Task {
     pub format: u32,
@@ -33,6 +33,7 @@ pub(super) struct Task {
     #[serde(default)]
     pub checks: Vec<Vec<String>>,
     pub inputs: BTreeMap<String, String>,
+    pub trial: Option<crate::trial::Inputs>,
 }
 
 impl Task {

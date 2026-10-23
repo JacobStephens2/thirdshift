@@ -98,6 +98,7 @@ impl<O: Outside> Record<O> {
             Begin::ArchitectRun => CommandKind::Architect,
             Begin::PickupRun => CommandKind::Pickup,
             Begin::SecurityRun => CommandKind::Secure,
+            Begin::Experiment => CommandKind::Experiment,
         };
         let (starting, quiet) = match begin {
             Begin::ChildRun(stamp, _) => {
@@ -109,6 +110,7 @@ impl<O: Outside> Record<O> {
             Begin::ArchitectRun => ("Architect run starting".into(), true),
             Begin::PickupRun => ("Pickup run starting".into(), true),
             Begin::SecurityRun => ("Security run starting".into(), true),
+            Begin::Experiment => ("Experiment starting".into(), false),
         };
         let now = self.outside.now();
         self.stamp
@@ -332,6 +334,22 @@ impl<O: Outside> Record<O> {
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.finish(account, self.outside.now());
+            self.write_record();
+        }
+    }
+
+    pub(super) fn experiment(&mut self, description: &crate::evals::experiment::Description) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.experiment = Some(description.clone());
+            self.write_record();
+        }
+    }
+
+    pub(super) fn experiment_finished(&mut self, outcome: &str, cause: Option<&str>) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.outcome = Some(outcome.into());
+            tree.command.cause = cause.map(String::from);
+            tree.command.ended_at = Some(self.outside.now().to_rfc3339());
             self.write_record();
         }
     }

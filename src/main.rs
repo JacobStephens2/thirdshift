@@ -86,6 +86,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
        thirdshift evals <action>                      Prepare Eval tasks and Arms; see the manual
+       thirdshift experiment <candidate> [options]   Compare two Arms on private Eval suites
+       thirdshift experiments [<id>] [--json]        List Experiments or show one
        thirdshift status [--all] [--json]             List this machine's Commands
        thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
@@ -157,6 +159,13 @@ fn main() -> ExitCode {
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
         Ok(Command::Evals(action)) => return printed(evals::execute(action)),
+        Ok(Command::Experiment(options)) => {
+            return match evals::experiment::run(options) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::Experiments(args)) => return printed(evals::experiment::show(&args)),
         Ok(Command::CronJobs { json }) => return printed(cronjobs::show(json)),
         Ok(Command::ConsoleInstall { output: None }) => {
             return match console::install() {
