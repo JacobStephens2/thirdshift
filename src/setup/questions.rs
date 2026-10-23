@@ -39,6 +39,12 @@ pub struct Answers {
     pub claude_setup_token: Option<String>,
 }
 
+/// The entered secrets to persist together, with omitted values retained.
+pub struct CredentialEdits<'a> {
+    pub resend_key: Option<&'a str>,
+    pub claude_setup_token: Option<&'a str>,
+}
+
 impl Answers {
     /// The User config changes, without Credentials or email effects.
     pub fn changes(&self) -> UserConfigChanges {
@@ -72,6 +78,16 @@ impl Answers {
         self.notifications
             .as_ref()
             .and_then(|notifications| notifications.key.as_deref())
+    }
+
+    /// No save is needed when both hidden answers were skipped or retained.
+    pub fn credential_edits(&self) -> Option<CredentialEdits<'_>> {
+        let resend_key = self.key();
+        let claude_setup_token = self.claude_setup_token.as_deref();
+        (resend_key.is_some() || claude_setup_token.is_some()).then_some(CredentialEdits {
+            resend_key,
+            claude_setup_token,
+        })
     }
 }
 

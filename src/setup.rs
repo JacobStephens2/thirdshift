@@ -32,7 +32,7 @@ use crate::harness::{
 use crate::resend_key::{Credentials, Source};
 use crate::{email, interrupt, progress};
 
-use questions::Answers;
+use questions::{Answers, CredentialEdits};
 
 /// Setup: write the User config. From a terminal, the Setup questions come
 /// first, each with the current value as its default answer, and the answers
@@ -110,9 +110,9 @@ fn run_setup(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<Str
         return Ok(written);
     };
     offer_console_install(outside, answers);
-    if answers.key().is_some() || answers.claude_setup_token.is_some() {
+    if let Some(edits) = answers.credential_edits() {
         outside.step(written);
-        written = outside.save_credentials(answers.key(), answers.claude_setup_token.as_deref())?;
+        written = outside.save_credentials(edits)?;
     }
     if !answers.send_test() {
         return Ok(written);
@@ -146,8 +146,8 @@ fn run_offer(outside: &mut impl Outside, home: &Path, path: &Path) -> Result<()>
     outside.step(format!("wrote the User config {}", path.display()));
     check_security_sandbox(outside, &text, path, home)?;
     offer_console_install(outside, answers);
-    if answers.key().is_some() || answers.claude_setup_token.is_some() {
-        match outside.save_credentials(answers.key(), answers.claude_setup_token.as_deref()) {
+    if let Some(edits) = answers.credential_edits() {
+        match outside.save_credentials(edits) {
             Ok(wrote) => outside.step(wrote),
             Err(error) => outside.step(format!("warning: {error:#}")),
         }
@@ -266,7 +266,7 @@ pub(crate) trait Outside: Terminal {
     /// Whether the already-read Credentials hold a Claude setup token.
     fn claude_setup_token_saved(&self) -> bool;
     /// Save supplied secrets together in the Credentials: the line saying where.
-    fn save_credentials(&mut self, key: Option<&str>, token: Option<&str>) -> Result<String>;
+    fn save_credentials(&mut self, edits: CredentialEdits<'_>) -> Result<String>;
     /// The public email of the user's GitHub profile, if it has one.
     fn github_email(&mut self) -> Result<Option<String>>;
     /// The global git `user.email`.
@@ -364,12 +364,12 @@ impl Outside for OnMachine<'_> {
             .is_some_and(Credentials::has_claude_setup_token)
     }
 
-    fn save_credentials(&mut self, key: Option<&str>, token: Option<&str>) -> Result<String> {
+    fn save_credentials(&mut self, edits: CredentialEdits<'_>) -> Result<String> {
         let credentials = match self.credentials.take() {
             Some(credentials) => credentials,
             None => Credentials::read()?,
         };
-        credentials.save(key, token)?;
+        credentials.save(edits.resend_key, edits.claude_setup_token)?;
         Ok(format!("wrote {credentials}"))
     }
 
@@ -620,11 +620,11 @@ mod scripted {
             false
         }
 
-        fn save_credentials(&mut self, key: Option<&str>, token: Option<&str>) -> Result<String> {
-            if let Some(key) = key {
+        fn save_credentials(&mut self, edits: CredentialEdits<'_>) -> Result<String> {
+            if let Some(key) = edits.resend_key {
                 self.calls.push(Call::SaveKey(key.to_string()));
             }
-            if let Some(token) = token {
+            if let Some(token) = edits.claude_setup_token {
                 self.calls
                     .push(Call::SaveClaudeSetupToken(token.to_string()));
             }
