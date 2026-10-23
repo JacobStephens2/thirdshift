@@ -73,7 +73,7 @@
 <ol>
 <li><p>Checks that the Ticket run makes sense, before creating anything:</p>
 <ul>
-<li>the <strong>Origin match</strong>: the <strong>Issue URL</strong> must belong to the same GitHub repository as the <code>origin</code> remote of the directory you run it from;</li>
+<li>the <strong>Origin match</strong>: the <strong>Issue URL</strong> must belong to the same GitHub repository as the <code>origin</code> remote of the directory you run it from, and a mismatch says to start it from a clone of the issue&#39;s repository instead;</li>
 <li>the issue is open;</li>
 <li>the <strong>Base branch</strong> is well defined: HEAD is not detached, the branch exists on <code>origin</code>, and your local copy is not ahead of it, so unpushed commits can&#39;t leak into the pull request;</li>
 <li>a local Issue branch, if you have one, points at the same commit as its copy on <code>origin</code>, so local-only commits are never destroyed.</li>

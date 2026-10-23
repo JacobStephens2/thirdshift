@@ -747,7 +747,14 @@ fn a_run_whose_issue_title_cant_be_read_sends_a_notification_without_it() {
         "{}",
         text(&request)
     );
-    assert_contains(text(&request), "origin mismatch");
+    assert_contains(
+        text(&request),
+        &format!(
+            "origin mismatch: {url} is not in the repository at origin {}; \
+             start it from a clone of Other/Widgets",
+            scenario.github_url()
+        ),
+    );
 }
 
 // Where `email` and `--email` can go, and when an address follows them, are
