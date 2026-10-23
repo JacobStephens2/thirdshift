@@ -13,6 +13,8 @@ pub(super) struct RunMetrics {
     pub(super) outcome: String,
     pub(super) repairs: usize,
     pub(super) ci_rounds: usize,
+    #[serde(default)]
+    pub(super) unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
     pub(super) stages: Vec<StageMetrics>,
     pub(super) total_minutes: Option<f64>,
 }
@@ -48,8 +50,9 @@ impl RunMetrics {
         record: &CommandRecord,
         ranges: &UsualRanges,
         outside: &mut impl super::effects::Outside,
+        unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
     ) -> Self {
-        Self::calculate(record, ranges, |log| {
+        Self::calculate(record, ranges, unaddressed_findings, |log| {
             outside
                 .review_summary(log)
                 .and_then(|bytes| serde_json::from_slice(&bytes).ok())
@@ -59,12 +62,13 @@ impl RunMetrics {
     /// Old records have no saved review counts or Usual ranges. Do not infer
     /// those from sidecars or today's history, or write anything back.
     pub(super) fn historical(record: &CommandRecord) -> Self {
-        Self::calculate(record, &UsualRanges::default(), |_| None)
+        Self::calculate(record, &UsualRanges::default(), None, |_| None)
     }
 
     fn calculate(
         record: &CommandRecord,
         ranges: &UsualRanges,
+        unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
         mut review: impl FnMut(&std::path::Path) -> Option<ReviewFindings>,
     ) -> Self {
         let mut sessions = HashSet::new();
@@ -82,6 +86,7 @@ impl RunMetrics {
                 .expect("a finished Run has an outcome"),
             repairs: count(StageName::Repair),
             ci_rounds: count(StageName::CiWatch),
+            unaddressed_findings,
             stages: record
                 .stage_times(None)
                 .map(|timing| {

@@ -32,6 +32,7 @@ pub(super) struct Week {
     repairs: Signal,
     ci_rounds: Signal,
     total_minutes: Signal,
+    unaddressed_findings: UnaddressedFindings,
     stages: BTreeMap<String, Stage>,
 }
 
@@ -71,6 +72,13 @@ struct Stage {
 struct Findings {
     standards: Signal,
     spec: Signal,
+}
+
+#[derive(Default, Serialize)]
+struct UnaddressedFindings {
+    standards: Signal,
+    spec: Signal,
+    security: Signal,
 }
 
 impl Stage {
@@ -158,6 +166,22 @@ fn collect(command: &Command, asked: &MetricsArgs, weeks: &mut BTreeMap<Group, W
         .add(metrics.map(|metrics| metrics.ci_rounds as f64));
     row.total_minutes
         .add(metrics.and_then(|metrics| metrics.total_minutes));
+    let unaddressed = metrics.and_then(|metrics| metrics.unaddressed_findings.as_ref());
+    row.unaddressed_findings.standards.add(
+        unaddressed
+            .and_then(|findings| findings.standards)
+            .map(|n| n as f64),
+    );
+    row.unaddressed_findings.spec.add(
+        unaddressed
+            .and_then(|findings| findings.spec)
+            .map(|n| n as f64),
+    );
+    row.unaddressed_findings.security.add(
+        unaddressed
+            .and_then(|findings| findings.security)
+            .map(|n| n as f64),
+    );
     let Some(metrics) = metrics else { return };
     let mut session_kinds = BTreeSet::new();
     let mut security_session = None;

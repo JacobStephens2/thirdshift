@@ -224,6 +224,11 @@ pub fn issue_branch(branch: Option<&str>) {
     record().issue_branch(branch);
 }
 
+/// Retain Delivery's final counts for the active Run's completion metrics.
+pub(crate) fn unaddressed_findings(counts: Option<crate::pull_request::UnaddressedFindings>) {
+    record().unaddressed_findings(counts);
+}
+
 /// Complete the durable facts from the same account used by other renderers.
 pub fn finished(account: &crate::run_ending::Account<'_>) {
     record().finished(account);

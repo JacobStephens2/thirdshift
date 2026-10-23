@@ -8,6 +8,48 @@ use support::Scenario;
 const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
 #[test]
+fn unaddressed_findings_stay_separate_in_run_views_and_weekly_trends() {
+    let scenario = Scenario::new();
+    write(&scenario, "7-fixture.command.json", &record(7));
+    let mut saved = record(8);
+    saved["run_metrics"] = json!({
+        "outcome": "ready for review", "repairs": 0, "ci_rounds": 1,
+        "total_minutes": 30.0, "stages": [],
+        "unaddressed_findings": {"standards": 2, "spec": 0, "security": null}
+    });
+    write(&scenario, "8-fixture.command.json", &saved);
+    let one = metrics(&scenario, &["metrics", "widgets#8", "--json"]);
+    assert_eq!(
+        one["command"]["metrics"]["unaddressed_findings"],
+        saved["run_metrics"]["unaddressed_findings"]
+    );
+    let old = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert_eq!(
+        old["command"]["metrics"]["unaddressed_findings"],
+        Value::Null
+    );
+    let trends = metrics(&scenario, &["metrics", "--json"]);
+    let run = trends["weeks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["session_kind"].is_null())
+        .unwrap();
+    assert_eq!(
+        run["unaddressed_findings"]["standards"],
+        json!({"observed": 1, "missing": 1, "sum": 2.0, "mean": 2.0})
+    );
+    assert_eq!(
+        run["unaddressed_findings"]["spec"],
+        json!({"observed": 1, "missing": 1, "sum": 0.0, "mean": 0.0})
+    );
+    assert_eq!(
+        run["unaddressed_findings"]["security"],
+        json!({"observed": 0, "missing": 2, "sum": null, "mean": null})
+    );
+}
+
+#[test]
 fn an_unrecorded_security_resume_setup_stays_missing() {
     let scenario = Scenario::new();
     let mut past = record(7);
@@ -238,6 +280,7 @@ fn a_spec_includes_ticket_runs_and_base_fixes_once_and_retains_saved_metrics() {
     ticket["parent_record"] = json!(spec_path);
     ticket["run_metrics"] = json!({
         "outcome": "merged", "repairs": 3, "ci_rounds": 4, "total_minutes": 42.0,
+        "unaddressed_findings": null,
         "stages": [{"name": "implement", "seconds": 120.0, "minutes": 2.0,
             "usual_range": {"lower_seconds": 60.0, "upper_seconds": 180.0},
             "position": "within", "review_findings": {"standards": 2, "spec": 0}}]
