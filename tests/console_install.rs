@@ -4,9 +4,10 @@
 mod support;
 
 use std::fs;
+use std::path::Path;
 use std::process::{Command, Output};
 
-use support::write_executable;
+use support::{copy_executable, write_executable};
 
 struct Machine {
     root: tempfile::TempDir,
@@ -397,12 +398,7 @@ fn unit_preserves_literal_paths_with_shell_and_systemd_metacharacters() {
     let home = machine.path("home space%$\"'\\");
     fs::rename(machine.path("home"), &home).unwrap();
     let binary = machine.path("thirdshift space%$binary");
-    let copied = Command::new("cp")
-        .arg(env!("CARGO_BIN_EXE_thirdshift"))
-        .arg(&binary)
-        .status()
-        .unwrap();
-    assert!(copied.success());
+    copy_executable(Path::new(env!("CARGO_BIN_EXE_thirdshift")), &binary);
     let output = Command::new(&binary)
         .args(["console", "install"])
         .env("HOME", &home)

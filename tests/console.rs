@@ -1434,12 +1434,7 @@ fn replacing_the_binary_executes_the_replacement_with_the_original_arguments() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
     let binary = home.path().join("thirdshift");
-    let copied = Command::new("cp")
-        .arg(env!("CARGO_BIN_EXE_thirdshift"))
-        .arg(&binary)
-        .status()
-        .unwrap();
-    assert!(copied.success());
+    support::copy_executable(Path::new(env!("CARGO_BIN_EXE_thirdshift")), &binary);
     let console = Console::start(&binary, home.path());
     assert_eq!(console.get("/").status(), 200);
     let _open_stream = console.get("/events");

@@ -57,6 +57,12 @@ use std::time::{Duration, Instant};
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
+/// Copy an executable through a child process, as with [`write_executable`].
+pub fn copy_executable(source: &Path, path: &Path) {
+    let status = Command::new("cp").arg(source).arg(path).status().unwrap();
+    assert!(status.success(), "could not copy {}", source.display());
+}
+
 fn terminal_attributes(fd: &impl std::os::fd::AsRawFd) -> libc::termios {
     // SAFETY: tcgetattr fills a valid termios using the open terminal descriptor.
     let mut attributes = unsafe { std::mem::zeroed() };
@@ -581,12 +587,7 @@ impl Scenario {
     ) -> RunResult {
         let copy = self.path("installed/thirdshift");
         fs::create_dir_all(copy.parent().unwrap()).unwrap();
-        let copied = Command::new("cp")
-            .arg(env!("CARGO_BIN_EXE_thirdshift"))
-            .arg(&copy)
-            .status()
-            .unwrap();
-        assert!(copied.success());
+        copy_executable(Path::new(env!("CARGO_BIN_EXE_thirdshift")), &copy);
         let held = self.spawn_until_started(self.command_running(&copy, args), COPY_IN_USE);
         replace(&copy);
         fs::write(self.path(COPY_REPLACED), "").unwrap();
