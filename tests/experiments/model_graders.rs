@@ -419,7 +419,8 @@ PY
             if caught { "Caught it." } else { "Missed it." }
         );
     }
-    assert_eq!(experiment["verdict"]["verdict"], "pass");
+    assert_eq!(experiment["verdict"]["provisional_verdict"], "pass");
+    assert_eq!(experiment["verdict"]["verdict"], "waiting_on_rechecks");
     assert_eq!(experiment["verdict"]["borderline_trials"], 3);
     assert_eq!(
         experiment["verdict"]["suites"]["spec-review"]["wrong_findings"]["verdict"],

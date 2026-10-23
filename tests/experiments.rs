@@ -10,6 +10,9 @@ use support::Scenario;
 #[path = "experiments/model_graders.rs"]
 mod model_graders;
 
+#[path = "experiments/rechecks.rs"]
+mod rechecks;
+
 #[test]
 fn experiment_trace_contains_trials_and_graders_and_reports_arm_usage() {
     let fixture = Fixture::new();
@@ -755,9 +758,9 @@ printf 'Spec report\n' > "$reports/spec.md"
 }
 
 #[test]
-fn mechanical_scores_determine_the_verdict_inbox_and_arm_minutes() {
+fn mechanical_scores_determine_the_provisional_verdict_inbox_and_arm_minutes() {
     for (passing_arm, decision, group) in [
-        ("candidate", "pass", "done"),
+        ("candidate", "pass", "needs you"),
         ("baseline", "fail", "needs you"),
     ] {
         let fixture = Fixture::new();
@@ -782,7 +785,8 @@ esac
         assert_eq!(run.code, Some(0), "{}", run.stderr);
         let last = run.stdout.lines().last().unwrap();
         let experiment: Value = serde_json::from_str(last).unwrap();
-        assert_eq!(experiment["verdict"]["verdict"], decision);
+        assert_eq!(experiment["verdict"]["provisional_verdict"], decision);
+        assert_eq!(experiment["verdict"]["verdict"], "waiting_on_rechecks");
         assert!(
             experiment["verdict"]["suites"]["spec-review"]["accuracy"]["interval"]["lower"]
                 .is_number()
@@ -808,7 +812,7 @@ esac
         let record = fixture
             .scenario
             .command_record("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment");
-        assert_eq!(record["outcome"], decision);
+        assert_eq!(record["outcome"], "waiting_on_rechecks");
         let status = fixture.scenario.run(&["status", "--json"]);
         let status: Value = serde_json::from_str(&status.stdout).unwrap();
         assert_eq!(status["commands"][0]["group"], group);

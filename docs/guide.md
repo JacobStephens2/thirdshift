@@ -402,6 +402,7 @@ thirdshift evals verify <repository> <base>  # refuse history beyond the base co
 thirdshift evals prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>  # cache builds and record fixed Harness paths
 thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json]  # run or resume an Experiment
 thirdshift experiments [<id>] [--json]  # list Experiments or show one
+thirdshift recheck <id> <trial> <pass|fail> --reason <text> [--wrong-finding <true|false>] [--json]
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print a compact command and option reference
@@ -496,6 +497,32 @@ incomplete or malformed Grader response pauses the Experiment; resuming retries
 grading without rerunning finished Trials,
 and reuses already validated Scores.
 
+The Verdict stays `waiting_on_rechecks` until you have rechecked every borderline
+Score and every decisive Score. A Score is decisive when flipping its pass/fail
+or wrong-finding flag changes the Experiment's pass/fail/inconclusive decision
+under the fixed Bar. Scores from a task dropped as void are excluded.
+`thirdshift experiments <id> --json` lists these under `pending_rechecks`, with
+each Trial's `id`, suite, task, Arm, Trial number and borderline/decisive flags.
+The text view lists the same IDs. `verdict.provisional_verdict` and suite
+intervals show the calculation while `verdict.verdict` waits.
+
+Read the Trial's reports and record your decision:
+
+```sh
+thirdshift recheck <experiment-id> <trial-id> pass --reason 'The report meets the written criteria.'
+thirdshift recheck <experiment-id> <trial-id> fail --reason 'This finding is wrong.' --wrong-finding true
+```
+
+Your latest recheck supplies the pass/fail used in the Verdict; the optional
+`--wrong-finding true|false` corrects that flag too. Omission retains its last
+value. Each Trial's `score` keeps the original Grader's decision, checks and
+model evidence, with your timestamped decisions and reasons in `score.rechecks`.
+Rechecking again appends to that history. The command atomically saves the
+history and recalculated Verdict, then prints the updated Experiment, with
+`--json` available. A changed Score can make another Score decisive, so consult
+the updated pending list. Trials and Graders never rerun for a recheck, and the
+Bar stays fixed. An Experiment being run or rechecked refuses concurrent writes.
+
 Each suite gets a paired Verdict using its recorded Trials per Eval task (one
 or three). Any failed suite fails the Experiment; otherwise any inconclusive
 suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
@@ -530,7 +557,9 @@ Each invocation that does work keeps a Command record, Command log and Activity
 log lines under `<logs.dir>/JacobStephens2/thirdshift/commands/experiment/`
 (the Activity log is at the repository level). The record names both Arms and
 the Bar and moves through Arm builds, Eval tasks and Trials. It appears in the
-Inbox: a pass goes in Done, and a fail or inconclusive Verdict goes in Needs you.
+Inbox: a pass goes in Done, and a fail, inconclusive Verdict or waiting rechecks
+go in Needs you. Command records retain the outcome at the end of that invocation;
+the Experiment views show the latest rechecks and Verdict.
 Use the name from `status` with `thirdshift stop <command>` to Stop it.
 The individual Trials keep no factory Command records.
 Trial and model Grader Session traces and code Grader spans join the invocation's

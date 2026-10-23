@@ -22,6 +22,10 @@ pub(super) struct Stored {
     pub tasks: Vec<Task>,
     #[serde(default)]
     pub verdict: Option<super::grading::Verdict>,
+    #[serde(default)]
+    pub rechecks: super::rechecks::History,
+    #[serde(default)]
+    pub pending_rechecks: Vec<super::rechecks::Pending>,
     #[serde(skip)]
     pub directory: PathBuf,
     #[serde(skip)]
@@ -36,6 +40,7 @@ struct View<'a> {
     created_at: &'a str,
     results: Vec<TrialResult>,
     verdict: &'a Option<super::grading::Verdict>,
+    pending_rechecks: &'a [super::rechecks::Pending],
     minutes: Minutes,
     usage: super::usage::Arms,
     voids: Voids,
@@ -178,12 +183,15 @@ impl Stored {
                 created_at: chrono::Local::now().to_rfc3339(),
                 tasks: tasks()?,
                 verdict: None,
+                rechecks: BTreeMap::new(),
+                pending_rechecks: Vec::new(),
                 directory: PathBuf::new(),
                 lock: None,
             }
         };
         stored.directory = directory;
         stored.lock = Some(lock);
+        stored.upgrade_verdict()?;
         stored.save()?;
         Ok(stored)
     }
@@ -195,9 +203,59 @@ impl Stored {
     pub fn results(&self) -> Result<Vec<TrialResult>> {
         let mut results = Vec::new();
         for path in result_paths(&self.directory)? {
-            results.push(serde_json::from_slice(&fs::read(path)?)?);
+            let mut result: TrialResult = serde_json::from_slice(&fs::read(path)?)?;
+            let key = result.key();
+            if let Some(score) = &mut result.score {
+                score.rechecks = self.rechecks.get(&key).cloned().unwrap_or_default();
+            }
+            results.push(result);
         }
         Ok(results)
+    }
+
+    pub fn refresh_verdict(&mut self) -> Result<()> {
+        let (verdict, pending) =
+            super::rechecks::assess(&self.tasks, &mut self.results()?, &self.description.bar)?;
+        self.verdict = Some(verdict);
+        self.pending_rechecks = pending;
+        Ok(())
+    }
+
+    fn upgrade_verdict(&mut self) -> Result<()> {
+        if self.state == State::Completed
+            && self
+                .verdict
+                .as_ref()
+                .is_none_or(|verdict| verdict.provisional_verdict.is_none())
+        {
+            self.refresh_verdict()?;
+        }
+        Ok(())
+    }
+
+    pub fn load(root: &Path, id: &str, exclusive: bool) -> Result<Self> {
+        ensure!(
+            id.len() == 64 && id.bytes().all(|c| c.is_ascii_hexdigit()),
+            "invalid Experiment ID"
+        );
+        let directory = root.join(id);
+        ensure!(directory.is_dir(), "Experiment not found");
+        let lock = if exclusive {
+            let lock = File::create(directory.join("lock"))?;
+            lock.try_lock()
+                .context("Experiment is already running or being rechecked")?;
+            Some(lock)
+        } else {
+            None
+        };
+        let mut stored: Self = serde_json::from_slice(
+            &fs::read(directory.join("experiment.json")).context("Experiment not found")?,
+        )?;
+        ensure!(stored.format == 1, "unsupported Experiment format");
+        stored.directory = directory;
+        stored.lock = lock;
+        stored.upgrade_verdict()?;
+        Ok(stored)
     }
 
     fn view(&self) -> Result<View<'_>> {
@@ -225,6 +283,7 @@ impl Stored {
             created_at: &self.created_at,
             results,
             verdict: &self.verdict,
+            pending_rechecks: &self.pending_rechecks,
             minutes,
             usage: super::usage::Arms::read(&self.directory)?,
             voids,
@@ -246,7 +305,8 @@ impl Stored {
                 view.results.len(),
                 self.verdict
                     .as_ref()
-                    .map_or("pending", |verdict| verdict.outcome()),
+                    .map_or("pending", |verdict| verdict.outcome())
+                    .replace('_', " "),
                 view.minutes.baseline,
                 view.usage.baseline(),
                 view.minutes.candidate,
@@ -256,6 +316,11 @@ impl Stored {
                 view.findings
                     .iter()
                     .map(|finding| format!("\nFinding: {finding}"))
+                    .chain(
+                        view.pending_rechecks
+                            .iter()
+                            .map(|pending| format!("\nRecheck: {pending}"))
+                    )
                     .collect::<String>()
             ))
         }
@@ -290,25 +355,19 @@ pub(super) fn result_paths(directory: &Path) -> Result<Vec<PathBuf>> {
 
 pub(super) fn show(root: &Path, id: Option<&str>, json: bool) -> Result<String> {
     if let Some(id) = id {
-        ensure!(
-            id.len() == 64 && id.bytes().all(|c| c.is_ascii_hexdigit()),
-            "invalid Experiment ID"
-        );
-        let directory = root.join(id);
-        let mut stored: Stored = serde_json::from_slice(
-            &fs::read(directory.join("experiment.json")).context("Experiment not found")?,
-        )?;
-        stored.directory = directory;
-        return stored.render(json);
+        return Stored::load(root, id, false)?.render(json);
     }
     let mut experiments = Vec::new();
     if root.exists() {
         for entry in fs::read_dir(root)? {
             let path = entry?.path().join("experiment.json");
             if path.is_file() {
-                let mut stored: Stored = serde_json::from_slice(&fs::read(&path)?)?;
-                stored.directory = path.parent().unwrap().into();
-                experiments.push(stored);
+                let directory = path.parent().unwrap();
+                let id = directory
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .context("invalid Experiment ID")?;
+                experiments.push(Stored::load(root, id, false)?);
             }
         }
     }

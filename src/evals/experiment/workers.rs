@@ -53,11 +53,17 @@ pub(super) struct TrialResult {
     pub suite: String,
     pub task: String,
     pub arm: Arm,
-    trial: usize,
+    pub trial: usize,
     pub outcome: Outcome,
     #[serde(default)]
     pub score: Option<grading::Score>,
     pub attempts: Vec<Output>,
+}
+
+impl TrialResult {
+    pub fn key(&self) -> String {
+        trial_key(&self.suite, &self.task, self.arm, self.trial)
+    }
 }
 
 struct Trial<'a> {
@@ -68,15 +74,19 @@ struct Trial<'a> {
 
 impl Trial<'_> {
     fn key(&self) -> String {
-        // Names cannot contain NUL. Hash the delimited tuple so names with
-        // `--` stay distinct and long names cannot exceed a filename limit.
-        let task = Sha256::new()
-            .chain_update(self.task.suite.as_bytes())
-            .chain_update([0])
-            .chain_update(self.task.name.as_bytes())
-            .finalize();
-        format!("{task:x}--{}--{}", self.arm.name(), self.index)
+        trial_key(&self.task.suite, &self.task.name, self.arm, self.index)
     }
+}
+
+fn trial_key(suite: &str, name: &str, arm: Arm, index: usize) -> String {
+    // Names cannot contain NUL. Hash the delimited tuple so names with
+    // `--` stay distinct and long names cannot exceed a filename limit.
+    let task = Sha256::new()
+        .chain_update(suite.as_bytes())
+        .chain_update([0])
+        .chain_update(name.as_bytes())
+        .finalize();
+    format!("{task:x}--{}--{}", arm.name(), index)
 }
 
 fn pauses(output: &Output) -> bool {

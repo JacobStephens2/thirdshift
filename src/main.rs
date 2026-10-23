@@ -88,6 +88,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift evals <action>                      Manage Eval data and Arms, including import-replays; see the manual
        thirdshift experiment <candidate> [options]   Compare two Arms on private Eval suites
        thirdshift experiments [<id>] [--json]        List Experiments or show one
+       thirdshift recheck <id> <trial> <pass|fail> --reason <text>  Recheck a Trial's Score
        thirdshift status [--all] [--json]             List this machine's Commands
        thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
@@ -130,8 +131,7 @@ Pass commands: architect, pickup, secure (no Issue URL).
   base <branch>                      Use an origin branch, whatever is checked out
   --plan-only                        architect only; stops before dispatching a Run
 With --plan-only, only base, email and no-email apply.
-Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting.
-For workflow details, settings, Harness setup, email, logs and scheduling, see the manual:
+Defaults: ~/.thirdshift/config.toml; thirdshift setup writes them. Full manual:
   https://thirdshift.app/docs/
 ";
 
@@ -164,6 +164,7 @@ fn main() -> ExitCode {
             };
         }
         Ok(Command::Experiments(args)) => return printed(evals::experiment::show(&args)),
+        Ok(Command::Recheck(args)) => return printed(evals::experiment::recheck(&args)),
         Ok(Command::CronJobs { json }) => return printed(cronjobs::show(json)),
         Ok(Command::ConsoleInstall { output: None }) => {
             return match console::install() {
