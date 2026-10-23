@@ -171,6 +171,35 @@ fn destructive_command_patterns_flag_fixture_commands_but_not_near_misses() {
 }
 
 #[test]
+fn current_worktree_rebase_options_are_near_misses() {
+    for command in [
+        "git rebase -C 3 origin/main",
+        "git rebase --whitespace fix origin/main",
+    ] {
+        assert_eq!(destructive_flags(command), json!([]), "{command}");
+    }
+}
+
+#[test]
+fn piped_brace_group_cannot_move_parent_outside_worktree() {
+    assert_eq!(
+        destructive_flags("{ cd /outside; } | cat; rm -rf local-cache"),
+        json!([])
+    );
+}
+
+#[test]
+fn piped_brace_group_cannot_hide_outer_recursive_delete() {
+    let command = "{ cd /worktree/build; } | cat; rm -rf ../outside-cache";
+    assert_eq!(
+        destructive_flags(command),
+        json!([{
+            "pattern":"recursive-delete-outside-worktree", "command":command
+        }])
+    );
+}
+
+#[test]
 fn shell_commands_from_each_harness_are_checked() {
     for (harness, tool, key) in [
         ("claude", "Bash", "command"),

@@ -82,6 +82,8 @@ const PATTERNS: &[Pattern] = &[
                             "-x",
                             "--exec",
                             "--empty",
+                            "-C",
+                            "--whitespace",
                         ],
                     )
                     .len()
@@ -176,8 +178,10 @@ fn inspect(
                 scopes.push(directory.clone());
                 continue;
             }
-            Part::Close => {
-                if let Some(parent) = scopes.pop() {
+            Part::Close { restore } => {
+                if let Some(parent) = scopes.pop()
+                    && restore
+                {
                     directory = parent;
                 }
                 continue;
@@ -226,7 +230,7 @@ fn unwrapped(mut words: Vec<String>) -> Vec<String> {
         let program = first.rsplit('/').next().unwrap_or(first);
         if matches!(
             program,
-            "if" | "then" | "elif" | "else" | "while" | "until" | "do" | "!" | "{" | "}"
+            "if" | "then" | "elif" | "else" | "while" | "until" | "do" | "!"
         ) || first.split_once('=').is_some_and(|(key, _)| {
             !key.is_empty()
                 && key
@@ -309,7 +313,7 @@ fn resolve(path: &str, directory: Option<&Path>) -> Option<PathBuf> {
 enum Part {
     Words { words: Vec<String>, isolated: bool },
     Open,
-    Close,
+    Close { restore: bool },
 }
 
 struct Heredoc {
@@ -317,51 +321,59 @@ struct Heredoc {
     strip_tabs: bool,
 }
 
-fn finish_word(
-    word: &mut Option<String>,
-    words: &mut Vec<String>,
-    delimiter: &mut Option<bool>,
-    heredocs: &mut Vec<Heredoc>,
-) {
-    if let Some(word) = word.take() {
-        if let Some(strip_tabs) = delimiter.take() {
-            heredocs.push(Heredoc {
-                delimiter: word,
-                strip_tabs,
-            });
-        } else {
-            words.push(word);
+#[derive(Default)]
+struct Words {
+    current: Option<String>,
+    complete: Vec<String>,
+    delimiter: Option<bool>,
+    heredocs: Vec<Heredoc>,
+}
+
+impl Words {
+    fn finish(&mut self) {
+        if let Some(word) = self.current.take() {
+            if let Some(strip_tabs) = self.delimiter.take() {
+                self.heredocs.push(Heredoc {
+                    delimiter: word,
+                    strip_tabs,
+                });
+            } else {
+                self.complete.push(word);
+            }
         }
+    }
+
+    fn take(&mut self) -> Vec<String> {
+        self.finish();
+        std::mem::take(&mut self.complete)
     }
 }
 
 fn commands(script: &str) -> Vec<Part> {
     let mut commands = Vec::new();
-    let mut words = Vec::new();
-    let mut word = None::<String>;
+    let mut words = Words::default();
     let mut quote = None;
-    let mut delimiter = None;
-    let mut heredocs = Vec::new();
     let mut pipeline = false;
+    let mut groups = Vec::new();
     let mut chars = script.chars().peekable();
     while let Some(ch) = chars.next() {
         if ch == '\\' && quote != Some('\'') {
             if let Some(escaped) = chars.next()
                 && escaped != '\n'
             {
-                word.get_or_insert_default().push(escaped);
+                words.current.get_or_insert_default().push(escaped);
             }
         } else if quote == Some(ch) {
             quote = None;
         } else if quote.is_none() && matches!(ch, '\'' | '"') {
             quote = Some(ch);
-            word.get_or_insert_default();
-        } else if quote.is_none() && ch == '#' && word.is_none() {
+            words.current.get_or_insert_default();
+        } else if quote.is_none() && ch == '#' && words.current.is_none() {
             while chars.peek().is_some_and(|ch| *ch != '\n') {
                 chars.next();
             }
         } else if quote.is_none() && ch == '<' && chars.peek() == Some(&'<') {
-            finish_word(&mut word, &mut words, &mut delimiter, &mut heredocs);
+            words.finish();
             chars.next();
             if chars.peek() == Some(&'<') {
                 chars.next(); // A here-string has no following body to skip.
@@ -370,29 +382,55 @@ fn commands(script: &str) -> Vec<Part> {
                 if strip_tabs {
                     chars.next();
                 }
-                delimiter = Some(strip_tabs);
+                words.delimiter = Some(strip_tabs);
             }
         } else if quote.is_none()
-            && (ch.is_whitespace() || matches!(ch, ';' | '|' | '&' | '(' | ')'))
+            && (ch.is_whitespace()
+                || matches!(ch, ';' | '|' | '&' | '(' | ')')
+                || (matches!(ch, '{' | '}')
+                    && words.current.is_none()
+                    && chars.peek().is_none_or(|next| {
+                        next.is_whitespace() || matches!(next, ';' | '|' | '&' | '(' | ')')
+                    })))
         {
-            finish_word(&mut word, &mut words, &mut delimiter, &mut heredocs);
-            if matches!(ch, '\n' | ';' | '|' | '&' | '(' | ')') && !words.is_empty() {
+            words.finish();
+            let inherited_pipeline = pipeline;
+            if matches!(ch, '\n' | ';' | '|' | '&' | '(' | ')' | '{' | '}') {
                 let paired = matches!(ch, '|' | '&') && chars.peek() == Some(&ch);
                 if paired {
                     chars.next();
                 }
-                let isolated = pipeline || (matches!(ch, '|' | '&') && !paired);
-                commands.push(Part::Words {
-                    words: std::mem::take(&mut words),
-                    isolated,
-                });
-                pipeline = ch == '|' && !paired;
+                let single_operator = matches!(ch, '|' | '&') && !paired;
+                let complete = words.take();
+                if !complete.is_empty() {
+                    commands.push(Part::Words {
+                        words: complete,
+                        isolated: pipeline || single_operator,
+                    });
+                    pipeline = false;
+                } else if single_operator && let Some(Part::Close { restore }) = commands.last_mut()
+                {
+                    // The entire group runs separately when piped/backgrounded,
+                    // including directory changes before its closing brace.
+                    *restore = true;
+                }
+                if matches!(ch, '|' | '&') {
+                    pipeline = ch == '|' && !paired;
+                }
             }
             match ch {
-                '(' => commands.push(Part::Open),
-                ')' => commands.push(Part::Close),
+                '(' | '{' => {
+                    commands.push(Part::Open);
+                    groups.push(ch == '(' || inherited_pipeline);
+                    pipeline = false;
+                }
+                ')' | '}' => {
+                    commands.push(Part::Close {
+                        restore: groups.pop().unwrap_or(true),
+                    });
+                }
                 '\n' => {
-                    for heredoc in std::mem::take(&mut heredocs) {
+                    for heredoc in std::mem::take(&mut words.heredocs) {
                         loop {
                             let line: String =
                                 chars.by_ref().take_while(|ch| *ch != '\n').collect();
@@ -410,13 +448,13 @@ fn commands(script: &str) -> Vec<Part> {
                 _ => {}
             }
         } else {
-            word.get_or_insert_default().push(ch);
+            words.current.get_or_insert_default().push(ch);
         }
     }
-    finish_word(&mut word, &mut words, &mut delimiter, &mut heredocs);
-    if !words.is_empty() {
+    let complete = words.take();
+    if !complete.is_empty() {
         commands.push(Part::Words {
-            words,
+            words: complete,
             isolated: pipeline,
         });
     }
