@@ -229,14 +229,11 @@ fn legacy_records_keep_first_outcomes_and_last_fix_endings_without_eager_decodin
             );
             let records = collection(private, vec![native(private, &candidate)]);
             assert!(records.next_fix().unwrap().is_none());
-            assert!(records.waiting_for_day_shift(true));
-            assert!(
-                records
-                    .decode_created(native(private, &candidate))
-                    .unwrap()
-                    .fix_size()
-                    .is_err()
-            );
+            let record = records.decode_created(native(private, &candidate)).unwrap();
+            assert!(record.fix_size().is_err());
+            // Only the first, well-formed outcome is a completed reproduction.
+            let expected = (outcome == "not reproduced").then_some(Outcome::NotReproduced);
+            assert!(record.completed_reproduction() == expected, "{outcome}");
         }
     }
 }
@@ -628,8 +625,6 @@ fn fix_transitions_preserve_fresh_edits_and_join_the_collection_gates() {
             let records = collection(private, vec![value]);
             assert_eq!(records.failed_fix().unwrap().is_some(), paused);
             assert!(records.next_fix().unwrap().is_none());
-            assert!(records.waiting_for_day_shift(false));
-            assert!(!records.waiting_for_day_shift(true));
         }
         for wrong in [
             "No fix section.",
@@ -753,6 +748,7 @@ fn reproduction_writes_join_selection_and_not_reproduced_records_keep_evidence()
             assert!(text.ends_with("```\nfixture();\n```\n"));
             let updated = record(private, &text);
             assert_eq!(updated.fix_size().is_ok(), reproduced);
+            assert!(updated.completed_reproduction() == Some(outcome));
             let mut value = native(private, &draft("fixture"));
             value[if private { "body" } else { "description" }] = json!(text);
             let records = collection(private, vec![value]);
@@ -762,8 +758,6 @@ fn reproduction_writes_join_selection_and_not_reproduced_records_keep_evidence()
                 assert_eq!(metadata.severity.as_deref(), Some("medium"));
                 assert!(record.fix_size().unwrap() == FixSize::Single);
             }
-            assert!(records.waiting_for_day_shift(false));
-            assert_eq!(records.waiting_for_day_shift(true), !reproduced);
         }
     }
 }

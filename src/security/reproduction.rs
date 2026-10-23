@@ -66,6 +66,7 @@ impl FixSize {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Reproduced { severity: Severity, size: FixSize },
     NotReproduced,
@@ -88,12 +89,18 @@ pub struct Reproduction {
     pub test: String,
 }
 
+impl Outcome {
+    pub fn severity(&self) -> Option<Severity> {
+        match self {
+            Self::Reproduced { severity, .. } => Some(*severity),
+            Self::NotReproduced => None,
+        }
+    }
+}
+
 impl Reproduction {
     pub fn severity(&self) -> Option<Severity> {
-        match self.outcome {
-            Outcome::Reproduced { severity, .. } => Some(severity),
-            Outcome::NotReproduced => None,
-        }
+        self.outcome.severity()
     }
 }
 
