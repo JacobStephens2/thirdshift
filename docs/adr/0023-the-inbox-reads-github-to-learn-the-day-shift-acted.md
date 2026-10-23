@@ -23,6 +23,6 @@ Now each machine's Console reads GitHub once a minute. One batched GraphQL query
 - When GitHub can't be read, the Inbox keeps the last answer. A row keeps the group its last-read facts give it, and one GitHub hasn't been read for, or can't find, goes by age. After 5 minutes without a good read, the Inbox's warning says when GitHub last answered and why the latest read failed (#919 Q3.1).
 - The Console leaves the last tenth of each quota to the factory. With fewer than 500 GraphQL points or 500 REST requests left, it skips its reads until that quota resets, and says so (#919 Q3.2).
 - GitHub is read for a row only until it reaches the History page, so each read grows with the Inbox, not with the machine's history, and a reopened issue brings back only a row still in Done or Resolved (#919 Q3.3).
-- Resolved counts from when a row stopped waiting, so a row dealt with after a long wait stays in view (#919 Q3.4).
+- Resolved counts from when a row was dealt with, so one dealt with after a long wait stays in view. A row that ages out still goes straight to History (#919 Q3.4, Q4.2).
 - Nothing turns the reads off, and none of their timings is a setting (#919 Q3.7).
 - The Inbox can be up to a minute behind GitHub, and further while GitHub can't be read or the quota is low, when it says so.

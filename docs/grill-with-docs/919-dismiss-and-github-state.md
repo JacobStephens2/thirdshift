@@ -267,7 +267,7 @@ The options:
 
 *Checked:* Both skills are in `~/.claude/skills/`, and only you can start them (`disable-model-invocation: true`), as `/to-spec` and `/to-tickets`. `to-spec` writes the Spec from the current conversation, so it's best run in this session, and `docs/agents/triage-labels.md` overrides both skills' readiness and parent-modification defaults. This branch is 85 commits behind `main`, whose glossary now says Ticket run where this branch's says Run (#1101). That's Q4.1.
 
-## Round 4 (open)
+## Round 4 (answered)
 
 **Q4.1 - Getting the glossary and ADR 0023 onto `main` before the Spec.** This branch, `dismiss-grill`, holds the only copy of ADR 0023, the **Dismissal** entry and the other glossary changes, and it's 85 commits behind `main`. `/to-spec` writes from this conversation and the checkout it runs in, and the Spec run's sessions will read `main`'s glossary and ADRs. Meanwhile `main` has renamed the run on one issue from Run to Ticket run (#1101, ADR 0022): its glossary has no **Run** left, and this branch's has 46. A trial merge of `main` into this branch conflicts only in `GLOSSARY.md`. #1083's PR #1180 changes the same Inbox line. Earlier grill files reached `main` through ordinary pull requests (#1100, #1108). The options:
 - (a) **Merge `main` in now, take its words, and land the docs first.** I merge `main` into `dismiss-grill`, resolve the glossary, and put ADR 0023 and the new glossary text in `main`'s words, such as "a **Slow** Ticket run that then dies". Then I push the branch and open a pull request with this file, the glossary, ADR 0016's new line and ADR 0023. Once you've merged it, you run `/to-spec` and `/to-tickets` here.
@@ -276,7 +276,7 @@ The options:
 
 *Recommended:* (a). The Spec, and every session that builds it, should read `main`'s words and the decisions recorded here, and a docs-only pull request is quick to review. Whichever of it and #1180 merges second keeps both #1083's later-Command exit and GitHub's in the Inbox line. (b) writes the Spec in this branch's older words. (c) mixes the docs into a code review, and leaves the Tickets that run beside the first without ADR 0023 to read.
 
-*Answer:* 
+*Answer:* agree
 
 **Q4.2 - A row that ages out.** Q3.4 starts Resolved's clock when a row stops waiting, which its option put as "when they left Needs you or Ready for review". Today a row that ages out of Needs you skips Resolved and goes straight to the History page (Q3.4's check). Read literally, Q3.4 would now keep it in Resolved for another `inbox.days`. Since Q2.5, only rows GitHub can't speak for age out, such as chart35's 48 billing failures. The options:
 - (a) **Ageing out isn't dealing with a row.** A row that ages out goes straight to the History page, as today. Resolved's clock restarts only when GitHub settles a row, a later Command takes up its issue, or someone dismisses it.
@@ -284,7 +284,7 @@ The options:
 
 *Recommended:* (a). Q3.4 keeps in view what someone has just dealt with, with its Undo. Nobody dealt with a row that aged out, and its week in Needs you was its chance to be seen. (b) would keep chart35's billing failures in the Inbox for two weeks.
 
-*Answer:* 
+*Answer:* agree
 
 ## Settled by earlier answers (shout if any is wrong)
 
@@ -316,7 +316,7 @@ The options:
 - **When GitHub can't be read, the Inbox keeps its last answer** (Q3.1). A row keeps the group its last-read facts give it. A row not read yet, or whose issue or pull request GitHub says is gone or hidden, goes by age. After 5 minutes without a good read, the warning line in `status` and the Console says when GitHub last answered and why the latest read failed. `status` asks GitHub itself only when the kept answer is more than 5 minutes old.
 - **The Console leaves the last tenth of each quota to the factory** (Q3.2). With fewer than 500 GraphQL points or 500 REST requests left, it skips reads until that quota resets, and the warning line says why. `status` does the same.
 - **GitHub is read for a row until it reaches the History page** (Q3.3). There, the row keeps what GitHub last showed, and a reopened issue no longer brings it back. Each read grows with the Inbox, not with the machine's history.
-- **Resolved's clock starts when a row stops waiting** (Q3.4), and Done still holds the Commands that ended in the last day. A row stops waiting when whatever ended its wait happened: when GitHub says its pull request merged or its issue closed, when the later Command started, or when it was dismissed, not when the Inbox noticed. So on the day #919 ships, rows GitHub finished weeks ago go straight to the History page instead of filling Resolved at once. An Undo makes a row wait again if it still has a problem, and its clock starts afresh when that wait ends. Whether ageing out ends a wait is Q4.2.
+- **Resolved's clock starts when a row stops waiting** (Q3.4), and Done still holds the Commands that ended in the last day. A row stops waiting when whatever ended its wait happened: when GitHub says its pull request merged or its issue closed, when the later Command started, or when it was dismissed, not when the Inbox noticed. So on the day #919 ships, rows GitHub finished weeks ago go straight to the History page instead of filling Resolved at once. An Undo makes a row wait again if it still has a problem, and its clock starts afresh when that wait ends. Ageing out doesn't end a wait (Q4.2): a row that ages out goes straight to the History page, as today.
 - **GitHub moves only ended rows** (Q3.5). A Silent or Slow row stays until its Run logs again, its stage ends, its Command ends, or someone stops or dismisses it.
 - **Dismiss sits in Command details, beside Stop** (Q3.6). One click dismisses, with no confirming page, and `thirdshift dismiss …` is shown beside the button. A dismissed row's Command details offers Undo, with `thirdshift dismiss --undo …`. #917 may later move both onto the rows.
 - **No new settings** (Q3.7). Every machine reads GitHub, and the minute between reads, the 5 minutes before a warning and the reserve are fixed.
