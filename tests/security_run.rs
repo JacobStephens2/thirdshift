@@ -3425,28 +3425,16 @@ fn failed_security_audits_send_one_notification_with_a_safe_status() {
     }
 }
 
-#[test]
-fn missing_base_branch_reports_a_safe_pre_audit_cause() {
-    let scenario = Scenario::new();
+fn assert_base_branch_pre_audit_cause(
+    scenario: &Scenario,
+    args: &[&str],
+    diagnostic: &str,
+    cause: &str,
+) {
     let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
-    let result = scenario.run_with_env(
-        &[
-            "secure",
-            "base",
-            "PRIVATE-BRANCH",
-            "email",
-            "me@example.com",
-        ],
-        &resend_env(&resend),
-    );
+    let result = scenario.run_with_env(args, &resend_env(&resend));
     assert_eq!(result.code, Some(1), "{}", result.stderr);
-    assert!(
-        result
-            .stderr
-            .contains("base branch PRIVATE-BRANCH does not exist on origin or locally"),
-        "{}",
-        result.stderr
-    );
+    assert!(result.stderr.contains(diagnostic), "{}", result.stderr);
     assert!(scenario.claude_calls().is_empty());
     assert!(scenario.codex_calls().is_empty());
     let (subject, text) = the_one_notification(&resend);
@@ -3456,25 +3444,41 @@ fn missing_base_branch_reports_a_safe_pre_audit_cause() {
     );
     assert!(text.contains("Result:       pre-audit failed"), "{text}");
     assert!(text.contains("Audit:        not started"), "{text}");
-    assert!(
-        text.contains("Cause:        Base branch not found"),
-        "{text}"
-    );
+    assert!(text.contains(&format!("Cause:        {cause}")), "{text}");
     assert!(
         text.contains("Diagnostics:  Check this command's stderr on "),
         "{text}"
     );
-    for diagnostic in [
+    for private in [
+        diagnostic,
         "PRIVATE-BRANCH",
+        "PRIVATE-COMMIT",
         "create or obtain",
         "git push",
         "pre-audit checks failed",
     ] {
         assert!(
-            !resend.requests()[0].body.to_string().contains(diagnostic),
+            !resend.requests()[0].body.to_string().contains(private),
             "{text}"
         );
     }
+}
+
+#[test]
+fn missing_base_branch_reports_a_safe_pre_audit_cause() {
+    let scenario = Scenario::new();
+    assert_base_branch_pre_audit_cause(
+        &scenario,
+        &[
+            "secure",
+            "base",
+            "PRIVATE-BRANCH",
+            "email",
+            "me@example.com",
+        ],
+        "base branch PRIVATE-BRANCH does not exist on origin or locally",
+        "Base branch not found",
+    );
 }
 
 #[test]
@@ -3498,37 +3502,12 @@ fn other_base_branch_preparation_failures_report_safe_pre_audit_causes() {
     ] {
         let scenario = Scenario::new();
         scenario.launch_git(setup);
-        let resend = ResendStandIn::replying(200, r#"{"id":"1"}"#);
-        let result =
-            scenario.run_with_env(&["secure", "email", "me@example.com"], &resend_env(&resend));
-        assert_eq!(result.code, Some(1), "{}", result.stderr);
-        assert!(result.stderr.contains(diagnostic), "{}", result.stderr);
-        assert!(scenario.claude_calls().is_empty());
-        assert!(scenario.codex_calls().is_empty());
-        let (subject, text) = the_one_notification(&resend);
-        assert_eq!(
-            subject,
-            "[thirdshift] acme/widgets Security run: pre-audit failed"
-        );
-        assert!(text.contains("Result:       pre-audit failed"), "{text}");
-        assert!(text.contains("Audit:        not started"), "{text}");
-        assert!(text.contains(&format!("Cause:        {cause}")), "{text}");
-        assert!(
-            text.contains("Diagnostics:  Check this command's stderr on "),
-            "{text}"
-        );
-        for private in [
+        assert_base_branch_pre_audit_cause(
+            &scenario,
+            &["secure", "email", "me@example.com"],
             diagnostic,
-            "PRIVATE-BRANCH",
-            "PRIVATE-COMMIT",
-            "git push",
-            "pre-audit checks failed",
-        ] {
-            assert!(
-                !resend.requests()[0].body.to_string().contains(private),
-                "{text}"
-            );
-        }
+            cause,
+        );
     }
 }
 
