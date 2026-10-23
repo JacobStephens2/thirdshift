@@ -23,6 +23,8 @@ pub(crate) struct Run {
     pub selector: String,
     pub peek_url: String,
     pub log_url: String,
+    pub issue_url: Option<String>,
+    pub issue_label: String,
     pub stages: Vec<Stage>,
     repository: String,
     started: Option<i64>,
@@ -70,6 +72,15 @@ fn subject(kind: &str, repository: &str, issue: Option<&Issue>) -> String {
         || format!("{kind} on {repository}"),
         |issue| format!("{kind} · {repository}#{}", issue.number),
     )
+}
+
+fn issue_link(issue: Option<&Issue>) -> (Option<String>, String) {
+    match issue {
+        Some(issue) if issue.url.starts_with("https://") => {
+            (Some(issue.url.clone()), format!("Issue #{}", issue.number))
+        }
+        _ => (None, String::new()),
+    }
 }
 
 fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
@@ -134,6 +145,7 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
             }
         })
         .collect();
+    let (issue_url, issue_label) = issue_link(record.issue.as_ref());
     Run {
         subject: subject(&record.kind, &record.repository, record.issue.as_ref()),
         title: record
@@ -148,6 +160,8 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
         },
         peek_url: super::inspect::url("/peek", &selector, None),
         log_url: super::inspect::url("/log", &selector, None),
+        issue_url,
+        issue_label,
         selector,
         repository: record.repository.clone(),
         stages,
@@ -176,6 +190,7 @@ pub(crate) fn load(config: &UserConfig, hours: f64) -> Result<Views> {
             Entry::Record(command) => collect(command, now, cutoff.timestamp(), &mut runs),
             Entry::History(command) => {
                 let selector = Observation::History(command).selector().unwrap_or_default();
+                let (issue_url, issue_label) = issue_link(command.issue.as_ref());
                 runs.push(Run {
                     subject: subject(&command.kind, &command.repository, command.issue.as_ref()),
                     title: String::new(),
@@ -185,6 +200,8 @@ pub(crate) fn load(config: &UserConfig, hours: f64) -> Result<Views> {
                         .unwrap_or_else(|| command.state.into()),
                     peek_url: super::inspect::url("/peek", &selector, None),
                     log_url: super::inspect::url("/log", &selector, None),
+                    issue_url,
+                    issue_label,
                     selector,
                     repository: command.repository.clone(),
                     stages: Vec::new(),
