@@ -182,6 +182,9 @@ fn record_spans(
                 }
             }),
     );
+    if let Some(experiment) = &command.record.experiment {
+        sessions.extend(experiment.trace_sessions(outer)?);
+    }
     for child in command.dispatched.iter().chain(&command.children) {
         record_spans(child, outer, context.run, spans, sessions)?;
     }

@@ -6,6 +6,8 @@ mod integrity;
 mod limits;
 mod options;
 mod store;
+mod trace;
+mod usage;
 mod workers;
 
 use std::collections::BTreeMap;

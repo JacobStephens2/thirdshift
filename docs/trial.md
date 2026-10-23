@@ -7,6 +7,11 @@ Both Arms' builds must support this protocol: the first Experiment's Baseline
 must be the first release that ships the flag, or a later release.
 The current Experiment supervises their raw Session logs for plan-limit
 warnings even when an Arm build has no warning detector of its own.
+It passes `THIRDSHIFT_TRIAL_TRACE_CONTEXT` to trace-aware Arms without changing
+the version-1 request. Session traces inherit the Experiment's Command trace ID
+and their Trial's parent span. The Experiment also joins older Arms' retained
+Session traces after completion. The context is cleared before the Harness is
+launched, like Command ownership; standalone Trials keep their own trace IDs.
 
 The caller prepares an isolated repository at the required commit, its branch
 and local Base branch, and a `.thirdshift-issue.md` containing the Spec's title,

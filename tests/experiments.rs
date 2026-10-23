@@ -8,6 +8,304 @@ use serde_json::{Value, json};
 use support::Scenario;
 
 #[test]
+fn experiment_trace_contains_trials_and_graders_and_reports_arm_usage() {
+    let fixture = Fixture::new();
+    // A trace-capable older Arm ignores the new inheritance environment.
+    let binary = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/builds/{}/thirdshift",
+        fixture.baseline,
+    ));
+    let original = binary.with_extension("real");
+    fs::rename(&binary, &original).unwrap();
+    fs::write(
+        &binary,
+        format!(
+            "#!/bin/sh\nunset THIRDSHIFT_TRIAL_TRACE_CONTEXT\nexec {:?} \"$@\"\n",
+            original
+        ),
+    )
+    .unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+    let task = fixture
+        .scenario
+        .path("home/.thirdshift/evals/suites/spec-review/tasks/fixture/task.toml");
+    let manifest = fs::read_to_string(&task).unwrap();
+    fs::write(
+        &task,
+        manifest.replace("[inputs]", "checks = [[\"true\"]]\n[inputs]"),
+    )
+    .unwrap();
+    fixture.scenario.agent_does(r#"
+test -z "${THIRDSHIFT_TRIAL_TRACE_CONTEXT+x}"
+echo '{"type":"assistant","message":{"id":"m1","model":"observed-a","usage":{"input_tokens":10,"output_tokens":3,"cache_read_input_tokens":2,"cache_creation_input_tokens":1},"content":[]}}'
+echo '{"type":"assistant","message":{"id":"m2","model":"observed-b","usage":{"input_tokens":20,"output_tokens":4},"content":[]}}'
+echo '{"type":"result","subtype":"success","total_cost_usd":0.25,"modelUsage":{"observed-a":{"inputTokens":10,"outputTokens":3,"cacheReadInputTokens":2,"cacheCreationInputTokens":1,"costUSD":0.10},"observed-b":{"inputTokens":20,"outputTokens":4,"costUSD":0.15}}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+"#);
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    for arm in ["baseline", "candidate"] {
+        let usage = &experiment["usage"][arm];
+        assert_eq!(usage["models"]["observed-a"]["input_tokens"], 13);
+        assert_eq!(usage["models"]["observed-a"]["output_tokens"], 3);
+        assert_eq!(usage["models"]["observed-b"]["input_tokens"], 20);
+        assert_eq!(usage["models"]["observed-b"]["output_tokens"], 4);
+        assert_eq!(usage["cost_usd"], 0.25);
+    }
+    let id = experiment["id"].as_str().unwrap();
+    let text = fixture.scenario.run(&["experiments", id]);
+    assert!(text.stdout.contains("observed-a"), "{}", text.stdout);
+    assert!(text.stdout.contains("$0.250000"), "{}", text.stdout);
+    let record = fixture
+        .scenario
+        .command_record("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment");
+    let export = fixture.scenario.path("export");
+    let run = fixture.scenario.run(&[
+        "logs",
+        record["name"].as_str().unwrap(),
+        "--export",
+        export.to_str().unwrap(),
+    ]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let spans = trace_spans(&export.join("spans.jsonl"));
+    let root = spans.iter().find(|span| span["name"] == "Command").unwrap();
+    let trials: Vec<_> = spans
+        .iter()
+        .filter(|span| span["name"].as_str().unwrap().starts_with("Trial "))
+        .collect();
+    assert_eq!(trials.len(), 2, "{spans:#?}");
+    let graders: Vec<_> = spans
+        .iter()
+        .filter(|span| span["name"] == "Grader")
+        .collect();
+    assert_eq!(graders.len(), 2);
+    for session in spans
+        .iter()
+        .filter(|span| span["name"] == "invoke_agent spec-review")
+        .chain(graders)
+    {
+        assert!(
+            trials
+                .iter()
+                .any(|trial| trial["spanId"] == session["parentSpanId"])
+        );
+    }
+    assert!(spans.iter().all(|span| span["traceId"] == root["traceId"]));
+    assert_eq!(
+        spans
+            .iter()
+            .filter(|span| span["name"] == "invoke_agent spec-review")
+            .count(),
+        2
+    );
+}
+
+fn trace_spans(path: &std::path::Path) -> Vec<Value> {
+    fs::read_to_string(path)
+        .unwrap()
+        .lines()
+        .flat_map(|line| {
+            let request: Value = serde_json::from_str(line).unwrap();
+            request["resourceSpans"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|resource| {
+                    resource["scopeSpans"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .flat_map(|scope| scope["spans"].as_array().unwrap().clone())
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn timed_out_trials_keep_partial_usage_and_exportable_session_ancestry() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(r#"
+echo '{"type":"assistant","message":{"id":"partial","model":"observed","usage":{"input_tokens":11,"output_tokens":2},"content":[]}}'
+sleep 20
+"#);
+    let run = fixture.run(&["--timeout", "1"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    for arm in ["baseline", "candidate"] {
+        assert_eq!(
+            experiment["usage"][arm]["models"]["observed"]["input_tokens"],
+            11
+        );
+        assert!(experiment["usage"][arm]["cost_usd"].is_null());
+    }
+    let record = fixture
+        .scenario
+        .command_record("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment");
+    let export = fixture.scenario.path("export");
+    let exported = fixture.scenario.run(&[
+        "logs",
+        record["name"].as_str().unwrap(),
+        "--export",
+        export.to_str().unwrap(),
+    ]);
+    assert_eq!(exported.code, Some(0), "{}", exported.stderr);
+    let spans = trace_spans(&export.join("spans.jsonl"));
+    let sessions: Vec<_> = spans
+        .iter()
+        .filter(|span| span["name"] == "invoke_agent spec-review")
+        .collect();
+    assert_eq!(sessions.len(), 2);
+    assert!(sessions.iter().all(|span| span["status"]["code"] == 2));
+}
+
+#[test]
+fn arm_usage_keeps_unreported_cost_and_model_unknown() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does("true");
+    let run = fixture.run(&[
+        "--baseline-harness",
+        "codex",
+        "--baseline-model",
+        "requested-only",
+    ]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    let usage = &experiment["usage"];
+    assert_eq!(usage["baseline"]["models"]["unknown"]["input_tokens"], 1200);
+    assert_eq!(usage["baseline"]["models"]["unknown"]["output_tokens"], 300);
+    assert_eq!(
+        usage["baseline"]["models"]["unknown"]["cache_read_tokens"],
+        200
+    );
+    assert!(usage["baseline"]["models"]["requested-only"].is_null());
+    assert!(usage["baseline"]["cost_usd"].is_null());
+    assert_eq!(usage["candidate"]["models"], json!({}));
+    assert!(usage["candidate"]["cost_usd"].is_null());
+}
+
+#[test]
+fn session_totals_keep_the_harness_reported_model() {
+    let fixture = Fixture::new();
+    let harness = fixture.scenario.path("bin/agy");
+    let real = harness.canonicalize().unwrap();
+    let fixed = fixture.scenario.path("versions/v1/agy");
+    fs::copy(real, &fixed).unwrap();
+    fs::remove_file(&harness).unwrap();
+    std::os::unix::fs::symlink(fixed, &harness).unwrap();
+    fixture.scenario.agent_does(
+        r#"
+echo '{"event":"init","conversation_id":"reported","init":{"model":"gemini-observed"}}'
+"#,
+    );
+    let run = fixture.run(&["--baseline-harness", "agy", "--candidate-harness", "agy"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    for arm in ["baseline", "candidate"] {
+        let models = &experiment["usage"][arm]["models"];
+        assert_eq!(models["gemini-observed"]["input_tokens"], 1200);
+        assert_eq!(models["gemini-observed"]["output_tokens"], 300);
+        assert_eq!(models["gemini-observed"]["cache_read_tokens"], 200);
+        assert!(models["unknown"].is_null(), "{models:#}");
+    }
+}
+
+#[test]
+fn arm_usage_keeps_session_totals_when_model_calls_report_partial_usage() {
+    let fixture = Fixture::new();
+    let harness = fixture.scenario.path("bin/agy");
+    let real = harness.canonicalize().unwrap();
+    let fixed = fixture.scenario.path("versions/v1/agy");
+    fs::copy(real, &fixed).unwrap();
+    fs::remove_file(&harness).unwrap();
+    std::os::unix::fs::symlink(fixed, &harness).unwrap();
+    fixture.scenario.agent_does(
+        r#"
+echo '{"event":"init","conversation_id":"reported","init":{"model":"gemini-observed"}}'
+echo '{"event":"step_update","step_update":{"conversation_id":"reported","step_index":1,"step_type":"agent_response","state":"DONE","usage":{"output_tokens":2}}}'
+"#,
+    );
+    let run = fixture.run(&["--baseline-harness", "agy", "--candidate-harness", "agy"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    for arm in ["baseline", "candidate"] {
+        let model = &experiment["usage"][arm]["models"]["gemini-observed"];
+        assert_eq!(model["input_tokens"], 1200, "{model:#}");
+        assert_eq!(model["output_tokens"], 300, "{model:#}");
+        assert_eq!(model["cache_read_tokens"], 200, "{model:#}");
+    }
+}
+
+#[test]
+fn partial_model_input_total_includes_preserved_cache_tokens() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(r#"
+echo '{"type":"assistant","message":{"id":"m1","model":"observed","usage":{"input_tokens":11,"output_tokens":2,"cache_read_input_tokens":5},"content":[]}}'
+echo '{"type":"result","subtype":"success","total_cost_usd":0.125,"modelUsage":{"observed":{"inputTokens":20,"outputTokens":3,"costUSD":0.125}}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+"#);
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    for arm in ["baseline", "candidate"] {
+        let model = &experiment["usage"][arm]["models"]["observed"];
+        assert_eq!(model["input_tokens"], 25);
+        assert_eq!(model["output_tokens"], 3);
+        assert_eq!(model["cache_read_tokens"], 5);
+        assert_eq!(experiment["usage"][arm]["cost_usd"], 0.125);
+    }
+}
+
+#[test]
+fn partial_model_totals_preserve_other_reported_call_measurements() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(r#"
+echo '{"type":"assistant","message":{"id":"m1","model":"observed","usage":{"input_tokens":11,"output_tokens":2,"cache_read_input_tokens":5},"content":[]}}'
+echo '{"type":"result","subtype":"success","total_cost_usd":0.125,"modelUsage":{"observed":{"outputTokens":3,"costUSD":0.125}}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+"#);
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    for arm in ["baseline", "candidate"] {
+        let model = &experiment["usage"][arm]["models"]["observed"];
+        assert_eq!(model["input_tokens"], 16);
+        assert_eq!(model["output_tokens"], 3);
+        assert_eq!(model["cache_read_tokens"], 5);
+        assert_eq!(experiment["usage"][arm]["cost_usd"], 0.125);
+    }
+}
+
+#[test]
+fn arm_usage_sums_void_retries_and_both_sessions_of_each_resume() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(&format!(r#"
+echo '{{"type":"assistant","message":{{"id":"m1","model":"observed","usage":{{"input_tokens":7,"output_tokens":2}},"content":[]}}}}'
+echo '{{"type":"result","subtype":"success","total_cost_usd":0.05}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+printf changed > changed.txt
+{}
+"#, support::leaves_running("cargo test")));
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    for arm in ["baseline", "candidate"] {
+        // Three fresh attempts, each with its opening session and Resume.
+        assert_eq!(
+            experiment["usage"][arm]["models"]["observed"]["input_tokens"],
+            42
+        );
+        assert_eq!(
+            experiment["usage"][arm]["models"]["observed"]["output_tokens"],
+            12
+        );
+        assert!((experiment["usage"][arm]["cost_usd"].as_f64().unwrap() - 0.30).abs() < 1e-9);
+    }
+    assert_eq!(
+        fixture.experiment(),
+        experiment,
+        "show must not count pending results twice"
+    );
+}
+
+#[test]
 fn spec_review_generated_instruction_fallbacks_do_not_void_trials() {
     for harness_name in ["agy", "opencode"] {
         let fixture = Fixture::new();

@@ -478,16 +478,29 @@ skips finished Trials and re-runs interrupted ones; a completed Experiment only
 reports its saved results. A changed Bar is refused after the first Trial.
 <code>thirdshift experiments --json</code> lists them and <code>thirdshift experiments &lt;id&gt; --json</code> shows one. The starting command&#39;s <code>--json</code> ends with one JSON line
 containing the Verdict and suite intervals alongside the Trial results and Arm
-minutes. Both views show Void counts and causes per Arm, and report repeated
-Trial-only memory-cap stops as a finding against that Arm. The text view shows
-Baseline and Candidate minutes beside the Verdict.</p>
+minutes. Both views also show each Arm&#39;s tokens by observed Model and its cost
+in USD where the Harness reports one. JSON keeps these under <code>usage.baseline</code>
+and <code>usage.candidate</code>, with <code>models</code> and <code>cost_usd</code>; missing measurements are
+<code>null</code>, and tokens without a reported Model are grouped under <code>unknown</code>.
+Input tokens include cache reads and writes, which are also shown separately.
+Totals include all attempts and Resume sessions; Grader usage is not charged
+to either Arm. The text view shows usage beside each Arm&#39;s minutes.
+Both views show Void counts and causes per Arm, and report repeated
+Trial-only memory-cap stops as a finding against that Arm.</p>
 <p>Each invocation that does work keeps a Command record, Command log and Activity
 log lines under <code>&lt;logs.dir&gt;/JacobStephens2/thirdshift/commands/experiment/</code>
 (the Activity log is at the repository level). The record names both Arms and
 the Bar and moves through Arm builds, Eval tasks and Trials. It appears in the
 Inbox: a pass goes in Done, and a fail or inconclusive Verdict goes in Needs you.
 Use the name from <code>status</code> with <code>thirdshift stop &lt;command&gt;</code> to Stop it.
-The individual Trials keep no factory Command records.</p>
+The individual Trials keep no factory Command records.
+Their Session traces and code Grader spans join the invocation&#39;s Command Trace.
+Export it with <code>thirdshift logs &lt;command&gt; --export &lt;dir&gt;</code>; the private Trial
+artifacts stay under the Experiment&#39;s Eval folder. On resume, each invocation&#39;s
+Trace keeps the attempts it started, while Arm totals cover the whole Experiment.
+Older Arms with Session traces are joined after completion; Arms predating
+Session traces contribute minutes only. Model Grader sessions follow with model
+grading.</p>
 <p><code>version</code> and <code>help</code> print to stdout and exit <code>0</code>. <code>update</code>, <code>setup</code> and <code>email-test</code> follow the Run&#39;s rule: stdout stays empty, messages go to stderr. <code>architect</code> follows it too: stdout carries the pull request&#39;s URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with <code>--plan-only</code>, or its idea when the review published no plan. A skipped Architect run prints nothing there when <a href="#one-at-a-time">another is still running</a>, the URL of each Architect plan that is <a href="#one-architect-plan-at-a-time">still open</a>, the URL of each <a href="#an-architect-idea-waits-for-triage">Architect idea waiting for triage</a>, and the URL of the <a href="#a-ready-issue-goes-first">Ready issue, or issue still settling, that goes first</a>. <code>pickup</code> follows it as well: stdout carries the pull request&#39;s URL of the run it dispatches, and nothing when the <a href="#pickup-runs">Pickup run</a> is skipped. So does <code>secure</code>: stdout carries the pull request&#39;s URL of a fix it dispatches, and nothing otherwise.</p>
 <p>Uncommitted changes in your clone are fine: the Run works in its own worktree from <code>origin</code>, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Run stops.</p>
 </div></details>
