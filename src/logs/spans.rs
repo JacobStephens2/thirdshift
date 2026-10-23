@@ -275,7 +275,7 @@ impl Builder<'_> {
                 SpanKind::Stage,
                 &selector,
             );
-            span.name = timing.stage.name.clone();
+            span.name = super::display_name(&timing.stage.name).to_owned();
             span.start = timing.began.map(|time| time.timestamp_millis() as f64);
             span.end = timing.ended.map(|time| time.timestamp_millis() as f64);
             span.status = if span.end.is_some() {
@@ -357,7 +357,7 @@ fn record_span(
         kind,
         name: format!(
             "{} · {}{}",
-            command.record.kind,
+            super::display_name(&command.record.kind),
             subject(command),
             command
                 .record

@@ -19,7 +19,7 @@ function pretty(text) {
   try { return JSON.stringify(JSON.parse(text), null, 2); } catch { return text; }
 }
 const quote = text => `'${text.replaceAll("'", "'\\''")}'`;
-const kindName = { cmd: 'Command', run: 'Run', stage: 'stage', sess: 'session', model: 'model call', tool: 'tool call', turn: 'turn', agent: 'sub-agent' };
+const kindName = { cmd: 'Command', run: 'Ticket run', stage: 'stage', sess: 'session', model: 'model call', tool: 'tool call', turn: 'turn', agent: 'sub-agent' };
 
 export function initSpanTree({ openCommand, openDetails }) {
   const tree = document.getElementById('span-tree');
@@ -174,6 +174,12 @@ export function initSpanTree({ openCommand, openDetails }) {
       const bottom = innerWidth <= 760 && !peek.hidden ? peek.getBoundingClientRect().top : innerHeight;
       const rect = row.getBoundingClientRect();
       window.scrollBy({ top: rect.top + rect.height / 2 - (top + bottom) / 2, behavior: 'instant' });
+      // Scrolling can pin the sticky axis. Keep the row inside the final
+      // visible space rather than the axis's position before that scroll.
+      const settled = row.getBoundingClientRect();
+      const visibleTop = Math.max(0, header.getBoundingClientRect().bottom);
+      if (settled.bottom > bottom) window.scrollBy({ top: settled.bottom - bottom, behavior: 'instant' });
+      else if (settled.top < visibleTop) window.scrollBy({ top: settled.top - visibleTop, behavior: 'instant' });
     });
   }
   function choose(id, focus = true) { selected = id; renderTree(); if (focus) rowFor(id)?.focus({ preventScroll: true }); }
