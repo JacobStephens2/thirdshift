@@ -11,7 +11,7 @@ impl Drop for FixtureProcess {
 }
 
 #[cfg(target_os = "linux")]
-fn start(pid: u32) -> String {
+pub(super) fn start(pid: u32) -> String {
     let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
     let ticks = stat
         .rsplit_once(") ")
@@ -25,7 +25,7 @@ fn start(pid: u32) -> String {
 }
 
 #[cfg(target_os = "macos")]
-fn start(pid: u32) -> String {
+pub(super) fn start(pid: u32) -> String {
     let mut info = std::mem::MaybeUninit::<libc::proc_bsdinfo>::uninit();
     let size = std::mem::size_of::<libc::proc_bsdinfo>() as i32;
     // SAFETY: the fixture owns this process and supplies the exact buffer size.

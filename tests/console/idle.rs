@@ -49,16 +49,7 @@ fn unchanged_requests_reuse_retained_records_but_replacements_are_visible() {
 fn live_fixture(home: &Path, pid: u32) {
     let mut fixture = record(home, 81, None, 0);
     fixture["process_id"] = json!(pid);
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
-    let ticks = stat
-        .rsplit_once(") ")
-        .unwrap()
-        .1
-        .split_whitespace()
-        .nth(19)
-        .unwrap();
-    let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap();
-    fixture["process_start"] = json!(format!("{}:{ticks}", boot.trim()));
+    fixture["process_start"] = json!(super::watching::start(pid));
     write_record(home, 81, &fixture);
 }
 

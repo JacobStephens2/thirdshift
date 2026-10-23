@@ -34,7 +34,7 @@ pub(crate) fn watching(config: &UserConfig) -> Result<Watching> {
     let mut watching = Watching::default();
     for entry in snapshot.entries() {
         if let Entry::Record(command) = entry {
-            collect(command, None, config, now, &mut watching);
+            collect(command, None, now, &mut watching);
         }
     }
     Ok(watching)
@@ -43,7 +43,6 @@ pub(crate) fn watching(config: &UserConfig) -> Result<Watching> {
 fn collect(
     command: &Command,
     outer_log: Option<&std::path::Path>,
-    config: &UserConfig,
     now: DateTime<Local>,
     watching: &mut Watching,
 ) {
@@ -60,41 +59,12 @@ fn collect(
             .map(crate::logs::session::path);
         watching.paths.insert(log.to_path_buf());
         watching.paths.extend(session.iter().cloned());
-        if let Some(stage) = &command.stage
-            && let Ok(began) = DateTime::parse_from_rfc3339(&stage.began_at)
-        {
-            let mut last_output = began.with_timezone(&Local);
-            for path in std::iter::once(log).chain(session.as_deref()) {
-                if let Ok(modified) = std::fs::metadata(path).and_then(|file| file.modified()) {
-                    last_output = last_output.max(DateTime::from(modified));
-                }
-            }
-            for multiple in [1, 3] {
-                deadline(
-                    last_output
-                        + chrono::Duration::seconds(
-                            config.silent_interval.as_secs().saturating_mul(multiple) as i64,
-                        ),
-                    now,
-                    watching,
-                );
-            }
-            if let Some(range) = command.usual_ranges.get(&stage.name) {
-                for multiple in [1.0, 2.0] {
-                    deadline(
-                        began.with_timezone(&Local)
-                            + chrono::Duration::seconds(
-                                (range.upper_seconds * multiple).floor() as i64 + 1,
-                            ),
-                        now,
-                        watching,
-                    );
-                }
-            }
+        if let Some(at) = command.next_health_change {
+            deadline(at, now, watching);
         }
     }
     for child in command.children.iter().chain(&command.dispatched) {
-        collect(child, Some(log), config, now, watching);
+        collect(child, Some(log), now, watching);
     }
 }
 

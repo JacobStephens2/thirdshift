@@ -164,6 +164,8 @@ pub(super) struct Command {
     pub(super) command_log: PathBuf,
     pub(super) dispatched: Vec<Command>,
     pub(super) health: Option<Health>,
+    #[serde(skip)]
+    pub(super) next_health_change: Option<DateTime<Local>>,
     pub(super) usual_ranges: BTreeMap<String, UsualRange>,
 }
 
@@ -204,6 +206,7 @@ impl Command {
             source: "command_record",
             dispatched: Vec::new(),
             health: None,
+            next_health_change: None,
             usual_ranges: BTreeMap::new(),
         }
     }

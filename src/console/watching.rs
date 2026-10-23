@@ -179,9 +179,12 @@ fn exit_descriptor(pid: u32) -> std::io::Result<OwnedFd> {
         data: 0,
         udata: std::ptr::null_mut(),
     };
+    // SAFETY: fd is owned here; close-on-exec keeps it out of CLI children.
+    if unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+        return Err(std::io::Error::last_os_error());
+    }
     // SAFETY: the event is initialized, and no output buffer is requested.
     let registered = unsafe {
-        libc::fcntl(fd.as_raw_fd(), libc::F_SETFD, libc::FD_CLOEXEC);
         libc::kevent(
             fd.as_raw_fd(),
             &event,
