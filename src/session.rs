@@ -16,7 +16,7 @@ use anyhow::{Context, Result, anyhow};
 pub(crate) use crate::harness::claude::claude_args;
 #[cfg(test)]
 pub(crate) use crate::harness::codex::{codex_args, codex_prompt};
-use crate::harness::interpretation::Ended;
+use crate::harness::interpretation::{Ended, SafeguardRefusal, SessionFailure};
 use crate::harness::{Adapter, Choice};
 use crate::issue::{IssueUrl, Repo};
 use crate::logs;
@@ -140,7 +140,7 @@ impl<'a> Sessions<'a> {
         harness: &'a Choice,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
-        Self::checked_within(logs, worktree, harness, None, &|| Ok(()), steps)
+        Self::checked_within(logs, worktree, harness, None, None, &|| Ok(()), steps)
     }
 
     /// [`Sessions::within`], checking `before_each` before each session
@@ -152,6 +152,7 @@ impl<'a> Sessions<'a> {
         worktree: &'a Path,
         harness: &'a Choice,
         security_review: Option<&'a Choice>,
+        security_review_default: Option<&'a Choice>,
         before_each: &'a dyn Fn() -> Result<()>,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
@@ -172,6 +173,7 @@ impl<'a> Sessions<'a> {
             harness: harness.clone(),
             adapter,
             security_review,
+            security_review_default: security_review_default.cloned(),
             recording: logs.recording().clone(),
         };
         let (taken, log) =
@@ -252,7 +254,21 @@ impl<'a> Sessions<'a> {
         } else {
             None
         };
-        let mut ended = self.start(purpose, Logged::of(kind), None, prompt, reports.as_ref())?;
+        let first = self.start(purpose, Logged::of(kind), None, prompt, reports.as_ref());
+        let kind = if let Err(error) = &first
+            && kind == Kind::SecurityReview
+            && matches!(purpose, Purpose::SecurityReview)
+            && self.outside.borrow_mut().fallback_review(error)?
+        {
+            Kind::SecurityReviewFallback
+        } else {
+            kind
+        };
+        let mut ended = if kind == Kind::SecurityReviewFallback {
+            self.start(purpose, Logged::of(kind), None, prompt, reports.as_ref())?
+        } else {
+            first?
+        };
         // What ended last, as the progress line on its killed work calls it.
         let mut ended_last = "session";
         if let (false, Some(session_id)) = (ended.killed.is_empty(), &ended.session_id) {
@@ -331,7 +347,12 @@ impl<'a> Sessions<'a> {
         self.last_log
             .borrow()
             .as_ref()
-            .filter(|(session, log)| session.kind == kind && log.exists())
+            .filter(|(session, log)| {
+                (session.kind == kind
+                    || (kind == Kind::SecurityReview
+                        && session.kind == Kind::SecurityReviewFallback))
+                    && log.exists()
+            })
             .map(|(_, log)| log.clone())
     }
 
@@ -343,6 +364,10 @@ impl<'a> Sessions<'a> {
 
 /// How the Resume rules run a session, and where their progress lines go.
 trait Outside {
+    /// Switch only a review that failed before any work to the default Harness.
+    fn fallback_review(&mut self, _error: &anyhow::Error) -> Result<bool> {
+        Ok(false)
+    }
     /// Run a session given `prompt`, labelled by its kind's token `label`,
     /// continuing the session with id `resume`, if any, its stream logged to
     /// `log`. Returns what it ended with once it has exited cleanly, its turn
@@ -367,10 +392,44 @@ struct OnMachine {
     harness: Choice,
     adapter: &'static dyn Adapter,
     security_review: Option<(Choice, &'static dyn Adapter)>,
+    security_review_default: Option<Choice>,
     recording: recording::Recording,
 }
 
 impl Outside for OnMachine {
+    fn fallback_review(&mut self, error: &anyhow::Error) -> Result<bool> {
+        crate::interrupt::check()?;
+        let Some(failure) = error.downcast_ref::<SessionFailure>() else {
+            return Ok(false);
+        };
+        let Some(reason) = failure
+            .diagnostic
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+        else {
+            return Ok(false);
+        };
+        let Some(default) = &mut self.security_review_default else {
+            return Ok(false);
+        };
+        let review = self
+            .security_review
+            .as_ref()
+            .map_or(&self.harness, |(choice, _)| choice);
+        if !failure.before_first_turn
+            || error.is::<SafeguardRefusal>()
+            || review.harness == default.harness
+        {
+            return Ok(false);
+        }
+        crate::harness::warn_review_fallback(review.harness, default.harness, reason);
+        default.check()?;
+        let adapter = default.harness.adapter();
+        skills::link_into(&self.worktree, adapter)?;
+        adapter.link_instruction_fallback(&self.worktree)?;
+        self.security_review = Some((default.clone(), adapter));
+        Ok(true)
+    }
     fn run_session(
         &mut self,
         purpose: Purpose,

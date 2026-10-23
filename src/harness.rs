@@ -7,7 +7,7 @@
 
 use std::fmt;
 use std::path::Path;
-use std::process::Output;
+use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail};
 
@@ -253,22 +253,50 @@ impl Choice {
         adapter.check(self)
     }
 
-    /// [`Choice::check`] this, a Command's, then `security_review`, what its
-    /// Security review runs on where that differs: a failure of the second
-    /// says it is the Security review's, and what chose it.
+    /// Check the Command and review before work. An unusable non-default
+    /// review choice is replaced by the configured default, after checking it.
     pub fn check_with_security_review(
         &mut self,
-        security_review: Option<&mut Choice>,
+        security_review: &mut Option<Choice>,
+        default: Option<&mut Choice>,
     ) -> Result<()> {
         self.check()?;
-        let Some(review) = security_review else {
+        let Some(default) = default else {
             return Ok(());
         };
-        let (harness, chosen_by) = (review.harness.name(), review.chosen_by);
-        review.check().with_context(|| {
-            format!("the Security review's Harness {harness}, chosen by {chosen_by}, can't run")
-        })
+        let Some(review) = security_review else {
+            return Ok(()); // The review shares the checked Command's choice.
+        };
+        if let Err(error) = review.check() {
+            crate::interrupt::check()?;
+            if review.harness == default.harness {
+                return Err(error).with_context(|| {
+                    format!(
+                        "the Security review's default Harness {} can't run",
+                        review.harness.name()
+                    )
+                });
+            }
+            warn_review_fallback(review.harness, default.harness, &format!("{error:#}"));
+            if default.runs_as(self) {
+                *default = self.clone();
+            } else {
+                default.check()?;
+            }
+            *review = default.clone();
+        }
+        Ok(())
     }
+}
+
+/// Both preflight and a startup failure report the same single-line warning.
+pub fn warn_review_fallback(from: Harness, to: Harness, reason: &str) {
+    let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+    crate::progress::step(format!(
+        "warning: Security review on {} can't be used ({reason}); reviewing on {}, the default Harness",
+        from.name(),
+        to.name()
+    ));
 }
 
 /// What a CLI said on stderr and stdout, trimmed, each on its own lines.
@@ -279,6 +307,17 @@ fn said(output: &Output) -> String {
         .filter(|said| !said.is_empty())
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// A CLI's non-billed sign-in status, before any Model test call.
+fn check_sign_in(adapter: &dyn Adapter, args: &[&str]) -> Result<()> {
+    let cli = adapter.name();
+    let output = process::output(adapter, Command::new(cli).args(args), None)
+        .with_context(|| format!("could not check whether {cli} is signed in"))?;
+    if !output.status.success() {
+        bail!("{cli} is not signed in: {}", said(&output));
+    }
+    Ok(())
 }
 
 impl fmt::Display for Choice {
