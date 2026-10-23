@@ -253,7 +253,7 @@ Everything one **Ticket run**, **Spec run**, **Architect run**, **Pickup run** o
 _Avoid_: cron log, output log, run log (a **Ticket run** is one kind of command)
 
 **Activity log**:
-One running record per repository of what the factory did there: a line when a **Ticket run**, **Spec run**, **Architect run**, **Pickup run** or **Security run** starts work, naming its **Command log**, a line when it is given a **Stop**, naming who asked and whether from the CLI or the **Console**, and a line when it ends, with its outcome. A skipped Architect run, Pickup run or Security run writes a line only when its reason differs from the last one recorded for its kind, so a repository that sits idle shows one line, not one per pass. It is what thirdshift writes about a scheduled pass, in place of output to the scheduler.
+One running record per repository of what the factory did there: a line when a **Ticket run**, **Spec run**, **Architect run**, **Pickup run** or **Security run** starts work, naming its **Command log**, a line when it is given a **Stop** or a **Dismissal**, or a Dismissal is taken back, naming who asked and whether from the CLI or the **Console**, and a line when it ends, with its outcome. A skipped Architect run, Pickup run or Security run writes a line only when its reason differs from the last one recorded for its kind, so a repository that sits idle shows one line, not one per pass. It is what thirdshift writes about a scheduled pass, in place of output to the scheduler.
 _Avoid_: cron log, pass log, history
 
 **Command record**:
@@ -267,7 +267,7 @@ _Avoid_: completion email, alert
 ### Console
 
 **Console**:
-The web page a machine serves that shows every **Command** started on it, opening on its **Inbox**, with each one's child **Ticket runs**, their stages and their logs, and from which a live Command can be stopped. Each machine serves its own, behind a sign-in. It does nothing the CLI can't do: every view and action it offers is also a command.
+The web page a machine serves that shows every **Command** started on it, opening on its **Inbox**, with each one's child **Ticket runs**, their stages and their logs, and from which a live Command can be stopped and an Inbox row given a **Dismissal**. Each machine serves its own, behind a sign-in. It does nothing the CLI can't do: every view and action it offers is also a command.
 _Avoid_: dashboard, floor, UI, web UI
 
 **Stop**:
@@ -283,11 +283,11 @@ One running record per machine of what happened to its **Console accounts**: sig
 _Avoid_: audit log, access log
 
 **Inbox**:
-The **Console**'s first page, and `thirdshift status`'s order: a machine's **Commands** grouped by what each asks of the **Day shift**. **Needs you** comes first. Ready for review holds Commands that ended ready, with a pull request waiting. A Command leaves it the way an ended Needs you Command does: when a later Command on the same issue starts on the machine, or once it is older than the period the **User config** sets. A pull request merged or closed by hand stays until then, since the Inbox reads only the machine. Landing holds live Ticket runs at CI watch or **Self-merge**. Working holds every other live Command. Done holds Commands that ended in the last day, and Resolved holds older ones with nothing waiting. Commands older still are only in the history.
+The **Console**'s first page, and `thirdshift status`'s order: a machine's **Commands** grouped by what each asks of the **Day shift**. **Needs you** comes first. Ready for review holds Commands that ended ready, with a pull request waiting, until GitHub shows it merged or closed, or a later Command on the same issue starts on the machine. Like Needs you, it keeps a row until it is dealt with, not until it is old: age clears only a row GitHub can't speak for. Landing holds live Ticket runs at CI watch or **Self-merge**. Working holds every other live Command. Done holds Commands that ended in the last day, and Resolved holds older ones with nothing waiting, until the period the **User config** sets has passed since they ended or were dealt with. Commands older still are only in the history. A **Dismissal** takes a row out of Needs you or Ready for review, and a row that leaves either one says why.
 _Avoid_: dashboard, feed, queue
 
 **Needs you**:
-The **Inbox**'s first group: what won't come right unless the **Day shift** acts. Live problems come first, **Silent** then **Slow** Ticket runs, and then the ended ones: a Command that died, one that failed, a **Stop** that left its issue `needs-triage`, and a **Security finding** waiting on a decision. An ended one leaves when a later Command on the same issue starts on the machine, or once it is older than the period the **User config** sets. Nothing else clears it, since the **Console** does nothing the CLI can't.
+The **Inbox**'s first group: what won't come right unless the **Day shift** acts. Live problems come first, **Silent** then **Slow** Ticket runs, and then the ended ones: a Command that died, one that failed, a **Stop** that left its issue `needs-triage`, and a **Security finding** waiting on a decision. An ended one leaves once GitHub shows it settled: its issue closed or its pull request merged, or those of the Spec run or Ticket run it dispatched, or, for a Stop, `needs-triage` taken off, or, for findings, none still waiting. It also leaves when a later Command on the same issue starts on the machine. Age clears only one GitHub can't speak for, such as a Command with no issue, once it is older than the period the **User config** sets. Any of them, live or ended, leaves on a **Dismissal**.
 _Avoid_: alerts, attention, triage queue
 
 **Silent**:
@@ -301,6 +301,10 @@ _Avoid_: late, overdue, stalled
 **Usual range**:
 How long a stage usually takes in a repository: the middle half of that stage's times over the repository's recent **Command records** on the machine, shown only once there are enough of them. It is what makes a Ticket run **Slow**.
 _Avoid_: average, baseline, estimate
+
+**Dismissal**:
+A person's judgment, from the CLI or the **Console**, that a row in **Needs you** or Ready for review asks nothing more of the **Day shift**. The row leaves that group, with every **Command** it stands for, and nothing else changes: a live Command keeps running, and its issue, its labels and its pull request stay as they are. It holds until the row turns into a kind it wasn't when dismissed, such as a **Slow** Ticket run that then dies, or until someone takes it back. The **Activity log** records who made it, and who took it back.
+_Avoid_: acknowledgement, archive, snooze, mute, hide
 
 **Theme**:
 How the **Console** looks, its colours, fonts, shapes, effects and motion, over a layout that every Theme shares. thirdshift comes with some, and a user can make their own. Choosing one changes how the page looks, never what it shows.

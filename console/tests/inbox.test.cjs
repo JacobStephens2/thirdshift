@@ -484,6 +484,78 @@ for (const storage of ['blocked', 'malformed']) {
   });
 }
 
+test('Landing, Ready and Stopping rows carry their state, Theme tags and still-able motion', { skip: process.platform !== 'linux' }, async t => {
+  // The live fixtures borrow the Console's own process identity, as above.
+  const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
+  const start = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const base = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+  const now = new Date().toISOString();
+  const live = stage => ({ kind: 'Run', process_id: server.pid, process_start: start, ended_at: null, outcome: null, cause: null, stages: [{ name: stage, began_at: now, session_log: null }] });
+  const fixtures = {
+    211: live('CI watch'),
+    212: { ended_at: now, outcome: 'ready for review', cause: null, pull_request: 'https://github.com/acme/widgets/pull/212' },
+    213: live('implement'),
+  };
+  const stop = join(dir, '213-fixture.command.stop.json');
+  const paths = [stop];
+  for (const [number, change] of Object.entries(fixtures)) {
+    const path = join(dir, `${number}-fixture.command.json`);
+    paths.push(path, join(dir, `${number}-fixture.log`));
+    await writeFile(path, JSON.stringify({ ...base, ...change, issue: { ...base.issue, number: Number(number), url: `https://github.com/acme/widgets/issues/${number}` } }));
+    await writeFile(join(dir, `${number}-fixture.log`), 'command\n');
+  }
+  try {
+    const page = await pageFor(t);
+    await page.goto(origin);
+    for (const group of ['ready for review', 'landing', 'working']) await page.locator(`[data-group="${group}"] > summary`).click();
+    const row = number => page.locator(`[data-group] > .commands > .command:has(> .row-head > .subject a[href$="/issues/${number}"])`);
+    const look = (number, tag) => row(number).evaluate((node, tag) => {
+      const probe = document.createElement('span');
+      document.body.append(probe);
+      const token = name => { probe.style.color = `var(--${name})`; return getComputedStyle(probe).color; };
+      const want = { text: token(`tag-${tag}-text`), bg: token(`tag-${tag}-bg`), done: token('tag-done-bg') };
+      probe.remove();
+      const label = node.querySelector(':scope > .row-head > .state');
+      const style = getComputedStyle(label);
+      return { ...want, state: node.dataset.state, word: label.textContent, color: style.color, background: style.backgroundColor, marker: getComputedStyle(label, '::before').content, spin: getComputedStyle(label, '::before').animationName };
+    }, tag);
+    for (const theme of ['focus-light', 'signal-light']) {
+      await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
+      for (const [number, state, tag, group] of [[211, 'Landing', 'landing', 'landing'], [212, 'Ready', 'ready', 'ready for review']]) {
+        assert.equal(await row(number).evaluate(node => node.closest('[data-group]').dataset.group), group);
+        const seen = await look(number, tag);
+        assert.equal(seen.state, state, `${theme}: ${number}`);
+        assert.equal(seen.word, state, `${theme}: ${number}`);
+        assert.equal(seen.color, seen.text, `${theme}: ${state} tag text`);
+        assert.equal(seen.background, seen.bg, `${theme}: ${state} tag background`);
+        if (theme === 'signal-light') assert.notEqual(seen.background, seen.done, `${theme}: ${state} must not fall back to Done`);
+      }
+      const landing = await look(211, 'landing');
+      assert.notEqual(landing.marker, 'none', 'Landing keeps the live-activity marker');
+      assert.equal(landing.spin, 'working');
+      const working = await look(213, 'working');
+      assert.deepEqual([working.state, working.word, working.background, working.spin], ['live', 'live', working.bg, 'working']);
+    }
+    // A Stop request reaches the open Inbox through its live update.
+    await writeFile(stop, JSON.stringify({ who: 'fixture', requeue: false }));
+    await page.waitForFunction(() => document.querySelector('.command:has(> .row-head > .subject a[href$="/issues/213"])')?.dataset.state === 'Stopping');
+    assert.equal(await row(213).evaluate(node => node.closest('[data-group]').dataset.group), 'working');
+    const stripe = () => row(213).evaluate(node => ({ word: node.querySelector(':scope > .row-head > .state').textContent, height: getComputedStyle(node, '::after').height, motion: getComputedStyle(node, '::after').animationName, running: node.getAnimations({ subtree: true }).length }));
+    assert.deepEqual(await stripe(), { word: 'Stopping', height: '3px', motion: 'activity-drift', running: 1 });
+    await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
+    assert.deepEqual(await stripe(), { word: 'Stopping', height: '3px', motion: 'none', running: 0 });
+    assert.equal(await page.evaluate(() => document.getAnimations().length), 0);
+    await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    assert.deepEqual(await stripe(), { word: 'Stopping', height: '3px', motion: 'none', running: 0 });
+    // Needs you rows keep their kind beside the new states.
+    assert.equal(await row(1).getAttribute('data-state'), 'Failed');
+  } finally {
+    await Promise.all(paths.map(path => rm(path, { force: true })));
+  }
+});
+
 test("a push keeps a Pass dispatch selected instead of its parent", async t => {
   const dir = join(home, '.thirdshift/logs/acme/widgets/commands/security');
   await mkdir(dir, { recursive: true });
@@ -694,6 +766,69 @@ test('Enter and Space activate focused peek buttons', async t => {
     assert.equal(await page.locator('#peek').isVisible(), false);
     assert.equal(new URL(page.url()).searchParams.get('page'), 'security');
   }
+});
+
+test('Command details copies its show command to the clipboard', async t => {
+  const page = await pageFor(t);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+  await page.goto(`${origin}/?page=security`);
+  const selector = await page.locator('.command').first().getAttribute('data-command');
+  await page.locator('.peek-link').click();
+  await page.locator('#peek dt').first().waitFor();
+  const expected = `thirdshift show '${selector}' --json`;
+  assert.equal(await page.locator('#peek code').filter({ hasText: 'thirdshift show' }).textContent(), expected);
+  await page.locator('#peek').getByRole('button', { name: 'Copy CLI', exact: true }).click();
+  await page.locator('#peek').getByRole('status').filter({ hasText: 'CLI copied.' }).waitFor();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), expected);
+});
+
+test('Command details selects its show command when the clipboard is refused', async t => {
+  const page = await pageFor(t);
+  await page.addInitScript(() => {
+    navigator.clipboard.writeText = () => Promise.reject(new DOMException('refused', 'NotAllowedError'));
+  });
+  await page.goto(`${origin}/?page=security`);
+  const selector = await page.locator('.command').first().getAttribute('data-command');
+  await page.locator('.peek-link').click();
+  await page.locator('#peek dt').first().waitFor();
+  await page.locator('#peek').getByRole('button', { name: 'Copy CLI', exact: true }).click();
+  await page.locator('#peek').getByRole('status').filter({ hasText: 'Selected; copy it with your keyboard.' }).waitFor();
+  assert.equal(await page.evaluate(() => getSelection().toString()), `thirdshift show '${selector}' --json`);
+});
+
+test('Command details keeps its fallback selection across a live refresh', { skip: process.platform !== 'linux' }, async t => {
+  const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
+  const start = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const path = join(dir, '203-fixture.command.json');
+  const session = join(home, 'copy-session.logs.jsonl');
+  const fixture = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+  Object.assign(fixture, { kind: 'Run', process_id: server.pid, process_start: start, outcome: null, ended_at: null, session_log: session });
+  fixture.issue.number = 203;
+  fixture.stages = [{ name: 'implement', began_at: new Date().toISOString(), session_log: session }];
+  await writeFile(path, JSON.stringify(fixture));
+  await writeFile(join(dir, '203-fixture.log'), 'command');
+  await writeFile(session, traceRecord('session'));
+  try {
+    const page = await pageFor(t);
+    await page.addInitScript(() => {
+      navigator.clipboard.writeText = () => Promise.reject(new DOMException('refused', 'NotAllowedError'));
+    });
+    await page.goto(origin);
+    await page.locator('[data-group="working"] > summary').click();
+    const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#203$/ }) });
+    await row.locator('.peek-link').click();
+    await page.locator('#peek [data-live="true"]').waitFor();
+    await page.locator('#peek').getByRole('button', { name: 'Copy CLI', exact: true }).click();
+    await page.locator('#peek').getByRole('status').filter({ hasText: 'Selected; copy it with your keyboard.' }).waitFor();
+    const cli = await page.evaluate(() => getSelection().toString());
+    assert.match(cli, /^thirdshift show '.*' --json$/);
+    const before = await page.locator('#peek .peek-cli').elementHandle();
+    await appendFile(session, traceRecord(' growth'));
+    await appendFile(join(dir, '203-fixture.log'), ' more');
+    await page.waitForFunction(old => !old.isConnected, before, { timeout: 5000 });
+    assert.equal(await page.evaluate(() => getSelection().toString()), cli);
+  } finally { await rm(path, { force: true }); }
 });
 
 test('Logs rows open the shared reader and page keys work from the reader', async t => {

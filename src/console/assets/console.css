@@ -66,13 +66,13 @@ dialog::backdrop { background: #0006; }
 footer { margin-top: 16px; }
 #section-options label { display: block; margin: 8px 0; }
 .command { box-shadow: var(--panel-shadow); --tag-bg: var(--tag-done-bg); --tag-text: var(--tag-done-text); }
-.command[data-state="live"] { --tag-bg: var(--tag-working-bg); --tag-text: var(--tag-working-text); }
+.command:is([data-state="live"], [data-state="Stopping"]) { --tag-bg: var(--tag-working-bg); --tag-text: var(--tag-working-text); }
 .command[data-state="Landing"] { --tag-bg: var(--tag-landing-bg); --tag-text: var(--tag-landing-text); }
 .command[data-state="Ready"] { --tag-bg: var(--tag-ready-bg); --tag-text: var(--tag-ready-text); }
 .command:is([data-state="Silent"], [data-state="Died"], [data-state="Failed"], [data-state="Finding"], [data-state="Triage"]) { --tag-bg: var(--tag-urgent-bg); --tag-text: var(--tag-urgent-text); }
 .command[data-state="Slow"] { --tag-bg: var(--tag-look-bg); --tag-text: var(--tag-look-text); }
 .command .state { background: var(--tag-bg); color: var(--tag-text); border-radius: var(--radius); padding: 0 3px; }
-.command[data-live="true"][data-state="live"] > .row-head > .state::before { content: ""; display: inline-block; width: 9px; height: 9px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; margin-right: 5px; }
+.command[data-live="true"]:is([data-state="live"], [data-state="Landing"]) > .row-head > .state::before { content: ""; display: inline-block; width: 9px; height: 9px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; margin-right: 5px; }
 header::after { content: ""; display: block; height: 4px; background: var(--activity-decoration); background-size: 24px 4px; }
 #log-content[data-live="true"]::after { content: "▌"; color: var(--working-text); }
 .command[data-state="Stopping"]::after { content: ""; display: block; height: 3px; background: repeating-linear-gradient(90deg, var(--urgent) 0 12px, transparent 12px 24px); background-size: 48px 3px; }
@@ -83,7 +83,7 @@ header::after { content: ""; display: block; height: 4px; background: var(--acti
 @keyframes cursor { 50% { opacity: 0; } }
 @keyframes latest { from { outline: 2px solid var(--working); } }
 @media (prefers-reduced-motion: no-preference) {
-  :root:not([data-paused="true"]) .command[data-live="true"][data-state="live"] > .row-head > .state::before { animation: working 2s linear infinite; }
+  :root:not([data-paused="true"]) .command[data-live="true"]:is([data-state="live"], [data-state="Landing"]) > .row-head > .state::before { animation: working 2s linear infinite; }
   :root:not([data-paused="true"]) .command[data-live="true"][data-state="Silent"] > .row-head > .state { animation: alarm 1.8s ease-in-out 3; }
   :root:not([data-paused="true"]) #log-content[data-live="true"]::after { animation: cursor 1s steps(1) infinite; }
   :root:not([data-paused="true"])[data-live="true"] header::after { animation: var(--activity-motion); }

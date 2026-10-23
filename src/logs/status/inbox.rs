@@ -218,9 +218,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     // history/show without duplicating DOM IDs.
                     row.children
                         .retain(|child| !listed.contains(&child.selector));
-                    if let Some(kind) = item.needs_you_kind {
-                        row.state = kind.title().into();
-                    }
+                    row.state = item.state_word().into();
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
                     Ok(row)
