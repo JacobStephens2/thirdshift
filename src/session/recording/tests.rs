@@ -44,6 +44,27 @@ impl Fixture {
 const MODEL: &str = r#"{"type":"assistant","message":{"model":"reported-model","content":[]}}"#;
 
 #[test]
+fn claude_stopped_background_agent_is_one_killed_work_item() {
+    let fixture = Fixture::new();
+    let _ = fixture.run(
+        "implement",
+        r#"
+echo '{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"agent-tool","name":"Agent","input":{"description":"Review","run_in_background":true}}]}}'
+echo '{"type":"system","subtype":"task_started","task_id":"background-task","tool_use_id":"agent-tool","task_type":"local_agent"}'
+echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent-tool","content":"Async agent launched"}]}}'
+echo '{"type":"system","subtype":"task_notification","task_id":"background-task","status":"stopped","summary":"Terminated"}'
+echo '{"type":"result","subtype":"success","result":"Done"}'
+"#,
+        &Choice::default(),
+    );
+    let measured = crate::logs::session_signals::read(&fixture.log("implement"))
+        .unwrap()
+        .unwrap();
+    let measured = serde_json::to_value(measured).unwrap();
+    assert_eq!(measured["signals"]["killed_work"], 1, "{measured:#}");
+}
+
+#[test]
 fn session_signals_count_calls_once_after_late_permission_metadata() {
     let fixture = Fixture::new();
     fixture.run("implement", r#"

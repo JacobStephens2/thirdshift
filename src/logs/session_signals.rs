@@ -114,6 +114,7 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
     let mut harness = None;
     let mut harness_version = None;
     let mut events = Vec::new();
+    let mut work_aliases = BTreeMap::new();
     for request in requests {
         for resource in request.resource_logs {
             if let Some(resource) = resource.resource {
@@ -127,9 +128,12 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
                 .flat_map(|scope| scope.log_records)
             {
                 if let Some(json) = text(&record.attributes, "thirdshift.events") {
+                    let mut batch = Vec::new();
                     for value in serde_json::from_str::<Vec<serde_json::Value>>(&json)? {
-                        events.push(serde_json::from_value::<Event>(value)?);
+                        batch.push(serde_json::from_value::<Event>(value)?);
                     }
+                    work_aliases.extend(ended_work_alias(&batch));
+                    events.extend(batch);
                 }
             }
         }
@@ -175,7 +179,7 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
                 id,
                 outcome: Outcome::Killed,
             } => {
-                killed.insert(id);
+                killed.insert(work_aliases.get(&id).cloned().unwrap_or(id));
             }
             _ => {}
         }
@@ -252,9 +256,8 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
             ..
         } = event
         {
-            signals.killed_work += 1;
-            // Some normalizers also emit WorkEnded for the same work.
-            killed.remove(id);
+            // A tool, agent and WorkEnded can describe the same killed work.
+            killed.insert(id.clone());
         }
         match event {
             Event::ToolCallStarted { tool, input, .. }
@@ -276,4 +279,38 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
         harness_version,
         signals,
     }))
+}
+
+/// A task notification ends its owning agent last, after inner work. Its
+/// WorkEnded can name a task ID rather than that agent's call ID. The normalized
+/// facts share one record even in converted traces, so retain that association
+/// before flattening records or counting retained amendments.
+fn ended_work_alias(events: &[Event]) -> Option<(String, String)> {
+    let ended: HashSet<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            Event::ToolCallEnded { id, .. } | Event::SubagentEnded { id, .. } => Some(id.as_str()),
+            _ => None,
+        })
+        .collect();
+    let mut unmatched = events.iter().filter_map(|event| match event {
+        Event::WorkEnded {
+            id,
+            outcome: Outcome::Killed,
+        } if !ended.contains(id.as_str()) => Some(id),
+        _ => None,
+    });
+    let task = unmatched.next()?;
+    if unmatched.next().is_some() {
+        return None;
+    }
+    let agent = events.iter().rev().find_map(|event| match event {
+        Event::SubagentEnded {
+            id,
+            outcome: Outcome::Killed,
+            ..
+        } => Some(id),
+        _ => None,
+    })?;
+    Some((task.clone(), agent.clone()))
 }
