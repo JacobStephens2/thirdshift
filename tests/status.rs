@@ -705,6 +705,44 @@ fn resolved_counts_superseded_rows_from_the_later_command_start() {
 }
 
 #[test]
+fn a_row_superseded_while_still_live_carries_no_left_reason() {
+    let scenario = Scenario::new();
+    let now = chrono::Local::now();
+    let stamp = |time: chrono::DateTime<chrono::Local>| {
+        time.to_rfc3339_opts(chrono::SecondsFormat::Secs, false)
+    };
+    let days_ago = |days: i64| stamp(now - chrono::Duration::days(days));
+    // Record 50 started twelve days ago and ended failed two days ago; record
+    // 51 started on issue 50 ten days ago, while 50 was still running, so 50
+    // never waited in Needs you.
+    write_record(&scenario, 50, &days_ago(12), Some(&days_ago(2)));
+    change_record(&scenario, 50, |record| {
+        record["outcome"] = "failed".into();
+    });
+    write_record(&scenario, 51, &days_ago(10), Some(&days_ago(10)));
+    change_record(&scenario, 51, |record| {
+        record["issue"] = serde_json::json!({
+            "number": 50,
+            "url": scenario.issue_url(50),
+            "title": "Fixture",
+        });
+        record["outcome"] = "merged".into();
+    });
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let row = status["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["issue"]["number"] == 50 && row["started_at"] == days_ago(12).as_str())
+        .unwrap()
+        .clone();
+    assert_eq!(row["group"], "resolved", "{row}");
+    assert!(row.get("left_reason").is_none_or(Value::is_null), "{row}");
+}
+
+#[test]
 fn inbox_puts_live_problems_first_and_points_to_silent_landing_without_duplicating_it() {
     let scenario = Scenario::new();
     scenario.issue_titled(99, "Held fixture");

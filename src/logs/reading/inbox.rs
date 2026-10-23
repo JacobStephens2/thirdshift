@@ -111,6 +111,18 @@ impl InboxItem<'_> {
         self.command.facts().cause
     }
 
+    /// The line saying why and when the row left its waiting group, for
+    /// `status` text and the Console row. `None` while it still waits or
+    /// never waited.
+    pub(in crate::logs) fn left_line(&self) -> Option<String> {
+        match (&self.left_from, &self.left_reason, &self.left_at) {
+            (Some(from), Some(reason), Some(at)) => {
+                Some(format!("left {from}: {reason} started at {at}"))
+            }
+            _ => None,
+        }
+    }
+
     /// The row's state word in the Console and `status`: its Needs you kind,
     /// then Stopping, Ready or Landing, otherwise the Command's own state.
     pub(in crate::logs) fn state_word(&self) -> &str {
@@ -285,7 +297,12 @@ pub(super) fn list(
         // row that ages out keeps going straight to History.
         let waited = problem.is_some() || facts.ready;
         let taken_up = if waited {
-            superseded_at(starts, &starts_by_issue)
+            superseded_at(starts, &starts_by_issue).filter(|taken| {
+                // The exit only ends a wait that had already started: the
+                // later Command must have started at or after this row
+                // ended. A row superseded while still live never waited.
+                ended.is_none_or(|end| *taken >= end)
+            })
         } else {
             None
         };

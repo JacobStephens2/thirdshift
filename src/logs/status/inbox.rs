@@ -225,12 +225,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     row.state = item.state_word().into();
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
-                    row.left = match (&item.left_from, &item.left_reason, &item.left_at) {
-                        (Some(from), Some(reason), Some(at)) => {
-                            format!("left {from}: {reason} started at {at}")
-                        }
-                        _ => String::new(),
-                    };
+                    row.left = item.left_line().unwrap_or_default();
                     Ok(row)
                 })
                 .collect::<Result<_>>()?;
