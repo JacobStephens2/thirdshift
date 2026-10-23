@@ -46,6 +46,7 @@ pub enum Ending {
     SecurityFix {
         ended: Ended,
         findings: Vec<crate::security::RecordedFinding>,
+        close: crate::security::CloseOutcome,
     },
     /// A Pass was skipped before any work.
     Skipped(Skip),

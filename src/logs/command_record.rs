@@ -137,6 +137,9 @@ pub enum StageName {
     SecurityAudit,
     SecurityReproduction,
     SecurityFixPublishing,
+    /// A fixed finding's proof-of-concept recheck against the merged Base
+    /// branch, before its private record is closed.
+    SecurityCloseCheck,
     /// A Pickup run or Security run waiting on the Run it dispatched.
     DispatchedRun,
     /// A Pickup run or Security run waiting on the Spec run it dispatched.
@@ -160,6 +163,7 @@ impl StageName {
             Self::SecurityAudit => "Security audit",
             Self::SecurityReproduction => "Security reproduction",
             Self::SecurityFixPublishing => "Security fix publishing",
+            Self::SecurityCloseCheck => "Security close check",
             Self::DispatchedRun => "dispatched Run",
             Self::DispatchedSpecRun => "dispatched Spec run",
         }
@@ -202,6 +206,7 @@ impl StageName {
             Self::SecurityAudit,
             Self::SecurityReproduction,
             Self::SecurityFixPublishing,
+            Self::SecurityCloseCheck,
             Self::DispatchedRun,
             Self::DispatchedSpecRun,
         ]

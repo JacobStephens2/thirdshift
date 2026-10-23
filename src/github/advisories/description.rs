@@ -8,6 +8,7 @@ use crate::security::reproduction::{FixSize, Outcome, Reproduction, Severity};
 
 const FIX_TICKET_MARKER: &str = "\n<!-- thirdshift:security-fix -->\nFix Ticket: ";
 const REPRODUCTION_MARKER: &str = "\n<!-- thirdshift:security-reproduction -->\n";
+const CLOSE_MARKER: &str = "\n<!-- thirdshift:security-close -->\n";
 
 pub(super) struct Description<'a>(pub(super) &'a str);
 
@@ -168,6 +169,47 @@ impl<'a> Description<'a> {
             FixEnding::Succeeded => "Fix Run: succeeded",
         };
         Ok(format!("{}\n{ending}\n", self.0.trim_end()))
+    }
+
+    /// The pull request that closed the finding, if a close was recorded.
+    pub(super) fn closed_by(&self) -> Option<&str> {
+        self.0
+            .rsplit_once(CLOSE_MARKER)
+            .and_then(|(_, close)| close.lines().next())
+            .and_then(|line| line.strip_prefix("Closed by: "))
+            .filter(|url| !url.trim().is_empty())
+    }
+
+    /// Name `pr_url` as the merged pull request that closed the finding.
+    /// The fix link must still name the dispatched fix, whose run must have
+    /// succeeded: any other change since it was read leaves the record
+    /// unchanged.
+    pub(super) fn with_close(&self, issue: &IssueUrl, pr_url: &str) -> Result<String> {
+        if self.closed_by().is_some() {
+            bail!("the private record is already closed; leaving it unchanged");
+        }
+        if self.fix_link() != Some(issue.url.as_str()) {
+            bail!("the private record's fix Ticket changed during its Run; leaving it unchanged");
+        }
+        if !matches!(self.fix_status(), Some(FixStatus::Succeeded)) {
+            bail!("the private record's fix did not succeed; leaving it unchanged");
+        }
+        Ok(format!(
+            "{}{CLOSE_MARKER}Closed by: {pr_url}\n",
+            self.0.trim_end()
+        ))
+    }
+
+    /// Note why the finding was left open, keeping the record for the Day
+    /// shift. The fix link must still name the dispatched fix.
+    pub(super) fn with_left_open_note(&self, issue: &IssueUrl, reason: &str) -> Result<String> {
+        if self.fix_link() != Some(issue.url.as_str()) {
+            bail!("the private record's fix Ticket changed during its Run; leaving it unchanged");
+        }
+        Ok(format!(
+            "{}\nSecurity close left open: {reason}\n",
+            self.0.trim_end()
+        ))
     }
     pub(super) fn check_public_fix_text(&self, body: &str, url: &str) -> Result<()> {
         if !body.contains(url) {

@@ -17,6 +17,7 @@ use crate::logs::{self, Pass, Work};
 use crate::pass::{LaunchAndGitHub, Outside};
 
 pub mod audit;
+pub mod close;
 pub(crate) mod fixing;
 pub mod reproduction;
 pub(crate) mod review;
@@ -27,13 +28,32 @@ pub enum FixAsk {
     Forbid,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseAsk {
+    Allow,
+    Forbid,
+}
+
 pub enum Outcome {
     Skipped(Skipped),
     Audited(Ended),
     Fixed {
         ended: crate::run::Ended,
         findings: Vec<RecordedFinding>,
+        close: CloseOutcome,
     },
+}
+
+/// What became of the attempt to close the finding a merged fix fixed. A
+/// failed close never changes the fix's outcome.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CloseOutcome {
+    /// Closing was not attempted: not allowed, or the fix did not merge.
+    NotAttempted,
+    /// The finding was closed by the merged pull request.
+    Closed { pr_url: String },
+    /// The finding was left open, with why; the Day shift was told.
+    LeftOpen { reason: String },
 }
 
 /// The Security run's outcome and the private records it reached, including before a failure.
@@ -140,6 +160,7 @@ pub fn run(
         &repo,
         base.name(),
         flags.security_fix_allowed(config),
+        flags.security_close_allowed(config),
         offer_command.as_deref(),
     )
 }
@@ -149,6 +170,7 @@ fn run_through(
     repo: &Repo,
     base: &str,
     fixing: bool,
+    closing: bool,
     offer_command: Option<&str>,
 ) -> Outcome {
     match outside.ready_issue() {
@@ -175,7 +197,9 @@ fn run_through(
     }
     if fixing {
         match records.next_fix() {
-            Ok(Some((record, metadata))) => return fix(outside, repo, base, record, metadata),
+            Ok(Some((record, metadata))) => {
+                return fix(outside, repo, base, record, metadata, closing);
+            }
             Ok(None) => {}
             Err(error) => return Outcome::Audited(error.into()),
         }
@@ -196,11 +220,12 @@ fn run_through(
             .and_then(|records| records.next_fix())
         {
             Ok(Some((record, metadata))) => {
-                let outcome = fix(outside, repo, base, record, metadata);
-                if let Outcome::Fixed { ended, .. } = outcome {
+                let outcome = fix(outside, repo, base, record, metadata, closing);
+                if let Outcome::Fixed { ended, close, .. } = outcome {
                     return Outcome::Fixed {
                         ended,
                         findings: audited.findings,
+                        close,
                     };
                 }
                 return outcome;
@@ -223,9 +248,10 @@ fn fix(
     base: &str,
     record: crate::github::SecurityRecord,
     metadata: RecordedFinding,
+    closing: bool,
 ) -> Outcome {
     let mut log = None;
-    let ended = (|| -> Result<crate::run::Ended> {
+    let outcome = (|| -> Result<(crate::run::Ended, crate::issue::IssueUrl)> {
         outside.check_harness(true)?;
         outside.started(Work::SecurityRun(repo));
         let (published, session_log) = outside.publish_security_fix(base, &record, &metadata.url);
@@ -257,19 +283,98 @@ fn fix(
                 },
             });
         }
-        Ok(ended)
+        Ok((ended, issue))
     })();
+    let (ended, issue) = match outcome {
+        Ok((ended, issue)) => (ended, Some(issue)),
+        Err(error) => (
+            crate::run::Ended {
+                outcome: Err(FailedRun {
+                    log,
+                    ..error.into()
+                }),
+                base_fix: None,
+                advice: Vec::new(),
+            },
+            None,
+        ),
+    };
+    let close = match (&ended.outcome, &issue) {
+        (Ok(reached), Some(issue)) if closing && reached.goal == crate::run::Goal::Merged => {
+            close_after_merge(outside, base, &record, issue, &reached.pr_url)
+        }
+        _ => CloseOutcome::NotAttempted,
+    };
     Outcome::Fixed {
-        ended: ended.unwrap_or_else(|error| crate::run::Ended {
-            outcome: Err(FailedRun {
-                log,
-                ..error.into()
-            }),
-            base_fix: None,
-            advice: Vec::new(),
-        }),
+        ended,
         findings: vec![metadata],
+        close,
     }
+}
+
+/// Close the finding whose fix merged as `pr_url`, after re-running its
+/// proof-of-concept test against the merged Base branch. A check that does
+/// not pass, or any step that fails, leaves the record open with a private
+/// note of what happened, and never changes the fix's outcome.
+fn close_after_merge(
+    outside: &mut impl Outside,
+    base: &str,
+    record: &crate::github::SecurityRecord,
+    issue: &crate::issue::IssueUrl,
+    pr_url: &str,
+) -> CloseOutcome {
+    let (checked, _log) = outside.recheck_security_fix(base, record, pr_url);
+    match checked {
+        Ok(check) if check.passes => match outside.close_security_record(record, issue, pr_url) {
+            Ok(()) => {
+                outside.step(format!("closed {} by {pr_url}", record.name()));
+                CloseOutcome::Closed {
+                    pr_url: pr_url.to_string(),
+                }
+            }
+            Err(error) => leave_open(
+                outside,
+                record,
+                issue,
+                format!("could not close the private record: {error:#}"),
+            ),
+        },
+        Ok(check) => leave_open(
+            outside,
+            record,
+            issue,
+            format!(
+                "the proof-of-concept test did not pass against the merged Base branch: {}",
+                check.detail
+            ),
+        ),
+        Err(error) => leave_open(
+            outside,
+            record,
+            issue,
+            format!(
+                "could not re-run the proof-of-concept test against the merged Base branch: {error:#}"
+            ),
+        ),
+    }
+}
+
+/// Leave the finding open with a private note of `reason`, telling the Day
+/// shift on stderr. The fix's outcome is unchanged.
+fn leave_open(
+    outside: &mut impl Outside,
+    record: &crate::github::SecurityRecord,
+    issue: &crate::issue::IssueUrl,
+    reason: String,
+) -> CloseOutcome {
+    if let Err(error) = outside.note_security_close_left_open(record, issue, &reason) {
+        outside.step(format!(
+            "could not note why {} stays open: {error:#}",
+            record.name()
+        ));
+    }
+    outside.step(format!("left {} open: {reason}", record.name()));
+    CloseOutcome::LeftOpen { reason }
 }
 
 fn audit_and_record(
@@ -431,7 +536,7 @@ mod tests {
             if ready {
                 outside = outside.ready(7, false);
             }
-            let outcome = run_through(&mut outside, &widgets(), "main", true, None);
+            let outcome = run_through(&mut outside, &widgets(), "main", true, false, None);
             if ready {
                 assert!(matches!(outcome, Outcome::Skipped(Skipped::ReadyIssue(_))));
                 assert!(matches!(
@@ -462,6 +567,276 @@ mod tests {
         }
     }
 
+    /// A dispatched fix that ended merged, for close-gate tests.
+    fn merged(pr_url: &str) -> crate::run::Ended {
+        crate::run::Ended {
+            outcome: Ok(crate::run::Reached {
+                pr_url: pr_url.to_string(),
+                goal: crate::run::Goal::Merged,
+                log: None,
+                ticket_lines: Vec::new(),
+            }),
+            base_fix: None,
+            advice: Vec::new(),
+        }
+    }
+
+    const MERGED_PR: &str = "https://github.com/acme/widgets/pull/12";
+
+    /// One reproduced advisory awaiting its fix, as the fix flow reads it.
+    fn reproduced_advisory() -> serde_json::Value {
+        serde_json::json!({
+            "state":"draft", "severity":"critical", "ghsa_id":"GHSA-first",
+            "summary":"Bound input", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-first",
+            "description":"Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical single\n"
+        })
+    }
+
+    #[test]
+    fn a_merged_fix_with_closing_allowed_closes_the_finding_naming_its_pull_request() {
+        for private in [false, true] {
+            let record = if private {
+                serde_json::json!({
+                    "number": 7, "state": "open", "title": "Bound input",
+                    "html_url": "https://github.com/acme/widgets/issues/7",
+                    "body": "Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical single\n",
+                    "labels": [{"name": "security-finding"}, {"name": "needs-triage"}]
+                })
+            } else {
+                reproduced_advisory()
+            };
+            let mut outside = if private {
+                InMemory::default().finding_issues(vec![record])
+            } else {
+                InMemory::default().advisories(vec![record])
+            }
+            .dispatched_ending(merged(MERGED_PR))
+            .close_check(true, "the bound holds; exit 0");
+            let Outcome::Fixed { ended, close, .. } =
+                run_through(&mut outside, &widgets(), "main", true, true, None)
+            else {
+                panic!("private {private}: fix expected");
+            };
+            assert!(ended.outcome.is_ok(), "private {private}");
+            assert_eq!(
+                close,
+                CloseOutcome::Closed {
+                    pr_url: MERGED_PR.into()
+                },
+                "private {private}"
+            );
+            let record_name = if private { "issue #7" } else { "GHSA-first" };
+            let at = |call: &Call| outside.calls.iter().position(|c| c == call);
+            let dispatched = at(&Call::DispatchSecurityFix {
+                issue: 8,
+                is_spec: false,
+                base: "main".into(),
+            })
+            .expect("private {private}: no dispatch");
+            let rechecked = at(&Call::RecheckSecurityFix {
+                record: record_name.into(),
+                base: "main".into(),
+            })
+            .expect("private {private}: no recheck");
+            let closed = at(&Call::CloseSecurityRecord {
+                issue: 8,
+                pr: MERGED_PR.into(),
+            })
+            .expect("private {private}: no close");
+            assert!(
+                dispatched < rechecked && rechecked < closed,
+                "private {private}: out of order: {:?}",
+                outside.calls
+            );
+            assert!(
+                !outside
+                    .calls
+                    .iter()
+                    .any(|call| matches!(call, Call::NoteSecurityCloseLeftOpen { .. })),
+                "private {private}: a close must leave no note"
+            );
+            assert!(
+                outside.calls.iter().any(|call| matches!(
+                    call,
+                    Call::Step(line) if line.contains(&format!("closed {record_name} by {MERGED_PR}"))
+                )),
+                "private {private}: no closed step: {:?}",
+                outside.calls
+            );
+        }
+    }
+
+    #[test]
+    fn without_closing_allowed_or_without_a_merge_a_fix_closes_nothing() {
+        // Closing off, or the fix left ready for review, attempts no close.
+        for (closing, ending, expected) in [
+            (false, merged(MERGED_PR), CloseOutcome::NotAttempted),
+            (
+                true,
+                crate::pass::ready_for_review(),
+                CloseOutcome::NotAttempted,
+            ),
+        ] {
+            let mut outside = InMemory::default()
+                .advisories(vec![reproduced_advisory()])
+                .dispatched_ending(ending);
+            let Outcome::Fixed { ended, close, .. } =
+                run_through(&mut outside, &widgets(), "main", true, closing, None)
+            else {
+                panic!("fix expected");
+            };
+            assert!(ended.outcome.is_ok());
+            assert_eq!(close, expected);
+            assert!(
+                !outside.calls.iter().any(|call| matches!(
+                    call,
+                    Call::RecheckSecurityFix { .. }
+                        | Call::CloseSecurityRecord { .. }
+                        | Call::NoteSecurityCloseLeftOpen { .. }
+                )),
+                "closing {closing}: a close was attempted: {:?}",
+                outside.calls
+            );
+        }
+    }
+
+    #[test]
+    fn a_failing_proof_of_concept_leaves_the_finding_open_with_a_note() {
+        let mut outside = InMemory::default()
+            .advisories(vec![reproduced_advisory()])
+            .dispatched_ending(merged(MERGED_PR))
+            .close_check(false, "the bound still overflows; exit 1");
+        let Outcome::Fixed { ended, close, .. } =
+            run_through(&mut outside, &widgets(), "main", true, true, None)
+        else {
+            panic!("fix expected");
+        };
+        // The run's outcome stays the fix's outcome.
+        assert!(ended.outcome.is_ok());
+        let CloseOutcome::LeftOpen { reason } = close else {
+            panic!("left open expected");
+        };
+        assert!(reason.contains("did not pass"), "{reason}");
+        assert!(
+            !outside
+                .calls
+                .iter()
+                .any(|call| matches!(call, Call::CloseSecurityRecord { .. })),
+            "a failed check must close nothing"
+        );
+        assert!(
+            outside
+                .calls
+                .iter()
+                .any(|call| matches!(call, Call::NoteSecurityCloseLeftOpen { issue: 8, .. })),
+            "no left-open note: {:?}",
+            outside.calls
+        );
+        assert!(
+            outside.calls.iter().any(|call| matches!(
+                call,
+                Call::Step(line) if line.contains("left GHSA-first open")
+            )),
+            "no left-open step: {:?}",
+            outside.calls
+        );
+    }
+
+    #[test]
+    fn a_failed_recheck_or_close_leaves_the_finding_open_without_changing_the_outcome() {
+        for (recheck, failing) in [
+            (
+                InMemory::default().close_check_error("the sandbox is unavailable"),
+                false,
+            ),
+            (InMemory::default().close_check(true, "exit 0"), true),
+        ] {
+            let outside = recheck
+                .advisories(vec![reproduced_advisory()])
+                .dispatched_ending(merged(MERGED_PR));
+            let mut outside = if failing {
+                outside.close_failing()
+            } else {
+                outside
+            };
+            let Outcome::Fixed { ended, close, .. } =
+                run_through(&mut outside, &widgets(), "main", true, true, None)
+            else {
+                panic!("fix expected");
+            };
+            assert!(ended.outcome.is_ok());
+            let CloseOutcome::LeftOpen { reason } = close else {
+                panic!("left open expected");
+            };
+            if failing {
+                assert!(reason.contains("could not close"), "{reason}");
+                assert!(outside.calls.contains(&Call::CloseSecurityRecord {
+                    issue: 8,
+                    pr: MERGED_PR.into()
+                }));
+            } else {
+                assert!(reason.contains("could not re-run"), "{reason}");
+            }
+            assert!(
+                outside
+                    .calls
+                    .iter()
+                    .any(|call| matches!(call, Call::NoteSecurityCloseLeftOpen { issue: 8, .. })),
+                "no left-open note: {:?}",
+                outside.calls
+            );
+        }
+    }
+
+    #[test]
+    fn a_failed_left_open_note_still_leaves_the_outcome_unchanged() {
+        let mut outside = InMemory::default()
+            .advisories(vec![reproduced_advisory()])
+            .dispatched_ending(merged(MERGED_PR))
+            .close_check(false, "the bound still overflows; exit 1")
+            .note_failing();
+        let Outcome::Fixed { ended, close, .. } =
+            run_through(&mut outside, &widgets(), "main", true, true, None)
+        else {
+            panic!("fix expected");
+        };
+        assert!(ended.outcome.is_ok());
+        assert!(matches!(close, CloseOutcome::LeftOpen { .. }));
+        assert!(
+            outside.calls.iter().any(|call| matches!(
+                call,
+                Call::Step(line) if line.contains("could not note why GHSA-first stays open")
+            )),
+            "no note-failure step: {:?}",
+            outside.calls
+        );
+    }
+
+    #[test]
+    fn a_closed_finding_is_neither_waiting_nor_fixed_again() {
+        let closed = "Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced critical single\n\n<!-- thirdshift:security-fix -->\nFix Ticket: https://github.com/acme/widgets/issues/8\nFix Run: succeeded\n\n<!-- thirdshift:security-close -->\nClosed by: https://github.com/acme/widgets/pull/12\n";
+        let mut outside = InMemory::default().advisories(vec![serde_json::json!({
+            "state":"closed", "severity":"critical", "ghsa_id":"GHSA-first",
+            "summary":"Bound input", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-first",
+            "description": closed,
+        })]);
+        let outcome = run_through(&mut outside, &widgets(), "main", true, true, None);
+        assert!(
+            matches!(outcome, Outcome::Audited(Ended { outcome: Ok(_), .. })),
+            "a closed finding must not dispatch another fix"
+        );
+        assert!(
+            !outside.calls.iter().any(|call| matches!(
+                call,
+                Call::DispatchSecurityFix { .. }
+                    | Call::RecheckSecurityFix { .. }
+                    | Call::CloseSecurityRecord { .. }
+            )),
+            "a closed finding was picked up: {:?}",
+            outside.calls
+        );
+    }
+
     #[test]
     fn a_finding_waiting_for_the_day_shift_does_not_hold_off_the_audit() {
         let reproduced = "Private record\n<!-- thirdshift:security-reproduction -->\nOutcome: reproduced high single\n";
@@ -483,7 +858,8 @@ mod tests {
                             "severity": if description == reproduced { Some("high") } else { None }
                         })])
                     };
-                    let outcome = run_through(&mut outside, &widgets(), "main", fixing, None);
+                    let outcome =
+                        run_through(&mut outside, &widgets(), "main", fixing, false, None);
                     assert!(
                         matches!(outcome, Outcome::Audited(Ended { outcome: Ok(_), .. })),
                         "fixing {fixing}, private {private}: {description}"
@@ -508,7 +884,7 @@ mod tests {
     #[test]
     fn checks_prerequisites_then_audits_without_pulling() {
         let mut outside = InMemory::default();
-        let outcome = run_through(&mut outside, &widgets(), "main", false, None);
+        let outcome = run_through(&mut outside, &widgets(), "main", false, false, None);
         assert!(matches!(
             outcome,
             Outcome::Audited(Ended { outcome: Ok(_), .. })
@@ -535,7 +911,7 @@ mod tests {
             .node_failing()
             .harness_failing();
         assert!(matches!(
-            run_through(&mut outside, &widgets(), "main", false, None),
+            run_through(&mut outside, &widgets(), "main", false, false, None),
             Outcome::Skipped(Skipped::ReadyIssue(_))
         ));
         assert!(matches!(
@@ -565,7 +941,7 @@ mod tests {
                     if unchanged {
                         outside = outside.unchanged_base();
                     }
-                    let outcome = run_through(&mut outside, &widgets(), "main", false, None);
+                    let outcome = run_through(&mut outside, &widgets(), "main", false, false, None);
                     let expected = if ready {
                         "Ready issue #7"
                     } else if failed_fix {
@@ -623,7 +999,7 @@ mod tests {
                             outside = outside.ready(7, false);
                         }
                         let Outcome::Skipped(skipped) =
-                            run_through(&mut outside, &widgets(), "main", fixing, None)
+                            run_through(&mut outside, &widgets(), "main", fixing, false, None)
                         else {
                             panic!("Security run should skip");
                         };
@@ -671,7 +1047,7 @@ mod tests {
             ),
         ] {
             assert!(matches!(
-                run_through(&mut outside, &widgets(), "main", false, None),
+                run_through(&mut outside, &widgets(), "main", false, false, None),
                 Outcome::Audited(Ended {
                     outcome: Err(_),
                     ..
@@ -689,7 +1065,7 @@ mod tests {
         let Outcome::Audited(Ended {
             outcome: Err(failed),
             ..
-        }) = run_through(&mut outside, &widgets(), "main", false, None)
+        }) = run_through(&mut outside, &widgets(), "main", false, false, None)
         else {
             panic!("audit should fail");
         };
@@ -732,7 +1108,7 @@ mod tests {
             outcome: Ok(recorded),
             findings,
             ..
-        }) = run_through(&mut outside, &widgets(), "main", false, None)
+        }) = run_through(&mut outside, &widgets(), "main", false, false, None)
         else {
             panic!("audit should succeed");
         };
@@ -834,7 +1210,7 @@ mod tests {
                 outcome: Ok(recorded),
                 findings,
                 ..
-            }) = run_through(&mut outside, &widgets(), "main", false, None)
+            }) = run_through(&mut outside, &widgets(), "main", false, false, None)
             else {
                 panic!("audit should succeed");
             };
@@ -899,6 +1275,7 @@ mod tests {
             &widgets(),
             "main",
             false,
+            false,
             Some("thirdshift secure security-fix"),
         ) else {
             panic!("audit expected");
@@ -936,7 +1313,7 @@ mod tests {
                 outside
             };
             let Outcome::Audited(ended) =
-                run_through(&mut outside, &widgets(), "main", false, None)
+                run_through(&mut outside, &widgets(), "main", false, false, None)
             else {
                 panic!("audit expected");
             };

@@ -34,10 +34,35 @@ const BASE_FIX: &str = "Base fix: ";
 pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
     match ending {
         Ending::Run(ended) => Ok(Account::of_run(ended)),
-        Ending::SecurityFix { ended, findings } => Ok(Account {
-            security_findings: Some(findings),
-            ..Account::of_run(ended)
-        }),
+        Ending::SecurityFix {
+            ended,
+            findings,
+            close,
+        } => {
+            let mut account = Account::of_run(ended);
+            account.security_findings = Some(findings);
+            let security_close = match (close, findings.first()) {
+                (crate::security::CloseOutcome::Closed { pr_url }, Some(finding)) => {
+                    Some(SecurityClose::Closed { finding, pr_url })
+                }
+                (crate::security::CloseOutcome::LeftOpen { reason }, Some(finding)) => {
+                    Some(SecurityClose::LeftOpen { finding, reason })
+                }
+                _ => None,
+            };
+            if let (Ok(line), Some(close)) = (&mut account.ended, &security_close) {
+                match close {
+                    SecurityClose::Closed { finding, pr_url } => {
+                        line.push_str(&format!("; closed {} by {pr_url}", finding.url));
+                    }
+                    SecurityClose::LeftOpen { finding, reason } => {
+                        line.push_str(&format!("; left {} open: {reason}", finding.url));
+                    }
+                }
+            }
+            account.security_close = security_close;
+            Ok(account)
+        }
         Ending::Architect { review, dispatched } => {
             Ok(Account::of_architect(review, dispatched.as_ref()))
         }
@@ -55,6 +80,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                     review: None,
                     security_findings: None,
                     security_findings_waiting: false,
+                    security_close: None,
                     failed_reproduction: None,
                     pre_audit_failure: None,
                     recovery: None,
@@ -136,9 +162,25 @@ pub struct Account<'a> {
     /// Safe metadata from a Security run's private records, even if the audit failed.
     pub security_findings: Option<&'a [crate::security::RecordedFinding]>,
     pub security_findings_waiting: bool,
+    /// What became of the attempt to close the fixed finding, if one was made.
+    pub security_close: Option<SecurityClose<'a>>,
     /// The URLs on stdout, a line each: the pull request's, or that of the
     /// issue an Architect run's review ended on.
     pub urls: Vec<&'a str>,
+}
+
+/// What became of the attempt to close the Security finding a merged fix
+/// fixed: which finding, by which pull request, or why it stays open.
+#[derive(Debug, PartialEq, Eq)]
+pub enum SecurityClose<'a> {
+    Closed {
+        finding: &'a crate::security::RecordedFinding,
+        pr_url: &'a str,
+    },
+    LeftOpen {
+        finding: &'a crate::security::RecordedFinding,
+        reason: &'a str,
+    },
 }
 
 /// How an Architect run's Architecture review ended.
@@ -209,6 +251,7 @@ impl<'a> Account<'a> {
                 review: None,
                 security_findings: None,
                 security_findings_waiting: false,
+                security_close: None,
                 failed_reproduction: None,
                 pre_audit_failure: None,
                 recovery: None,
@@ -237,6 +280,7 @@ impl<'a> Account<'a> {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_close: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: failed.recovery.as_deref(),
@@ -269,6 +313,7 @@ impl<'a> Account<'a> {
                 review: None,
                 security_findings: None,
                 security_findings_waiting: false,
+                security_close: None,
                 failed_reproduction: None,
                 pre_audit_failure: None,
                 recovery: None,
@@ -563,6 +608,7 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_close: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -585,6 +631,7 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_close: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -776,6 +823,7 @@ mod tests {
                     }),
                     security_findings: None,
                     security_findings_waiting: false,
+                    security_close: None,
                     failed_reproduction: None,
                     pre_audit_failure: None,
                     recovery: None,
@@ -822,6 +870,48 @@ mod tests {
                 ..failed_account("interrupted")
             }
         );
+    }
+
+    #[test]
+    fn a_security_fix_sums_up_the_finding_its_pull_request_closed() {
+        let findings = [crate::security::RecordedFinding {
+            severity: Some("high".to_string()),
+            title: "Bound input".to_string(),
+            url: "https://github.com/acme/widgets/security/advisories/GHSA-first".to_string(),
+        }];
+        let record = "https://github.com/acme/widgets/security/advisories/GHSA-first";
+        for (close, line) in [
+            (
+                crate::security::CloseOutcome::Closed {
+                    pr_url: PR.to_string(),
+                },
+                format!("PR {PR} is merged; closed {record} by {PR}"),
+            ),
+            (
+                crate::security::CloseOutcome::LeftOpen {
+                    reason: "the proof-of-concept still fails".to_string(),
+                },
+                format!("PR {PR} is merged; left {record} open: the proof-of-concept still fails"),
+            ),
+            (
+                crate::security::CloseOutcome::NotAttempted,
+                format!("PR {PR} is merged"),
+            ),
+        ] {
+            let ending = Ending::SecurityFix {
+                ended: reached(Goal::Merged),
+                findings: findings.to_vec(),
+                close,
+            };
+            let account = read_account(&ending);
+            assert_eq!(account.outcome, "merged");
+            assert_eq!(account.summary(), line);
+            assert_eq!(
+                shown(&account).0,
+                vec![line],
+                "stderr must tell the Day shift"
+            );
+        }
     }
 
     #[test]

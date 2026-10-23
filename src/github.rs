@@ -279,6 +279,19 @@ impl GitHub {
         ])
     }
 
+    /// Comment on `issue`, which is already closed.
+    pub fn comment_issue(&self, issue: &IssueUrl, comment: &str) -> Result<()> {
+        self.gh(&[
+            "issue",
+            "comment",
+            &issue.number.to_string(),
+            "--repo",
+            &issue.repo_slug(),
+            "--body",
+            comment,
+        ])
+    }
+
     /// The numeric database id of `issue`, for API calls that take one
     /// instead of the issue number (sub-issues, dependencies).
     fn issue_db_id(&self, issue: &IssueUrl) -> Result<u64> {

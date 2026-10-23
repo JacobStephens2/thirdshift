@@ -226,6 +226,11 @@ fn public_flag_words(flags: &Flags, words: &mut Vec<String>) {
         Some(crate::security::FixAsk::Forbid) => words.push("no-security-fix".into()),
         None => {}
     }
+    match flags.security_close {
+        Some(crate::security::CloseAsk::Allow) => words.push("security-close".into()),
+        Some(crate::security::CloseAsk::Forbid) => words.push("no-security-close".into()),
+        None => {}
+    }
     match flags.security_review {
         Some(crate::security::review::Ask::Allow) => words.push("security-review".into()),
         Some(crate::security::review::Ask::Forbid) => words.push("no-security-review".into()),
@@ -728,6 +733,18 @@ fn take_flag<'a>(
             arg,
             SECURITY_FIX_FLAGS,
         )?,
+        "security-close" | "--security-close" => ask_once(
+            &mut flags.security_close,
+            crate::security::CloseAsk::Allow,
+            arg,
+            SECURITY_CLOSE_FLAGS,
+        )?,
+        "no-security-close" | "--no-security-close" => ask_once(
+            &mut flags.security_close,
+            crate::security::CloseAsk::Forbid,
+            arg,
+            SECURITY_CLOSE_FLAGS,
+        )?,
         "security-review" | "--security-review" => ask_once(
             &mut flags.security_review,
             crate::security::review::Ask::Allow,
@@ -759,6 +776,7 @@ const EMAIL_FLAGS: &str = "email and no-email";
 const BASE_FIX_FLAGS: &str = "base-fix and no-base-fix";
 const SECURITY_REVIEW_FLAGS: &str = "security-review and no-security-review";
 const SECURITY_FIX_FLAGS: &str = "security-fix and no-security-fix";
+const SECURITY_CLOSE_FLAGS: &str = "security-close and no-security-close";
 
 /// Record in `given` what the flag `arg` asked for: the same kind of ask
 /// twice is a repeated argument, and a different one contradicts the first,
@@ -944,6 +962,7 @@ mod tests {
                 parallel: NonZeroUsize::new(2),
                 base_fix: Some(BaseFixAsk::Forbid),
                 security_fix: Some(crate::security::FixAsk::Forbid),
+                security_close: None,
                 security_review: Some(crate::security::review::Ask::Allow),
                 harness: harness::Asked {
                     harness: Some(Harness::Codex),
@@ -1123,6 +1142,30 @@ mod tests {
         }
         assert!(parse_strs(&[URL, "security-review", "no-security-review"]).is_err());
         assert!(parse_strs(&[URL, "security-review", "--security-review"]).is_err());
+    }
+
+    #[test]
+    fn security_close_words_are_accepted_on_commands_that_start_runs() {
+        use crate::security::CloseAsk;
+        for command in [URL, "pickup", "architect", "secure"] {
+            for (word, expected) in [
+                ("security-close", CloseAsk::Allow),
+                ("--security-close", CloseAsk::Allow),
+                ("no-security-close", CloseAsk::Forbid),
+                ("--no-security-close", CloseAsk::Forbid),
+            ] {
+                let flags = match parse_strs(&[command, word]) {
+                    Ok(Command::Run(run)) => run.flags,
+                    Ok(Command::Pickup(pass) | Command::Secure(pass)) => pass.flags,
+                    Ok(Command::Architect(architect)) => architect.flags,
+                    _ => panic!("{command} {word}: unexpected command"),
+                };
+                assert_eq!(flags.security_close, Some(expected), "{command} {word}");
+            }
+        }
+        assert!(parse_strs(&[URL, "security-close", "no-security-close"]).is_err());
+        assert!(parse_strs(&[URL, "security-close", "--security-close"]).is_err());
+        assert!(parse_strs(&["secure", "security-close", "no-security-fix"]).is_ok());
     }
 
     fn parse_strs(args: &[&str]) -> Result<Command> {
@@ -1553,6 +1596,7 @@ mod tests {
             base: Some("develop".to_string()),
             flags: Flags {
                 security_fix: None,
+                security_close: None,
                 security_review: None,
                 goal: Some(Goal::Merged),
                 email: Some(NotificationAsk::Send(Some("me@example.com".to_string()))),
@@ -1609,6 +1653,7 @@ mod tests {
             base: None,
             flags: Flags {
                 security_fix: None,
+                security_close: None,
                 security_review: None,
                 goal: Some(Goal::ReadyForReview),
                 email: Some(NotificationAsk::Skip),
