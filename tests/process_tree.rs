@@ -3,12 +3,11 @@
 mod support;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use support::Scenario;
 use support::check::{DuringCheck, OwnedCheck};
+use support::{Scenario, write_executable};
 
 #[test]
 fn interrupting_a_live_claude_model_check_stops_before_work() {
@@ -186,9 +185,9 @@ fn assert_live_session_stdout_holder_stopped(slow_cleanup: bool) {
         // Scenario prepends bin to PATH; delegate past this shim after
         // delaying only the finishing worktree removal.
         let git = scenario.path("bin/git");
-        fs::write(
+        write_executable(
             &git,
-            format!(
+            &format!(
                 r#"#!/bin/sh
 if test "$1" = worktree && test "$2" = remove; then
     touch "{cleanup_started}"
@@ -203,9 +202,7 @@ PATH="${{PATH#*:}}" exec git "$@"
                 pid = pid.display(),
                 holder_at_cleanup = holder_at_cleanup.display(),
             ),
-        )
-        .unwrap();
-        fs::set_permissions(git, fs::Permissions::from_mode(0o755)).unwrap();
+        );
     }
     let expired = scenario.path("stdout-holder-expired");
     // Bash waits on its own FIFO so a child sleep cannot outlive the holder

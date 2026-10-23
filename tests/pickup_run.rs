@@ -16,10 +16,11 @@
 mod support;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 
 use support::resend::{ResendStandIn, assert_one_issue_line, assert_saved_notification};
-use support::{HeldRun, REPO, RunResult, Scenario, TimelineEvent, before_command_log};
+use support::{
+    HeldRun, REPO, RunResult, Scenario, TimelineEvent, before_command_log, write_executable,
+};
 
 /// The label of an issue a Pickup run may take.
 const READY_FOR_AGENT: &str = "ready-for-agent";
@@ -56,8 +57,7 @@ fn install_git_wrapper(scenario: &Scenario, script: impl FnOnce(&str) -> String)
         .unwrap();
     assert!(git.status.success());
     let git = String::from_utf8(git.stdout).unwrap();
-    fs::write(scenario.path("bin/git"), script(git.trim())).unwrap();
-    fs::set_permissions(scenario.path("bin/git"), fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&scenario.path("bin/git"), &script(git.trim()));
 }
 
 /// The newest pull request from `head` on the fake GitHub.
@@ -240,8 +240,8 @@ exec "{git}" "$@"
         // correct search reject that history before any Issue branch read.
         fs::create_dir_all(scenario.path("bin/real")).unwrap();
         fs::rename(scenario.path("bin/gh"), scenario.path("bin/real/gh")).unwrap();
-        fs::write(
-            scenario.path("bin/gh"),
+        write_executable(
+            &scenario.path("bin/gh"),
             r#"#!/bin/sh
 if [ "$HOLD_READY_READ" = 1 ]; then
     case "$1 $2 $*" in
@@ -267,9 +267,7 @@ if [ "$HOLD_READY_READ" = 1 ]; then
 fi
 exec "$(dirname "$0")/real/gh" "$@"
 "#,
-        )
-        .unwrap();
-        fs::set_permissions(scenario.path("bin/gh"), fs::Permissions::from_mode(0o755)).unwrap();
+        );
     }
     let started = if active_history {
         "tmp/listing-read"
@@ -424,12 +422,10 @@ fn a_reservation_push_rejection_fails_before_any_claim_or_session() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7, &[]);
     let hook = scenario.origin_dir().join("hooks/pre-receive");
-    fs::write(
+    write_executable(
         &hook,
         "#!/bin/sh\necho 'reservations forbidden' >&2\nexit 1\n",
-    )
-    .unwrap();
-    fs::set_permissions(hook, fs::Permissions::from_mode(0o755)).unwrap();
+    );
     let before = scenario.origin_git(&["show-ref"]);
     let github = scenario.gh_state();
 

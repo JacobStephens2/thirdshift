@@ -25,6 +25,7 @@ use std::process::Stdio;
 use std::process::{Command, Output};
 
 use serde_json::{Value, json};
+use support::write_executable;
 use tempfile::TempDir;
 
 const REPO: &str = "JacobStephens2/thirdshift";
@@ -225,12 +226,10 @@ impl Release {
         // Execute the built binary through the script's Cargo interface, so
         // release tests do not rebuild it or depend on the machine's rustup.
         let cargo = release.bin().join("cargo");
-        fs::write(
+        write_executable(
             &cargo,
             "#!/bin/sh\nexec \"$THIRDSHIFT_TEST_BINARY\" --release-summary\n",
-        )
-        .unwrap();
-        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+        );
         fs::create_dir(root.join("home")).unwrap();
         fs::write(
             root.join("gh-state.json"),
@@ -403,9 +402,9 @@ impl Release {
         fs::create_dir(&unwrapped).unwrap();
         let gh = self.bin().join("gh");
         fs::rename(&gh, unwrapped.join("gh")).unwrap();
-        fs::write(
+        write_executable(
             &gh,
-            format!(
+            &format!(
                 r#"#!/bin/bash
 set -euo pipefail
 "$(dirname "$0")/unwrapped/gh" "$@"
@@ -416,9 +415,7 @@ if [ "$1 $2" = 'run list' ] && [[ " $* " == *' --workflow ci.yml '* ]] &&
 fi
 "#
             ),
-        )
-        .unwrap();
-        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+        );
     }
 
     /// Arranges a merge during the first tip's pending CI, with CI on the
@@ -1537,8 +1534,7 @@ fn review_edit_opens_the_summary_in_the_editor_and_carries_on_with_what_was_save
     let release = Release::new();
     release.ci_reports(GREEN);
     let editor = release.root().join("editor.sh");
-    fs::write(&editor, "#!/bin/sh\nsed -i 's/headline/big news/' \"$1\"\n").unwrap();
-    fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&editor, "#!/bin/sh\nsed -i 's/headline/big news/' \"$1\"\n");
 
     let output = release.run_script_with(
         &["--review", "0.2.0"],
