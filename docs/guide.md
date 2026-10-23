@@ -125,7 +125,7 @@ For each repository and kind of Pass whose latest Activity log line is a skip, s
 Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: https://github.com/acme/widgets/issues/7
 ```
 
-`thirdshift status --json` is the versioned API for agents and the coming [Console](adr/0016-the-console-is-a-long-running-reader.md). It runs outside a repository too. Version 1 has this shape:
+`thirdshift status --json` is the versioned API for agents; the [Console](adr/0016-the-console-is-a-long-running-reader.md) shows the same Inbox. It runs outside a repository too. Version 1 has this shape:
 
 ```json
 {
@@ -273,9 +273,66 @@ cargo install thirdshift
 
 ### Console installation
 
-On Linux, `thirdshift console install` prints a script to read and run with sudo; `--output install-console.sh` saves it instead. For Caddy or Apache (Debian's `apache2` or Red Hat's `httpd`), the script first checks the configured Console address through the system resolver with `getent hosts`. If the name doesn't resolve, it exits before writing files, enabling services or restarting anything, and asks you to add an A or AAAA record pointing at this server and run the script again. It doesn't check whether the address points at this machine. Once the name resolves, installation continues with the Console's systemd service, proxy site and HTTPS certificate.
+To open this machine's Inbox locally, run:
 
-With neither proxy, the script installs a localhost-only service and prints an SSH tunnel command, without checking an address. See the [Console setup instructions](../README.md#console-on-a-server) for settings and proxy prerequisites.
+```sh
+thirdshift console --no-sign-in
+```
+
+Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. It never starts work; start Commands from the CLI or the operating system's scheduler.
+
+#### Console on a server
+
+Set the machine's address, fixed localhost port and sign-in allowlist in `~/.thirdshift/config.toml`:
+
+```toml
+[console]
+address = "https://console.example.com" # a DNS name, with or without https://; no port or path
+port = 8711
+allowed_emails = ["you@example.com"]
+```
+
+Point that DNS name at the machine, then run these commands as the owner:
+
+```sh
+thirdshift console password --email you@example.com
+thirdshift console install --output install-console.sh
+# Read the script, then install it:
+sudo sh install-console.sh
+```
+
+`console install` only prints a script; `--output <file>` saves it to that file instead, replacing any earlier copy, and writes nothing if the settings can't make a script. On Linux it prefers a running Caddy or Apache service; otherwise it checks for `caddy`, `apache2ctl` or `httpd` on PATH. For either proxy, the script first checks the Console's address with the system resolver (`getent hosts`). If it doesn't resolve, it stops before writing files or changing services and asks you to add an A or AAAA record pointing at this server, then run the script again. It checks resolution only, not whether the address points at this machine. The script writes `thirdshift-console.service`, running the installed binary as you with your HOME and automatic restarts. Only the script needs root. It enables the service, then restarts the proxy.
+
+For Caddy it writes `/etc/caddy/sites/thirdshift-console.caddy`, imports the sites folder from `/etc/caddy/Caddyfile` if needed, and disables proxy buffering with `flush_interval -1`. Caddy handles HTTPS. It **restarts**, rather than reloads, Caddy to preserve HTTP/3 on Android. For Apache it writes the port-80 site under `/etc/apache2/sites-available` or `/etc/httpd/conf.d`, preserves Host, forwards the request protocol and disables gzip on the Console's event streams. Install certbot with its Apache plugin first; the script runs `certbot --apache -d <name>`. Debian's module/site helpers are included. On an `httpd` machine, enable `proxy`, `proxy_http`, `headers`, `ssl` and `setenvif` and permit proxy connections in the host's SELinux policy first.
+
+With neither proxy, the script installs a localhost-only service with `--no-sign-in` and prints an SSH tunnel command. No address or accounts are needed for that mode. Run the tunnel on your computer and open the printed `http://localhost:<port>` address. On other operating systems, run `thirdshift console --no-sign-in` directly and use the same tunnel; only the Linux installer assumes systemd.
+
+#### nginx
+
+For nginx, use the generated service but remove `--no-sign-in` from its `ExecStart` before installing it. Configure the allowlist and password above. Obtain an HTTPS certificate for your DNS name, then add a site like this, adjusting the name, certificate paths and port:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name console.example.com;
+    ssl_certificate /etc/letsencrypt/live/console.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/console.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8711;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+        proxy_read_timeout 1h;
+    }
+}
+```
+
+Run `sudo nginx -t`, then `sudo systemctl restart nginx` on a systemd host. The Console still binds only to 127.0.0.1; nginx terminates HTTPS and passes live updates without buffering.
 
 ### Updating
 
@@ -401,7 +458,7 @@ thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print a compact command and option reference
 ```
 
-`help` lists commands and shared options, with a link to the [README](../README.md), which points here for workflow details, settings, Harness setup, email, logs and scheduling.
+`help` lists commands and shared options, with a link to this manual for workflow details, settings, Harness setup, email, logs and scheduling.
 
 `version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Ticket run's rule: stdout stays empty, messages go to stderr. `architect` follows it too: stdout carries the pull request's URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with `--plan-only`, or its idea when the review published no plan. A skipped Architect run prints nothing there when [another is still running](#one-at-a-time), the URL of each Architect plan that is [still open](#one-architect-plan-at-a-time), the URL of each [Architect idea waiting for triage](#an-architect-idea-waits-for-triage), and the URL of the [Ready issue, or issue still settling, that goes first](#a-ready-issue-goes-first). `pickup` follows it as well: stdout carries the pull request's URL of the run it dispatches, and nothing when the [Pickup run](#pickup-runs) is skipped. So does `secure`: stdout carries the pull request's URL of a fix it dispatches, and nothing otherwise.
 
