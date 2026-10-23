@@ -43,6 +43,10 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | Architecture review, Architect run | `src/architect.rs` | `tests/architect_run.rs` |
 | Security audit, Security review, Security run | `src/security.rs` and `src/security/`; which Runs run a Security review, and what every child Run is handed: `src/child_run/asks.rs` — `ChildAsks` | Inline tests; `tests/security_review.rs`, `tests/security_run.rs` |
 
+Eval task manifests, suite dependency selection and repository preparation live in
+`src/evals.rs` and `src/evals/`; `tests/evals.rs` tests the CLI with real Git
+repositories. The private data format is documented in `docs/eval-tasks.md`.
+
 For example, `rg -n 'Claim|TicketBoard|RunNotification' src/claim.rs src/spec_run/ticket_board.rs src/notification.rs` locates the owners of Claim, Ticket board and Run notification without reading the whole glossary or README. Ticket board is an implementation term; the glossary defines its Spec run and Ticket vocabulary.
 
 For integration-test fakes, `tests/fakes.rs` is the executable entry, `tests/fakes/<tool>.rs` holds each tool's behavior (for example, `tests/fakes/gh.rs`), and `tests/support/fakes.rs` builds and configures them. Search the relevant tool before reading a large fake or test file.

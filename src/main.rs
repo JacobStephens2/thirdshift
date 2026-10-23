@@ -12,6 +12,7 @@ mod console;
 mod cronjobs;
 mod delivery;
 mod email;
+mod evals;
 mod failed_run;
 mod git;
 mod github;
@@ -80,6 +81,10 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
+       thirdshift evals list                          List private Eval suites and tasks as JSON
+       thirdshift evals touched [<path>...]            Select suites by source dependencies
+       thirdshift evals prepare <suite> <task> <dir>   Prepare an approved Eval task repository
+       thirdshift evals verify <repository> <base>    Check that no later history survives
        thirdshift status [--all] [--json]             List this machine's Commands
        thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
@@ -151,6 +156,7 @@ fn main() -> ExitCode {
         }
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
+        Ok(Command::Evals(action)) => return printed(evals::execute(action)),
         Ok(Command::CronJobs { json }) => return printed(cronjobs::show(json)),
         Ok(Command::ConsoleInstall { output: None }) => {
             return match console::install() {
