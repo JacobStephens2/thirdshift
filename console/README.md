@@ -127,7 +127,11 @@ after a change notice, preserving the selected row, folds and scroll. If the
 stream drops or is unavailable, the page polls every five seconds until it
 reconnects. The heartbeat only beats for observed log growth, stays flat while
 Silent and respects reduced motion. The tab counts Needs you and its favicon
-marks urgent items (Slow alone is not urgent).
+marks urgent items (Slow alone is not urgent). Each row shows the same state
+word as `thirdshift status`: Landing and Ready rows take their Theme's Landing
+and Ready tag colours, Landing keeps Working's live-activity marker, and a live
+row given a Stop shows Stopping with a drifting stripe until it ends. Pause
+motion and reduced motion hold the stripe still.
 
 When no Commands are live on this machine, the Inbox explains that above its
 sections. It points to ended problems in Needs you and pull requests in Ready
@@ -180,6 +184,9 @@ Lanes shows each Command and its child Runs on a shared time axis, over the last
 3.5, 12 or 24 hours. The window is kept in `hours=`; bars clip to that window,
 while their text retains the whole stage's time. Older Commands are on History.
 Stages keeps live Runs first across repositories, then finished Runs newest first.
+Rows follow the Command record's stage order: implement through cleanup, then
+the stages of other Command kinds. Unrecognised stage names follow all known
+stages in alphabetical order.
 Tables continue when the repository changes or three columns are filled, so
 each stage's Usual range belongs to that table's repository. On phones each
 stage stacks its labelled cells. Historical Runs without stage metadata show

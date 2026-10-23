@@ -54,7 +54,7 @@ fn idle_viewers_sleep_and_log_appends_and_completion_wake_the_reader() {
     write_record(
         home.path(),
         81,
-        &super::watching::live_record(home.path(), std::process::id()),
+        &super::watching::live_record(home.path(), 81, std::process::id()),
     );
     let path = home
         .path()

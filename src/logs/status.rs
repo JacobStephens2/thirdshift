@@ -25,7 +25,7 @@ struct Status<'a> {
     idle_passes: &'a [IdlePass],
 }
 
-fn print_command(command: &Command, indent: &str) {
+fn print_command(command: &Command, state_word: &str, indent: &str) {
     let facts = &command.record;
     let stage = stage_text(command);
     let mut subject = match &facts.issue {
@@ -43,17 +43,17 @@ fn print_command(command: &Command, indent: &str) {
     println!(
         "{indent}{} {subject} · {} · {} · {} · {} · {stage}",
         super::display_name(&facts.kind),
-        command.state,
+        state_word,
         facts.harness,
         facts.model.as_deref().unwrap_or("default Model"),
         facts.effort.as_deref().unwrap_or("default Effort")
     );
     print_tickets(facts, &format!("{indent}  "));
     for dispatched in &command.dispatched {
-        print_command(dispatched, &format!("{indent}  "));
+        print_command(dispatched, dispatched.state, &format!("{indent}  "));
     }
     for child in &command.children {
-        print_command(child, &format!("{indent}  "));
+        print_command(child, child.state, &format!("{indent}  "));
     }
 }
 
@@ -113,7 +113,7 @@ pub fn show(json: bool, all: bool) -> Result<()> {
             println!("{}:", group.title());
             for item in items {
                 match item.command {
-                    Observation::Record(command) => print_command(command, ""),
+                    Observation::Record(command) => print_command(command, item.state_word(), ""),
                     Observation::History(command) => print_history(command),
                 }
                 if item.count > 1 {
