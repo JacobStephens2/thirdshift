@@ -278,6 +278,8 @@ The options:
 
 *Answer:* agree
 
+*Checked:* Done on 2026-10-23. `main` is merged into `dismiss-grill`, with one conflict, in `GLOSSARY.md`. The new glossary text and ADR 0023 now say Ticket run, and "the Spec run or Ticket run it dispatched". This file keeps the words it was written in, as ADR 0022 lets dated records do, and the glossary lists Run as Ticket run's former name. The docs go to `main` in a pull request of their own.
+
 **Q4.2 - A row that ages out.** Q3.4 starts Resolved's clock when a row stops waiting, which its option put as "when they left Needs you or Ready for review". Today a row that ages out of Needs you skips Resolved and goes straight to the History page (Q3.4's check). Read literally, Q3.4 would now keep it in Resolved for another `inbox.days`. Since Q2.5, only rows GitHub can't speak for age out, such as chart35's 48 billing failures. The options:
 - (a) **Ageing out isn't dealing with a row.** A row that ages out goes straight to the History page, as today. Resolved's clock restarts only when GitHub settles a row, a later Command takes up its issue, or someone dismisses it.
 - (b) **Ageing out counts as leaving.** The row spends another `inbox.days` in Resolved.
@@ -379,4 +381,4 @@ The options:
 
 ## Waiting on research
 
-- Nothing is running.
+- An agent is re-checking the code facts above against `main` as merged on 2026-10-23, 94 commits newer than the research. No open question waits on it.
