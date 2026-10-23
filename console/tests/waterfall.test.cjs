@@ -29,9 +29,22 @@ before(async () => {
   };
   const parent = join(folder, '7-fixture.command.json');
   await writeFile(parent, JSON.stringify(record));
-  const session = join(folder, '99-20261001T120000+0000-implement.jsonl');
-  const item = (id, command) => JSON.stringify({ type: 'item.completed', item: { id, type: 'command_execution', command, status: 'completed' } }) + '\n';
-  await writeFile(session, item('a', 'first <unsafe>') + item('b', 'unmatched') + item('c', 'last'));
+  const session = join(folder, '99-20261001T120000+0000-implement.logs.jsonl');
+  const spans = [
+    ['a', 'first <unsafe>', '1790856015000000000', '1790856030000000000'],
+    ['b', 'unmatched', '0', '0'],
+    ['c', 'last', '1790856030000000000', '1790856040000000000'],
+  ].map(([id, command, start, end], index) => ({
+    spanId: (index + 1).toString(16).padStart(16, '0'), name: `execute_tool Bash ${command}`,
+    startTimeUnixNano: start, endTimeUnixNano: end,
+    attributes: [
+      { key: 'gen_ai.operation.name', value: { stringValue: 'execute_tool' } },
+      { key: 'gen_ai.tool.call.id', value: { stringValue: id } },
+      { key: 'gen_ai.tool.name', value: { stringValue: 'Bash' } },
+    ]
+  }));
+  await writeFile(session, '');
+  await writeFile(session.replace('.logs.jsonl', '.spans.jsonl'), JSON.stringify({ resourceSpans: [{ scopeSpans: [{ spans }] }] }) + '\n');
   await writeFile(join(folder, '7-fixture.issue-99.child.json'), JSON.stringify({
     ...record, kind: 'Run', name: 'ticket-99', issue: { ...record.issue, number: 99 }, parent_record: parent,
     started_at: '2026-10-01T12:00:10+00:00', ended_at: '2026-10-01T12:00:40+00:00', session_log: session,

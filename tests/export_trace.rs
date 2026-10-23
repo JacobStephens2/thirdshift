@@ -133,10 +133,7 @@ fn export_decodes_with_official_types_and_keeps_record_times_and_all_session_log
         .as_array()
         .unwrap()
         .iter()
-        .map(|path| {
-            fs::read_to_string(Path::new(path.as_str().unwrap()).with_extension("logs.jsonl"))
-                .unwrap()
-        })
+        .map(|path| fs::read_to_string(path.as_str().unwrap()).unwrap())
         .collect::<String>();
     assert!(!logs.is_empty());
     assert_eq!(logs, source);

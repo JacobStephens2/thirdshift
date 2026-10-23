@@ -467,7 +467,7 @@ fn a_run_not_asked_about_a_base_fix_links_the_base_branchs_failing_checks_and_of
              thirdshift: Base check: {BASE_CHECK}\n\
              thirdshift: Retry with: {retry}\n\
              thirdshift: Or set: {OR_SET}\n\
-             thirdshift: session log: "
+             thirdshift: session trace: "
         )),
         "stderr: {}",
         result.stderr
@@ -481,7 +481,7 @@ fn a_run_not_asked_about_a_base_fix_links_the_base_branchs_failing_checks_and_of
              Base check:   {BASE_CHECK}\n\
              Retry with:   {retry}\n\
              Or set:       {OR_SET}\n\
-             Session log:  "
+             Session trace:  "
         )),
         "text: {text}"
     );

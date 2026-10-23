@@ -1069,7 +1069,7 @@ fn a_dispatched_run_that_fails_fails_the_pickup_run_as_a_failed_run_does() {
     assert_eq!(result.stdout, "");
     let last = *before_command_log(&result.stderr).last().unwrap();
     assert!(
-        last.starts_with("thirdshift: session log: ") && last.ends_with("-implement.jsonl"),
+        last.starts_with("thirdshift: session trace: ") && last.ends_with("-implement.logs.jsonl"),
         "stderr: {}",
         result.stderr
     );
@@ -1490,7 +1490,7 @@ fn the_notification_of_a_run_left_ready_for_review_is_that_runs() {
              Title:        Sharpen the widgets\n\
              Command:      Pickup run, which dispatched a Run\n\
              Pull request: {}\n\
-             Session log:  {}\n\
+             Session trace:  {}\n\
              Command log:  {}\n\
              Built with claude · default model · default effort (configured)\n\
              Sent by:      thirdshift\n\
@@ -1548,7 +1548,7 @@ fn the_notification_of_a_failed_run_has_its_pull_request_and_its_cause() {
              Command:      Pickup run, which dispatched a Run\n\
              Pull request: {}\n\
              Cause:        claude exited 3\n\
-             Session log:  ",
+             Session trace:  ",
             pr_from(&scenario, "issue-7")["url"].as_str().unwrap()
         )),
         "{text}"

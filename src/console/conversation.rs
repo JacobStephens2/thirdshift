@@ -1,4 +1,4 @@
-//! Render normalized Session-trace events, with legacy Claude/Codex support,
+//! Render normalized Session-trace events, including raw Claude/Codex events,
 //! as one escaped conversation with each `https://` URL a link.
 use super::filters::{escaped, linked};
 use crate::harness::interpretation::event::Event;
@@ -177,7 +177,7 @@ fn record_parts(record: LogRecord) -> Vec<Part> {
         }
     }
     if output.is_empty() {
-        // Thinking and other raw-only content still use the legacy renderer.
+        // Thinking and other raw-only content uses the Harness-event renderer.
         parts(&raw)
     } else {
         // Messages normalization has no thinking/unknown-block facts. Retain

@@ -30,7 +30,7 @@ before(async () => {
   await mkdir(folder, { recursive: true });
   await writeFile(join(home, '.thirdshift/config.toml'), '[console]\nport = 0\n');
   const start = Date.parse('2026-10-01T12:00:00Z');
-  session = join(folder, '99-20261001T120000+0000-implement.jsonl');
+  session = join(folder, '99-20261001T120000+0000-implement.logs.jsonl');
   const record = {
     version: 1, kind: 'Spec run', repository: 'acme/widgets', name: 'spec-7', hostname: 'fixture',
     issue: { number: 7, url: 'https://github.com/acme/widgets/issues/7', title: 'Widgets <unsafe>' },
@@ -55,8 +55,8 @@ before(async () => {
     span(ids.turn, ids.session, 'turn response', start + 1000, start + 55000, [attr('thirdshift.type', 'turn_ended')]),
     ...Array.from({ length: 300 }, (_, i) => span((1000 + i).toString(16).padStart(16, '0'), ids.session, `execute_tool Read ${i}`, start + 46000, start + 46010, [attr('gen_ai.operation.name', 'execute_tool')]))
   ];
-  await writeFile(session.replace('.jsonl', '.logs.jsonl'), '');
-  await writeFile(session.replace('.jsonl', '.spans.jsonl'), JSON.stringify({ resourceSpans: [{ scopeSpans: [{ spans }] }] }) + '\n');
+  await writeFile(session, '');
+  await writeFile(session.replace('.logs.jsonl', '.spans.jsonl'), JSON.stringify({ resourceSpans: [{ scopeSpans: [{ spans }] }] }) + '\n');
   server = spawn(binary, ['console', '--no-sign-in'], { env: { ...process.env, HOME: home }, stdio: ['ignore', 'pipe', 'inherit'] });
   exited = once(server, 'exit');
   const lines = createInterface({ input: server.stdout });

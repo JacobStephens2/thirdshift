@@ -187,7 +187,7 @@ fn partial_stdout_is_reported_after_log_failure_with_a_blocked_prompt() {
         let error = execute_session(root);
         assert!(
             error.to_string().contains("could not write")
-                && error.to_string().contains("implement.jsonl"),
+                && error.to_string().contains("implement.logs.jsonl"),
             "{error:#}"
         );
         assert_eq!(
@@ -206,7 +206,7 @@ done
 echo another-line
 exec sleep 5"#,
     );
-    let log = fixture.path("logs/7-20261003T120000-0400~fixture-implement.jsonl");
+    let log = fixture.path("logs/7-20261003T120000-0400~fixture-implement.logs.jsonl");
     assert!(Command::new("mkfifo").arg(&log).status().unwrap().success());
     let child = fixture
         .command("session::execution_tests::partial_stdout_is_reported_after_log_failure_with_a_blocked_prompt")
@@ -416,11 +416,13 @@ fn keeps_review_reports_beside_each_harness_session_log() {
         result.unwrap();
         assert!(log.exists());
         assert_eq!(
-            fs::read_to_string(log.with_extension("standards")).unwrap(),
+            fs::read_to_string(crate::logs::session::original(&log).with_extension("standards"))
+                .unwrap(),
             "Standards report\nFiles read: src/session.rs\n"
         );
         assert_eq!(
-            fs::read_to_string(log.with_extension("spec")).unwrap(),
+            fs::read_to_string(crate::logs::session::original(&log).with_extension("spec"))
+                .unwrap(),
             "Spec report\nFiles read: GLOSSARY.md\n"
         );
         return;
@@ -446,8 +448,16 @@ fn missing_review_reports_get_a_progress_line_and_the_run_carries_on() {
         let (result, log) = execute_review(root, Harness::OpenCode);
         result.unwrap();
         assert!(root.join("carried-on").exists());
-        assert!(!log.with_extension("standards").exists());
-        assert!(!log.with_extension("spec").exists());
+        assert!(
+            !crate::logs::session::original(&log)
+                .with_extension("standards")
+                .exists()
+        );
+        assert!(
+            !crate::logs::session::original(&log)
+                .with_extension("spec")
+                .exists()
+        );
         return;
     }
     let fixture = review_fixture("#!/bin/bash\ncat >/dev/null\n");
@@ -471,17 +481,19 @@ fn a_resumes_review_reports_are_kept_beside_its_own_session_log() {
         result.unwrap();
         assert_eq!(
             log.file_name().unwrap(),
-            "7-20261003T120000-0400~fixture-implement-resume.jsonl"
+            "7-20261003T120000-0400~fixture-implement-resume.logs.jsonl"
         );
         assert_eq!(
-            fs::read_to_string(log.with_extension("standards")).unwrap(),
+            fs::read_to_string(crate::logs::session::original(&log).with_extension("standards"))
+                .unwrap(),
             "Resume Standards report\nFiles read: src/prompt.rs\n"
         );
         assert_eq!(
-            fs::read_to_string(log.with_extension("spec")).unwrap(),
+            fs::read_to_string(crate::logs::session::original(&log).with_extension("spec"))
+                .unwrap(),
             "Resume Spec report\nFiles read: src/session.rs\n"
         );
-        // The first session's reports remain with its own Session log.
+        // The first session's reports remain with its own Session trace.
         assert_eq!(
             fs::read_to_string(
                 root.join("logs/7-20261003T120000-0400~fixture-implement.standards")
@@ -520,10 +532,15 @@ fn a_failed_session_still_keeps_whichever_review_report_it_left() {
         assert!(result.is_err());
         assert!(!root.join("carried-on").exists());
         assert_eq!(
-            fs::read_to_string(log.with_extension("standards")).unwrap(),
+            fs::read_to_string(crate::logs::session::original(&log).with_extension("standards"))
+                .unwrap(),
             "Standards report\nFiles read: src/session.rs\n"
         );
-        assert!(!log.with_extension("spec").exists());
+        assert!(
+            !crate::logs::session::original(&log)
+                .with_extension("spec")
+                .exists()
+        );
         return;
     }
     let fixture = review_fixture(&format!(

@@ -29,8 +29,8 @@ before(async () => {
   }
   const security = join(configDir, 'logs/acme/widgets/commands/secure');
   await mkdir(security, { recursive: true });
-  const session = join(security, 'secure-fixture-security-audit.jsonl');
-  await writeFile(session, 'Security Session output\n');
+  const session = join(security, 'secure-fixture-security-audit.logs.jsonl');
+  await writeFile(session, JSON.stringify({ resourceLogs: [{ scopeLogs: [{ logRecords: [{ body: { stringValue: 'Security Session output' } }] }] }] }) + '\n');
   await writeFile(join(security, 'secure-fixture.log'), 'Security Command output\n');
   await writeFile(join(security, 'secure-fixture.command.json'), JSON.stringify({
     version: 1, kind: 'Security run', name: 'secure-fixture', repository: 'acme/widgets',
@@ -373,8 +373,8 @@ for (const storage of ['blocked', 'malformed']) {
   });
 }
 
-for (const trace of [false, true]) {
-  test(`heartbeat watches ${trace ? 'Session trace records' : 'old Session logs'} and is flat when Silent`, { skip: process.platform !== 'linux' }, async t => {
+{
+  test('heartbeat watches Session trace records and is flat when Silent', { skip: process.platform !== 'linux' }, async t => {
     // This fixture borrows the Console's real native process identity. HTTP
     // coverage uses an actual held Run on both Linux and macOS.
     const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
@@ -382,15 +382,13 @@ for (const trace of [false, true]) {
     const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
     const path = join(dir, '202-fixture.command.json');
     const log = join(dir, '202-fixture.log');
-    const sessionLog = join(home, 'heartbeat-session.jsonl');
-    const session = trace ? join(home, 'heartbeat-session.logs.jsonl') : sessionLog;
-    const event = text => trace ? JSON.stringify({ resourceLogs: [{ scopeLogs: [{ logRecords: [{ body: { stringValue: text } }] }] }] }) + '\n' : text;
-    if (trace) await writeFile(sessionLog, 'Stale Session log');
+    const session = join(home, 'heartbeat-session.logs.jsonl');
+    const event = text => JSON.stringify({ resourceLogs: [{ scopeLogs: [{ logRecords: [{ body: { stringValue: text } }] }] }] }) + '\n';
     const fixture = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
-    Object.assign(fixture, { kind: 'Run', process_id: server.pid, process_start: start, outcome: null, ended_at: null, session_log: sessionLog });
+    Object.assign(fixture, { kind: 'Run', process_id: server.pid, process_start: start, outcome: null, ended_at: null, session_log: session });
     fixture.issue.number = 202;
     const began = new Date(Date.now() - 20 * 60 * 1000).toISOString();
-    fixture.stages = [{ name: 'implement', began_at: began, session_log: sessionLog }];
+    fixture.stages = [{ name: 'implement', began_at: began, session_log: session }];
     await writeFile(path, JSON.stringify(fixture));
     await writeFile(log, 'command');
     await writeFile(session, event('session'));
@@ -443,7 +441,7 @@ for (const trace of [false, true]) {
       await page.emulateMedia({ reducedMotion: 'no-preference' });
       assert.equal(await page.evaluate(() => document.getAnimations().length), 0, 'an ended Command must stop the garden and conveyor');
     } finally {
-      await Promise.all([path, log, session, sessionLog].map(path => rm(path, { force: true })));
+      await Promise.all([path, log, session].map(path => rm(path, { force: true })));
       await writeFile(join(home, '.thirdshift/config.toml'), '[console]\nport = 0\n');
     }
   });
@@ -629,7 +627,7 @@ test('History filters and Security findings and sessions work from a phone', asy
   assert.match(await page.title(), /^Security ·/);
   assert.deepEqual(streams, []);
   assert.deepEqual(errors, []);
-  await page.locator('#peek a').filter({ hasText: 'Session log:' }).click();
+  await page.locator('#peek a').filter({ hasText: 'Session trace:' }).click();
   await page.waitForURL('**/log?*');
   assert.match(await page.locator('body').textContent(), /Security Session output/);
 });
@@ -638,7 +636,7 @@ test("Enter activates the focused Security session link", async t => {
   const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
   await page.goto(`${origin}/?page=security`);
   await page.locator('.peek-link').click();
-  const sessionLink = page.locator('#peek a').filter({ hasText: 'Session log:' });
+  const sessionLink = page.locator('#peek a').filter({ hasText: 'Session trace:' });
   await sessionLink.waitFor();
   await sessionLink.focus();
   await page.keyboard.press('Enter');

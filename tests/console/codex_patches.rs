@@ -111,7 +111,7 @@ fn page(scenario: &support::Scenario) -> String {
         .as_array()
         .unwrap()
         .iter()
-        .find(|log| log["kind"] == "Session log")
+        .find(|log| log["kind"] == "Session trace")
         .unwrap()["id"]
         .as_str()
         .unwrap();

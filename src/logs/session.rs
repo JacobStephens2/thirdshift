@@ -38,17 +38,13 @@ pub(in crate::logs) fn read_requests<R: Request>(path: &Path) -> anyhow::Result<
     Ok(Some(requests))
 }
 
-/// Command records may still name the old Session log during the transition.
+/// Converted Command records can still name the former raw file. Resolve its
+/// log-records file without ever falling back to the old Session-log format.
 pub(crate) fn path(log: &Path) -> PathBuf {
     if is_trace(log) {
         return log.to_owned();
     }
-    let records = log.with_extension("logs.jsonl");
-    if records.is_file() {
-        records
-    } else {
-        log.to_owned()
-    }
+    original(log).with_extension("logs.jsonl")
 }
 
 fn is_trace(path: &Path) -> bool {
@@ -75,11 +71,10 @@ pub(crate) fn original(path: &Path) -> PathBuf {
 pub(crate) fn tail_events(log: &Path) -> io::Result<Vec<String>> {
     const WINDOW: u64 = 64 * 1024;
     let path = path(log);
-    let trace = is_trace(&path);
     let mut file = File::open(path)?;
     let length = file.metadata()?.len();
     let mut start = length.saturating_sub(WINDOW);
-    if trace {
+    {
         let mut cursor = start;
         while cursor > 0 {
             let previous = cursor.saturating_sub(WINDOW);
@@ -98,18 +93,11 @@ pub(crate) fn tail_events(log: &Path) -> io::Result<Vec<String>> {
     let mut bytes = Vec::new();
     file.take(length - start).read_to_end(&mut bytes)?;
     let tail = String::from_utf8_lossy(&bytes);
-    // Old Session logs retain their bounded-tail behavior, including dropping
-    // a partial first line when the window begins in the middle of an event.
-    let tail = if !trace && start > 0 {
-        tail.split_once('\n').map_or("", |(_, tail)| tail)
-    } else {
-        &tail
-    };
-    Ok(events(tail).collect())
+    Ok(events(&tail).collect())
 }
 
 /// A request can contain several resources, scopes and records. Keep their file
-/// order, and preserve old logs and malformed diagnostics for the renderer.
+/// order, preserving raw Harness events inside the OTLP bodies.
 pub(crate) fn events(lines: &str) -> impl Iterator<Item = String> + '_ {
     records(lines).filter_map(|record| match record.body {
         Some(AnyValue::String(raw)) => Some(raw),
@@ -117,23 +105,11 @@ pub(crate) fn events(lines: &str) -> impl Iterator<Item = String> + '_ {
     })
 }
 
-/// Keep normalized attributes available to readers that understand them. Old
-/// logs and malformed diagnostics become records containing only their raw body.
+/// Keep normalized attributes available to readers that understand them.
 pub(crate) fn records(lines: &str) -> impl Iterator<Item = LogRecord> + '_ {
-    lines.lines().flat_map(|line| {
-        let is_trace = serde_json::from_str::<serde_json::Value>(line)
-            .is_ok_and(|value| value.get("resourceLogs").is_some());
-        if is_trace && let Some(Ok(request)) = Reader::<_, Logs>::new(line.as_bytes()).next() {
-            return request
-                .resource_logs
-                .into_iter()
-                .flat_map(|resource| resource.scope_logs)
-                .flat_map(|scope| scope.log_records)
-                .collect();
-        }
-        vec![LogRecord {
-            body: Some(AnyValue::String(line.to_owned())),
-            ..Default::default()
-        }]
-    })
+    Reader::<_, Logs>::new(lines.as_bytes())
+        .filter_map(Result::ok)
+        .flat_map(|request| request.resource_logs)
+        .flat_map(|resource| resource.scope_logs)
+        .flat_map(|scope| scope.log_records)
 }

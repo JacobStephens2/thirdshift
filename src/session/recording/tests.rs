@@ -1,5 +1,6 @@
 use super::*;
 use crate::harness::Harness;
+use std::fs::File;
 
 const PARENT_OWNER: &str = "THIRDSHIFT_LOG_OWNER";
 
@@ -43,7 +44,7 @@ impl Fixture {
 const MODEL: &str = r#"{"type":"assistant","message":{"model":"reported-model","content":[]}}"#;
 
 #[test]
-fn all_harnesses_write_otlp_session_traces_beside_unchanged_logs() {
+fn all_harnesses_preserve_raw_events_only_in_otlp_session_traces() {
     use crate::otlp_jsonl::{Logs, Reader, Spans};
     use opentelemetry_proto::tonic::collector::{
         logs::v1::ExportLogsServiceRequest, trace::v1::ExportTraceServiceRequest,
@@ -73,7 +74,7 @@ fn all_harnesses_write_otlp_session_traces_beside_unchanged_logs() {
                 .adapter()
                 .interpretation(fixture.root.path(), "session prompt"),
         );
-        assert_eq!(fs::read_to_string(&log).unwrap(), raw);
+        assert!(!log.exists());
         let logs = fs::read_to_string(log.with_extension("logs.jsonl")).unwrap();
         let spans = fs::read_to_string(log.with_extension("spans.jsonl")).unwrap();
         let requests: Vec<_> = Reader::<_, Logs>::new(logs.as_bytes())
@@ -362,17 +363,23 @@ echo '{"info":{"outcome":"completed"},"messages":[{"type":"assistant","model":{"
 fn reader_failure_keeps_models_consumed_before_the_log_failed() {
     let fixture = Fixture::new();
     let log = fixture.log("implement");
-    assert!(Command::new("mkfifo").arg(&log).status().unwrap().success());
+    assert!(
+        Command::new("mkfifo")
+            .arg(log.with_extension("logs.jsonl"))
+            .status()
+            .unwrap()
+            .success()
+    );
     let released = fixture.root.path().join("released");
     let reader_release = released.clone();
-    let reader_log = log.clone();
+    let reader_log = log.with_extension("logs.jsonl");
     let reader = std::thread::spawn(move || {
         let mut input = BufReader::new(File::open(reader_log).unwrap());
         let mut line = String::new();
         loop {
             line.clear();
             assert_ne!(input.read_line(&mut line).unwrap(), 0);
-            if line == "ready\n" {
+            if logs::session::events(&line).any(|raw| raw == "ready") {
                 break;
             }
         }

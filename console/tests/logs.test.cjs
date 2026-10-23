@@ -8,12 +8,11 @@ const { join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const { chromium } = require("playwright");
 
-for (const storage of ['Session log', 'Session trace', 'Session trace only']) {
-  describe(storage, () => {
+  describe('Session trace', () => {
     let home, server, exited, browser, origin, folder, log, recordPath, record;
     const encode = event => {
       const raw = JSON.stringify(event);
-      return (storage === 'Session log' ? raw : JSON.stringify({ resourceLogs: [{ scopeLogs: [{ logRecords: [{ body: { stringValue: raw } }] }] }] })) + '\n';
+      return JSON.stringify({ resourceLogs: [{ scopeLogs: [{ logRecords: [{ body: { stringValue: raw } }] }] }] }) + '\n';
     };
     const message = text => encode({ type: "item.completed", item: { id: text, type: "agent_message", text } });
     const tool = text => encode({ type: "item.completed", item: { id: text, type: "command_execution", command: text, aggregated_output: "output", status: "completed", exit_code: 0 } });
@@ -23,9 +22,8 @@ for (const storage of ['Session log', 'Session trace', 'Session trace only']) {
       await mkdir(folder, { recursive: true });
       await writeFile(join(home, ".thirdshift/config.toml"), "[console]\nport = 0\n");
       const stem = "7-20261003T120000-0400~fixture";
-      const sessionLog = join(folder, `${stem}-implement.jsonl`);
-      log = storage === 'Session log' ? sessionLog : join(folder, `${stem}-implement.logs.jsonl`);
-      if (storage === 'Session trace') await writeFile(sessionLog, 'Stale Session log\n');
+      const sessionLog = join(folder, `${stem}-implement.logs.jsonl`);
+      log = sessionLog;
       recordPath = join(folder, `${stem}.command.json`);
       await writeFile(log, message("Initial retained line") + message("Tall initial message\n".repeat(150)) + tool("first tool"));
       await writeFile(join(folder, `${stem}.log`), "Command <plain> output\n");
@@ -66,7 +64,7 @@ for (const storage of ['Session log', 'Session trace', 'Session trace only']) {
       page.on("pageerror", error => errors.push(error.message));
       await page.goto(`${origin}/logs`);
       assert.equal(await page.locator(".log-list strong").count(), 2);
-      await page.getByRole("link", { name: /Session log/ }).click();
+      await page.getByRole("link", { name: /Session trace/ }).click();
       await page.getByRole('link', { name: 'Command details', exact: true }).click();
       await page.getByRole('button', { name: 'Stop', exact: true }).waitFor();
       await page.getByRole('button', { name: 'Close details (Esc)', exact: true }).click();
@@ -131,7 +129,7 @@ for (const storage of ['Session log', 'Session trace', 'Session trace only']) {
       const page = await browser.newPage();
       t.after(() => page.close());
       await page.goto(`${origin}/logs`);
-      await page.getByRole('link', { name: /Session log/ }).click();
+      await page.getByRole('link', { name: /Session trace/ }).click();
       await page.getByText('Patch unavailable in this log.', { exact: true }).waitFor({ state: 'attached' });
       await appendFile(log, encode({ type: 'tool_call_ended', id: 'patch-live', tool: 'apply_patch',
         result: { source: 'codex_session_file', changes: [{ path: 'widgets.rs', kind: 'update',
@@ -148,7 +146,7 @@ for (const storage of ['Session log', 'Session trace', 'Session trace only']) {
       assert.equal(await page.getByText('Patch unavailable in this log.', { exact: true }).count(), 0);
     });
 
-    test("Session log polls appended lines when EventSource is unavailable", { skip: process.platform !== "linux" }, async t => {
+    test("Session trace polls appended lines when EventSource is unavailable", { skip: process.platform !== "linux" }, async t => {
       await appendFile(log, "\n"); // Finish the preceding test's unterminated final event.
       record.outcome = null;
       record.ended_at = null;
@@ -170,7 +168,7 @@ for (const storage of ['Session log', 'Session trace', 'Session trace only']) {
         };
       });
       await page.goto(`${origin}/logs`);
-      await page.getByRole('link', { name: /Session log/ }).click();
+      await page.getByRole('link', { name: /Session trace/ }).click();
       const initial = await page.locator('#log-content .message').first().elementHandle();
       await appendFile(log, message('Visible through polling fallback'));
       await page.getByText('Visible through polling fallback', { exact: true }).waitFor({ timeout: 12000 });
@@ -201,7 +199,7 @@ for (const storage of ['Session log', 'Session trace', 'Session trace only']) {
         finally { finishedPoll(); }
       });
       await page.goto(`${origin}/logs`);
-      await page.getByRole('link', { name: /Session log/ }).click();
+      await page.getByRole('link', { name: /Session trace/ }).click();
       await page.waitForFunction(() => window.readerSource);
       const path = await page.locator('#log-content').getAttribute('data-stream');
       await appendFile(log, message('First line after disconnect'));
@@ -227,7 +225,7 @@ for (const storage of ['Session log', 'Session trace', 'Session trace only']) {
         'Recovered SSE plus an older overlapping poll must append each Session line once');
     });
 
-    test('stable normalized messages update across stream batches and reload', { skip: process.platform !== 'linux' || storage === 'Session log' }, async t => {
+    test('stable normalized messages update across stream batches and reload', { skip: process.platform !== 'linux' }, async t => {
       record.outcome = null;
       record.ended_at = null;
       await writeFile(recordPath, JSON.stringify(record));
@@ -242,7 +240,7 @@ for (const storage of ['Session log', 'Session trace', 'Session trace only']) {
       t.after(() => context.close());
       const page = await context.newPage();
       await page.goto(`${origin}/logs`);
-      await page.getByRole('link', { name: /Session log/ }).click();
+      await page.getByRole('link', { name: /Session trace/ }).click();
       const original = await page.getByText('Snapshot first', { exact: true }).locator('..').elementHandle();
       await appendFile(log, snapshot('Snapshot first complete'));
       await page.getByText('Snapshot first complete', { exact: true }).waitFor();
@@ -276,7 +274,7 @@ for (const storage of ['Session log', 'Session trace', 'Session trace only']) {
         };
       });
       await page.goto(`${origin}/logs`);
-      await page.getByRole('link', { name: /Session log/ }).click();
+      await page.getByRole('link', { name: /Session trace/ }).click();
       await page.waitForFunction(() => window.recoverySource?.opened);
       await page.evaluate(() => window.recoverySource.pause());
       await appendFile(log, message('Delivered by polling'));
@@ -290,4 +288,3 @@ for (const storage of ['Session log', 'Session trace', 'Session trace only']) {
         `SSE replayed a line already appended by polling: ${JSON.stringify(visible)}`);
     });
   });
-}

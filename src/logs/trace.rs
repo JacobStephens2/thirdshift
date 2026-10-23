@@ -102,7 +102,7 @@ impl Context {
         Self::with_identity(identity)
     }
 
-    /// Unowned callers still retain a Session log; preserve that behavior.
+    /// Unowned callers still retain a Session trace; preserve that behavior.
     /// A stamped path recovers grouping without borrowing another Command.
     pub(crate) fn of_session(path: &std::path::Path) -> Self {
         let identity = super::owner::decode(path)

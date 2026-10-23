@@ -146,7 +146,7 @@ gh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7
         command["session_log"]
             .as_str()
             .unwrap()
-            .ends_with("-implement.jsonl")
+            .ends_with("-implement.logs.jsonl")
     );
     assert!(text.stdout.contains("Make widgets"), "{}", text.stdout);
     assert!(text.stdout.contains("implement ·"), "{}", text.stdout);
@@ -321,7 +321,7 @@ fn a_merge_run_retains_delivery_stages_and_their_start_times() {
             stage["session_log"]
                 .as_str()
                 .unwrap()
-                .ends_with("-implement.jsonl")
+                .ends_with("-implement.logs.jsonl")
         );
     }
     assert_eq!(record["outcome"], "merged");
@@ -737,8 +737,8 @@ fn tokenless_sessions_require_explicit_evidence_to_belong_to_an_owned_command() 
         fs::rename(folder.join("7-fixture.command.json"), &record).unwrap();
         let log = folder.join("7-20261003T120000-0400~ownerA.log");
         fs::write(&log, "owned Command output\n").unwrap();
-        let session = folder.join("7-20261003T120000-0400-implement.jsonl");
-        fs::write(&session, "tokenless Session\n").unwrap();
+        let session = folder.join("7-20261003T120000-0400-implement.logs.jsonl");
+        support::session_trace::write(&session, "tokenless Session\n");
         match evidence {
             "record" => {
                 let mut facts: Value = serde_json::from_slice(&fs::read(&record).unwrap()).unwrap();
@@ -746,7 +746,7 @@ fn tokenless_sessions_require_explicit_evidence_to_belong_to_an_owned_command() 
                 fs::write(&record, serde_json::to_vec(&facts).unwrap()).unwrap();
             }
             "models" => fs::write(
-                session.with_extension("models.json"),
+                session.with_file_name("7-20261003T120000-0400-implement.models.json"),
                 serde_json::json!({"command_log": log}).to_string(),
             )
             .unwrap(),
@@ -883,7 +883,11 @@ fn fixture_log(scenario: &Scenario, relative: &str, contents: &str) {
         .path("home/.thirdshift/logs/acme/widgets")
         .join(relative);
     fs::create_dir_all(path.parent().unwrap()).unwrap();
-    fs::write(path, contents).unwrap();
+    if relative.ends_with(".logs.jsonl") {
+        support::session_trace::write(path, contents);
+    } else {
+        fs::write(path, contents).unwrap();
+    }
 }
 
 #[test]
@@ -904,7 +908,7 @@ fn status_reads_activity_starts_from_before_harness_metadata() {
     );
     fixture_log(
         &scenario,
-        "commands/issue/7-20261004T120000-0400-implement.jsonl",
+        "commands/issue/7-20261004T120000-0400-implement.logs.jsonl",
         "{}\n",
     );
     let result = scenario.run(&["status", "--all", "--json"]);
@@ -1089,13 +1093,13 @@ fn status_fills_gaps_by_source_and_groups_only_current_layout_sessions() {
         ),
     );
     for name in [
-        "7-20261001T120000-0400-implement.jsonl",
-        "8-20261002T120000-0400-spec-review.jsonl",
-        "10-20261002T120000-0400-implement.jsonl", // Ticket belongs to Spec #8.
-        "9-20260901T120000-0400-implement.jsonl",
-        "9-20260901T120000-0400-implement-resume.jsonl",
-        "9-20260901T120000-0400-repair-1.jsonl",
-        "9-20260902T120000-0400-implement.jsonl",
+        "7-20261001T120000-0400-implement.logs.jsonl",
+        "8-20261002T120000-0400-spec-review.logs.jsonl",
+        "10-20261002T120000-0400-implement.logs.jsonl", // Ticket belongs to Spec #8.
+        "9-20260901T120000-0400-implement.logs.jsonl",
+        "9-20260901T120000-0400-implement-resume.logs.jsonl",
+        "9-20260901T120000-0400-repair-1.logs.jsonl",
+        "9-20260902T120000-0400-implement.logs.jsonl",
     ] {
         fixture_log(&scenario, &format!("commands/issue/{name}"), "{}\n");
     }
@@ -1106,8 +1110,8 @@ fn status_fills_gaps_by_source_and_groups_only_current_layout_sessions() {
     );
     fixture_log(&scenario, "commands/issue/bad-name.jsonl", "{}");
     for relative in [
-        "sessions/widgets-4-20260801T120000-0400-implement.jsonl",
-        "commands/issue/5-20260801T120000-0400-implement.jsonl",
+        "sessions/widgets-4-20260801T120000-0400-implement.logs.jsonl",
+        "commands/issue/5-20260801T120000-0400-implement.logs.jsonl",
     ] {
         let path = scenario.path("home/.thirdshift/logs").join(relative);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1423,9 +1427,9 @@ fn repair_resume_and_security_review_keep_their_own_session_logs() {
     let record = scenario.command_record(LOGS);
     let stages = record["stages"].as_array().unwrap();
     for (name, log) in [
-        ("Resume", "-implement-resume.jsonl"),
-        ("Security review", "-security-review.jsonl"),
-        ("Repair", "-repair-1.jsonl"),
+        ("Resume", "-implement-resume.logs.jsonl"),
+        ("Security review", "-security-review.logs.jsonl"),
+        ("Repair", "-repair-1.logs.jsonl"),
     ] {
         assert!(
             stages.iter().any(|stage| stage["name"] == name

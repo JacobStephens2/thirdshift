@@ -19,8 +19,8 @@ use crate::logs;
 use crate::progress::{self, ChildLine};
 use crate::run::Ended;
 
-/// What starts the line naming a Failed run's session log.
-const SESSION_LOG: &str = "session log: ";
+/// What starts the line naming a Failed run's session trace.
+const SESSION_LOG: &str = "session trace: ";
 
 /// What starts the line naming a Failed run's Command log.
 const COMMAND_LOG: &str = "command log: ";
@@ -122,7 +122,7 @@ pub struct Account<'a> {
     pub advice: &'a [Advice],
     /// What became of the Base fix the Run started or waited on, if any.
     pub base_fix: Option<&'a str>,
-    /// The Session log of the session a failure came from, else the most
+    /// The Session trace of the session a failure came from, else the most
     /// recent one, if a session was started.
     pub log: Option<&'a Path>,
     /// In a Spec run, a line on each Ticket, as in its summary on stderr.
@@ -436,7 +436,7 @@ pub struct ChildFailure {
 /// stderr, as it is relayed, then how it exited. Only the child's own
 /// progress lines count: a line that continues one, as the later lines of a
 /// cause do, tells nothing, nor does a line the child relayed from a Run it
-/// started itself. Its advice, between its cause and its session log, is
+/// started itself. Its advice, between its cause and its session trace, is
 /// neither.
 #[derive(Default)]
 pub struct Reader {
@@ -444,7 +444,7 @@ pub struct Reader {
     /// log nor a Base fix: once a failed child has shown its ending, its
     /// cause.
     cause: Option<String>,
-    /// The session log named since that line.
+    /// The session trace named since that line.
     log: Option<String>,
     base_fix: Option<String>,
     local_work: Vec<String>,
@@ -570,7 +570,7 @@ mod tests {
         }
     }
 
-    /// How a Run that failed as `cause`, with its session log and no pull
+    /// How a Run that failed as `cause`, with its session trace and no pull
     /// request, reads.
     fn failed_account(cause: &str) -> Account<'static> {
         Account {
@@ -891,7 +891,7 @@ mod tests {
                     "claude exited 1\nno such model".to_string(),
                     "Base check: test: https://ci.example/main/test".to_string(),
                     "Or set: base.fix = true".to_string(),
-                    format!("session log: {LOG}"),
+                    format!("session trace: {LOG}"),
                 ],
                 strings(&[PR]),
                 false
@@ -1043,7 +1043,7 @@ mod tests {
         for line in account.recovery.unwrap().lines() {
             reader.read(ChildLine::Own(&line));
         }
-        reader.read(ChildLine::Own(&format!("session log: {LOG}")));
+        reader.read(ChildLine::Own(&format!("session trace: {LOG}")));
         assert_eq!(
             reader.finish("", false).outcome,
             Err(ChildFailure {

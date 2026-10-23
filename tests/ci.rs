@@ -270,7 +270,8 @@ fn red_ci_is_handed_to_a_ci_fix_repair_whose_fix_turns_it_green() {
     );
     let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
     assert!(
-        logs.iter().any(|name| name.ends_with("-repair-1.jsonl")),
+        logs.iter()
+            .any(|name| name.ends_with("-repair-1.logs.jsonl")),
         "logs: {logs:?}"
     );
     scenario.assert_cleaned_up("issue-7");
@@ -292,7 +293,8 @@ fn assert_session_log_is(result: &support::RunResult, kind: &str) {
         .last()
         .unwrap_or(&"");
     assert!(
-        last.starts_with("thirdshift: session log: ") && last.ends_with(&format!("-{kind}.jsonl")),
+        last.starts_with("thirdshift: session trace: ")
+            && last.ends_with(&format!("-{kind}.logs.jsonl")),
         "stderr: {}",
         result.stderr
     );

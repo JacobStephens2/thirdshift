@@ -344,7 +344,7 @@ fn body(
         text += &format!("Base fix:     {base_fix}\n");
     }
     if let Some(log) = account.log {
-        text += &format!("Session log:  {}\n", log.display());
+        text += &format!("Session trace:  {}\n", log.display());
     }
     if let Some(log) = command_log {
         text += &format!("Command log:  {}\n", log.display());
@@ -486,7 +486,7 @@ mod tests {
                      Title:        Add export button\n\
                      Command:      Run\n\
                      Pull request: {PR}\n\
-                     Session log:  {LOG}\n\
+                     Session trace:  {LOG}\n\
                      Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
@@ -510,7 +510,7 @@ mod tests {
                      Command:      Run\n\
                      Cause:        claude exited 1\n\
                      Base fix:     {PLAN} not merged\n\
-                     Session log:  {LOG}\n\
+                     Session trace:  {LOG}\n\
                      Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
@@ -565,7 +565,7 @@ mod tests {
                      Strength:     Strong\n\
                      Dispatched:   merged\n\
                      Pull request: {PR}\n\
-                     Session log:  {LOG}\n\
+                     Session trace:  {LOG}\n\
                      Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
@@ -633,7 +633,7 @@ mod tests {
                      Command:      Architect run\n\
                      Review:       failed\n\
                      Cause:        claude exited 1\n\
-                     Session log:  {LOG}\n\
+                     Session trace:  {LOG}\n\
                      Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
@@ -748,7 +748,7 @@ mod tests {
             ),
             "Result:       merged\n\
              Pull request: https://github.com/acme/widgets/pull/1\n\
-             Session log:  /home/me/.thirdshift/logs/sessions/x.jsonl\n\
+             Session trace:  /home/me/.thirdshift/logs/sessions/x.jsonl\n\
              Command log:  /home/me/.thirdshift/logs/commands/issue/x.log\n\
              Built with claude · opus · high\n\
              Sent by:      thirdshift\n\
@@ -801,7 +801,7 @@ mod tests {
              Cause:        CI red on test, which also fails on main at 362b9ca; fix main first\n\
              Base check:   test: https://ci.example/main/test\n\
              Or set:       base.fix = true\n\
-             Session log:  /home/me/.thirdshift/logs/x.jsonl\n\
+             Session trace:  /home/me/.thirdshift/logs/x.jsonl\n\
              Sent by:      thirdshift\n\
              Host:         droplet-1\n\
              Took:         4s\n"

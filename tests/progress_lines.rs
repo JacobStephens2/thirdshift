@@ -266,7 +266,7 @@ fn still_logs_the_whole_stream() {
 #[test]
 fn a_log_failure_still_recovers_and_reports_warnings_and_usage() {
     let scenario = Scenario::new();
-    let pipe = scenario.path("session-log-pipe");
+    let pipe = scenario.path("session-trace-pipe");
     assert!(
         Command::new("mkfifo")
             .arg(&pipe)
@@ -288,7 +288,7 @@ for log in "{logs}/commands/issue/"*.log; do
     identity_fragment=${{identity_fragment%.log}}
 done
 mkdir -p "{logs}/commands/issue"
-ln -s "{pipe}" "{logs}/commands/issue/7-$identity_fragment-implement.jsonl"
+ln -s "{pipe}" "{logs}/commands/issue/7-$identity_fragment-implement.logs.jsonl"
 touch "{ready}"
 "#,
             logs = logs.display(),
@@ -331,7 +331,7 @@ exec sleep 5
     let mut line = String::new();
     loop {
         line.clear();
-        if reader.read_line(&mut line).unwrap() == 0 || line == "ready-to-fail\n" {
+        if reader.read_line(&mut line).unwrap() == 0 || line.contains("ready-to-fail") {
             break;
         }
     }

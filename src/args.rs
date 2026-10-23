@@ -18,9 +18,6 @@ use crate::run::Goal;
 
 /// What thirdshift was asked to do.
 pub enum Command {
-    LogsConvert {
-        remove: bool,
-    },
     Help,
     Version,
     Update,
@@ -449,11 +446,6 @@ pub fn parse(args: &[String]) -> Result<Command> {
         }
         Some("logs") => {
             match &args[1..] {
-                [flag] if flag == "--convert" || flag == "--remove-converted" => {
-                    return Ok(Command::LogsConvert {
-                        remove: flag == "--remove-converted",
-                    });
-                }
                 [] => {
                     return Ok(Command::LogsList {
                         json: false,

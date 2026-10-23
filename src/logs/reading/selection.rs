@@ -162,11 +162,7 @@ impl<'a> Observation<'a> {
             Self::Record(command) => {
                 let mut paths = Vec::new();
                 for path in command.record.session_references() {
-                    let path = if path.exists() {
-                        path.clone()
-                    } else {
-                        crate::logs::session::path(path)
-                    };
+                    let path = crate::logs::session::path(path);
                     if !paths.contains(&path) {
                         paths.push(path);
                     }
@@ -191,7 +187,7 @@ impl<'a> Observation<'a> {
             let prefix = issue
                 .map(|issue| issue.number.to_string())
                 .or_else(|| pass_prefix(kind).map(String::from))
-                .context("cannot name Session logs for this Command kind")?;
+                .context("cannot name Session traces for this Command kind")?;
             for entry in super::entries(log.parent().context("Command log has no directory")?)? {
                 let path = entry.path();
                 if entry.file_type()?.is_file()
@@ -233,7 +229,7 @@ impl<'a> Observation<'a> {
                 };
                 crate::session::kind::selects(kind, session)
             })
-            .with_context(|| format!("no {kind} Session log for this Command"))
+            .with_context(|| format!("no {kind} Session trace for this Command"))
     }
 }
 

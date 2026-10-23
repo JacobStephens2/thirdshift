@@ -11,8 +11,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::reading::{Command, Entry, Observation, Snapshot};
-use super::status::{inspect, waterfall};
-use super::trace::{Context, SpanKind, id};
+use super::status::inspect;
+use super::trace::{Context, SpanKind};
 use crate::config::UserConfig;
 
 #[derive(Clone, Serialize)]
@@ -240,16 +240,9 @@ pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
         let mut builder = Builder {
             context,
             sessions: BTreeSet::new(),
-            log: waterfall::matching::Log::read(
-                &owner.command_log,
-                DateTime::parse_from_rfc3339(&owner.record.started_at)?,
-            )?,
-            now: now.fixed_offset(),
             spans: &mut tree.spans,
         };
-        let mut relays = Vec::new();
-        relay_path(owner, command, &mut relays);
-        builder.record(command, hex(builder.context.command), &relays)?;
+        builder.record(command, hex(builder.context.command))?;
     }
     tree.roll_up();
     Ok(View { choices, tree })
@@ -258,13 +251,11 @@ pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
 struct Builder<'a> {
     context: Context,
     sessions: BTreeSet<PathBuf>,
-    log: waterfall::matching::Log,
-    now: DateTime<chrono::FixedOffset>,
     spans: &'a mut Vec<Span>,
 }
 
 impl Builder<'_> {
-    fn record(&mut self, command: &Command, parent: String, relays: &[u64]) -> Result<()> {
+    fn record(&mut self, command: &Command, parent: String) -> Result<()> {
         let context = self.context.for_record(&command.record);
         let selector = Observation::Record(command).selector().unwrap_or_default();
         let run_id = hex(context.run);
@@ -332,66 +323,8 @@ impl Builder<'_> {
                 .or(template.start);
             template.input = None;
             template.conversation_url = Some(inspect::url("/log", &selector, Some(&path)));
-            if let Some(mut spans) = session::read(&path, &context, &template)? {
-                if spans.iter().any(|span| {
-                    span.attributes.get("thirdshift.migration")
-                        == Some(&Value::String("legacy".into()))
-                }) {
-                    let (calls, measured) =
-                        waterfall::session_calls(&path, command, relays, &mut self.log)?;
-                    let placed = waterfall::place_calls(&path, command, &calls, measured, self.now);
-                    for span in spans.iter_mut().filter(|span| span.kind == SpanKind::Tool) {
-                        let call = span
-                            .attributes
-                            .get("gen_ai.tool.call.id")
-                            .and_then(Value::as_str);
-                        let parent = span
-                            .attributes
-                            .get("thirdshift.parent_id")
-                            .and_then(Value::as_str);
-                        if let Some(timing) = placed.iter().find(|timing| {
-                            timing.identity.as_ref().is_some_and(|(scope, id)| {
-                                Some(id.as_str()) == call && scope.as_deref() == parent
-                            })
-                        }) {
-                            span.start = timing.start.map(|time| time.timestamp_millis() as f64);
-                            span.end = timing.end.map(|time| time.timestamp_millis() as f64);
-                            span.duration_ms = duration(span.start, span.end);
-                            span.estimated = true;
-                        }
-                    }
-                }
+            if let Some(spans) = session::read(&path, &context, &template)? {
                 self.spans.extend(spans);
-            } else {
-                // Old logs retain their scoped estimates without pretending to
-                // contain Sessions or measured model calls they never recorded.
-                let (calls, measured) =
-                    waterfall::session_calls(&path, command, relays, &mut self.log)?;
-                for (index, call) in
-                    waterfall::place_calls(&path, command, &calls, measured, self.now)
-                        .into_iter()
-                        .enumerate()
-                {
-                    let mut span = template.clone();
-                    span.id = hex(id(&[
-                        &context.run.0,
-                        original.as_os_str().as_encoded_bytes(),
-                        &index.to_be_bytes(),
-                    ]));
-                    span.parent_id = call
-                        .stage
-                        .map(|index| hex(context.stage_id(stages[index].stage)))
-                        .or(Some(run_id.clone()));
-                    span.kind = SpanKind::Tool;
-                    span.name = call.label;
-                    span.start = call.start.map(|time| time.timestamp_millis() as f64);
-                    span.end = call.end.map(|time| time.timestamp_millis() as f64);
-                    span.duration_ms = duration(span.start, span.end);
-                    span.status = if span.end.is_some() { "ok" } else { "unknown" }.into();
-                    span.error = None;
-                    span.estimated = true;
-                    self.spans.push(span);
-                }
             }
         }
         for child in command.dispatched.iter().chain(&command.children) {
@@ -405,16 +338,7 @@ impl Builder<'_> {
                 || run_id.clone(),
                 |timing| hex(context.stage_id(timing.stage)),
             );
-            let mut child_relays = relays.to_vec();
-            if command
-                .children
-                .iter()
-                .any(|entry| std::ptr::eq(entry, child))
-                && let Some(issue) = &child.record.issue
-            {
-                child_relays.push(issue.number);
-            }
-            self.record(child, parent, &child_relays)?;
+            self.record(child, parent)?;
         }
         Ok(())
     }
@@ -485,28 +409,6 @@ fn state(command: &Command) -> String {
         }
         .into()
     })
-}
-
-fn relay_path(command: &Command, selected: &Command, path: &mut Vec<u64>) -> bool {
-    if std::ptr::eq(command, selected) {
-        return true;
-    }
-    for child in command.dispatched.iter().chain(&command.children) {
-        let length = path.len();
-        if command
-            .children
-            .iter()
-            .any(|entry| std::ptr::eq(entry, child))
-            && let Some(issue) = &child.record.issue
-        {
-            path.push(issue.number);
-        }
-        if relay_path(child, selected, path) {
-            return true;
-        }
-        path.truncate(length);
-    }
-    false
 }
 
 fn time(value: &str) -> Option<i64> {

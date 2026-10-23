@@ -22,7 +22,7 @@ fn span_tree_and_details_pair_cli_with_routes_and_nest_child_runs() {
     let dir = home
         .path()
         .join(".thirdshift/logs/acme/widgets/commands/issue");
-    let session = dir.join("99-20261001T120000+0000-implement.jsonl");
+    let session = dir.join("99-20261001T120000+0000-implement.logs.jsonl");
     let mut child = parent.clone();
     child["kind"] = json!("Run");
     child["name"] = json!("ticket-99");
@@ -38,9 +38,9 @@ fn span_tree_and_details_pair_cli_with_routes_and_nest_child_runs() {
         serde_json::to_vec(&child).unwrap(),
     )
     .unwrap();
-    fs::write(session.with_extension("logs.jsonl"), "").unwrap();
+    fs::write(support::session_trace::artifact(&session, "logs.jsonl"), "").unwrap();
     let attr = |key: &str, value: &str| json!({"key":key,"value":{"stringValue":value}});
-    fs::write(session.with_extension("spans.jsonl"), serde_json::to_vec(&json!({
+    fs::write(support::session_trace::artifact(&session, "spans.jsonl"), serde_json::to_vec(&json!({
         "resourceSpans":[{"scopeSpans":[{"spans":[
             {"spanId":"1111111111111111","name":"invoke_agent implement","startTimeUnixNano":"1790856010000000000","endTimeUnixNano":"1790856050000000000","attributes":[attr("gen_ai.operation.name","invoke_agent"),attr("thirdshift.session.prompt","Build widgets")]},
             {"spanId":"2222222222222222","parentSpanId":"1111111111111111","name":"agent reviewer","startTimeUnixNano":"1790856015000000000","endTimeUnixNano":"1790856040000000000","attributes":[attr("thirdshift.type","subagent_started"),attr("thirdshift.description","Review widgets")]},

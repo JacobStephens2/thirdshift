@@ -153,7 +153,7 @@ The available pages are Inbox (`1`), Lanes (`2`), Stages (`3`), Waterfall (`4`),
 History (`5`), Logs (`6`), Security (`7`) and Cron jobs (`8`). Inbox through Security links
 keep the page in `?page=`. History includes every ended Command, including old
 logs, and filters by outcome and repository. Security shows retained findings
-and Session logs. Older records without finding metadata still show their logs.
+and Session traces. Older records without finding metadata still show their logs.
 
 Cron jobs (`/cronjobs`, or `g` then `j`) shows schedules and commands from the
 Unix account running the Console's `crontab -l`. The same inventory is available
@@ -240,12 +240,12 @@ beside the list on a wide screen or at the bottom of a phone.
 
 For an exact older Command, `show` and `logs` also accept the absolute record
 or Command-log path. The Console adds `::name` to a record path to distinguish
-a dispatched Run from its enclosing Command. A retained Session-log path can
+a dispatched Run from its enclosing Command. A retained Session-trace path can
 select a historical Command without a record; `logs --session` accepts an exact
 path from that Command's Session inventory as well as a session kind.
-Page 6, `/logs`, lists every Command log and Session log in the current
+Page 6, `/logs`, lists every Command log and Session trace in the current
 `commands/` layout, including Security logs, and marks the live ones. Every
-Command row links to its Run and Session logs, including child Ticket Runs.
+Command row links to its Run and Session traces, including child Ticket Runs.
 Older `sessions/` folders are not linked. The same inventory is available with
 `thirdshift logs` or `thirdshift logs --json`; `thirdshift logs --file <id>`
 reads an exact listed file and accepts `--follow`.
@@ -255,7 +255,7 @@ logs as its Console link; the inventory's `owners` field lists those exact IDs.
 Command logs are plain text. Session traces from all six Harnesses render their
 normalized messages, tool calls and results as conversations with folded tool
 groups and Bash, Edit, Read and Grep views. Unfamiliar events stay visible as
-plain raw lines. Older Claude and Codex Session logs retain their conversation
+plain raw lines. Older Claude and Codex Session traces retain their conversation
 rendering and collapsed thinking. A live reader uses its own SSE stream
 to append escaped HTML from a byte offset. Reconnecting resumes from the last
 event's byte offset; incomplete live lines wait until their newline arrives.

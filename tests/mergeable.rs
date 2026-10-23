@@ -155,12 +155,12 @@ fn logs_the_conflict_repair_with_the_runs_shared_timestamp() {
     assert_eq!(logs.len(), 2, "logs: {logs:?}");
     let implement = logs
         .iter()
-        .find(|name| name.ends_with("-implement.jsonl"))
+        .find(|name| name.ends_with("-implement.logs.jsonl"))
         .expect("no implement log");
-    let prefix = implement.strip_suffix("implement.jsonl").unwrap();
+    let prefix = implement.strip_suffix("implement.logs.jsonl").unwrap();
     assert!(prefix.starts_with("7-"), "log: {implement}");
     assert!(
-        logs.contains(&format!("{prefix}repair-1.jsonl")),
+        logs.contains(&format!("{prefix}repair-1.logs.jsonl")),
         "logs: {logs:?}"
     );
 }

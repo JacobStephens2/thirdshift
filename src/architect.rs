@@ -342,7 +342,7 @@ struct ArchitectRun<'a> {
 /// [`gates`], a skip recorded with its reason if one skips; then the check of
 /// its Harness, failing before any work if it can't run; then the record
 /// that it started work, which keeps its Command log with its repository's
-/// logs, where its Session logs go too; then the Launch directory's pull, if
+/// logs, where its Session traces go too; then the Launch directory's pull, if
 /// asked for. Then, unless it was interrupted, the Architecture review
 /// session and its [`conclude`]; then, unless `plan_only`, the plan it
 /// marked ready dispatched on its Base branch.
@@ -383,7 +383,7 @@ fn failed(run: FailedRun) -> Outcome {
 
 /// [`run_through`] past its gates, up to its dispatch: the Harness check,
 /// the start, the pull, and the Architecture review, with its conclusion,
-/// failing with the review's Session log if it gets that far.
+/// failing with the review's Session trace if it gets that far.
 fn up_to_the_dispatch(
     outside: &mut impl Outside,
     architect_run: &ArchitectRun,

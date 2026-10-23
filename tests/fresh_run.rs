@@ -389,15 +389,14 @@ fn logs_the_session_stream_under_the_home_directory() {
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
     let name = &logs[0];
     assert!(
-        name.starts_with("7-") && name.ends_with("-implement.jsonl"),
+        name.starts_with("7-") && name.ends_with("-implement.logs.jsonl"),
         "log: {name}"
     );
-    let log = std::fs::read_to_string(
+    let log = support::session_trace::events(
         scenario
             .path("home/.thirdshift/logs/acme/widgets/commands/issue")
             .join(name),
-    )
-    .unwrap();
+    );
     assert!(
         log.contains(r#""type": "system""#) && log.contains(r#""type": "result""#),
         "log: {log}"

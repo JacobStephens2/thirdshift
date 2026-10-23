@@ -1,9 +1,9 @@
-//! Session log recording: consume the transcript, checkpoint stream Models,
+//! Session trace recording: consume the transcript, checkpoint stream Models,
 //! and replace them only when completed Interpretation supplies a report.
 //! The captured owning Command also governs child inheritance and collection.
 
-use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Write};
+use std::fs;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
@@ -54,7 +54,7 @@ impl Recording {
         let owner = self
             .owner
             .as_ref()
-            .map_err(|cause| anyhow::anyhow!("cannot name Session log: {cause}"))?;
+            .map_err(|cause| anyhow::anyhow!("cannot name Session trace: {cause}"))?;
         Ok(owner.session_path(dir, subject, kind))
     }
 
@@ -99,8 +99,6 @@ impl Recording {
             fs::create_dir_all(dir)
                 .with_context(|| format!("could not create {}", dir.display()))?;
         }
-        let mut log_file =
-            File::create(log).with_context(|| format!("could not create {}", log.display()))?;
         let started = Instant::now();
         let context = logs::trace_context()
             .or_else(|| self.owner.as_ref().ok().map(logs::trace::Context::of_owner))
@@ -124,14 +122,7 @@ impl Recording {
             input.stdin,
             stream,
             move |output, stream| {
-                let followed = follow(
-                    &kind_owned,
-                    output,
-                    &mut log_file,
-                    &log_owned,
-                    stream,
-                    &streaming_trace,
-                );
+                let followed = follow(&kind_owned, output, stream, &streaming_trace);
                 // The process owner joins this reader before returning, including
                 // on interruption, when it deliberately suppresses state recovery.
                 recording.keep(
@@ -201,7 +192,7 @@ impl Recording {
             effort: choice.effort.clone(),
             observed,
         };
-        let path = log.with_extension("models.json");
+        let path = logs::session::original(log).with_extension("models.json");
         let kept = serde_json::to_vec(&record)
             .map_err(anyhow::Error::from)
             .and_then(|json| fs::write(&path, json).map_err(anyhow::Error::from));
@@ -288,13 +279,10 @@ struct SessionModels {
     observed: Vec<String>,
 }
 
-/// Copy every line of `stream` to `log_file` and print the progress lines it
-/// condenses to, until the stream ends.
+/// Record each Harness event and print its progress until the stream ends.
 fn follow(
     kind: &str,
     stream: impl Read,
-    log_file: &mut File,
-    log: &Path,
     progress: &mut Interpretation,
     trace: &Mutex<super::trace::Trace>,
 ) -> Result<()> {
@@ -309,12 +297,13 @@ fn follow(
         {
             return Ok(());
         }
-        log_file
-            .write_all(&line)
-            .with_context(|| format!("could not write {}", log.display()))?;
         let raw = String::from_utf8_lossy(&line);
         let decoded = progress.decode(&raw);
-        trace.lock().unwrap().record(&raw, &decoded.events)?;
+        trace
+            .lock()
+            .unwrap()
+            .record(&raw, &decoded.events)
+            .context("could not write the Session trace")?;
         for condensed in decoded.progress {
             progress::step(format_args!("{kind}: {condensed}"));
         }
