@@ -431,3 +431,36 @@ PY
         "resume reuses validated Scores"
     );
 }
+
+#[test]
+fn metadata_rows_contiguous_with_a_findings_table_are_blinded() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(r#"
+reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
+cat > "$reports/spec.md" <<'EOF'
+| Area | Finding |
+| --- | --- |
+| Harness | lookup accepts a directory as an executable. |
+| Harness | claude |
+| Model | private-model |
+EOF
+"#);
+    let run = fixture.run(&["--prior", "0.01"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let packet = fixture.grader_packet();
+    assert_eq!(packet["trials"].as_array().unwrap().len(), 2);
+    for trial in packet["trials"].as_array().unwrap() {
+        let report = trial["spec"].as_str().unwrap();
+        assert!(
+            report.contains("lookup accepts a directory as an executable."),
+            "Blinding erased genuine finding: {report}"
+        );
+    }
+    let text = packet.to_string().to_ascii_lowercase();
+    for identity in ["claude", "private-model"] {
+        assert!(
+            !text.contains(identity),
+            "Grader packet leaked identifying metadata {identity}: {packet}"
+        );
+    }
+}
