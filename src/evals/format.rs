@@ -20,7 +20,7 @@ pub(super) enum Session {
     SpecReview,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Task {
     pub format: u32,
