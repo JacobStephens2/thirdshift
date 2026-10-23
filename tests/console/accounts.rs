@@ -135,6 +135,7 @@ fn sign_in_guards_pages_streams_and_actions_and_pairs_the_console_log_with_cli()
     );
     for path in [
         "/",
+        "/resources",
         "/?page=lanes",
         "/?page=stages",
         "/?page=waterfall",

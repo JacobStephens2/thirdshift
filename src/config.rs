@@ -24,6 +24,7 @@ pub use console::{ConsoleAccess, ConsoleSettings};
 #[derive(Debug, PartialEq, Eq)]
 pub struct UserConfig {
     pub console: ConsoleSettings,
+    pub resources: crate::resources::Limits,
     /// `merge.always`: every Run is a Merge run unless told `no-merge`.
     pub merge_always: bool,
     /// `base.fix`: every Run may start a Base fix unless told `no-base-fix`.
@@ -113,6 +114,7 @@ impl UserConfig {
     /// What a Run does with no User config under `home`.
     fn defaults(home: &Path) -> Self {
         UserConfig {
+            resources: crate::resources::Limits::default(),
             console: ConsoleSettings::default(),
             merge_always: false,
             base_fix: false,
@@ -146,6 +148,13 @@ impl UserConfig {
             .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::defaults(home);
         for (section, value) in &table {
+            if section == "resources" {
+                config.resources = value
+                    .clone()
+                    .try_into()
+                    .with_context(|| format!("invalid [resources] in {file}"))?;
+                continue;
+            }
             if section == "console" {
                 config.console = value
                     .clone()
@@ -887,6 +896,10 @@ quiet_skips = false   # a skipped Pass prints nothing, leaving only its Activity
 [spec]
 parallel = 3   # how many Tickets a Spec run runs at once; default 3
 
+[resources]
+min_available_memory_mb = 0   # delay new sessions below this available RAM in MB; 0 disables
+max_load_per_cpu_percent = 0  # delay new sessions above this one-minute load per logical CPU (%); 0 disables
+
 [pickup]
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 wait_minutes = 30   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 30
@@ -1014,6 +1027,26 @@ mod tests {
             Path::new("/home/me/.thirdshift/config.toml"),
             Path::new("/home/me"),
         )
+    }
+
+    #[test]
+    fn resource_limits_are_opt_in_and_accept_machine_thresholds() {
+        let defaults = parse("").unwrap();
+        assert_eq!(defaults.resources.min_available_memory_mb, 0);
+        assert_eq!(defaults.resources.max_load_per_cpu_percent, 0);
+        let config =
+            parse("[resources]\nmin_available_memory_mb = 2048\nmax_load_per_cpu_percent = 100\n")
+                .unwrap();
+        assert_eq!(config.resources.min_available_memory_mb, 2048);
+        assert_eq!(config.resources.max_load_per_cpu_percent, 100);
+        for text in [
+            "[resources]\nmin_available_memory_mb = -1\n",
+            "[resources]\nmin_available_memory_mb = 1.5\n",
+            "[resources]\nmax_load_per_cpu_percent = -1\n",
+            "[resources]\nunknown = 3\n",
+        ] {
+            assert!(parse(text).is_err(), "{text}");
+        }
     }
 
     #[test]

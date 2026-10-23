@@ -36,6 +36,7 @@ mod pull_request;
 mod ready;
 mod recovery;
 mod resend_key;
+mod resources;
 mod run;
 mod run_ending;
 mod security;
@@ -82,6 +83,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift setup                               Choose defaults and write the User config
        thirdshift status [--all] [--json]             List this machine's Commands
        thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs
+       thirdshift resources [--json]                  Show host memory, CPU load and session limits
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
        thirdshift console install [--output <file>]   Print, or save, a service and proxy install script for sudo
        thirdshift console password [--email <address>]  Set a Console password privately
@@ -152,6 +154,7 @@ fn main() -> ExitCode {
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
         Ok(Command::CronJobs { json }) => return printed(cronjobs::show(json)),
+        Ok(Command::Resources { json }) => return printed(resources::show(json)),
         Ok(Command::ConsoleInstall { output: None }) => {
             return match console::install() {
                 Ok(script) => {
@@ -415,6 +418,7 @@ fn release_summary() -> ExitCode {
         let config = UserConfig::load()?;
         let mut prompt = String::new();
         std::io::stdin().read_to_string(&mut prompt)?;
+        resources::wait()?;
         harness::write_summary(&config.harness, &prompt)
     })();
     match summary {

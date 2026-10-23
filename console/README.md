@@ -15,6 +15,11 @@ npm test
 home folder and a free localhost port, and closes its own server and browser.
 Node and npm are test tools only; the release build embeds its assets.
 
+The **Resources** page (`9`, or `g e`) shows a host snapshot and the configured
+session admission decision, also available with `thirdshift resources --json`.
+Reload to refresh it. Set `[resources] min_available_memory_mb` and
+`max_load_per_cpu_percent` in User config; zero disables each limit.
+
 The Themes picker offers **Make a Theme from this**, starting from any built-in
 or custom Theme. Edit its JSON name and tokens, then **Save / import JSON**.
 Choose the saved name in the picker to apply it. **Export JSON** gives a document

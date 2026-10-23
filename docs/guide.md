@@ -407,6 +407,24 @@ thirdshift help                     # print a compact command and option referen
 
 Uncommitted changes in your clone are fine: the Ticket run works in its own worktree from `origin`, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Ticket run stops.
 
+### Host resources
+
+`thirdshift resources` (or `thirdshift resources --json`) reports this host's available and total RAM in MB (1,000,000 bytes), logical CPU count, one-minute load average, configured limits and whether another session may start. The Console's **Resources** page shows the same snapshot; reload to update it.
+
+Set `[resources]` in `~/.thirdshift/config.toml` to delay new sessions when this machine is busy:
+
+```toml
+[resources]
+min_available_memory_mb = 2048
+max_load_per_cpu_percent = 100
+```
+
+Both settings default to `0`, disabling that limit. Values are nonnegative whole numbers; `max_load_per_cpu_percent` is at most 4,294,967,295. A load limit of 100 permits a one-minute load of 8 on eight logical CPUs. Load includes runnable work and, on Linux, tasks waiting for IO; it is not instantaneous CPU usage.
+
+Before every session, including a Resume, Repair or Security review, thirdshift checks the host. If available RAM is below the minimum or load per CPU exceeds the maximum, it reports why and waits, rechecking every ten seconds. Running sessions continue. Limits are read again on every check, so editing the config can release a waiting Command. Stop or Ctrl-C interrupts the wait through normal cleanup. A failed resource read with limits enabled fails the Command rather than starting a session without a measurement.
+
+These are host snapshots, not resource reservations or per-session budgets: simultaneous Commands may both pass a check, and container quotas are not measured. `spec.parallel` still sets the upper bound on parallel Ticket runs. Limits apply to sessions; they do not prevent worktree preparation or Claims.
+
 ### User config
 
 A **User config** at `~/.thirdshift/config.toml` sets this machine's defaults for every Ticket run. It is optional: with no file, or one that says nothing about a setting, a Ticket run does only what its command asks for.

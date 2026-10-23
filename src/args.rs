@@ -25,6 +25,9 @@ pub enum Command {
     CronJobs {
         json: bool,
     },
+    Resources {
+        json: bool,
+    },
     Console {
         no_sign_in: bool,
     },
@@ -536,6 +539,13 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 [] => Ok(Command::CronJobs { json: false }),
                 [flag] if flag == "--json" => Ok(Command::CronJobs { json: true }),
                 _ => bail!("usage: thirdshift cronjobs [--json]"),
+            };
+        }
+        Some("resources") => {
+            return match &args[1..] {
+                [] => Ok(Command::Resources { json: false }),
+                [flag] if flag == "--json" => Ok(Command::Resources { json: true }),
+                _ => bail!("usage: thirdshift resources [--json]"),
             };
         }
         Some("status") => {
