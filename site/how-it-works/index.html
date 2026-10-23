@@ -70,7 +70,7 @@
       <pre class="guide-command"><code>cd ~/repos/widgets
 thirdshift --no-merge https://github.com/acme/widgets/issues/7</code></pre>
       <p>In that clone, <code>thirdshift 7</code> also starts the issue's Ticket run: a bare issue number is resolved from <code>origin</code>. Add <code>--no-merge</code> to leave it for review regardless of your defaults. <a href="/docs/#usage">Command forms</a>.</p>
-      <p><code>--no-merge</code> explicitly leaves the pull request for review, even if your User config normally requests merging. Before starting, install and authenticate GitHub CLI (<code>gh</code>) and your chosen <strong>Harness</strong> (the agent CLI, such as Claude Code or Codex), configure Git's commit identity and push access, and install the repository's test toolchain. <code>thirdshift setup</code> chooses machine defaults.</p>
+      <p><code>--no-merge</code> explicitly leaves the pull request for review, even if your User config normally requests merging. Before starting, install and authenticate GitHub CLI (<code>gh</code>) and your chosen <strong>Harness</strong> (the agent CLI, such as Claude Code or Codex), configure Git's commit identity and push access, and install the repository's test toolchain. <code>thirdshift setup</code> chooses machine defaults and offers to save a Claude setup token, made with <code>claude setup-token</code>, with hidden input. That token is reserved for Trials; ordinary Runs use the Harness's existing login.</p>
       </div>
     </details>
   </section>
@@ -152,6 +152,7 @@ thirdshift --no-merge https://github.com/acme/widgets/issues/7</code></pre>
 thirdshift show https://github.com/acme/widgets/issues/7
 thirdshift logs https://github.com/acme/widgets/issues/7 --follow</code></pre>
       <p>The <strong>Console</strong> shows this machine's Commands, opening on its <strong>Inbox</strong>. Beside the CLI, you can watch their stages and logs there. For this machine on localhost, start it with:</p>
+      <p>When no Commands are running, the Inbox shows the last recorded skipped Pass reasons, points to work waiting for you, and links to Cron jobs to help diagnose launch failures. If no reason was recorded, it says so.</p>
       <pre class="guide-command"><code>thirdshift console --no-sign-in</code></pre>
       <p>For a server, <code>thirdshift console install</code> prints an installation script to read and run with <code>sudo</code>, putting its Console behind a sign-in. <a href="/docs/#console-installation">Console installation</a> and <a href="/docs/#machine-status">machine status</a>.</p>
       <p>A signed-in Console account can <strong>Stop</strong> a live Command or Requeue it for Pickup. The CLI does the same:</p>
@@ -201,6 +202,7 @@ thirdshift stop &lt;command&gt; --requeue</code></pre>
         <p class="guide-connector">Eligible work ↓ Ticket run or Spec run ↓ reviewed pull request</p>
       </figure>
       <p>Pickup respects issue readiness, open blockers and the Claim limit. Architect and Security runs yield to ready human-shaped work. Gates can skip a pass without failure, and unresolved plans, ideas or findings can leave the next decision with the Day shift. This is scheduled CLI work on your machine, using your authenticated tools.</p>
+      <p>When a Security run fails before its audit starts, its requested Run notification names a fixed Cause for Base branch preparation failures, such as <code>Base branch not found</code>, and points to stderr on the host at the command's start time for diagnostics. <a href="/docs/#security-runs">Security run notifications</a>.</p>
       <p>Before dispatch, Pickup reserves its selected issue on <code>origin</code> and checks that it is still Ready. Competing Pickup runs on two machines cannot take the same issue: only the reservation's owner can dispatch it. After a crash, the reservation waits for the Day shift to confirm its owner has stopped and release it. <a href="/docs/#pickup-runs">Pickup's reservation and readiness checks</a>.</p>
       <p><a href="/docs/#architect-runs-every-few-minutes">Architect runs every few minutes</a> and <a href="/docs/#security-runs-on-a-schedule-with-fixing-allowed">Security runs on a schedule, with fixing allowed</a>, started by your operating system.</p>
       <p>Next: <a href="/prompts/">inspect every prompt and skill</a>, see <a href="/#how-a-run-works">a real Ticket run's recorded output</a>, see <a href="/architecture/">the architecture in six figures</a>, use the <a href="/docs/">manual for installation, commands and configuration</a>, or <a href="/videos/">watch the explainer videos</a>.</p>

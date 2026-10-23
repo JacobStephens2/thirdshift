@@ -183,15 +183,23 @@ fn left_open_note_refuses_an_already_closed_record() {
     let issue = IssueUrl::parse("https://github.com/acme/widgets/issues/8").unwrap();
     let pr = "https://github.com/acme/widgets/pull/9";
     let storage = collection(false, Vec::new());
-    let record = storage.decode_created(native(false, &mut draft("legacy"))).unwrap();
-    let pending = record.with_pending_fix(record.description(), &issue).unwrap();
+    let record = storage
+        .decode_created(native(false, &draft("legacy")))
+        .unwrap();
+    let pending = record
+        .with_pending_fix(record.description(), &issue)
+        .unwrap();
     let succeeded = record
         .with_fix_ending(&pending, &issue, FixEnding::Succeeded)
         .unwrap();
     let closed = record.with_close(&succeeded, &issue, pr).unwrap();
     assert!(
         record
-            .with_left_open_note(&closed, &issue, "could not close the private record: gh failed")
+            .with_left_open_note(
+                &closed,
+                &issue,
+                "could not close the private record: gh failed"
+            )
             .is_err()
     );
 }

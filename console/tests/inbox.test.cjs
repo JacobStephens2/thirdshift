@@ -209,6 +209,39 @@ test("the Inbox works without JavaScript and Focus auto follows system light and
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(18, 18, 20)");
 });
 
+test("idle explanations stay visible with hidden sections, on phones and without JavaScript", async t => {
+  const config = join(home, '.thirdshift/config.toml');
+  const activity = join(home, '.thirdshift/logs/acme/widgets/activity.log');
+  const ready = join(home, '.thirdshift/logs/acme/widgets/commands/issue/203-fixture.command.json');
+  const fixture = JSON.parse(await readFile(join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json'), 'utf8'));
+  Object.assign(fixture, { outcome: 'ready for review', pull_request: 'https://github.com/acme/widgets/pull/203' });
+  fixture.issue.number = 203;
+  await writeFile(ready, JSON.stringify(fixture));
+  await writeFile(config, '[console]\nport = 0\nhidden_sections = ["needs-you", "ready-for-review", "landing", "working", "done", "resolved"]\n');
+  await writeFile(activity, '2026-01-01 12:00:00 Pickup run skipped: no Ready issue on acme/widgets <script>unsafe</script>\n');
+  try {
+    for (const javaScriptEnabled of [false, true]) {
+      const page = await pageFor(t, { javaScriptEnabled, viewport: { width: 390, height: 844 } });
+      await page.goto(origin);
+      const notice = page.getByRole('region', { name: 'No running Commands' });
+      assert.equal(await notice.isVisible(), true);
+      assert.match(await notice.textContent(), /Pickup run idle on acme\/widgets: no Ready issue/);
+      assert.equal(await notice.locator('script').count(), 0);
+      for (const [label, section] of [['Needs you', 'needs-you'], ['Ready for review', 'ready-for-review']]) {
+        assert.equal(await notice.getByRole('link', { name: label, exact: true }).count(), 0, 'hidden sections must not have dead links');
+        assert.ok((await notice.textContent()).includes(`${label} (hidden; show it with Sections or thirdshift console sections --show ${section})`));
+      }
+      assert.equal(await notice.getByRole('link', { name: 'Cron jobs', exact: true }).getAttribute('href'), '/cronjobs');
+      assert.equal(await page.locator('#inbox > details:visible').count(), 0);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    }
+  } finally {
+    await rm(activity, { force: true });
+    await rm(ready, { force: true });
+    await writeFile(config, '[console]\nport = 0\n');
+  }
+});
+
 test("explicit Focus light and dark override the system preference", async t => {
   const page = await pageFor(t, { javaScriptEnabled: false });
   const config = join(home, ".thirdshift/config.toml");
@@ -396,6 +429,7 @@ for (const storage of ['blocked', 'malformed']) {
     try {
       const page = await pageFor(t);
       await page.goto(origin);
+      assert.equal(await page.getByRole('region', { name: 'No running Commands' }).count(), 0);
       await page.locator('[data-group="working"] > summary').click();
       const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#202$/ }) });
       const id = await row.getAttribute('id');
@@ -428,6 +462,7 @@ for (const storage of ['blocked', 'malformed']) {
       await utimes(log, old, old);
       await utimes(session, old, old);
       await page.waitForFunction(id => document.getElementById(id).dataset.state === 'Silent', id);
+      assert.equal(await page.getByRole('region', { name: 'No running Commands' }).count(), 0);
       assert.equal(await row.locator('.state').evaluate(state => getComputedStyle(state).animationIterationCount), '3');
       assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
       await page.emulateMedia({ reducedMotion: 'reduce' });
@@ -439,6 +474,7 @@ for (const storage of ['blocked', 'malformed']) {
       fixture.outcome = 'merged'; fixture.ended_at = new Date().toISOString();
       await writeFile(path, JSON.stringify(fixture));
       await page.waitForFunction(() => document.documentElement.dataset.live === 'false');
+      await page.getByRole('region', { name: 'No running Commands' }).waitFor();
       await page.emulateMedia({ reducedMotion: 'no-preference' });
       assert.equal(await page.evaluate(() => document.getAnimations().length), 0, 'an ended Command must stop the garden and conveyor');
     } finally {

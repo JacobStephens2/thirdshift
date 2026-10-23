@@ -129,6 +129,14 @@ reconnects. The heartbeat only beats for observed log growth, stays flat while
 Silent and respects reduced motion. The tab counts Needs you and its favicon
 marks urgent items (Slow alone is not urgent).
 
+When no Commands are live on this machine, the Inbox explains that above its
+sections. It points to ended problems in Needs you and pull requests in Ready
+for review, and shows the last recorded skipped Pass reasons from Activity logs.
+These reasons are retained observations, not a check that the scheduler still
+runs. With none recorded, it says so. Cron jobs and the scheduler's output help
+diagnose launch failures; the Console never starts work. A live Command in
+Needs you, or in a hidden section, still counts as running.
+
 Choose **Turn notifications on** in the Console header and allow the browser's
 permission prompt. This browser remembers the choice for this Console address;
 the same button turns it off across its open tabs. Keep a Console tab open

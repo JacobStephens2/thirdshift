@@ -36,19 +36,44 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
         Ending::Run(ended) => Ok(Account::of_run(ended)),
         Ending::SecurityFix {
             ended,
-            findings,
+            finding,
+            audit,
             close,
         } => {
-            let mut account = Account::of_run(ended);
-            account.security_findings = Some(findings);
-            let security_close = match (close, findings.first()) {
-                (crate::security::CloseOutcome::Closed { pr_url }, Some(finding)) => {
+            let audit = audit.as_deref();
+            // The audit's other findings, those whose records wait for triage first.
+            let (waiting, recorded): (Vec<_>, Vec<_>) =
+                audit.map_or_else(Default::default, |audit| {
+                    audit
+                        .findings
+                        .iter()
+                        .filter(|other| other.url != finding.url)
+                        .partition(|other| audit.waiting.contains(&other.url))
+                });
+            let mut account = Account {
+                security_findings: Some(
+                    audit.map_or(std::slice::from_ref(finding), |audit| &audit.findings),
+                ),
+                security_findings_waiting: !waiting.is_empty(),
+                security_fix: Some(SecurityFix {
+                    finding,
+                    audit: audit.map(|audit| match &audit.outcome {
+                        Ok(recorded) => recorded.to_string(),
+                        Err(failed) => failure_outcome(failed, "audit failed").to_string(),
+                    }),
+                    waiting,
+                    recorded,
+                }),
+                ..Account::of_run(ended)
+            };
+            let security_close = match close {
+                crate::security::CloseOutcome::Closed { pr_url } => {
                     Some(SecurityClose::Closed { finding, pr_url })
                 }
-                (crate::security::CloseOutcome::LeftOpen { reason }, Some(finding)) => {
+                crate::security::CloseOutcome::LeftOpen { reason } => {
                     Some(SecurityClose::LeftOpen { finding, reason })
                 }
-                _ => None,
+                crate::security::CloseOutcome::NotAttempted => None,
             };
             if let (Ok(line), Some(close)) = (&mut account.ended, &security_close) {
                 match close {
@@ -80,6 +105,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                     review: None,
                     security_findings: None,
                     security_findings_waiting: false,
+                    security_fix: None,
                     security_close: None,
                     failed_reproduction: None,
                     pre_audit_failure: None,
@@ -101,6 +127,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                 pre_audit_failure: if !audited.audit_started {
                     audited.outcome.as_ref().err().map(|failed| {
                         crate::github::operational_cause(&failed.error)
+                            .or_else(|| crate::launch::base_branch_cause(&failed.error))
                             .unwrap_or("pre-audit checks failed")
                     })
                 } else {
@@ -108,7 +135,7 @@ pub fn read(ending: &Ending) -> Result<Account<'_>, &Skip> {
                 },
                 failed_reproduction: audited.failed_reproduction,
                 security_findings: Some(&audited.findings),
-                security_findings_waiting: audited.findings_waiting,
+                security_findings_waiting: !audited.waiting.is_empty(),
                 advice: &audited.advice,
                 ..account
             })
@@ -162,11 +189,30 @@ pub struct Account<'a> {
     /// Safe metadata from a Security run's private records, even if the audit failed.
     pub security_findings: Option<&'a [crate::security::RecordedFinding]>,
     pub security_findings_waiting: bool,
+    /// In a Security run that dispatched a fix, which finding it was
+    /// dispatched for and how the audit before it ended.
+    pub security_fix: Option<SecurityFix<'a>>,
     /// What became of the attempt to close the fixed finding, if one was made.
     pub security_close: Option<SecurityClose<'a>>,
     /// The URLs on stdout, a line each: the pull request's, or that of the
     /// issue an Architect run's review ended on.
     pub urls: Vec<&'a str>,
+}
+
+/// The fix a Security run dispatched, told apart from the findings its audit
+/// only recorded.
+#[derive(Debug, PartialEq, Eq)]
+pub struct SecurityFix<'a> {
+    /// The Security finding the fix's pull request addresses.
+    pub finding: &'a crate::security::RecordedFinding,
+    /// How the audit before the fix ended; `None` when the Security run
+    /// fixed an earlier recorded finding without auditing.
+    pub audit: Option<String>,
+    /// The audit's other findings whose records wait for the Day shift's
+    /// triage.
+    pub waiting: Vec<&'a crate::security::RecordedFinding>,
+    /// The audit's other findings, already triaged.
+    pub recorded: Vec<&'a crate::security::RecordedFinding>,
 }
 
 /// What became of the attempt to close the Security finding a merged fix
@@ -251,6 +297,7 @@ impl<'a> Account<'a> {
                 review: None,
                 security_findings: None,
                 security_findings_waiting: false,
+                security_fix: None,
                 security_close: None,
                 failed_reproduction: None,
                 pre_audit_failure: None,
@@ -280,6 +327,7 @@ impl<'a> Account<'a> {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
             security_close: None,
             failed_reproduction: None,
             pre_audit_failure: None,
@@ -313,6 +361,7 @@ impl<'a> Account<'a> {
                 review: None,
                 security_findings: None,
                 security_findings_waiting: false,
+                security_fix: None,
                 security_close: None,
                 failed_reproduction: None,
                 pre_audit_failure: None,
@@ -608,6 +657,7 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
             security_close: None,
             failed_reproduction: None,
             pre_audit_failure: None,
@@ -631,6 +681,7 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
             security_close: None,
             failed_reproduction: None,
             pre_audit_failure: None,
@@ -823,6 +874,7 @@ mod tests {
                     }),
                     security_findings: None,
                     security_findings_waiting: false,
+                    security_fix: None,
                     security_close: None,
                     failed_reproduction: None,
                     pre_audit_failure: None,
@@ -900,7 +952,8 @@ mod tests {
         ] {
             let ending = Ending::SecurityFix {
                 ended: reached(Goal::Merged),
-                findings: findings.to_vec(),
+                finding: findings[0].clone(),
+                audit: None,
                 close,
             };
             let account = read_account(&ending);

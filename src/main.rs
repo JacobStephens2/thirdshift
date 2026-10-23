@@ -394,11 +394,13 @@ fn secure(args: PassArgs) -> ExitCode {
         security::Outcome::Audited(audited) => Ending::Security(audited),
         security::Outcome::Fixed {
             ended,
-            findings,
+            finding,
+            audit,
             close,
         } => Ending::SecurityFix {
             ended,
-            findings,
+            finding,
+            audit,
             close,
         },
     })
