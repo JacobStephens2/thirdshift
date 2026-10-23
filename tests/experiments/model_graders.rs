@@ -1,6 +1,52 @@
 use super::*;
 
 #[test]
+fn finding_tables_preserve_harness_model_effort_and_arm_evidence() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(r#"
+reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
+cat > "$reports/spec.md" <<'EOF'
+| Area | Finding |
+| --- | --- |
+| Harness | lookup accepts a directory as an executable. |
+| Model | selection accepts invalid input. |
+| Effort | validation is missing. |
+| Arm | setup can accidentally reuse credentials. |
+EOF
+"#);
+    let run = fixture.run(&["--prior", "0.01"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let calls = fixture.scenario.claude_calls();
+    let grader = calls
+        .iter()
+        .find(|call| {
+            call["prompt"]
+                .as_str()
+                .unwrap()
+                .starts_with("You are a Grader")
+        })
+        .unwrap();
+    let packet: Value = serde_json::from_slice(
+        &fs::read(PathBuf::from(grader["cwd"].as_str().unwrap()).join("packet.json")).unwrap(),
+    )
+    .unwrap();
+    for trial in packet["trials"].as_array().unwrap() {
+        let report = trial["spec"].as_str().unwrap();
+        for finding in [
+            "lookup accepts a directory as an executable.",
+            "selection accepts invalid input.",
+            "validation is missing.",
+            "setup can accidentally reuse credentials.",
+        ] {
+            assert!(
+                report.contains(finding),
+                "Blinding erased genuine finding {finding}: {report}"
+            );
+        }
+    }
+}
+
+#[test]
 fn horizontal_metadata_tables_are_blinded() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does(r#"

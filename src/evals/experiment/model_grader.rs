@@ -229,7 +229,7 @@ fn packet(task: &Task, results: &[(std::path::PathBuf, TrialResult)]) -> Result<
 
 fn blind(text: &str) -> String {
     let fields = ["harness", "model", "effort", "arm"];
-    let mut identifying_table = false;
+    let mut identifying_table = None;
     let mut blinded = String::new();
     for line in text.lines() {
         let normalized = line.to_ascii_lowercase().replace(['*', '_', '`'], "");
@@ -238,16 +238,20 @@ fn blind(text: &str) -> String {
             .trim_start_matches(['#', '>', '-', ' '])
             .trim();
         if normalized.contains('|') {
-            identifying_table |= normalized
-                .split('|')
-                .any(|cell| fields.contains(&cell.trim()));
+            // Classify the first row only: a findings table can name a
+            // Model or Harness in its data without identifying this Trial.
+            let identifying = identifying_table.get_or_insert_with(|| {
+                normalized
+                    .split('|')
+                    .any(|cell| fields.contains(&cell.trim()))
+            });
             // Horizontal metadata tables put the identities in later rows.
             // Drop the entire contiguous table, not just its field headings.
-            if identifying_table {
+            if *identifying {
                 continue;
             }
         } else {
-            identifying_table = false;
+            identifying_table = None;
         }
         let identifying = fields.iter().any(|key| {
             normalized == *key
