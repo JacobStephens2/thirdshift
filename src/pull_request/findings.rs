@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Default, Serialize, Deserialize)]
 pub(crate) struct UnaddressedFindings {
-    standards: usize,
-    spec: usize,
-    security: usize,
+    standards: Option<usize>,
+    spec: Option<usize>,
+    security: Option<usize>,
 }
 
 enum Axis {
@@ -49,11 +49,18 @@ fn list_item(text: &str) -> Option<&str> {
 
 impl UnaddressedFindings {
     pub(super) fn include_security_review(&mut self, count: usize) {
-        self.security = self.security.max(count);
+        self.security = Some(self.security.unwrap_or_default().max(count));
+    }
+
+    pub(super) fn from_security_review(count: usize) -> Self {
+        Self {
+            security: Some(count),
+            ..Self::default()
+        }
     }
 
     pub(super) fn from_body(body: &str) -> Self {
-        let mut counts = Self::default();
+        let (mut standards, mut spec, mut security) = (0, 0, 0);
         let mut section_level = None;
         let mut axis = None;
         let mut item_indent = None;
@@ -71,6 +78,10 @@ impl UnaddressedFindings {
                 continue;
             }
             if fence.is_some() {
+                continue;
+            }
+            let indent = line.len() - line.trim_start().len();
+            if item_indent.is_some_and(|root| indent > root) {
                 continue;
             }
             let title = text.trim_start_matches('#');
@@ -107,21 +118,20 @@ impl UnaddressedFindings {
             ) {
                 continue;
             }
-            let indent = line.len() - line.trim_start().len();
-            let root = *item_indent.get_or_insert(indent);
-            if indent > root {
-                continue;
-            }
+            item_indent.get_or_insert(indent);
             match axis {
-                Some(Axis::Standards) => counts.standards += 1,
-                Some(Axis::Spec) => counts.spec += 1,
-                Some(Axis::Security) => counts.security += 1,
+                Some(Axis::Standards) => standards += 1,
+                Some(Axis::Spec) => spec += 1,
+                Some(Axis::Security) => security += 1,
                 Some(Axis::SecurityOutcome) => security_outcome += 1,
                 None => {}
             }
         }
         // Delivery's deterministic summary repeats the review's detailed entries.
-        counts.security = counts.security.max(security_outcome);
-        counts
+        Self {
+            standards: Some(standards),
+            spec: Some(spec),
+            security: Some(security.max(security_outcome)),
+        }
     }
 }

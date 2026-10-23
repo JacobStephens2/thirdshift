@@ -833,6 +833,26 @@ fn run_metrics_include_the_security_reviews_count_even_if_its_body_write_fails()
 }
 
 #[test]
+fn spec_review_known_security_count_survives_an_unreadable_pr_body() {
+    let scenario = Scenario::new();
+    scenario.agent_does_in_session(1, OPENS_PR);
+    scenario.agent_does_in_session(
+        2,
+        &format!(
+            "{}\ngh fake fails 'pr view 1 --repo acme/widgets --json body'\n",
+            review_script(&json!([]), &["Cross-tenant read", "Unchecked input"])
+        ),
+    );
+    let ended = scenario.run(&[&scenario.issue_url(7), "security-review", "no-merge"]);
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    let record = scenario.command_record("home/.thirdshift/logs/acme/widgets/commands/issue");
+    assert_eq!(
+        record["run_metrics"]["unaddressed_findings"]["security"],
+        json!(2)
+    );
+}
+
+#[test]
 fn an_unaddressed_introduced_finding_holds_self_merge_with_the_pr_ready() {
     let scenario = Scenario::new();
     scenario.agent_does_in_session(1, OPENS_PR);

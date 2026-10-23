@@ -193,12 +193,7 @@ impl Delivery<'_> {
                 }
             }
         };
-        match pull_request.unaddressed_findings() {
-            Ok(counts) => crate::logs::unaddressed_findings(counts),
-            Err(error) => progress::step(format!(
-                "warning: could not read Unaddressed findings for Run metrics: {error:#}"
-            )),
-        }
+        crate::logs::unaddressed_findings(pull_request.unaddressed_findings());
         result
     }
 }

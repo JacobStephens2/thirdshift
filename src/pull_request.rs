@@ -286,16 +286,23 @@ impl<A: Adapter> PullRequest<A> {
 
     /// Read only the captured PR, after publication and any Repairs. Completion
     /// reads also work after interruption or a merge; metrics grant no authority.
-    pub fn unaddressed_findings(&mut self) -> Result<Option<UnaddressedFindings>> {
-        let Some(pr) = &self.identified else {
-            return Ok(None);
+    pub fn unaddressed_findings(&mut self) -> Option<UnaddressedFindings> {
+        let pr = self.identified.as_ref()?;
+        let mut counts = match self.adapter.body(&self.issue, pr.number, true) {
+            Ok(body) => UnaddressedFindings::from_body(&body),
+            Err(error) => {
+                progress::step(format!(
+                    "warning: could not read Unaddressed findings for Run metrics: {error:#}"
+                ));
+                return self
+                    .security_review_count
+                    .map(UnaddressedFindings::from_security_review);
+            }
         };
-        let body = self.adapter.body(&self.issue, pr.number, true)?;
-        let mut counts = UnaddressedFindings::from_body(&body);
         if let Some(count) = self.security_review_count {
             counts.include_security_review(count);
         }
-        Ok(Some(counts))
+        Some(counts)
     }
 
     /// The review's own count survives a failed body write or later publication.

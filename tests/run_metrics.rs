@@ -8,6 +8,39 @@ use support::Scenario;
 const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
 #[test]
+fn spec_review_nested_evidence_heading_preserves_the_findings_axis() {
+    let scenario = Scenario::new();
+    scenario.agent_does(
+        r#"
+echo work > work.txt
+git add work.txt
+git commit -qm 'Make widgets'
+gh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7
+
+## Unaddressed findings
+### Standards
+- Naming: retained because the glossary defines it.
+
+  #### Evidence
+  - The glossary uses the same term.
+
+- Duplication: the adapters have different contracts.
+
+### Spec
+- None.
+### Security
+- None.'
+"#,
+    );
+    let ended = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    assert_eq!(
+        scenario.command_record(LOGS)["run_metrics"]["unaddressed_findings"],
+        serde_json::json!({"standards": 2, "spec": 0, "security": 0})
+    );
+}
+
+#[test]
 fn a_run_counts_unaddressed_findings_by_kind_from_its_final_pr_body() {
     let scenario = Scenario::new();
     scenario.agent_does(
