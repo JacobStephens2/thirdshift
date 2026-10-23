@@ -595,11 +595,12 @@ rmdir "$state/lock"
 }
 
 #[test]
-fn a_timed_out_trial_counts_as_failed_and_its_descendants_end() {
+fn a_timeout_is_failed_even_after_repository_changes_and_its_descendants_end() {
     let fixture = Fixture::new();
     let escaped = fixture.scenario.path("escaped-after-timeout");
     fixture.scenario.agent_does(&format!(
         r#"
+printf changed > changed-by-agent.txt
 (sleep 3; echo escaped > '{}') &
 while true; do sleep 0.05; done
 "#,
@@ -618,16 +619,27 @@ while true; do sleep 0.05; done
 }
 
 #[test]
-fn void_trials_retry_twice_in_fresh_repositories_and_keep_every_cause() {
+fn login_failures_retry_twice_fresh_drop_both_arms_and_show_causes() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does(r#"
-echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["connection refused"]}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+case "$PWD" in *--candidate--*)
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["login expired"]}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+;; esac
 "#);
     let result = fixture.run(&[]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let experiment = fixture.experiment();
     assert_eq!(experiment["results"].as_array().unwrap().len(), 2);
+    assert_eq!(experiment["verdict"]["verdict"], "inconclusive");
+    let suite = &experiment["verdict"]["suites"]["spec-review"];
+    assert_eq!(suite["dropped_tasks"], 1);
+    assert_eq!(suite["retained_tasks"], 0);
     for result in experiment["results"].as_array().unwrap() {
+        if result["arm"] == "baseline" {
+            assert_eq!(result["outcome"], "succeeded");
+            assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
+            continue;
+        }
         assert_eq!(result["outcome"], "void");
         assert_eq!(result["attempts"].as_array().unwrap().len(), 3);
         for attempt in result["attempts"].as_array().unwrap() {
@@ -635,12 +647,150 @@ echo '{"type":"result","subtype":"error_during_execution","is_error":true,"error
         }
     }
     let calls = fixture.scenario.claude_calls();
-    assert_eq!(calls.len(), 6);
+    assert_eq!(calls.len(), 4);
     let repositories: std::collections::BTreeSet<_> = calls
         .iter()
         .map(|call| call["cwd"].as_str().unwrap())
         .collect();
-    assert_eq!(repositories.len(), 6);
+    assert_eq!(repositories.len(), 4);
+    assert_eq!(experiment["voids"]["baseline"]["count"], 0);
+    assert_eq!(experiment["voids"]["candidate"]["count"], 3);
+    assert_eq!(
+        experiment["voids"]["candidate"]["causes"]["session_unavailable"],
+        3
+    );
+    let shown = fixture
+        .scenario
+        .run(&["experiments", experiment["id"].as_str().unwrap()]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    assert!(
+        shown.stdout.contains("Baseline: 0 Void Trials"),
+        "{}",
+        shown.stdout
+    );
+    assert!(
+        shown
+            .stdout
+            .contains("Candidate: 3 Void Trials (session_unavailable: 3)"),
+        "{}",
+        shown.stdout
+    );
+}
+
+#[test]
+fn provider_limit_pauses_consume_the_fixed_retry_budget_across_resumes() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(r#"
+echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["quota exceeded"]}' >> "$FAKE_CLAUDE_AFTER_RESULT"
+"#);
+    for _ in 0..3 {
+        let paused = fixture.run(&[]);
+        assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    }
+    let finished = fixture.run(&[]);
+    assert_eq!(finished.code, Some(0), "{}", finished.stderr);
+    let experiment = fixture.experiment();
+    assert_eq!(experiment["state"], "completed");
+    assert_eq!(
+        experiment["verdict"]["suites"]["spec-review"]["dropped_tasks"],
+        1
+    );
+    for arm in ["baseline", "candidate"] {
+        assert_eq!(experiment["voids"][arm]["count"], 3);
+        assert_eq!(experiment["voids"][arm]["causes"]["usage_limit"], 3);
+    }
+    assert_eq!(fixture.scenario.claude_calls().len(), 6);
+}
+
+#[test]
+fn host_kills_of_the_trial_or_its_harness_retry_fresh_and_keep_the_cause() {
+    for killed in ["trial", "harness"] {
+        let fixture = Fixture::new();
+        if killed == "trial" {
+            for commit in [&fixture.baseline, &fixture.candidate] {
+                fs::write(
+                    fixture.scenario.path(&format!(
+                        "home/.thirdshift/evals/builds/{commit}/thirdshift"
+                    )),
+                    "#!/bin/sh\nkill -KILL $$\n",
+                )
+                .unwrap();
+            }
+        } else {
+            fixture.scenario.agent_does("kill -KILL \"$PPID\"");
+        }
+        let run = fixture.run(&[]);
+        assert_eq!(run.code, Some(0), "{killed}: {}", run.stderr);
+        let experiment = fixture.experiment();
+        for result in experiment["results"].as_array().unwrap() {
+            assert_eq!(result["outcome"], "void", "{killed}: {result}");
+            assert_eq!(result["attempts"].as_array().unwrap().len(), 3);
+            for attempt in result["attempts"].as_array().unwrap() {
+                assert_eq!(attempt["void_cause"], "host_killed");
+            }
+        }
+    }
+}
+
+#[test]
+fn the_bar_never_allows_more_than_two_void_retries() {
+    let fixture = Fixture::new();
+    let run = fixture.run(&["--void-retries", "3"]);
+    assert_eq!(run.code, Some(2), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("Void Trials allow at most two fresh retries"),
+        "{}",
+        run.stderr
+    );
+    assert!(fixture.scenario.claude_calls().is_empty());
+}
+
+#[test]
+fn trial_only_memory_caps_are_counted_per_arm_and_repeated_caps_are_findings() {
+    for (retries, count, repeated) in [("0", 1, false), ("2", 3, true)] {
+        let fixture = Fixture::new();
+        // The outer launcher reports a cap from outside the agent's sandbox.
+        // An agent's own out-of-memory diagnostic is covered at the Trial seam.
+        let output = json!({
+            "version": 1, "outcome": "void", "void_cause": "memory_cap",
+            "cause": "Trial scope memory.events reported an oom_kill",
+            "timings": {"total_ms": 50, "session_ms": 40},
+            "session_id": null, "log": null, "model_evidence": null,
+            "reports": {"standards": null, "spec": null}
+        });
+        fs::write(
+            fixture.scenario.path(&format!(
+                "home/.thirdshift/evals/builds/{}/thirdshift",
+                fixture.candidate
+            )),
+            format!("#!/bin/sh\ncat <<'TRIAL_RESULT'\n{output}\nTRIAL_RESULT\n"),
+        )
+        .unwrap();
+        let run = fixture.run(&["--void-retries", retries]);
+        assert_eq!(run.code, Some(0), "{}", run.stderr);
+        let experiment = fixture.experiment();
+        assert_eq!(experiment["voids"]["baseline"]["count"], 0);
+        assert_eq!(experiment["voids"]["candidate"]["count"], count);
+        assert_eq!(
+            experiment["voids"]["candidate"]["causes"]["memory_cap"],
+            count
+        );
+        let findings = experiment["findings"].as_array().unwrap();
+        assert_eq!(!findings.is_empty(), repeated, "{experiment}");
+        let shown = fixture
+            .scenario
+            .run(&["experiments", experiment["id"].as_str().unwrap()]);
+        assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+        assert_eq!(
+            shown
+                .stdout
+                .contains("Finding: Candidate Arm repeatedly hit its memory cap (3 Void Trials)"),
+            repeated,
+            "{}",
+            shown.stdout
+        );
+    }
 }
 
 #[test]

@@ -201,7 +201,11 @@ fn a_failed_trial_keeps_its_session_id_diagnostic_and_model_evidence() {
 #[test]
 fn unavailable_sessions_and_provider_limits_are_void_trials() {
     for (script, expected, diagnostic) in [
-        ("exit 3".to_string(), "session_unavailable", "claude exited 3"),
+        (
+            r#"echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["connection refused"]}' >> "$FAKE_CLAUDE_AFTER_RESULT""#.to_string(),
+            "session_unavailable",
+            "connection refused",
+        ),
         (
             r#"echo '{"type":"result","subtype":"error_during_execution","is_error":true,"errors":["quota exceeded"]}' >> "$FAKE_CLAUDE_AFTER_RESULT""#.to_string(),
             "usage_limit",
@@ -297,18 +301,34 @@ fn a_trial_clears_inherited_ownership_and_resumes_killed_work_only_once_with_its
 }
 
 #[test]
-fn early_refusals_and_context_limits_fail_while_login_and_provider_failures_are_void() {
-    for (diagnostic, expected) in [
-        ("context window exceeded", "failed"),
-        ("request refused", "failed"),
-        ("not logged in", "void"),
-        ("provider server error", "void"),
+fn only_external_failures_are_void_and_provider_server_errors_require_no_work() {
+    for (diagnostic, turns, expected, cause) in [
+        ("", 0, "failed", Value::Null),
+        ("context window exceeded", 0, "failed", Value::Null),
+        ("request refused", 0, "failed", Value::Null),
+        ("JavaScript heap out of memory", 0, "failed", Value::Null),
+        ("not logged in", 0, "void", json!("session_unavailable")),
+        ("login expired", 1, "void", json!("session_unavailable")),
+        (
+            "provider server error",
+            0,
+            "void",
+            json!("session_unavailable"),
+        ),
+        ("provider server error", 1, "failed", Value::Null),
+        (
+            "sandbox failed to start",
+            0,
+            "void",
+            json!("sandbox_unavailable"),
+        ),
+        ("sandbox failed to start", 1, "failed", Value::Null),
     ] {
         let scenario = Scenario::new();
         let request = request(&scenario);
         scenario.agent_does(&format!(
             "cat >> \"$FAKE_CLAUDE_AFTER_RESULT\" <<'TRIAL_ERROR'\n{}\nTRIAL_ERROR\nexit 3\n",
-            json!({"type":"result", "subtype":"error_during_execution", "is_error":true, "errors":[diagnostic]}),
+            json!({"type":"result", "subtype":"error_during_execution", "is_error":true, "errors":[diagnostic], "num_turns":turns}),
         ));
 
         let result = scenario.run(&["--trial", request.to_str().unwrap()]);
@@ -316,14 +336,7 @@ fn early_refusals_and_context_limits_fail_while_login_and_provider_failures_are_
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         let line: Value = serde_json::from_str(&result.stdout).unwrap();
         assert_eq!(line["outcome"], expected, "{diagnostic}: {line}");
-        assert_eq!(
-            line["void_cause"],
-            if expected == "void" {
-                json!("session_unavailable")
-            } else {
-                Value::Null
-            },
-        );
+        assert_eq!(line["void_cause"], cause, "{diagnostic}: {line}");
         assert!(
             line["cause"].as_str().unwrap().contains(diagnostic),
             "{line}"

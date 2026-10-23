@@ -76,6 +76,9 @@ impl Default for Bar {
                     VoidCause::RateLimit,
                     VoidCause::Interrupted,
                     VoidCause::RepositoryChanged,
+                    VoidCause::SandboxUnavailable,
+                    VoidCause::HostKilled,
+                    VoidCause::MemoryCap,
                 ]
                 .into(),
             },

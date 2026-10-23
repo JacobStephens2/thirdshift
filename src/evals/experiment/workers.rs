@@ -4,6 +4,7 @@
 use std::collections::VecDeque;
 use std::fs;
 use std::os::unix::fs::symlink;
+use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::{
@@ -165,6 +166,10 @@ fn run_trial(
     let directory = experiment.directory.join("trials").join(trial.key());
     fs::create_dir_all(&directory)?;
     let pending = directory.join("pending.json");
+    let terminal = experiment
+        .directory
+        .join("results")
+        .join(format!("{}.json", trial.key()));
     let mut result = if pending.exists() {
         serde_json::from_slice(&fs::read(&pending)?)?
     } else {
@@ -179,14 +184,7 @@ fn run_trial(
         }
     };
     let bar = &experiment.description.bar;
-    while result.outcome == Outcome::Void
-        && result
-            .attempts
-            .iter()
-            .filter(|attempt| !pauses(attempt))
-            .count()
-            <= bar.void_rules.retries
-    {
+    while result.outcome == Outcome::Void && result.attempts.len() <= bar.void_rules.retries {
         interrupt::check()?;
         let attempt = tempfile::Builder::new()
             .prefix("attempt-")
@@ -230,6 +228,7 @@ fn run_trial(
             .append(true)
             .open(experiment.directory.join("started"))?;
         progress::step(format!("Trial {} starting", trial.key()));
+        let started = Instant::now();
         let output = execute(
             experiment,
             arm,
@@ -242,17 +241,25 @@ fn run_trial(
             Ok(output) => {
                 fs::write(attempt.join("stdout"), &output.stdout)?;
                 fs::write(attempt.join("stderr"), &output.stderr)?;
-                if !output.status.success() {
-                    bail!(
-                        "Arm Trial protocol failed ({}): {}",
-                        output.status,
-                        String::from_utf8_lossy(&output.stderr)
-                    );
+                if output.status.signal() == Some(libc::SIGKILL) {
+                    Output::without_session(
+                        started.elapsed().as_millis(),
+                        Some(VoidCause::HostKilled),
+                        "Trial process killed by host (SIGKILL)",
+                    )
+                } else {
+                    if !output.status.success() {
+                        bail!(
+                            "Arm Trial protocol failed ({}): {}",
+                            output.status,
+                            String::from_utf8_lossy(&output.stderr)
+                        );
+                    }
+                    let protocol: Output =
+                        serde_json::from_slice(&output.stdout).context("invalid Trial result")?;
+                    ensure!(protocol.version == 1, "unsupported Trial result");
+                    protocol
                 }
-                let protocol: Output =
-                    serde_json::from_slice(&output.stdout).context("invalid Trial result")?;
-                ensure!(protocol.version == 1, "unsupported Trial result");
-                protocol
             }
             Err(error) if error.is::<process::TimedOut>() => {
                 Output::timed_out(u128::from(bar.timeout_seconds) * 1000)
@@ -261,7 +268,11 @@ fn run_trial(
         };
         let after = integrity::snapshot(&prepared_repo.repository);
         interrupt::check()?;
-        if !after.as_ref().is_ok_and(|after| after == &before) {
+        // A known agent failure, especially a timeout, must never become void
+        // merely because the agent also changed its repository.
+        if protocol.outcome != Outcome::Failed
+            && !after.as_ref().is_ok_and(|after| after == &before)
+        {
             protocol.outcome = Outcome::Void;
             protocol.void_cause = Some(VoidCause::RepositoryChanged);
             protocol.cause = Some("Trial repository changed during its session".into());
@@ -284,6 +295,11 @@ fn run_trial(
         // short. A resume keeps the original Bar's remaining retry budget.
         store::write(&pending, &result)?;
         if paused {
+            // A provider limit still stops scheduling, including on the last
+            // attempt. Publish exhaustion so resume cannot grant more retries.
+            if result.attempts.len() > bar.void_rules.retries {
+                store::write(&terminal, &result)?;
+            }
             bail!(
                 "Trial {} paused: {:?}; run the Experiment again to resume",
                 trial.key(),
@@ -294,13 +310,7 @@ fn run_trial(
             break;
         }
     }
-    store::write(
-        &experiment
-            .directory
-            .join("results")
-            .join(format!("{}.json", trial.key())),
-        &result,
-    )?;
+    store::write(&terminal, &result)?;
     progress::step(format!("Trial {} {}", trial.key(), result.outcome));
     Ok(())
 }
