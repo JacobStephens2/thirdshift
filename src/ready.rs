@@ -106,7 +106,13 @@ pub fn before_architect(
     repo: &Repo,
     wait: TimeDelta,
 ) -> Result<Option<PriorityIssue>> {
-    search(launch, repo, wait, Settling::Include, PickupOrder::LowestFirst)
+    search(
+        launch,
+        repo,
+        wait,
+        Settling::Include,
+        PickupOrder::LowestFirst,
+    )
 }
 
 fn search(
@@ -738,12 +744,12 @@ mod tests {
         )
         .first_priority(Settling::Wait)
         .unwrap()
-            .map(|priority| {
-                let PriorityIssue::Ready(ready) = priority else {
-                    panic!("a search waiting for settling selected an unsettled issue");
-                };
-                (ready.listed.issue.number, ready.is_spec)
-            });
+        .map(|priority| {
+            let PriorityIssue::Ready(ready) = priority else {
+                panic!("a search waiting for settling selected an unsettled issue");
+            };
+            (ready.listed.issue.number, ready.is_spec)
+        });
         (ready, seen.into_inner())
     }
 

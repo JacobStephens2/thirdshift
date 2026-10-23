@@ -254,13 +254,14 @@ impl UserConfig {
                             })?;
                     }
                     ("pickup", "order", Value::String(order)) => {
-                        config.pickup_order = PickupOrder::parse(order.trim()).with_context(|| {
-                            format!(
-                                "pickup.order must be {} or {}, not {order:?}, in {file}",
-                                PickupOrder::LowestFirst,
-                                PickupOrder::HighestFirst,
-                            )
-                        })?;
+                        config.pickup_order =
+                            PickupOrder::parse(order.trim()).with_context(|| {
+                                format!(
+                                    "pickup.order must be {} or {}, not {order:?}, in {file}",
+                                    PickupOrder::LowestFirst,
+                                    PickupOrder::HighestFirst,
+                                )
+                            })?;
                     }
                     ("pickup", "order", _) => {
                         bail!("pickup.order must be a quoted order in {file}")

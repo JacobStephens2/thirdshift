@@ -210,12 +210,7 @@ impl Outside for LaunchAndGitHub<'_> {
     }
 
     fn ready_issue(&mut self, order: PickupOrder) -> Result<Option<ReadyIssue>> {
-        ready::first(
-            self.launch.git(),
-            self.repo,
-            self.config.pickup_wait,
-            order,
-        )
+        ready::first(self.launch.git(), self.repo, self.config.pickup_wait, order)
     }
 
     fn before_architect(&mut self) -> Result<Option<PriorityIssue>> {

@@ -146,7 +146,12 @@ fn pickup_takes(extra: &[&str], taken: u32, left: u32) {
         "extra: {extra:?}"
     );
     assert!(scenario.origin_log(&format!("issue-{left}")).is_none());
-    assert_eq!(scenario.claude_calls().len(), 1, "sessions: {:?}", scenario.claude_calls());
+    assert_eq!(
+        scenario.claude_calls().len(),
+        1,
+        "sessions: {:?}",
+        scenario.claude_calls()
+    );
 }
 
 #[test]

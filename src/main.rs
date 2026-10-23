@@ -358,7 +358,13 @@ fn pickup(args: PassArgs) -> ExitCode {
     };
     let mut harness = args.flags.harness(&config);
     let order = args.order.unwrap_or(config.pickup_order);
-    let took = pickup::run(args.base.as_deref(), &args.flags, &config, &mut harness, order);
+    let took = pickup::run(
+        args.base.as_deref(),
+        &args.flags,
+        &config,
+        &mut harness,
+        order,
+    );
     started.built_with(&harness);
     match took {
         Ok(pickup::Outcome::Took(Took {
