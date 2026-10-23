@@ -1,6 +1,52 @@
 use super::*;
 
 #[test]
+fn horizontal_metadata_tables_are_blinded() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(r#"
+reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
+case "$PWD" in
+  *--candidate--*) identity='candidate'; model='other-private-model' ;;
+  *) identity='baseline'; model='private-model' ;;
+esac
+printf '| Harness | Model | Effort | Arm |\n| --- | --- | --- | --- |\n| claude | %s | max | %s |\n' "$model" "$identity" > "$reports/standards.md"
+printf 'Reported the invented finding.\n' > "$reports/spec.md"
+"#);
+    let run = fixture.run(&[
+        "--baseline-model",
+        "private-model",
+        "--candidate-model",
+        "other-private-model",
+        "--prior",
+        "0.01",
+    ]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let calls = fixture.scenario.claude_calls();
+    let graders: Vec<_> = calls
+        .iter()
+        .filter(|call| {
+            call["prompt"]
+                .as_str()
+                .unwrap()
+                .starts_with("You are a Grader")
+        })
+        .collect();
+    assert_eq!(graders.len(), 1);
+    let packet: Value = serde_json::from_slice(
+        &fs::read(PathBuf::from(graders[0]["cwd"].as_str().unwrap()).join("packet.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(packet["trials"].as_array().unwrap().len(), 2);
+    let text = packet.to_string().to_ascii_lowercase();
+    for identity in ["baseline", "candidate", "claude", "private-model", "max"] {
+        assert!(
+            !text.contains(identity),
+            "Grader packet leaked identifying metadata {identity}: {packet}"
+        );
+    }
+}
+
+#[test]
 fn blind_packets_preserve_findings_about_harness_model_and_effort_behavior() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does(r#"

@@ -228,33 +228,45 @@ fn packet(task: &Task, results: &[(std::path::PathBuf, TrialResult)]) -> Result<
 }
 
 fn blind(text: &str) -> String {
-    text.lines()
-        .filter(|line| {
-            let normalized = line.to_ascii_lowercase().replace(['*', '_', '`'], "");
-            let normalized = normalized
-                .trim()
-                .trim_start_matches(['#', '>', '-', ' '])
-                .trim();
-            let identifying = ["harness", "model", "effort", "arm"].iter().any(|key| {
-                normalized == *key
-                    || normalized
-                        .strip_prefix(key)
-                        .is_some_and(|rest| rest.trim_start().starts_with([':', '=']))
-                    || (normalized.starts_with('|')
-                        && normalized
-                            .trim_start_matches('|')
-                            .split('|')
-                            .next()
-                            .is_some_and(|cell| cell.trim() == *key))
-            });
-            !identifying
-                && !["baseline", "candidate", "baseline arm", "candidate arm"].contains(&normalized)
-                && !["built with", "generated with", "co-authored-by:"]
-                    .iter()
-                    .any(|prefix| normalized.starts_with(prefix))
-        })
-        .map(|line| format!("{line}\n"))
-        .collect()
+    let fields = ["harness", "model", "effort", "arm"];
+    let mut identifying_table = false;
+    let mut blinded = String::new();
+    for line in text.lines() {
+        let normalized = line.to_ascii_lowercase().replace(['*', '_', '`'], "");
+        let normalized = normalized
+            .trim()
+            .trim_start_matches(['#', '>', '-', ' '])
+            .trim();
+        if normalized.contains('|') {
+            identifying_table |= normalized
+                .split('|')
+                .any(|cell| fields.contains(&cell.trim()));
+            // Horizontal metadata tables put the identities in later rows.
+            // Drop the entire contiguous table, not just its field headings.
+            if identifying_table {
+                continue;
+            }
+        } else {
+            identifying_table = false;
+        }
+        let identifying = fields.iter().any(|key| {
+            normalized == *key
+                || normalized
+                    .strip_prefix(key)
+                    .is_some_and(|rest| rest.trim_start().starts_with([':', '=']))
+        });
+        if identifying
+            || ["baseline", "candidate", "baseline arm", "candidate arm"].contains(&normalized)
+            || ["built with", "generated with", "co-authored-by:"]
+                .iter()
+                .any(|prefix| normalized.starts_with(prefix))
+        {
+            continue;
+        }
+        blinded.push_str(line);
+        blinded.push('\n');
+    }
+    blinded
 }
 
 fn grade(grader: &Grader, directory: &Path, packet: &Packet, timeout: u64) -> Result<Response> {
