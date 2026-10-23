@@ -2406,7 +2406,7 @@ fn started_work_requires_a_hand_back_after_the_last_claim_ended() {
 }
 
 #[test]
-fn a_security_harness_that_cannot_run_fails_the_pass_once_it_has_taken_an_issue_before_any_work() {
+fn an_unusable_security_harness_falls_back_before_the_pickup_dispatches_its_run() {
     let scenario = ready_ticket();
     scenario.user_config_is(
         r#"
@@ -2422,19 +2422,30 @@ review = true
 "#,
     );
     scenario.agent_does_in_session(1, "echo 'no such model'\nexit 1");
+    scenario.agent_does_for_in_session(7, 2, r#"
+report=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Private report file: `\(.*\)`\.$/\1/p')
+test -n "$report"
+printf '[]\n' > "$report"
+printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#);
 
     let result = scenario.run(&["pickup"]);
 
-    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert!(
         result.stderr.contains(
-            "the Security review's Harness claude, chosen by security.harness in the User config, can't run: \
-             claude refused a test call on the Model claude-opus-5-5: no such model\n"
+            "warning: Security review on claude can't be used (claude refused a test call on the Model claude-opus-5-5: no such model); reviewing on codex, the default Harness\n"
         ),
         "stderr: {}",
         result.stderr
     );
-    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
-    assert!(scenario.codex_calls().is_empty());
+    assert_eq!(scenario.issue_labels(7), [IN_PROGRESS]);
+    assert_eq!(scenario.codex_calls().len(), 2);
     assert_eq!(scenario.claude_calls().len(), 1);
+    assert!(
+        pr_from(&scenario, "issue-7")["body"]
+            .as_str()
+            .unwrap()
+            .contains("No unaddressed introduced findings.")
+    );
 }

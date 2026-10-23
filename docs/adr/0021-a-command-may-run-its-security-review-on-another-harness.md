@@ -8,12 +8,12 @@ This is the first step towards choosing a Harness per session. The direction is 
 
 ## Considered Options
 
-- **Retry once on a fallback Harness after a refusal.** Rejected: it adds retry logic, and still spends a refused session first.
+- **Retry once on a fallback Harness after a refusal.** Initially rejected: it adds retry logic, and still spends a refused session first. [#975](https://github.com/JacobStephens2/thirdshift/issues/975) revises this for a Harness error before any turns or tokens: check sign-in before work, fall back to the configured default Harness if the review's check fails, and retry once on that default when an unchecked startup error surfaces at review time. Refusals and failures after work starts still receive no fallback.
 - **A command word for the review's Harness.** Left out: the choice is about this machine's Harnesses and what each will do, which is the User config's to say. A Continuation reads the same User config, so the Recovery command needs no new word to reproduce the choice.
 - **A general per-session Harness map.** Left for later: only the Security review has needed one so far.
 
 ## Consequences
 
-- A Command that will run its Security review on a Harness, Model or Effort other than its own checks that one before any work, as it checks its own, and fails before any work naming `security.harness` if it can't run. A Pass checks it with its own Harness, only when it may dispatch a Run, and a child Run is handed it checked, as it is handed the Command's.
+- A Command checks its own Harness and its Security review's before work, including non-billed sign-in status where the CLI supports it. If a non-default review Harness can't run, the review uses `harness.default` (Claude Code when unset) with its own configured Model and Effort, warning with both Harnesses and the reason. If that default can't run, preflight fails. A Pass checks the review only when it may dispatch a Run. A Spec run hands the settled choice and the default fallback to every Ticket, and reviews each Ticket and the Spec PR, as #975's addendum requires.
 - Both Harnesses' Factory skills are linked into the worktree.
-- The review's Session log, its `.models.json`, the Command log's line for it and the Run notification's session models name the Harness it ran on. The `Built with` line in the pull request and Run notification still names the Command's Harness.
+- The review's Session trace, its `.models.json`, the Command log's line for it and the Run notification's session models name the Harness it ran on. The `Built with` line in the pull request and Run notification still names the Command's Harness.

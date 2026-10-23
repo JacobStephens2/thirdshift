@@ -206,7 +206,10 @@ impl Outside for LaunchAndGitHub<'_> {
             .flags
             .security_review_harness(self.config, self.harness)
             .filter(|_| dispatches);
-        self.harness.check_with_security_review(security.as_mut())?;
+        let mut default = (dispatches && self.flags.security_review(self.config))
+            .then(|| Choice::of(&crate::harness::Asked::default(), &self.config.harness));
+        self.harness
+            .check_with_security_review(&mut security, default.as_mut())?;
         self.security_review_harness = security;
         Ok(())
     }

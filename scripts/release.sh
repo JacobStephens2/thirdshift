@@ -19,9 +19,10 @@
 #
 # Before it pushes anything, it refuses a release that can't be cut: a version
 # that isn't plain X.Y.Z, or isn't higher than the one on main, a v<version>
-# tag that already exists locally or on origin, or a latest CI run on main that
-# didn't succeed. If that CI run is still running, it waits for it to finish
-# before starting the release.
+# tag that already exists locally or on origin, or a CI run on main's tip that
+# didn't succeed. It waits for that tip's run to appear and finish, following
+# main if it moves and naming each move. The version bump starts from the tip
+# whose CI succeeded, with the requested version checked against that tip.
 #
 # If a run is interrupted, running it again with the same version carries on
 # from the first step not yet done: it opens the PR for a pushed branch, waits
@@ -202,8 +203,7 @@ finish_if_tagged() {
 # in a temporary worktree and sets head to it.
 commit_bump() {
 	local base
-	base=$(git rev-parse --verify 'origin/main^{commit}')
-	check_can_release "$version" "$tag" "$base"
+	base=$(check_can_release "$version" "$tag")
 	repo=$PWD
 	work=$(mktemp -d)
 	trap 'git -C "$repo" worktree remove --force "$work" 2>/dev/null || rm -rf "$work"' EXIT
@@ -311,48 +311,67 @@ refuse() {
 	exit 1
 }
 
-# check_can_release <version> <tag> <base>
+# check_can_release <version> <tag>
 # Refuses unless <version> is plain X.Y.Z and higher than the version in the
-# manifest at <base>, main's tip, no <tag> exists on origin or locally, and
-# the latest CI run on main is on <base> and succeeded, waiting if unfinished.
+# manifest on main's tip, no <tag> exists on origin or locally, and the tip's
+# latest CI run succeeded. Follows main while waiting for missing or pending
+# CI, then prints the commit whose CI passed, for the bump's base.
 check_can_release() {
-	local current short=${3:0:7} latest sha status conclusion waiting=
+	local current base short previous= latest sha status conclusion waiting=
 	if ! is_plain_version "$1"; then
 		refuse "it is not a plain X.Y.Z version, such as 0.4.0"
 	fi
-	current=$(git show "$3:Cargo.toml" | package_field version)
-	if ! is_higher "$1" "$current"; then
-		refuse "it is not higher than $current on main"
-	fi
-
-	# Origin first: fetching main brings in the tags on it, so a tag found
-	# locally may have come from origin.
-	if [ -n "$(git ls-remote --tags origin "refs/tags/$2")" ]; then
-		refuse "$2 already exists on origin"
-	fi
-	if git rev-parse --quiet --verify "refs/tags/$2" >/dev/null; then
-		refuse "$2 already exists locally"
-	fi
 
 	while :; do
-		latest=$(gh run list --branch main --workflow ci.yml --event push --limit 1 \
+		fetch_main
+		base=$(git rev-parse --verify 'origin/main^{commit}')
+		short=${base:0:7}
+		if [ "$base" != "$previous" ]; then
+			if [ -n "$previous" ]; then
+				progress "main moved from ${previous:0:7} to $short; waiting for CI on $short"
+			fi
+			waiting=
+			previous=$base
+			current=$(git show "$base:Cargo.toml" | package_field version)
+			if ! is_higher "$1" "$current"; then
+				refuse "it is not higher than $current on main"
+			fi
+
+			# Origin first: fetching main brings in the tags on it, so a tag
+			# found locally may have come from origin.
+			if [ -n "$(git ls-remote --tags origin "refs/tags/$2")" ]; then
+				refuse "$2 already exists on origin"
+			fi
+			if git rev-parse --quiet --verify "refs/tags/$2" >/dev/null; then
+				refuse "$2 already exists locally"
+			fi
+		fi
+		latest=$(gh run list --branch main --workflow ci.yml --event push --commit "$base" --limit 1 \
 			--json headSha,status,conclusion --jq '.[] | "\(.headSha) \(.status) \(.conclusion)"')
 		read -r sha status conclusion <<<"$latest"
-		if [ "$sha" != "$3" ]; then
-			refuse "CI has not run on main at $short yet"
+		# The listing can take long enough for another merge to land. Its
+		# result only decides the release if it still belongs to main's tip.
+		fetch_main
+		if [ "$(git rev-parse --verify 'origin/main^{commit}')" != "$base" ]; then
+			continue
 		fi
-		if [ "$status" = completed ]; then
-			break
+		if [ "$sha" = "$base" ] && [ "$status" = completed ]; then
+			if [ "$conclusion" != success ]; then
+				refuse "CI on main at $short ended in $conclusion"
+			fi
+			printf '%s\n' "$base"
+			return
 		fi
 		if [ -z "$waiting" ]; then
-			progress "waiting for CI on main at $short"
+			if [ "$sha" != "$base" ]; then
+				progress "waiting for CI on main at $short to start"
+			else
+				progress "waiting for CI on main at $short"
+			fi
 			waiting=1
 		fi
 		sleep "$poll_seconds"
 	done
-	if [ "$conclusion" != success ]; then
-		refuse "CI on main at $short ended in $conclusion"
-	fi
 }
 
 # is_plain_version <version>

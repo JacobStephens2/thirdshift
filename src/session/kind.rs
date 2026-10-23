@@ -15,6 +15,8 @@ pub enum Kind {
     Repair(usize),
     /// `security-review`.
     SecurityReview,
+    /// A Security review retried once on the configured default Harness.
+    SecurityReviewFallback,
     /// An Architect run's Architecture review, `architecture-review`.
     ArchitectureReview,
     /// `security-audit`.
@@ -34,6 +36,7 @@ impl Kind {
             Self::SpecReview => "spec-review".to_string(),
             Self::Repair(n) => format!("repair-{n}"),
             Self::SecurityReview => "security-review".to_string(),
+            Self::SecurityReviewFallback => "security-review-fallback".to_string(),
             Self::ArchitectureReview => "architecture-review".to_string(),
             Self::SecurityAudit => "security-audit".to_string(),
             Self::SecurityReproduction(n) => format!("security-reproduction-{n}"),
@@ -44,10 +47,11 @@ impl Kind {
     /// The kind `token` names, if any. A numbered kind's number is read as
     /// `--session repair` has always read a Repair's.
     fn read(token: &str) -> Option<Self> {
-        const UNNUMBERED: [Kind; 6] = [
+        const UNNUMBERED: [Kind; 7] = [
             Kind::Implementation,
             Kind::SpecReview,
             Kind::SecurityReview,
+            Kind::SecurityReviewFallback,
             Kind::ArchitectureReview,
             Kind::SecurityAudit,
             Kind::SecurityFixPublishing,
@@ -110,13 +114,17 @@ impl Logged {
     pub fn stage(self) -> Stage {
         match (self.kind, self.resume) {
             (
-                Kind::Implementation | Kind::SpecReview | Kind::Repair(_) | Kind::SecurityReview,
+                Kind::Implementation
+                | Kind::SpecReview
+                | Kind::Repair(_)
+                | Kind::SecurityReview
+                | Kind::SecurityReviewFallback,
                 true,
             ) => Stage::Resume,
             (Kind::Implementation, false) => Stage::Implement,
             (Kind::SpecReview, false) => Stage::SpecReview,
             (Kind::Repair(_), false) => Stage::Repair,
-            (Kind::SecurityReview, false) => Stage::SecurityReview,
+            (Kind::SecurityReview | Kind::SecurityReviewFallback, false) => Stage::SecurityReview,
             (Kind::ArchitectureReview, _) => Stage::ArchitectureReview,
             (Kind::SecurityAudit, _) => Stage::SecurityAudit,
             (Kind::SecurityReproduction(_), _) => Stage::SecurityReproduction,
@@ -134,6 +142,7 @@ pub fn selects(word: &str, token: &str) -> bool {
     let resumed = token.strip_suffix("-resume").unwrap_or(token);
     token == word
         || resumed == word
+        || (word == "security-review" && resumed == "security-review-fallback")
         || (word == "repair"
             && matches!(
                 Logged::read(token),

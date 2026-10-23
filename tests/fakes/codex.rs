@@ -57,6 +57,14 @@ fn emit(event: Json) {
 
 pub fn main(argv: Vec<String>) {
     match argv.first().map(String::as_str) {
+        Some("login") if argv.get(1).map(String::as_str) == Some("status") => {
+            if std::env::var_os("FAKE_CODEX_SIGNED_OUT").is_some() {
+                eprintln!("Not logged in");
+                crate::exit(1);
+            }
+            eprintln!("Logged in using ChatGPT");
+            crate::exit(0);
+        }
         Some("debug") if argv.get(1).map(String::as_str) == Some("models") => {
             crate::check_script();
             println!("{CATALOG}");

@@ -318,11 +318,17 @@
       <aside class="misprint" aria-labelledby="misprint-title">
         <h3 id="misprint-title">Misprint: a Failed run</h3>
         <p>A Run that ends, including by interruption, without an open pull request from its Issue branch that targets the Base branch, is mergeable, and has passing CI is a Failed run. Nothing is lost: its work, uncommitted changes included, is committed and pushed to the Issue branch (or, if the push fails, its worktree and local Issue branch are kept), and its open pull request, if any, goes back to draft. Run the same command again to continue it.</p>
-        <p class="illustrative"><b>Illustrative.</b> These are the last stderr lines of a Run whose CI is still failing after 5 Repairs. Their order is inferred from the code, not seen in a real Run.</p>
+        <p class="illustrative"><b>Illustrative.</b> These are the last stderr lines of a standalone Run whose CI is still failing after 5 Repairs, with its work pushed and no notification requested. The Recovery command assumes Claude Code, no Model or Effort override, no Security review or fix, and no Base fix choice. The lines and their order come from the ending renderer and Recovery code, not a real Run.</p>
         <ol class="stderr-lines" aria-label="stderr lines from an illustrative Failed run">
           <li><span class="prefix">thirdshift: &lt;time&gt;</span> CI failed on &lt;commit&gt;: &lt;check&gt;</li>
           <li><span class="prefix">thirdshift: &lt;time&gt;</span> pushing issue-&lt;n&gt;</li>
           <li><span class="prefix">thirdshift: &lt;time&gt;</span> cleaning up the worktree and local branch issue-&lt;n&gt;</li>
+          <li class="failed"><span class="prefix">thirdshift: &lt;time&gt;</span> Stopped at: Repair</li>
+          <li class="failed"><span class="prefix">thirdshift: &lt;time&gt;</span> Preserved: remotely on issue-&lt;n&gt;</li>
+          <li class="failed"><span class="prefix">thirdshift: &lt;time&gt;</span> Recovery: thirdshift https://github.com/&lt;owner&gt;/&lt;repo&gt;/issues/&lt;n&gt; --no-merge no-security-fix no-security-review harness claude</li>
+          <li class="failed"><span class="prefix">thirdshift: &lt;time&gt;</span> Run from the Launch directory &lt;launch&gt; with Base branch main checked out (the command cannot encode the Base branch). Retry when the failure's cause is resolved.</li>
+          <li class="failed"><span class="prefix">thirdshift: &lt;time&gt;</span> Continuing reuses the preserved branch and PR and skips completed Tickets. This starts a new Continuation, not the interrupted agent conversation; review and merge/CI repairs may still be needed.</li>
+          <li class="failed"><span class="prefix">thirdshift: &lt;time&gt;</span> Took: &lt;elapsed&gt;</li>
           <li class="failed"><span class="prefix">thirdshift: &lt;time&gt;</span> repairs exhausted: CI red</li>
           <li class="failed"><span class="prefix">thirdshift: &lt;time&gt;</span> session log: &lt;home&gt;/.thirdshift/logs/&lt;owner&gt;/&lt;repo&gt;/commands/issue/&lt;n&gt;-&lt;stamp&gt;-repair-5.jsonl</li>
           <li class="failed"><span class="prefix">thirdshift: &lt;time&gt;</span> command log: &lt;home&gt;/.thirdshift/logs/&lt;owner&gt;/&lt;repo&gt;/commands/issue/&lt;n&gt;-&lt;stamp&gt;.log</li>
@@ -343,18 +349,19 @@
     </div>
   </section>
 
-  <!-- The factory grows: current workflows, documented in the README. -->
+  <!-- The factory grows: current workflows, documented in the manual. -->
   <section class="sec" id="grows" aria-labelledby="grows-title">
     <div class="wrap grows">
       <div class="grows-text">
         <p class="eyebrow">Plan view · the press hall</p>
         <h2 id="grows-title">The factory grows</h2>
         <p>One Run is the first primitive: one Issue URL in, one pull request out. The factory now builds with six workflows. Every line on this floor is installed; follow it to the documentation.</p>
-        <p>A <a href="https://github.com/JacobStephens2/thirdshift#usage">Merge run</a> merges its own reviewed, green pull request when you ask. A <a href="https://github.com/JacobStephens2/thirdshift#spec-runs">Spec run</a> works through Tickets in dependency order, up to three at once by default. They merge into a Spec branch, then one Spec PR gets reviewed against the whole Spec.</p>
-        <p>An <a href="https://github.com/JacobStephens2/thirdshift#architect-runs">Architect run</a> looks for architecture improvements and builds its top Strong plan. Without a Strong recommendation, it leaves an Architect idea for the Day shift. Use <code>--plan-only</code> to publish a plan and stop.</p>
-        <p>A <a href="https://github.com/JacobStephens2/thirdshift#pickup-runs">Pickup run</a> takes the lowest-numbered Ready issue, after it has settled and while the repository is below its Claim limit. Failed work stays with the Day shift; a later Pickup run does not retry a started issue.</p>
-        <p>A <a href="https://github.com/JacobStephens2/thirdshift#security-runs">Security run</a> audits the Base branch and records findings privately. It is report-only by default. With <code>security-fix</code>, it can fix a reproduced finding through a Run or Spec run. An optional <a href="https://github.com/JacobStephens2/thirdshift#security-review">Security review</a> checks an individual change and holds Self-merge if introduced findings remain unaddressed or the review is incomplete.</p>
-        <p>Start passes with <code>thirdshift architect base main</code>, <code>thirdshift pickup base main</code> or <code>thirdshift secure base main</code>. Your operating system schedules them. Frequent Architect runs are <a href="https://github.com/JacobStephens2/thirdshift#weeding">Weeding</a>; scheduled Security runs with fixing allowed are <a href="https://github.com/JacobStephens2/thirdshift#fencing">Fencing</a>. Both yield to work the Day shift shaped, and pause when a decision needs you.</p>
+        <p>A <a href="/docs/#usage">Merge run</a> merges its own reviewed, green pull request when you ask. A <a href="/docs/#spec-runs">Spec run</a> works through Tickets in dependency order, up to three at once by default. They merge into a Spec branch, then one Spec PR gets reviewed against the whole Spec.</p>
+        <p>An <a href="/docs/#architect-runs">Architect run</a> looks for architecture improvements and builds its top Strong plan. Without a Strong recommendation, it leaves an Architect idea for the Day shift. Use <code>--plan-only</code> to publish a plan and stop.</p>
+        <p>A <a href="/docs/#pickup-runs">Pickup run</a> takes the lowest-numbered Ready issue, after it has settled and while the repository is below its Claim limit. Failed work stays with the Day shift until you hand it back by applying <code>ready-for-agent</code> again.</p>
+        <p>A <a href="/docs/#security-runs">Security run</a> audits the Base branch and records findings privately. It is report-only by default. With <code>security-fix</code>, it can fix a reproduced finding through a Run or Spec run. An optional <a href="/docs/#security-review">Security review</a> checks each Run's change, including Tickets and the Spec PR, and holds Self-merge if introduced findings remain unaddressed or the review is incomplete. Its Harness is checked before work; an unavailable review Harness falls back to the default Harness, with one fallback also allowed for a Harness error before its first turn.</p>
+        <p>Start passes with <code>thirdshift architect base main</code>, <code>thirdshift pickup base main</code> or <code>thirdshift secure base main</code>. Your operating system schedules them. Frequent Architect runs are <a href="/docs/#weeding">Weeding</a>; scheduled Security runs with fixing allowed are <a href="/docs/#fencing">Fencing</a>. Both yield to work the Day shift shaped, and pause when a decision needs you.</p>
+        <p>The <a href="/docs/#console-installation">Console</a> opens on this machine's Inbox: Commands grouped by what needs you, with their stages and logs. A signed-in account can Stop or Requeue a live Command, just as from the CLI.</p>
       </div>
       <figure class="floor grid-bg">
         <!-- Static plan: visible names, statuses and hints also work without JavaScript.
@@ -379,7 +386,7 @@
             <text class="north" x="456" y="38">N ↑</text>
           </g>
           <g transform="translate(0 60)">
-            <a href="https://github.com/JacobStephens2/thirdshift#what-a-run-does" class="line">
+            <a href="/docs/#what-a-run-does" class="line">
               <rect class="frame" x="20" y="0" width="440" height="146"/>
               <text class="line-label" x="31" y="24">LINE 1 · ONE RUN</text>
               <text class="status" x="31" y="47">INSTALLED</text>
@@ -392,7 +399,7 @@
             </a>
           </g>
           <g transform="translate(0 210)">
-            <a href="https://github.com/JacobStephens2/thirdshift#usage" class="line">
+            <a href="/docs/#usage" class="line">
               <rect class="frame" x="20" y="0" width="440" height="146"/>
               <text class="line-label" x="31" y="24">LINE 2 · MERGE RUN</text>
               <text class="status" x="31" y="47">INSTALLED</text>
@@ -405,7 +412,7 @@
             </a>
           </g>
           <g transform="translate(0 360)">
-            <a href="https://github.com/JacobStephens2/thirdshift#architect-runs" class="line">
+            <a href="/docs/#architect-runs" class="line">
               <rect class="frame" x="20" y="0" width="440" height="146"/>
               <text class="line-label" x="31" y="24">LINE 3 · ARCHITECT RUN</text>
               <text class="status" x="31" y="47">INSTALLED</text>
@@ -418,7 +425,7 @@
             </a>
           </g>
           <g transform="translate(0 510)">
-            <a href="https://github.com/JacobStephens2/thirdshift#spec-runs" class="line">
+            <a href="/docs/#spec-runs" class="line">
               <rect class="frame" x="20" y="0" width="440" height="146"/>
               <text class="line-label" x="31" y="24">LINE 4 · SPEC RUN</text>
               <text class="status" x="31" y="47">INSTALLED</text>
@@ -431,7 +438,7 @@
             </a>
           </g>
           <g transform="translate(0 660)">
-            <a href="https://github.com/JacobStephens2/thirdshift#pickup-runs" class="line">
+            <a href="/docs/#pickup-runs" class="line">
               <rect class="frame" x="20" y="0" width="440" height="146"/>
               <text class="line-label" x="31" y="24">LINE 5 · PICKUP RUN</text>
               <text class="status" x="31" y="47">INSTALLED</text>
@@ -444,7 +451,7 @@
             </a>
           </g>
           <g transform="translate(0 810)">
-            <a href="https://github.com/JacobStephens2/thirdshift#security-runs" class="line">
+            <a href="/docs/#security-runs" class="line">
               <rect class="frame" x="20" y="0" width="440" height="146"/>
               <text class="line-label" x="31" y="24">LINE 6 · SECURITY RUN</text>
               <text class="status" x="31" y="47">INSTALLED</text>
@@ -504,7 +511,7 @@
             <li><b>macOS</b> Tahoe 26.5.2 and later, Apple Silicon.</li>
           </ul></div>
       </div>
-      <p class="reqs-note">Choose the Harness, Model and Effort with <code>thirdshift setup</code> or per command. See <a href="https://github.com/JacobStephens2/thirdshift#harness-model-and-effort">Harness configuration</a> and <a href="https://github.com/JacobStephens2/thirdshift#supported-platforms">supported platforms</a>.</p>
+      <p class="reqs-note">Choose the Harness, Model and Effort with <code>thirdshift setup</code> or per command. See <a href="/docs/#harness-model-and-effort">Harness configuration</a> and <a href="/docs/#supported-platforms">supported platforms</a>.</p>
     </div>
   </section>
 

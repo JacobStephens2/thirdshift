@@ -396,6 +396,45 @@ impl Release {
         self.gh(&["fake", "run", &run.to_string()]);
     }
 
+    /// Moves origin's main just after the first CI listing, so the script
+    /// must fetch again before using that listing to start the release.
+    fn move_main_after_ci_read(&self, sha: &str) {
+        let unwrapped = self.bin().join("unwrapped");
+        fs::create_dir(&unwrapped).unwrap();
+        let gh = self.bin().join("gh");
+        fs::rename(&gh, unwrapped.join("gh")).unwrap();
+        fs::write(
+            &gh,
+            format!(
+                r#"#!/bin/bash
+set -euo pipefail
+"$(dirname "$0")/unwrapped/gh" "$@"
+if [ "$1 $2" = 'run list' ] && [[ " $* " == *' --workflow ci.yml '* ]] &&
+    [ ! -e "$FAKE_GH_STATE.main-moved" ]; then
+    touch "$FAKE_GH_STATE.main-moved"
+    git -C "${{FAKE_GH_STATE%/*}}/origin.git" update-ref refs/heads/main {sha}
+fi
+"#
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&gh, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// Arranges a merge during the first tip's pending CI, with CI on the
+    /// new tip pending too before it reaches `conclusion`.
+    fn main_moves_while_waiting(&self, conclusion: &str) -> (String, String) {
+        let old = self.origin(&["rev-parse", "main"]);
+        self.merge_pr("incoming", "Merge while releasing", "");
+        let new = self.origin(&["rev-parse", "main"]);
+        self.origin(&["update-ref", "refs/heads/main", &old]);
+        self.main_ci_on(&new, "completed", conclusion, 2);
+        // An older commit's run can be listed newest; select CI by commit.
+        self.main_ci_on(&old, "completed", "success", 3);
+        self.move_main_after_ci_read(&new);
+        (old, new)
+    }
+
     /// Every ref on origin with the commit it points at, to show a refusal
     /// pushed nothing.
     fn origin_refs(&self) -> String {
@@ -1799,11 +1838,131 @@ fn an_unfinished_ci_run_on_main_that_does_not_succeed_pushes_nothing() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn a_main_whose_tip_ci_has_not_run_on_is_refused() {
+fn a_main_whose_tip_ci_appears_after_a_few_polls_is_released() {
     let release = Release::new();
     release.merge_pr("untested", "Not yet built", "");
+    let base = release.origin(&["rev-parse", "main"]);
+    release.gh(&[
+        "fake",
+        "run",
+        &json!({
+            "branch": "main",
+            "workflow": "ci.yml",
+            "event": "push",
+            "headSha": base,
+            "status": "completed",
+            "conclusion": "success",
+            "hidden_polls": 3,
+        })
+        .to_string(),
+    ]);
+    release.ci_reports(GREEN);
 
-    assert_refused(&release, "0.2.0", &["CI has not run on main at"]);
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    let waiting = err
+        .find(&format!(
+            "waiting for CI on main at {} to start",
+            &base[..7]
+        ))
+        .expect(&err);
+    assert!(
+        waiting < err.find("bumping the version").expect(&err),
+        "{err}"
+    );
+    let head = release.pr_head("release-0.2.0");
+    assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), base);
+    assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
+    assert_eq!(
+        release.origin_tag("v0.2.0"),
+        Some(release.origin(&["rev-parse", "main"]))
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn main_moving_during_ci_is_followed_and_the_bump_uses_the_tested_tip() {
+    let release = Release::new();
+    let (old, new) = release.main_moves_while_waiting("success");
+    release.ci_reports(GREEN);
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    let moved = err
+        .find(&format!(
+            "main moved from {} to {}; waiting for CI on {}",
+            &old[..7],
+            &new[..7],
+            &new[..7]
+        ))
+        .expect(&err);
+    assert!(
+        moved < err.find("bumping the version").expect(&err),
+        "{err}"
+    );
+    let head = release.pr_head("release-0.2.0");
+    assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), new);
+    assert_eq!(
+        release.origin(&["diff", "--numstat", &new, &head]),
+        "1\t1\tCargo.lock\n1\t1\tCargo.toml"
+    );
+    assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
+    assert_eq!(
+        release.origin_tag("v0.2.0"),
+        Some(release.origin(&["rev-parse", "main"]))
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn failed_ci_on_the_newest_tip_refuses_without_pushing() {
+    let release = Release::new();
+    let (old, new) = release.main_moves_while_waiting("failure");
+    let refs_before = release.origin_refs();
+    let prs_before = release.gh_state()["prs"].clone();
+
+    let output = release.run_script("0.2.0");
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(
+        err.contains(&format!(
+            "refusing to release 0.2.0: CI on main at {} ended in failure",
+            &new[..7]
+        )),
+        "{err}"
+    );
+    // Only the simulated incoming merge may change origin, not the release.
+    assert_eq!(
+        release.origin_refs(),
+        refs_before.replace(
+            &format!("refs/heads/main {old}"),
+            &format!("refs/heads/main {new}")
+        )
+    );
+    assert_eq!(release.gh_state()["prs"], prs_before);
+    assert!(release.agent_calls().is_empty());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn main_moving_during_a_completed_ci_read_is_followed() {
+    for conclusion in ["success", "failure"] {
+        let release = Release::new();
+        let (old, new) = release.main_moves_while_waiting("success");
+        release.main_ci_on(&old, "completed", conclusion, 0);
+        release.ci_reports(GREEN);
+
+        let output = release.run_script("0.2.0");
+
+        assert!(output.status.success(), "{}", stderr(&output));
+        let head = release.pr_head("release-0.2.0");
+        assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), new);
+    }
 }
 
 #[test]

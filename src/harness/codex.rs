@@ -81,6 +81,7 @@ impl Adapter for Codex {
         invocation
     }
     fn check(&self, choice: &mut Choice) -> Result<()> {
+        super::check_sign_in(self, &["login", "status"])?;
         check_model_and_effort(choice)
     }
     /// Unlike a session (ADR-0012), the summary reads contributor-editable PR

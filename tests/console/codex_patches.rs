@@ -32,6 +32,20 @@ cat > "${{CODEX_HOME:-$HOME/.codex}}/sessions/2026/10/21/rollout-2026-10-21T12-0
     )
 }
 
+fn completed_items(patches: &[Value]) -> String {
+    let items: String = patches
+        .iter()
+        .enumerate()
+        .map(|(index, changes)| {
+            format!("{}\n", json!({"timestamp":"2026-10-21T12:00:00Z","type":"event_msg","payload":{
+                "type":"item_completed","item":{"type":"FileChange","id":format!("native-{index}"),
+                    "status":"completed","changes":changes}
+            }}))
+        })
+        .collect();
+    format!("{}{items}", native(&[]))
+}
+
 fn run(scenario: &support::Scenario, retained: &str, edits: &[Value]) {
     run_with_setup(scenario, &native_setup(retained), edits, &[]);
 }
@@ -153,6 +167,54 @@ fn each_codex_patch_keeps_its_own_diff_in_the_trace_and_console() {
 }
 
 #[test]
+fn current_codex_file_changes_keep_update_add_and_delete_diffs() {
+    let scenario = support::Scenario::new();
+    let added = "--- /dev/null\n+++ b/added.txt\n@@ -0,0 +1 @@\n+hello\n";
+    let deleted = "--- a/deleted.txt\n+++ /dev/null\n@@ -1 +0,0 @@\n-gone\n";
+    let retained = completed_items(&[
+        json!({
+            "/work/widgets/widgets.rs":{"type":"update","unified_diff":FIRST},
+            "/work/widgets/added.txt":{"type":"add","unified_diff":added},
+            "/work/widgets/deleted.txt":{"type":"delete","unified_diff":deleted}
+        }),
+        json!({"/work/widgets/widgets.rs":{"type":"update","unified_diff":SECOND}}),
+    ]);
+    run(
+        &scenario,
+        &retained,
+        &[
+            json!([
+                {"path":"/work/widgets/deleted.txt","kind":"delete"},
+                {"path":"/work/widgets/widgets.rs","kind":"update"},
+                {"path":"/work/widgets/added.txt","kind":"add"}
+            ]),
+            json!([{"path":"/work/widgets/widgets.rs","kind":"update"}]),
+        ],
+    );
+    let amended = amendments(&trace(&scenario));
+    assert_eq!(amended.len(), 2);
+    assert_eq!(amended[0]["id"], "stream-0");
+    assert_eq!(amended[0]["result"]["changes"][0]["diff"], deleted);
+    assert_eq!(amended[0]["result"]["changes"][1]["diff"], FIRST);
+    assert_eq!(amended[0]["result"]["changes"][2]["diff"], added);
+    assert_eq!(amended[1]["id"], "stream-1");
+    assert_eq!(amended[1]["result"]["changes"][0]["diff"], SECOND);
+    assert_eq!(
+        amended[0]["result"]["record"]["payload"]["item"]["type"],
+        "FileChange"
+    );
+    let html = page(&scenario);
+    assert!(html.contains("-gone\n"), "{html}");
+    assert!(html.contains("+hello\n"), "{html}");
+    assert!(html.contains("-old\n+middle"), "{html}");
+    assert!(
+        html.contains("-middle\n+&#60;script&#62;new()&#60;/script&#62;"),
+        "{html}"
+    );
+    assert!(!html.contains("Patch unavailable in this log."));
+}
+
+#[test]
 fn mismatched_or_unavailable_native_files_leave_every_edit_unchanged() {
     let a = json!({"a.rs":{"type":"update","unified_diff":FIRST,"move_path":null}});
     let b = json!({"b.rs":{"type":"update","unified_diff":SECOND,"move_path":null}});
@@ -194,6 +256,24 @@ fn mismatched_or_unavailable_native_files_leave_every_edit_unchanged() {
             native_setup(&valid.replace("\"unified_diff\"", "\"future_diff\"")),
         ),
         ("truncated", native_setup(&format!("{valid}{{not json\n"))),
+        ("no patch records", native_setup(&native(&[]))),
+        (
+            "current unrelated completed item",
+            native_setup(
+                &completed_items(&[a.clone(), b.clone()]).replace("FileChange", "CommandExecution"),
+            ),
+        ),
+        (
+            "current wrong count",
+            native_setup(&completed_items(std::slice::from_ref(&a))),
+        ),
+        (
+            "current wrong path after a matching edit",
+            native_setup(&completed_items(&[
+                a.clone(),
+                json!({"other.rs":{"type":"update","unified_diff":SECOND}}),
+            ])),
+        ),
     ];
     for (case, setup) in fixtures {
         let scenario = support::Scenario::new();
@@ -264,10 +344,10 @@ fn a_custom_codex_home_supplies_only_the_latest_turn_and_matches_absolute_paths(
     let retained = format!(
         "{}{}\n{}\n",
         native(&[json!({"previous.rs":{"type":"update","unified_diff":FIRST}})]),
-        json!({"type":"event_msg","payload":{"type":"task_started","turn_id":"resumed"}}),
-        json!({"type":"event_msg","payload":{"type":"patch_apply_end","call_id":"current","success":true,"status":"completed",
+        json!({"type":"event_msg","payload":{"type":"turn_started","turn_id":"resumed"}}),
+        json!({"type":"event_msg","payload":{"type":"item_completed","item":{"type":"FileChange","id":"current","status":"completed",
             "changes":{"WORKTREE/widgets.rs":{"type":"update","unified_diff":SECOND,"move_path":null}}
-        }})
+        }}})
     );
     let setup = format!(
         "{}\npatch_fixture=$(cat \"$CODEX_HOME/sessions/2026/10/21/rollout-2026-10-21T12-00-00-fake-thread-1.jsonl\")\nprintf '%s\\n' \"${{patch_fixture//WORKTREE/$PWD}}\" > \"$CODEX_HOME/sessions/2026/10/21/rollout-2026-10-21T12-00-00-fake-thread-1.jsonl\"\n",
