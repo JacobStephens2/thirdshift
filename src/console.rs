@@ -429,6 +429,18 @@ impl InboxPage {
         self.inbox.sections[0].rows.len()
     }
 
+    fn idle(&self) -> bool {
+        !self
+            .inbox
+            .sections
+            .iter()
+            .any(|section| section.rows.iter().any(|row| row.live))
+    }
+
+    fn ready_for_review(&self) -> usize {
+        self.inbox.sections[1].rows.len()
+    }
+
     fn urgent(&self) -> bool {
         self.inbox.sections[0]
             .rows
