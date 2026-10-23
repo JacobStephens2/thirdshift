@@ -378,12 +378,18 @@ fn convert(root: &Path, source: &Path, snapshot: &Snapshot, session: &mut Sessio
     )?;
     // Recovered Codex diffs are intentional additions. Compare against the
     // original rendered with exactly those amendments, and disclose their count.
+    // `show` amendments produce no progress lines, but include them here so the
+    // expected latest event matches the trace's whole Session, as conversation does.
     let mut expected = before;
     if !amendments.is_empty() {
+        let combined = format!("{}\n{amendments}", original.trim_end());
         expected.conversation = crate::console::conversation::render(
-            &format!("{}\n{amendments}", original.trim_end()),
+            &combined,
             super::catalog::Kind::Session,
         );
+        let combined_events: Vec<String> =
+            super::session::events(&combined).collect();
+        expected.show = super::reading::latest_session_event(&combined_events, harness);
     }
     session.readers = expected.compare(&after);
     ensure!(

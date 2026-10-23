@@ -15,7 +15,7 @@ use crate::logs::{catalog, owner, session};
 pub(super) struct Readings {
     pub conversation: String,
     waterfall: Vec<PlacedCall>,
-    show: Option<String>,
+    pub(super) show: Option<String>,
     model_evidence: Value,
 }
 
@@ -52,6 +52,11 @@ pub(super) fn read(
         stream.condense(&raw);
     }
     let (calls, measured) = waterfall::session_calls(path, command, relays, &mut log)?;
+    // `show` in use reads only a live Command's latest event. The round-trip
+    // check measures what `show` would report for the Session, over the whole
+    // Session, without depending on the live 64 KiB tail window. The live tail
+    // behavior itself is unchanged.
+    let show_events: Vec<String> = session::events(&text).collect();
     Ok(Readings {
         conversation: crate::console::conversation::render(&text, catalog::Kind::Session),
         waterfall: waterfall::place_calls(
@@ -61,7 +66,7 @@ pub(super) fn read(
             measured,
             Local::now().fixed_offset(),
         ),
-        show: crate::logs::reading::latest_session_event(&session::tail_events(path)?, harness),
+        show: crate::logs::reading::latest_session_event(&show_events, harness),
         model_evidence: json!({"sidecar":models,"stream_models":stream.observed_models()}),
     })
 }
