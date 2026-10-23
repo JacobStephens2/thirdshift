@@ -3,6 +3,8 @@
 Issue: https://github.com/JacobStephens2/thirdshift/issues/1165
 Research: [proposed direction](https://github.com/JacobStephens2/thirdshift/issues/1165#issuecomment-6369972244), #585, #710, #833
 
+Paused 2026-10-23 with Round 1 open and unanswered. To resume, answer Q1.1–Q1.4 below, then run `/grill-with-docs` on #1165, pointing it at this file. `GLOSSARY.md` is unchanged so far: its **Claim**, **Claim limit**, **Sweep** and **Ready issue** entries wait on Q1.1–Q1.3.
+
 Already agreed in chat (2026-10-23), before Round 1:
 
 - A **Failed run** that leaves work on `origin` swaps `in-progress` for a new label, `run-failed`, instead of keeping its Claim.
