@@ -263,9 +263,18 @@ fn blind(text: &str) -> String {
                     Table::Findings
                 }
             });
+            // A Findings block can still smuggle metadata: a two-column row
+            // naming a field with a bare token value (| Harness | claude |)
+            // identifies the Trial, while genuine finding evidence is a
+            // sentence. Drop the former even when the block latched as
+            // Findings.
+            let metadata_row = cells.len() == 2
+                && cells.first().is_some_and(|cell| fields.contains(cell))
+                && cells[1].split_whitespace().count() <= 1;
             if matches!(kind, Table::Identities)
                 || (matches!(kind, Table::KeyValue)
                     && cells.first().is_some_and(|cell| fields.contains(cell)))
+                || metadata_row
             {
                 continue;
             }
