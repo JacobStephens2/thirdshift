@@ -123,3 +123,38 @@ the lifetime of its Trial; the repository and any bare origin are throwaway.
 These commands prepare data for the Experiment runner; they start no Harness,
 Trial or Grader. Isolation of the session's home, processes and network belongs
 to the runner's sandbox, not to this Git preparation step.
+
+## Arm preparation
+
+Before its first Trial, an Experiment prepares both Arms together:
+
+```sh
+thirdshift evals prepare-arms <thirdshift-repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>
+```
+
+Commits are full lowercase object IDs in the local thirdshift repository;
+Harnesses use their CLI names (`claude`, `codex`, `agy`, `grok`, `muse`,
+`opencode`). The command writes a format-1 JSON record to stdout and, atomically,
+to a new file at `<record.json>`. Its parent directory must exist. It records
+`baseline` and `candidate`, each with `commit`, the cached thirdshift `binary`,
+and a `harness` holding its `name`, resolved `path` and `version`.
+
+Each missing build runs `cargo build --release --locked` in a detached worktree
+at that Arm's commit, with a private target directory. The finished executable
+is published at `~/.thirdshift/evals/builds/<commit>/thirdshift`. A per-commit
+lock prevents concurrent Experiments from building the same commit twice.
+The temporary worktree and target directory are removed after success or
+failure. A failed build reports Cargo's output, publishes no cache entry or
+Arm record, and prevents Trials from starting. A successful first Arm's cache
+entry is reusable if preparing the other Arm fails.
+
+Harnesses are resolved and queried with `--version` once per distinct Harness
+before building either Arm. Version lookup failure stops preparation. Trial
+launchers must use the recorded real path, including for version queries and
+Resumes, rather than looking up the CLI name again. Moving an installation's
+symlink then cannot switch the Harness between Arms. This fixes symlink-based
+updates; replacing the executable in place is outside that guarantee.
+
+This command prepares the runner's inputs; it starts no Trials. Tests seed
+`builds/<commit>/thirdshift` with the test binary for both Arms, and use fake
+Cargo commands when exercising cache misses, so they compile no Arm builds.
