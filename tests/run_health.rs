@@ -288,7 +288,8 @@ fn a_dispatch_stage_is_never_slow_or_silent_since_its_dispatched_command_carries
     );
     let text = run.scenario.run(&["status"]);
     assert!(
-        text.stdout.contains(" · dispatched Run · 10 hr 0 min\n"),
+        text.stdout
+            .contains(" · dispatched Ticket run · 10 hr 0 min\n"),
         "{}",
         text.stdout
     );

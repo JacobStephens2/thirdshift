@@ -11,6 +11,57 @@ fn cli(home: &Path, args: &[&str]) -> Value {
 }
 
 #[test]
+fn span_json_retains_stable_run_and_dispatch_names() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut fixture = record(home.path(), 7, Some("merged"), 0);
+    fixture["kind"] = json!("Run");
+    fixture["issue"]["title"] = json!("Widgets");
+    fixture["stages"] = json!([
+        {"name": "implement", "began_at": fixture["started_at"], "session_log": null},
+        {"name": "dispatched Run", "began_at": fixture["started_at"], "session_log": null}
+    ]);
+    write_record(home.path(), 7, &fixture);
+    let tree = cli(home.path(), &["show", "widgets#7", "--spans", "--json"]);
+    let spans = tree["spans"].as_array().unwrap();
+    for span in spans
+        .iter()
+        .filter(|span| span["kind"] == "cmd" || span["kind"] == "run")
+    {
+        assert_eq!(span["name"], "Run · acme/widgets#7 · Widgets");
+        let detail = cli(
+            home.path(),
+            &[
+                "show",
+                "widgets#7",
+                "--span",
+                span["id"].as_str().unwrap(),
+                "--json",
+            ],
+        );
+        assert_eq!(detail["name"], span["name"]);
+    }
+    assert!(
+        spans
+            .iter()
+            .any(|span| span["kind"] == "stage" && span["name"] == "dispatched Run"),
+        "{tree}"
+    );
+    let shown = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+        .args(["show", "widgets#7", "--spans"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(shown.status.success(), "{shown:?}");
+    let text = String::from_utf8(shown.stdout).unwrap();
+    assert!(
+        text.contains("Ticket run · acme/widgets#7 · Widgets"),
+        "{text}"
+    );
+    assert!(text.contains("dispatched Ticket run"), "{text}");
+}
+
+#[test]
 fn span_tree_and_details_pair_cli_with_routes_and_nest_child_runs() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

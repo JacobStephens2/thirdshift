@@ -300,7 +300,7 @@ impl Route<'_> {
             );
         }
         let comment = format!(
-            "Closed by #{}, merged into {} by a thirdshift Merge run.",
+            "Closed by #{}, merged into {} by a thirdshift Ticket run with Self-merge.",
             pr.number, self.base
         );
         if let Err(error) = retry_if_interrupted(outside, |outside| {
@@ -384,7 +384,7 @@ fn fail(
             Ok(Preserved::NoChanges) => Preservation::None,
             Err(problem) => {
                 outside.step(format!(
-                    "could not push the failed run's work, so it may exist only locally: {problem:#}"
+                    "could not push the failed ticket run's work, so it may exist only locally: {problem:#}"
                 ));
                 Preservation::Local
             }
@@ -508,7 +508,7 @@ impl std::fmt::Display for UntrustedEdit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "#{} {} edited since the Run started by an account that is not a Trusted account; starting no further session",
+            "#{} {} edited since the Ticket run started by an account that is not a Trusted account; starting no further session",
             self.number, self.text
         )
     }
@@ -1051,9 +1051,12 @@ mod tests {
         let mut outside = Scripted::default();
         assert!(deliver(&mut outside, Goal::Merged, false).is_ok());
         assert!(outside.calls.contains(&Call::Delete));
-        assert!(outside.calls.contains(&Call::Close(
-            "Closed by #12, merged into main by a thirdshift Merge run.".to_string()
-        )));
+        assert!(
+            outside.calls.contains(&Call::Close(
+                "Closed by #12, merged into main by a thirdshift Ticket run with Self-merge."
+                    .to_string()
+            ))
+        );
     }
 
     #[test]

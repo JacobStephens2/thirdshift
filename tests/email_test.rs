@@ -275,8 +275,8 @@ fn with_no_key_anywhere_it_lists_every_way_to_give_one() {
             &format!("add it to {} (mode 600):", path.display()),
             "[resend]",
             "key = \"re_...\"",
-            "set RESEND_API_KEY in the environment the Run starts from",
-            "(a crontab line, CI secret, or a shell profile the Run's shell reads)",
+            "set RESEND_API_KEY in the environment the Ticket run starts from",
+            "(a crontab line, CI secret, or a shell profile the Ticket run's shell reads)",
         ] {
             assert!(
                 result.stderr.contains(part),

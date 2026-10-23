@@ -259,9 +259,9 @@ fn body(
             text += &format!("Title:        {title}\n");
         }
         let command = match (*picked_up, *is_spec) {
-            (false, false) => "Run",
+            (false, false) => "Ticket run",
             (false, true) => "Spec run",
-            (true, false) => "Pickup run, which dispatched a Run",
+            (true, false) => "Pickup run, which dispatched a Ticket run",
             (true, true) => "Pickup run, which dispatched a Spec run",
         };
         text += &command_lines(command, None);
@@ -484,7 +484,7 @@ mod tests {
                     "Result:       merged\n\
                      Issue:        https://github.com/acme/widgets/issues/123\n\
                      Title:        Add export button\n\
-                     Command:      Run\n\
+                     Command:      Ticket run\n\
                      Pull request: {PR}\n\
                      Session trace:  {LOG}\n\
                      Sent by:      thirdshift\n\
@@ -507,7 +507,7 @@ mod tests {
                     "Result:       failed\n\
                      Issue:        https://github.com/acme/widgets/issues/123\n\
                      Title:        Add export button\n\
-                     Command:      Run\n\
+                     Command:      Ticket run\n\
                      Cause:        claude exited 1\n\
                      Base fix:     {PLAN} not merged\n\
                      Session trace:  {LOG}\n\
@@ -533,7 +533,7 @@ mod tests {
                 "Result:       interrupted\n\
                  Issue:        https://github.com/acme/widgets/issues/123\n\
                  Title:        Add export button\n\
-                 Command:      Run\n\
+                 Command:      Ticket run\n\
                  Sent by:      thirdshift\n\
                  Host:         droplet-1\n\
                  Took:         4s\n"
