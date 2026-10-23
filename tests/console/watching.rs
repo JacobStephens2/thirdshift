@@ -1,7 +1,7 @@
 //! Native process-exit updates through HTTP, on Linux and macOS.
 use super::*;
 
-struct FixtureProcess(Child);
+pub(super) struct FixtureProcess(pub(super) Child);
 
 impl Drop for FixtureProcess {
     fn drop(&mut self) {
