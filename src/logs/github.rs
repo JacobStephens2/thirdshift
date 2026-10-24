@@ -27,6 +27,24 @@ pub(super) struct Subject {
     pub triage_since: Option<DateTime<FixedOffset>>,
 }
 
+pub(super) struct FindingSubject {
+    pub row: String,
+    pub repository: String,
+    pub urls: Vec<String>,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(super) struct Findings {
+    waits: BTreeMap<String, bool>,
+    pub triaged_at: Option<String>,
+}
+
+impl Findings {
+    pub fn waiting(&self) -> bool {
+        self.waits.values().any(|waiting| *waiting)
+    }
+}
+
 #[derive(Serialize, Deserialize)]
 struct File {
     version: u32,
@@ -34,6 +52,8 @@ struct File {
     subjects: BTreeMap<String, Option<InboxState>>,
     #[serde(default)]
     history: BTreeMap<String, Option<InboxState>>,
+    #[serde(default)]
+    findings: BTreeMap<String, Findings>,
     #[serde(default)]
     failure: Option<String>,
     #[serde(default)]
@@ -52,6 +72,7 @@ struct File {
 pub struct Kept {
     states: BTreeMap<String, Option<InboxState>>,
     history: BTreeMap<String, Option<InboxState>>,
+    findings: BTreeMap<String, Findings>,
     pub age: Option<Duration>,
     last_answered: Option<DateTime<Utc>>,
     pub failure: Option<String>,
@@ -59,6 +80,10 @@ pub struct Kept {
 }
 
 impl Kept {
+    pub(super) fn findings(&self, row: &str) -> Option<&Findings> {
+        self.findings.get(row)
+    }
+
     pub fn last_answered_at(&self) -> Option<String> {
         self.last_answered
             .map(|at| at.to_rfc3339_opts(SecondsFormat::Secs, true))
@@ -176,6 +201,7 @@ pub fn load(logs_dir: &Path) -> Kept {
             Kept {
                 states: file.subjects,
                 history: file.history,
+                findings: file.findings,
                 age: modified.and_then(|at| at.elapsed().ok()),
                 last_answered: modified.map(DateTime::from),
                 failure: file.failure,
@@ -211,6 +237,9 @@ pub(super) fn refresh(
     if snapshot
         .github_subjects(config.inbox_days, &kept)
         .is_empty()
+        && snapshot
+            .finding_subjects(config.inbox_days, &kept)
+            .is_empty()
     {
         return Ok(kept);
     }
@@ -238,8 +267,9 @@ pub(super) fn refresh(
         }
     }
     let subjects = snapshot.github_subjects(config.inbox_days, &kept);
+    let findings = snapshot.finding_subjects(config.inbox_days, &kept);
     if kept.age.is_some_and(|age| age < fresh_for)
-        || subjects.is_empty()
+        || (subjects.is_empty() && findings.is_empty())
         || kept.quotas.as_ref().and_then(Quotas::warning).is_some()
     {
         return Ok(kept);
@@ -296,6 +326,67 @@ pub(super) fn refresh(
             }
         }
     }
+    let mut repositories = BTreeMap::<_, Vec<_>>::new();
+    for subject in findings {
+        repositories
+            .entry(subject.repository.clone())
+            .or_default()
+            .push(subject);
+    }
+    for (repository, subjects) in repositories {
+        if kept.quotas.as_ref().and_then(Quotas::warning).is_some() {
+            break;
+        }
+        match github.inbox_findings(&repository) {
+            Ok(waits) => {
+                for subject in subjects {
+                    // Older records did not retain finding URLs. They can only
+                    // ask whether any private record in their repository waits.
+                    let waits = if subject.urls.is_empty() {
+                        waits.clone()
+                    } else {
+                        subject
+                            .urls
+                            .into_iter()
+                            .map(|url| {
+                                let waiting = waits.get(&url).copied().unwrap_or(false);
+                                (url, waiting)
+                            })
+                            .collect()
+                    };
+                    let mut facts = Findings {
+                        waits,
+                        triaged_at: None,
+                    };
+                    if !facts.waiting() {
+                        facts.triaged_at = kept
+                            .findings
+                            .get(&subject.row)
+                            .and_then(|previous| previous.triaged_at.clone())
+                            .or_else(|| Some(Utc::now().to_rfc3339()));
+                    }
+                    kept.findings.insert(subject.row, facts);
+                }
+                kept.age = Some(Duration::ZERO);
+                kept.last_answered = Some(Utc::now());
+                kept.failure = None;
+                answered = true;
+            }
+            Err(error) => {
+                kept.failure = Some(format!("{error:#}"));
+                break;
+            }
+        }
+        // Includes every paginated request and private-storage discovery, so
+        // another repository cannot start a list on an exhausted reserve.
+        match github.inbox_quotas() {
+            Ok(quotas) => kept.quotas = Some(quotas),
+            Err(error) => {
+                kept.failure = Some(format!("{error:#}"));
+                break;
+            }
+        }
+    }
     save(&config.logs_dir, &kept, answered)?;
     Ok(kept)
 }
@@ -306,6 +397,7 @@ fn save(logs_dir: &Path, kept: &Kept, answered: bool) -> Result<()> {
         version: 2,
         subjects: kept.states.clone(),
         history: kept.history.clone(),
+        findings: kept.findings.clone(),
         failure: kept.failure.clone(),
         quotas: kept.quotas.clone(),
         warning: kept.warning(),
@@ -318,6 +410,7 @@ fn save(logs_dir: &Path, kept: &Kept, answered: bool) -> Result<()> {
         .is_none_or(|previous| {
             previous.version != file.version
                 || previous.subjects != file.subjects
+                || previous.findings != file.findings
                 || previous.warning != file.warning
         });
     // Keep History freezes too, without waking pages for bookkeeping.

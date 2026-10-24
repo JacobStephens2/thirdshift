@@ -56,7 +56,7 @@ pub(super) struct CommandRecord {
     pub parent_dispatch: Option<String>,
     #[serde(default)]
     pub tickets: Vec<TicketRecord>,
-    /// Local knowledge at completion; status never refreshes findings from GitHub.
+    /// Local knowledge at completion; the Inbox overlays its kept GitHub answer.
     #[serde(default)]
     pub security_findings_waiting: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
