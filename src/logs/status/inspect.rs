@@ -1,13 +1,13 @@
 //! Render one Command and stream its selected log bytes.
 
-use std::io::{self, Write};
+use std::io::Write;
 
 use anyhow::{Context, Result};
 use chrono::Local;
 use serde::Serialize;
 
 use crate::config::UserConfig;
-use crate::logs::reading::{Command, Observation, Snapshot};
+use crate::logs::reading::{Command, Framing, Observation, Reader, Snapshot};
 
 pub(crate) fn log_path(
     config: &UserConfig,
@@ -126,18 +126,23 @@ pub fn logs(input: &str, session: Option<&str>, follow: bool) -> Result<()> {
     let selection = snapshot.resolve(input)?;
     let command = selection.observation;
     let path = selected_log(command, session)?;
-    let mut file =
-        std::fs::File::open(&path).with_context(|| format!("could not open {}", path.display()))?;
-    let mut stdout = io::stdout().lock();
+    stream_log(&selection.reader(path), follow)
+}
+
+pub(in crate::logs) fn stream_log(reader: &Reader, follow: bool) -> Result<()> {
+    let mut stdout = std::io::stdout().lock();
+    let mut offset = 0;
     loop {
-        // Check before draining, so a completed Command's final bytes are
-        // always copied even when it ended between two polls.
-        let ended = selection.process_exited();
-        io::copy(&mut file, &mut stdout)?;
+        let batch = reader.read(offset, Framing::Raw, 256 * 1024)?;
+        stdout.write_all(&batch.bytes)?;
         stdout.flush()?;
-        if !follow || ended {
+        if batch.done || (!follow && batch.bytes.len() < 256 * 1024) {
             return Ok(());
         }
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        let progressed = batch.offset != offset;
+        offset = batch.offset;
+        if !progressed {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
     }
 }

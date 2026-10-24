@@ -51,11 +51,10 @@ fn idle_viewers_sleep_and_log_appends_and_completion_wake_the_reader() {
     use std::io::Write;
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
-    write_record(
-        home.path(),
-        81,
-        &super::watching::live_record(home.path(), 81, std::process::id()),
-    );
+    let mut work =
+        super::watching::FixtureProcess(Command::new("sleep").arg("60").spawn().unwrap());
+    let mut fixture = super::watching::live_record(home.path(), 81, work.0.id());
+    write_record(home.path(), 81, &fixture);
     let path = home
         .path()
         .join(".thirdshift/logs/acme/widgets/commands/issue/81-fixture.log");
@@ -89,9 +88,11 @@ fn idle_viewers_sleep_and_log_appends_and_completion_wake_the_reader() {
         began.elapsed() < Duration::from_secs(2),
         "log append was not delivered promptly"
     );
-    let mut fixture = record(home.path(), 81, Some("merged"), 0);
+    fixture["outcome"] = json!("merged");
     fixture["ended_at"] = json!(chrono::Local::now().to_rfc3339());
     write_record(home.path(), 81, &fixture);
+    work.0.kill().unwrap();
+    work.0.wait().unwrap();
     assert!(sse_event(&mut reader).contains("\"done\":true"));
 }
 

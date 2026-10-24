@@ -1,14 +1,13 @@
 //! Current-layout log inventory shared by the CLI and Console. IDs name exact
 //! retained files, including older Commands with the same issue or start stamp.
 use std::collections::BTreeMap;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::Local;
 use serde::Serialize;
 
-use super::{Command, Entry, Observation, Snapshot, directories, entries};
+use super::{Command, Entry, Observation, Reader, Snapshot, directories, entries};
 use crate::config::UserConfig;
 use crate::logs::owner;
 
@@ -42,6 +41,8 @@ pub(crate) struct Log {
     pub path: PathBuf,
     #[serde(skip)]
     pub selector: String,
+    #[serde(skip)]
+    pub reader: Reader,
 }
 
 #[derive(Default)]
@@ -50,6 +51,7 @@ struct Observed {
     command: String,
     owners: Vec<String>,
     selector: String,
+    reader: Option<Reader>,
 }
 
 pub(crate) fn id(path: &Path) -> String {
@@ -88,6 +90,11 @@ pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<
                 command: subject.clone(),
                 owners: owners.clone(),
                 selector: selector.clone(),
+                reader: Some(Reader::captured(
+                    command.command_log.clone(),
+                    Some(command),
+                    false,
+                )),
             });
         let current = command
             .record
@@ -98,12 +105,13 @@ pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<
             let session = crate::logs::session::path(&session);
             let live = command.state == "live" && current.as_ref() == Some(&session);
             observed.insert(
-                session,
+                session.clone(),
                 Observed {
                     live,
                     command: subject.clone(),
                     owners: owners.clone(),
                     selector: selector.clone(),
+                    reader: Some(Reader::captured(session, Some(command), true)),
                 },
             );
         }
@@ -148,11 +156,14 @@ pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<
                         command,
                         mut owners,
                         selector,
+                        reader,
                     } = observed.remove(&path).unwrap_or_default();
                     if let Some(decoded) = owner::decode(&path) {
                         owners.push(id(decoded.command_log(&path).strip_prefix(root)?));
                     }
                     logs.push(Log {
+                        reader: reader
+                            .unwrap_or_else(|| Reader::captured(path.clone(), None, false)),
                         id: id(relative),
                         name: relative.to_string_lossy().into_owned(),
                         repository: repository.clone(),
@@ -214,17 +225,5 @@ pub(crate) fn show(json: bool, owner: Option<&str>) -> Result<()> {
 pub(crate) fn print_file(selected: &str, follow: bool) -> Result<()> {
     let config = UserConfig::load()?;
     let log = find(&config, selected)?;
-    let mut file = std::fs::File::open(&log.path)?;
-    let mut stdout = std::io::stdout().lock();
-    loop {
-        let live = follow && find(&config, selected)?.live;
-        let mut bytes = Vec::new();
-        file.read_to_end(&mut bytes)?;
-        stdout.write_all(&bytes)?;
-        stdout.flush()?;
-        if !live {
-            return Ok(());
-        }
-        std::thread::sleep(std::time::Duration::from_millis(100));
-    }
+    crate::logs::status::inspect::stream_log(&log.reader, follow)
 }
