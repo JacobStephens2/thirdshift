@@ -26,7 +26,7 @@ use crate::{interrupt, logs, progress};
 
 #[derive(Clone, Copy, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub(super) enum Arm {
+pub(crate) enum Arm {
     Baseline,
     Candidate,
 }
@@ -48,7 +48,7 @@ impl Arm {
 }
 
 #[derive(Serialize, Deserialize)]
-pub(super) struct TrialResult {
+pub(crate) struct TrialResult {
     pub suite: String,
     pub task: String,
     pub arm: Arm,
@@ -77,7 +77,7 @@ impl Trial<'_> {
     }
 }
 
-fn trial_key(suite: &str, name: &str, arm: Arm, index: usize) -> String {
+pub(crate) fn trial_key(suite: &str, name: &str, arm: Arm, index: usize) -> String {
     // Names cannot contain NUL. Hash the delimited tuple so names with
     // `--` stay distinct and long names cannot exceed a filename limit.
     let task = Sha256::new()
@@ -258,6 +258,7 @@ fn run_trial(
             .open(experiment.directory.join("started"))?;
         limits::check(signal)?;
         progress::step(format!("Trial {} starting", trial.key()));
+        let _active = super::evidence::Active::start(&directory, &attempt, result.attempts.len())?;
         let monitor = RefCell::new(super::limits::Monitor::new(
             &attempt.join("session"),
             &prepared_repo.repository,

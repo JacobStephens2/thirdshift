@@ -200,6 +200,17 @@ layout; Rust checks trace timing, legacy matching and CLI parity.
 The retained Spec-review checks are `python3 console/reproductions/waterfall-fractional.py`
 and `python3 console/reproductions/waterfall-stage.py` from the repo root after a build.
 The Rust router test walks the registered routes and checks their CLI pairs.
+Experiments (`/experiments`, or `g` then `e`) uses Running, Needs you and Done
+groups. Its Experiment page shows the live Trial grid, per-suite Verdict
+intervals, pending rechecks, Arm comparison and folded Bar. A Trial or Eval task
+opens the Peek; each retained attempt links to its Session log or Session trace.
+Both pages use the same view as `thirdshift experiments [<id>] --json`, including
+the saved refs/title, end time, resume command, active Trials and session IDs.
+`thirdshift experiments <id> --session <session-id>` reads a listed session.
+These pages poll every two seconds independently of Command-record events, and
+retain folds, filters and the open Peek. Rechecks stay in the CLI; Copy command
+copies the current Trial's command. `node --test console/tests/experiments.test.cjs`
+checks live updates and interaction at 390 px after a build.
 The fractional Run/stage boundaries also run in the Rust integration tests.
 The retained Session-trace regression is
 `python3 console/reproductions/waterfall-trace-axis.py`; it checks that completed

@@ -403,6 +403,7 @@ thirdshift evals prepare-arms <repository> <baseline-commit> <baseline-harness> 
 thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json]  # run or resume an Experiment
 thirdshift experiment --release <commit> [--json]  # use the last release tag and touched suites
 thirdshift experiments [<id>] [--json]  # list Experiments or show one
+thirdshift experiments <id> --session <session-id>  # read a Trial's retained session from its inventory
 thirdshift recheck <id> <trial> <pass|fail> --reason <text> [--wrong-finding <true|false>] [--json]
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift <version>
@@ -568,6 +569,19 @@ Totals include all attempts and Resume sessions; Grader usage is not charged
 to either Arm. The text view shows usage beside each Arm's minutes.
 Both views show Void counts and causes per Arm, and report repeated
 Trial-only memory-cap stops as a finding against that Arm.
+
+The Console's **Experiments** link opens `/experiments`, grouped into Running,
+Needs you and Done, newest first within each. Open an Experiment for its live
+Trial grid, per-suite Verdict intervals, Arm comparison and folded Bar. Select
+a Trial or Eval task to open its Peek, including Grader reasons, rechecks,
+Void causes and links to retained Session logs or Session traces. Both pages
+pair with `experiments --json`; its view includes task names, active Trial start
+times and the `sessions` inventory. Read one with
+`thirdshift experiments <id> --session <session-id>`. Pending rechecks offer a
+copyable CLI command and a filter for their Eval tasks; the Console records no
+recheck itself. The page polls every two seconds, including after completion
+so rechecks recorded in the CLI appear. Older records show unknown refs,
+versions or end times where those facts were not retained.
 
 Each invocation that does work keeps a Command record, Command log and Activity
 log lines under `<logs.dir>/JacobStephens2/thirdshift/commands/experiment/`

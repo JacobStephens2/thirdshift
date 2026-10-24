@@ -18,6 +18,8 @@ pub(super) struct Stored {
     #[serde(flatten)]
     pub description: Description,
     pub state: State,
+    #[serde(flatten)]
+    pub details: Details,
     created_at: String,
     pub tasks: Vec<Task>,
     #[serde(default)]
@@ -33,30 +35,60 @@ pub(super) struct Stored {
 }
 
 #[derive(Serialize)]
-struct View<'a> {
+pub(crate) struct View {
     #[serde(flatten)]
-    description: &'a Description,
-    state: State,
-    created_at: &'a str,
-    results: Vec<TrialResult>,
-    verdict: &'a Option<super::grading::Verdict>,
-    pending_rechecks: &'a [super::rechecks::Pending],
-    minutes: Minutes,
-    usage: super::usage::Arms,
-    voids: Voids,
-    findings: Vec<String>,
+    pub description: Description,
+    pub state: State,
+    #[serde(flatten)]
+    pub details: Details,
+    pub created_at: String,
+    pub tasks: Vec<TaskName>,
+    pub running_trials: Vec<super::RunningTrial>,
+    pub sessions: Vec<super::SessionLog>,
+    pub results: Vec<TrialResult>,
+    pub verdict: Option<super::grading::Verdict>,
+    pub pending_rechecks: Vec<super::rechecks::Pending>,
+    pub minutes: Minutes,
+    pub usage: super::usage::Arms,
+    pub voids: Voids,
+    pub findings: Vec<String>,
+}
+
+/// Facts for readers; these never participate in Experiment identity or the Bar.
+#[derive(Clone, Default, Serialize, Deserialize)]
+pub(crate) struct Details {
+    #[serde(default)]
+    pub baseline_ref: Option<String>,
+    #[serde(default)]
+    pub candidate_ref: Option<String>,
+    #[serde(default)]
+    pub title: Option<String>,
+    #[serde(default)]
+    pub ended_at: Option<String>,
+    #[serde(default)]
+    pub pause_reason: Option<String>,
+    #[serde(default)]
+    pub resume_command: Option<String>,
+    #[serde(default)]
+    pub command_log: Option<PathBuf>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct TaskName {
+    pub suite: String,
+    pub name: String,
 }
 
 #[derive(Default, Serialize)]
-struct Voids {
-    baseline: ArmVoids,
-    candidate: ArmVoids,
+pub(crate) struct Voids {
+    pub baseline: ArmVoids,
+    pub candidate: ArmVoids,
 }
 
 #[derive(Default, Serialize)]
-struct ArmVoids {
-    count: usize,
-    causes: BTreeMap<VoidCause, usize>,
+pub(crate) struct ArmVoids {
+    pub count: usize,
+    pub causes: BTreeMap<VoidCause, usize>,
 }
 
 impl Voids {
@@ -104,9 +136,9 @@ impl std::fmt::Display for ArmVoids {
 }
 
 #[derive(Default, Serialize)]
-struct Minutes {
-    baseline: f64,
-    candidate: f64,
+pub(crate) struct Minutes {
+    pub baseline: f64,
+    pub candidate: f64,
 }
 
 impl Minutes {
@@ -125,7 +157,7 @@ impl Minutes {
 
 #[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
-pub(super) enum State {
+pub(crate) enum State {
     Prepared,
     Running,
     Completed,
@@ -180,6 +212,7 @@ impl Stored {
                 format: 1,
                 description,
                 state: State::Prepared,
+                details: Details::default(),
                 created_at: chrono::Local::now().to_rfc3339(),
                 tasks: tasks()?,
                 verdict: None,
@@ -252,14 +285,19 @@ impl Stored {
             &fs::read(directory.join("experiment.json")).context("Experiment not found")?,
         )?;
         ensure!(stored.format == 1, "unsupported Experiment format");
+        ensure!(
+            stored.description.id == id,
+            "Experiment ID does not match its folder"
+        );
         stored.directory = directory;
         stored.lock = lock;
         stored.upgrade_verdict()?;
         Ok(stored)
     }
 
-    fn view(&self) -> Result<View<'_>> {
+    fn view(&self) -> Result<View> {
         let results = self.results()?;
+        let (running_trials, sessions) = super::evidence::inventory(self)?;
         let mut minutes = Minutes::default();
         let mut voids = Voids::default();
         let trials = self.directory.join("trials");
@@ -278,12 +316,23 @@ impl Stored {
         }
         let findings = voids.findings();
         Ok(View {
-            description: &self.description,
+            description: self.description.clone(),
             state: self.state,
-            created_at: &self.created_at,
+            details: self.details.clone(),
+            created_at: self.created_at.clone(),
+            tasks: self
+                .tasks
+                .iter()
+                .map(|task| TaskName {
+                    suite: task.suite.clone(),
+                    name: task.name.clone(),
+                })
+                .collect(),
+            running_trials,
+            sessions,
             results,
-            verdict: &self.verdict,
-            pending_rechecks: &self.pending_rechecks,
+            verdict: self.verdict.clone(),
+            pending_rechecks: self.pending_rechecks.clone(),
             minutes,
             usage: super::usage::Arms::read(&self.directory)?,
             voids,
@@ -353,10 +402,7 @@ pub(super) fn result_paths(directory: &Path) -> Result<Vec<PathBuf>> {
     Ok(paths)
 }
 
-pub(super) fn show(root: &Path, id: Option<&str>, json: bool) -> Result<String> {
-    if let Some(id) = id {
-        return Stored::load(root, id, false)?.render(json);
-    }
+pub(super) fn list(root: &Path) -> Result<Vec<Stored>> {
     let mut experiments = Vec::new();
     if root.exists() {
         for entry in fs::read_dir(root)? {
@@ -371,7 +417,29 @@ pub(super) fn show(root: &Path, id: Option<&str>, json: bool) -> Result<String> 
             }
         }
     }
-    experiments.sort_by(|a, b| a.description.id.cmp(&b.description.id));
+    // Retained timestamps include local offsets, so lexical order is not time order.
+    experiments.sort_by(|a, b| {
+        chrono::DateTime::parse_from_rfc3339(&b.created_at)
+            .ok()
+            .cmp(&chrono::DateTime::parse_from_rfc3339(&a.created_at).ok())
+            .then_with(|| a.description.id.cmp(&b.description.id))
+    });
+    Ok(experiments)
+}
+
+pub(crate) fn read(id: Option<&str>) -> Result<Vec<View>> {
+    let root = crate::config::home()?.join(".thirdshift/evals/experiments");
+    if let Some(id) = id {
+        return Ok(vec![Stored::load(&root, id, false)?.view()?]);
+    }
+    list(&root)?.iter().map(Stored::view).collect()
+}
+
+pub(super) fn show(root: &Path, id: Option<&str>, json: bool) -> Result<String> {
+    if let Some(id) = id {
+        return Stored::load(root, id, false)?.render(json);
+    }
+    let experiments = list(root)?;
     if json {
         let views = experiments
             .iter()

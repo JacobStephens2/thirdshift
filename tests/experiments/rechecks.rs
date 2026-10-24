@@ -14,6 +14,10 @@ fn decisive_score_waits_for_recheck_and_retains_both_scores_and_history() {
     assert_eq!(waiting[0]["arm"], "candidate");
     assert_eq!(waiting[0]["decisive"], true);
     assert_eq!(waiting[0]["borderline"], false);
+    assert_eq!(
+        waiting[0]["decisive_flips"],
+        json!(["passed", "wrong_finding"])
+    );
     let id = experiment["id"].as_str().unwrap();
     let trial = waiting[0]["id"].as_str().unwrap();
     let text = fixture.scenario.run(&["experiments", id]);

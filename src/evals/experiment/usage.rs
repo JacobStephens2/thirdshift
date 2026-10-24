@@ -12,15 +12,15 @@ use super::workers;
 use crate::otlp_jsonl::{AnyValue, KeyValue, Reader, Span, Spans};
 
 #[derive(Default, Serialize)]
-pub(super) struct Arms {
-    baseline: Arm,
-    candidate: Arm,
+pub(crate) struct Arms {
+    pub baseline: Arm,
+    pub candidate: Arm,
 }
 
 #[derive(Default, Serialize)]
-pub(super) struct Arm {
+pub(crate) struct Arm {
     models: BTreeMap<String, Measurement>,
-    cost_usd: Option<f64>,
+    pub cost_usd: Option<f64>,
 }
 
 #[derive(Clone, Copy, Default, Serialize)]
@@ -63,6 +63,18 @@ impl Arms {
 }
 
 impl Arm {
+    pub fn tokens(&self) -> Option<u64> {
+        let mut total = None;
+        for measurement in self.models.values() {
+            for count in [measurement.input_tokens, measurement.output_tokens]
+                .into_iter()
+                .flatten()
+            {
+                total = Some(total.unwrap_or(0_u64).saturating_add(count));
+            }
+        }
+        total
+    }
     fn session(path: &Path) -> Result<Self> {
         let mut spans = BTreeMap::new();
         let mut excludes_cache = false;

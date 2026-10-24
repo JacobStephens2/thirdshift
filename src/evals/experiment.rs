@@ -1,6 +1,7 @@
 //! A resumable Experiment owns its fixed inputs and Trial artifacts. Command
 //! recording stays in the ordinary logs; private Eval data stays here.
 
+mod evidence;
 mod grading;
 mod integrity;
 mod limits;
@@ -29,22 +30,26 @@ use crate::issue::Repo;
 use crate::trial::VoidCause;
 use crate::{interrupt, logs, progress};
 
+pub(crate) use evidence::{RunningTrial, SessionLog};
 pub use options::{Options, parse};
 pub(crate) use rechecks::record as recheck;
+pub(crate) use rechecks::{Flip, Pending};
+pub(crate) use store::{View, read};
+pub(crate) use workers::{Arm, TrialResult, trial_key};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Bar {
     #[serde(deserialize_with = "decimal")]
-    margin: f64,
+    pub margin: f64,
     #[serde(deserialize_with = "decimal")]
-    credible_level: f64,
+    pub credible_level: f64,
     #[serde(deserialize_with = "decimal")]
-    prior: f64,
-    seed: u64,
-    draws: usize,
-    trials_per_task: BTreeMap<String, usize>,
-    timeout_seconds: u64,
-    void_rules: VoidRules,
+    pub prior: f64,
+    pub seed: u64,
+    pub draws: usize,
+    pub trials_per_task: BTreeMap<String, usize>,
+    pub timeout_seconds: u64,
+    pub void_rules: VoidRules,
 }
 
 // serde's flattened-record buffer sees arbitrary-precision JSON decimals as
@@ -59,9 +64,9 @@ fn decimal<'de, D: serde::Deserializer<'de>>(
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-struct VoidRules {
-    retries: usize,
-    causes: Vec<VoidCause>,
+pub(crate) struct VoidRules {
+    pub retries: usize,
+    pub causes: Vec<VoidCause>,
 }
 
 impl Default for Bar {
@@ -95,10 +100,10 @@ impl Default for Bar {
 
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Setup {
-    commit: String,
-    harness: String,
-    model: Option<String>,
-    effort: Option<String>,
+    pub commit: String,
+    pub harness: String,
+    pub model: Option<String>,
+    pub effort: Option<String>,
 }
 
 impl Setup {
@@ -115,12 +120,12 @@ impl Setup {
 /// Only these public Experiment facts enter factory logs, never task inputs.
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Description {
-    id: String,
-    baseline: Setup,
-    candidate: Setup,
-    suites: Vec<String>,
-    bar: Bar,
-    prepared: Option<arms::Prepared>,
+    pub id: String,
+    pub baseline: Setup,
+    pub candidate: Setup,
+    pub suites: Vec<String>,
+    pub bar: Bar,
+    pub prepared: Option<arms::Prepared>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -226,6 +231,27 @@ pub fn run(options: Options) -> Result<()> {
         println!("{}", experiment.render(options.json)?);
         return Ok(());
     }
+    if experiment.details.candidate_ref.is_none() {
+        experiment.details.baseline_ref =
+            Some(baseline_reference.unwrap_or_else(|| "main (merge base)".into()));
+        experiment.details.candidate_ref = Some(options.candidate.clone());
+        experiment.details.title = Some(git.run(&[
+            "log",
+            "-1",
+            "--format=%s",
+            &experiment.description.candidate.commit,
+        ])?);
+    }
+    experiment.details.resume_command = Some(
+        std::iter::once("thirdshift".to_owned())
+            .chain(
+                std::env::args()
+                    .skip(1)
+                    .map(|arg| format!("'{}'", arg.replace('\'', "'\\''"))),
+            )
+            .collect::<Vec<_>>()
+            .join(" "),
+    );
     logs::begin(logs::Begin::Experiment);
     logs::configured(&config);
     let repo = Repo {
@@ -237,6 +263,9 @@ pub fn run(options: Options) -> Result<()> {
         &experiment.description.candidate.choice(),
     );
     logs::experiment(&experiment.description);
+    experiment.details.command_log = logs::command_log_path();
+    experiment.details.ended_at = None;
+    experiment.details.pause_reason = None;
     let result = (|| {
         experiment.state = State::Running;
         experiment.save()?;
@@ -280,6 +309,9 @@ pub fn run(options: Options) -> Result<()> {
             State::Paused
         };
     }
+    experiment.details.ended_at =
+        (experiment.state == State::Completed).then(|| chrono::Local::now().to_rfc3339());
+    experiment.details.pause_reason = cause.clone();
     let saved = experiment.save();
     if result.is_ok() && saved.is_ok() {
         // Results contain private Grader evidence, unlike the public Command
@@ -307,11 +339,22 @@ pub fn run(options: Options) -> Result<()> {
 }
 
 pub fn show(args: &[String]) -> Result<String> {
+    if let [id, flag, session] = args
+        && flag == "--session"
+    {
+        let view = read(Some(id))?.pop().context("Experiment not found")?;
+        let session = view
+            .sessions
+            .iter()
+            .find(|log| log.id == *session)
+            .context("Session not found")?;
+        return Ok(std::fs::read_to_string(&session.path)?);
+    }
     let json = args.iter().any(|arg| arg == "--json");
     let positional: Vec<_> = args.iter().filter(|arg| arg.as_str() != "--json").collect();
     ensure!(
         positional.len() <= 1,
-        "usage: thirdshift experiments [<id>] [--json]"
+        "usage: thirdshift experiments [<id>] [--json] or experiments <id> --session <session-id>"
     );
     let root = crate::config::home()?.join(".thirdshift/evals/experiments");
     store::show(&root, positional.first().map(|id| id.as_str()), json)
