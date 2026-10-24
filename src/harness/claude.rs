@@ -55,7 +55,10 @@ impl Adapter for Claude {
         let at = invocation.args.len() - 1;
         invocation.args.splice(
             at..at,
-            ["--disallowedTools".to_string(), "WebSearch,WebFetch".to_string()],
+            [
+                "--disallowedTools".to_string(),
+                "WebSearch,WebFetch".to_string(),
+            ],
         );
         invocation
     }

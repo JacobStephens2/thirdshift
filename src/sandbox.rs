@@ -335,11 +335,7 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
     let mut argv = base_argv();
     binds.argv(&mut argv);
     let env = environment.finish(&request.adapter_env);
-    let prefix = vec![
-        SHELL.into(),
-        "-c".into(),
-        relay_script(&socat).into(),
-    ];
+    let prefix = vec![SHELL.into(), "-c".into(), relay_script(&socat).into()];
     Ok(Prepared {
         argv,
         env,
@@ -1106,7 +1102,11 @@ mod tests {
 
         let output = run_script(&prepared, &layout.repo);
 
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert_eq!(
             String::from_utf8_lossy(&output.stdout).trim(),
             "HTTP/1.1 403 Forbidden"
@@ -1129,7 +1129,11 @@ mod tests {
 
         let output = run_script(&prepared, &layout.repo);
 
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert_eq!(
             String::from_utf8_lossy(&output.stdout).trim(),
             "HTTP/1.1 403 Forbidden"
@@ -1152,7 +1156,11 @@ mod tests {
 
         let output = run_script(&prepared, &layout.repo);
 
-        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         assert_eq!(
             String::from_utf8_lossy(&output.stdout).trim(),
             "HTTP/1.1 403 Forbidden"
@@ -1367,8 +1375,13 @@ mod tests {
         let script = "test -n \"$THIRDSHIFT_OPENCODE_API_KEY\" || exit 21; \
             test ! -e \"$HOME/.local/share/opencode/opencode.db\" || exit 22; \
             echo \"$OPENCODE_CONFIG_CONTENT\"";
-        let request =
-            layout.request(Harness::OpenCode, script, secrets, Some("anthropic/claude"), &[]);
+        let request = layout.request(
+            Harness::OpenCode,
+            script,
+            secrets,
+            Some("anthropic/claude"),
+            &[],
+        );
         let prepared = prepare(&request).unwrap();
 
         let output = run_script(&prepared, &layout.repo);
@@ -1397,8 +1410,13 @@ mod tests {
             claude_setup_token: None,
             opencode_api_key: Some("opencode-provider-key".into()),
         };
-        let request =
-            layout.request(Harness::OpenCode, "exit 99", secrets, Some("acme/model"), &[]);
+        let request = layout.request(
+            Harness::OpenCode,
+            "exit 99",
+            secrets,
+            Some("acme/model"),
+            &[],
+        );
 
         let error = format!("{:#}", prepare(&request).err().unwrap());
 

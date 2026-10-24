@@ -39,12 +39,7 @@ pub trait Adapter: Sync {
     /// Harness's web search switched off, since a Trial runs in a sandbox
     /// whose proxy reaches only its provider. Harnesses with no such switch
     /// keep the code review session unchanged.
-    fn trial_session(
-        &self,
-        choice: &Choice,
-        resume: Option<&str>,
-        prompt: &str,
-    ) -> Invocation {
+    fn trial_session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation {
         self.code_review_session(choice, resume, prompt)
     }
 

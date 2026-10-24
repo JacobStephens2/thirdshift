@@ -101,7 +101,7 @@ fn opencode_provider_hosts(model: Option<&str>) -> Result<Vec<&'static str>> {
 /// never resolves.
 pub(crate) fn allowed_name(host: &str, allowed: &[String]) -> bool {
     let normalized = host.trim().trim_end_matches('.').to_ascii_lowercase();
-    !normalized.is_empty() && allowed.iter().any(|name| *name == normalized)
+    !normalized.is_empty() && allowed.contains(&normalized)
 }
 
 /// Why the proxy refuses resolved addresses: loopback (or the unspecified
@@ -251,7 +251,10 @@ fn serve_one(mut stream: std::os::unix::net::UnixStream, shared: &Shared) {
         (Decision::Tunnel(_), Some(_)) => ("200 Connection Established".to_string(), None),
         (Decision::Tunnel(request), None) => (
             "502 Bad Gateway".to_string(),
-            Some(format!("CONNECT {}:{} could not connect", request.host, request.port)),
+            Some(format!(
+                "CONNECT {}:{} could not connect",
+                request.host, request.port
+            )),
         ),
         (Decision::Refuse { status, message }, _) => (status.clone(), Some(message.clone())),
     };
@@ -335,7 +338,10 @@ fn decide(head: &str, shared: &Shared) -> Decision {
     let (method, target) = match (parts.next(), parts.next(), parts.next(), parts.next()) {
         (Some(method), Some(target), Some(_version), None) => (method, target),
         _ => {
-            return refuse("400 Bad Request", "CONNECT <host>:<port> HTTP/1.1".to_string());
+            return refuse(
+                "400 Bad Request",
+                "CONNECT <host>:<port> HTTP/1.1".to_string(),
+            );
         }
     };
     if method != "CONNECT" {
@@ -475,7 +481,10 @@ mod tests {
             vec!["2001:db8::10".parse().unwrap()],
             // One bad address in the set refuses the name, against DNS
             // rebinding past the check.
-            vec!["203.0.113.10".parse().unwrap(), "127.0.0.1".parse().unwrap()],
+            vec![
+                "203.0.113.10".parse().unwrap(),
+                "127.0.0.1".parse().unwrap(),
+            ],
         ] {
             assert!(address_refusal(&refused, &local).is_some(), "{refused:?}");
         }
