@@ -85,6 +85,83 @@ test('Dismiss keeps Undo in Command details and updates another open Inbox', asy
   assert.equal(await page.evaluate(() => window.sameDocument), true);
 });
 
+test('Dismiss and Undo show pending feedback through live refresh and prevent duplicate submissions', async t => {
+  const page = await pageFor(t);
+  await page.goto(origin);
+  await page.locator('[data-group="needs you"] .peek-link').first().click();
+  const form = page.locator('form[data-dismiss]');
+  await form.waitFor();
+  const recordPath = await form.locator('[name="command"]').inputValue();
+  const original = await readFile(recordPath, 'utf8');
+  try {
+    for (const [path, label, pending, next] of [
+      ['/dismiss', 'Dismiss', 'Dismissing…', 'Undo'],
+      ['/dismiss/undo', 'Undo', 'Taking back dismissal…', 'Dismiss']
+    ]) {
+      let release;
+      const held = new Promise(resolve => { release = resolve; });
+      let requests = 0;
+      await page.route(`${origin}${path}`, async route => {
+        requests++;
+        await held;
+        await route.continue();
+      });
+      try {
+        await page.getByRole('button', { name: label, exact: true }).click();
+        await page.waitForFunction(pending => document.querySelector('form[data-dismiss] [role="status"]').textContent === pending, pending, { timeout: 2000 });
+        assert.equal(await form.locator('button').isDisabled(), true);
+        const updated = JSON.parse(original);
+        updated.cause = `Live refresh while ${label} is pending`;
+        await writeFile(recordPath, JSON.stringify(updated));
+        await page.locator('#peek-content').getByText(updated.cause, { exact: true }).waitFor();
+        assert.equal(await form.getByRole('status').textContent(), pending);
+        assert.equal(await form.locator('button').isDisabled(), true);
+        // A second submit event must be ignored even if a browser dispatches it directly.
+        await form.evaluate(form => form.requestSubmit());
+        release();
+        await page.getByRole('button', { name: next, exact: true }).waitFor({ timeout: 3000 });
+        await page.waitForFunction(() => !document.querySelector('form[data-dismiss] button').disabled);
+        assert.equal(requests, 1);
+      } finally {
+        release();
+        await page.unrouteAll({ behavior: 'wait' });
+      }
+    }
+  } finally { await writeFile(recordPath, original); }
+});
+
+test('A failed Dismiss shows the error through live refresh and allows retry', async t => {
+  const page = await pageFor(t);
+  await page.goto(origin);
+  await page.locator('[data-group="needs you"] .peek-link').first().click();
+  const form = page.locator('form[data-dismiss]');
+  await form.waitFor();
+  const recordPath = await form.locator('[name="command"]').inputValue();
+  const original = await readFile(recordPath, 'utf8');
+  await page.route(`${origin}/dismiss`, route => route.fulfill({ status: 409, body: 'Please try again' }));
+  try {
+    await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    const error = 'Could not save the dismissal: Please try again';
+    await form.getByRole('status').getByText(error, { exact: true }).waitFor();
+    assert.equal(await form.locator('button').isEnabled(), true);
+    const updated = JSON.parse(original);
+    updated.cause = 'Live refresh after failed dismissal';
+    await writeFile(recordPath, JSON.stringify(updated));
+    await page.locator('#peek-content').getByText(updated.cause, { exact: true }).waitFor();
+    assert.equal(await form.getByRole('status').textContent(), error);
+    await page.unrouteAll({ behavior: 'wait' });
+    await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await page.getByRole('button', { name: 'Undo', exact: true }).waitFor();
+    await page.waitForFunction(() => !document.querySelector('form[data-dismiss] button').disabled);
+    assert.equal(await form.getByRole('status').textContent(), '');
+    await page.getByRole('button', { name: 'Undo', exact: true }).click();
+    await page.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
+  } finally {
+    await page.unrouteAll({ behavior: 'wait' });
+    await writeFile(recordPath, original);
+  }
+});
+
 test("Shift+T switches all built-in Themes and saves hidden sections across browsers", async t => {
   const page = await pageFor(t);
   const remote = [];
