@@ -339,22 +339,29 @@ pub fn run(options: Options) -> Result<()> {
 }
 
 pub fn show(args: &[String]) -> Result<String> {
-    if let [id, flag, session] = args
-        && flag == "--session"
+    let json = args.iter().any(|arg| arg == "--json");
+    let positional: Vec<_> = args.iter().filter(|arg| arg.as_str() != "--json").collect();
+    if let [id, flag, session] = positional.as_slice()
+        && flag.as_str() == "--session"
     {
         let view = read(Some(id))?.pop().context("Experiment not found")?;
         let session = view
             .sessions
             .iter()
-            .find(|log| log.id == *session)
+            .find(|log| log.id == session.as_str())
             .context("Session not found")?;
-        return Ok(std::fs::read_to_string(&session.path)?);
+        let contents = std::fs::read_to_string(&session.path)?;
+        return Ok(if json {
+            serde_json::to_string_pretty(&serde_json::json!({
+                "id": session.id, "trace": session.trace, "contents": contents
+            }))?
+        } else {
+            contents
+        });
     }
-    let json = args.iter().any(|arg| arg == "--json");
-    let positional: Vec<_> = args.iter().filter(|arg| arg.as_str() != "--json").collect();
     ensure!(
         positional.len() <= 1,
-        "usage: thirdshift experiments [<id>] [--json] or experiments <id> --session <session-id>"
+        "usage: thirdshift experiments [<id>] [--json] or experiments <id> --session <session-id> [--json]"
     );
     let root = crate::config::home()?.join(".thirdshift/evals/experiments");
     store::show(&root, positional.first().map(|id| id.as_str()), json)

@@ -1,6 +1,6 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, execFileSync } = require('node:child_process');
 const { once } = require('node:events');
 const { mkdtemp, mkdir, writeFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
@@ -25,6 +25,30 @@ after(async () => {
   if (server && server.exitCode === null) server.kill();
   await exited;
   if (home) await rm(home, { recursive: true, force: true });
+});
+test('proposed Eval tasks can be approved from Experiment pages on a phone', async t => {
+  for (const [suite, task] of [['code-review', 'review-me'], ['spec-review', 'other-proposal']]) {
+    const folder = join(home, '.thirdshift/evals/suites', suite);
+    await mkdir(join(folder, 'tasks', task), { recursive: true });
+    await writeFile(join(folder, 'suite.toml'), 'format = 1\ntrials_per_arm = 1\n[dependencies]\nfactory_skills = []\nsession_prompts = []\nharness_defaults = []\nmodel_defaults = []\neffort_defaults = []\n');
+    await writeFile(join(folder, 'tasks', task, 'task.toml'), `format = 1\nstate = "proposed"\nsession = "${suite}"\nrepository = "private"\nbase = "${'a'.repeat(40)}"\nchange = "${'b'.repeat(40)}"\ncriteria = "Invented success criteria"\n[inputs]\n`);
+  }
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  page.setDefaultTimeout(10000);
+  await page.goto(`${origin}/experiments/${fixture.id}`);
+  await page.getByRole('heading', { name: 'Proposed Eval tasks', exact: true }).waitFor();
+  assert.equal(await page.getByRole('button', { name: 'Approve spec-review / other-proposal', exact: true }).count(), 0);
+  await page.getByRole('button', { name: 'Approve code-review / review-me', exact: true }).click();
+  await page.waitForURL(`${origin}/experiments`);
+  assert.equal(await page.getByRole('button', { name: 'Approve code-review / review-me', exact: true }).count(), 0);
+  await page.getByRole('button', { name: 'Approve spec-review / other-proposal', exact: true }).click();
+  await page.getByRole('heading', { name: 'Experiments', exact: true }).waitFor();
+  assert.equal(await page.locator('#experiment-proposals').count(), 0);
+  const listed = JSON.parse(execFileSync(process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift'), ['evals', 'list'], { env: { ...process.env, HOME: home }, timeout: 10000 }));
+  assert.deepEqual(listed.map(suite => suite.tasks[0].state), ['approved', 'approved']);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 });
 test('Experiments update live through Trials, Verdict and rechecks and fit a 390 px phone', async t => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, permissions: ['clipboard-read', 'clipboard-write'] });

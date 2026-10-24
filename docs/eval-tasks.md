@@ -68,8 +68,12 @@ pr_url = "https://github.com/acme/widgets/pull/1"
 ```
 
 - `state` is `proposed` or `approved`. Proposals are listed with their state and
-  are never eligible for preparation or Trials. Approval is a separate workflow
-  (#1021); these commands do not approve anything.
+  are never eligible for preparation or Trials. Approve one with
+  `thirdshift evals approve <suite> <task> [--json]` or on the Console's
+  Experiment pages. Approval changes only its state in the existing suite,
+  preserving its inputs and manifest comments. Approving again is harmless.
+  It starts no work and affects future Experiments only; an existing
+  Experiment keeps its fixed Eval tasks, including when resumed.
 - `session` is `code-review` or `spec-review`.
 - `repository` names a local Git repository holding both commits, absolute or
   relative to the Eval task's folder. Preparation never fetches from the network.
@@ -137,6 +141,7 @@ for each Arm: the fraction of retained Eval tasks where all three Trials passed.
 
 ```sh
 thirdshift evals list
+thirdshift evals approve reviews invented-counter --json
 thirdshift evals touched skills/thirdshift-code-review/SKILL.md src/prompt.rs
 thirdshift evals prepare reviews invented-counter /tmp/invented-trial
 thirdshift evals verify /tmp/invented-trial 1111111111111111111111111111111111111111
