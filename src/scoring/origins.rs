@@ -1,4 +1,4 @@
-//! Proposed Bug origins retain evidence; confirmation and metrics belong to #1029.
+//! Bug origins retain the proposed evidence beside the Day shift's settlement.
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,23 +15,44 @@ use crate::harness::built_with;
 use crate::session::private;
 use crate::{interrupt, logs, prompt};
 
+mod settlement;
+pub(crate) use settlement::confirmed_counts;
+pub(crate) use settlement::{Options, execute, parse};
+
+#[derive(Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum State {
+    Proposed,
+    Confirmed,
+    Rejected,
+}
+
 #[derive(Serialize, Deserialize)]
 pub(super) struct Proposal {
     issue: String,
     closed_at: DateTime<Utc>,
-    state: String,
+    state: State,
     commit: Option<String>,
     reason: String,
     pull_requests: Vec<PullRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    settlement: Option<Settlement>,
 }
 
 #[derive(Serialize, Deserialize)]
+struct Settlement {
+    pull_request: PullRequest,
+    corrected: bool,
+    eval_task: crate::evals::bug_origin::Reference,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 struct PullRequest {
     url: String,
     run: Option<Run>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case")]
 enum Run {
     Local {
@@ -104,10 +125,11 @@ pub(super) fn propose(
         proposals.push(Proposal {
             issue: bug.url,
             closed_at: bug.closed_at,
-            state: "proposed".into(),
+            state: State::Proposed,
             commit: response.commit,
             reason: response.reason,
             pull_requests,
+            settlement: None,
         });
     }
     Ok(proposals)

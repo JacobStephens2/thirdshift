@@ -29,6 +29,7 @@ pub enum Command {
         mine: bool,
         json: bool,
     },
+    BugOrigins(crate::scoring::origins::Options),
     Evals(crate::evals::Action),
     Experiment(crate::evals::experiment::Options),
     Experiments(Vec<String>),
@@ -342,6 +343,9 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
         Some("evals") => return crate::evals::parse(&args[1..]).map(Command::Evals),
+        Some("bug-origins") => {
+            return crate::scoring::origins::parse(&args[1..]).map(Command::BugOrigins);
+        }
         Some("experiment") => {
             return crate::evals::experiment::parse(&args[1..]).map(Command::Experiment);
         }

@@ -17,7 +17,7 @@ use crate::{interrupt, logs};
 
 mod calibration;
 mod grader;
-mod origins;
+pub(crate) mod origins;
 mod sample;
 pub(crate) use sample::PullRequest;
 pub(crate) mod packet;

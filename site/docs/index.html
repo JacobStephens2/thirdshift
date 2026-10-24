@@ -437,6 +437,10 @@ thirdshift secure base &lt;branch&gt;     # do that with &lt;branch&gt; as the B
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
 thirdshift scores [&lt;pull request&gt;] [--json] # show Scores and calibration
 thirdshift scores &lt;pull request&gt; --mine    # enter your five Scores
+thirdshift bug-origins [&lt;issue&gt;] [--json]  # list Bug origins or show one
+thirdshift bug-origins &lt;issue&gt; --confirm   # confirm the proposed pull request
+thirdshift bug-origins &lt;issue&gt; --correct &lt;pull request&gt; # confirm a different pull request
+thirdshift bug-origins &lt;issue&gt; --none      # reject the origin
 thirdshift email-test [&lt;address&gt;]   # send a test email through Resend (see Email)
 thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
 thirdshift evals list               # list private Eval suites and approved/proposed Eval tasks
@@ -1476,9 +1480,34 @@ PR associations are retained without choosing between them.</p>
 <p>The saved window&#39;s <code>bug_origins</code> list contains these proposals and their
 evidence; <code>thirdshift scores --json</code> includes it. Session artifacts stay in
 the window&#39;s private <code>packets/origins/</code> directory. Proposals count for nothing
-until the Day shift settles them (#1029). A plan-limit warning stops Scoring
+until the Day shift settles them. A plan-limit warning stops Scoring
 before another proposal starts and advances no window; retry <code>thirdshift score</code>
 to analyze that window again. A session or search failure also advances no window.</p>
+<p><code>thirdshift bug-origins [&lt;issue&gt;] [--json]</code> lists origins and their state:
+<code>proposed</code>, <code>confirmed</code> or <code>rejected</code>. Use an issue URL, or a number when it
+identifies exactly one bug across the retained repositories. A settlement
+changes the latest proposal for that bug and retains its original evidence.
+<code>--confirm</code> needs exactly one proposed pull request; <code>--correct &lt;pull request&gt;</code>
+confirms a different merged pull request in the bug&#39;s repository, given its
+URL or number. Corrections have <code>state: &quot;confirmed&quot;</code> and <code>settlement.corrected: true</code>. <code>--none</code> rejects it. Each action also accepts <code>--json</code>. Unknown or
+ambiguous origins and incomplete GitHub evidence fail without settling anything.
+Settlement uses the same machine-wide writer lock as Scoring and human Scores.</p>
+<p>A confirmed origin retains its chosen pull request and Run, when known. Each
+local Run&#39;s <code>thirdshift show &lt;command&gt; --json</code> includes
+<code>command.run_metrics.confirmed_bug_origins</code>, derived from the latest decisions;
+rejected and unsettled origins contribute zero. Correcting an origin moves
+its attribution to the chosen Run, without rewriting old Command records.</p>
+<p>Confirmation also creates a private <code>proposed</code> Eval task in the <code>code-review</code>
+suite, creating the suite with its usual dependencies when absent. Its local
+repository pins the PR head and the parent of its first commit, separately
+from the merge tree and later fix. It carries the originating issue at merge
+time and a draft catch criterion based on the proposal&#39;s evidence. Review and
+refine that criterion before <code>thirdshift evals approve code-review &lt;task&gt;</code>.
+Until approval, preparation and Experiments exclude it. Repeated confirmation
+keeps the same Eval task, including edits and approval. Rejecting or correcting
+an already confirmed origin withdraws its old unapproved proposal; a task the
+Day shift independently approved stays in the suite. Security fixes cannot be
+selected as origins. All these files stay in private Eval storage on this host.</p>
 <p>The Command record and Command log live under
 <code>&lt;logs.dir&gt;/JacobStephens2/thirdshift/commands/scoring/</code>, with start and end lines
 in that repository&#39;s Activity log. The Command appears in the Inbox, can be

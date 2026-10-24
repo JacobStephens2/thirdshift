@@ -98,7 +98,11 @@ impl GitHub {
         })
     }
 
-    fn scoring_issue_at(&self, issue: &IssueUrl, at: DateTime<Utc>) -> Result<Text> {
+    pub(in crate::github) fn scoring_issue_at(
+        &self,
+        issue: &IssueUrl,
+        at: DateTime<Utc>,
+    ) -> Result<Text> {
         let (json, edits) = self.paged_nodes(issue, BODY, "edits", "Scoring body history")?;
         let mut revisions = edits
             .iter()
