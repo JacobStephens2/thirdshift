@@ -170,6 +170,17 @@ const jumps = document.querySelector('#jumps');
 let selected = null;
 let peekCommand = null;
 let pendingPeek = null;
+// Details can be replaced or reopened while a dismissal request is in flight.
+const dismissals = new Map();
+
+function showDismissal() {
+  const form = content.querySelector('form[data-dismiss]');
+  if (!form) return;
+  const state = dismissals.get(form.elements.command.value);
+  form.querySelector('button').disabled = state?.pending ?? false;
+  form.querySelector('[role="status"]').textContent = state && (state.pending || state.action === form.action)
+    ? state.message : '';
+}
 
 function initializeSpanTree() { return initSpanTree({
   openDetails() {
@@ -248,6 +259,7 @@ async function loadPeek(url) {
     // Only the server's escaped show template is inserted, never a log.
     content.replaceChildren(document.createRange().createContextualFragment(html));
     restoreCopy();
+    showDismissal();
     if (content.querySelector('[data-live="true"]')) startUpdates();
     else stopPeekUpdates();
   } catch (error) {
@@ -309,18 +321,33 @@ content.addEventListener('submit', async event => {
   const form = event.target.closest('form[data-dismiss]');
   if (!form) return;
   event.preventDefault();
-  const button = form.querySelector('button');
-  button.disabled = true;
+  const command = form.elements.command.value;
+  if (dismissals.get(command)?.pending) return;
+  const undo = new URL(form.action).pathname === '/dismiss/undo';
+  const state = {
+    action: form.action, pending: true,
+    message: undo ? 'Taking back dismissal…' : 'Dismissing…'
+  };
+  dismissals.set(command, state);
+  showDismissal();
+  let saved = false;
   try {
     const response = await fetch(form.action, {
       method: 'POST', body: new URLSearchParams(new FormData(form))
     });
     if (!response.ok) throw new Error(await response.text());
+    saved = true;
+    pendingPeek?.abort();
+    pendingPeek = null;
     await refresh();
+    dismissals.delete(command);
   } catch (error) {
-    form.querySelector('[role="status"]').textContent = `Could not save the dismissal: ${error.message}`;
+    state.message = saved
+      ? `Dismissal saved. Could not refresh details: ${error.message}`
+      : `Could not save the dismissal: ${error.message}`;
   } finally {
-    button.disabled = false;
+    state.pending = false;
+    showDismissal();
   }
 });
 document.querySelector('[data-close-peek]').addEventListener('click', closePeek);
