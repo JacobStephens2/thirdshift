@@ -1547,14 +1547,14 @@ impl InboxSubject {
 
 /// The Inbox's facts for either kind of GitHub subject. Untagged to keep
 /// reading the pull-request-only cache written before issue reads existed.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub(crate) enum InboxState {
     Issue(IssueState),
     PullRequest(PullRequestState),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct IssueState {
     pub closed: bool,
     pub closed_at: Option<String>,
@@ -1589,7 +1589,7 @@ impl IssueState {
 
 /// What GitHub last showed for one pull request: its state and its merge
 /// or close time, each as GitHub wrote them.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PullRequestState {
     pub state: PrState,
     pub merged_at: Option<String>,

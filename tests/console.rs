@@ -21,6 +21,9 @@ mod look;
 #[path = "console/inbox.rs"]
 mod inbox;
 
+#[path = "console/github.rs"]
+mod github;
+
 #[path = "console/codex_patches.rs"]
 mod codex_patches;
 

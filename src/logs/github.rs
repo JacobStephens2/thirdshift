@@ -1,11 +1,12 @@
 //! The Inbox's kept GitHub answer: what the last batched issue/pull request read
 //! showed, in one file per machine. `status` reuses it while it is under
 //! five minutes old and reads GitHub first when it is missing or older; the
-//! Console reads the same file. A row that has reached the History page
-//! keeps what GitHub last showed and is not read again. The reads never
-//! write to GitHub.
+//! Console refreshes the same file once a minute. A row that has reached
+//! the History page keeps what GitHub last showed and is not read again.
+//! The reads never write to GitHub.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -13,6 +14,8 @@ use anyhow::Result;
 use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 
+use super::reading::{Group, Snapshot};
+use crate::config::UserConfig;
 use crate::github::{GitHub, InboxState, IssueState, PullRequestState};
 
 /// How long `status` reuses the kept answer before reading GitHub again.
@@ -93,11 +96,25 @@ pub fn path(logs_dir: &Path) -> PathBuf {
     logs_dir.join("github-inbox.json")
 }
 
+/// Only github-inbox.changed wakes pages. The answer itself also keeps
+/// History bookkeeping, which can change without changing an Inbox row.
+pub fn bookkeeping(path: &Path, logs_dir: &Path) -> bool {
+    path.parent() == Some(logs_dir)
+        && path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| {
+                matches!(name, "github-inbox.json" | "github-inbox.refreshed")
+                    || name.starts_with(".github-inbox-")
+            })
+}
+
 /// The kept answer, whatever its age. A missing or unreadable file keeps
 /// nothing, so the next read starts over.
 pub fn load(logs_dir: &Path) -> Kept {
     let path = path(logs_dir);
-    let age = std::fs::metadata(&path)
+    let age = std::fs::metadata(path.with_extension("refreshed"))
+        .or_else(|_| std::fs::metadata(&path))
         .and_then(|metadata| metadata.modified())
         .ok()
         .and_then(|modified| modified.elapsed().ok());
@@ -115,11 +132,44 @@ pub fn load(logs_dir: &Path) -> Kept {
     }
 }
 
-/// Read GitHub for `subjects` unless the kept answer is still fresh, and keep
+/// Refresh without an age gate, even when no page is open. All this work,
+/// including the blocking GitHub adapter, belongs off the Console's async thread.
+pub fn poll() -> Result<()> {
+    let config = UserConfig::load()?;
+    let snapshot = Snapshot::load_with_silence(
+        &config.logs_dir,
+        chrono::Local::now(),
+        config.silent_interval,
+    )?;
+    refresh(&snapshot, &config, Duration::ZERO)?;
+    Ok(())
+}
+
+/// Read GitHub unless the kept answer is still fresh, and keep
 /// the merged answer. A failed read keeps the last answer, however old.
 /// Only reads; nothing here writes to GitHub.
-pub(super) fn refresh(logs_dir: &Path, subjects: &[Subject], mut kept: Kept) -> Result<Kept> {
-    if kept.age.is_some_and(|age| age < FRESH_FOR) || subjects.is_empty() {
+pub(super) fn refresh(
+    snapshot: &Snapshot,
+    config: &UserConfig,
+    fresh_for: Duration,
+) -> Result<Kept> {
+    let mut kept = load(&config.logs_dir);
+    // From History on, a row keeps what GitHub last showed and is not read
+    // again: only rows with a kept answer are frozen, so the first read
+    // still looks up a row that local rules alone would call History.
+    for item in snapshot.inbox(true, config.inbox_days, &kept) {
+        for item in std::iter::once(&item).chain(&item.collapsed) {
+            if item.group == Group::History
+                && let Some(row) = item.command.selector()
+            {
+                for url in item.github_urls() {
+                    kept.freeze(row.clone(), url);
+                }
+            }
+        }
+    }
+    let subjects = snapshot.github_subjects(config.inbox_days, &kept);
+    if kept.age.is_some_and(|age| age < fresh_for) || subjects.is_empty() {
         return Ok(kept);
     }
     let urls: Vec<_> = subjects.iter().map(|subject| subject.url.clone()).collect();
@@ -146,7 +196,7 @@ pub(super) fn refresh(logs_dir: &Path, subjects: &[Subject], mut kept: Kept) -> 
                 kept.states.insert(url.clone(), state);
             }
             kept.age = Some(Duration::ZERO);
-            save(logs_dir, &kept)?;
+            save(&config.logs_dir, &kept)?;
         }
         Err(_) => {
             // GitHub could not be read: the Inbox keeps the last answer.
@@ -163,8 +213,22 @@ fn save(logs_dir: &Path, kept: &Kept) -> Result<()> {
         history: kept.history.clone(),
     };
     let bytes = serde_json::to_vec(&file)?;
-    let tmp = path.with_extension("json.tmp");
-    std::fs::write(&tmp, bytes)?;
-    std::fs::rename(&tmp, &path)?;
+    let previous = std::fs::read(&path).ok();
+    let facts_changed = previous
+        .as_deref()
+        .and_then(|bytes| serde_json::from_slice::<File>(bytes).ok())
+        .is_none_or(|previous| previous.version != 1 || previous.subjects != file.subjects);
+    // Keep History freezes too, without waking pages for bookkeeping.
+    if previous.as_deref() != Some(bytes.as_slice()) {
+        let mut tmp = tempfile::Builder::new()
+            .prefix(".github-inbox-")
+            .tempfile_in(logs_dir)?;
+        tmp.write_all(&bytes)?;
+        tmp.persist(&path)?;
+    }
+    std::fs::write(path.with_extension("refreshed"), [])?;
+    if facts_changed {
+        std::fs::write(path.with_extension("changed"), [])?;
+    }
     Ok(())
 }

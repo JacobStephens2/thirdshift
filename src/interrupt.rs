@@ -36,6 +36,14 @@ pub fn check() -> Result<()> {
     Ok(())
 }
 
+/// Stop ordinary blocking children before the Console re-executes itself.
+/// Like a signal, this request lasts until the process ends.
+pub fn request() {
+    REQUESTED
+        .get_or_init(|| Arc::new(AtomicBool::new(false)))
+        .store(true, Ordering::SeqCst);
+}
+
 /// Has the Command or terminal Setup been interrupted?
 pub fn requested() -> bool {
     REQUESTED

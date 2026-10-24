@@ -1750,6 +1750,14 @@ fn age_cache_file(scenario: &Scenario, seconds: u64) {
         .unwrap();
     file.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(seconds))
         .unwrap();
+    if let Ok(freshness) = fs::File::options()
+        .write(true)
+        .open(scenario.path(GITHUB_CACHE).with_extension("refreshed"))
+    {
+        freshness
+            .set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(seconds))
+            .unwrap();
+    }
 }
 
 fn hours_ago(hours: i64) -> String {
