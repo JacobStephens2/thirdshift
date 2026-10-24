@@ -23,6 +23,10 @@ struct Status<'a> {
     hostname: String,
     commands: Vec<InboxItem<'a>>,
     idle_passes: &'a [IdlePass],
+    /// How old the Inbox's kept GitHub answer is, in seconds. `None` where
+    /// no answer is kept: with no ready pull requests to read, or before
+    /// the first read.
+    github_answer_age_seconds: Option<u64>,
 }
 
 fn print_command(command: &Command, state_word: &str, indent: &str) {
@@ -84,11 +88,30 @@ pub fn show(json: bool, all: bool) -> Result<()> {
     }
     let snapshot =
         Snapshot::load_with_silence(&config.logs_dir, Local::now(), config.silent_interval)?;
+    // Every ready row's pull request is looked up in one batched read,
+    // except a row that has already reached History: from there on it
+    // keeps what GitHub last showed and is not read again.
+    let mut kept = super::github::load(&config.logs_dir);
+    let first = snapshot.inbox(true, config.inbox_days, &kept);
+    // From History on, a row keeps what GitHub last showed and is not read
+    // again: only rows with a kept answer are frozen, so the first read
+    // still looks up a row that local rules alone would call History.
+    for item in first {
+        if item.group == Group::History
+            && let Some(url) = item.pull_request()
+            && let Some(row) = item.command.selector()
+        {
+            kept.freeze(row, url);
+        }
+    }
+    let urls = snapshot.ready_pull_requests(config.inbox_days, &kept);
+    let kept = super::github::refresh(&config.logs_dir, &urls, kept)?;
     let status = Status {
         version: 1,
         hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-        commands: snapshot.inbox(all, config.inbox_days),
+        commands: snapshot.inbox(all, config.inbox_days, &kept),
         idle_passes: &snapshot.idle_passes,
+        github_answer_age_seconds: kept.age.map(|age| age.as_secs()),
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&status)?);

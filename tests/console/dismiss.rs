@@ -196,6 +196,56 @@ fn console_dismiss_is_unavailable_for_commands_that_are_not_waiting() {
 }
 
 #[test]
+fn console_dismiss_availability_follows_the_kept_github_answer() {
+    let scenario = support::Scenario::new();
+    let home = scenario.path("home");
+    configure(&home);
+    allow(&home, true);
+    record(&home, 7, Some("ready for review"), 2);
+    let mut open = record(&home, 8, Some("ready for review"), 30);
+    open["pull_request"] = json!("https://github.com/acme/widgets/pull/11");
+    write_record(&home, 8, &open);
+    let merged = (chrono::Local::now() - chrono::Duration::hours(1)).to_rfc3339();
+    let mut gh = scenario.gh_state();
+    gh["prs"] = json!([
+        {"number": 10, "url": "https://github.com/acme/widgets/pull/10", "state": "MERGED", "mergedAt": merged},
+        {"number": 11, "url": "https://github.com/acme/widgets/pull/11", "state": "OPEN"}
+    ]);
+    scenario.write_gh_state(&gh);
+    let status = scenario.run(&["status", "--json"]);
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    assert!(password(&home, None, PASSWORD, PASSWORD).0.success());
+    let console = Console::start_mode(Path::new(env!("CARGO_BIN_EXE_thirdshift")), &home, false);
+    let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
+    for (number, available) in [(7, false), (8, true)] {
+        let details = get(
+            &console,
+            &format!("/peek?command=widgets%23{number}"),
+            &session,
+        )
+        .text()
+        .unwrap();
+        assert_eq!(
+            details.contains(">Dismiss</button>"),
+            available,
+            "{details}"
+        );
+        let token = csrf(&get(&console, "/account", &session).text().unwrap());
+        let response = client()
+            .post(format!("{}/dismiss", console.address))
+            .header("cookie", &session)
+            .form(&[("command", format!("widgets#{number}")), ("csrf", token)])
+            .send()
+            .unwrap();
+        assert_eq!(response.status(), if available { 303 } else { 409 });
+    }
+    let details = get(&console, "/peek?command=widgets%238", &session)
+        .text()
+        .unwrap();
+    assert!(details.contains(">Undo</button>"), "{details}");
+}
+
+#[test]
 fn console_dismiss_and_undo_update_open_pages_and_name_the_account() {
     for outcome in ["failed", "ready for review"] {
         let home = configured();

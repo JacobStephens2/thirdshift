@@ -136,7 +136,13 @@ struct DismissalTarget {
     dismissed: bool,
 }
 
-fn row_for(snapshot: &Snapshot, input: &str, days: i64, undo: bool) -> Result<DismissalTarget> {
+fn row_for(
+    snapshot: &Snapshot,
+    github: &super::github::Kept,
+    input: &str,
+    days: i64,
+    undo: bool,
+) -> Result<DismissalTarget> {
     let selected = snapshot.resolve(input)?;
     let record = match selected.observation {
         Observation::Record(command) => &command.record,
@@ -162,7 +168,7 @@ fn row_for(snapshot: &Snapshot, input: &str, days: i64, undo: bool) -> Result<Di
         .selector()
         .with_context(|| format!("cannot dismiss {input}: row has no Command record"))?;
     let found = snapshot
-        .inbox(true, days)
+        .inbox(true, days, github)
         .into_iter()
         .find(|item| {
             item.command.selector().as_deref() == Some(selector.as_str())
@@ -218,8 +224,13 @@ pub(crate) enum Action {
 }
 
 /// Command details uses the same row and collapse selection as a request.
-pub(super) fn action(snapshot: &Snapshot, input: &str, days: i64) -> Option<Action> {
-    let target = row_for(snapshot, input, days, true).ok()?;
+pub(super) fn action(
+    snapshot: &Snapshot,
+    github: &super::github::Kept,
+    input: &str,
+    days: i64,
+) -> Option<Action> {
+    let target = row_for(snapshot, github, input, days, true).ok()?;
     if matches!(target.group, Group::NeedsYou | Group::ReadyForReview) {
         Some(Action::Dismiss)
     } else if target.dismissed {
@@ -308,7 +319,8 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
         chrono::Local::now(),
         config.silent_interval,
     )?;
-    let target = row_for(&snapshot, input, config.inbox_days, undo)?;
+    let github = super::github::load(&config.logs_dir);
+    let target = row_for(&snapshot, &github, input, config.inbox_days, undo)?;
     if target.members.is_empty() {
         bail!("cannot dismiss {input}: row has no Command record");
     }

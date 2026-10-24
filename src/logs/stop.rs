@@ -145,8 +145,9 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
     } else {
         reading::RetainedWork::default()
     };
+    let github = super::github::load(&config.logs_dir);
     Ok(Inspection {
-        dismissal: super::dismiss::action(&snapshot, input, config.inbox_days),
+        dismissal: super::dismiss::action(&snapshot, &github, input, config.inbox_days),
         details,
         can_stop: selected.stop_target(input).is_ok() && !pending,
         stopping,

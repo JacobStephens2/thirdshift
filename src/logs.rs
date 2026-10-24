@@ -16,6 +16,7 @@ mod command_record;
 pub mod dismiss;
 mod effects;
 pub mod export;
+pub(crate) mod github;
 pub(crate) mod owner;
 mod process_identity;
 mod reading;
