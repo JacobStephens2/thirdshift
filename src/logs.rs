@@ -13,6 +13,7 @@
 
 mod activity;
 mod command_record;
+pub mod dismiss;
 mod effects;
 pub mod export;
 pub(crate) mod github;

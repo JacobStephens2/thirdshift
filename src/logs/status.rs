@@ -142,6 +142,9 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                 if let Some(line) = item.left_line() {
                     println!("  {line}");
                 }
+                if let Some(dismissal) = &item.dismissal {
+                    println!("  {}", dismissal.line());
+                }
                 if item.count > 1 {
                     let cause = item.cause().unwrap_or_default();
                     println!("  {} Commands with this cause: {cause}", item.count);

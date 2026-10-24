@@ -1872,6 +1872,79 @@ fn rows_github_cannot_speak_for_still_age_out() {
 }
 
 #[test]
+fn dismissal_of_an_old_open_pull_request_survives_github_refreshes_until_undo() {
+    let scenario = Scenario::new();
+    let ended = hours_ago(30 * 24);
+    ready_record_with_pr(&scenario, 7, &ended, Some(7));
+    github_pr_is(&scenario, 7, "OPEN", None, None);
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(
+        status["commands"][0]["group"], "ready for review",
+        "{status}"
+    );
+
+    let calls = scenario.gh_calls().len();
+    let output = scenario.run(&["dismiss", "widgets#7"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    assert_eq!(scenario.gh_calls().len(), calls);
+
+    let closed = hours_ago(1);
+    for (state, at) in [
+        ("OPEN", None),
+        ("CLOSED", Some(closed.as_str())),
+        ("OPEN", None),
+    ] {
+        github_pr_is(&scenario, 7, state, None, at);
+        age_cache_file(&scenario, 360);
+        let output = scenario.run(&["status", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        let row = &status["commands"][0];
+        assert_eq!(row["group"], "resolved", "{status}");
+        assert_eq!(row["dismissal"]["kind"], "Ready", "{row}");
+        assert_eq!(row["github_state"], state.to_ascii_lowercase(), "{row}");
+        assert!(!row["dismissal"]["who"].as_str().unwrap().is_empty());
+    }
+
+    let calls = scenario.gh_calls().len();
+    let output = scenario.run(&["dismiss", "widgets#7", "--undo"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    assert_eq!(scenario.gh_calls().len(), calls);
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let row = &status["commands"][0];
+    assert_eq!(row["group"], "ready for review", "{status}");
+    assert_eq!(row["github_state"], "open", "{row}");
+    assert!(row.get("dismissal").is_none(), "{row}");
+}
+
+#[test]
+fn dismiss_refuses_a_ready_row_already_moved_by_the_kept_github_answer() {
+    let scenario = Scenario::new();
+    let ended = hours_ago(48);
+    let merged = hours_ago(1);
+    ready_record_with_pr(&scenario, 7, &ended, Some(7));
+    github_pr_is(&scenario, 7, "MERGED", Some(&merged), None);
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(status["commands"][0]["group"], "resolved", "{status}");
+
+    let calls = scenario.gh_calls().len();
+    let output = scenario.run(&["dismiss", "widgets#7"]);
+    assert_ne!(output.code, Some(0));
+    assert!(
+        output.stderr.contains("not Needs you or Ready for review"),
+        "{}",
+        output.stderr
+    );
+    assert_eq!(scenario.gh_calls().len(), calls);
+}
+
+#[test]
 fn reopened_pull_request_brings_back_a_resolved_row() {
     let scenario = Scenario::new();
     let ended = hours_ago(48);

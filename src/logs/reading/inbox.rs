@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use super::{Command, Entry, Health, Observation};
 use crate::github::{PrState, PullRequestState};
+use crate::logs::dismiss::{self, DismissalView, READY_KIND};
 use crate::logs::github::Kept;
 use crate::logs::stop;
 
@@ -119,6 +120,10 @@ pub(in crate::logs) struct InboxItem<'a> {
     /// closed row: when the row stopped waiting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub github_at: Option<String>,
+    /// Who dismissed the row, when, from where and the kind covered.
+    /// `None` while the row waits or was never dismissed for its kind.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dismissal: Option<DismissalView>,
 }
 
 impl InboxItem<'_> {
@@ -249,7 +254,17 @@ pub(super) fn next_change(
             // until inbox.days after its pull request merged or closed.
             let github_moved = github_left(&observation, github, ended)
                 .and_then(|(_, at)| at.checked_add_signed(chrono::Duration::days(days)));
-            [recent, retained, taken_up, github_moved]
+            // A dismissed row stays in Resolved until inbox.days after the
+            // dismissal, so its new boundary wakes open pages too.
+            let dismissed = match observation {
+                Observation::Record(command) => observation
+                    .selector()
+                    .and_then(|selector| dismiss::covering(&command.record_path, &selector))
+                    .and_then(|row| time(Some(&row.at)))
+                    .and_then(|at| at.checked_add_signed(chrono::Duration::days(days))),
+                Observation::History(_) => None,
+            };
+            [recent, retained, taken_up, github_moved, dismissed]
                 .into_iter()
                 .flatten()
                 // Grouping includes the exact cutoff; cross it before waking.
@@ -333,6 +348,24 @@ pub(super) fn list<'a>(
         };
         let landing = matches!(command, Observation::Record(command) if is_landing(command));
         let stopping = matches!(command, Observation::Record(command) if facts.state == "live" && stop::requested(&command.record_path).is_some());
+        // A dismissal holds only for the kind it covered: a row that turns
+        // into a kind it wasn't when dismissed waits again. Its kind is
+        // independent of age or a later Command taking it up, so those
+        // exits do not erase the dismissal or shorten its retention.
+        let kind_now = live_problem
+            .or(problem)
+            .map(NeedsYouKind::title)
+            .or(if facts.ready { Some(READY_KIND) } else { None });
+        let selector = command.selector();
+        let dismissed_row = match command {
+            Observation::Record(record) => selector
+                .and_then(|selector| dismiss::covering(&record.record_path, &selector))
+                .filter(|row| Some(row.kind.as_str()) == kind_now),
+            Observation::History(_) => None,
+        };
+        let dismissed = dismissed_row.is_some();
+        let dismissed_at = dismissed_row.as_ref().and_then(|row| time(Some(&row.at)));
+        let dismissal = dismissed_row.as_ref().map(|row| row.view());
         // When this row stopped waiting through the later-Command exit:
         // the earliest later start on any of its issues. Only rows that
         // waited (ended problems and ready Commands) leave through it, so
@@ -364,7 +397,9 @@ pub(super) fn list<'a>(
                 .iter()
                 .any(|(issue, start)| latest.get(issue).is_some_and(|latest| latest > start)))
             || github_open;
-        let needs_you_kind = live_problem.or_else(|| problem.filter(|_| held));
+        let needs_you_kind = live_problem
+            .or_else(|| problem.filter(|_| held))
+            .filter(|_| !dismissed);
         let from = if problem.is_some() {
             Some("needs you")
         } else if facts.ready {
@@ -384,7 +419,7 @@ pub(super) fn list<'a>(
             .filter(|_| from.is_some());
         let group = if needs_you_kind.is_some() {
             Group::NeedsYou
-        } else if facts.ready && held && github_moved.is_none() {
+        } else if facts.ready && held && github_moved.is_none() && !dismissed {
             Group::ReadyForReview
         } else if landing {
             Group::Landing
@@ -399,6 +434,8 @@ pub(super) fn list<'a>(
             || github_moved.as_ref().is_some_and(|(_, at)| {
                 cutoff.is_none_or(|cutoff| at.with_timezone(&Local) >= cutoff)
             })
+            || dismissed_at
+                .is_some_and(|at| cutoff.is_none_or(|cutoff| at.with_timezone(&Local) >= cutoff))
         {
             Group::Resolved
         } else {
@@ -426,6 +463,7 @@ pub(super) fn list<'a>(
                 left_at: departure.as_ref().map(|(_, at)| at.to_rfc3339()),
                 github_state: state.map(|state| state.state.to_string()),
                 github_at: state.and_then(event_time).map(str::to_string),
+                dismissal,
             });
         }
     }
@@ -440,16 +478,25 @@ pub(super) fn list<'a>(
     let mut collapsed: Vec<InboxItem<'_>> = Vec::new();
     let mut failures = BTreeMap::new();
     for item in items {
-        if item.needs_you_kind == Some(NeedsYouKind::Failed)
-            && let Some(cause) = item.command.facts().cause.filter(|cause| !cause.is_empty())
+        // A dismissed Failed row keeps the row it left: dismissed failures
+        // collapse with each other, never with failures still waiting.
+        let failed = item.needs_you_kind == Some(NeedsYouKind::Failed)
+            || item
+                .dismissal
+                .as_ref()
+                .is_some_and(|dismissal| dismissal.kind == NeedsYouKind::Failed.title());
+        if failed && let Some(cause) = item.command.facts().cause.filter(|cause| !cause.is_empty())
         {
-            if let Some(&index) = failures.get(cause) {
+            // A later failure with a dismissed cause starts a row of one:
+            // dismissed rows collapse only with each other.
+            let key = (cause, item.dismissal.is_some());
+            if let Some(&index) = failures.get(&key) {
                 let first: &mut InboxItem<'_> = &mut collapsed[index];
                 first.count += 1;
                 first.collapsed.push(item);
                 continue;
             }
-            failures.insert(cause, collapsed.len());
+            failures.insert(key, collapsed.len());
         }
         collapsed.push(item);
     }
