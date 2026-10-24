@@ -33,8 +33,12 @@ pub(super) struct Snapshot {
 }
 
 impl Snapshot {
-    pub(super) fn next_inbox_change(&self, days: i64) -> Option<DateTime<Local>> {
-        inbox::next_change(&self.commands, self.now, days)
+    pub(super) fn next_inbox_change(
+        &self,
+        days: i64,
+        github: &BTreeMap<String, Option<crate::github::PullRequestState>>,
+    ) -> Option<DateTime<Local>> {
+        inbox::next_change(&self.commands, self.now, days, github)
     }
 
     pub(super) fn entries(&self) -> &[Entry] {
@@ -107,8 +111,17 @@ impl Snapshot {
         })
     }
 
-    pub(super) fn inbox(&self, all: bool, days: i64) -> Vec<InboxItem<'_>> {
-        inbox::list(&self.commands, self.now, all, days)
+    pub(super) fn inbox(
+        &self,
+        all: bool,
+        days: i64,
+        github: &BTreeMap<String, Option<crate::github::PullRequestState>>,
+    ) -> Vec<InboxItem<'_>> {
+        inbox::list(&self.commands, self.now, all, days, github)
+    }
+
+    pub(super) fn ready_pull_requests(&self) -> Vec<String> {
+        inbox::ready_pull_requests(&self.commands)
     }
 
     pub(super) fn resolve(&self, input: &str) -> Result<selection::Selection<'_>> {

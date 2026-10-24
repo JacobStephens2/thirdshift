@@ -1,13 +1,14 @@
 //! Asking GitHub, through `gh`, about issues, pull requests and the signed-in
 //! user.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::process::{Command, Output};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::issue::{IssueUrl, Repo};
@@ -686,6 +687,46 @@ impl GitHub {
             .filter(|pr| pr["isCrossRepository"] != Value::Bool(true))
             .map(PullRequest::from_json)
             .collect()
+    }
+
+    /// What GitHub last showed for the pull requests `urls` names, one
+    /// batched GraphQL query per hundred, split only if it must be. Each
+    /// alias asks for its pull request's state and its merge or close time,
+    /// and for the query's own `rateLimit`. A pull request GitHub can't
+    /// resolve answers null and stays out of the map, without failing the
+    /// rest of the read. Only reads; nothing here writes to GitHub.
+    pub(crate) fn pull_request_states(
+        &self,
+        urls: &[String],
+    ) -> Result<BTreeMap<String, PullRequestState>> {
+        let mut states = BTreeMap::new();
+        for chunk in urls.chunks(100) {
+            let mut query = String::from("query {");
+            let mut aliases = Vec::new();
+            for (index, url) in chunk.iter().enumerate() {
+                let Some((owner, repo, number)) = split_pull_request_url(url) else {
+                    continue;
+                };
+                let alias = format!("pr{index}");
+                query.push_str(&format!(" {alias}: repository(owner: \"{owner}\", name: \"{repo}\") {{ pullRequest(number: {number}) {{ url state mergedAt closedAt }} }}"));
+                aliases.push((alias, url.clone()));
+            }
+            if aliases.is_empty() {
+                continue;
+            }
+            query.push_str(" rateLimit { limit cost remaining resetAt } }");
+            let query = format!("query={query}");
+            let json = self.gh_json(&["api", "graphql", "-f", &query])?;
+            let data = &json["data"];
+            for (alias, url) in aliases {
+                let pull = &data[alias.as_str()]["pullRequest"];
+                if pull.is_null() {
+                    continue;
+                }
+                states.insert(url.clone(), PullRequestState::from_json(&url, pull)?);
+            }
+        }
+        Ok(states)
     }
 
     /// Open a draft pull request from `head` into `base`, and return its URL.
@@ -1371,7 +1412,7 @@ pub struct PrSnapshot {
     pub from_fork: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrState {
     Open,
     Closed,
@@ -1433,6 +1474,47 @@ impl PullRequest {
                     "gh output has no isDraft".into(),
                 ))?,
         })
+    }
+}
+
+/// What GitHub last showed for one pull request: its state and its merge
+/// or close time, each as GitHub wrote them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct PullRequestState {
+    pub state: PrState,
+    pub merged_at: Option<String>,
+    pub closed_at: Option<String>,
+}
+
+impl PullRequestState {
+    fn from_json(url: &str, json: &Value) -> Result<Self> {
+        let state = match json["state"].as_str() {
+            Some("OPEN") => PrState::Open,
+            Some("CLOSED") => PrState::Closed,
+            Some("MERGED") => PrState::Merged,
+            other => bail!(CommandFailure::InvalidResponse(format!(
+                "gh output has an unknown PR state {other:?} for {url}"
+            ))),
+        };
+        let at = |name: &str| json[name].as_str().map(String::from);
+        Ok(PullRequestState {
+            state,
+            merged_at: at("mergedAt"),
+            closed_at: at("closedAt"),
+        })
+    }
+}
+
+/// The owner, repository and pull request number of a
+/// `https://github.com/<owner>/<repo>/pull/<number>` URL, if it parses.
+fn split_pull_request_url(url: &str) -> Option<(String, String, u64)> {
+    let path = url.strip_prefix("https://github.com/")?;
+    match path.split('/').collect::<Vec<_>>().as_slice() {
+        [owner, repo, "pull", number] if !owner.is_empty() && !repo.is_empty() => number
+            .parse()
+            .ok()
+            .map(|number| (owner.to_string(), repo.to_string(), number)),
+        _ => None,
     }
 }
 

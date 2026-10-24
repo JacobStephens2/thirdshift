@@ -15,6 +15,7 @@ mod activity;
 mod command_record;
 mod effects;
 pub mod export;
+pub(crate) mod github;
 pub(crate) mod owner;
 mod process_identity;
 mod reading;
