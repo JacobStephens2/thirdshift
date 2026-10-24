@@ -486,7 +486,7 @@ that Model grades; otherwise the User config's default choice grades. The
 Grader choice and executable are fixed before Trials start. Graders currently
 run without a sandbox too, until #1014.
 
-Each Trial and each model Grader runs in a scope of its own, with the `[trial]` caps, and raises its own `oom_score_adj` to the maximum, so a system-wide kill takes it before the factory. A Trial its cap kills dies alone and is void with `memory_cap`, from the scope's `memory.events` or journal evidence. An agent's own out-of-memory error stays failed. Code checks run the Eval task's own commands directly, under the Trial timeout but no memory cap.
+Each Trial and each Grader runs in a scope of its own, with the `[trial]` caps, and raises its own `oom_score_adj` to the maximum, so it gives way before the factory under system-wide memory pressure. A Trial its cap kills dies alone and is void with `memory_cap`, from the scope's `memory.events` or journal evidence. An agent's own out-of-memory error stays failed. Each code check has its own Grader scope and the Trial timeout. A Grader killed by its cap stops the Experiment with a diagnostic so you can raise the cap and retry.
 
 Each Trial retains the model's pass/fail, reason, wrong-finding flag and
 borderline mark beside its mechanical checks. A mechanical failure still fails
@@ -703,6 +703,11 @@ effort = ""   # the Model's variant, passed as #effort; default blank, for OpenC
 fix = false   # Security runs may fix reproduced findings; default false
 review = false   # Runs review their change for Security findings; default false
 harness = ""   # the Harness for Security runs, unless the command names one, and for every Security review; default blank; blank or missing leaves Security runs on harness.default, or Claude Code if that is missing, and Security reviews on their Command's Harness
+
+[trial]
+memory_high = "1G"   # throttle each Trial and Grader scope past this; default 1G
+memory_max = "2G"   # kill each Trial and Grader scope past this, voiding the Trial; default 2G
+memory_swap_max = "1G"   # swap each Trial and Grader scope may use; default 1G
 ```
 
 Every key holds its real value, so a Run reading it does exactly what it does with no file. `email.to` has no default, so `setup` suggests one: the public email of your GitHub profile (from `gh api user`), else your global git `user.email`, unless that is a `@users.noreply.github.com` address, which can't receive mail. With neither, `email.to` is the only line written commented out, as above. `setup` never asks `gh` for more scopes, so a private GitHub email is not read, and a Run never looks the suggestion up: `--email` with no address and no `email.to` still stops the Run. From a terminal (stdin and stderr both terminals), `setup` first asks, on stderr:
@@ -735,7 +740,7 @@ With `email.always = true`, every Run sends a [Run notification](#run-notificati
 
 `pickup.limit` sets the [Claim limit](#the-claim-limit): how many open issues labelled `in-progress` stop a [Pickup run](#pickup-runs) from taking another, by default 3. It must be a whole number from 1 up. There is no command-line flag for it.
 
-`trial.memory_high`, `trial.memory_max` and `trial.memory_swap_max` cap each Trial and each model Grader in its own scope, from `systemd-run --user --scope`. Past `memory_high` the scope throttles. Past `memory_max` its processes are killed and the Trial is void. `memory_swap_max` bounds its swap. They default to `1G`, `2G` and `1G`, measured from the largest Harness resident sizes with headroom for two workers beside the factory's builds on an 8 GiB host. Each must be a byte count systemd accepts, such as `512M`, `2G` or `infinity`. There is no command-line flag for them. The Experiment suite overrides them with `THIRDSHIFT_TRIAL_MEMORY_HIGH`, `THIRDSHIFT_TRIAL_MEMORY_MAX` and `THIRDSHIFT_TRIAL_MEMORY_SWAP_MAX` for a small test cap. Scopes need your user manager: run `loginctl enable-linger <user>` once, so they work while you are logged out. Without a reachable manager Trials and Graders run directly, still with their raised `oom_score_adj`, and a warning names the linger step.
+`trial.memory_high`, `trial.memory_max` and `trial.memory_swap_max` cap each Trial and each Grader in its own scope, from `systemd-run --user --scope`. Past `memory_high` the scope throttles. Past `memory_max` its processes are killed together and the Trial is void. `memory_swap_max` bounds its swap. They default to `1G`, `2G` and `1G`, chosen with headroom above #1009's largest observed Harness resident size of about 480 MiB. That snapshot had no builds running; a Trial's footprint beside two building Runs remains unmeasured. Each limit must be a byte count systemd accepts, such as `512M`, `2G` or `infinity`. There is no command-line flag for them. The Experiment suite overrides them with `THIRDSHIFT_TRIAL_MEMORY_HIGH`, `THIRDSHIFT_TRIAL_MEMORY_MAX` and `THIRDSHIFT_TRIAL_MEMORY_SWAP_MAX` for a small test cap. Scopes need your user manager: run `loginctl enable-linger <user>` once, so they work while you are logged out. A logged-out launcher discovers the user's runtime directory if its environment omits it. Without a reachable manager the Experiment stops before dispatch and names the linger step.
 
 `logs.dir` sets the root of the [logs](#logs), with each repository's in its `<owner>/<repo>/` folder, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
 

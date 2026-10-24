@@ -290,9 +290,7 @@ mod tests {
             security_harness: None,
             security_fix: None,
             security_review: false,
-            trial_memory_high: crate::scope::DEFAULT_MEMORY_HIGH.to_string(),
-            trial_memory_max: crate::scope::DEFAULT_MEMORY_MAX.to_string(),
-            trial_memory_swap_max: crate::scope::DEFAULT_MEMORY_SWAP_MAX.to_string(),
+            trial_caps: crate::scope::Caps::default(),
         }
     }
 

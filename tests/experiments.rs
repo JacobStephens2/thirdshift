@@ -473,6 +473,25 @@ impl Fixture {
 
     fn with_session(session: &str, trials: usize) -> Self {
         let scenario = Scenario::new();
+        // Ordinary fixtures use a pass-through manager at the external
+        // systemd seam. Live cap tests forward the real bus explicitly.
+        for (name, body) in [
+            (
+                "systemctl",
+                "case \"$*\" in '--user show -p SystemState --value') echo running ;; esac",
+            ),
+            (
+                "systemd-run",
+                "while [ \"$#\" -gt 0 ] && [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"",
+            ),
+            ("journalctl", "exit 0"),
+        ] {
+            let path = scenario.path(&format!("bin/{name}"));
+            fs::write(&path, format!(
+                "#!/bin/sh\nif [ -n \"${{DBUS_SESSION_BUS_ADDRESS:-}}\" ]; then exec /usr/bin/{name} \"$@\"; fi\n{body}\n"
+            )).unwrap();
+            fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+        }
         fs::write(scenario.path("claude-script.sh.grader"), r#"
 python3 - <<'PY'
 import json, os
@@ -1603,6 +1622,133 @@ fn trial_only_memory_caps_are_counted_per_arm_and_repeated_caps_are_findings() {
 }
 
 #[test]
+fn review_code_graders_raise_their_own_oom_score() {
+    if !std::path::Path::new("/proc/self/oom_score_adj").is_file() {
+        println!("SKIPPED (code Grader OOM score): no /proc/self/oom_score_adj");
+        return;
+    }
+    let fixture = Fixture::new();
+    let task = fixture
+        .scenario
+        .path("home/.thirdshift/evals/suites/spec-review/tasks/fixture/task.toml");
+    let manifest = fs::read_to_string(&task).unwrap();
+    fs::write(&task, manifest.replace("[inputs]", "checks = [[\"sh\", \"-c\", \"printf CODE_GRADER_ADJ=; cat /proc/self/oom_score_adj\"]]\n[inputs]")).unwrap();
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(
+        run.stdout.contains("CODE_GRADER_ADJ=1000"),
+        "Code Graders must raise their own score: {}",
+        run.stdout
+    );
+}
+
+#[test]
+fn review_an_unreachable_manager_cannot_dispatch_uncapped_trials() {
+    let fixture = Fixture::new();
+    let run = fixture.scenario.run_with_env(
+        &["experiment", "candidate", "--json"],
+        &[
+            ("THIRDSHIFT_TRIAL_NO_SANDBOX", "1"),
+            ("XDG_RUNTIME_DIR", "/nonexistent-thirdshift-review-runtime"),
+            (
+                "DBUS_SESSION_BUS_ADDRESS",
+                "unix:path=/nonexistent-thirdshift-review-bus",
+            ),
+        ],
+    );
+    // Refusing dispatch is acceptable when no capped scope can be created.
+    if fixture.trial_calls().is_empty() {
+        assert_eq!(run.code, Some(1), "{}", run.stderr);
+        assert!(
+            run.stderr.contains("reachable systemd user manager"),
+            "{}",
+            run.stderr
+        );
+        return;
+    }
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment: Value = serde_json::from_str(&run.stdout).unwrap();
+    let trials = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}/trials",
+        experiment["id"].as_str().unwrap()
+    ));
+    for trial in fs::read_dir(trials).unwrap().map(Result::unwrap) {
+        for attempt in fs::read_dir(trial.path()).unwrap().map(Result::unwrap) {
+            if attempt.path().join("result.json").is_file() {
+                assert!(
+                    attempt.path().join("scope").is_file(),
+                    "Trial dispatched without its required memory scope: {:?}; stderr: {}",
+                    attempt.path(),
+                    run.stderr
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn review_a_cap_killed_tool_cannot_leave_a_successful_trial() {
+    if !scope_available() {
+        println!("SKIPPED (a cap-killed tool voids its Trial): no systemd user manager");
+        return;
+    }
+    let (Ok(bus), Ok(runtime)) = (
+        std::env::var("DBUS_SESSION_BUS_ADDRESS"),
+        std::env::var("XDG_RUNTIME_DIR"),
+    ) else {
+        println!("SKIPPED (a cap-killed tool voids its Trial): no user bus in test env");
+        return;
+    };
+    let fixture = Fixture::new();
+    fs::write(
+        fixture.scenario.path(&format!(
+            "home/.thirdshift/evals/builds/{}/thirdshift",
+            fixture.candidate
+        )),
+        r#"#!/usr/bin/python3
+import json, signal, subprocess, sys, time
+from pathlib import Path
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+request = json.load(open(sys.argv[2]))
+output = Path(request['output_dir'])
+output.mkdir(parents=True, exist_ok=True)
+report = output / 'standards.md'
+report.write_text('Standards report\n')
+time.sleep(1)
+subprocess.run([sys.executable, '-c', 'a=[bytearray(1000000) for _ in range(2000)]'])
+print(json.dumps(dict(version=1, outcome='succeeded', void_cause=None, cause=None,
+    timings=dict(total_ms=1, session_ms=1), session_id=None, log=None,
+    model_evidence=None, reports=dict(standards=str(report), spec=None))), flush=True)
+"#,
+    )
+    .unwrap();
+    let run = fixture.scenario.run_with_env(
+        &["experiment", "candidate", "--json"],
+        &[
+            ("THIRDSHIFT_TRIAL_NO_SANDBOX", "1"),
+            ("THIRDSHIFT_TRIAL_MEMORY_HIGH", "300M"),
+            ("THIRDSHIFT_TRIAL_MEMORY_MAX", "300M"),
+            ("THIRDSHIFT_TRIAL_MEMORY_SWAP_MAX", "0"),
+            ("DBUS_SESSION_BUS_ADDRESS", bus.as_str()),
+            ("XDG_RUNTIME_DIR", runtime.as_str()),
+        ],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment: Value = serde_json::from_str(&run.stdout).unwrap();
+    let candidate = experiment["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["arm"] == "candidate")
+        .unwrap();
+    assert_eq!(
+        candidate["outcome"], "void",
+        "a capped Trial must be void: {candidate}"
+    );
+    assert_eq!(candidate["attempts"][0]["void_cause"], "memory_cap");
+}
+
+#[test]
 fn a_trial_over_its_cap_dies_alone_and_is_void_while_others_carry_on() {
     if !scope_available() {
         println!("SKIPPED (a Trial over its cap dies alone): no systemd user manager");
@@ -1616,8 +1762,8 @@ fn a_trial_over_its_cap_dies_alone_and_is_void_while_others_carry_on() {
         println!("SKIPPED (a Trial over its cap dies alone): no python3");
         return;
     }
-    // The scenario environment is isolated, so forward the user bus: without
-    // it the user manager is unreachable and Trials fall back to direct.
+    // Forward the real user bus past the fixture's pass-through manager so
+    // this acceptance test exercises kernel-enforced memory caps.
     let (Ok(bus), Ok(runtime)) = (
         std::env::var("DBUS_SESSION_BUS_ADDRESS"),
         std::env::var("XDG_RUNTIME_DIR"),

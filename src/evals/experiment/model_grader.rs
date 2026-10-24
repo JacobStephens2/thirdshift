@@ -114,7 +114,7 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
     let grader: Grader =
         serde_json::from_slice(&fs::read(experiment.directory.join("grader.json"))?)?;
     // Machine caps are read live, not fixed with the Bar.
-    let caps = crate::scope::Caps::from_config_or_env(&crate::config::UserConfig::load()?)?;
+    let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
     for task in &experiment.tasks {
         interrupt::check()?;
         let key = Sha256::new()
@@ -334,9 +334,7 @@ fn grade(
         .env("THIRDSHIFT_GRADER_SCORES", &scores);
     let scope = launched.scope;
     // The unit name stays in the workspace for `journalctl --user -u` after.
-    if let Some(scope) = &scope {
-        fs::write(workspace.join("scope"), &scope.unit)?;
-    }
+    fs::write(workspace.join("scope"), scope.unit())?;
     let ended = Recording::for_trial().run(
         "model Grader",
         &choice,
@@ -352,10 +350,7 @@ fn grade(
     );
     interrupt::check()?;
     let ended = ended.map_err(|_| {
-        if scope
-            .as_ref()
-            .is_some_and(|scope| scope.journal_oom_killed())
-        {
+        if scope.oom_killed() {
             anyhow::anyhow!(
                 "model Grader hit its memory cap ({}); see private Grader artifacts, \
                  and raise the trial.memory_max User config to retry",

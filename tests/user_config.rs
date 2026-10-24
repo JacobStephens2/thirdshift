@@ -142,6 +142,24 @@ fn a_spec_parallel_that_is_not_a_whole_number_from_1_up_stops_the_run() {
 }
 
 #[test]
+fn trial_memory_caps_reject_multiple_suffixes_before_work() {
+    for value in ["2GG", "512KK", "1MK"] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(&format!("[trial]\nmemory_max = \"{value}\"\n"));
+
+        let result = scenario.run(&["status", "--json"]);
+
+        assert_eq!(result.code, Some(1), "{value}: {}", result.stderr);
+        scenario.assert_rejected_before_any_work(&result, &path.display().to_string());
+        assert!(
+            result.stderr.contains("must be a byte count"),
+            "{value}: {}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
 fn a_trial_memory_cap_systemd_cannot_use_stops_the_run() {
     for config in [
         "[trial]\nmemory_high = \"much\"\n",

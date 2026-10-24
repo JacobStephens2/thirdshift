@@ -98,28 +98,31 @@ breaks on a machine.
 
 ## Memory
 
-Each Trial and each model Grader runs in a scope of its own, from
+Each Trial and each Grader runs in a scope of its own, from
 `systemd-run --user --scope`, with `MemoryHigh`, `MemoryMax` and
 `MemorySwapMax` from the User config's `[trial]` section (defaults `1G`,
-`2G` and `1G`, measured from the largest Harness resident sizes). The scope's
+`2G` and `1G`, chosen above #1009's observed Harness resident sizes). The scope's
 own process raises its `oom_score_adj` to the maximum, so a system-wide kill
 takes the Trial or Grader before the factory; that covers old Arm builds
 through inheritance, and the Trial raises its own too, which covers direct
-runs. A Trial its cap kills dies
-alone and is void with `memory_cap`. The launcher watches the scope's
+runs. The scope sets [`OOMPolicy=kill`](https://www.freedesktop.org/software/systemd/man/255/systemd.scope.html),
+so a tool killed by OOM takes down its whole Trial or Grader, even when its
+parent catches the tool's failure. A Trial its cap kills dies alone and is
+void with `memory_cap`. The launcher watches the scope's
 `memory.events` while the Trial runs, and reads the user journal's `oom-kill`
 result for the scope after a suspicious exit, which survives the scope
 itself. Either is the outer launcher's evidence; without it the Trial stays
 failed. Each attempt keeps its scope's unit name beside it, for
-`journalctl --user -u` after. Code checks run the Eval task's own commands
-directly, under the Trial timeout but no memory cap: they are Eval-authored,
-like CI, and their compilers need gigabytes. `THIRDSHIFT_TRIAL_MEMORY_HIGH`,
+`journalctl --user -u` after. Each code check runs in its own Grader scope,
+under the Trial timeout and caps. A cap-killed Grader stops the Experiment
+with a diagnostic; raise the cap and rerun to retry. `THIRDSHIFT_TRIAL_MEMORY_HIGH`,
 `THIRDSHIFT_TRIAL_MEMORY_MAX` and `THIRDSHIFT_TRIAL_MEMORY_SWAP_MAX`, when set
 and not empty, override the User config's caps: the Experiment suite uses them
 for a small test cap. Scopes need the calling user's manager: run
 `loginctl enable-linger <user>` once, so they work while logged out. Without
-a reachable manager the Trial or Grader runs directly, still with its raised
-`oom_score_adj`, and a warning names the linger step.
+a reachable manager the Experiment stops before dispatch and names the linger
+step. Logged-out launchers discover the user's runtime directory when their
+environment omits it.
 
 ## Result
 

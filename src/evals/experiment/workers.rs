@@ -267,7 +267,7 @@ fn run_trial(
         let mut trace = super::trace::Attempt::start(&attempt, &trial.key(), context)?;
         // Machine caps are read live per attempt, not fixed with the Bar: an
         // operator edit between attempts applies to the next one.
-        let caps = crate::scope::Caps::from_config_or_env(&crate::config::UserConfig::load()?)?;
+        let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
         let launched = trial_command(
             &Attempt {
                 experiment,
@@ -281,13 +281,7 @@ fn run_trial(
             &caps,
         )?;
         // The unit name stays in the attempt for `journalctl --user -u` after.
-        if let Some(scope) = &launched.scope {
-            fs::write(attempt.join("scope"), &scope.unit)?;
-        }
-        // Watch the scope's `memory.events` while the Trial runs. The watch
-        // resolves lazily: the scope only exists once the Trial has started.
-        let unit = launched.scope.as_ref().map(|scope| scope.unit.clone());
-        let watch = RefCell::new(None);
+        fs::write(attempt.join("scope"), launched.scope.unit())?;
         let mut command = launched.command;
         trace.inherit(&mut command)?;
         let output = process::output_until(
@@ -301,13 +295,7 @@ fn run_trial(
             Instant::now() + Duration::from_secs(bar.timeout_seconds),
             &|| {
                 monitor.borrow_mut().check(signal)?;
-                let mut watch = watch.borrow_mut();
-                if watch.is_none() {
-                    *watch = unit.as_deref().and_then(crate::scope::watch_scope);
-                }
-                if let Some(watch) = watch.as_mut() {
-                    watch.sample();
-                }
+                launched.scope.sample();
                 Ok(())
             },
         );
@@ -318,16 +306,7 @@ fn run_trial(
         // gone. Only failed Trials consult it: explicit Void causes stay as
         // the Trial diagnosed them, so limit pauses keep pausing, and an
         // agent's own out-of-memory error leaves no kernel kill behind.
-        let cap_killed = || {
-            watch
-                .borrow()
-                .as_ref()
-                .is_some_and(|watch| watch.kernel_kill_seen())
-                || launched
-                    .scope
-                    .as_ref()
-                    .is_some_and(|scope| scope.journal_oom_killed())
-        };
+        let cap_killed = || launched.scope.oom_killed();
         let mut protocol = match output {
             Ok(output) => {
                 fs::write(attempt.join("stdout"), &output.stdout)?;
@@ -335,8 +314,7 @@ fn run_trial(
                 // systemd-run reports its scope's signal death as an exit
                 // code, so a scoped SIGKILL arrives as 137, not as a signal.
                 let sigkilled = output.status.signal() == Some(libc::SIGKILL)
-                    || launched.scope.is_some()
-                        && output.status.code() == Some(128 + libc::SIGKILL);
+                    || output.status.code() == Some(128 + libc::SIGKILL);
                 if sigkilled {
                     Output::failed(
                         started.elapsed().as_millis(),
