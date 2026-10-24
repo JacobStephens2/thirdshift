@@ -2132,10 +2132,15 @@ fn graphql(state: &Json, args: &[&str]) {
 /// GraphQL-shaped nodes in `scoring_prs`, independently of live Run PRs.
 fn scoring_search(state: &Json, variables: &BTreeMap<String, String>) {
     if let Some(script) = state.get("on_scoring_search").and_then(Json::as_str) {
+        // Like the other hooks, release the fake's state lock while held.
+        // Call readers take this lock too, so a test must still be able to
+        // inspect calls and Stop a Scoring command during its search.
+        unlock();
         let status = Command::new("bash")
             .args(["-e", "-c", script])
             .status()
             .unwrap();
+        lock();
         if !status.success() {
             die("scoring search hook failed", 1);
         }

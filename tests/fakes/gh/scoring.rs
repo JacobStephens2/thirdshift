@@ -132,7 +132,7 @@ fn closed_bugs(state: &Json, variables: &BTreeMap<String, String>) {
         .unwrap();
     let (start, end) = range
         .split_once("..")
-        .unwrap_or(("", range.trim_start_matches('<')));
+        .unwrap_or(("", range.trim_start_matches(['<', '='])));
     let nodes: Vec<_> = state
         .get("scoring_bugs")
         .map(Json::items)
@@ -150,7 +150,11 @@ fn closed_bugs(state: &Json, variables: &BTreeMap<String, String>) {
                 .unwrap()
                 .eq_ignore_ascii_case(owner)
                 && (start.is_empty() || at >= &start[..19])
-                && at <= &end[..19]
+                && if range.starts_with('<') && !range.starts_with("<=") {
+                    at < &end[..19]
+                } else {
+                    at <= &end[..19]
+                }
         })
         .cloned()
         .collect();

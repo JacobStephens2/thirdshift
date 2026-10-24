@@ -2,7 +2,7 @@
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
@@ -12,7 +12,7 @@ use crate::config::UserConfig;
 use crate::git::Git;
 use crate::github::{GitHub, scoring::origins::ClosedBug};
 use crate::harness::built_with;
-use crate::session::recording::{Input, Recording};
+use crate::session::private;
 use crate::{interrupt, logs, prompt};
 
 #[derive(Serialize, Deserialize)]
@@ -144,47 +144,27 @@ fn analyze(config: &UserConfig, bug: &ClosedBug, fix: &str, directory: &Path) ->
     )?;
     let prompt = prompt::bug_origin();
     fs::write(workspace.join("prompt.md"), &prompt)?;
-    crate::resources::wait()?;
     let choice = config.scoring.grader();
-    let adapter = choice.harness.adapter();
     let binary = crate::sandbox::resolve_binary(choice.harness.name())?;
-    let invocation = adapter.trial_session(&choice, None, &prompt);
-    let sandbox = crate::sandbox::for_session(&choice, &binary, &workspace, directory)?;
     let caps = config.trial_caps.with_env()?;
-    let mut launched = match &sandbox {
-        Some(prepared) => prepared
-            .launch()
-            .scoped_command(&invocation.args, &workspace, &caps)?,
-        None => crate::scope::grader_command(&binary, &invocation.args, &workspace, &caps)?,
-    };
-    launched
-        .command
-        .stderr(fs::File::create(directory.join("stderr"))?);
-    let ended = Recording::for_trial().run(
-        "Bug-origin proposal",
-        &choice,
-        &mut launched.command,
-        Input {
-            prompt: &prompt,
-            stdin: invocation.stdin.as_deref(),
-            deadline: Some(Instant::now() + Duration::from_secs(300)),
-            private: true,
-        },
-        &directory.join("session.jsonl"),
-        adapter.interpretation(&workspace, &prompt),
-    );
-    interrupt::check()?;
-    let ended = ended.map_err(|error| {
+    private::run(private::Request {
+        kind: "Bug-origin proposal",
+        choice: &choice,
+        binary: &binary,
+        workspace: &workspace,
+        artifacts: directory,
+        prompt: &prompt,
+        timeout: Duration::from_secs(300),
+        caps: &caps,
+        environment: &[],
+    })
+    .map_err(|error| {
         if error.is::<crate::session::limits::Reached>() {
             anyhow::anyhow!("Scoring stopped at a plan-limit warning; window was not advanced")
         } else {
             error.context("Bug-origin session failed")
         }
     })?;
-    ensure!(
-        ended.killed.is_empty(),
-        "Bug-origin session left unfinished background work"
-    );
     let response: Response = serde_json::from_slice(
         &fs::read(workspace.join("proposal.json"))
             .context("Bug-origin session left no proposal")?,

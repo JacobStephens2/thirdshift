@@ -5,6 +5,67 @@ use chrono::{TimeDelta, Utc};
 use serde_json::{Value, json};
 use support::Scenario;
 
+#[test]
+fn sandboxed_bug_origin_stops_at_codex_native_plan_limit() {
+    if !std::process::Command::new("bwrap")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        println!("SKIPPED (sandboxed Bug-origin native quota): bwrap unavailable");
+        return;
+    }
+    let scenario = scenario();
+    scenario.user_config_is("[scoring]\nowners = [\"acme\"]\nharness = \"codex\"\n");
+    let codex = scenario.path("bin/codex");
+    std::fs::remove_file(&codex).unwrap();
+    support::write_executable(
+        &codex,
+        r#"#!/bin/sh
+set -eu
+if [ "${1-}" = --version ]; then
+    printf '%s\n' 'codex-cli 1.2.3'
+    exit 0
+fi
+printf '%s\n' '{"type":"thread.started","thread_id":"origin-native-fixture"}'
+printf '%s\n' '{"type":"turn.started"}'
+mkdir -p "$HOME/.codex/sessions/2026/10/24"
+native="$HOME/.codex/sessions/2026/10/24/rollout-origin-native-fixture.jsonl"
+printf '{"type":"session_meta","payload":{"id":"origin-native-fixture","cwd":"%s"}}\n' "$PWD" > "$native"
+sleep 1.1
+timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","rate_limits":{"secondary":{"used_percent":85}}}}\n' "$timestamp" >> "$native"
+sleep 2
+printf '%s' '{"commit":null,"reason":"No introducing commit is established by the available history."}' > proposal.json
+printf '%s\n' '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}'
+"#,
+    );
+    let fix = scenario
+        .origin_git(&["rev-parse", "main"])
+        .trim()
+        .to_owned();
+    let mut state = scenario.gh_state();
+    state["scoring_bugs"] = json!([bug(8, Some(&fix), 1)]);
+    scenario.write_gh_state(&state);
+    let run = scenario.run_with_env(&["score"], &[("THIRDSHIFT_TRIAL_NO_SANDBOX", "")]);
+    assert_eq!(
+        run.code,
+        Some(1),
+        "Scoring missed the native Codex warning: {}",
+        run.stderr
+    );
+    assert!(
+        run.stderr
+            .contains("Scoring stopped at a plan-limit warning"),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        weeks(&scenario).is_empty(),
+        "a plan-limit stop advanced the window"
+    );
+}
+
 fn scenario() -> Scenario {
     let scenario = Scenario::new();
     // A pinned Harness keeps its executable name; the shared fake dispatches

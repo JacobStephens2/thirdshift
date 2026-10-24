@@ -87,7 +87,9 @@ impl GitHub {
             while let Some((start, end)) = windows.pop() {
                 let end_text = end.to_rfc3339_opts(SecondsFormat::Secs, true);
                 let range = start.map_or_else(
-                    || format!("<{end_text}"),
+                    // Search only understands whole seconds. Include the
+                    // cutoff's second, then filter against the exact end.
+                    || format!("<={end_text}"),
                     |start| {
                         format!(
                             "{}..{end_text}",

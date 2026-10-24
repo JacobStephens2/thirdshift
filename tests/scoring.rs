@@ -508,7 +508,7 @@ fn a_live_scoring_command_is_visible_stoppable_and_excludes_a_second_command() {
     let scenario = scenario();
     let mut state = scenario.gh_state();
     state["on_scoring_search"] = format!(
-        "touch '{}'\nwhile true; do sleep 0.05; done",
+        "touch '{}'\nsleep 5",
         scenario.path("search-started").display()
     )
     .into();
