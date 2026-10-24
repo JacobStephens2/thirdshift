@@ -204,7 +204,8 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
     let now = Local::now();
     let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
     // The Console shows the same groups as `status` by reading the same
-    // kept answer. Only `status` refreshes it from GitHub.
+    // kept answer. The Console's background reader refreshes it independently
+    // of requests; status reads GitHub only when that answer is too old.
     let kept = crate::logs::github::load(&config.logs_dir);
     let items = snapshot.inbox(false, config.inbox_days, &kept);
     let listed: std::collections::BTreeSet<_> = items

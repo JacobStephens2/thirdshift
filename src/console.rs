@@ -5,6 +5,7 @@ mod auth;
 pub(crate) mod conversation;
 mod cronjobs;
 mod filters;
+mod github;
 pub use account_commands::{password, print_log, sign_out};
 mod install;
 pub use install::{install, install_to};
@@ -337,6 +338,7 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             .context("can't listen for the Console on localhost")?;
         let watched = executable.clone();
         let (changes, notifier, observer) = changes::observe(&config, &executable)?;
+        let github = github::follow();
         let mut control = changes.clone();
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
@@ -371,6 +373,8 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             // graceful shutdown waits for the connections to finish.
             observer.abort();
             let _ = observer.await;
+            github.abort();
+            let _ = github.await;
         })
         .await
         .context("Console server failed")?;
