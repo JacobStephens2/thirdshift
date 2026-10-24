@@ -52,6 +52,26 @@ struct PullRequest {
     run: Option<Run>,
 }
 
+impl PullRequest {
+    fn attributed(logs_dir: &Path, url: String, body: &str) -> Result<Self> {
+        let run = if let Some((command_record, name)) = logs::run_for_pull_request(logs_dir, &url)?
+        {
+            Some(Run::Local {
+                command_record,
+                name,
+            })
+        } else {
+            built_with::read(body).map(|built| Run::BuiltWith {
+                harness: built.harness.name().into(),
+                version: built.version,
+                model: built.model,
+                effort: built.effort,
+            })
+        };
+        Ok(Self { url, run })
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case")]
 enum Run {
@@ -99,27 +119,11 @@ pub(super) fn propose(
                 if !pr.merged_at.is_some_and(|merged| merged <= bug.closed_at) {
                     continue;
                 }
-                let run = if let Some((command_record, name)) =
-                    logs::run_for_pull_request(&config.logs_dir, &pr.html_url)?
-                {
-                    Some(Run::Local {
-                        command_record,
-                        name,
-                    })
-                } else {
-                    built_with::read(pr.body.as_deref().unwrap_or_default()).map(|built| {
-                        Run::BuiltWith {
-                            harness: built.harness.name().into(),
-                            version: built.version,
-                            model: built.model,
-                            effort: built.effort,
-                        }
-                    })
-                };
-                pull_requests.push(PullRequest {
-                    url: pr.html_url,
-                    run,
-                });
+                pull_requests.push(PullRequest::attributed(
+                    &config.logs_dir,
+                    pr.html_url,
+                    pr.body.as_deref().unwrap_or_default(),
+                )?);
             }
         }
         proposals.push(Proposal {

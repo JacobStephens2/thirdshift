@@ -25,6 +25,7 @@ struct Metadata {
     head_ref_name: String,
     merged_at: DateTime<Utc>,
     commits: Commits,
+    merge_commit: MergeCommit,
     closing_issues_references: Connection<Linked>,
 }
 
@@ -45,6 +46,11 @@ struct CommitNode {
 }
 #[derive(Deserialize)]
 struct Parents {
+    parents: Oids,
+}
+#[derive(Deserialize)]
+struct MergeCommit {
+    oid: String,
     parents: Oids,
 }
 #[derive(Deserialize)]
@@ -94,24 +100,44 @@ impl GitHub {
             .first()
             .map(|issue| IssueUrl::parse(&issue.url))
             .transpose()?
-            .or(inferred)
-            .context("Bug-origin pull request has no originating issue")?;
-        let text = self.scoring_issue_at(&issue, metadata.merged_at)?;
-        let base = metadata
-            .commits
-            .nodes
-            .first()
-            .and_then(|node| node.commit.parents.nodes.first())
-            .context("Bug-origin pull request has no base commit")?
-            .oid
-            .clone();
+            .or(inferred);
+        let (issue_url, input) = if let Some(issue) = issue {
+            let text = self.scoring_issue_at(&issue, metadata.merged_at)?;
+            (issue.url, format!("# {}\n\n{}\n", text.title, text.body))
+        } else {
+            // GitHub's /issues/<PR number> redirects to that PR. The Trial
+            // needs an identity, but must not be given the later bug report.
+            (
+                pr.url.clone(),
+                format!(
+                    "# Historical pull request\n\n{}\n\nNo originating issue was linked; no original issue specification is available.\n",
+                    metadata.body
+                ),
+            )
+        };
+        // A squash or merge commit records the target at merge time. GitHub
+        // rebases rewrite commit IDs; merge-base with the original PR head
+        // therefore also discards the rebased PR commits on that parent.
+        // Keep the first-commit parent for a preserved, linear PR head.
+        let base = if metadata.merge_commit.oid == metadata.head_ref_oid {
+            metadata
+                .commits
+                .nodes
+                .first()
+                .and_then(|node| node.commit.parents.nodes.first())
+        } else {
+            metadata.merge_commit.parents.nodes.first()
+        }
+        .context("Bug-origin pull request has no base commit")?
+        .oid
+        .clone();
         Ok(ReviewedPullRequest {
             body: metadata.body,
             base,
             head: metadata.head_ref_oid,
-            input: format!("# {}\n\n{}\n", text.title, text.body),
+            input,
             trial: crate::trial::Inputs {
-                issue_url: issue.url,
+                issue_url,
                 base: metadata.base_ref_name,
                 branch: metadata.head_ref_name,
                 pr_url: format!("https://github.com/{}/pull/{}", pr.repo_slug(), pr.number),
@@ -124,6 +150,7 @@ impl GitHub {
 const QUERY: &str = r#"query BugOriginReview($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) { pullRequest(number: $number) {
     body headRefOid baseRefName headRefName mergedAt
+    mergeCommit { oid parents(first: 1) { nodes { oid } } }
     commits(first: 1) { nodes { commit { parents(first: 1) { nodes { oid } } } } }
     closingIssuesReferences(first: 100) { pageInfo { hasNextPage } nodes {
       url labels(first: 100) { pageInfo { hasNextPage } nodes { name } }

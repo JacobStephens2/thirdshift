@@ -1765,13 +1765,17 @@ its attribution to the chosen Run, without rewriting old Command records.
 
 Confirmation also creates a private `proposed` Eval task in the `code-review`
 suite, creating the suite with its usual dependencies when absent. Its local
-repository pins the PR head and the parent of its first commit, separately
-from the merge tree and later fix. It carries the originating issue at merge
-time and a draft catch criterion based on the proposal's evidence. Review and
+repository pins the PR head and its historical merge-base, separately from
+the merge tree and later fix. The target's parent at merge time excludes
+upstream changes already merged into the PR branch; preserved linear heads
+use the first PR commit's parent. It carries the originating issue at merge
+time, or the PR body when no issue was linked, and a draft catch criterion
+based on the proposal's evidence. Review and
 refine that criterion before `thirdshift evals approve code-review <task>`.
 Until approval, preparation and Experiments exclude it. Repeated confirmation
 keeps the same Eval task, including edits and approval. Rejecting or correcting
-an already confirmed origin withdraws its old unapproved proposal; a task the
+an already confirmed origin withdraws its old unapproved proposal, including
+prior occurrences of a reopened and reclosed bug; a task the
 Day shift independently approved stays in the suite. Security fixes cannot be
 selected as origins. All these files stay in private Eval storage on this host.
 

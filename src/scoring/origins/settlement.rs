@@ -5,9 +5,8 @@ use anyhow::{Context, Result, bail, ensure};
 use super::{Proposal, PullRequest, Run, Settlement, State};
 use crate::config::UserConfig;
 use crate::github::GitHub;
-use crate::harness::built_with;
 use crate::issue::IssueUrl;
-use crate::{config, evals, logs, scoring};
+use crate::{config, evals, scoring};
 
 enum Action {
     Confirm,
@@ -89,6 +88,17 @@ pub(crate) fn execute(options: Options) -> Result<String> {
         })
         .transpose()?;
     if let Some(action) = options.action {
+        let previous: Vec<_> = weeks
+            .iter()
+            .flat_map(|week| week.bug_origins.iter().flatten())
+            .filter(|origin| Some(&origin.issue) == issue.as_ref())
+            .filter_map(|origin| {
+                origin
+                    .settlement
+                    .as_ref()
+                    .map(|settlement| settlement.eval_task.clone())
+            })
+            .collect();
         let week = weeks
             .iter_mut()
             .rev()
@@ -108,10 +118,24 @@ pub(crate) fn execute(options: Options) -> Result<String> {
             .find(|origin| Some(&origin.issue) == issue.as_ref())
             .unwrap();
         settle(origin, action)?;
+        let keep = origin
+            .settlement
+            .as_ref()
+            .map(|settlement| settlement.eval_task.clone());
         config::replace(
             &scoring::checkpoint(&directory, week)?,
             &serde_json::to_string_pretty(week)?,
         )?;
+        // Reopened and reclosed bugs can have several retained occurrences.
+        // The latest decision supersedes all their pending proposals.
+        for reference in previous {
+            if keep
+                .as_ref()
+                .is_none_or(|keep| keep.suite != reference.suite || keep.task != reference.task)
+            {
+                evals::bug_origin::withdraw(&reference)?;
+            }
+        }
     }
     let origins: Vec<&Proposal> = weeks
         .iter()
@@ -199,27 +223,13 @@ fn settle(origin: &mut Proposal, action: Action) -> Result<()> {
         review.merged_at <= origin.closed_at,
         "Bug-origin pull request merged after the bug was closed"
     );
-    let run = if let Some((command_record, name)) =
-        logs::run_for_pull_request(&UserConfig::load()?.logs_dir, &url)?
-    {
-        Some(Run::Local {
-            command_record,
-            name,
-        })
-    } else {
-        built_with::read(&review.body).map(|built| Run::BuiltWith {
-            harness: built.harness.name().into(),
-            version: built.version,
-            model: built.model,
-            effort: built.effort,
-        })
-    };
+    let pull_request = PullRequest::attributed(&UserConfig::load()?.logs_dir, url, &review.body)?;
     let eval_task = evals::bug_origin::propose(&bug, &pr, review, &origin.reason)?;
     if let Some(previous) = &origin.settlement {
         evals::bug_origin::withdraw(&previous.eval_task)?;
     }
     origin.settlement = Some(Settlement {
-        pull_request: PullRequest { url, run },
+        pull_request,
         corrected,
         eval_task,
     });

@@ -1,5 +1,25 @@
 use super::*;
 
+#[test]
+fn historical_review_and_reclosed_origin_regressions() {
+    for mode in ["merged-base", "no-issue", "reclosed"] {
+        let output = std::process::Command::new("python3")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/bug_origins/regressions.py"
+            ))
+            .arg(env!("CARGO_BIN_EXE_thirdshift"))
+            .arg(mode)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{mode}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+}
+
 fn proposed_origin() -> (Scenario, String, String) {
     let scenario = scenario();
     let base = scenario
@@ -26,6 +46,7 @@ fn proposed_origin() -> (Scenario, String, String) {
     state["origin_review_prs"] = json!({"23": {
         "body": "Closes #7\nBuilt with codex 1.2.3 · model · high <!-- thirdshift:built-with -->",
         "headRefOid": head, "baseRefName": "main", "headRefName": "issue-7",
+        "mergeCommit": {"oid": head, "parents": {"nodes": [{"oid": base}]}},
         "mergedAt": (Utc::now() - TimeDelta::days(1)).to_rfc3339(),
         "commits": {"nodes": [{"commit": {"parents": {"nodes": [{"oid": base}]}}}]},
         "closingIssuesReferences": {"nodes": [{"url": scenario.issue_url(7),
