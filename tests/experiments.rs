@@ -33,30 +33,7 @@ fn saved_single_level_experiments_keep_their_bar_and_verdict_when_read_and_resum
         "home/.thirdshift/evals/experiments/{id}/experiment.json"
     ));
     let mut legacy: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-    let old_bar = |bar: &mut Value| {
-        let bar = bar.as_object_mut().unwrap();
-        let level = bar.remove("pass_level").unwrap();
-        bar.remove("fail_level");
-        bar.insert("credible_level".into(), level);
-    };
-    old_bar(&mut legacy["bar"]);
-    for suite in legacy["verdict"]["suites"]
-        .as_object_mut()
-        .unwrap()
-        .values_mut()
-    {
-        old_bar(&mut suite["bar"]);
-        suite["method"] = json!(
-            "paired-dirichlet-v1; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles"
-        );
-        suite["thirdshift_version"] = json!("legacy-version");
-        for metric in ["accuracy", "wrong_findings"] {
-            let metric = suite[metric].as_object_mut().unwrap();
-            let interval = metric.remove("pass_interval").unwrap();
-            metric.remove("fail_interval");
-            metric.insert("interval".into(), interval);
-        }
-    }
+    single_level_experiment(&mut legacy);
     // A retained decision is authoritative, even if a fresh calculation differs.
     legacy["verdict"]["verdict"] = json!("fail");
     for provisional in [None, Some(Value::Null), Some(json!("fail"))] {
@@ -82,6 +59,33 @@ fn saved_single_level_experiments_keep_their_bar_and_verdict_when_read_and_resum
         assert_eq!(resumed["bar"], legacy["bar"]);
         assert_eq!(resumed["verdict"], legacy["verdict"]);
         assert_eq!(fixture.trial_calls().len(), trials);
+    }
+}
+
+fn single_level_experiment(legacy: &mut Value) {
+    let old_bar = |bar: &mut Value| {
+        let bar = bar.as_object_mut().unwrap();
+        let level = bar.remove("pass_level").unwrap();
+        bar.remove("fail_level");
+        bar.insert("credible_level".into(), level);
+    };
+    old_bar(&mut legacy["bar"]);
+    for suite in legacy["verdict"]["suites"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        old_bar(&mut suite["bar"]);
+        suite["method"] = json!(
+            "paired-dirichlet-v1; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles"
+        );
+        suite["thirdshift_version"] = json!("legacy-version");
+        for metric in ["accuracy", "wrong_findings"] {
+            let metric = suite[metric].as_object_mut().unwrap();
+            let interval = metric.remove("pass_interval").unwrap();
+            metric.remove("fail_interval");
+            metric.insert("interval".into(), interval);
+        }
     }
 }
 

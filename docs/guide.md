@@ -475,6 +475,8 @@ thirdshift experiment --release <commit> [--json]  # use the last release tag an
 thirdshift experiments [<id>] [--json]  # list Experiments or show one
 thirdshift experiments <id> --session <session-id> [--json]  # read a Trial's retained session from its inventory
 thirdshift recheck <id> <trial> <pass|fail> --reason <text> [--wrong-finding <true|false>] [--json]
+thirdshift recheck <id> --pending [--json]  # review pending Scores and their fingerprint
+thirdshift recheck <id> --batch <fingerprint> <pass|fail> --reason <text> [--wrong-finding <true|false>] [--json]
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print a compact command and option reference
@@ -601,6 +603,11 @@ or wrong-finding flag changes the Experiment's pass/fail/inconclusive decision
 under the fixed Bar. Scores from a task dropped as void are excluded.
 `thirdshift experiments <id> --json` lists these under `pending_rechecks`, with
 each Trial's `id`, suite, task, Arm, Trial number and borderline/decisive flags.
+`decisive_flips` names `passed`, `wrong_finding`, or both;
+`decisive_verdicts` maps each named flip to the provisional Verdict it would
+give (`pass`, `fail` or `inconclusive`). These are separate one-flag flips,
+not both flags flipped together. A Score pending only because it is borderline
+has an empty list and map.
 The text view lists the same IDs. `verdict.provisional_verdict` and suite
 intervals show the calculation while `verdict.verdict` waits.
 
@@ -620,6 +627,24 @@ history and recalculated Verdict, then prints the updated Experiment, with
 `--json` available. A changed Score can make another Score decisive, so consult
 the updated pending list. Trials and Graders never rerun for a recheck, and the
 Bar stays fixed. An Experiment being run or rechecked refuses concurrent writes.
+
+To record the same decision and reason for every Score on a reviewed list:
+
+```sh
+thirdshift recheck <experiment-id> --pending --json
+thirdshift recheck <experiment-id> --batch <fingerprint> pass --reason 'I checked every listed Trial against the written criteria.'
+```
+
+The first command lists every pending Score with its suite, Eval task, Arm,
+Trial number, ID and borderline/decisive reason, plus a `fingerprint` of that
+Experiment's list. Omit `--json` for text. The second command takes that
+fingerprint and appends one timestamped recheck to each listed Score's history,
+using one exclusive lock and one atomic save. It accepts `--wrong-finding` and
+`--json` just like a single recheck. A stale fingerprint refuses the entire
+batch without changing anything; list the pending Scores again and review
+them before retrying. An empty pending list refuses a batch too. The batch
+only covers the reviewed list: its decisions may make other Scores decisive,
+so check the updated pending list afterwards. Rechecks stay in the CLI.
 
 Each suite gets a paired Verdict using its recorded Trials per Eval task (one
 or three). For each metric, fail when the upper bound at the fail level is below

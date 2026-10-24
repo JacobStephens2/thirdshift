@@ -268,6 +268,10 @@ impl Stored {
     }
 
     fn upgrade_verdict(&mut self) -> Result<()> {
+        let missing_flip_verdicts = self
+            .pending_rechecks
+            .iter()
+            .any(|pending| pending.decisive && pending.decisive_verdicts.is_empty());
         if matches!(
             self.description.bar.levels,
             crate::verdict::Levels::Legacy { .. }
@@ -275,13 +279,22 @@ impl Stored {
         {
             // A saved single-level Verdict is evidence, not an invitation to
             // recalculate it under a newer runner's recheck policy.
+            if self.state == State::Completed && missing_flip_verdicts {
+                let (_, pending) = super::rechecks::assess(
+                    &self.tasks,
+                    &mut self.results()?,
+                    &self.description.bar,
+                )?;
+                self.pending_rechecks = pending;
+            }
             return Ok(());
         }
         if self.state == State::Completed
-            && self
+            && (self
                 .verdict
                 .as_ref()
                 .is_none_or(|verdict| verdict.provisional_verdict.decision().is_none())
+                || missing_flip_verdicts)
         {
             self.refresh_verdict()?;
         }
