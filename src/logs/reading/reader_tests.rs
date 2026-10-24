@@ -59,14 +59,17 @@ fn exact(root: &Path, path: &Path) -> Reader {
 fn inventory_reads_unowned_files_by_path_bytes_and_refuses_excluded_storage() {
     let dir = tempfile::tempdir().unwrap();
     let commands = dir.path().join("acme/widgets/commands");
-    let unnamed = commands.join(std::ffi::OsStr::from_bytes(b"kind-\xff"));
-    fs::create_dir_all(commands.join("issue")).unwrap();
-    fs::create_dir_all(&unnamed).unwrap();
-    for path in [
+    let mut unowned = vec![
         commands.join("issue/notes.log"),
         commands.join("issue/draft.logs.jsonl"),
-        unnamed.join("notes.log"),
-    ] {
+    ];
+    // APFS refuses names that are not UTF-8, so only other filesystems can hold one.
+    if cfg!(not(target_os = "macos")) {
+        let unnamed = commands.join(std::ffi::OsStr::from_bytes(b"kind-\xff"));
+        unowned.push(unnamed.join("notes.log"));
+    }
+    for path in unowned {
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(&path, b"unowned\n").unwrap();
         let batch = exact(dir.path(), &path)
             .read(0, Framing::Lines, 100)
