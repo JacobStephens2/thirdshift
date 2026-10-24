@@ -32,6 +32,7 @@ struct ReaderPage {
     log: Log,
     html: String,
     offset: u64,
+    live: bool,
 }
 
 pub(super) async fn index() -> Response {
@@ -74,6 +75,7 @@ pub(super) async fn reader(Path(id): Path<String>) -> Response {
                 log,
                 html,
                 offset: lines.offset,
+                live: !lines.done,
             }
             .render()?,
         ))

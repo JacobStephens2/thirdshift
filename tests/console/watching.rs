@@ -117,6 +117,7 @@ fn outcome_does_not_finish_sse_or_polling_before_the_writer_exits() {
         assert!(!later.contains("final unterminated output"), "{later}");
         let initial = console.get(&link).text().unwrap();
         assert!(!initial.contains("final unterminated output"), "{initial}");
+        assert!(initial.contains("data-live=\"true\""), "{initial}");
         // Let the observer settle after the append, then exit without another record write.
         std::thread::sleep(Duration::from_millis(200));
         let began = std::time::Instant::now();
