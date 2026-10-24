@@ -6,6 +6,8 @@ use serde_json::{Value, json};
 
 use super::*;
 
+#[path = "inventory_tests.rs"]
+mod inventory_tests;
 #[path = "reader_tests.rs"]
 mod reader_tests;
 

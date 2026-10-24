@@ -301,24 +301,65 @@ pub(super) fn record_log(path: &Path) -> PathBuf {
     path.with_file_name(format!("{}.log", name.split('.').next().unwrap_or(&name)))
 }
 
-/// Explicit Model evidence can link a transitional tokenless Session to its
-/// owned Command. Timestamp equality alone cannot establish that link.
-pub(super) fn evidenced_log(session: &Path) -> Option<PathBuf> {
+/// The Model-evidence sidecar that may name a Session's Command log.
+pub(super) fn evidence_file(session: &Path) -> PathBuf {
+    super::session::original(session).with_extension("models.json")
+}
+
+/// The Command log named by a Model-evidence sidecar's bytes, if any.
+pub(super) fn evidenced_log(sidecar: &[u8]) -> Option<PathBuf> {
     #[derive(Deserialize)]
     struct Evidence {
         command_log: Option<PathBuf>,
     }
-    let bytes = fs::read(super::session::original(session).with_extension("models.json")).ok()?;
-    serde_json::from_slice::<Evidence>(&bytes).ok()?.command_log
+    serde_json::from_slice::<Evidence>(sidecar)
+        .ok()?
+        .command_log
 }
 
-pub(super) fn session_matches(session: &Path, log: &Path) -> bool {
-    if let Some(evidence) = evidenced_log(session) {
-        return evidence == log;
+/// The Command a Session belongs to. Explicit Model evidence can link a
+/// transitional tokenless Session to its owned Command and takes priority over
+/// the filename; timestamp equality alone cannot establish that link.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) enum SessionOwner {
+    Evidenced(PathBuf),
+    Named {
+        stamp: String,
+        token: Option<String>,
+    },
+}
+
+impl SessionOwner {
+    pub fn of(session: &Decoded<'_>, evidence: Option<PathBuf>) -> Self {
+        evidence.map_or_else(
+            || Self::Named {
+                stamp: session.identity.stamp.into(),
+                token: session.identity.token.map(str::to_owned),
+            },
+            Self::Evidenced,
+        )
     }
-    match (decode(session), decode(log)) {
-        (Some(session), Some(command)) => session.identity == command.identity,
-        _ => false,
+
+    /// Every owner whose Sessions belong to `log`, keyed lexically.
+    pub fn of_log(log: &Path) -> impl Iterator<Item = Self> {
+        let named = decode(log).map(|command| Self::Named {
+            stamp: command.identity.stamp.into(),
+            token: command.identity.token.map(str::to_owned),
+        });
+        std::iter::once(Self::Evidenced(log.to_owned())).chain(named)
+    }
+
+    pub fn owns(&self, log: &Path) -> bool {
+        match self {
+            Self::Evidenced(evidence) => evidence == log,
+            Self::Named { stamp, token } => decode(log).is_some_and(|command| {
+                command.identity
+                    == Identity {
+                        stamp,
+                        token: token.as_deref(),
+                    }
+            }),
+        }
     }
 }
 
