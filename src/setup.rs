@@ -1226,6 +1226,10 @@ quiet_skips = true
 [spec]
 parallel = 5
 
+[resources]
+min_available_memory_mb = 0
+max_load_per_cpu_percent = 0
+
 [pickup]
 limit = 5
 wait_minutes = 60
