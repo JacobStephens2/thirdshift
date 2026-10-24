@@ -144,6 +144,45 @@ fn github_merge_wakes_open_inbox_and_status_reuses_the_answer() {
 }
 
 #[test]
+fn github_issue_closure_wakes_needs_you_and_status_reuses_the_answer() {
+    let scenario = Scenario::new();
+    let home = scenario.path("home");
+    configure(&home);
+    record(&home, 81, Some("failed"), 10);
+    scenario.issue_is(81, "OPEN");
+    let console = start(&scenario);
+    let mut stream = events(&console);
+    // Local age would put this row in History; its first GitHub read must
+    // still bring it into Needs you while the issue is open.
+    wait_for(&console, &mut stream, "needs you");
+    let closed = (chrono::Local::now() - chrono::Duration::hours(1)).to_rfc3339();
+    let mut gh = scenario.gh_state();
+    gh["issues"]["81"] = json!("CLOSED");
+    gh["issue_closed_at"]["81"] = json!(closed);
+    scenario.write_gh_state(&gh);
+    wait_for(&console, &mut stream, "resolved");
+    assert!(!group(&console.get("/").text().unwrap(), "needs you").contains("acme/widgets#81"));
+    // Repeated issue reads keep their first label-absence timestamp, so
+    // unchanged facts must leave open pages idle too.
+    assert_idle_events(&console, Duration::from_secs(2));
+    drop(stream);
+    drop(console);
+    let before = scenario.gh_calls();
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let row = &status["commands"][0];
+    assert_eq!(row["group"], "resolved", "{status}");
+    assert_eq!(row["left_reason"], "issue closed", "{status}");
+    assert_eq!(row["left_at"], closed, "{status}");
+    assert_eq!(
+        scenario.gh_calls(),
+        before,
+        "status read GitHub instead of the Console's answer"
+    );
+}
+
+#[test]
 fn unchanged_github_reads_leave_open_inbox_idle_and_keep_status_fresh() {
     let scenario = Scenario::new();
     let home = scenario.path("home");

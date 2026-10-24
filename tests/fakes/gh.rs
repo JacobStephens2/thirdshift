@@ -7,6 +7,7 @@
 //!  "private"?: true,
 //!  "advisory_error"?: "<stderr>",
 //!  "issues": {"<number>": "OPEN" | "CLOSED"},
+//!  "issue_closed_at"?: {"<number>": "<ISO 8601 time>"},
 //!  "titles"?: {"<number>": "<title>"},
 //!  "created"?: {"<number>": "<ISO 8601 time>"},
 //!  "bodies"?: {"<number>": "<body>"},
@@ -126,13 +127,15 @@
 //! and an object names its `by` account, null for a deleted one, and its
 //! `association`. Any other query exits 2.
 //!
-//! `gh api graphql` also answers the Inbox's batched pull request query: one
-//! `alias: repository(owner, name)` entry per pull request, each with that
+//! `gh api graphql` also answers the Inbox's batched issue and pull request query: one
+//! `alias: repository(owner, name)` entry per subject, each with that
 //! PR's `url`, `state` (`OPEN`, `CLOSED` or `MERGED`) and its `mergedAt` and
 //! `closedAt` times when the state names them, else null, plus the query's
 //! own `rateLimit`. An alias for a pull request the state does not know, or
 //! for another repository, answers a null `pullRequest` and a scoped GraphQL
 //! error. Like `gh`, the fake prints the partial data and exits 1.
+//! Issues answer `state`, `closedAt` from `issue_closed_at` and label nodes
+//! from `labels`, with the same null/scoped error for an unknown issue.
 //!
 //! `gh api --method PATCH repos/<repo>/pulls/<number> -f body=<body>` sets the
 //! PR's body. `gh pr view`, `gh pr ready` and `gh pr merge` name the PR by
@@ -1988,17 +1991,18 @@ fn record_run(state: &mut Json, mut run: Json) {
 /// The Tickets query or the candidate query, told apart by the candidate
 /// query's `timelineItems`: `-f query=...` plus `-f`/`-F` variables.
 ///
-/// The Inbox's batched pull request query, told apart by its `pullRequest(`
-/// lookups with a `rateLimit`: one `alias: repository(owner, name)` entry per
-/// pull request, each with the state's `state` and its `mergedAt`/`closedAt`
-/// times when the fake knows them, else a null `pullRequest` for that alias.
+/// The Inbox's batched subject query, identified by its numbered issue/PR
+/// lookups with a `rateLimit`: one `alias: repository(owner, name)` per subject,
+/// with state, settlement times and issue labels when known, else null.
 /// An alias for another repository answers null, and every answer carries the
 /// query's own `rateLimit`. An unresolved item adds a scoped GraphQL error
 /// and exits 1, keeping the other aliases' data on stdout as `gh` does.
 fn graphql(state: &Json, args: &[&str]) {
     let mut variables = api_fields(args);
     let query = variables.remove("query").unwrap_or_default();
-    if query.contains("pullRequest(number:") && query.contains("rateLimit") {
+    if (query.contains("pullRequest(number:") || query.contains("issue(number:"))
+        && query.contains("rateLimit")
+    {
         pull_requests(state, &query);
         return;
     }
@@ -2061,9 +2065,9 @@ fn graphql(state: &Json, args: &[&str]) {
     println!("{answer}");
 }
 
-/// The Inbox's batched pull request query: one `alias:
-/// repository(owner: "owner", name: "repo") { pullRequest(number: n) { ... }
-/// }` entry per pull request, answered alias by alias with the query's own
+/// The Inbox's batched query: one `alias:
+/// repository(owner: "owner", name: "repo") { issue/pullRequest(number: n) { ... }
+/// }` entry per subject, answered alias by alias with the query's own
 /// `rateLimit`.
 fn pull_requests(state: &Json, query: &str) {
     let mut data: Vec<(String, Json)> = Vec::new();
@@ -2078,10 +2082,17 @@ fn pull_requests(state: &Json, query: &str) {
         rest = &rest[at + ": repository(".len()..];
         let owner = quoted_after(rest, "owner:");
         let name = quoted_after(rest, "name:");
-        let number = rest
-            .find("pullRequest(number:")
+        let subject = rest.split(": repository(").next().unwrap_or(rest);
+        let field = if subject.contains("pullRequest(number:") {
+            "pullRequest"
+        } else {
+            "issue"
+        };
+        let lookup = format!("{field}(number:");
+        let number = subject
+            .find(&lookup)
             .and_then(|at| {
-                rest[at + "pullRequest(number:".len()..]
+                subject[at + lookup.len()..]
                     .trim_start()
                     .split(|char: char| !char.is_ascii_digit())
                     .next()
@@ -2094,34 +2105,51 @@ fn pull_requests(state: &Json, query: &str) {
         });
         let pull = same_repo
             .then(|| {
+                if field == "issue" {
+                    return state.at("issues").get(number).map(|issue_state| {
+                        let labels = listed(state, "labels", number)
+                            .into_iter()
+                            .map(|label| object([("name", label)]))
+                            .collect();
+                        object([
+                            ("state", issue_state.clone()),
+                            (
+                                "closedAt",
+                                state
+                                    .get("issue_closed_at")
+                                    .and_then(|times| times.get(number))
+                                    .cloned()
+                                    .unwrap_or(Null),
+                            ),
+                            ("labels", object([("nodes", Array(labels))])),
+                        ])
+                    });
+                }
                 prs(state)
                     .iter()
                     .find(|pr| pr.at("number").python() == number)
+                    .map(|pr| {
+                        let at = |field: &str| pr.get(field).cloned().unwrap_or(Null);
+                        object([
+                            ("url", pr.at("url").clone()),
+                            ("state", pr.at("state").clone()),
+                            ("mergedAt", at("mergedAt")),
+                            ("closedAt", at("closedAt")),
+                        ])
+                    })
             })
-            .flatten()
-            .map(|pr| {
-                let at = |field: &str| pr.get(field).cloned().unwrap_or(Null);
-                object([
-                    ("url", pr.at("url").clone()),
-                    ("state", pr.at("state").clone()),
-                    ("mergedAt", at("mergedAt")),
-                    ("closedAt", at("closedAt")),
-                ])
-            });
+            .flatten();
         if pull.is_none() {
             errors.push(object([
                 ("type", string("NOT_FOUND")),
-                (
-                    "path",
-                    Json::Array(vec![string(&alias), string("pullRequest")]),
-                ),
+                ("path", Json::Array(vec![string(&alias), string(field)])),
                 (
                     "message",
                     string(format!("Could not resolve pull request {number}.")),
                 ),
             ]));
         }
-        data.push((alias, object([("pullRequest", pull.unwrap_or(Null))])));
+        data.push((alias, object([(field, pull.unwrap_or(Null))])));
     }
     if data.is_empty() {
         die("fake gh: batched pull request query names no repository", 2);

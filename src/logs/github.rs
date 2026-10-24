@@ -1,4 +1,4 @@
-//! The Inbox's kept GitHub answer: what the last batched pull request read
+//! The Inbox's kept GitHub answer: what the last batched issue/pull request read
 //! showed, in one file per machine. `status` reuses it while it is under
 //! five minutes old and reads GitHub first when it is missing or older; the
 //! Console refreshes the same file once a minute. A row that has reached
@@ -11,56 +11,80 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
+use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 
 use super::reading::{Group, Snapshot};
 use crate::config::UserConfig;
-use crate::github::{GitHub, PullRequestState};
+use crate::github::{GitHub, InboxState, IssueState, PullRequestState};
 
 /// How long `status` reuses the kept answer before reading GitHub again.
 pub const FRESH_FOR: Duration = Duration::from_secs(5 * 60);
 
+/// One requested subject, with the Triage wait its label observation must follow.
+pub(super) struct Subject {
+    pub url: String,
+    pub triage_since: Option<DateTime<FixedOffset>>,
+}
+
 #[derive(Serialize, Deserialize)]
 struct File {
     version: u32,
+    #[serde(default, alias = "pull_requests")]
+    subjects: BTreeMap<String, Option<InboxState>>,
     #[serde(default)]
-    pull_requests: BTreeMap<String, Option<PullRequestState>>,
-    #[serde(default)]
-    history: BTreeMap<String, Option<PullRequestState>>,
+    history: BTreeMap<String, Option<InboxState>>,
 }
 
-/// What the kept answer holds: every pull request read so far, and how old
-/// the answer is. `None` age means no answer is kept. A pull request GitHub
+/// What the kept answer holds: every issue/pull request read so far, and how old
+/// the answer is. `None` age means no answer is kept. A subject GitHub
 /// can't resolve keeps `None`: what it last showed is nothing, and a row
 /// that has reached History on that is not read again.
 #[derive(Default)]
 pub struct Kept {
-    states: BTreeMap<String, Option<PullRequestState>>,
-    history: BTreeMap<String, Option<PullRequestState>>,
+    states: BTreeMap<String, Option<InboxState>>,
+    history: BTreeMap<String, Option<InboxState>>,
     pub age: Option<Duration>,
 }
 
 impl Kept {
-    pub fn state(&self, row: &str, url: &str) -> Option<&PullRequestState> {
+    fn state(&self, row: &str, url: &str) -> Option<&InboxState> {
         self.history
-            .get(row)
+            .get(&format!("{row}::{url}"))
+            .or_else(|| self.history.get(row))
             .or_else(|| self.states.get(url))
             .and_then(Option::as_ref)
+    }
+
+    pub fn pull_request(&self, row: &str, url: &str) -> Option<&PullRequestState> {
+        match self.state(row, url)? {
+            InboxState::PullRequest(state) => Some(state),
+            InboxState::Issue(_) => None,
+        }
+    }
+
+    pub fn issue(&self, row: &str, url: &str) -> Option<&IssueState> {
+        match self.state(row, url)? {
+            InboxState::Issue(state) => Some(state),
+            InboxState::PullRequest(_) => None,
+        }
     }
 
     pub fn has_answer(&self, url: &str) -> bool {
         self.states.contains_key(url)
     }
 
-    pub fn is_frozen(&self, row: &str) -> bool {
-        self.history.contains_key(row)
+    pub fn is_frozen(&self, row: &str, url: &str) -> bool {
+        self.history.contains_key(row) || self.history.contains_key(&format!("{row}::{url}"))
     }
 
     /// Preserve a History row's facts before another row refreshes the same
-    /// pull request. The row selector distinguishes continuations and dispatches.
+    /// issue or pull request. The selector distinguishes continuations and dispatches.
     pub fn freeze(&mut self, row: String, url: &str) {
         if let Some(state) = self.states.get(url) {
-            self.history.entry(row).or_insert_with(|| state.clone());
+            self.history
+                .entry(format!("{row}::{url}"))
+                .or_insert_with(|| state.clone());
         }
     }
 }
@@ -100,7 +124,7 @@ pub fn load(logs_dir: &Path) -> Kept {
         .filter(|file| file.version == 1);
     match file {
         Some(file) => Kept {
-            states: file.pull_requests,
+            states: file.subjects,
             history: file.history,
             age,
         },
@@ -130,24 +154,46 @@ pub(super) fn refresh(
     fresh_for: Duration,
 ) -> Result<Kept> {
     let mut kept = load(&config.logs_dir);
-    // From History on, preserve the row's last facts even if another row
-    // still in view shares its pull request.
+    // From History on, a row keeps what GitHub last showed and is not read
+    // again: only rows with a kept answer are frozen, so the first read
+    // still looks up a row that local rules alone would call History.
     for item in snapshot.inbox(true, config.inbox_days, &kept) {
-        if item.group == Group::History
-            && let Some(url) = item.pull_request()
-            && let Some(row) = item.command.selector()
-        {
-            kept.freeze(row, url);
+        for item in std::iter::once(&item).chain(&item.collapsed) {
+            if item.group == Group::History
+                && let Some(row) = item.command.selector()
+            {
+                for url in item.github_urls() {
+                    kept.freeze(row.clone(), url);
+                }
+            }
         }
     }
-    let urls = snapshot.ready_pull_requests(config.inbox_days, &kept);
-    if kept.age.is_some_and(|age| age < fresh_for) || urls.is_empty() {
+    let subjects = snapshot.github_subjects(config.inbox_days, &kept);
+    if kept.age.is_some_and(|age| age < fresh_for) || subjects.is_empty() {
         return Ok(kept);
     }
-    match GitHub::new().pull_request_states(&urls) {
+    let urls: Vec<_> = subjects.iter().map(|subject| subject.url.clone()).collect();
+    match GitHub::new().inbox_states(&urls) {
         Ok(states) => {
-            for url in &urls {
-                kept.states.insert(url.clone(), states.get(url).cloned());
+            for subject in subjects {
+                let url = &subject.url;
+                let mut state = states.get(url).cloned();
+                if let Some(InboxState::Issue(issue)) = &mut state
+                    && !issue.needs_triage
+                {
+                    issue.triaged_at = match kept.states.get(url) {
+                        Some(Some(InboxState::Issue(previous))) if !previous.needs_triage => {
+                            previous.triaged_at.clone().filter(|at| {
+                                subject.triage_since.is_none_or(|since| {
+                                    DateTime::parse_from_rfc3339(at).is_ok_and(|at| at >= since)
+                                })
+                            })
+                        }
+                        _ => None,
+                    }
+                    .or_else(|| Some(chrono::Utc::now().to_rfc3339()));
+                }
+                kept.states.insert(url.clone(), state);
             }
             kept.age = Some(Duration::ZERO);
             save(&config.logs_dir, &kept)?;
@@ -163,7 +209,7 @@ fn save(logs_dir: &Path, kept: &Kept) -> Result<()> {
     let path = path(logs_dir);
     let file = File {
         version: 1,
-        pull_requests: kept.states.clone(),
+        subjects: kept.states.clone(),
         history: kept.history.clone(),
     };
     let bytes = serde_json::to_vec(&file)?;
@@ -171,9 +217,7 @@ fn save(logs_dir: &Path, kept: &Kept) -> Result<()> {
     let facts_changed = previous
         .as_deref()
         .and_then(|bytes| serde_json::from_slice::<File>(bytes).ok())
-        .is_none_or(|previous| {
-            previous.version != 1 || previous.pull_requests != file.pull_requests
-        });
+        .is_none_or(|previous| previous.version != 1 || previous.subjects != file.subjects);
     // Keep History freezes too, without waking pages for bookkeeping.
     if previous.as_deref() != Some(bytes.as_slice()) {
         let mut tmp = tempfile::Builder::new()
