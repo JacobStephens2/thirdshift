@@ -149,8 +149,8 @@ impl Stored {
     pub fn open(
         root: &Path,
         mut description: Description,
-        tasks: impl FnOnce() -> Result<Vec<Task>>,
-    ) -> Result<Self> {
+        tasks: impl FnOnce(&Description) -> Result<Option<Vec<Task>>>,
+    ) -> Result<Option<Self>> {
         fs::create_dir_all(root)?;
         let directory = root.join(&description.id);
         fs::create_dir_all(&directory)?;
@@ -176,12 +176,17 @@ impl Stored {
             }
             stored
         } else {
+            // Selection may skip a new release Experiment. Keep it out of
+            // saved results while retaining the exclusive creation lock.
+            let Some(tasks) = tasks(&description)? else {
+                return Ok(None);
+            };
             Self {
                 format: 1,
                 description,
                 state: State::Prepared,
                 created_at: chrono::Local::now().to_rfc3339(),
-                tasks: tasks()?,
+                tasks,
                 verdict: None,
                 rechecks: BTreeMap::new(),
                 pending_rechecks: Vec::new(),
@@ -193,7 +198,7 @@ impl Stored {
         stored.lock = Some(lock);
         stored.upgrade_verdict()?;
         stored.save()?;
-        Ok(stored)
+        Ok(Some(stored))
     }
 
     pub fn save(&self) -> Result<()> {

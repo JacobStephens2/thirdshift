@@ -84,6 +84,42 @@ fn experiments_name_all_approved_tasks_missing_trial_inputs_before_building() {
 }
 
 #[test]
+fn spec_review_completed_experiment_uses_saved_inputs() {
+    for release in [false, true] {
+        let fixture = Fixture::new();
+        fixture
+            .scenario
+            .launch_git(&["tag", "v0.1.0", &fixture.baseline]);
+        fixture.scenario.agent_does(review_reports_prelude());
+        let options: &[&str] = if release { &["--release"] } else { &[] };
+        let first = fixture.run(options);
+        assert_eq!(first.code, Some(0), "{}", first.stderr);
+        let saved: Value = serde_json::from_str(&first.stdout).unwrap();
+        assert_eq!(saved["state"], "completed");
+        let trial_count = fixture.trial_calls().len();
+        let task = fixture
+            .scenario
+            .path("home/.thirdshift/evals/suites/spec-review/tasks/fixture/task.toml");
+        let mut manifest = fs::read_to_string(&task)
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        manifest.remove("trial");
+        fs::write(&task, manifest.to_string()).unwrap();
+
+        let rerun = fixture.run(options);
+        assert_eq!(
+            rerun.code,
+            Some(0),
+            "completed Experiment must use saved inputs: {}",
+            rerun.stderr
+        );
+        assert_eq!(serde_json::from_str::<Value>(&rerun.stdout).unwrap(), saved);
+        assert_eq!(fixture.trial_calls().len(), trial_count);
+    }
+}
+
+#[test]
 fn experiment_trace_contains_trials_and_graders_and_reports_arm_usage() {
     let fixture = Fixture::new();
     // A trace-capable older Arm ignores the new inheritance environment.

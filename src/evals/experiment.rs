@@ -183,17 +183,6 @@ pub fn run(options: Options) -> Result<()> {
         !suites.is_empty(),
         "no Eval suites selected; use --suite for a defaults-only Experiment"
     );
-    // The release Baseline probe can build an Arm too. Check every selected
-    // approved task before reaching it, and reuse those inputs for a new Experiment.
-    let selected_tasks = tasks(&suites_root, &suites)?;
-    if options.release && !release::supports_trials(&repository, &root, &baseline)? {
-        let tag = baseline_reference.as_deref().expect("release Baseline tag");
-        return release::skip(
-            "baseline_without_trial",
-            &format!("last release {tag} has no Trial flag; carrying on without an Experiment"),
-            options.json,
-        );
-    }
     let config = UserConfig::load()?;
     let baseline = options.baseline_setup.resolve(baseline, &config);
     let candidate = options.candidate_setup.resolve(candidate, &config);
@@ -221,9 +210,26 @@ pub fn run(options: Options) -> Result<()> {
         bar,
         prepared: None,
     };
-    let mut experiment = store::Stored::open(&root.join("experiments"), description, || {
-        Ok(selected_tasks)
-    })?;
+    let Some(mut experiment) =
+        store::Stored::open(&root.join("experiments"), description, |description| {
+            // The release Baseline probe can build an Arm too. Check new
+            // Experiments first; resumes keep the tasks already recorded.
+            let tasks = tasks(&suites_root, &description.suites)?;
+            if options.release
+                && !release::supports_trials(&repository, &root, &description.baseline.commit)?
+            {
+                return Ok(None);
+            }
+            Ok(Some(tasks))
+        })?
+    else {
+        let tag = baseline_reference.as_deref().expect("release Baseline tag");
+        return release::skip(
+            "baseline_without_trial",
+            &format!("last release {tag} has no Trial flag; carrying on without an Experiment"),
+            options.json,
+        );
+    };
     if experiment.state == State::Completed {
         println!("{}", experiment.render(options.json)?);
         return Ok(());

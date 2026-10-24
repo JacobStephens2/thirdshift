@@ -32,6 +32,12 @@ fn release_notes_a_baseline_without_the_trial_flag() {
         run.stderr
     );
     assert!(fixture.trial_calls().is_empty());
+    let listed = fixture.scenario.run(&["experiments", "--json"]);
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    assert_eq!(
+        serde_json::from_str::<Value>(&listed.stdout).unwrap(),
+        json!([])
+    );
 }
 
 #[test]
