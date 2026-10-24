@@ -161,12 +161,20 @@ fn replay_inputs(fixture: &Fixture) -> PathBuf {
         "number": 17, "head_as_merged": fixture.change, "merge_base": fixture.base,
         "head_ref": "issue-16", "implements_issue": 16
     });
-    fs::write(forward.join("manifest.json"), serde_json::to_vec(&serde_json::json!({
-        "timing_bugs": [{"id": 7, "introducing_pr": pr}],
-        "spec_reviews": [{"repo": "thirdshift", "spec_issue": 19,
-            "pre_review_head": fixture.change, "merge_base": fixture.base, "spec_branch": "issue-19"}],
-        "plans": []
-    })).unwrap()).unwrap();
+    fs::write(
+        forward.join("manifest.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "timing_bugs": [{"id": 7, "introducing_pr": pr}],
+            "spec_reviews": [{"repo": "thirdshift", "spec_issue": 19,
+                "pre_review_head": fixture.change, "merge_base": fixture.base,
+                "spec_issue_url": "https://github.com/acme/widgets/issues/19",
+                "spec_pr_url": "https://github.com/acme/widgets/pull/23",
+                "base_branch": "stable", "spec_branch": "spec/counter-19"}],
+            "plans": []
+        }))
+        .unwrap(),
+    )
+    .unwrap();
     fs::write(
         dated.join("inputs/manifest.json"),
         serde_json::to_vec(&serde_json::json!({
@@ -264,39 +272,79 @@ fn imports_replay_bugs_and_scored_specs_once_as_preparable_eval_tasks() {
 }
 
 #[test]
-fn replay_import_completes_legacy_code_review_trial_inputs_and_preserves_local_edits() {
+fn replay_import_completes_trial_inputs_and_preserves_local_edits() {
     let fixture = Fixture::new();
     replay_inputs(&fixture);
     success(fixture.evals(&["import-replays"]));
-    let task = fixture
-        .suite("code-review")
-        .join("tasks/bug-7-pr-17/task.toml");
-    let mut document = fs::read_to_string(&task)
-        .unwrap()
-        .parse::<toml_edit::DocumentMut>()
-        .unwrap();
-    document.remove("trial");
-    document["criteria"] = toml_edit::value("Locally revised catch criterion.");
-    fs::write(&task, format!("# Keep my note.\n{document}")).unwrap();
+    for (suite, name, expected) in [
+        (
+            "code-review",
+            "bug-7-pr-17",
+            [
+                "https://github.com/JacobStephens2/thirdshift/issues/16",
+                "https://github.com/JacobStephens2/thirdshift/pull/17",
+                "main",
+                "issue-16",
+            ],
+        ),
+        (
+            "spec-review",
+            "thirdshift-19",
+            [
+                "https://github.com/acme/widgets/issues/19",
+                "https://github.com/acme/widgets/pull/23",
+                "stable",
+                "spec/counter-19",
+            ],
+        ),
+    ] {
+        let task = fixture.suite(suite).join(format!("tasks/{name}/task.toml"));
+        let mut document = fs::read_to_string(&task)
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        for (field, value) in ["issue_url", "pr_url", "base", "branch"]
+            .into_iter()
+            .zip(expected)
+        {
+            assert_eq!(
+                document["trial"][field].as_str(),
+                Some(value),
+                "{suite}: {field}"
+            );
+        }
+        document.remove("trial");
+        document["criteria"] = toml_edit::value("Locally revised catch criterion.");
+        fs::write(&task, format!("# Keep my note.\n{document}")).unwrap();
 
-    assert_eq!(
-        success(fixture.evals(&["import-replays"])),
-        serde_json::json!({"imported": 0, "skipped": 4})
-    );
+        assert_eq!(
+            success(fixture.evals(&["import-replays"])),
+            serde_json::json!({"imported": 0, "skipped": 4})
+        );
 
-    let contents = fs::read_to_string(&task).unwrap();
-    let mut restored = contents.parse::<toml_edit::DocumentMut>().unwrap();
-    assert_eq!(
-        restored["criteria"].as_str(),
-        Some("Locally revised catch criterion.")
-    );
-    assert!(contents.contains("# Keep my note."));
-    assert!(restored.get("trial").is_some(), "{contents}");
-    restored["trial"]["branch"] = toml_edit::value("custom-review-branch");
-    let before = restored.to_string();
-    fs::write(&task, &before).unwrap();
-    success(fixture.evals(&["import-replays"]));
-    assert_eq!(fs::read_to_string(task).unwrap(), before);
+        let contents = fs::read_to_string(&task).unwrap();
+        let mut restored = contents.parse::<toml_edit::DocumentMut>().unwrap();
+        assert_eq!(
+            restored["criteria"].as_str(),
+            Some("Locally revised catch criterion.")
+        );
+        assert!(contents.contains("# Keep my note."));
+        for (field, value) in ["issue_url", "pr_url", "base", "branch"]
+            .into_iter()
+            .zip(expected)
+        {
+            assert_eq!(
+                restored["trial"][field].as_str(),
+                Some(value),
+                "{suite}: {field}"
+            );
+        }
+        restored["trial"]["branch"] = toml_edit::value("custom-review-branch");
+        let before = restored.to_string();
+        fs::write(&task, &before).unwrap();
+        success(fixture.evals(&["import-replays"]));
+        assert_eq!(fs::read_to_string(task).unwrap(), before);
+    }
 }
 
 #[test]

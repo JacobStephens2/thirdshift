@@ -1,6 +1,11 @@
 use super::*;
 
 #[test]
+fn release_names_all_approved_tasks_missing_trial_inputs_before_building() {
+    assert_missing_trial_inputs_refused_before_builds(true);
+}
+
+#[test]
 fn release_notes_a_baseline_without_the_trial_flag() {
     let fixture = Fixture::new();
     fixture
@@ -27,6 +32,12 @@ fn release_notes_a_baseline_without_the_trial_flag() {
         run.stderr
     );
     assert!(fixture.trial_calls().is_empty());
+    let listed = fixture.scenario.run(&["experiments", "--json"]);
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    assert_eq!(
+        serde_json::from_str::<Value>(&listed.stdout).unwrap(),
+        json!([])
+    );
 }
 
 #[test]

@@ -123,11 +123,14 @@ pr_url = "https://github.com/acme/widgets/pull/1"
   outside the prepared repository.
 - `trial` supplies the version-1 Trial's session inputs. It is optional for
   standalone preparation, and required for approved tasks selected by an
-  Experiment. `base` and `branch` name distinct local branches; `issue_url`
-  and `pr_url` describe the fixture's issue and PR. Spec-review Experiments
+  Experiment. Missing tables are reported by task name before either Arm is
+  built, including for release Experiments. `base` and `branch` name distinct
+  local branches; `issue_url` and `pr_url` are the original issue and PR URLs.
+  Spec-review Experiments
   create those local branches, commit the prepared change and push them to
-  the disposable bare origin. Supply fixture services or disposable PRs for
-  sessions that can reach GitHub, as described in the Trial protocol.
+  the disposable bare origin. A Spec-review Trial keeps the production Spec
+  review prompt. There is no PR service: its `gh` calls fail inside the sandbox,
+  and only its reports are graded.
   Code-review Experiments also commit the prepared patch on the Issue branch,
   so the production review skill sees `base...HEAD` as reviewed. They create no
   origin and push nothing. Their review-only prompt retains both axis reports
@@ -197,8 +200,9 @@ It reads the paths used by `docs/research/second-opinion-replays/replay.py`:
 The replay manifests retain their original shape: timing bugs have `id` and
 `introducing_pr`; reverse bugs have `id` and `introducing_prs`. Each PR supplies
 `number`, `merge_base`, `head_as_merged` and `implements_issue`. Spec entries
-supply `repo`, `spec_issue`, `merge_base` and `pre_review_head`. Other replay
-fields (plans, branch names, recorded sessions) are ignored. Bug IDs may be
+supply `repo`, `spec_issue`, `merge_base`, `pre_review_head`, `spec_issue_url`,
+`spec_pr_url`, `base_branch` and `spec_branch`. Other replay
+fields (plans, recorded sessions) are ignored. Bug IDs may be
 numbers or directory-safe strings, optionally prefixed with `#`.
 
 The replay script does not define a machine-readable grading format. Put the
@@ -230,13 +234,11 @@ bug repositories are `~/repos/thirdshift/`.
 Code-review imports include their review-only `[trial]` inputs: the original
 thirdshift issue and PR URLs, a local `main` Base branch and `issue-<n>` Issue
 branch. The PR URL is unused and no GitHub service is needed. Rerunning the
-import fills this table in older code-review tasks only when it is missing,
-preserving local edits and any existing Trial inputs.
-
-Replay manifests do not supply Spec review's branch and PR service inputs.
-Before running an imported Spec-review Eval task in an Experiment, add its
-`[trial]` table as described above, using fixture services or a disposable PR.
-Import leaves that optional table unset and preserves later edits on a rerun.
+import fills this table in older tasks only when it is missing, preserving
+local edits and any existing Trial inputs. Spec-review imports also include
+`[trial]`: `issue_url` and `pr_url` copy `spec_issue_url` and `spec_pr_url`,
+and `base` and `branch` copy `base_branch` and `spec_branch`. No PR service is
+provided; the sandbox blocks `gh` calls and only the review reports are graded.
 
 The importer creates approved Eval tasks in `code-review` (three Trials per Arm)
 and `spec-review` (one). Each bug/introducing-PR pair becomes
@@ -250,7 +252,7 @@ dependencies. No plan-check or reverse-Spec suite is imported.
 All source data is checked before publishing either suite. Each new Eval task
 is published as a complete folder. Repeating the command preserves existing
 valid Eval tasks and suite declarations, even if edited after the first import,
-apart from completing missing Code review Trial inputs, and adds missing tasks.
+apart from completing missing Trial inputs, and adds missing tasks.
 Completed tables count as skipped tasks in the JSON counts, for example
 `{"imported":4,"skipped":0}`, with the same exit rules as the other Eval commands.
 Keep the source material and imported suites private; only made-up fixtures

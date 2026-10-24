@@ -438,7 +438,7 @@ documents the manifests with made-up data and the Arm record.
 On the host holding #429's material, `thirdshift evals import-replays` reads
 the private replay manifests, cached original issue bodies and grading index
 under `~/.thirdshift/replays/` into the code-review and Spec-review suites.
-Rerunning adds missing Eval tasks and completes missing Code review Trial inputs,
+Rerunning adds missing Eval tasks and completes missing Trial inputs in both suites,
 preserving local edits. The format document also describes the
 grading index to prepare on that host; private material stays outside the repository.
 
@@ -449,6 +449,8 @@ branch or commit with its merge-base with `main`. Use `--baseline <ref>` to name
 another Baseline. Suites default to those touched by the change, using their
 declarations; repeat `--suite <name>` to select them explicitly, including for a
 Harness, Model or Effort comparison with the same build in both Arms.
+Before building either Arm, an Experiment names every selected approved Eval
+task missing a `[trial]` table. This check also precedes the release Baseline probe.
 
 `thirdshift experiment --release <commit>` uses the last reachable `v<version>`
 tag as its Baseline and selects suites touched since that tag. `--baseline`
@@ -465,7 +467,8 @@ support the [versioned Trial protocol](https://github.com/JacobStephens2/thirdsh
 Both Code review and Spec review Eval tasks run. Code review Trials use the
 production code-review Factory skill on the historical diff and retain both
 axis reports without fixing or publishing anything. Spec review Trials keep
-the ordinary Spec review prompt.
+the production Spec review prompt. They have no PR service: `gh` calls fail
+inside the sandbox and only their reports are graded.
 
 The Bar is saved before the first Trial: margin `-0.10`, credible level `0.95`,
 prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an

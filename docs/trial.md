@@ -15,10 +15,10 @@ launched, like Command ownership; standalone Trials keep their own trace IDs.
 
 The caller prepares an isolated repository at the required commit, its branch
 and local Base branch, and a `.thirdshift-issue.md` containing the Spec's title,
-body and only comments from Trusted accounts. The caller supplies the draft
-Spec PR URL for a Spec review. That Trial uses the ordinary Spec review Session
-prompt, including its commit and PR-edit instructions: use fixture services or
-disposable PRs when the Trial must not change a production PR.
+body and only comments from Trusted accounts. The caller supplies the original
+Spec PR URL for a Spec review. That Trial keeps the production Spec review
+Session prompt, including its commit and PR-edit instructions. There is no PR
+service: its `gh` calls fail inside the sandbox, and only its reports are graded.
 A Code review uses the new review-only Session prompt and the production
 code-review Factory skill on `base...HEAD`, with the implement session's
 sub-agent rules. The caller must commit the reviewed patch on `branch` first.

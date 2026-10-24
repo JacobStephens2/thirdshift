@@ -188,14 +188,6 @@ pub fn run(options: Options) -> Result<()> {
         !suites.is_empty(),
         "no Eval suites selected; use --suite for a defaults-only Experiment"
     );
-    if options.release && !release::supports_trials(&repository, &root, &baseline)? {
-        let tag = baseline_reference.as_deref().expect("release Baseline tag");
-        return release::skip(
-            "baseline_without_trial",
-            &format!("last release {tag} has no Trial flag; carrying on without an Experiment"),
-            options.json,
-        );
-    }
     let config = UserConfig::load()?;
     let baseline = options.baseline_setup.resolve(baseline, &config);
     let candidate = options.candidate_setup.resolve(candidate, &config);
@@ -223,10 +215,26 @@ pub fn run(options: Options) -> Result<()> {
         bar,
         prepared: None,
     };
-    let selected = description.suites.clone();
-    let mut experiment = store::Stored::open(&root.join("experiments"), description, || {
-        tasks(&suites_root, &selected)
-    })?;
+    let Some(mut experiment) =
+        store::Stored::open(&root.join("experiments"), description, |description| {
+            // The release Baseline probe can build an Arm too. Check new
+            // Experiments first; resumes keep the tasks already recorded.
+            let tasks = tasks(&suites_root, &description.suites)?;
+            if options.release
+                && !release::supports_trials(&repository, &root, &description.baseline.commit)?
+            {
+                return Ok(None);
+            }
+            Ok(Some(tasks))
+        })?
+    else {
+        let tag = baseline_reference.as_deref().expect("release Baseline tag");
+        return release::skip(
+            "baseline_without_trial",
+            &format!("last release {tag} has no Trial flag; carrying on without an Experiment"),
+            options.json,
+        );
+    };
     if experiment.state == State::Completed {
         println!("{}", experiment.render(options.json)?);
         return Ok(());
@@ -379,6 +387,7 @@ fn resolve(git: &Git, reference: &str) -> Result<String> {
 
 fn tasks(root: &Path, suites: &[String]) -> Result<Vec<Task>> {
     let mut tasks = Vec::new();
+    let mut missing = Vec::new();
     for name in suites {
         let suite = root.join(name);
         for (task_name, directory) in super::suite::directories(&suite.join("tasks"))? {
@@ -386,10 +395,10 @@ fn tasks(root: &Path, suites: &[String]) -> Result<Vec<Task>> {
             if manifest.state == format::State::Proposed {
                 continue;
             }
-            let inputs = manifest
-                .trial
-                .as_ref()
-                .context("Eval task needs a [trial] table; see docs/eval-tasks.md")?;
+            let Some(inputs) = manifest.trial.as_ref() else {
+                missing.push(format!("{name}/{task_name}"));
+                continue;
+            };
             crate::issue::IssueUrl::parse(&inputs.issue_url)?;
             ensure!(
                 !inputs.base.is_empty() && !inputs.branch.is_empty() && !inputs.pr_url.is_empty(),
@@ -403,6 +412,11 @@ fn tasks(root: &Path, suites: &[String]) -> Result<Vec<Task>> {
             });
         }
     }
+    ensure!(
+        missing.is_empty(),
+        "Eval tasks need a [trial] table: {}; see docs/eval-tasks.md",
+        missing.join(", ")
+    );
     ensure!(
         !tasks.is_empty(),
         "selected suites have no approved Eval tasks"

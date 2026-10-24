@@ -23,6 +23,102 @@ mod release;
 #[path = "experiments/sandbox.rs"]
 mod sandbox;
 
+fn assert_missing_trial_inputs_refused_before_builds(release: bool) {
+    for session in ["code-review", "spec-review"] {
+        let fixture = Fixture::with_session(session, 1);
+        let tasks = fixture
+            .scenario
+            .path(&format!("home/.thirdshift/evals/suites/{session}/tasks"));
+        let mut manifest = fs::read_to_string(tasks.join("fixture/task.toml"))
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        manifest.remove("trial");
+        for name in ["fixture", "second", "proposal"] {
+            let directory = tasks.join(name);
+            fs::create_dir_all(&directory).unwrap();
+            manifest["state"] = toml_edit::value(if name == "proposal" {
+                "proposed"
+            } else {
+                "approved"
+            });
+            fs::write(directory.join("task.toml"), manifest.to_string()).unwrap();
+        }
+        fs::remove_dir_all(fixture.scenario.path("home/.thirdshift/evals/builds")).unwrap();
+        let built = fixture.scenario.path("arm-build-started");
+        let cargo = fixture.scenario.path("bin/cargo");
+        fs::write(
+            &cargo,
+            format!("#!/bin/sh\ntouch '{}'\nexit 99\n", built.display()),
+        )
+        .unwrap();
+        fs::set_permissions(cargo, fs::Permissions::from_mode(0o755)).unwrap();
+        fixture
+            .scenario
+            .launch_git(&["tag", "v0.1.0", &fixture.baseline]);
+
+        let run = fixture.run(if release { &["--release"] } else { &[] });
+
+        assert_eq!(run.code, Some(1), "{}", run.stderr);
+        assert!(
+            !built.exists(),
+            "Arm built before Trial inputs were checked: {}",
+            run.stderr
+        );
+        for name in ["fixture", "second"] {
+            assert!(
+                run.stderr.contains(&format!("{session}/{name}")),
+                "{}",
+                run.stderr
+            );
+        }
+        assert!(run.stderr.contains("[trial]"), "{}", run.stderr);
+        assert!(!run.stderr.contains("proposal"), "{}", run.stderr);
+        assert!(fixture.trial_calls().is_empty());
+    }
+}
+
+#[test]
+fn experiments_name_all_approved_tasks_missing_trial_inputs_before_building() {
+    assert_missing_trial_inputs_refused_before_builds(false);
+}
+
+#[test]
+fn spec_review_completed_experiment_uses_saved_inputs() {
+    for release in [false, true] {
+        let fixture = Fixture::new();
+        fixture
+            .scenario
+            .launch_git(&["tag", "v0.1.0", &fixture.baseline]);
+        fixture.scenario.agent_does(review_reports_prelude());
+        let options: &[&str] = if release { &["--release"] } else { &[] };
+        let first = fixture.run(options);
+        assert_eq!(first.code, Some(0), "{}", first.stderr);
+        let saved: Value = serde_json::from_str(&first.stdout).unwrap();
+        assert_eq!(saved["state"], "completed");
+        let trial_count = fixture.trial_calls().len();
+        let task = fixture
+            .scenario
+            .path("home/.thirdshift/evals/suites/spec-review/tasks/fixture/task.toml");
+        let mut manifest = fs::read_to_string(&task)
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        manifest.remove("trial");
+        fs::write(&task, manifest.to_string()).unwrap();
+
+        let rerun = fixture.run(options);
+        assert_eq!(
+            rerun.code,
+            Some(0),
+            "completed Experiment must use saved inputs: {}",
+            rerun.stderr
+        );
+        assert_eq!(serde_json::from_str::<Value>(&rerun.stdout).unwrap(), saved);
+        assert_eq!(fixture.trial_calls().len(), trial_count);
+    }
+}
+
 #[test]
 fn unapproved_proposals_never_run_and_approval_only_changes_future_experiments() {
     let fixture = Fixture::new();

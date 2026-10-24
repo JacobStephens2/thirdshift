@@ -197,10 +197,22 @@ fn a_code_review_trial_reviews_the_prepared_diff_and_keeps_both_reports() {
 }
 
 #[test]
-fn a_spec_review_trial_prints_one_complete_line_and_keeps_artifacts_outside_factory_logs() {
+fn a_spec_review_trial_keeps_reports_without_a_pr_service_or_factory_logs() {
     let scenario = Scenario::new();
     let request = request(&scenario);
-    scenario.agent_does(write_reports());
+    // The sandbox cannot reach GitHub or the scenario's fake gh. Keep the
+    // same unavailable-PR behavior when run_trial falls back without bwrap.
+    scenario.gh_fails("pr view");
+    scenario.agent_does(&format!(
+        r#"
+if gh pr view https://github.com/acme/widgets/pull/1 --json state >/dev/null 2>&1; then
+    echo 'unexpected PR service' >&2
+    exit 1
+fi
+{}
+"#,
+        write_reports()
+    ));
 
     let result = run_trial(&scenario, &request, &[]);
 
@@ -241,9 +253,15 @@ fn a_spec_review_trial_prints_one_complete_line_and_keeps_artifacts_outside_fact
     assert!(prompt.contains("Every Ticket of the Spec"));
     assert!(prompt.contains("using main as the fixed point"));
     assert!(prompt.contains(".thirdshift-issue.md"));
+    assert!(prompt.contains("Update PR https://github.com/acme/widgets/pull/1"));
     assert_trial_sessions_found_the_factory_skills(trial_calls(&scenario, "claude-calls.json"));
     assert!(!scenario.path("home/.thirdshift/logs").exists());
-    assert!(scenario.gh_calls().is_empty());
+    assert!(
+        scenario
+            .gh_calls()
+            .iter()
+            .all(|call| call.starts_with(&["pr".to_owned(), "view".to_owned()]))
+    );
 }
 
 #[test]
