@@ -116,6 +116,7 @@ pub(crate) fn request_stop(input: &str, request: Request) -> Result<PathBuf> {
 
 pub(crate) struct Inspection {
     pub details: serde_json::Value,
+    pub dismissal: Option<super::dismiss::Action>,
     pub can_stop: bool,
     pub stopping: bool,
     pub branches: Vec<String>,
@@ -145,6 +146,7 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
         reading::RetainedWork::default()
     };
     Ok(Inspection {
+        dismissal: super::dismiss::action(&snapshot, input, config.inbox_days),
         details,
         can_stop: selected.stop_target(input).is_ok() && !pending,
         stopping,

@@ -661,6 +661,12 @@ the Console, which of the record&#39;s rows it covers, and the kind it covered. 
 Command, its issue, labels, Claim and pull request stay as they are, and nothing
 is written to GitHub. The Activity log records each dismissal and each one taken
 back, naming the Unix user and the CLI. <code>dismiss --json</code> reports what it did.</p>
+<p>In the Console, any signed-in account can click <strong>Dismiss</strong> in a waiting row&#39;s
+Command details, beside Stop when available. One click dismisses, with no
+confirmation page. A dismissed row offers <strong>Undo</strong> there. Each button shows its
+CLI form beside it. Both posts require a session and a valid CSRF token, open
+pages update together, and the Activity log names the account&#39;s email and the
+Console.</p>
 </div></details>
 <details class="fold"><summary><h3>Logs</h3></summary>
 <div class="manual-content" id="logs">

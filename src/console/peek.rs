@@ -15,6 +15,10 @@ pub(super) struct Peek {
     pub live: bool,
     pub stopping: bool,
     pub stop_cli: String,
+    pub can_dismiss: bool,
+    pub can_undo: bool,
+    pub dismiss_cli: String,
+    pub csrf: String,
     pub branches: Vec<String>,
     pub pull_requests: Vec<String>,
     pub issue_url: Option<String>,
@@ -32,7 +36,7 @@ pub(super) struct Fact {
 }
 
 impl Peek {
-    pub fn new(command: String, inspection: crate::logs::stop::Inspection) -> Self {
+    pub fn new(command: String, inspection: crate::logs::stop::Inspection, csrf: String) -> Self {
         let value = inspection.details;
         let (issue_url, issue_label) = match value.get("issue") {
             Some(Value::Object(issue)) => match (
@@ -64,6 +68,10 @@ impl Peek {
             command.replace('\'', "'\\''")
         );
         Self {
+            can_dismiss: inspection.dismissal == Some(crate::logs::dismiss::Action::Dismiss),
+            can_undo: inspection.dismissal == Some(crate::logs::dismiss::Action::Undo),
+            dismiss_cli: format!("thirdshift dismiss '{}'", command.replace('\'', "'\\''")),
+            csrf,
             live: value["state"] == "live",
             stop_cli: format!("thirdshift stop '{}'", command.replace('\'', "'\\''")),
             can_stop: inspection.can_stop,
