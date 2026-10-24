@@ -357,7 +357,16 @@ pub(super) fn list<'a>(
     for (command, starts) in observations.into_iter().zip(&starts) {
         let facts = command.facts();
         let ended = time(facts.ended_at);
-        let problem = command.problem();
+        let github_settlement = github_left(&command, github, ended);
+        // Settling failed work removes that wait, while another finding
+        // from the same audit can still need the Day shift.
+        let finding_wait = github_settlement.is_some()
+            && matches!(command, Observation::Record(command) if command.record.security_findings_waiting);
+        let problem = if finding_wait {
+            Some(NeedsYouKind::Finding)
+        } else {
+            command.problem()
+        };
         let live_problem = match command {
             Observation::Record(command) if facts.state == "live" => live_problem(command),
             _ => None,
@@ -401,15 +410,15 @@ pub(super) fn list<'a>(
         // Age moves only rows GitHub can't speak for. An ended problem
         // with known facts stays until settlement; a ready row stays while
         // its pull request is open. A later local Command still takes up either.
-        let github_moved = taken_up
-            .is_none()
-            .then(|| github_left(&command, github, ended))
+        let github_moved = (taken_up.is_none() && !finding_wait)
+            .then_some(github_settlement)
             .flatten();
         let github_holds = taken_up.is_none()
             && ((facts.ready
                 && github_state(&command, github)
                     .is_some_and(|state| state.state == PrState::Open))
-                || (problem.is_some() && github_known(command, github)));
+                || (problem.is_some_and(|kind| kind != NeedsYouKind::Finding)
+                    && github_known(command, github)));
         let held = (ended
             .or_else(|| time(Some(facts.started_at)))
             .is_some_and(|time| cutoff.is_none_or(|cutoff| time >= cutoff))

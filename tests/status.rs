@@ -2133,6 +2133,42 @@ fn review_later_triage_stop_does_not_inherit_an_older_absence_time() {
 }
 
 #[test]
+fn review_failed_security_fix_settlement_preserves_other_waiting_findings() {
+    let scenario = Scenario::new();
+    let ended = hours_ago(48);
+    let settled = hours_ago(1);
+    failed_record(&scenario, 8, &ended);
+    let dispatched: Value = serde_json::from_slice(
+        &fs::read(scenario.path(LOGS).join("8-fixture.command.json")).unwrap(),
+    )
+    .unwrap();
+    change_record(&scenario, 8, |record| {
+        let mut run = dispatched.clone();
+        run["pull_request"] = github_pr_url(8).into();
+        record["kind"] = "Security run".into();
+        record["name"] = "secure-fixture".into();
+        record["issue"] = Value::Null;
+        record["outcome"] = "failed".into();
+        // Another finding from this audit still awaits the Day shift.
+        record["security_findings_waiting"] = true.into();
+        record["dispatched"] = vec![run].into();
+    });
+    github_issue_is(&scenario, 8, "CLOSED", Some(&settled));
+    github_pr_is(&scenario, 8, "MERGED", Some(&settled), None);
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let row = status["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "Security run")
+        .unwrap();
+    assert_eq!(row["group"], "needs you", "{status}");
+    assert_eq!(row["needs_you_kind"], "finding", "{status}");
+}
+
+#[test]
 fn merged_pull_request_takes_its_ready_row_into_resolved_saying_so() {
     let scenario = Scenario::new();
     let ended = hours_ago(48);
