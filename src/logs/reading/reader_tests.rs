@@ -2,6 +2,40 @@
 use super::*;
 use crate::logs::reading::Framing;
 
+#[test]
+fn disappeared_dispatched_session_retains_its_captured_writer() {
+    let dir = tempfile::tempdir().unwrap();
+    let folder = dir.path().join("acme/widgets/commands/issue");
+    let session = folder.join("30-20261019T110000-0400~removed-implement.logs.jsonl");
+
+    let mut dispatch = record(30);
+    dispatch["session_log"] = json!(session);
+    let mut parent = record(7);
+    parent["dispatched"] = json!([dispatch]);
+    let record_path = write(
+        dir.path(),
+        "7-20261019T110000-0400~removed.command.json",
+        &parent,
+    );
+    fs::write(&session, b"first\nunfinished").unwrap();
+
+    let reader = exact(dir.path(), &session);
+    let first = reader.read(0, Framing::Lines, 100).unwrap();
+    assert_eq!(first.bytes, b"first\n");
+    assert!(!first.done);
+
+    parent["dispatched"] = json!([]);
+    fs::write(&record_path, serde_json::to_vec(&parent).unwrap()).unwrap();
+
+    let pending = reader.read(first.offset, Framing::Lines, 100).unwrap();
+    assert!(
+        !pending.done,
+        "removing the observing record cannot prove captured writer exit"
+    );
+    assert!(pending.bytes.is_empty());
+    assert_eq!(pending.offset, first.offset);
+}
+
 fn exact(root: &Path, path: &Path) -> Reader {
     let mut config = crate::config::UserConfig::parse("", &root.join("config.toml"), root).unwrap();
     config.logs_dir = root.to_owned();

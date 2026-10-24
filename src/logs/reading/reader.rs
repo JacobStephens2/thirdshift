@@ -91,7 +91,9 @@ impl Reader {
                         .find(|record| {
                             record.name == owner.name && record.started_at == owner.started_at
                         });
-                return Ok(current.is_some_and(|record| {
+                // A removed dispatched record is no stronger evidence of
+                // completion than a removed record file: keep its writer.
+                return Ok(current.is_none_or(|record| {
                     record
                         .session_log
                         .as_deref()
