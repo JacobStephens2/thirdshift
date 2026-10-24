@@ -20,20 +20,47 @@ use anyhow::{Context, Result, bail};
 
 use crate::harness::Harness;
 
-/// What the proxy allows, per Harness, from #1009's live-checked lists: the
-/// hosts each Harness contacted through `HTTPS_PROXY` with a fake credential.
-/// Codex's plugin-sync hosts (`github.com`, `api.github.com`) and
-/// `files.openai.com` stay refused: with them refused, Codex carries on to
-/// its API. The subscription-login hosts the checks could not reach come from
-/// Codex's own source (`chatgpt.com`, `auth.openai.com`) and Claude's sandbox
-/// docs (`claude.ai`, `platform.claude.com`).
+/// One provider's hosts, from #1009's live-checked lists: the hosts each
+/// Harness contacted through `HTTPS_PROXY` with a fake credential. Codex's
+/// plugin-sync hosts (`github.com`, `api.github.com`) and `files.openai.com`
+/// stay refused: with them refused, Codex carries on to its API. The
+/// subscription-login hosts the checks could not reach come from Codex's own
+/// source (`chatgpt.com`, `auth.openai.com`) and Claude's sandbox docs
+/// (`claude.ai`, `platform.claude.com`).
+const ANTHROPIC_HOSTS: &[&str] = &["api.anthropic.com", "claude.ai", "platform.claude.com"];
+const OPENAI_HOSTS: &[&str] = &["api.openai.com", "chatgpt.com", "auth.openai.com"];
+const XAI_HOSTS: &[&str] = &["api.x.ai"];
+const META_HOSTS: &[&str] = &["api.meta.ai"];
+const AGY_HOSTS: &[&str] = &["antigravity-unleash.goog", "play.googleapis.com"];
+
+/// One provider's hosts by the name an OpenCode Model uses for it.
+fn provider_hosts(provider: &str) -> Option<&'static [&'static str]> {
+    match provider {
+        "anthropic" => Some(ANTHROPIC_HOSTS),
+        "openai" => Some(OPENAI_HOSTS),
+        "xai" => Some(XAI_HOSTS),
+        "meta" => Some(META_HOSTS),
+        _ => None,
+    }
+}
+
+/// The provider an OpenCode Model names as `<provider>/<model>`, with an
+/// optional `#effort` suffix on the model.
+pub(crate) fn opencode_provider(model: Option<&str>) -> Option<&str> {
+    model
+        .and_then(|model| model.split('#').next())
+        .and_then(|model| model.split_once('/').map(|(provider, _)| provider))
+        .filter(|provider| !provider.is_empty())
+}
+
+/// What the proxy allows, per Harness: that Harness's provider hosts.
 pub(crate) fn allowed_hosts(harness: Harness, model: Option<&str>) -> Result<Vec<String>> {
     let hosts: Vec<&str> = match harness {
-        Harness::Claude => vec!["api.anthropic.com", "claude.ai", "platform.claude.com"],
-        Harness::Codex => vec!["api.openai.com", "chatgpt.com", "auth.openai.com"],
-        Harness::Grok => vec!["api.x.ai"],
-        Harness::Muse => vec!["api.meta.ai"],
-        Harness::Agy => vec!["antigravity-unleash.goog", "play.googleapis.com"],
+        Harness::Claude => ANTHROPIC_HOSTS.to_vec(),
+        Harness::Codex => OPENAI_HOSTS.to_vec(),
+        Harness::Grok => XAI_HOSTS.to_vec(),
+        Harness::Muse => META_HOSTS.to_vec(),
+        Harness::Agy => AGY_HOSTS.to_vec(),
         Harness::OpenCode => {
             let mut hosts = vec!["opencode.ai", "models.opencode.ai"];
             hosts.extend(opencode_provider_hosts(model)?);
@@ -54,24 +81,18 @@ pub(crate) fn allowed_hosts(harness: Harness, model: Option<&str>) -> Result<Vec
 /// model, so a Trial must name its provider; one this lookup does not know
 /// fails before its session starts rather than reaching further than its list.
 fn opencode_provider_hosts(model: Option<&str>) -> Result<Vec<&'static str>> {
-    let provider = model
-        .and_then(|model| model.split('#').next())
-        .and_then(|model| model.split_once('/').map(|(provider, _)| provider))
-        .filter(|provider| !provider.is_empty());
-    match provider {
-        Some("anthropic") => Ok(vec!["api.anthropic.com", "claude.ai", "platform.claude.com"]),
-        Some("openai") => Ok(vec!["api.openai.com", "chatgpt.com", "auth.openai.com"]),
-        Some("xai") => Ok(vec!["api.x.ai"]),
-        Some("meta") => Ok(vec!["api.meta.ai"]),
-        Some("google") => Ok(vec!["antigravity-unleash.goog", "play.googleapis.com"]),
-        Some(provider) => bail!(
-            "OpenCode Trial login failed: unknown provider {provider}; \
-             the Trial's Model must name a provider this proxy allows"
-        ),
-        None => bail!(
-            "OpenCode Trial login failed: the Model must name its provider as \
-             <provider>/<model>, so the Trial's proxy can allow that provider's hosts"
-        ),
+    match opencode_provider(model).and_then(provider_hosts) {
+        Some(hosts) => Ok(hosts.to_vec()),
+        None => match opencode_provider(model) {
+            Some(provider) => bail!(
+                "OpenCode Trial login failed: unknown provider {provider}; \
+                 the Trial's Model must name a provider this proxy allows"
+            ),
+            None => bail!(
+                "OpenCode Trial login failed: the Model must name its provider as \
+                 <provider>/<model>, so the Trial's proxy can allow that provider's hosts"
+            ),
+        },
     }
 }
 

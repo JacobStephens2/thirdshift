@@ -853,11 +853,7 @@ fn opencode_into(request: &Request<'_>, environment: &mut Environment) -> Result
 /// `{env:…}` naming the variable that carries the key, with web search and
 /// web fetch denied, since a Trial runs behind the allowlisting proxy.
 fn provider_config(model: Option<&str>) -> Result<String> {
-    let provider = model
-        .and_then(|model| model.split('#').next())
-        .and_then(|model| model.split_once('/').map(|(provider, _)| provider))
-        .filter(|provider| !provider.is_empty());
-    let Some(provider) = provider else {
+    let Some(provider) = proxy::opencode_provider(model) else {
         bail!(
             "OpenCode Trial login failed: the Model must name its provider as \
              <provider>/<model>, so the Trial's config can set that provider's apiKey"
@@ -1117,6 +1113,10 @@ mod tests {
         );
     }
 
+    /// `localhost` is refused before it resolves here: it is not on the
+    /// Harness's allowlist, so the proxy never resolves it. The resolution
+    /// guard itself is covered in `proxy.rs`, where `localhost` is allowed
+    /// and refused for resolving to loopback.
     #[test]
     fn a_name_that_resolves_to_loopback_is_refused_through_the_proxy() {
         if !bwrap_or_skip("proxy loopback") {
