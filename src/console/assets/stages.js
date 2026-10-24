@@ -49,10 +49,10 @@ export function initStages(main, refresh) {
         const visible = [...scroll.querySelectorAll('.command')].filter(run => visibleWidth(run) > 1);
         // Prefer a visible focused/selected run; otherwise keep the column being
         // read, rather than a sliver of its neighbour under the sticky labels.
-        const anchor = scroll.scrollLeft > 0 ? (
+        const anchor = (
           visible.find(run => run.contains(active)) ?? visible.find(run => run.getAttribute('aria-current') === 'true') ??
           visible.reduce((best, run) => !best || visibleWidth(run) > visibleWidth(best) ? run : best, null)
-        ) : null;
+        );
         return {
           key: section.dataset.grid,
           left: scroll.scrollLeft,

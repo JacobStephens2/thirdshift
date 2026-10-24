@@ -221,7 +221,7 @@ test('Stages groups runs, scrolls in both views and remembers the view at phone 
 });
 
 test('Stages live insertions preserve the visible Ticket, link focus and selected view', async () => {
-  for (const width of [390, 1280]) for (const view of ['all', 'repository']) {
+  for (const width of [390, 1280]) for (const view of ['all', 'repository']) for (const position of ['left', 'older']) {
     const context = await browser.newContext({ viewport: { width, height: 844 } });
     const page = await context.newPage();
     const folder = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
@@ -230,13 +230,14 @@ test('Stages live insertions preserve the visible Ticket, link focus and selecte
       await page.goto(`${origin}/?page=stages`);
       await page.getByLabel('View', { exact: true }).selectOption(view);
       await page.waitForFunction(count => document.querySelectorAll('.stage-grid').length === count, view === 'all' ? 1 : 2);
-      const ticket = page.locator('thead .command').filter({ has: page.getByRole('link', { name: 'Ticket run · acme/widgets#6', exact: true }) });
+      const ticket = page.locator('thead .command').filter({ has: page.getByRole('link', { name: `Ticket run · acme/widgets#${position === 'left' ? 5 : 6}`, exact: true }) });
       const link = ticket.locator('.peek-link');
       await link.focus();
-      await ticket.evaluate(node => {
+      await ticket.evaluate((node, position) => {
         const scroll = node.closest('.stage-scroll');
-        scroll.scrollLeft += node.getBoundingClientRect().left - scroll.getBoundingClientRect().left - 155;
-      });
+        if (position === 'left') scroll.scrollLeft = 0;
+        else scroll.scrollLeft += node.getBoundingClientRect().left - scroll.getBoundingClientRect().left - 155;
+      }, position);
       const left = (await ticket.boundingBox()).x;
       const selector = await ticket.getAttribute('data-command');
       for (const [index, path] of added.entries()) {
@@ -247,7 +248,7 @@ test('Stages live insertions preserve the visible Ticket, link focus and selecte
         if (index === 0) delete fixture.parent_record;
         await writeFile(path, JSON.stringify(fixture));
         await page.locator('thead .command', { hasText: fixture.issue.title }).waitFor();
-        assert.ok(Math.abs((await ticket.boundingBox()).x - left) < 1, `${width} ${view}: insertion ${index} moved the Ticket`);
+        assert.ok(Math.abs((await ticket.boundingBox()).x - left) < 1, `${width} ${view} ${position}: insertion ${index} moved the Ticket`);
         assert.equal(await page.evaluate(() => document.activeElement?.className), 'peek-link');
         assert.equal(await page.locator('.command[aria-current="true"]').getAttribute('data-command'), selector);
         assert.equal(await page.getByLabel('View', { exact: true }).inputValue(), view);
@@ -295,6 +296,28 @@ test('Stages handles invalid or unavailable preferences and preserves selector f
       await context.close();
       await writeFile(path, before);
     }
+  }
+});
+
+test('Stages orders starts within the same second by their recorded time', async t => {
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  const folder = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const paths = [3, 4].map(number => join(folder, `${number}-fixture.command.json`));
+  const before = await Promise.all(paths.map(path => readFile(path, 'utf8')));
+  try {
+    const second = Math.floor(Date.now() / 1000) * 1000;
+    for (const [index, path] of paths.entries()) {
+      const fixture = JSON.parse(before[index]);
+      fixture.started_at = new Date(second + [100, 900][index]).toISOString();
+      await writeFile(path, JSON.stringify(fixture));
+    }
+    const page = await context.newPage();
+    await page.goto(`${origin}/?page=stages`);
+    const headings = await page.locator('thead .peek-link').allTextContents();
+    assert.ok(headings.indexOf('Ticket run · acme/widgets#4') < headings.indexOf('Ticket run · acme/widgets#3'));
+  } finally {
+    await Promise.all(paths.map((path, index) => writeFile(path, before[index])));
   }
 });
 

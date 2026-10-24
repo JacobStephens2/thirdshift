@@ -2,7 +2,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, FixedOffset, Local};
 
 use crate::config::UserConfig;
 use crate::logs::command_record::{Issue, StageName};
@@ -29,7 +29,7 @@ pub(crate) struct Run {
     pub context: String,
     pub group_start: bool,
     repository: String,
-    started: Option<i64>,
+    started: Option<DateTime<FixedOffset>>,
     ended: Option<i64>,
     stage_metadata: bool,
 }
@@ -194,32 +194,28 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
         context: String::new(),
         group_start: true,
         stages,
-        started: timestamp(&record.started_at),
+        started: DateTime::parse_from_rfc3339(&record.started_at).ok(),
         ended: record.ended_at.as_deref().and_then(timestamp),
         stage_metadata: true,
     }
 }
 
-fn collect(command: &Command, now: DateTime<Local>, cutoff: i64, runs: &mut Vec<Run>) {
-    runs.push(run(command, now, cutoff));
-    for child in command.dispatched.iter().chain(&command.children) {
-        collect(child, now, cutoff, runs);
-    }
-}
-
 // Membership follows exact recorded ancestry, never an issue number shared by attempts.
-fn collect_groups(
+fn collect(
     command: &Command,
     now: DateTime<Local>,
     cutoff: i64,
     spec: Option<usize>,
     context: &str,
     groups: &mut Vec<Group>,
+    runs: &mut Vec<Run>,
 ) {
     let mut current = run(command, now, cutoff);
+    runs.push(current.clone());
     current.context = context.into();
-    let spec = if command.record.kind == "Run" && spec.is_some() {
-        let index = spec.unwrap();
+    let spec = if command.record.kind == "Run"
+        && let Some(index) = spec
+    {
         current.context = format!(
             "Ticket of {} · Started {}",
             groups[index].subject, groups[index].started
@@ -238,23 +234,25 @@ fn collect_groups(
         command.record.issue.as_ref(),
     );
     for dispatched in &command.dispatched {
-        collect_groups(
+        collect(
             dispatched,
             now,
             cutoff,
             spec,
             &format!("Dispatched by {parent}"),
             groups,
+            runs,
         );
     }
     for child in &command.children {
-        collect_groups(
+        collect(
             child,
             now,
             cutoff,
             spec,
             &format!("Child of {parent}"),
             groups,
+            runs,
         );
     }
 }
@@ -330,8 +328,15 @@ pub(crate) fn load(config: &UserConfig, hours: f64, by_repository: bool) -> Resu
         let mut runs = Vec::new();
         match entry {
             Entry::Record(command) => {
-                collect(command, now, cutoff.timestamp(), &mut runs);
-                collect_groups(command, now, cutoff.timestamp(), None, "", &mut groups);
+                collect(
+                    command,
+                    now,
+                    cutoff.timestamp(),
+                    None,
+                    "",
+                    &mut groups,
+                    &mut runs,
+                );
             }
             Entry::History(command) => {
                 let selector = Observation::History(command).selector().unwrap_or_default();
@@ -352,7 +357,7 @@ pub(crate) fn load(config: &UserConfig, hours: f64, by_repository: bool) -> Resu
                     context: String::new(),
                     group_start: true,
                     stages: Vec::new(),
-                    started: timestamp(&command.started_at),
+                    started: DateTime::parse_from_rfc3339(&command.started_at).ok(),
                     ended: command.ended_at.as_deref().and_then(timestamp),
                     stage_metadata: false,
                 });
@@ -362,13 +367,19 @@ pub(crate) fn load(config: &UserConfig, hours: f64, by_repository: bool) -> Resu
         if runs.iter().any(|run| {
             run.state == "live"
                 || run.started.is_some_and(|start| {
+                    let start = start.timestamp();
                     start <= now.timestamp() && run.ended.unwrap_or(start) > cutoff.timestamp()
                 })
         }) {
             lanes.push(runs);
         }
     }
-    lanes.sort_by_key(|runs| std::cmp::Reverse(runs.first().and_then(|run| run.started)));
+    lanes.sort_by_key(|runs| {
+        std::cmp::Reverse(
+            runs.first()
+                .and_then(|run| run.started.map(|start| start.timestamp())),
+        )
+    });
     groups.sort_by_key(|group| {
         (
             std::cmp::Reverse(group.runs[0].started),
