@@ -90,17 +90,29 @@ fn read(record: &Path) -> DismissalFile {
 
 /// The dismissal covering this record's row, if one names its selector.
 pub(crate) fn covering(record: &Path, selector: &str) -> Option<DismissedRow> {
-    read(record)
-        .rows
-        .into_iter()
-        .find(|row| row.selector == selector)
-        .map(|mut row| {
+    Captured::read(record).covering(selector).cloned()
+}
+
+/// One read of a Command record's dismissals, shared by all of its Inbox rows.
+pub(super) struct Captured {
+    rows: Vec<DismissedRow>,
+}
+
+impl Captured {
+    pub(super) fn read(record: &Path) -> Self {
+        let mut rows = read(record).rows;
+        for row in &mut rows {
             // Dismissals written before kinds accumulated covered one kind.
             if !row.covers(&row.kind) {
                 row.kinds.push(row.kind.clone());
             }
-            row
-        })
+        }
+        Self { rows }
+    }
+
+    pub(super) fn covering(&self, selector: &str) -> Option<&DismissedRow> {
+        self.rows.iter().find(|row| row.selector == selector)
+    }
 }
 
 fn write(record: &Path, file: &DismissalFile) -> Result<()> {
@@ -168,15 +180,8 @@ fn row_for(
         .selector()
         .with_context(|| format!("cannot dismiss {input}: row has no Command record"))?;
     let found = snapshot
-        .inbox(true, days, github)
-        .into_iter()
-        .find(|item| {
-            item.command.selector().as_deref() == Some(selector.as_str())
-                || item
-                    .collapsed
-                    .iter()
-                    .any(|child| child.command.selector().as_deref() == Some(selector.as_str()))
-        })
+        .evaluate_inbox(days, github)
+        .into_target(&selector)
         .with_context(|| {
             format!("cannot dismiss {input}: row is not in Needs you or Ready for review")
         })?;

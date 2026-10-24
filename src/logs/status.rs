@@ -96,7 +96,9 @@ pub fn show(json: bool, all: bool) -> Result<()> {
         version: 1,
         hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
         active_runs: snapshot.active_runs(),
-        commands: snapshot.inbox(all, config.inbox_days, &kept),
+        commands: snapshot
+            .evaluate_inbox(config.inbox_days, &kept)
+            .into_rows(all),
         idle_passes: &snapshot.idle_passes,
         github_answer_age_seconds: kept.age.map(|age| age.as_secs()),
         github_last_answered_at: kept.last_answered_at(),

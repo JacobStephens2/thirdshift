@@ -242,7 +242,9 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
     // kept answer. The Console's background reader refreshes it independently
     // of requests; status reads GitHub only when that answer is too old.
     let kept = crate::logs::github::load(&config.logs_dir);
-    let items = snapshot.inbox(false, config.inbox_days, &kept);
+    let items = snapshot
+        .evaluate_inbox(config.inbox_days, &kept)
+        .into_rows(false);
     let listed: std::collections::BTreeSet<_> = items
         .iter()
         .filter_map(|item| item.command.selector())

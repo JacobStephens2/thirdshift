@@ -2,13 +2,14 @@
 
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use chrono::{DateTime, FixedOffset, Local};
 use serde::Serialize;
 
 use super::{Command, Entry, Health, Observation};
 use crate::github::{PrState, PullRequestState};
-use crate::logs::dismiss::{self, DismissalView, READY_KIND};
+use crate::logs::dismiss::{self, DismissalView, DismissedRow, READY_KIND};
 use crate::logs::github::{FindingSubject, Kept, RowAnswer, Subject};
 use crate::logs::stop;
 
@@ -159,10 +160,6 @@ impl InboxItem<'_> {
         self.departure.as_ref().map(Departure::line)
     }
 
-    pub(in crate::logs) fn github_urls(&self) -> Vec<&str> {
-        github_urls(self.command)
-    }
-
     /// The row's state word in the Console and `status`: its Needs you kind,
     /// then Stopping, Ready or Landing, otherwise the Command's own state.
     pub(in crate::logs) fn state_word(&self) -> &str {
@@ -190,11 +187,11 @@ struct Facts<'a> {
 }
 
 impl<'a> Observation<'a> {
-    fn problem(self) -> Option<NeedsYouKind> {
+    fn problem(self, stop: Option<&stop::Request>) -> Option<NeedsYouKind> {
         let facts = self.facts();
         if facts.state == "died" {
             Some(NeedsYouKind::Died)
-        } else if matches!(self, Observation::Record(command) if facts.state == "ended" && !facts.ready && stop::requested(&command.record_path).is_some_and(|request| !request.requeue))
+        } else if matches!(self, Observation::Record(_) if facts.state == "ended" && !facts.ready && stop.is_some_and(|request| !request.requeue))
         {
             Some(NeedsYouKind::Triage)
         } else if facts
@@ -238,156 +235,224 @@ impl<'a> Observation<'a> {
     }
 }
 
-fn observations(entries: &[Entry]) -> impl Iterator<Item = Observation<'_>> {
-    entries.iter().flat_map(|entry| {
-        let (outer, ready): (_, Vec<_>) = match entry {
-            Entry::Record(command) => (
-                Observation::Record(command),
-                command
-                    .dispatched
-                    .iter()
-                    .filter(|run| Observation::Record(run).facts().ready)
-                    .map(Observation::Record)
-                    .collect(),
-            ),
-            Entry::History(command) => (Observation::History(command), Vec::new()),
+struct LocalFacts {
+    stop: Option<stop::Request>,
+    dismissals: dismiss::Captured,
+}
+
+/// Classification inputs for a row and the dispatched work that can answer it.
+/// Side files are read once per owning path, even when several rows share it.
+struct Captured<'a> {
+    command: Observation<'a>,
+    problem: Option<NeedsYouKind>,
+    stopping: bool,
+    dismissal: Option<DismissedRow>,
+    dispatched: Vec<Captured<'a>>,
+}
+
+impl<'a> Captured<'a> {
+    fn new(command: Observation<'a>, local: &mut BTreeMap<&'a Path, LocalFacts>) -> Self {
+        let (request, dismissal) = match command {
+            Observation::Record(record) => {
+                let facts = local
+                    .entry(&record.record_path)
+                    .or_insert_with(|| LocalFacts {
+                        stop: stop::requested(&record.record_path),
+                        dismissals: dismiss::Captured::read(&record.record_path),
+                    });
+                (
+                    facts.stop.as_ref(),
+                    command
+                        .selector()
+                        .and_then(|row| facts.dismissals.covering(&row))
+                        .cloned(),
+                )
+            }
+            Observation::History(_) => (None, None),
         };
-        std::iter::once(outer).chain(ready)
-    })
-}
+        let problem = command.problem(request);
+        let stopping = command.facts().state == "live" && request.is_some();
+        let dispatched = match command {
+            Observation::Record(record) => record
+                .dispatched
+                .iter()
+                .map(|run| Self::new(Observation::Record(run), local))
+                .collect(),
+            Observation::History(_) => Vec::new(),
+        };
+        Self {
+            command,
+            problem,
+            stopping,
+            dismissal,
+            dispatched,
+        }
+    }
 
-pub(super) fn next_change(
-    entries: &[Entry],
-    now: DateTime<Local>,
-    days: i64,
-    github: &Kept,
-) -> Option<DateTime<Local>> {
-    let observations: Vec<_> = observations(entries).collect();
-    let starts: Vec<_> = observations.iter().copied().map(issue_starts).collect();
-    let starts_by_issue = all_starts(&starts);
-    observations
-        .into_iter()
-        .zip(&starts)
-        .filter_map(|(observation, starts)| {
-            let facts = observation.facts();
-            if facts.state == "live" {
-                return None;
+    /// A failed Pass is answered by its failed dispatched work; a Finding
+    /// waits for its own private records rather than a successful fix.
+    fn github_records(&self) -> Vec<&'a crate::logs::command_record::CommandRecord> {
+        if self.problem == Some(NeedsYouKind::Finding) {
+            return Vec::new();
+        }
+        let Observation::Record(command) = self.command else {
+            return Vec::new();
+        };
+        if self.problem.is_some()
+            && matches!(
+                command.record.kind.as_str(),
+                "Architect run" | "Security run"
+            )
+            && !self.dispatched.is_empty()
+        {
+            let failed: Vec<_> = self
+                .dispatched
+                .iter()
+                .filter(|run| run.problem.is_some())
+                .collect();
+            return if failed.is_empty() {
+                self.dispatched.iter().collect()
+            } else {
+                failed
             }
-            let ended = time(facts.ended_at);
-            let recent = ended.and_then(|at| at.checked_add_signed(chrono::Duration::days(1)));
-            let retained = ended
-                .or_else(|| time(Some(facts.started_at)))
-                .and_then(|at| at.checked_add_signed(chrono::Duration::days(days)));
-            // A row taken up by a later Command stays in Resolved until
-            // inbox.days after that Command started, so its new boundary
-            // wakes open pages too.
-            let taken_up = superseded_at(starts, &starts_by_issue, ended)
-                .and_then(|at| at.checked_add_signed(chrono::Duration::days(days)));
-            // GitHub departures stay in Resolved for inbox.days from settlement.
-            let github_moved = github_left(&observation, github, ended)
-                .and_then(|(_, at)| at.checked_add_signed(chrono::Duration::days(days)));
-            // A dismissed row stays in Resolved until inbox.days after the
-            // dismissal, so its new boundary wakes open pages too.
-            let dismissed = match observation {
-                Observation::Record(command) => observation
-                    .selector()
-                    .and_then(|selector| dismiss::covering(&command.record_path, &selector))
-                    .and_then(|row| time(Some(&row.at)))
-                    .and_then(|at| at.checked_add_signed(chrono::Duration::days(days))),
+            .into_iter()
+            .filter_map(|run| match run.command {
+                Observation::Record(command) => Some(&command.record),
                 Observation::History(_) => None,
-            };
-            [recent, retained, taken_up, github_moved, dismissed]
-                .into_iter()
-                .flatten()
-                // Grouping includes the exact cutoff; cross it before waking.
-                .filter_map(|at| at.checked_add_signed(chrono::Duration::nanoseconds(1)))
-                .map(|at| at.with_timezone(&Local))
-                .filter(|at| *at > now)
-                .min()
+            })
+            .collect();
+        }
+        vec![&command.record]
+    }
+}
+
+/// Owned work targets, independent of the kept answer so the adapter can apply
+/// History freezes under its refresh lock without evaluating row policy again.
+#[derive(Default)]
+pub(in crate::logs) struct RefreshWork {
+    pub subjects: Vec<Subject>,
+    pub findings: Vec<FindingSubject>,
+    pub freezes: Vec<Freeze>,
+}
+
+pub(in crate::logs) struct Freeze {
+    pub row: String,
+    pub url: String,
+}
+
+impl RefreshWork {
+    pub(in crate::logs) fn has_remote_reads(&self) -> bool {
+        !self.subjects.is_empty() || !self.findings.is_empty()
+    }
+}
+
+struct Row<'a> {
+    item: InboxItem<'a>,
+    order: (Group, Option<u8>, Reverse<Option<DateTime<FixedOffset>>>),
+    failure: Option<(&'a str, bool)>,
+}
+
+/// One operation's retained Inbox decisions. Projections read only this value;
+/// a new local observation or kept GitHub answer requires a new evaluation.
+pub(in crate::logs) struct Evaluation<'a> {
+    rows: Vec<Row<'a>>,
+    refresh: RefreshWork,
+    next_change: Option<DateTime<Local>>,
+}
+
+impl<'a> Evaluation<'a> {
+    pub(in crate::logs) fn refresh_work(&self) -> &RefreshWork {
+        &self.refresh
+    }
+
+    pub(in crate::logs) fn next_change(&self) -> Option<DateTime<Local>> {
+        self.next_change
+    }
+
+    /// The collapsed row containing an exact selector, with the same visible
+    /// membership as the Inbox. An explicit History target remains undoable,
+    /// but cannot pull visible Commands into that History row's Dismissal.
+    pub(in crate::logs) fn into_target(mut self, selector: &str) -> Option<InboxItem<'a>> {
+        let history = self
+            .rows
+            .iter()
+            .find(|row| row.item.command.selector().as_deref() == Some(selector))?
+            .item
+            .group
+            == Group::History;
+        self.rows
+            .retain(|row| (row.item.group == Group::History) == history);
+        self.into_rows(true).into_iter().find(|item| {
+            std::iter::once(item)
+                .chain(&item.collapsed)
+                .any(|member| member.command.selector().as_deref() == Some(selector))
         })
-        .min()
-}
+    }
 
-/// Issues/pull requests for Needs you and pull requests for Ready for
-/// review, including departures still in view. History keeps its last facts;
-/// a row not yet read gets one lookup before local age alone can move it there.
-pub(super) fn github_subjects(
-    entries: &[Entry],
-    now: DateTime<Local>,
-    days: i64,
-    github: &Kept,
-) -> Vec<Subject> {
-    let mut urls = BTreeMap::new();
-    for item in list(entries, now, true, days, github) {
-        for item in std::iter::once(&item).chain(&item.collapsed) {
-            for url in item.github_urls() {
-                if let Some(row) = item.command.selector()
-                    && !github.is_frozen(&row, url)
-                    && (item.group != Group::History || !github.has_answer(url))
-                {
-                    let triage_since = (item.command.problem() == Some(NeedsYouKind::Triage)
-                        && github_records(item.command).iter().any(|record| {
-                            record.issue.as_ref().is_some_and(|issue| issue.url == url)
-                        }))
-                    .then(|| time(item.command.facts().ended_at))
-                    .flatten();
-                    urls.entry(url.to_owned())
-                        .and_modify(|since: &mut Option<DateTime<FixedOffset>>| {
-                            *since = (*since).max(triage_since)
-                        })
-                        .or_insert(triage_since);
+    pub(in crate::logs) fn into_rows(self, all: bool) -> Vec<InboxItem<'a>> {
+        // Filter before collapse: hidden History members cannot contribute to
+        // visible counts or the Commands a Dismissal will cover.
+        let mut rows: Vec<_> = self
+            .rows
+            .into_iter()
+            .filter(|row| all || row.item.group != Group::History)
+            .collect();
+        rows.sort_by_key(|row| row.order);
+        let mut collapsed: Vec<InboxItem<'_>> = Vec::new();
+        let mut failures = BTreeMap::new();
+        for row in rows {
+            if let Some(key) = row.failure {
+                if let Some(&index) = failures.get(&key) {
+                    let first: &mut InboxItem<'_> = &mut collapsed[index];
+                    first.count += 1;
+                    first.collapsed.push(row.item);
+                    continue;
                 }
+                failures.insert(key, collapsed.len());
             }
+            collapsed.push(row.item);
         }
+        collapsed
     }
-    urls.into_iter()
-        .map(|(url, triage_since)| Subject { url, triage_since })
-        .collect()
 }
 
-pub(super) fn finding_subjects(
-    entries: &[Entry],
-    now: DateTime<Local>,
-    days: i64,
-    github: &Kept,
-) -> Vec<FindingSubject> {
-    let mut subjects = Vec::new();
-    for item in list(entries, now, true, days, github) {
-        for item in std::iter::once(&item).chain(&item.collapsed) {
-            if let Observation::Record(command) = item.command
-                && command.record.kind == "Security run"
-                && command.record.security_findings_waiting
-                && let Some(row) = item.command.selector()
-                && (item.group != Group::History || github.findings(&row).is_none())
-            {
-                subjects.push(FindingSubject {
-                    row,
-                    repository: command.record.repository.clone(),
-                    urls: command
-                        .record
-                        .security_findings
-                        .iter()
-                        .map(|finding| finding.url.clone())
-                        .collect(),
-                });
-            }
-        }
-    }
-    subjects
-}
-
-pub(super) fn list<'a>(
+pub(super) fn evaluate<'a>(
     entries: &'a [Entry],
     now: DateTime<Local>,
-    all: bool,
     days: i64,
     github: &Kept,
-) -> Vec<InboxItem<'a>> {
+) -> Evaluation<'a> {
     // An accepted duration can exceed chrono's calendar. In that case every
     // representable timestamp is inside the requested retention period.
     let cutoff = now.checked_sub_signed(chrono::Duration::days(days));
-    let observations: Vec<_> = observations(entries).collect();
-    let starts: Vec<_> = observations.iter().copied().map(issue_starts).collect();
+    let mut local = BTreeMap::new();
+    let captured: Vec<_> = entries
+        .iter()
+        .map(|entry| {
+            Captured::new(
+                match entry {
+                    Entry::Record(command) => Observation::Record(command),
+                    Entry::History(command) => Observation::History(command),
+                },
+                &mut local,
+            )
+        })
+        .collect();
+    let observations: Vec<_> = captured
+        .iter()
+        .flat_map(|outer| {
+            std::iter::once(outer).chain(
+                outer
+                    .dispatched
+                    .iter()
+                    .filter(|run| run.command.facts().ready),
+            )
+        })
+        .collect();
+    let starts: Vec<_> = observations
+        .iter()
+        .map(|row| issue_starts(row.command))
+        .collect();
     let starts_by_issue = all_starts(&starts);
     let mut latest = BTreeMap::new();
     for starts in &starts {
@@ -398,27 +463,36 @@ pub(super) fn list<'a>(
                 .or_insert(*start);
         }
     }
-    let mut items = Vec::new();
-    for (command, starts) in observations.into_iter().zip(&starts) {
+    let mut evaluation = Evaluation {
+        rows: Vec::new(),
+        refresh: RefreshWork::default(),
+        next_change: None,
+    };
+    let mut subjects = BTreeMap::new();
+    for (captured, starts) in observations.into_iter().zip(&starts) {
+        let command = captured.command;
         let facts = command.facts();
         let ended = time(facts.ended_at);
-        let recorded_dismissal = match command {
-            Observation::Record(record) => command
-                .selector()
-                .and_then(|selector| dismiss::covering(&record.record_path, &selector)),
-            Observation::History(_) => None,
+        let recorded_dismissal = captured.dismissal.as_ref();
+        let records = captured.github_records();
+        let tree_problem = match command {
+            Observation::Record(command) => live_problem(command),
+            _ => None,
         };
+        let live_problem = tree_problem.filter(|_| facts.state == "live");
+        let urls = github_urls(command, captured.problem, tree_problem, &records);
         let finding_facts = command.selector().and_then(|row| github.findings(&row));
         let findings_waiting = matches!(command, Observation::Record(command) if command.record.security_findings_waiting)
             && finding_facts.is_none_or(|facts| facts.waiting());
-        let github_settlement = github_left(&command, github, ended);
+        let github_settlement = github_left(captured, &records, github, ended);
         // Settling failed work removes that wait, while another finding
         // from the same audit can still need the Day shift.
         let finding_wait = github_settlement.is_some() && findings_waiting;
+        let settled_at = github_settlement.as_ref().map(|(_, at)| *at);
         let mut problem = if finding_wait {
             Some(NeedsYouKind::Finding)
         } else {
-            command.problem()
+            captured.problem
         };
         // Dismissing the failure does not dismiss the findings it hid.
         if problem == Some(NeedsYouKind::Failed)
@@ -429,12 +503,8 @@ pub(super) fn list<'a>(
         {
             problem = Some(NeedsYouKind::Finding);
         }
-        let live_problem = match command {
-            Observation::Record(command) if facts.state == "live" => live_problem(command),
-            _ => None,
-        };
         let landing = matches!(command, Observation::Record(command) if is_landing(command));
-        let stopping = matches!(command, Observation::Record(command) if facts.state == "live" && stop::requested(&command.record_path).is_some());
+        let stopping = captured.stopping;
         // When this row stopped waiting through the later-Command exit:
         // the earliest later start on any of its issues. Only rows that
         // waited (ended problems and ready Commands) leave through it, so
@@ -457,7 +527,7 @@ pub(super) fn list<'a>(
                 && github_state(&command, github)
                     .is_some_and(|state| state.state == PrState::Open))
                 || (problem.is_some_and(|kind| kind != NeedsYouKind::Finding)
-                    && github_known(command, github))
+                    && github_known(command, &records, github))
                 || (problem == Some(NeedsYouKind::Finding) && finding_facts.is_some()));
         let held = (ended
             .or_else(|| time(Some(facts.started_at)))
@@ -519,7 +589,10 @@ pub(super) fn list<'a>(
             Group::Landing
         } else if facts.state == "live" {
             Group::Working
-        } else if ended.is_some_and(|time| time >= now - chrono::Duration::days(1)) {
+        } else if ended.is_some_and(|time| {
+            now.checked_sub_signed(chrono::Duration::days(1))
+                .is_none_or(|cutoff| time >= cutoff)
+        }) {
             Group::Done
         } else if resolved_at
             .is_some_and(|at| cutoff.is_none_or(|cutoff| at.with_timezone(&Local) >= cutoff))
@@ -534,8 +607,89 @@ pub(super) fn list<'a>(
         let departure = left
             .map(|at| (TAKEN_UP_REASON.to_string(), at))
             .or(github_moved);
-        if all || group != Group::History {
-            items.push(InboxItem {
+        if facts.state != "live" {
+            let recent = ended.and_then(|at| at.checked_add_signed(chrono::Duration::days(1)));
+            // Keep subsequent transitions even while Done takes precedence.
+            // Extra age/settlement wakes are conservative; all clocks use the
+            // same captured departures and dismissal as grouping above.
+            let retained = [
+                ended.or_else(|| time(Some(facts.started_at))),
+                taken_up,
+                settled_at,
+                recorded_dismissal.and_then(|row| time(Some(&row.at))),
+                resolved_at,
+            ]
+            .into_iter()
+            .flatten()
+            .filter_map(|at| at.checked_add_signed(chrono::Duration::days(days)));
+            let next = recent
+                .into_iter()
+                .chain(retained)
+                // Grouping includes the cutoff; wake strictly after it.
+                .filter_map(|at| at.checked_add_signed(chrono::Duration::nanoseconds(1)))
+                .map(|at| at.with_timezone(&Local))
+                .filter(|at| *at > now)
+                .min();
+            evaluation.next_change = evaluation.next_change.into_iter().chain(next).min();
+        }
+        if let Some(row) = command.selector() {
+            for &url in &urls {
+                if github.is_frozen(&row, url) {
+                    continue;
+                }
+                if group == Group::History && github.has_answer(url) {
+                    evaluation.refresh.freezes.push(Freeze {
+                        row: row.clone(),
+                        url: url.to_owned(),
+                    });
+                } else {
+                    let triage_since = (captured.problem == Some(NeedsYouKind::Triage)
+                        && records.iter().any(|record| {
+                            record.issue.as_ref().is_some_and(|issue| issue.url == url)
+                        }))
+                    .then_some(ended)
+                    .flatten();
+                    subjects
+                        .entry(url.to_owned())
+                        .and_modify(|since: &mut Option<DateTime<FixedOffset>>| {
+                            *since = (*since).max(triage_since);
+                        })
+                        .or_insert(triage_since);
+                }
+            }
+            if let Observation::Record(command) = command
+                && command.record.kind == "Security run"
+                && command.record.security_findings_waiting
+                && (group != Group::History || github.findings(&row).is_none())
+            {
+                evaluation.refresh.findings.push(FindingSubject {
+                    row,
+                    repository: command.record.repository.clone(),
+                    urls: command
+                        .record
+                        .security_findings
+                        .iter()
+                        .map(|finding| finding.url.clone())
+                        .collect(),
+                });
+            }
+        }
+        // Dismissed failures collapse together, separately from waiting ones.
+        let failed = needs_you_kind == Some(NeedsYouKind::Failed)
+            || dismissal
+                .as_ref()
+                .is_some_and(|row| row.kind == NeedsYouKind::Failed.title());
+        evaluation.rows.push(Row {
+            order: (
+                group,
+                needs_you_kind.map(NeedsYouKind::priority),
+                Reverse(time(facts.ended_at.or(Some(facts.started_at)))),
+            ),
+            failure: facts
+                .cause
+                .filter(|cause| failed && !cause.is_empty())
+                .map(|cause| (cause, dismissal.is_some())),
+            item: InboxItem {
                 command,
                 group,
                 needs_you_kind,
@@ -552,45 +706,16 @@ pub(super) fn list<'a>(
                 github_at: state.and_then(event_time).map(str::to_string),
                 github: command
                     .selector()
-                    .and_then(|row| github.row_answer(&row, github_urls(command))),
+                    .and_then(|row| github.row_answer(&row, urls)),
                 dismissal,
-            });
-        }
+            },
+        });
     }
-    items.sort_by_key(|item| {
-        let facts = item.command.facts();
-        (
-            item.group,
-            item.needs_you_kind.map(NeedsYouKind::priority),
-            Reverse(time(facts.ended_at.or(Some(facts.started_at)))),
-        )
-    });
-    let mut collapsed: Vec<InboxItem<'_>> = Vec::new();
-    let mut failures = BTreeMap::new();
-    for item in items {
-        // A dismissed Failed row keeps the row it left: dismissed failures
-        // collapse with each other, never with failures still waiting.
-        let failed = item.needs_you_kind == Some(NeedsYouKind::Failed)
-            || item
-                .dismissal
-                .as_ref()
-                .is_some_and(|dismissal| dismissal.kind == NeedsYouKind::Failed.title());
-        if failed && let Some(cause) = item.command.facts().cause.filter(|cause| !cause.is_empty())
-        {
-            // A later failure with a dismissed cause starts a row of one:
-            // dismissed rows collapse only with each other.
-            let key = (cause, item.dismissal.is_some());
-            if let Some(&index) = failures.get(&key) {
-                let first: &mut InboxItem<'_> = &mut collapsed[index];
-                first.count += 1;
-                first.collapsed.push(item);
-                continue;
-            }
-            failures.insert(key, collapsed.len());
-        }
-        collapsed.push(item);
-    }
-    collapsed
+    evaluation.refresh.subjects = subjects
+        .into_iter()
+        .map(|(url, triage_since)| Subject { url, triage_since })
+        .collect();
+    evaluation
 }
 
 /// The row's own pull request URL, if its observation has a record with
@@ -602,12 +727,16 @@ fn record_pull_request<'a>(observation: &Observation<'a>) -> Option<&'a str> {
     }
 }
 
-fn github_urls(observation: Observation<'_>) -> Vec<&str> {
+fn github_urls<'a>(
+    observation: Observation<'a>,
+    problem: Option<NeedsYouKind>,
+    live_problem: Option<NeedsYouKind>,
+    records: &[&'a crate::logs::command_record::CommandRecord],
+) -> Vec<&'a str> {
     let mut urls = Vec::new();
-    let problem = observation.problem().is_some()
-        || matches!(observation, Observation::Record(command) if live_problem(command).is_some());
+    let problem = problem.is_some() || live_problem.is_some();
     if observation.facts().ready || problem {
-        for record in github_records(observation) {
+        for record in records {
             if let Some(url) = &record.pull_request {
                 urls.push(url.as_str());
             }
@@ -619,45 +748,15 @@ fn github_urls(observation: Observation<'_>) -> Vec<&str> {
     urls
 }
 
-/// A failed Pass is answered by its failed dispatched work, not by a
-/// different fix that succeeded. Undispatched failures have no such subject.
-fn github_records(
+fn github_known(
     observation: Observation<'_>,
-) -> Vec<&crate::logs::command_record::CommandRecord> {
-    // A successful fix speaks for that fix, not for other findings from
-    // its audit that still need the Day shift.
-    if observation.problem() == Some(NeedsYouKind::Finding) {
-        return Vec::new();
-    }
-    let Observation::Record(command) = observation else {
-        return Vec::new();
-    };
-    if observation.problem().is_some()
-        && matches!(
-            command.record.kind.as_str(),
-            "Architect run" | "Security run"
-        )
-        && !command.dispatched.is_empty()
-    {
-        let failed: Vec<_> = command
-            .dispatched
-            .iter()
-            .filter(|run| Observation::Record(run).problem().is_some())
-            .map(|run| &run.record)
-            .collect();
-        if !failed.is_empty() {
-            return failed;
-        }
-        return command.dispatched.iter().map(|run| &run.record).collect();
-    }
-    vec![&command.record]
-}
-
-fn github_known(observation: Observation<'_>, github: &Kept) -> bool {
+    records: &[&crate::logs::command_record::CommandRecord],
+    github: &Kept,
+) -> bool {
     let Some(row) = observation.selector() else {
         return false;
     };
-    github_records(observation).iter().any(|record| {
+    records.iter().any(|record| {
         record
             .issue
             .as_ref()
@@ -686,18 +785,20 @@ fn event_time(state: &PullRequestState) -> Option<&str> {
 /// A problem's issue closing or pull request merging settles it; Triage
 /// also leaves on label removal. Ready rows also leave on an unmerged close.
 fn github_left(
-    observation: &Observation<'_>,
+    captured: &Captured<'_>,
+    records: &[&crate::logs::command_record::CommandRecord],
     github: &Kept,
     ended: Option<DateTime<FixedOffset>>,
 ) -> Option<(String, DateTime<FixedOffset>)> {
+    let observation = captured.command;
     if observation.facts().state == "live" {
         return None;
     }
-    let settled_work = github_work_left(observation, github, ended);
-    let finding_row = observation.problem() == Some(NeedsYouKind::Finding)
-        || (observation.problem() == Some(NeedsYouKind::Failed)
+    let settled_work = github_work_left(captured, records, github, ended);
+    let finding_row = captured.problem == Some(NeedsYouKind::Finding)
+        || (captured.problem == Some(NeedsYouKind::Failed)
             && matches!(observation, Observation::Record(command) if command.record.security_findings_waiting
-                && (settled_work.is_some() || observation.selector().and_then(|row| dismiss::covering(&command.record_path, &row))
+                && (settled_work.is_some() || captured.dismissal.as_ref()
                     .is_some_and(|row| row.covers(NeedsYouKind::Failed.title())
                         && !row.covers(NeedsYouKind::Finding.title())))));
     if finding_row
@@ -714,14 +815,16 @@ fn github_left(
 /// Settlement of the Command's own or dispatched work, independently of
 /// any other findings that its Security audit left waiting.
 fn github_work_left(
-    observation: &Observation<'_>,
+    captured: &Captured<'_>,
+    records: &[&crate::logs::command_record::CommandRecord],
     github: &Kept,
     ended: Option<DateTime<FixedOffset>>,
 ) -> Option<(String, DateTime<FixedOffset>)> {
-    if observation.problem().is_some() {
+    let observation = captured.command;
+    if captured.problem.is_some() {
         let row = observation.selector()?;
-        let departures = github_records(*observation)
-            .into_iter()
+        let departures = records
+            .iter()
             .map(|record| {
                 let issue = record
                     .issue
@@ -731,7 +834,7 @@ fn github_work_left(
                     && issue.closed
                 {
                     (ISSUE_CLOSED_REASON, issue.closed_at.as_deref())
-                } else if observation.problem() == Some(NeedsYouKind::Triage)
+                } else if captured.problem == Some(NeedsYouKind::Triage)
                     && let Some(issue) = issue
                     && !issue.needs_triage
                 {
@@ -760,7 +863,7 @@ fn github_work_left(
     if !observation.facts().ready {
         return None;
     }
-    let state = github_state(observation, github)?;
+    let state = github_state(&observation, github)?;
     let (reason, at) = match state.state {
         PrState::Merged => (MERGED_REASON.to_string(), event_time(state)),
         PrState::Closed => (CLOSED_REASON.to_string(), state.closed_at.as_deref()),

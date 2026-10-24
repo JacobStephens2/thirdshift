@@ -39,14 +39,6 @@ pub(super) struct Snapshot {
 }
 
 impl Snapshot {
-    pub(super) fn next_inbox_change(
-        &self,
-        days: i64,
-        github: &super::github::Kept,
-    ) -> Option<DateTime<Local>> {
-        inbox::next_change(&self.commands, self.now, days, github)
-    }
-
     pub(super) fn entries(&self) -> &[Entry] {
         &self.commands
     }
@@ -126,29 +118,12 @@ impl Snapshot {
         })
     }
 
-    pub(super) fn inbox(
-        &self,
-        all: bool,
-        days: i64,
-        github: &super::github::Kept,
-    ) -> Vec<InboxItem<'_>> {
-        inbox::list(&self.commands, self.now, all, days, github)
-    }
-
-    pub(super) fn github_subjects(
+    pub(super) fn evaluate_inbox(
         &self,
         days: i64,
         github: &super::github::Kept,
-    ) -> Vec<super::github::Subject> {
-        inbox::github_subjects(&self.commands, self.now, days, github)
-    }
-
-    pub(super) fn finding_subjects(
-        &self,
-        days: i64,
-        github: &super::github::Kept,
-    ) -> Vec<super::github::FindingSubject> {
-        inbox::finding_subjects(&self.commands, self.now, days, github)
+    ) -> inbox::Evaluation<'_> {
+        inbox::evaluate(&self.commands, self.now, days, github)
     }
 
     pub(super) fn active_runs(&self) -> usize {
