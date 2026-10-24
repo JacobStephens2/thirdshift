@@ -310,6 +310,7 @@ fn grade(
     timeout: u64,
     caps: &crate::scope::Caps,
 ) -> Result<Response> {
+    crate::resources::wait()?;
     let workspace = tempfile::Builder::new()
         .prefix("session-")
         .tempdir_in(directory)?

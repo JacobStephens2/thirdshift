@@ -12,7 +12,7 @@ use crate::harness::Choice;
 use crate::issue::IssueUrl;
 
 /// A Pass owns its dispatched work in the same process and atomic record.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct CommandTree {
     #[serde(flatten)]
     pub command: CommandRecord,
@@ -53,7 +53,7 @@ pub(crate) fn experiment_rechecked(log: &Path, id: &str, outcome: &str) -> Resul
     OnMachine.replace_record(&path, &serde_json::to_vec_pretty(&tree)?)
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct CommandRecord {
     pub version: u32,
     pub kind: String,
@@ -70,6 +70,9 @@ pub(super) struct CommandRecord {
     pub started_at: String,
     #[serde(default)]
     pub ended_at: Option<String>,
+    /// Reader-only provenance: legacy retention estimates are not recorded finishes.
+    #[serde(skip)]
+    pub end_time_estimated: bool,
     pub stages: Vec<Stage>,
     pub session_log: Option<PathBuf>,
     pub outcome: Option<String>,
@@ -82,7 +85,7 @@ pub(super) struct CommandRecord {
     pub parent_dispatch: Option<String>,
     #[serde(default)]
     pub tickets: Vec<TicketRecord>,
-    /// Local knowledge at completion; status never refreshes findings from GitHub.
+    /// Local knowledge at completion; the Inbox overlays its kept GitHub answer.
     #[serde(default)]
     pub security_findings_waiting: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -108,14 +111,14 @@ impl From<&IssueUrl> for Issue {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct TicketRecord {
     pub issue: Issue,
     pub state: TicketState,
     pub blockers: Vec<Issue>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum TicketState {
     Running,
@@ -126,7 +129,7 @@ pub(crate) enum TicketState {
     NotStarted,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Stage {
     pub name: String,
     pub began_at: String,
@@ -148,59 +151,62 @@ impl StageTime<'_> {
     }
 }
 
-/// Internal transitions are typed; persisted names stay tolerant of new stages.
-#[derive(Clone, Copy)]
-pub enum StageName {
-    Implement,
-    CodeReview,
-    Resume,
-    SecurityReview,
-    PullRequest,
-    CiWatch,
-    Repair,
-    SelfMerge,
-    Cleanup,
-    ArchitectureReview,
-    Tickets,
-    SpecReview,
-    SecurityAudit,
-    SecurityReproduction,
-    SecurityFixPublishing,
-    ArmBuilds,
-    EvalTasks,
-    Trials,
+// Keep typed stages, persisted names and display order in one declaration.
+macro_rules! stage_names {
+    ($($(#[$meta:meta])* $stage:ident => $name:literal,)*) => {
+        /// Internal transitions are typed; persisted names stay tolerant of new stages.
+        #[derive(Clone, Copy)]
+        pub enum StageName {
+            $($(#[$meta])* $stage,)*
+        }
+
+        impl StageName {
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Self::$stage => $name,)*
+                }
+            }
+
+            /// Declaration order, with unfamiliar persisted names after every known stage.
+            pub(super) fn order(name: &str) -> usize {
+                match name {
+                    $($name => Self::$stage as usize,)*
+                    _ => usize::MAX,
+                }
+            }
+        }
+    };
+}
+
+stage_names! {
+    Implement => "implement",
+    CodeReview => "Code review",
+    Resume => "Resume",
+    SecurityReview => "Security review",
+    PullRequest => "pull request",
+    CiWatch => "CI watch",
+    Repair => "Repair",
+    SelfMerge => "Self-merge",
+    Cleanup => "cleanup",
+    ArchitectureReview => "Architecture review",
+    Tickets => "Tickets",
+    SpecReview => "Spec review",
+    SecurityAudit => "Security audit",
+    SecurityReproduction => "Security reproduction",
+    SecurityFixPublishing => "Security fix publishing",
+    /// A fixed finding's proof-of-concept recheck against the merged Base
+    /// branch, before its private record is closed.
+    SecurityCloseCheck => "Security close check",
+    ArmBuilds => "Arm builds",
+    EvalTasks => "Eval tasks",
+    Trials => "Trials",
     /// A Pickup run or Security run waiting on the Run it dispatched.
-    DispatchedRun,
+    DispatchedRun => "dispatched Run",
     /// A Pickup run or Security run waiting on the Spec run it dispatched.
-    DispatchedSpecRun,
+    DispatchedSpecRun => "dispatched Spec run",
 }
 
 impl StageName {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Implement => "implement",
-            Self::CodeReview => "Code review",
-            Self::Resume => "Resume",
-            Self::SecurityReview => "Security review",
-            Self::PullRequest => "pull request",
-            Self::CiWatch => "CI watch",
-            Self::Repair => "Repair",
-            Self::SelfMerge => "Self-merge",
-            Self::Cleanup => "cleanup",
-            Self::ArchitectureReview => "Architecture review",
-            Self::Tickets => "Tickets",
-            Self::SpecReview => "Spec review",
-            Self::SecurityAudit => "Security audit",
-            Self::SecurityReproduction => "Security reproduction",
-            Self::SecurityFixPublishing => "Security fix publishing",
-            Self::ArmBuilds => "Arm builds",
-            Self::EvalTasks => "Eval tasks",
-            Self::Trials => "Trials",
-            Self::DispatchedRun => "dispatched Run",
-            Self::DispatchedSpecRun => "dispatched Spec run",
-        }
-    }
-
     /// The stage a pass enters while `work`, the Command it dispatched, runs.
     pub(super) fn dispatched(work: Work<'_>) -> Self {
         match work {
@@ -224,30 +230,7 @@ impl StageName {
     }
 
     pub(super) fn known(name: &str) -> bool {
-        [
-            Self::Implement,
-            Self::CodeReview,
-            Self::Resume,
-            Self::SecurityReview,
-            Self::PullRequest,
-            Self::CiWatch,
-            Self::Repair,
-            Self::SelfMerge,
-            Self::Cleanup,
-            Self::ArchitectureReview,
-            Self::Tickets,
-            Self::SpecReview,
-            Self::SecurityAudit,
-            Self::SecurityReproduction,
-            Self::SecurityFixPublishing,
-            Self::ArmBuilds,
-            Self::EvalTasks,
-            Self::Trials,
-            Self::DispatchedRun,
-            Self::DispatchedSpecRun,
-        ]
-        .into_iter()
-        .any(|stage| stage.name() == name)
+        Self::order(name) != usize::MAX
     }
 }
 
@@ -341,6 +324,7 @@ impl CommandRecord {
             effort: harness.effort.clone(),
             started_at: now.to_rfc3339(),
             ended_at: None,
+            end_time_estimated: false,
             stages: Vec::new(),
             session_log: None,
             outcome: None,

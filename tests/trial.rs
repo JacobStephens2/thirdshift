@@ -164,7 +164,7 @@ fn a_code_review_trial_reviews_the_prepared_diff_and_keeps_both_reports() {
         output["log"]
             .as_str()
             .unwrap()
-            .ends_with("trial-code-review.jsonl")
+            .ends_with("trial-code-review.logs.jsonl")
     );
     for (axis, expected) in [
         ("standards", "Standards fixture report\n"),
@@ -407,11 +407,7 @@ fn a_live_plan_limit_cuts_short_a_trial_and_keeps_its_evidence() {
         assert_eq!(output["session_id"], session_id);
         assert!(output["cause"].as_str().unwrap().contains("plan-limit"));
         assert!(PathBuf::from(output["model_evidence"].as_str().unwrap()).is_file());
-        assert!(
-            fs::read_to_string(output["log"].as_str().unwrap())
-                .unwrap()
-                .contains(event)
-        );
+        assert!(support::session_trace::events(output["log"].as_str().unwrap()).contains(event));
         assert!(
             !escaped.exists(),
             "{harness} kept working after its warning"
@@ -509,9 +505,7 @@ touch '{}'
         "the native warning was not read while stdout was idle"
     );
     assert!(
-        fs::read_to_string(output["log"].as_str().unwrap())
-            .unwrap()
-            .contains("used_percent")
+        support::session_trace::events(output["log"].as_str().unwrap()).contains("used_percent")
     );
 }
 
@@ -576,7 +570,7 @@ fn a_trial_clears_inherited_ownership_and_resumes_killed_work_only_once_with_its
         line["log"]
             .as_str()
             .unwrap()
-            .ends_with("-spec-review-resume.jsonl")
+            .ends_with("-spec-review-resume.logs.jsonl")
     );
     assert!(result.stderr.contains("resuming it once"));
     assert!(
@@ -798,7 +792,7 @@ fn factory_skill_temporary_files_are_removed_after_success_or_failure() {
 fn an_interrupted_trial_keeps_an_already_observed_session_id() {
     let scenario = Scenario::new();
     let request = request(&scenario);
-    let log = scenario.path("trial-output/trial-spec-review.jsonl");
+    let log = scenario.path("trial-output/trial-spec-review.logs.jsonl");
     scenario.agent_does(&format!(
         "until grep -q 'fake-session-1' '{}'; do sleep 0.01; done\n\
          touch '{}'\n\

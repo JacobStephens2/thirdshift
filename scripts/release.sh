@@ -48,8 +48,9 @@
 # If main gains different content after that selection, the script refuses
 # to merge or tag it under the old Experiment; choose a fresh release version.
 #
-# Prints a progress line on stderr for each step, with the release workflow
-# run's URL once it waits for that run, and the GitHub Release's URL last.
+# Prints a progress line on stderr for each step, stamped with the local time
+# as HH:MM:SS, with the release workflow run's URL once it waits for that run,
+# and the GitHub Release's URL last.
 # Exits 0 once the release workflow run for the tag has succeeded: the GitHub
 # Release is published with its final body and the crate is on crates.io. It
 # exits 1 with nothing more pushed if it refuses or the review says no, exits
@@ -256,7 +257,7 @@ wait_for_experiment() {
 	progress "checking release Experiment for ${1:0:7}"
 	snapshot=$(cargo run --quiet --manifest-path "$summary_manifest" -- experiment --release "$1" --json)
 	while :; do
-		status=$(printf '%s\n' "$snapshot" | python3 "$(dirname "$summary_prompt")/release-experiment.py")
+		status=$(printf '%s\n' "$snapshot" | experiment_status)
 		read -r outcome id <<<"$status"
 		case $outcome in
 		pass | skip) return ;;
@@ -265,7 +266,7 @@ wait_for_experiment() {
 			snapshot=$(cargo run --quiet --manifest-path "$summary_manifest" -- experiments "$id" --json)
 			;;
 		fail | inconclusive)
-			printf 'release: Experiment %s; release anyway? [y/N] ' "$outcome" >&2
+			{ stamp && printf 'Experiment %s; release anyway? [y/N] ' "$outcome"; } >&2
 			read -r answer || refuse "Experiment $outcome; no release override given"
 			case $answer in
 			y | yes) return ;;
@@ -275,6 +276,27 @@ wait_for_experiment() {
 		*) refuse "unexpected release Experiment state: $outcome" ;;
 		esac
 	done
+}
+
+# experiment_status
+# Keep the renderer's state on stdout and stamp its progress through the same
+# helper as every other release step. Preserve parser diagnostics on failure.
+experiment_status() {
+	local rendered result=0 line
+	rendered=$(python3 "$(dirname "$summary_prompt")/release-experiment.py" 2>&1) || result=$?
+	while IFS= read -r line; do
+		case $line in
+		"release: "*) progress "${line#release: }" ;;
+		*)
+			if [ "$result" -eq 0 ]; then
+				printf '%s\n' "$line"
+			else
+				printf '%s\n' "$line" >&2
+			fi
+			;;
+		esac
+	done <<<"$rendered"
+	return "$result"
 }
 
 # write_summary <what stopping leaves undone>
@@ -371,8 +393,18 @@ release_run() {
 		--jq '.[] | "\(.databaseId) \(.url) \(.status) \(.conclusion)"'
 }
 
+# progress <message>
+# Prints <message> on stderr as a progress line.
 progress() {
-	echo "release: $*" >&2
+	{ stamp && printf '%s\n' "$*"; } >&2
+}
+
+# stamp
+# What every progress line starts with: the prefix, then the local time it was
+# printed as HH:MM:SS, as thirdshift stamps its own, so a long wait can be told
+# from a stalled one.
+stamp() {
+	printf 'release: %(%H:%M:%S)T ' -1
 }
 
 # refuse <reason>
@@ -529,7 +561,7 @@ review_summary() {
 	local answer file status
 	printf '\n%s\n\n' "$1" >&2
 	while :; do
-		printf 'release: open the PR with this summary? [y]es / [e]dit / [n]o ' >&2
+		{ stamp && printf 'open the PR with this summary? [y]es / [e]dit / [n]o '; } >&2
 		read -r answer || return
 		case $answer in
 		y | yes)

@@ -1,5 +1,37 @@
 //! Deterministic Trace ancestry. No second copy of Command or stage times.
+pub(super) mod ancestry;
+
+use serde::Serialize;
 use sha2::{Digest, Sha256};
+
+/// The eight kinds in a Command's trace, including record-derived ancestors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum SpanKind {
+    Cmd,
+    Run,
+    Stage,
+    Sess,
+    Model,
+    Turn,
+    Tool,
+    Agent,
+}
+
+impl std::fmt::Display for SpanKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Cmd => "cmd",
+            Self::Run => "run",
+            Self::Stage => "stage",
+            Self::Sess => "sess",
+            Self::Model => "model",
+            Self::Turn => "turn",
+            Self::Tool => "tool",
+            Self::Agent => "agent",
+        })
+    }
+}
 
 use super::{
     command_record::{CommandRecord, Stage},
@@ -35,7 +67,7 @@ impl Context {
         Self::of_owner(owner).for_record(record)
     }
 
-    pub(super) fn for_record(&self, record: &CommandRecord) -> Self {
+    fn for_record(&self, record: &CommandRecord) -> Self {
         let mut context = self.clone();
         context.repository = record.repository.clone();
         context.run = id(&[
@@ -74,7 +106,7 @@ impl Context {
         Self::with_identity(identity)
     }
 
-    /// Unowned callers still retain a Session log; preserve that behavior.
+    /// Unowned callers still retain a Session trace; preserve that behavior.
     /// A stamped path recovers grouping without borrowing another Command.
     pub(crate) fn of_session(path: &std::path::Path) -> Self {
         let identity = super::owner::decode(path)

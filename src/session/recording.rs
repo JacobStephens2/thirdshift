@@ -1,11 +1,11 @@
-//! Session log recording: consume the transcript, checkpoint stream Models,
+//! Session trace recording: consume the transcript, checkpoint stream Models,
 //! and replace them only when completed Interpretation supplies a report.
 //! The captured owning Command also governs child inheritance and collection.
 
-use std::fs::{self, File};
+use std::fs;
+use std::io::Read;
 #[cfg(test)]
 use std::io::{BufRead, BufReader};
-use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdout, Command};
@@ -76,10 +76,10 @@ impl Recording {
         let owner = self
             .owner
             .as_ref()
-            .map_err(|cause| anyhow::anyhow!("cannot name Session log: {cause}"))?;
+            .map_err(|cause| anyhow::anyhow!("cannot name Session trace: {cause}"))?;
         Ok(match owner {
             Some(owner) => owner.session_path(dir, subject, kind),
-            None => dir.join(format!("{subject}-{kind}.jsonl")),
+            None => dir.join(format!("{subject}-{kind}.logs.jsonl")),
         })
     }
 
@@ -134,8 +134,6 @@ impl Recording {
             fs::create_dir_all(dir)
                 .with_context(|| format!("could not create {}", dir.display()))?;
         }
-        let mut log_file =
-            File::create(log).with_context(|| format!("could not create {}", log.display()))?;
         let started = Instant::now();
         let context = self
             .trial_context
@@ -168,7 +166,6 @@ impl Recording {
                 let followed = follow(
                     &kind_owned,
                     output,
-                    &mut log_file,
                     &log_owned,
                     stream,
                     &streaming_trace,
@@ -249,7 +246,7 @@ impl Recording {
             effort: choice.effort.clone(),
             observed,
         };
-        let path = log.with_extension("models.json");
+        let path = logs::session::original(log).with_extension("models.json");
         let kept = serde_json::to_vec(&record)
             .map_err(anyhow::Error::from)
             .and_then(|json| fs::write(&path, json).map_err(anyhow::Error::from));
@@ -337,12 +334,11 @@ struct StreamPolicy {
     private: bool,
 }
 
-/// Copy every line to the private transcript and trace. Ordinary sessions also
+/// Record every line in the Session trace. Ordinary sessions also
 /// print progress; Eval sessions stop at plan limits while preserving evidence.
 fn follow(
     kind: &str,
     mut stream: ChildStdout,
-    log_file: &mut File,
     log: &Path,
     progress: &mut Interpretation,
     trace: &Mutex<super::trace::Trace>,
@@ -388,21 +384,13 @@ fn follow(
                     .map_or(0, |index| index + 1)
             };
             for line in pending[..complete].split_inclusive(|byte| *byte == b'\n') {
-                record_line(kind, line, log_file, log, progress, trace, policy.private)?;
+                record_line(kind, line, log, progress, trace, policy.private)?;
             }
             pending.drain(..complete);
         }
         if policy.stop_at_limit {
             for raw in progress.limit_records() {
-                record_line(
-                    kind,
-                    raw.as_bytes(),
-                    log_file,
-                    log,
-                    progress,
-                    trace,
-                    policy.private,
-                )?;
+                record_line(kind, raw.as_bytes(), log, progress, trace, policy.private)?;
             }
             if progress.plan_limit_reached() {
                 return super::limits::stop();
@@ -417,18 +405,18 @@ fn follow(
 fn record_line(
     kind: &str,
     line: &[u8],
-    log_file: &mut File,
     log: &Path,
     progress: &mut Interpretation,
     trace: &Mutex<super::trace::Trace>,
     private: bool,
 ) -> Result<()> {
-    log_file
-        .write_all(line)
-        .with_context(|| format!("could not write {}", log.display()))?;
     let raw = String::from_utf8_lossy(line);
     let decoded = progress.decode(&raw);
-    trace.lock().unwrap().record(&raw, &decoded.events)?;
+    trace
+        .lock()
+        .unwrap()
+        .record(line, &decoded.events)
+        .with_context(|| format!("could not write Session trace {}", log.display()))?;
     if !private {
         for condensed in decoded.progress {
             progress::step(format_args!("{kind}: {condensed}"));

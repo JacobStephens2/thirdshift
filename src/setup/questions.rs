@@ -31,9 +31,12 @@ pub struct Answers {
     pub launch_pull: bool,
     /// `security.fix`: Security runs may fix reproduced findings.
     pub security_fix: bool,
+    /// `security.close`: a Security run may close a finding its fix merged.
+    pub security_close: bool,
     pub security_review: bool,
     /// With Run notifications on, `email.always`, their settings; with them
-    /// off, `None`, and the email settings stay as they were.
+    /// off, `None`, which turns `email.unless_merged` off too, and the
+    /// addresses stay as they were.
     pub notifications: Option<Notifications>,
     /// A Claude setup token to save for Trials, independent of notifications.
     pub claude_setup_token: Option<String>,
@@ -54,6 +57,7 @@ impl Answers {
             base_fix: self.base_fix,
             launch_pull: self.launch_pull,
             security_fix: self.security_fix,
+            security_close: self.security_close,
             security_review: self.security_review,
             notifications: self
                 .notifications
@@ -132,15 +136,19 @@ pub fn ask(
     found: Option<Source>,
 ) -> Result<Answers> {
     let harness = outside.ask_harness_settings(&current.harness)?;
-    let merge_always = yes_or_no(outside, "Every Run a Merge run?", current.merge_always)?;
+    let merge_always = yes_or_no(
+        outside,
+        "Every Ticket run Self-merges?",
+        current.merge_always,
+    )?;
     let base_fix = yes_or_no(
         outside,
-        "Every Run may start a Base fix when the Base branch's CI is red?",
+        "Every Ticket run may start a Base fix when the Base branch's CI is red?",
         current.base_fix,
     )?;
     let launch_pull = yes_or_no(
         outside,
-        "Every Run first fast-forwards your checkout of the Base branch?",
+        "Every Ticket run first fast-forwards your checkout of the Base branch?",
         current.launch_pull,
     )?;
     let security_fix = yes_or_no(
@@ -148,9 +156,18 @@ pub fn ask(
         "Security runs may fix reproduced findings?",
         current.security_fix.unwrap_or(false),
     )?;
+    let security_close = if security_fix {
+        yes_or_no(
+            outside,
+            "Security runs may close a finding their fix merged?",
+            current.security_close.unwrap_or(false),
+        )?
+    } else {
+        current.security_close.unwrap_or(false)
+    };
     let security_review = yes_or_no(
         outside,
-        "Runs review their change for Security findings?",
+        "Ticket runs review their change for Security findings?",
         current.security_review,
     )?;
     let notifications = ask_notifications(outside, current, found)?;
@@ -180,6 +197,7 @@ pub fn ask(
         base_fix,
         launch_pull,
         security_fix,
+        security_close,
         security_review,
         notifications,
         claude_setup_token,
@@ -194,8 +212,8 @@ fn ask_notifications(
 ) -> Result<Option<Notifications>> {
     if !yes_or_no(
         outside,
-        "Run notifications, an email as each Run ends?",
-        current.email.always,
+        "Run notifications, an email as each Ticket run ends?",
+        current.email.always || current.email.unless_merged,
     )? {
         return Ok(None);
     }
@@ -227,7 +245,7 @@ fn ask_notifications(
     } else {
         outside.say(
             "No Resend API key, so no email can go yet. To add one later, rerun \
-             `thirdshift setup`, or set RESEND_API_KEY in the environment the Run starts from."
+             `thirdshift setup`, or set RESEND_API_KEY in the environment the Ticket run starts from."
                 .to_string(),
         );
         false

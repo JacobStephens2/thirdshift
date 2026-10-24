@@ -50,7 +50,7 @@ pub enum Purpose {
     SecurityReview,
 }
 
-/// Where Session logs go: beside the owning Command log in
+/// Where Session traces go: beside the owning Command log in
 /// `commands/<command>/` under the repository's logs, under the User config's `logs.dir` or
 /// `~/.thirdshift/logs`, each named for what is run and stamped with the
 /// command's start stamp, which its Command log shares. Only once the logs
@@ -101,7 +101,7 @@ impl Logs {
     }
 
     /// Where a session's stream is logged:
-    /// `<root>/commands/<command>/<name>-<stamp>~<token>-<kind>.jsonl`.
+    /// `<root>/commands/<command>/<name>-<stamp>~<token>-<kind>.logs.jsonl`.
     pub fn path(&self, session: Logged) -> Result<PathBuf> {
         self.recording()
             .session_path(&self.dir, &self.name, &session.token())
@@ -126,7 +126,7 @@ pub struct Sessions<'a> {
     outside: RefCell<Box<dyn Outside>>,
     /// What must still hold before each session starts, a Resume included:
     /// a session it fails is not started, and the step fails with it.
-    before_each: &'a dyn Fn() -> Result<()>,
+    before_each: Box<dyn Fn() -> Result<()> + 'a>,
     /// The session started last, a Resume included, and its log.
     last_log: RefCell<Option<(Logged, PathBuf)>>,
     /// How each session ended whose last ending, its Resume's if it got one,
@@ -178,8 +178,13 @@ impl<'a> Sessions<'a> {
             recording: logs.recording().clone(),
             sandbox: Some(sandbox.launch()),
         };
-        let (taken, log) =
-            Sessions::taking(logs, worktree, Box::new(on_machine), &|| Ok(()), steps);
+        let (taken, log) = Sessions::taking(
+            logs,
+            worktree,
+            Box::new(on_machine),
+            crate::resources::wait,
+            steps,
+        );
         (taken, log.filter(|log| log.exists()))
     }
 
@@ -217,8 +222,16 @@ impl<'a> Sessions<'a> {
             recording: logs.recording().clone(),
             sandbox: None,
         };
-        let (taken, log) =
-            Sessions::taking(logs, worktree, Box::new(on_machine), before_each, steps);
+        let (taken, log) = Sessions::taking(
+            logs,
+            worktree,
+            Box::new(on_machine),
+            move || {
+                crate::resources::wait()?;
+                before_each()
+            },
+            steps,
+        );
         (taken, log.filter(|log| log.exists()))
     }
 
@@ -229,14 +242,14 @@ impl<'a> Sessions<'a> {
         logs: &'a Logs,
         worktree: &'a Path,
         outside: Box<dyn Outside>,
-        before_each: &'a dyn Fn() -> Result<()>,
+        before_each: impl Fn() -> Result<()> + 'a,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
         let sessions = Sessions {
             logs,
             worktree,
             outside: RefCell::new(outside),
-            before_each,
+            before_each: Box::new(before_each),
             last_log: RefCell::default(),
             endings_with_killed_work: RefCell::default(),
         };
@@ -619,7 +632,7 @@ mod tests {
             std::os::unix::fs::symlink(outside.path(), &dir).unwrap();
             let logs = Logs {
                 name: "670".into(),
-                dir: worktree.path().join("session-logs"),
+                dir: worktree.path().join("session-traces"),
                 recording: OnceCell::new(),
             };
             let choice = Choice {
@@ -753,7 +766,7 @@ mod tests {
             );
             for axis in ["standards", "spec"] {
                 assert_eq!(
-                    fs::read_to_string(log.with_extension(axis)).unwrap(),
+                    fs::read_to_string(logs::session::original(&log).with_extension(axis)).unwrap(),
                     format!("{marker} {axis}")
                 );
             }
@@ -782,7 +795,7 @@ mod tests {
             &logs,
             Path::new("/unused"),
             Box::new(scripted),
-            &|| Ok(()),
+            || Ok(()),
             steps,
         );
         let calls = calls.take();

@@ -133,10 +133,7 @@ fn export_decodes_with_official_types_and_keeps_record_times_and_all_session_log
         .as_array()
         .unwrap()
         .iter()
-        .map(|path| {
-            fs::read_to_string(Path::new(path.as_str().unwrap()).with_extension("logs.jsonl"))
-                .unwrap()
-        })
+        .map(|path| fs::read_to_string(path.as_str().unwrap()).unwrap())
         .collect::<String>();
     assert!(!logs.is_empty());
     assert_eq!(logs, source);
@@ -152,9 +149,22 @@ fn trace_only_sessions_export_once_even_when_the_record_names_the_old_log() {
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let shown = scenario.run(&["show", "widgets#7", "--json"]);
     let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
-    for session in shown["command"]["session_logs"].as_array().unwrap() {
-        fs::remove_file(session.as_str().unwrap()).unwrap();
+    let record_path =
+        Path::new(shown["command"]["command_log"].as_str().unwrap()).with_extension("command.json");
+    let mut record: Value = serde_json::from_slice(&fs::read(&record_path).unwrap()).unwrap();
+    // Converted records retain the former raw filename, while only the trace
+    // files exist. Exercise that reference without deleting the records file.
+    record["session_log"] = record["session_log"]
+        .as_str()
+        .unwrap()
+        .replace(".logs.jsonl", ".jsonl")
+        .into();
+    for stage in record["stages"].as_array_mut().unwrap() {
+        if let Some(path) = stage["session_log"].as_str() {
+            stage["session_log"] = path.replace(".logs.jsonl", ".jsonl").into();
+        }
     }
+    fs::write(record_path, serde_json::to_vec(&record).unwrap()).unwrap();
     let dir = scenario.path("export");
     let result = scenario.run(&["logs", "widgets#7", "--export", dir.to_str().unwrap()]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
@@ -216,4 +226,37 @@ fn a_pickup_commands_dispatched_spec_and_tickets_export_as_one_whole_trace() {
         source_lines.iter().map(String::as_str).collect()
     );
     assert_logs_belong_to_trace(&logs, &spans);
+    let tree = scenario.run(&[
+        "show",
+        outer["command_log"].as_str().unwrap(),
+        "--spans",
+        "--json",
+    ]);
+    assert_eq!(tree.code, Some(0), "{}", tree.stderr);
+    let tree: Value = serde_json::from_str(&tree.stdout).unwrap();
+    for node in tree["spans"].as_array().unwrap() {
+        let exported = spans
+            .iter()
+            .find(|span| {
+                let id: String = span
+                    .span_id
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect();
+                node["id"] == id
+            })
+            .unwrap();
+        let parent: String = exported
+            .parent_span_id
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
+        assert_eq!(
+            node["parent_id"].as_str().unwrap_or_default(),
+            parent,
+            "export ancestry differs from the CLI/Console tree for {} {}",
+            node["kind"],
+            node["name"]
+        );
+    }
 }

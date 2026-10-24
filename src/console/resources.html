@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en" data-theme="{{ page.theme }}">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Resources · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/console.js" type="module"></script></head>
+<body>{% include "console/header.html" %}{% include "console/nav.html" %}
+<main><div class="page-title"><h1>Resources</h1><code>thirdshift resources --json</code></div>
+<p>Host snapshot. <a href="/resources">Reload</a> to update measurements and limits.</p>
+<dl>
+  <dt>Available memory</dt><dd>{{ snapshot.host.available_memory_mb }} MB of {{ snapshot.host.total_memory_mb }} MB (1 MB = 1,000,000 bytes)</dd>
+  <dt>Logical CPUs</dt><dd>{{ snapshot.host.logical_cpus }}</dd>
+  <dt>One-minute load</dt><dd>{{ snapshot.host.load_one|fmt("{:.2}") }} · {{ snapshot.load_per_cpu_percent|fmt("{:.1}") }}% per CPU</dd>
+  <dt>Minimum available memory</dt><dd>{% if snapshot.limits.min_available_memory_mb == 0 %}Disabled{% else %}{{ snapshot.limits.min_available_memory_mb }} MB{% endif %}</dd>
+  <dt>Maximum load per CPU</dt><dd>{% if snapshot.limits.max_load_per_cpu_percent == 0 %}Disabled{% else %}{{ snapshot.limits.max_load_per_cpu_percent }}%{% endif %}</dd>
+</dl>
+{% if snapshot.ready %}<p role="status">Ready to start another session</p>{% else %}<p role="status">Waiting for host resources</p><ul>{% for reason in snapshot.reasons %}<li>{{ reason }}</li>{% endfor %}</ul>{% endif %}
+<p>Set limits in <code>[resources]</code> in <code>~/.thirdshift/config.toml</code>. Zero disables each limit. Before every session, thirdshift waits while a configured limit is exceeded. Running sessions continue.</p>
+<p>Load is a one-minute average, not instantaneous CPU usage. These host measurements do not reserve capacity or account for container quotas.</p>
+</main>{% include "console/chrome.html" %}</body></html>

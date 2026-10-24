@@ -72,6 +72,141 @@ fn issue() -> IssueUrl {
     IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap()
 }
 
+fn candidate_with_history(fixture: &Fixture, events: &[Value]) -> Candidate {
+    let response = serde_json::json!({"data": {"repository": {"issue": {
+        "parent": null,
+        "subIssues": {"nodes": []},
+        "blockedBy": {"nodes": []},
+        "linked": {"nodes": []},
+        "labelled": {"nodes": events, "pageInfo": {"hasNextPage": false}}
+    }}}});
+    fixture.script(&format!("cat <<'RESPONSE'\n{response}\nRESPONSE"));
+    GitHub::new()
+        .candidate(&issue(), crate::labels::READY_FOR_AGENT)
+        .unwrap()
+}
+
+fn label_event(kind: &str, label: &str, at: &str) -> Value {
+    serde_json::json!({"__typename": kind, "label": {"name": label}, "createdAt": at})
+}
+
+#[test]
+fn a_same_second_hand_back_counts_in_either_timeline_order() {
+    with_recorded_signal(
+        "github::execution_tests::a_same_second_hand_back_counts_in_either_timeline_order",
+        |_| {
+            let fixture = Fixture::new("");
+            let claim = label_event("LabeledEvent", "in-progress", "2026-10-24T15:00:00Z");
+            let ready = label_event("LabeledEvent", "ready-for-agent", "2026-10-24T15:42:42Z");
+            let release = label_event("UnlabeledEvent", "in-progress", "2026-10-24T15:42:42Z");
+            for swap in [[ready.clone(), release.clone()], [release, ready]] {
+                let read = candidate_with_history(
+                    &fixture,
+                    &[claim.clone(), swap[0].clone(), swap[1].clone()],
+                );
+                assert!(read.handed_back, "{swap:?}");
+                assert!(!read.claimed);
+                assert_eq!(read.claim_generation, 1);
+            }
+        },
+    );
+}
+
+#[test]
+fn a_ready_label_strictly_before_claim_removal_is_not_a_hand_back() {
+    with_recorded_signal(
+        "github::execution_tests::a_ready_label_strictly_before_claim_removal_is_not_a_hand_back",
+        |_| {
+            let fixture = Fixture::new("");
+            let read = candidate_with_history(
+                &fixture,
+                &[
+                    label_event("LabeledEvent", "in-progress", "2026-10-24T15:00:00Z"),
+                    label_event("LabeledEvent", "ready-for-agent", "2026-10-24T15:42:41Z"),
+                    label_event("UnlabeledEvent", "in-progress", "2026-10-24T15:42:42Z"),
+                ],
+            );
+            assert!(!read.handed_back);
+            assert!(!read.claimed);
+            assert_eq!(read.claim_generation, 1);
+        },
+    );
+}
+
+#[test]
+fn a_same_second_claim_prevents_hand_back_in_every_timeline_order() {
+    with_recorded_signal(
+        "github::execution_tests::a_same_second_claim_prevents_hand_back_in_every_timeline_order",
+        |_| {
+            let fixture = Fixture::new("");
+            let earlier = label_event("LabeledEvent", "in-progress", "2026-10-24T15:00:00Z");
+            let claim = label_event("LabeledEvent", "IN-PROGRESS", "2026-10-24T15:42:42Z");
+            let ready = label_event("LabeledEvent", "Ready-For-Agent", "2026-10-24T15:42:42Z");
+            let release = label_event("UnlabeledEvent", "in-progress", "2026-10-24T15:42:42Z");
+            for events in [
+                vec![claim.clone(), ready.clone()],
+                vec![ready.clone(), claim.clone()],
+                vec![ready.clone(), release.clone(), claim.clone()],
+                vec![release.clone(), claim.clone(), ready.clone()],
+                vec![release, ready, claim],
+            ] {
+                let mut history = vec![earlier.clone()];
+                history.extend(events);
+                let read = candidate_with_history(&fixture, &history);
+                assert!(read.claimed, "{history:?}");
+                assert!(!read.handed_back, "{history:?}");
+                assert_eq!(read.claim_generation, 2);
+            }
+        },
+    );
+}
+
+#[test]
+fn labelled_issue_reads_include_every_page_and_exclude_pull_requests() {
+    with_recorded_signal(
+        "github::execution_tests::labelled_issue_reads_include_every_page_and_exclude_pull_requests",
+        |_| {
+            let fixture = Fixture::new("");
+            let label = Label::new("Architect plan & idea", "");
+            let mut response = String::from(
+                "{\"html_url\":\"https://github.com/acme/widgets/pull/42\",\"pull_request\":{}}\n",
+            );
+            for number in (1..=1001).rev() {
+                response.push_str(
+                    &serde_json::json!({
+                        "html_url": format!("https://github.com/acme/widgets/issues/{number}"),
+                        "title": format!("Plan {number}"),
+                        "labels": [{"name": label.name()}],
+                    })
+                    .to_string(),
+                );
+                response.push('\n');
+            }
+            for state in ["open", "closed"] {
+                fixture.script(&format!(
+                    r#"
+test "$*" = 'api --paginate --jq .[] repos/acme/widgets/issues?state={state}&labels=Architect+plan+%26+idea&sort=created&direction=desc&per_page=100' || exit 2
+cat <<'ISSUES'
+{response}ISSUES
+"#,
+                ));
+                let github = GitHub::new();
+                let listed = match state {
+                    "open" => github.open_issues_labelled("acme/widgets", label),
+                    "closed" => github.closed_issues_labelled("acme/widgets", label),
+                    _ => unreachable!(),
+                }
+                .unwrap();
+                assert_eq!(listed.len(), 1001, "{state}");
+                assert_eq!(listed[0].issue.number, 1001);
+                assert_eq!(listed[0].title, "Plan 1001");
+                assert!(listed[0].labels.has(label));
+                assert_eq!(listed[1000].issue.number, 1);
+            }
+        },
+    );
+}
+
 #[test]
 fn a_transient_private_security_issue_listing_recovers() {
     with_recorded_signal(
@@ -327,7 +462,7 @@ fn transient_transport_failures_recover_across_read_only_operations() {
                 (
                     "issues",
                     "echo 'HTTP 429: Too Many Requests' >&2; exit 1",
-                    "[]",
+                    "",
                 ),
                 (
                     "pr",

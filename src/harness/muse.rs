@@ -167,6 +167,7 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<ModelAndEffort>
                 effort: settled.effort.clone(),
                 chosen_by: super::ChosenBy::UserConfig,
             };
+            crate::resources::wait()?;
             crate::progress::step(format_args!(
                 "checking the Model {model} with a test call to muse"
             ));

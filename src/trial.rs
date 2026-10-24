@@ -249,11 +249,11 @@ pub fn run(path: &Path) -> Result<String> {
     let session_ms = session_started.elapsed().as_millis();
     let artifact = |extension| {
         log.as_ref()
-            .map(|log| log.with_extension(extension))
+            .map(|log| crate::logs::session::original(log).with_extension(extension))
             .filter(|path| path.is_file())
     };
     let recorded_session_id = || {
-        let file = fs::File::open(log.as_ref()?).ok()?;
+        let file = fs::File::open(crate::logs::session::path(log.as_ref()?)).ok()?;
         let mut stream = choice
             .harness
             .adapter()
@@ -263,7 +263,9 @@ pub fn run(path: &Path) -> Result<String> {
             let Ok(line) = line else {
                 break;
             };
-            drop(stream.condense(&line));
+            for raw in crate::logs::session::events(&line) {
+                drop(stream.condense(&raw));
+            }
         }
         stream.into_session_id()
     };
@@ -301,7 +303,7 @@ pub fn run(path: &Path) -> Result<String> {
             standards: artifact("standards"),
             spec: artifact("spec"),
         },
-        log,
+        log: log.as_deref().map(crate::logs::session::path),
     };
     serde_json::to_string(&output).context("could not serialize Trial result")
 }

@@ -1,6 +1,6 @@
 //! A command's record in its repository's logs: its stamp, its Command log
 //! and its lines in the Activity log, all under the root of the repository's
-//! logs, `<logs.dir>/<owner>/<repo>/`, with its Session logs.
+//! logs, `<logs.dir>/<owner>/<repo>/`, with its Session traces.
 //!
 //! A command says how it [`begin`]s, that it is [`configured`], what work it
 //! [`started`], what pass was [`skipped`], and how it [`ended`]; this module
@@ -13,15 +13,18 @@
 
 mod activity;
 mod command_record;
-pub(crate) mod convert;
+pub mod dismiss;
 mod effects;
 pub mod export;
+pub(crate) mod github;
 pub(crate) mod owner;
 mod process_identity;
 mod reading;
+pub(crate) use reading::Framing;
 pub(crate) use reading::catalog;
 mod recording;
 pub(crate) mod session;
+pub(crate) mod spans;
 pub mod status;
 pub mod stop;
 pub(crate) mod trace;
@@ -42,7 +45,31 @@ pub(crate) use command_record::{TicketRecord, TicketState, experiment_rechecked}
 use effects::OnMachine;
 use recording::Record;
 
-/// The command typed, which owns its Session logs and all child Runs' logs.
+/// The Unix actor recorded for a CLI action, shared by Stop and Dismissal.
+fn unix_user(action: &str) -> anyhow::Result<String> {
+    use anyhow::Context;
+
+    let failure = format!("could not identify the Unix user asking for {action}");
+    let user = std::process::Command::new("id")
+        .arg("-un")
+        .output()
+        .with_context(|| failure.clone())?;
+    if !user.status.success() {
+        anyhow::bail!(failure);
+    }
+    Ok(String::from_utf8(user.stdout)?.trim().to_owned())
+}
+
+/// Human-facing names for stable stored kinds and dispatch stages (ADR 0022).
+pub(crate) fn display_name(stored: &str) -> &str {
+    match stored {
+        "Run" => "Ticket run",
+        "dispatched Run" => "dispatched Ticket run",
+        other => other,
+    }
+}
+
+/// The command typed, which owns its Session traces and all child Runs' logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandKind {
     Issue,
@@ -215,7 +242,7 @@ pub fn stage(stage: Stage) {
     record().stage(stage, None);
 }
 
-/// Keep the current Session log, including a Resume's own log, as
+/// Keep the current Session trace, including a Resume's own log, as
 /// `session` enters its stage.
 pub fn session(session: Logged, path: &Path) {
     record().stage(session.stage(), Some(path));
@@ -265,7 +292,7 @@ pub fn show_held() {
 
 /// The root of `repo`'s logs: `<logs.dir>/<owner>/<repo>/`, named for the
 /// GitHub repository, not the checkout, so every checkout of it logs to the
-/// same place. Its Command logs, Session logs and Activity log are all under
+/// same place. Its Command logs, Session traces and Activity log are all under
 /// it.
 ///
 /// # Panics
@@ -275,12 +302,12 @@ pub fn root(repo: &Repo) -> PathBuf {
     record().root(repo)
 }
 
-/// The command whose folder holds this process's Session logs.
+/// The command whose folder holds this process's Session traces.
 pub fn command_kind() -> CommandKind {
     record().command_kind()
 }
 
-/// Where this command and all its child Runs keep Session logs on `repo`.
+/// Where this command and all its child Runs keep Session traces on `repo`.
 pub fn session_dir(repo: &Repo) -> PathBuf {
     let record = record();
     record
@@ -290,7 +317,7 @@ pub fn session_dir(repo: &Repo) -> PathBuf {
 }
 
 /// The command's start stamp, as in `20261003T120000-0400`, which names its
-/// Command log and its Session logs.
+/// Command log and its Session traces.
 pub fn stamp() -> String {
     record().stamp()
 }

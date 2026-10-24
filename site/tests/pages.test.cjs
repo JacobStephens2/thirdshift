@@ -79,7 +79,7 @@ test("the manual starts folded and readers can unfold nested sections without Ja
   assert.equal(await page.locator("main details[open]").count(), 0);
   assert.equal(await page.locator("main details").count(), await page.locator("main :is(h2,h3,h4)").count());
   await checkSectionToggles(page, ":scope > .manual-content", "Enter");
-  await page.getByRole("heading", { name: "What a Run does", exact: true }).click();
+  await page.getByRole("heading", { name: "What a Ticket run does", exact: true }).click();
   const claim = page.getByRole("heading", { name: "The Claim", exact: true });
   assert.equal(await claim.isVisible(), true);
   const ends = page.getByRole("heading", { name: "When the Claim ends", exact: true });
@@ -129,6 +129,18 @@ test("every public page identifies its canonical URL, purpose and share metadata
   assert.equal(descriptions.size, publicPaths.length, "each page has its own search description");
   await page.goto(`${origin}/`);
   assert.match(await page.title(), /GitHub issues.*pull requests/);
+});
+
+test("hand-written pages describe the current share card in both alt tags", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  for (const path of ["/", "/how-it-works/", "/architecture/"]) {
+    await page.goto(`${origin}${path}`);
+    for (const selector of ['meta[property="og:image:alt"]', 'meta[name="twitter:image:alt"]']) {
+      const alt = await page.locator(selector).getAttribute("content");
+      assert.match(alt, /Your issues become pull requests overnight\./, `${path}: ${selector}`);
+      assert.doesNotMatch(alt, /go to press|FEEDER|DELIVERY PILE|units [1-4]/i, `${path}: ${selector}`);
+    }
+  }
 });
 
 test("robots advertises a valid sitemap of reachable canonical pages", async (t) => {
@@ -212,6 +224,55 @@ test("hand-written pages link directly to unique manual sections", async (t) => 
   }
 });
 
+test("homepage accessible names use steps in place of press units", async (t) => {
+  const page = await pageForTest(t);
+  await page.goto(`${origin}/`);
+  assert.equal(await page.getByRole("group", { name: "Ticket run steps", exact: true }).count(), 1);
+  for (const number of [1, 2, 3, 4]) {
+    assert.equal(await page.locator(`.unit-col .stderr-lines[aria-label="stderr lines from step ${number}"]`).count(), 1);
+  }
+  assert.equal(await page.getByRole("log", { name: "Terminal replay of the selected step's stderr lines", exact: true }).count(), 1);
+});
+
+test("the homepage explains Ticket runs and five workflows in plain words", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  await page.goto(`${origin}/`);
+  assert.equal(await page.locator("h1").textContent(), "Your issues become pull requests overnight.");
+  for (const phrase of ["You plan by day. Agents work at night.", "How a Ticket run works",
+    "When a Ticket run fails", "Results", "What you get back", "Workflows", "Five workflows",
+    "Examples", "Real pull requests", "About the name"]) {
+    assert.ok((await page.locator("body").textContent()).includes(phrase), phrase);
+  }
+  const opening = await page.locator(".framing").textContent();
+  assert.match(opening, /coding agents you already use, logged in as you/);
+  assert.match(opening, /each agent's plan or account/);
+  assert.match(opening, /Claude Code.*subscription.*usage allowance/);
+  assert.match(opening, /free and open source/);
+  assert.deepEqual(await page.locator(".floor .line-label").allTextContents(), [
+    "1 · TICKET RUN", "2 · SPEC RUN", "3 · ARCHITECT RUN", "4 · PICKUP RUN", "5 · SECURITY RUN",
+  ]);
+  assert.doesNotMatch(await page.locator(".floor").textContent(), /INSTALLED|MERGE RUN/);
+  assert.doesNotMatch(await page.locator(".press-svg").textContent(), /FEEDER|DELIVERY PILE|UNIT [1-4]/);
+});
+
+test("hand-written pages use the five workflow names outside the recorded replay", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  for (const path of ["/", "/how-it-works/", "/architecture/"]) {
+    await page.goto(`${origin}${path}`);
+    const prose = await page.locator("body").evaluate(node => {
+      const copy = node.cloneNode(true);
+      copy.querySelectorAll(".unit-col .stderr-lines").forEach(replay => replay.remove());
+      return copy.textContent;
+    });
+    assert.doesNotMatch(prose, /\bMerge runs?\b|\bFailed runs?\b|\bWeeding\b|\bFencing\b/, path);
+    // Run remains a verb and part of Run notification / Run metrics.
+    assert.doesNotMatch(prose, /\bRun\b(?! notification| metrics| from)/, path);
+    assert.match(prose, /Ticket run/, path);
+    assert.match(prose, /Failed ticket run/, path);
+  }
+  assert.equal(await page.locator("#merge-run-title").textContent(), "A Ticket run that Self-merges");
+});
+
 test("the homepage leads to a guide that teaches the process in order", async (t) => {
   const page = await pageForTest(t);
   await page.goto(`${origin}/`);
@@ -220,11 +281,11 @@ test("the homepage leads to a guide that teaches the process in order", async (t
   assert.equal(await page.getByRole("heading", { name: "How thirdshift works", level: 1 }).isVisible(), true);
   assert.deepEqual(await page.locator("main h2").allTextContents(), [
     "Start with work you can describe",
-    "Give the Run its own checkout",
+    "Give the Ticket run its own checkout",
     "Let the agent implement and review",
     "Deliver against the latest Base branch",
     "Know what comes back",
-    "Scale one Run into a Spec run",
+    "Scale one Ticket run into a Spec run",
     "Choose how the next work starts",
   ]);
 });

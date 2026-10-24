@@ -1,5 +1,5 @@
 """Retained Spec-review reproduction: measured spans survive a died Command."""
-import json, os, pathlib, re, subprocess, tempfile, urllib.request
+import json, os, pathlib, subprocess, tempfile, urllib.request
 
 binary = pathlib.Path('target/debug/thirdshift').resolve()
 with tempfile.TemporaryDirectory(prefix='989-spec-died-') as temp:
@@ -29,14 +29,11 @@ with tempfile.TemporaryDirectory(prefix='989-spec-died-') as temp:
     )
     try:
         origin = server.stdout.readline().strip()
-        html = urllib.request.urlopen(origin + '/waterfall?command=widgets%237').read().decode()
-        tools = re.findall(
-            r'<li class="waterfall-tool" data-start="([^"]*)" data-seconds="([^"]*)">'
-            r'.*?<svg class="timeline".*?<svg x="([^"]*)%" width="([^"]*)%"',
-            html, re.S
-        )
-        print('Rendered tool timing and bars:', tools)
-        assert float(tools[0][3]) > 0, 'Ended tool span must draw a visible bar for a died Command'
+        tree = json.load(urllib.request.urlopen(origin + '/spans?command=widgets%237'))
+        tools = [span for span in tree['spans'] if span['kind'] == 'tool' and span['end'] is not None]
+        print('Retained tool timing:', tools)
+        assert len(tools) == 2 and all(span['end'] > span['start'] for span in tools), 'Ended tool spans must retain visible intervals for a died Command'
+        # console/tests/waterfall.test.cjs also checks the rendered bar widths.
     finally:
         server.terminate()
         server.wait(timeout=10)

@@ -57,7 +57,7 @@ fn text(request: &Request) -> &str {
     request.body["text"].as_str().unwrap()
 }
 
-/// The path of the one session log the Run wrote.
+/// The path of the one session trace the Run wrote.
 fn the_one_log(scenario: &Scenario) -> String {
     let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
@@ -97,7 +97,7 @@ fn a_run_without_email_saves_its_notification_beside_its_command_log() {
         ),
         "{saved}"
     );
-    assert_contains(&saved, "\nCommand:      Run\n");
+    assert_contains(&saved, "\nCommand:      Ticket run\n");
     assert_contains(&saved, PR_URL);
     assert_contains(&saved, path.to_str().unwrap());
     assert_contains(&saved, "\nSession models:\n");
@@ -548,7 +548,7 @@ fn a_run_ready_for_review_sends_one_notification_to_the_address_given() {
         "{text}"
     );
     assert_one_issue_line(text);
-    assert_contains(text, "\nCommand:      Run\n");
+    assert_contains(text, "\nCommand:      Ticket run\n");
     assert_contains(text, PR_URL);
     assert_contains(text, &the_one_log(&scenario));
     assert_contains(text, &hostname());
@@ -586,7 +586,7 @@ fn a_merge_run_sends_one_notification_that_it_merged() {
         text(&request)
     );
     assert_contains(text(&request), PR_URL);
-    assert_contains(text(&request), "\nCommand:      Run\n");
+    assert_contains(text(&request), "\nCommand:      Ticket run\n");
 }
 
 #[test]
@@ -654,6 +654,10 @@ EVENTS
         let cause = format!("{prefix}: {MESSAGE}");
         assert_contains(&result.stderr, &cause);
         assert_contains(text(&request), &format!("Cause:        {cause}"));
+        assert_contains(
+            text(&request),
+            "Usage limit:  Harness usage allowance exhausted. Retry when usage is available.",
+        );
         for output in [result.stderr.as_str(), text(&request)] {
             for fact in [
                 "api_error: usage_limit_reached",
@@ -669,6 +673,36 @@ EVENTS
         }
         assert_eq!(scenario.claude_calls().len(), 1, "unexpected Resume");
     }
+}
+
+#[test]
+fn a_muse_usage_failure_is_explained_in_the_saved_and_emailed_notification() {
+    const CAUSE: &str = "API error 429: Subscription quota exhausted. Your usage window resets at 2026-10-24T03:28:16Z. (rate_limit_error)";
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!("echo '{CAUSE}' > \"$FAKE_MUSE_ERROR\"\nexit 1\n"));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[
+            "harness",
+            "muse",
+            "email",
+            "me@example.com",
+            &scenario.issue_url(7),
+        ],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let request = the_one_request(&resend);
+    assert_contains(text(&request), CAUSE);
+    assert_contains(
+        text(&request),
+        "Usage limit:  Harness usage allowance exhausted. Retry when usage is available.",
+    );
+    assert_saved_notification(&scenario, "issue", &request);
 }
 
 #[test]
@@ -747,7 +781,14 @@ fn a_run_whose_issue_title_cant_be_read_sends_a_notification_without_it() {
         "{}",
         text(&request)
     );
-    assert_contains(text(&request), "origin mismatch");
+    assert_contains(
+        text(&request),
+        &format!(
+            "origin mismatch: {url} is not in the repository at origin {}; \
+             start it from a clone of Other/Widgets",
+            scenario.github_url()
+        ),
+    );
 }
 
 // Where `email` and `--email` can go, and when an address follows them, are
@@ -794,6 +835,169 @@ fn merge_after_a_bare_flag_reaches_the_run_notification_as_the_goal() {
         "{}",
         subject(&request)
     );
+}
+
+#[test]
+fn email_unless_merged_saves_a_merged_ticket_runs_notification_without_emailing_it() {
+    let scenario = Scenario::new();
+    scenario.issue_titled(7, "Add export button");
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[
+            "email-unless-merged",
+            "me@example.com",
+            "merge",
+            &scenario.issue_url(7),
+        ],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    assert!(resend.requests().is_empty(), "{:?}", resend.requests());
+    let (_, saved) = saved_notification(&scenario, "issue");
+    assert!(
+        saved.starts_with(
+            "Subject: [thirdshift] acme/widgets#7 Add export button: merged\n\n\
+             Result:       merged\n"
+        ),
+        "{saved}"
+    );
+}
+
+#[test]
+fn email_unless_merged_emails_a_ticket_run_left_ready_for_review() {
+    let scenario = Scenario::new();
+    scenario.issue_titled(7, "Add export button");
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[
+            &scenario.issue_url(7),
+            "--email-unless-merged",
+            "me@example.com",
+        ],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let request = the_one_request(&resend);
+    assert_eq!(request.body["to"], "me@example.com");
+    assert_eq!(
+        subject(&request),
+        "[thirdshift] acme/widgets#7 Add export button: ready for review"
+    );
+    assert_saved_notification(&scenario, "issue", &request);
+}
+
+#[test]
+fn email_unless_merged_emails_a_failed_ticket_run() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[email]\nto = \"config@example.com\"\n");
+    scenario.agent_does("exit 3\n");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &["merge", "email-unless-merged", &scenario.issue_url(7)],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let request = the_one_request(&resend);
+    assert_eq!(request.body["to"], "config@example.com");
+    assert!(
+        subject(&request).ends_with(": failed"),
+        "{}",
+        subject(&request)
+    );
+}
+
+#[test]
+fn email_unless_merged_checks_for_a_key_before_any_work() {
+    let scenario = Scenario::new();
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[
+            &scenario.issue_url(7),
+            "email-unless-merged",
+            "me@example.com",
+        ],
+        None,
+    );
+
+    scenario.assert_rejected_before_any_work(&result, "RESEND_API_KEY");
+    assert!(scenario.gh_calls().is_empty(), "{:?}", scenario.gh_calls());
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn email_unless_merged_in_the_user_config_emails_only_a_ticket_run_that_did_not_merge() {
+    for (goal, emailed) in [("merge", false), ("no-merge", true)] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(
+            "[email]\nalways = true\nunless_merged = true\nto = \"me@example.com\"\n",
+        );
+        scenario.agent_does(AGENT_OPENS_PR);
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+
+        let result = run(
+            &scenario,
+            &resend,
+            &[goal, &scenario.issue_url(7)],
+            Some(KEY),
+        );
+
+        assert_eq!(result.code, Some(0), "{goal}: {}", result.stderr);
+        assert_eq!(resend.requests().len(), usize::from(emailed), "{goal}");
+        saved_notification(&scenario, "issue");
+    }
+}
+
+#[test]
+fn unless_merged_alone_in_the_user_config_emails_a_ticket_run_that_did_not_merge() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[email]\nunless_merged = true\nto = \"me@example.com\"\n");
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let result = run(
+        &scenario,
+        &resend,
+        &["no-merge", &scenario.issue_url(7)],
+        Some(KEY),
+    );
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(resend.requests().len(), 1, "{:?}", resend.requests());
+}
+
+#[test]
+fn the_email_flag_wins_over_unless_merged_in_the_user_config() {
+    let scenario = Scenario::new();
+    scenario
+        .user_config_is("[email]\nalways = true\nunless_merged = true\nto = \"me@example.com\"\n");
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &["merge", "email", &scenario.issue_url(7)],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(subject(&the_one_request(&resend)).ends_with(": merged"));
 }
 
 #[test]
@@ -997,7 +1201,7 @@ fn with_no_key_anywhere_the_run_stops_before_any_work_listing_every_way_to_give_
         "run `thirdshift setup`",
         &format!("add it to {} (mode 600):", path.display()),
         "key = \"re_...\"",
-        "set RESEND_API_KEY in the environment the Run starts from",
+        "set RESEND_API_KEY in the environment the Ticket run starts from",
     ] {
         scenario.assert_rejected_before_any_work(&result, part);
     }
@@ -1242,10 +1446,10 @@ fn a_dropped_stream_while_selecting_the_issue_branch_is_retried_without_a_failur
     scenario.agent_does(AGENT_OPENS_PR);
     // Origin drops the first connection, as an HTTP/2 stream can.
     let connections = scenario.path("connections");
-    let script = scenario.path("upload-pack.sh");
-    std::fs::write(
-        &script,
-        format!(
+    let upload_pack = scenario.path("upload-pack");
+    support::write_executable(
+        &upload_pack,
+        &format!(
             "#!/bin/sh\n\
              if [ ! -e '{0}' ]; then\n\
              touch '{0}'\n\
@@ -1256,19 +1460,7 @@ fn a_dropped_stream_while_selecting_the_issue_branch_is_retried_without_a_failur
              exec git upload-pack \"$@\"\n",
             connections.display()
         ),
-    )
-    .unwrap();
-    // Installed by `install`, not by this process: a file open for writing
-    // here would be inherited by whatever another test starts meanwhile, and
-    // can't be run until that has let go of it ("Text file busy").
-    let upload_pack = scenario.path("upload-pack");
-    let installed = Command::new("install")
-        .args(["-m", "755"])
-        .arg(&script)
-        .arg(&upload_pack)
-        .status()
-        .unwrap();
-    assert!(installed.success());
+    );
     scenario.launch_git(&[
         "config",
         "remote.origin.uploadpack",

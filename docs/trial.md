@@ -5,7 +5,7 @@ repository through the same session code as a Run. This internal flag is hidden
 from `help`. `session_kind` accepts `code-review` and `spec-review`.
 Both Arms' builds must support this protocol: the first Experiment's Baseline
 must be the first release that ships the flag, or a later release.
-The current Experiment supervises their raw Session logs for plan-limit
+The current Experiment supervises their Session traces (or older Arms' raw Session logs) for plan-limit
 warnings even when an Arm build has no warning detector of its own.
 It passes `THIRDSHIFT_TRIAL_TRACE_CONTEXT` to trace-aware Arms without changing
 the version-1 request. Session traces inherit the Experiment's Command trace ID
@@ -148,7 +148,7 @@ stderr. Exit `0` means a result was emitted, including a failed or Void Trial.
 The result version is independently identified by `version: 1`.
 
 ```json
-{"version":1,"outcome":"succeeded","timings":{"total_ms":1234,"session_ms":1200},"void_cause":null,"cause":null,"session_id":"session-123","log":"/tmp/trials/widgets-7/trial-spec-review.jsonl","model_evidence":"/tmp/trials/widgets-7/trial-spec-review.models.json","reports":{"standards":"/tmp/trials/widgets-7/trial-spec-review.standards","spec":"/tmp/trials/widgets-7/trial-spec-review.spec"}}
+{"version":1,"outcome":"succeeded","timings":{"total_ms":1234,"session_ms":1200},"void_cause":null,"cause":null,"session_id":"session-123","log":"/tmp/trials/widgets-7/trial-spec-review.logs.jsonl","model_evidence":"/tmp/trials/widgets-7/trial-spec-review.models.json","reports":{"standards":"/tmp/trials/widgets-7/trial-spec-review.standards","spec":"/tmp/trials/widgets-7/trial-spec-review.spec"}}
 ```
 
 - `outcome`: `succeeded` means the Harness session finished successfully; it is
@@ -190,8 +190,8 @@ The result version is independently identified by `version: 1`.
   finding in `thirdshift experiments <id>`.
 - `cause`: failure diagnostic, or `null` on success.
 - `session_id`: the last session's Harness ID if available, otherwise `null`.
-- `log`: absolute path to the last session's raw event log, otherwise `null`.
-  Its OTLP files use the same stem with `.logs.jsonl` and `.spans.jsonl`.
+- `log`: absolute path to the last session's `.logs.jsonl` Session trace, otherwise `null`.
+  Its span file uses the same stem with `.spans.jsonl`. Older Arms may return a raw event log.
 - `model_evidence`: absolute path to its `.models.json` sidecar, otherwise `null`.
 - `reports`: each axis's preserved report path, or `null` if that report is
   missing. Reports are opaque and missing reports do not change the outcome,

@@ -14,13 +14,11 @@ use crate::child_run::{self, Given};
 use crate::harness::{self, Harness};
 use crate::issue::{IssueInput, IssueUrl};
 use crate::notification::NotificationAsk;
+use crate::ready::PickupOrder;
 use crate::run::Goal;
 
 /// What thirdshift was asked to do.
 pub enum Command {
-    LogsConvert {
-        remove: bool,
-    },
     Help,
     Version,
     Update,
@@ -30,6 +28,9 @@ pub enum Command {
     Experiments(Vec<String>),
     Recheck(Vec<String>),
     CronJobs {
+        json: bool,
+    },
+    Resources {
         json: bool,
     },
     Console {
@@ -65,9 +66,19 @@ pub enum Command {
         command: String,
         json: bool,
     },
+    Spans {
+        command: String,
+        span: Option<String>,
+        json: bool,
+    },
     Stop {
         command: String,
         requeue: bool,
+        json: bool,
+    },
+    Dismiss {
+        command: String,
+        undo: bool,
         json: bool,
     },
     Logs {
@@ -119,7 +130,7 @@ pub struct ArchitectArgs {
     /// The Base branch `base <branch>` named, if given; without it, the
     /// branch checked out in the Launch directory is the Base branch.
     pub base: Option<String>,
-    /// The flags it shares with a Run: `email` and `no-email` for its own
+    /// The flags it shares with a Run: the email flags for its own
     /// Run notification, the rest for the Spec run or Run the plan is
     /// dispatched as, which are never given with [`PLAN_ONLY`].
     pub flags: Flags,
@@ -133,10 +144,14 @@ pub struct PassArgs {
     /// The Base branch `base <branch>` named, if given; without it, the
     /// branch checked out in the Launch directory is the Base branch.
     pub base: Option<String>,
-    /// The flags it shares with a Run: `email` and `no-email` for its own
+    /// The flags it shares with a Run: the email flags for its own
     /// Run notification, the rest for a run the Pass dispatches. The
     /// Security run also uses `security-fix` for its own choice of work.
     pub flags: Flags,
+    /// What `lowest-first` or `highest-first` asked for, on a Pickup run:
+    /// which end of the issue numbers it takes its Ready issue from. None
+    /// leaves it to the User config. A Security run takes neither.
+    pub order: Option<PickupOrder>,
 }
 
 /// The word that lets a Run start a Base fix, which the command a Base fix
@@ -226,6 +241,12 @@ fn public_flag_words(flags: &Flags, words: &mut Vec<String>) {
                 words.push(to.clone());
             }
         }
+        Some(NotificationAsk::SendUnlessMerged(to)) => {
+            words.push("--email-unless-merged".into());
+            if let Some(to) = to {
+                words.push(to.clone());
+            }
+        }
         Some(NotificationAsk::Skip) => words.push("--no-email".into()),
         None => {}
     }
@@ -235,6 +256,11 @@ fn public_flag_words(flags: &Flags, words: &mut Vec<String>) {
     match flags.security_fix {
         Some(crate::security::FixAsk::Allow) => words.push("security-fix".into()),
         Some(crate::security::FixAsk::Forbid) => words.push("no-security-fix".into()),
+        None => {}
+    }
+    match flags.security_close {
+        Some(crate::security::CloseAsk::Allow) => words.push("security-close".into()),
+        Some(crate::security::CloseAsk::Forbid) => words.push("no-security-close".into()),
         None => {}
     }
     match flags.security_review {
@@ -282,10 +308,11 @@ pub(crate) fn shell_command(words: Vec<String>) -> String {
 /// `setup`, `email-test`, `architect`, `pickup` and `secure` are commands only as the
 /// first argument. Otherwise it is a Run: one Issue URL or bare issue number,
 /// with each Run flag at most once, before or after it.
-/// `email` may be followed by the address to send the Run notification to,
-/// and `parallel` must be followed by a whole number from 1 up.
-/// `merge` and `no-merge` contradict each other, as do `email` and `no-email`,
-/// and `base-fix` and `no-base-fix`. Every other argument is offered to the
+/// `email` and `email-unless-merged` may be followed by the address to send
+/// the Run notification to, and `parallel` must be followed by a whole number
+/// from 1 up. `merge` and `no-merge` contradict each other, as do any two of
+/// `email`, `email-unless-merged` and `no-email`, and `base-fix` and
+/// `no-base-fix`. Every other argument is offered to the
 /// child Run module first, which takes the hidden arguments a child Run is
 /// given.
 pub fn parse(args: &[String]) -> Result<Command> {
@@ -431,7 +458,59 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 json,
             });
         }
+        Some("dismiss") => {
+            let usage = "usage: thirdshift dismiss <command> [--undo] [--json]";
+            let Some((command, options)) = args[1..].split_first() else {
+                bail!(usage)
+            };
+            if command.starts_with('-') {
+                bail!(usage);
+            }
+            let (mut undo, mut json) = (false, false);
+            for option in options {
+                match option.as_str() {
+                    "--undo" if !undo => undo = true,
+                    "--json" if !json => json = true,
+                    _ => bail!(usage),
+                }
+            }
+            return Ok(Command::Dismiss {
+                command: command.clone(),
+                undo,
+                json,
+            });
+        }
         Some("show") => {
+            let usage = "usage: thirdshift show <command> [--spans | --span <id>] [--json]";
+            if args.iter().any(|arg| arg == "--spans" || arg == "--span") {
+                let command = args
+                    .get(1)
+                    .filter(|arg| !arg.starts_with('-'))
+                    .ok_or_else(|| anyhow::anyhow!(usage))?;
+                let (mut tree, mut span, mut json) = (false, None, false);
+                let mut flags = args[2..].iter();
+                while let Some(flag) = flags.next() {
+                    match flag.as_str() {
+                        "--json" if !json => json = true,
+                        "--spans" if !tree && span.is_none() => tree = true,
+                        "--span" if !tree && span.is_none() => {
+                            span = Some(
+                                flags
+                                    .next()
+                                    .filter(|id| !id.starts_with('-'))
+                                    .ok_or_else(|| anyhow::anyhow!(usage))?
+                                    .clone(),
+                            );
+                        }
+                        _ => bail!(usage),
+                    }
+                }
+                return Ok(Command::Spans {
+                    command: command.clone(),
+                    span,
+                    json,
+                });
+            }
             return match &args[1..] {
                 [command] if !command.starts_with('-') => Ok(Command::Show {
                     command: command.clone(),
@@ -448,11 +527,6 @@ pub fn parse(args: &[String]) -> Result<Command> {
         }
         Some("logs") => {
             match &args[1..] {
-                [flag] if flag == "--convert" || flag == "--remove-converted" => {
-                    return Ok(Command::LogsConvert {
-                        remove: flag == "--remove-converted",
-                    });
-                }
                 [] => {
                     return Ok(Command::LogsList {
                         json: false,
@@ -540,6 +614,13 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 _ => bail!("usage: thirdshift cronjobs [--json]"),
             };
         }
+        Some("resources") => {
+            return match &args[1..] {
+                [] => Ok(Command::Resources { json: false }),
+                [flag] if flag == "--json" => Ok(Command::Resources { json: true }),
+                _ => bail!("usage: thirdshift resources [--json]"),
+            };
+        }
         Some("status") => {
             return match &args[1..] {
                 [] => Ok(Command::Status {
@@ -615,8 +696,9 @@ pub fn parse(args: &[String]) -> Result<Command> {
 /// each at most once, in any order. `base` must be followed by the Base
 /// branch. [`PLAN_ONLY`] dispatches nothing, so the flags for the dispatched
 /// run, `merge`, `no-merge`, `parallel`, `base-fix`, `no-base-fix`,
-/// `harness`, `model` and `effort`, can't go with it. `email` and `no-email`
-/// are for the Architect run's own Run notification, and `base` is for the
+/// `harness`, `model` and `effort`, can't go with it. `email`,
+/// `email-unless-merged` and `no-email` are for the Architect run's own Run
+/// notification, and `base` is for the
 /// Architecture review too, so they can. None of a Run's flags, nor `base`,
 /// is ever the focus, and any other argument that starts with a dash is
 /// unexpected rather than a focus.
@@ -659,16 +741,36 @@ fn parse_architect(args: &[String]) -> Result<ArchitectArgs> {
 
 /// Parse the arguments after `pickup` or `secure`: shared flags, at most once, in any
 /// order, and nothing else. `base` must be followed by the Base branch.
+/// `lowest-first` and `highest-first` are a Pickup run's only: they say
+/// which end of the issue numbers it takes its Ready issue from, over the
+/// User config.
 fn parse_pass(args: &[String], command: &str) -> Result<PassArgs> {
     let mut base = None;
     let mut flags = Flags::default();
+    let mut order = None;
     let mut args = args.iter().peekable();
     while let Some(arg) = args.next() {
+        if command == "pickup" && take_pickup_order(&mut order, arg)? {
+            continue;
+        }
         if !take_pass_flag(&mut base, &mut flags, arg, &mut args)? {
             bail!("unexpected argument after {command}: {arg}");
         }
     }
-    Ok(PassArgs { base, flags })
+    Ok(PassArgs { base, flags, order })
+}
+
+/// Record in `order` what the Pickup flag `arg` asks for, if it is one of
+/// the order words, with or without its dashes. False, taking nothing, if
+/// `arg` is none of them.
+fn take_pickup_order(order: &mut Option<PickupOrder>, arg: &str) -> Result<bool> {
+    let asked = match arg {
+        "lowest-first" | "--lowest-first" => PickupOrder::LowestFirst,
+        "highest-first" | "--highest-first" => PickupOrder::HighestFirst,
+        _ => return Ok(false),
+    };
+    ask_once(order, asked, arg, ORDER_FLAGS)?;
+    Ok(true)
 }
 
 /// Take a Pass's shared words: its Base branch and the flags for its
@@ -691,7 +793,8 @@ fn take_pass_flag<'a>(
 
 /// Record in `flags` what `arg` asks for, if it is one of the flags a Run
 /// and a Pass both take, with or without its dashes,
-/// taking from `rest` the address after `email`, if one is there, the
+/// taking from `rest` the address after `email` or `email-unless-merged`,
+/// if one is there, the
 /// number after `parallel`, and the name or level after `harness`, `model`
 /// and `effort`. False, taking nothing, if `arg` is none of them.
 fn take_flag<'a>(
@@ -709,6 +812,15 @@ fn take_flag<'a>(
             ask_once(
                 &mut flags.email,
                 NotificationAsk::Send(to),
+                arg,
+                EMAIL_FLAGS,
+            )?
+        }
+        "email-unless-merged" | "--email-unless-merged" => {
+            let to = rest.next_if(|next| is_address(next)).cloned();
+            ask_once(
+                &mut flags.email,
+                NotificationAsk::SendUnlessMerged(to),
                 arg,
                 EMAIL_FLAGS,
             )?
@@ -734,6 +846,18 @@ fn take_flag<'a>(
             crate::security::FixAsk::Forbid,
             arg,
             SECURITY_FIX_FLAGS,
+        )?,
+        "security-close" | "--security-close" => ask_once(
+            &mut flags.security_close,
+            crate::security::CloseAsk::Allow,
+            arg,
+            SECURITY_CLOSE_FLAGS,
+        )?,
+        "no-security-close" | "--no-security-close" => ask_once(
+            &mut flags.security_close,
+            crate::security::CloseAsk::Forbid,
+            arg,
+            SECURITY_CLOSE_FLAGS,
         )?,
         "security-review" | "--security-review" => ask_once(
             &mut flags.security_review,
@@ -761,11 +885,13 @@ fn take_flag<'a>(
     Ok(true)
 }
 
+const ORDER_FLAGS: &str = "lowest-first and highest-first";
 const MERGE_FLAGS: &str = "merge and no-merge";
-const EMAIL_FLAGS: &str = "email and no-email";
+const EMAIL_FLAGS: &str = "email, email-unless-merged and no-email";
 const BASE_FIX_FLAGS: &str = "base-fix and no-base-fix";
 const SECURITY_REVIEW_FLAGS: &str = "security-review and no-security-review";
 const SECURITY_FIX_FLAGS: &str = "security-fix and no-security-fix";
+const SECURITY_CLOSE_FLAGS: &str = "security-close and no-security-close";
 
 /// Record in `given` what the flag `arg` asked for: the same kind of ask
 /// twice is a repeated argument, and a different one contradicts the first,
@@ -831,7 +957,7 @@ fn ask_harness(harness: &mut Option<Harness>, arg: &str, name: Option<&String>) 
     Ok(())
 }
 
-/// Is `arg`, after `email`, the address to send to? Only if it looks like
+/// Is `arg`, after `email` or `email-unless-merged`, the address to send to? Only if it looks like
 /// one, so the Issue URL is never taken for it, nor is an Architect run's
 /// focus unless it has an `@`.
 fn is_address(arg: &str) -> bool {
@@ -951,6 +1077,7 @@ mod tests {
                 parallel: NonZeroUsize::new(2),
                 base_fix: Some(BaseFixAsk::Forbid),
                 security_fix: Some(crate::security::FixAsk::Forbid),
+                security_close: None,
                 security_review: Some(crate::security::review::Ask::Allow),
                 harness: harness::Asked {
                     harness: Some(Harness::Codex),
@@ -974,6 +1101,16 @@ mod tests {
                 base_fix: Some(BaseFixAsk::Undecided {
                     retry: "computed child retry must stay private".into(),
                 }),
+                ..Flags::default()
+            },
+            Flags {
+                email: Some(NotificationAsk::SendUnlessMerged(Some(
+                    "day@example.com".into(),
+                ))),
+                ..Flags::default()
+            },
+            Flags {
+                email: Some(NotificationAsk::SendUnlessMerged(None)),
                 ..Flags::default()
             },
         ]
@@ -1130,6 +1267,30 @@ mod tests {
         }
         assert!(parse_strs(&[URL, "security-review", "no-security-review"]).is_err());
         assert!(parse_strs(&[URL, "security-review", "--security-review"]).is_err());
+    }
+
+    #[test]
+    fn security_close_words_are_accepted_on_commands_that_start_runs() {
+        use crate::security::CloseAsk;
+        for command in [URL, "pickup", "architect", "secure"] {
+            for (word, expected) in [
+                ("security-close", CloseAsk::Allow),
+                ("--security-close", CloseAsk::Allow),
+                ("no-security-close", CloseAsk::Forbid),
+                ("--no-security-close", CloseAsk::Forbid),
+            ] {
+                let flags = match parse_strs(&[command, word]) {
+                    Ok(Command::Run(run)) => run.flags,
+                    Ok(Command::Pickup(pass) | Command::Secure(pass)) => pass.flags,
+                    Ok(Command::Architect(architect)) => architect.flags,
+                    _ => panic!("{command} {word}: unexpected command"),
+                };
+                assert_eq!(flags.security_close, Some(expected), "{command} {word}");
+            }
+        }
+        assert!(parse_strs(&[URL, "security-close", "no-security-close"]).is_err());
+        assert!(parse_strs(&[URL, "security-close", "--security-close"]).is_err());
+        assert!(parse_strs(&["secure", "security-close", "no-security-fix"]).is_ok());
     }
 
     fn parse_strs(args: &[&str]) -> Result<Command> {
@@ -1317,6 +1478,23 @@ mod tests {
                 None,
             ),
             (
+                vec!["architect", "email-unless-merged", "the Spec run"],
+                Some(NotificationAsk::SendUnlessMerged(None)),
+                focus(),
+            ),
+            (
+                vec![
+                    "architect",
+                    "--plan-only",
+                    "--email-unless-merged",
+                    "me@example.com",
+                ],
+                Some(NotificationAsk::SendUnlessMerged(Some(
+                    "me@example.com".to_string(),
+                ))),
+                None,
+            ),
+            (
                 vec!["architect", "--no-email", "the Spec run"],
                 Some(NotificationAsk::Skip),
                 focus(),
@@ -1333,15 +1511,27 @@ mod tests {
         for (args, error) in [
             (
                 vec!["architect", "email", "--no-email"],
-                "email and no-email can't be used together",
+                "email, email-unless-merged and no-email can't be used together",
             ),
             (
                 vec!["architect", "no-email", "--plan-only", "--email"],
-                "email and no-email can't be used together",
+                "email, email-unless-merged and no-email can't be used together",
             ),
             (
                 vec!["architect", "--email", "me@example.com", "email"],
                 "repeated argument: email",
+            ),
+            (
+                vec!["architect", "email", "email-unless-merged"],
+                "email, email-unless-merged and no-email can't be used together",
+            ),
+            (
+                vec!["architect", "--email-unless-merged", "no-email"],
+                "email, email-unless-merged and no-email can't be used together",
+            ),
+            (
+                vec!["architect", "email-unless-merged", "--email-unless-merged"],
+                "repeated argument: --email-unless-merged",
             ),
         ] {
             assert_eq!(rejection(&args), error, "{args:?}");
@@ -1554,12 +1744,14 @@ mod tests {
         let none = PassArgs {
             base: None,
             flags: Flags::default(),
+            order: None,
         };
         assert_eq!(pickup_args(&["pickup"]), none);
         let all = PassArgs {
             base: Some("develop".to_string()),
             flags: Flags {
                 security_fix: None,
+                security_close: None,
                 security_review: None,
                 goal: Some(Goal::Merged),
                 email: Some(NotificationAsk::Send(Some("me@example.com".to_string()))),
@@ -1573,6 +1765,7 @@ mod tests {
                     },
                 },
             },
+            order: None,
         };
         for args in [
             vec![
@@ -1616,6 +1809,7 @@ mod tests {
             base: None,
             flags: Flags {
                 security_fix: None,
+                security_close: None,
                 security_review: None,
                 goal: Some(Goal::ReadyForReview),
                 email: Some(NotificationAsk::Skip),
@@ -1623,6 +1817,7 @@ mod tests {
                 base_fix: Some(BaseFixAsk::Forbid),
                 harness: harness::Asked::default(),
             },
+            order: None,
         };
         for args in [
             ["pickup", "no-merge", "no-base-fix", "no-email"],
@@ -1633,6 +1828,67 @@ mod tests {
         let bare_email = pickup_args(&["pickup", "email", "merge"]);
         assert_eq!(bare_email.flags.email, Some(NotificationAsk::Send(None)));
         assert_eq!(bare_email.flags.goal, Some(Goal::Merged));
+    }
+
+    #[test]
+    fn pickup_takes_an_order_word_with_or_without_dashes() {
+        for (word, expected) in [
+            ("lowest-first", PickupOrder::LowestFirst),
+            ("--lowest-first", PickupOrder::LowestFirst),
+            ("highest-first", PickupOrder::HighestFirst),
+            ("--highest-first", PickupOrder::HighestFirst),
+        ] {
+            assert_eq!(
+                pickup_args(&["pickup", word]).order,
+                Some(expected),
+                "{word}"
+            );
+        }
+        assert_eq!(pickup_args(&["pickup"]).order, None);
+        assert_eq!(
+            pickup_args(&["pickup", "highest-first", "merge"]).order,
+            Some(PickupOrder::HighestFirst)
+        );
+    }
+
+    #[test]
+    fn pickup_rejects_repeated_and_contradictory_order_words() {
+        for (args, error) in [
+            (
+                vec!["pickup", "highest-first", "lowest-first"],
+                "lowest-first and highest-first can't be used together",
+            ),
+            (
+                vec!["pickup", "lowest-first", "--lowest-first"],
+                "repeated argument: --lowest-first",
+            ),
+            (
+                vec!["pickup", "highest-first", "highest-first"],
+                "repeated argument: highest-first",
+            ),
+        ] {
+            assert_eq!(rejection(&args), error, "{args:?}");
+        }
+    }
+
+    #[test]
+    fn order_words_are_rejected_after_secure_and_an_issue_url() {
+        for (args, error) in [
+            (
+                vec!["secure", "highest-first"],
+                "unexpected argument after secure: highest-first",
+            ),
+            (
+                vec!["secure", "--lowest-first"],
+                "unexpected argument after secure: --lowest-first",
+            ),
+            (
+                vec![URL, "highest-first"],
+                "unexpected argument after the Issue URL: highest-first",
+            ),
+        ] {
+            assert_eq!(rejection(&args), error, "{args:?}");
+        }
     }
 
     #[test]
@@ -1688,7 +1944,7 @@ mod tests {
             ),
             (
                 vec!["pickup", "no-email", "email", "me@example.com"],
-                "email and no-email can't be used together",
+                "email, email-unless-merged and no-email can't be used together",
             ),
             (
                 vec!["pickup", "email", "--email"],

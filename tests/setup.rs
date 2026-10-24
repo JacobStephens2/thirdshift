@@ -11,6 +11,8 @@ use std::fs;
 use std::io::Read;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 
+#[cfg(target_os = "linux")]
+use support::write_executable;
 use support::{CTRL_C, Keystrokes, Scenario, TerminalResult, TerminalStep};
 
 /// The agent commits its work and opens a PR that closes issue #7, into
@@ -34,8 +36,7 @@ fn security_sandbox_start_failure_warns_and_still_writes_the_user_config() {
     let scenario = Scenario::new();
     scenario.user_config_is("[security]\nreview = true\n");
     let bwrap = scenario.path("bin/bwrap");
-    fs::write(&bwrap, "#!/bin/sh\nexit 1\n").unwrap();
-    fs::set_permissions(&bwrap, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&bwrap, "#!/bin/sh\nexit 1\n");
 
     let result = scenario.run(&["setup"]);
 
@@ -95,15 +96,13 @@ fn security_sandbox_runs_only_for_the_saved_security_settings() {
         scenario.user_config_is(&format!("[security]\nreview = {review}\nfix = {fix}\n"));
         let marker = scenario.path("probe-ran");
         let bwrap = scenario.path("bin/bwrap");
-        fs::write(
+        write_executable(
             &bwrap,
-            format!(
+            &format!(
                 "#!/bin/sh\nprintf probed > '{}'\nexit 1\n",
                 marker.display()
             ),
-        )
-        .unwrap();
-        fs::set_permissions(bwrap, fs::Permissions::from_mode(0o755)).unwrap();
+        );
         let result = scenario.run(&["setup"]);
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert_eq!(marker.exists(), review || fix);
@@ -120,8 +119,7 @@ fn security_sandbox_hung_bwrap_is_bounded_and_reaped() {
     let scenario = Scenario::new();
     scenario.user_config_is("[security]\nreview = true\n");
     let bwrap = scenario.path("bin/bwrap");
-    fs::write(&bwrap, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
-    fs::set_permissions(bwrap, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&bwrap, "#!/bin/sh\nexec /bin/sleep 30\n");
     let start = std::time::Instant::now();
     let result = scenario.run(&["setup"]);
     assert!(start.elapsed() < std::time::Duration::from_secs(8));
@@ -164,8 +162,7 @@ fn security_sandbox_checks_real_isolation_and_detects_each_removed_control() {
         let scenario = Scenario::new();
         scenario.user_config_is("[security]\nreview = true\n");
         let bwrap = scenario.path("bin/bwrap");
-        fs::write(&bwrap, format!("#!/bin/bash\n{wrapper}\n")).unwrap();
-        fs::set_permissions(bwrap, fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&bwrap, &format!("#!/bin/bash\n{wrapper}\n"));
         let before = fs::read_dir(scenario.path("tmp")).unwrap().count();
         let result = scenario.run(&["setup"]);
         assert_eq!(result.code, Some(0), "{}", result.stderr);
@@ -226,6 +223,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[console]",
             "[activity]",
             "[spec]",
+            "[resources]",
             "[pickup]",
             "[harness]",
             "[harness.claude]",
@@ -261,8 +259,16 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     );
     assert_eq!(config["activity"]["quiet_skips"].as_bool(), Some(false));
     assert_eq!(config["spec"]["parallel"].as_integer(), Some(3));
+    assert_eq!(
+        config["resources"]["min_available_memory_mb"].as_integer(),
+        Some(0)
+    );
+    assert_eq!(
+        config["resources"]["max_load_per_cpu_percent"].as_integer(),
+        Some(0)
+    );
     assert_eq!(config["pickup"]["limit"].as_integer(), Some(3));
-    assert_eq!(config["pickup"]["wait_minutes"].as_integer(), Some(30));
+    assert_eq!(config["pickup"]["wait_minutes"].as_integer(), Some(5));
     assert_eq!(config["security"]["fix"].as_bool(), Some(false));
     assert_eq!(config["security"]["harness"].as_str(), Some(""));
     assert_eq!(config["trial"]["memory_high"].as_str(), Some("1G"));
@@ -332,6 +338,7 @@ effort = 'high' # my Effort
             "[otlp]",
             "[inbox]",
             "[console]",
+            "[resources]",
             "[harness.agy]",
             "[harness.grok]",
             "[harness.muse]",
@@ -499,14 +506,15 @@ fn setup_with_an_argument_is_an_argument_error_and_writes_nothing() {
 
 // Setup from a terminal.
 
-const HARNESS: &str = "Harness for every Run's sessions";
+const HARNESS: &str = "Harness for every Ticket run's sessions";
 const MODEL: &str = "Model for claude";
 const EFFORT: &str = "Effort for claude";
-const MERGE: &str = "Merge run?";
-const BASE_FIX: &str = "Every Run may start a Base fix when the Base branch's CI is red?";
+const MERGE: &str = "Self-merges?";
+const BASE_FIX: &str = "Every Ticket run may start a Base fix when the Base branch's CI is red?";
 const PULL: &str = "fast-forward";
-const SECURITY_REVIEW: &str = "Runs review their change for Security findings?";
+const SECURITY_REVIEW: &str = "Ticket runs review their change for Security findings?";
 const SECURITY_FIX: &str = "Security runs may fix reproduced findings?";
+const SECURITY_CLOSE: &str = "close a finding their fix merged?";
 const NOTIFY: &str = "Run notifications, an email";
 const CONSOLE: &str = "Run the Console?";
 const TO: &str = "Send Run notifications to";
@@ -788,6 +796,7 @@ fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes(
             (BASE_FIX, ""),
             (PULL, ""),
             (SECURITY_FIX, "y"),
+            (SECURITY_CLOSE, "y"),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
             (CLAUDE_TOKEN, ""),
@@ -804,6 +813,8 @@ fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes(
     let text = result.user_config.unwrap();
     let config: toml::Table = text.parse().unwrap();
     assert_eq!(config["security"]["fix"].as_bool(), Some(true));
+    assert_eq!(config["security"]["close"].as_bool(), Some(true));
+    assert_eq!(result.stderr.matches(SECURITY_CLOSE).count(), 1);
     assert_eq!(config["security"]["harness"].as_str(), Some(""));
     assert!(
         text.contains(
@@ -819,29 +830,34 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
     let saved = "# my Security settings\n[security]\nfix = true # keep this choice\nharness = 'codex' # use Codex\n";
     scenario.user_config_is(saved);
 
-    for (answer, enabled, choices) in [
-        ("", true, "[Y/n]"),
-        ("n", false, "[Y/n]"),
-        ("", false, "[y/N]"),
+    for (answer, was_on, enabled, close) in [
+        ("", true, true, Some("")),
+        ("n", true, false, None),
+        ("", false, false, None),
     ] {
-        let result = setup_on_terminal(
-            &scenario,
-            &[],
-            &[
-                (HARNESS, ""),
-                (MODEL, ""),
-                (EFFORT, ""),
-                (MERGE, ""),
-                (BASE_FIX, ""),
-                (PULL, ""),
-                (SECURITY_FIX, answer),
-                (SECURITY_REVIEW, ""),
-                (NOTIFY, ""),
-                (CLAUDE_TOKEN, ""),
-                (CONSOLE, "n"),
-            ],
-        );
-        assert!(result.stderr.contains(&format!("{SECURITY_FIX} {choices}")));
+        let mut keystrokes = vec![
+            (HARNESS, ""),
+            (MODEL, ""),
+            (EFFORT, ""),
+            (MERGE, ""),
+            (BASE_FIX, ""),
+            (PULL, ""),
+            (SECURITY_FIX, answer),
+        ];
+        if let Some(close) = close {
+            keystrokes.push((SECURITY_CLOSE, close));
+        }
+        keystrokes.extend_from_slice(&[
+            (SECURITY_REVIEW, ""),
+            (NOTIFY, ""),
+            (CLAUDE_TOKEN, ""),
+            (CONSOLE, "n"),
+        ]);
+        let result = setup_on_terminal(&scenario, &[], &keystrokes);
+        assert!(result.stderr.contains(&format!(
+            "{SECURITY_FIX} {}",
+            if was_on { "[Y/n]" } else { "[y/N]" }
+        )));
         assert_eq!(
             result.stderr.contains("Security sandbox probe:"),
             enabled,
@@ -852,6 +868,7 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
         let text = result.user_config.unwrap();
         let config: toml::Table = text.parse().unwrap();
         assert_eq!(config["security"]["fix"].as_bool(), Some(enabled));
+        assert_eq!(config["security"]["close"].as_bool(), Some(false));
         assert_eq!(config["security"]["harness"].as_str(), Some("codex"));
         assert!(text.starts_with("# my Security settings\n[security]\n"));
         assert!(text.contains("# keep this choice\n"));

@@ -1,17 +1,21 @@
 //! Filesystem observations of Commands, their Runs and exact ownership.
 //! Loading uses one sampled time; reading never prints or performs Stop effects.
 
+mod cache;
+mod captured_activity;
 pub(crate) mod catalog;
 mod health;
 mod history;
 mod inbox;
+mod inventory;
+mod reader;
 mod selection;
 #[cfg(test)]
 mod tests;
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Local};
@@ -23,14 +27,16 @@ use super::{Pass, activity};
 pub(super) use health::{Health, UsualRange};
 pub(super) use history::Command as HistoricalCommand;
 pub(super) use inbox::{Group, InboxItem};
-pub(in crate::logs) use selection::latest_session_event;
-pub(in crate::logs) use selection::pass_prefix;
+use inventory::{Folder, Inventory};
+pub(crate) use reader::{Framing, Reader, Writer};
 pub(super) use selection::{Detailed, Observation};
 
 pub(super) struct Snapshot {
     commands: Vec<Entry>,
     pub(super) idle_passes: Vec<IdlePass>,
     now: DateTime<Local>,
+    /// The capture its Commands' Session queries and the Logs listing share.
+    inventory: Arc<Inventory>,
 }
 
 impl Snapshot {
@@ -47,35 +53,43 @@ impl Snapshot {
         now: DateTime<Local>,
         silent: std::time::Duration,
     ) -> Result<Self> {
+        Self::capture(Arc::new(inventory::Native), root, now, silent)
+    }
+
+    fn capture(
+        files: Arc<dyn inventory::Files>,
+        root: &Path,
+        now: DateTime<Local>,
+        silent: std::time::Duration,
+    ) -> Result<Self> {
+        let inventory = Arc::new(Inventory::capture(files, root)?);
         let mut records = BTreeMap::new();
         let mut commands = Vec::new();
         let mut idle_passes = Vec::new();
-        for owner in directories(root)? {
-            for repo in directories(&owner)? {
-                let mut covered = HashSet::new();
-                idle_passes.extend(read_idle_passes(&repo)?);
-                for folder in directories(&repo.join("commands"))? {
-                    for (path, tree) in read_records(&folder)? {
-                        let record = &tree.command;
-                        if record.parent_record.is_none() {
-                            covered.insert(command_log(&path));
-                        }
-                        for session in std::iter::once(record)
-                            .chain(&tree.dispatched)
-                            .flat_map(CommandRecord::session_references)
-                        {
-                            covered.insert(session.clone());
-                            covered.insert(super::session::path(session));
-                        }
-                        records.insert(path, tree);
+        for repo in inventory.repositories() {
+            let mut covered = HashSet::new();
+            idle_passes.extend(read_idle_passes(&repo.path)?);
+            for folder in &repo.folders {
+                for (path, tree) in read_records(&inventory, folder)? {
+                    let record = &tree.command;
+                    if record.parent_record.is_none() {
+                        covered.insert(command_log(&path));
                     }
+                    for session in std::iter::once(record)
+                        .chain(&tree.dispatched)
+                        .flat_map(CommandRecord::session_references)
+                    {
+                        covered.insert(session.clone());
+                        covered.insert(super::session::path(session));
+                    }
+                    records.insert(path, tree);
                 }
-                commands.extend(
-                    history::read(&repo, &covered)?
-                        .into_iter()
-                        .map(|command| Entry::History(Box::new(command))),
-                );
             }
+            commands.extend(
+                history::read(&inventory, repo, &covered)?
+                    .into_iter()
+                    .map(|command| Entry::History(Box::new(command))),
+            );
         }
         let ranges = health::UsualRanges::from_records(&records);
         let roots: Vec<_> = records
@@ -86,14 +100,12 @@ impl Snapshot {
             })
             .map(|(path, _)| path.clone())
             .collect();
-        commands.extend(
-            roots
-                .into_iter()
-                .map(|path| Entry::Record(Box::new(tree(&path, &mut records, &now)))),
-        );
+        commands.extend(roots.into_iter().map(|path| {
+            Entry::Record(Box::new(tree(&inventory, &path, None, &mut records, &now)))
+        }));
         for entry in &mut commands {
             if let Entry::Record(command) = entry {
-                health::observe(command, &now, silent, None, &ranges);
+                health::observe(command, &now, silent, &ranges);
             }
         }
         idle_passes.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
@@ -101,11 +113,20 @@ impl Snapshot {
             commands,
             idle_passes,
             now,
+            inventory,
         })
     }
 
-    pub(super) fn inbox(&self, all: bool, days: i64) -> Vec<InboxItem<'_>> {
-        inbox::list(&self.commands, self.now, all, days)
+    pub(super) fn evaluate_inbox(
+        &self,
+        days: i64,
+        github: &super::github::Kept,
+    ) -> inbox::Evaluation<'_> {
+        inbox::evaluate(&self.commands, self.now, days, github)
+    }
+
+    pub(super) fn active_runs(&self) -> usize {
+        inbox::active_runs(&self.commands)
     }
 
     pub(super) fn resolve(&self, input: &str) -> Result<selection::Selection<'_>> {
@@ -115,9 +136,11 @@ impl Snapshot {
 
 /// Reload only the captured Command's folder, after Stop cleanup has finished.
 pub(super) fn retained_work(path: &Path, now: DateTime<Local>) -> Result<RetainedWork> {
-    let mut records = read_records(path.parent().context("Command record has no directory")?)?;
+    let inventory = Arc::new(Inventory::on_demand());
+    let folder = inventory.folder(path.parent().context("Command record has no directory")?)?;
+    let mut records = read_records(&inventory, &folder)?;
     anyhow::ensure!(records.contains_key(path), "Command record is unavailable");
-    let command = tree(path, &mut records, &now);
+    let command = tree(&inventory, path, None, &mut records, &now);
     let mut work = RetainedWork::default();
     fn collect(command: &Command, work: &mut RetainedWork) {
         work.branches
@@ -165,7 +188,13 @@ pub(super) struct Command {
     pub(super) command_log: PathBuf,
     pub(super) dispatched: Vec<Command>,
     pub(super) health: Option<Health>,
+    #[serde(skip)]
+    pub(super) next_health_change: Option<DateTime<Local>>,
     pub(super) usual_ranges: BTreeMap<String, UsualRange>,
+    #[serde(skip)]
+    inventory: Arc<Inventory>,
+    #[serde(skip)]
+    activity: captured_activity::Activity,
 }
 
 #[derive(Serialize)]
@@ -176,10 +205,12 @@ pub(super) struct CurrentStage {
 }
 
 impl Command {
-    pub(in crate::logs) fn new(
+    fn new(
+        inventory: &Arc<Inventory>,
         record: CommandRecord,
         record_path: PathBuf,
         now: DateTime<Local>,
+        log: &Path,
     ) -> Self {
         let state = if record.outcome.is_some() {
             "ended"
@@ -196,6 +227,7 @@ impl Command {
                 .unwrap_or(0),
         });
         Self {
+            activity: captured_activity::Activity::new(log, record.session_log.as_deref(), now),
             command_log: command_log(&record_path),
             record_path,
             record,
@@ -205,25 +237,21 @@ impl Command {
             source: "command_record",
             dispatched: Vec::new(),
             health: None,
+            next_health_change: None,
             usual_ranges: BTreeMap::new(),
+            inventory: inventory.clone(),
         }
     }
 }
 
-fn read_records(folder: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
+fn read_records(inventory: &Inventory, folder: &Folder) -> Result<BTreeMap<PathBuf, CommandTree>> {
     let mut records = BTreeMap::new();
-    for entry in entries(folder)? {
-        let name = entry.file_name();
-        let name = name.to_string_lossy();
-        if !entry.file_type()?.is_file()
-            || (!name.ends_with(".command.json") && !name.ends_with(".child.json"))
-        {
+    for path in &folder.files {
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        if !name.ends_with(".command.json") && !name.ends_with(".child.json") {
             continue;
         }
-        let path = entry.path();
-        let bytes =
-            fs::read(&path).with_context(|| format!("could not read {}", path.display()))?;
-        let Ok(mut tree) = serde_json::from_slice::<CommandTree>(&bytes) else {
+        let Some(mut tree) = cache::record(path)? else {
             continue;
         };
         let record = &mut tree.command;
@@ -233,13 +261,12 @@ fn read_records(folder: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
         // Records written before completion times existed were last
         // replaced when their outcome was recorded.
         if record.outcome.is_some() && record.ended_at.is_none() {
-            record.ended_at = entry
-                .metadata()?
-                .modified()
-                .ok()
+            record.end_time_estimated = true;
+            record.ended_at = inventory
+                .modified(path)?
                 .map(|time| DateTime::<Local>::from(time).to_rfc3339());
         }
-        records.insert(path, tree);
+        records.insert(path.clone(), tree);
     }
     Ok(records)
 }
@@ -255,24 +282,27 @@ fn command_stamp(path: &Path) -> Option<(&str, DateTime<chrono::FixedOffset>)> {
 }
 
 fn tree(
+    inventory: &Arc<Inventory>,
     path: &Path,
+    outer_log: Option<&Path>,
     records: &mut BTreeMap<PathBuf, CommandTree>,
     now: &DateTime<Local>,
 ) -> Command {
     let tree = records.remove(path).expect("a discovered record exists");
-    let mut command = Command::new(tree.command, path.to_owned(), *now);
-    command.children = children(path, None, records, now);
+    let log = outer_log.map_or_else(|| command_log(path), Path::to_path_buf);
+    let mut command = Command::new(inventory, tree.command, path.to_owned(), *now, &log);
+    command.children = children(inventory, path, None, &log, records, now);
     command.dispatched = tree
         .dispatched
         .into_iter()
         .map(|record| {
-            let mut dispatched = Command::new(record, path.to_owned(), *now);
+            let mut dispatched = Command::new(inventory, record, path.to_owned(), *now, &log);
             let issue = dispatched
                 .record
                 .issue
                 .as_ref()
                 .map(|issue| issue.url.as_str());
-            dispatched.children = children(path, issue, records, now);
+            dispatched.children = children(inventory, path, issue, &log, records, now);
             dispatched
         })
         .collect();
@@ -280,8 +310,10 @@ fn tree(
 }
 
 fn children(
+    inventory: &Arc<Inventory>,
     path: &Path,
     dispatch: Option<&str>,
+    log: &Path,
     records: &mut BTreeMap<PathBuf, CommandTree>,
     now: &DateTime<Local>,
 ) -> Vec<Command> {
@@ -295,7 +327,7 @@ fn children(
         .collect();
     let mut children: Vec<_> = paths
         .into_iter()
-        .map(|path| tree(&path, records, now))
+        .map(|path| tree(inventory, &path, Some(log), records, now))
         .collect();
     children.sort_by_key(|child| child.record.issue.as_ref().map(|issue| issue.number));
     children
@@ -303,22 +335,8 @@ fn children(
 
 fn read_idle_passes(repo: &Path) -> Result<Vec<IdlePass>> {
     let path = repo.join(activity::FILE);
-    let activity = match fs::read_to_string(&path) {
-        Ok(activity) => activity,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => {
-            return Err(error).with_context(|| format!("could not read {}", path.display()));
-        }
-    };
-    let repository = format!(
-        "{}/{}",
-        repo.parent()
-            .unwrap()
-            .file_name()
-            .unwrap()
-            .to_string_lossy(),
-        repo.file_name().unwrap().to_string_lossy()
-    );
+    let activity = cache::text(&path)?;
+    let repository = inventory::name(repo);
     let mut idle = Vec::new();
     for pass in [Pass::Architect, Pass::Pickup, Pass::Security] {
         let kind = activity::Kind::Pass(pass);
@@ -333,22 +351,4 @@ fn read_idle_passes(repo: &Path) -> Result<Vec<IdlePass>> {
         }
     }
     Ok(idle)
-}
-
-fn entries(path: &Path) -> Result<Vec<fs::DirEntry>> {
-    match fs::read_dir(path) {
-        Ok(entries) => entries.collect::<std::io::Result<_>>().map_err(Into::into),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(error) => Err(error).with_context(|| format!("could not list {}", path.display())),
-    }
-}
-
-fn directories(path: &Path) -> Result<Vec<PathBuf>> {
-    let mut paths = Vec::new();
-    for entry in entries(path)? {
-        if entry.file_type()?.is_dir() {
-            paths.push(entry.path());
-        }
-    }
-    Ok(paths)
 }

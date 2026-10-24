@@ -192,7 +192,7 @@ fn consumer_log_failure_cleans_up_even_with_a_blocked_prompt_writer() {
             state.extend_from_slice(&bytes);
             FailingLog
                 .write_all(&bytes)
-                .context("could not write Session log")
+                .context("could not write Session trace")
         },
     )
     .unwrap();
@@ -200,7 +200,7 @@ fn consumer_log_failure_cleans_up_even_with_a_blocked_prompt_writer() {
     assert_eq!(result.state, b"initialready");
     assert_eq!(
         format!("{:#}", result.execution.unwrap_err()),
-        "could not write Session log: log device failed"
+        "could not write Session trace: log device failed"
     );
     assert!(started.elapsed() < Duration::from_secs(2));
     child.assert_stopped();

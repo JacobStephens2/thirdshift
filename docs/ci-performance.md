@@ -53,7 +53,7 @@ The gate is one `macos-26` job: `cargo clippy --all-targets -- -D warnings`,
 then `cargo nextest run --profile macos-gate`. That profile's `default-filter`
 in `.config/nextest.toml` selects the tests of the macOS-specific code: the
 `#[cfg(target_os = "macos")]` process identity, the non-Linux skills directory
-handle, and the platform branches in child Run handling. New macOS-specific
+handle, and the platform branches in child Ticket run handling. New macOS-specific
 code adds its tests there.
 
 Adding `test:macos` to an open PR into `main` starts the full suite on its
@@ -123,7 +123,7 @@ Linux retains `cargo test`; macOS retains the same four hash partitions.
 
 The final-message matrix now crosses `Review::from_final_message` and `Outcome`
 in process, preserving all 11 original malformed cases and missing `None`.
-Four end-to-end Runs retain missing/malformed messages in both Self-merge and
+Four end-to-end Ticket runs retain missing/malformed messages in both Self-merge and
 report-only modes, asserting exit status, public reason and ready/open PR.
 The separate end-to-end private-report validation and deliberate-incomplete
 cases remain. The unauthenticated publisher test remains end to end: its

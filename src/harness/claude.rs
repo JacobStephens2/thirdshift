@@ -142,6 +142,7 @@ pub fn test_call(choice: &Choice) -> Result<()> {
     let Some(model) = &choice.model else {
         return Ok(());
     };
+    crate::resources::wait()?;
     progress::step(format_args!(
         "checking the Model {model} with a test call to {cli}"
     ));
@@ -168,7 +169,7 @@ pub fn test_call(choice: &Choice) -> Result<()> {
 const TEST_PROMPT: &str = "Reply with OK.";
 
 /// Ask Claude's Model and Effort, with `current` as the defaults. A Model is
-/// checked with a test call, as a Run checks it, and on a refusal the Model
+/// checked with a test call, as a Ticket run checks it, and on a refusal the Model
 /// and Effort are asked again.
 fn ask_claude(outside: &mut dyn Terminal, current: &ModelAndEffort) -> Result<ModelAndEffort> {
     loop {

@@ -79,7 +79,7 @@ impl Monitor {
         });
         let artifact = |extension| {
             log.as_ref()
-                .map(|log| log.with_extension(extension))
+                .map(|log| crate::logs::session::original(log).with_extension(extension))
                 .filter(|path| path.is_file())
         };
         Output {
@@ -111,8 +111,18 @@ impl Session {
             self.stream.as_mut().unwrap().set_home(&self.home);
         }
         if self.file.is_none() {
-            match File::open(&self.log) {
-                Ok(file) => self.file = Some(BufReader::new(file)),
+            // Version-1 Arms can retain either raw streams or Session traces.
+            let trace = crate::logs::session::path(&self.log);
+            let path = if trace.is_file() {
+                trace
+            } else {
+                self.log.clone()
+            };
+            match File::open(&path) {
+                Ok(file) => {
+                    self.log = path;
+                    self.file = Some(BufReader::new(file));
+                }
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
                 Err(error) => return Err(error.into()),
             }
@@ -124,12 +134,15 @@ impl Session {
                 _ if !self.partial.ends_with(b"\n") => break,
                 _ => (),
             }
-            drop(
-                self.stream
-                    .as_mut()
-                    .unwrap()
-                    .condense(&String::from_utf8_lossy(&self.partial)),
-            );
+            let line = String::from_utf8_lossy(&self.partial);
+            let stream = self.stream.as_mut().unwrap();
+            if self.log.to_string_lossy().ends_with(".logs.jsonl") {
+                for raw in crate::logs::session::events(&line) {
+                    drop(stream.condense(&raw));
+                }
+            } else {
+                drop(stream.condense(&line));
+            }
             self.partial.clear();
         }
         Ok(())

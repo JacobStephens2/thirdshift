@@ -383,7 +383,7 @@ fn with_quiet_skips_a_pass_that_works_prints_as_ever() {
 fn with_quiet_skips_a_pass_that_fails_prints_its_lines_and_its_error() {
     let scenario = Scenario::new();
     scenario.user_config_is(QUIET_SKIPS);
-    scenario.gh_fails("issue list");
+    scenario.gh_fails("api --paginate");
 
     let result = run_in_zone(&scenario, &["pickup"]);
 

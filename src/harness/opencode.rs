@@ -128,6 +128,7 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<()> {
         effort: chosen.effort.clone(),
         chosen_by: super::ChosenBy::UserConfig,
     };
+    crate::resources::wait()?;
     crate::progress::step("checking OpenCode's Model and Effort with a standalone test call");
     let invocation = OpenCode.session(&choice, None, "Reply with OK.");
     let output = super::process::output(

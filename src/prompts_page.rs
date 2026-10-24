@@ -1,5 +1,5 @@
 //! The Prompts and skills page's generated fragment: the `claude` command
-//! line, every prompt a Run sends, and every Factory skill, rendered from the
+//! line, every prompt a Ticket run sends, and every Factory skill, rendered from the
 //! same functions and embedded files the binary uses, so the page can't drift
 //! from what it does. Each prompt is also rendered as a Markdown file in
 //! `prompts/`, with a README.md listing them. Test-only: the golden-file tests
@@ -85,11 +85,11 @@ const PLACEHOLDERS: [&str; 20] = [
 
 /// Who sends a prompt.
 enum Sender {
-    /// A Run, from one of these press units.
+    /// A Ticket run, from one of these press units.
     Units(&'static [Unit]),
-    /// An Architect run, which the press units, a Run's, don't cover.
+    /// An Architect run, which the press units, a Ticket run's, don't cover.
     ArchitectRun,
-    /// A Security run, before any dispatched Run.
+    /// A Security run, before any dispatched Ticket run.
     SecurityRun,
     /// An Experiment's private model Grader.
     Experiment,
@@ -146,21 +146,21 @@ fn prompts() -> Vec<Prompt> {
         Prompt {
             id: "prompt-fresh",
             title: "Fresh",
-            when: "Starts the implement session, which goes on to review and open the pull request, when the Run starts a new Issue branch.",
+            when: "Starts the implement session, which goes on to review and open the pull request, when the Ticket run starts a new Issue branch.",
             sender: Units(&[IMPLEMENT]),
             text: prompt::fresh(&issue, BASE, BRANCH),
         },
         Prompt {
             id: "prompt-continuation",
             title: "Continuation, with no pull request",
-            when: "Starts the implement session when the Run is a Continuation of an Issue branch that has no pull request.",
+            when: "Starts the implement session when the Ticket run is a Continuation of an Issue branch that has no pull request.",
             sender: Units(&[IMPLEMENT]),
             text: prompt::continuation(&issue, BASE, BRANCH, None),
         },
         Prompt {
             id: "prompt-continuation-pr",
             title: "Continuation, with an open pull request",
-            when: "Starts the implement session when the Run is a Continuation of an Issue branch whose pull request is open.",
+            when: "Starts the implement session when the Ticket run is a Continuation of an Issue branch whose pull request is open.",
             sender: Units(&[IMPLEMENT]),
             text: prompt::continuation(&issue, BASE, BRANCH, Some(PR_URL)),
         },
@@ -188,7 +188,7 @@ fn prompts() -> Vec<Prompt> {
         Prompt {
             id: "prompt-security-review",
             title: "Security review",
-            when: "When enabled, runs one guidance review after a Run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Ticket Runs get none; Base fixes get one too. Introduced findings, refusals or incomplete reviews hold Self-merge.",
+            when: "When enabled, runs one guidance review after a Ticket run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Each Ticket run and Base fix gets one too. Introduced findings, refusals or incomplete reviews hold Self-merge.",
             sender: Units(&[REVIEW]),
             text: prompt::security_review(&issue, BASE, BRANCH),
         },
@@ -226,21 +226,21 @@ fn prompts() -> Vec<Prompt> {
         Prompt {
             id: "prompt-security-fix",
             title: "Security fix publishing",
-            when: "With fixing allowed, publishes a terse Ticket or Spec with Tickets for the most severe reproduced finding, reusing a private finding's issue. thirdshift checks and marks it ready before dispatching its Run or Spec run.",
+            when: "With fixing allowed, publishes a terse Ticket or Spec with Tickets for the most severe reproduced finding, reusing a private finding's issue. thirdshift checks and marks it ready before dispatching its Ticket run or Spec run.",
             sender: SecurityRun,
             text: prompt::security_fix(BASE, "<private record URL>", "<recorded Security finding>"),
         },
         Prompt {
             id: "prompt-foreign-conflict-repair",
             title: "Conflict Repair, on Foreign commits",
-            when: "In a Merge run, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.",
+            when: "In a Ticket run that Self-merges, starts a Repair session when merging Foreign commits from the Issue branch on origin into the local one leaves conflicts.",
             sender: Units(&[FINISH]),
             text: prompt::conflict_repair(&issue, BRANCH, BRANCH, PR_URL),
         },
         Prompt {
             id: "prompt-review-repair",
             title: "Review Repair",
-            when: "In a Merge run, starts a Repair session when Foreign commits merged into the Issue branch change the tree, to review it from the head the Run last knew as its own before they can be merged.",
+            when: "In a Ticket run that Self-merges, starts a Repair session when Foreign commits merged into the Issue branch change the tree, to review it from the head the Ticket run last knew as its own before they can be merged.",
             sender: Units(&[FINISH]),
             text: prompt::review_repair(&issue, BRANCH, PR_URL, OWN_HEAD),
         },
@@ -329,9 +329,9 @@ fn readme(prompts: &[Prompt]) -> String {
 
 # Session prompts
 
-Every Session prompt thirdshift can start or resume an agent session with, one file each, with placeholders such as `{BRANCH}` where each Run fills in its own values. The [Prompts and skills page](https://thirdshift.app/prompts/) shows the same prompts.
+Every Session prompt thirdshift can start or resume an agent session with, one file each, with placeholders such as `{BRANCH}` where each Ticket run fills in its own values. The [Prompts and skills page](https://thirdshift.app/prompts/) shows the same prompts.
 
-Every session runs `claude` headless in the Run's worktree, in auto permission mode. The Factory skills are linked into the worktree's `.claude/skills/`, where Claude Code finds them, and kept out of git:
+Every session runs `claude` headless in the Ticket run's worktree, in auto permission mode. The Factory skills are linked into the worktree's `.claude/skills/`, where Claude Code finds them, and kept out of git:
 
 ```sh
 {new}
@@ -387,7 +387,7 @@ fn fence(text: &str) -> String {
 }
 
 /// What uses each Factory skill: the unit whose session does, linked, and
-/// when, if not always; or the Architecture review, which is no unit of a Run.
+/// when, if not always; or the Architecture review, which is no unit of a Ticket run.
 fn skill_used_by(skill: &str) -> String {
     match skill {
         "thirdshift-implement" | "thirdshift-tdd" => unit_links(&[IMPLEMENT]),
@@ -472,7 +472,7 @@ fn command_line(html: &mut String) {
   <div class="wrap">
     <details class="fold">
     <summary class="sec-head"><span class="eyebrow">The command line</span><h2 id="command-title">How each session starts</h2></summary>
-    <p class="lede">Every session runs <code>claude</code> headless in the Run's worktree, in auto permission mode. The Factory skills are linked into the worktree's <code>.claude/skills/</code>, where Claude Code finds them, and kept out of git. The prompt is one of the templates below.</p>
+    <p class="lede">Every session runs <code>claude</code> headless in the Ticket run's worktree, in auto permission mode. The Factory skills are linked into the worktree's <code>.claude/skills/</code>, where Claude Code finds them, and kept out of git. The prompt is one of the templates below.</p>
     <pre class="job-text" aria-label="A new session"><code>{new}</code></pre>
     <p class="lede">A <a href="#prompt-resume">Resume</a> continues the session that ended:</p>
     <pre class="job-text" aria-label="A Resume"><code>{resume}</code></pre>
@@ -492,8 +492,8 @@ fn prompt_section(html: &mut String) {
         r##"<section class="sec" aria-labelledby="prompts-title">
   <div class="wrap">
     <details class="fold">
-    <summary class="sec-head"><span class="eyebrow">Prompts</span><h2 id="prompts-title">What a Run tells the agent</h2></summary>
-    <p class="lede">Every prompt a Run can send, with its placeholders highlighted: they change for each Run.</p>
+    <summary class="sec-head"><span class="eyebrow">Prompts</span><h2 id="prompts-title">What a Ticket run tells the agent</h2></summary>
+    <p class="lede">Every prompt a Ticket run can send, with its placeholders highlighted: they change for each Ticket run.</p>
     <div class="job-sheets">
 "##,
     );

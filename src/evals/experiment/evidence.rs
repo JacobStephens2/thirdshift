@@ -131,10 +131,10 @@ pub(super) fn inventory(stored: &Stored) -> Result<(Vec<RunningTrial>, Vec<Sessi
                 continue;
             }
             let selected = crate::logs::session::path(&path);
-            if selected != path {
+            if selected != path && selected.is_file() {
                 continue;
             }
-            let canonical = match selected.canonicalize() {
+            let canonical = match path.canonicalize() {
                 Ok(path) => path,
                 Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
                 Err(error) => return Err(error.into()),

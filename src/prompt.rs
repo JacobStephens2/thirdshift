@@ -25,7 +25,8 @@ const HEADLESS: &str = "You run headless: nobody is watching, and ending your tu
     other sessions on this machine run the same commands. \
     Never end your turn while a background task you depend on is still running: ending the turn kills it. \
     Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): \
-    a task still running when your turn ends is taken as work you were waiting on.\n";
+    a task still running when your turn ends is taken as work you were waiting on. \
+    thirdshift records this session as a Session trace, with Model evidence and any review reports beside it.\n";
 
 /// A fresh model Grader sees only a blind packet, never Arm metadata or logs.
 pub fn grader() -> String {
@@ -284,8 +285,8 @@ pub fn architecture_review(base: &str, focus: Option<&str>) -> String {
 }
 
 /// The conflict Repair prompt, for a merge of `origin/<merging>` left in
-/// progress with conflicts: the Base branch, or in a Merge run the Issue
-/// branch with Foreign commits on it.
+/// progress with conflicts: the Base branch, or in a Ticket run asked to merge,
+/// the Issue branch with Foreign commits on it.
 pub fn conflict_repair(issue: &IssueUrl, merging: &str, branch: &str, pr_url: &str) -> String {
     format!(
         "/thirdshift-resolving-merge-conflicts\n\
@@ -347,8 +348,9 @@ pub fn ci_fix_repair(
     )
 }
 
-/// The review Repair prompt, for Foreign commits a Merge run has merged into
-/// the Issue branch on top of `own_head`, the head it last knew as its own.
+/// The review Repair prompt, for Foreign commits a Ticket run asked to merge
+/// has merged into the Issue branch on top of `own_head`, the head it last
+/// knew as its own.
 pub fn review_repair(issue: &IssueUrl, branch: &str, pr_url: &str, own_head: &str) -> String {
     let review = ReviewInstruction::ForeignCommits;
     format!(
@@ -412,7 +414,7 @@ pub fn security_audit(
     )
 }
 
-/// One guidance session on the Run's change, before Delivery pushes and
+/// One guidance session on the Ticket run's change, before Delivery pushes and
 /// enters the Repair loop. The separate Security audit remains a full audit.
 pub const SECURITY_REVIEW_REPORT_FILE: &str = "<private report file>";
 pub const SECURITY_REVIEW_MERGE_BASE: &str = "<merge base commit>";
@@ -459,6 +461,20 @@ pub fn security_reproduction(commit: &str, finding: &str, test: &std::path::Path
     )
 }
 
+/// The close check's terminal protocol: only this final line is read.
+pub const CLOSE_CHECK_PASSES_LINE: &str = "Security close check: passes";
+pub const CLOSE_CHECK_FAILS_PREFIX: &str = "Security close check: fails: ";
+
+pub fn security_close_check(base: &str, pr_url: &str, finding: &str) -> String {
+    format!(
+        "Check whether the fix for this reproduced Security finding holds on Base branch `{base}`, now that it merged as {pr_url}.\n\
+         Re-run the finding's proof-of-concept test from the private record below against the untouched code in this throwaway worktree, at the merged Base branch head. The test failed before the fix. Use harmless payloads only, never a deployed site or a real third-party service. Do not fix or change repository source.\n\
+         In your final message, give the exact command and its result. End your final message with exactly `{CLOSE_CHECK_PASSES_LINE}` when the test now passes, or `{CLOSE_CHECK_FAILS_PREFIX}<one-line reason>` when it still fails or cannot run.\n\
+         This session commits, pushes, opens and publishes nothing.\n\n\
+         Private record:\n{finding}\n\n{HEADLESS}",
+    )
+}
+
 pub const SECURITY_FIX_LINE: &str = "Security fix Ticket: ";
 pub const SECURITY_FIX_SPEC_LINE: &str = "Security fix Spec: ";
 pub const STAGED_PROPOSAL_MARKER: &str = "Proposed public issue:";
@@ -476,7 +492,7 @@ pub fn security_fix(base: &str, url: &str, finding: &str) -> String {
          On a public repository, stage the proposed public issue text instead of creating any public issue directly: do not run `gh issue create` yourself. thirdshift validates the staged text and creates the `needs-triage` top issue and its Tickets from it. On a private repository, reuse the finding's issue as the top issue and preserve its body and evidence; add the bigger fix's Tickets as its native sub-issues. Only a private bigger fix publishes its issues itself.\n\
          Every new issue is terse: it says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record. This overrides the skills' templates.\n\
          A Spec's Tickets must be new, open, labelled `ready-for-agent`, linked as native sub-issues with their native blocking links, and have no sub-issues of their own. On a public repository thirdshift makes those links from the staged text; read the staged blocking edges back before finishing.\n\
-         This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks every issue, marks the top issue ready, labels all fix issues security-fix and dispatches its Run or Spec run.\n\
+         This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks every issue, marks the top issue ready, labels all fix issues security-fix and dispatches its Ticket run or Spec run.\n\
          End your final message for a single public fix with exactly:\n{STAGED_PROPOSAL_MARKER}\n{STAGED_TITLE_MARKER} <title>\n{STAGED_BODY_MARKER}\n<body>\nFor a public spec, end with exactly:\n{STAGED_SPEC_MARKER}\n{STAGED_TITLE_MARKER} <spec title>\n{STAGED_BODY_MARKER}\n<spec body>\n{STAGED_TICKET_MARKER} <ticket 1 title>\n{STAGED_BODY_MARKER}\n<ticket 1 body>\n{STAGED_BLOCKED_BY_MARKER} none\n{STAGED_TICKET_MARKER} <ticket 2 title>\n{STAGED_BODY_MARKER}\n<ticket 2 body>\n{STAGED_BLOCKED_BY_MARKER} 1\nwith each later Ticket naming the 1-based positions of the Tickets that block it, or none. For a private bigger fix, end with exactly `{SECURITY_FIX_SPEC_LINE}<Issue URL>`, naming the top issue.\n\n\
          Private record:\n{finding}\n\n{HEADLESS}"
     )

@@ -701,10 +701,11 @@ mod tests {
 
     const OFFER: &str =
         "No User config at /home/me/.thirdshift/config.toml. Set your defaults now? [Y/n] ";
-    const MERGE: &str = "Every Run a Merge run?";
-    const BASE_FIX: &str = "Every Run may start a Base fix when the Base branch's CI is red?";
+    const MERGE: &str = "Every Ticket run Self-merges?";
+    const BASE_FIX: &str =
+        "Every Ticket run may start a Base fix when the Base branch's CI is red?";
     const PULL: &str = "fast-forward";
-    const SECURITY_REVIEW: &str = "Runs review their change for Security findings?";
+    const SECURITY_REVIEW: &str = "Ticket runs review their change for Security findings?";
     const SECURITY_FIX: &str = "Security runs may fix reproduced findings?";
     const NOTIFY: &str = "Run notifications, an email";
     const CONSOLE: &str = "Run the Console?";
@@ -715,7 +716,7 @@ mod tests {
     const KEY_PROMPT: &str = "Resend API key (input hidden, Enter to skip): ";
     const KEPT: &str = "Resend API key (input hidden, Enter keeps the saved one): ";
     const SKIPPED: &str = "No Resend API key, so no email can go yet. To add one later, rerun \
-                           `thirdshift setup`, or set RESEND_API_KEY in the environment the Run \
+                           `thirdshift setup`, or set RESEND_API_KEY in the environment the Ticket run \
                            starts from.";
     const ENDED: &str = "Setup ended before its last answer; nothing written";
     const KEY: &str = "re_secret_123";
@@ -1119,12 +1120,12 @@ to = \"me@example.com\"  # my inbox
         assert_eq!(
             outside.prompts(),
             [
-                "Every Run a Merge run? [y/N] ",
-                "Every Run may start a Base fix when the Base branch's CI is red? [y/N] ",
-                "Every Run first fast-forwards your checkout of the Base branch? [y/N] ",
+                "Every Ticket run Self-merges? [y/N] ",
+                "Every Ticket run may start a Base fix when the Base branch's CI is red? [y/N] ",
+                "Every Ticket run first fast-forwards your checkout of the Base branch? [y/N] ",
                 "Security runs may fix reproduced findings? [y/N] ",
-                "Runs review their change for Security findings? [y/N] ",
-                "Run notifications, an email as each Run ends? [y/N] ",
+                "Ticket runs review their change for Security findings? [y/N] ",
+                "Run notifications, an email as each Ticket run ends? [y/N] ",
                 "Claude setup token from `claude setup-token` (Trials only; input hidden, Enter to skip): ",
                 "Run the Console? [y/N] ",
             ]
@@ -1162,8 +1163,8 @@ to = \"me@example.com\"  # my inbox
         let text = outside.user_config.unwrap();
         let expected = DEFAULTS
             .replace(
-                "always = false   # every Run is a Merge",
-                "always = true    # every Run is a Merge",
+                "always = false   # every Ticket run Self-merges",
+                "always = true    # every Ticket run Self-merges",
             )
             .replace("fix = false      #", "fix = true       #")
             .replace("pull = false     #", "pull = true      #")
@@ -1196,6 +1197,7 @@ pull = true
 
 [email]
 always = true
+unless_merged = false
 to = \"mine@example.net\"
 from = \"ts@acme.dev\"
 
@@ -1224,13 +1226,19 @@ quiet_skips = true
 [spec]
 parallel = 5
 
+[resources]
+min_available_memory_mb = 0
+max_load_per_cpu_percent = 0
+
 [pickup]
 limit = 5
 wait_minutes = 60
+order = \"highest-first\"
 
 [security]
 harness = \"codex\"
 fix = false
+close = false
 review = false
 
 [harness]
@@ -1294,12 +1302,12 @@ memory_swap_max = \"1G\"
         assert_eq!(
             outside.prompts(),
             [
-                "Every Run a Merge run? [Y/n] ",
-                "Every Run may start a Base fix when the Base branch's CI is red? [Y/n] ",
-                "Every Run first fast-forwards your checkout of the Base branch? [Y/n] ",
+                "Every Ticket run Self-merges? [Y/n] ",
+                "Every Ticket run may start a Base fix when the Base branch's CI is red? [Y/n] ",
+                "Every Ticket run first fast-forwards your checkout of the Base branch? [Y/n] ",
                 "Security runs may fix reproduced findings? [y/N] ",
-                "Runs review their change for Security findings? [y/N] ",
-                "Run notifications, an email as each Run ends? [Y/n] ",
+                "Ticket runs review their change for Security findings? [y/N] ",
+                "Run notifications, an email as each Ticket run ends? [Y/n] ",
                 "Send Run notifications to [mine@example.net]: ",
                 "Send them from [ts@acme.dev]: ",
                 "Send a test email now? [y/N] ",
@@ -1650,6 +1658,38 @@ always = false # quiet, please
         assert!(outside.said().is_empty(), "{:?}", outside.said());
         assert_eq!(outside.effects().len(), 1, "{:?}", outside.effects());
         assert_eq!(table(&outside)["email"]["always"].as_bool(), Some(false));
+    }
+
+    #[test]
+    fn unless_merged_alone_counts_as_notifications_on_and_answering_no_turns_it_off() {
+        let mut outside = Scripted {
+            user_config: Some("[email]\nunless_merged = true\n".to_string()),
+            key: Ok(Some(Source::Credentials(CREDENTIALS.into()))),
+            ..Scripted::answering(&[
+                (MERGE, ""),
+                (BASE_FIX, ""),
+                (PULL, ""),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
+                (NOTIFY, "n"),
+                (CLAUDE_TOKEN, ""),
+                (CONSOLE, "n"),
+            ])
+        };
+
+        setup(&mut outside).unwrap();
+
+        assert!(
+            outside
+                .prompts()
+                .iter()
+                .any(|prompt| prompt.contains(NOTIFY) && prompt.ends_with("[Y/n] ")),
+            "{:?}",
+            outside.prompts()
+        );
+        let config = table(&outside);
+        assert_eq!(config["email"]["always"].as_bool(), Some(false));
+        assert_eq!(config["email"]["unless_merged"].as_bool(), Some(false));
     }
 
     #[test]

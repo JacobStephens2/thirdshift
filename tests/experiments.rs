@@ -833,7 +833,7 @@ esac
                 attempt["log"]
                     .as_str()
                     .unwrap()
-                    .ends_with("trial-code-review.jsonl")
+                    .ends_with("trial-code-review.logs.jsonl")
             );
             for axis in ["standards", "spec"] {
                 assert!(std::path::Path::new(attempt["reports"][axis].as_str().unwrap()).is_file());
@@ -1367,15 +1367,19 @@ esac
 
 #[test]
 fn older_code_review_arms_stop_at_native_limits_in_their_fresh_homes() {
-    assert_older_arm_native_limits("code-review", 3);
+    for trace in [false, true] {
+        assert_older_arm_native_limits("code-review", 3, trace);
+    }
 }
 
 #[test]
 fn older_arms_native_limits_are_monitored_in_their_fresh_homes() {
-    assert_older_arm_native_limits("spec-review", 1);
+    for trace in [false, true] {
+        assert_older_arm_native_limits("spec-review", 1, trace);
+    }
 }
 
-fn assert_older_arm_native_limits(session: &str, trials: usize) {
+fn assert_older_arm_native_limits(session: &str, trials: usize, trace: bool) {
     let fixture = Fixture::with_session(session, trials);
     let continued = fixture.scenario.path("continued-after-native-warning");
     for commit in [&fixture.baseline, &fixture.candidate] {
@@ -1383,14 +1387,20 @@ fn assert_older_arm_native_limits(session: &str, trials: usize) {
             "home/.thirdshift/evals/builds/{commit}/thirdshift"
         ));
         // A version-1 Arm with a sandbox home, before live quota detection.
-        // Native records are its public Harness output, absent from stdout.
+        // Cover both historical storage formats. Native quota records are
+        // absent from stdout, so the monitor must decode the session ID first.
         fs::write(&binary, format!(r#"#!/usr/bin/env python3
 import datetime, json, pathlib, sys, time
 request = json.load(open(sys.argv[2]))
 output = pathlib.Path(request['output_dir'])
 native = output / 'home/.codex/sessions/2026/10/24/rollout-fake-thread-1.jsonl'
 native.parent.mkdir(parents=True)
-(output / 'trial-{session}.jsonl').write_text(json.dumps(dict(type='thread.started', thread_id='fake-thread-1')) + '\n')
+event = json.dumps(dict(type='thread.started', thread_id='fake-thread-1'))
+suffix = 'jsonl'
+if '{trace}' == 'true':
+    event = json.dumps(dict(resourceLogs=[dict(scopeLogs=[dict(logRecords=[dict(body=dict(stringValue=event))])])]))
+    suffix = 'logs.jsonl'
+(output / ('trial-{session}.' + suffix)).write_text(event + '\n')
 native.write_text(json.dumps(dict(type='session_meta', payload=dict(id='fake-thread-1', cwd=request['repository']))) + '\n')
 time.sleep(0.2)
 with native.open('a') as records:

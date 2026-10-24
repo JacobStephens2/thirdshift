@@ -322,8 +322,8 @@ fn missing(path: &Path) -> String {
          - add it to {} (mode 600):\n        \
          [resend]\n        \
          key = \"re_...\"\n  \
-         - or set RESEND_API_KEY in the environment the Run starts from\n    \
-         (a crontab line, CI secret, or a shell profile the Run's shell reads)",
+         - or set RESEND_API_KEY in the environment the Ticket run starts from\n    \
+         (a crontab line, CI secret, or a shell profile the Ticket run's shell reads)",
         path.display()
     )
 }

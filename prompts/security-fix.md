@@ -2,7 +2,7 @@
 
 # Security fix publishing
 
-With fixing allowed, publishes a terse Ticket or Spec with Tickets for the most severe reproduced finding, reusing a private finding's issue. thirdshift checks and marks it ready before dispatching its Run or Spec run.
+With fixing allowed, publishes a terse Ticket or Spec with Tickets for the most severe reproduced finding, reusing a private finding's issue. thirdshift checks and marks it ready before dispatching its Ticket run or Spec run.
 
 ```
 Publish the fix for this reproduced Security finding on Base branch `<base>`.
@@ -11,7 +11,7 @@ Follow the completed reproduction's fix size: single stages one Ticket; spec sta
 On a public repository, stage the proposed public issue text instead of creating any public issue directly: do not run `gh issue create` yourself. thirdshift validates the staged text and creates the `needs-triage` top issue and its Tickets from it. On a private repository, reuse the finding's issue as the top issue and preserve its body and evidence; add the bigger fix's Tickets as its native sub-issues. Only a private bigger fix publishes its issues itself.
 Every new issue is terse: it says only what the fix changes and links the private record. It carries none of the write-up, trace, evidence, reproduction notes, proof-of-concept test or exploit details, even paraphrased. Keep those in the private record. This overrides the skills' templates.
 A Spec's Tickets must be new, open, labelled `ready-for-agent`, linked as native sub-issues with their native blocking links, and have no sub-issues of their own. On a public repository thirdshift makes those links from the staged text; read the staged blocking edges back before finishing.
-This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks every issue, marks the top issue ready, labels all fix issues security-fix and dispatches its Run or Spec run.
+This session changes no repository source, commits and pushes nothing, opens no pull request, and does not implement the fix. thirdshift checks every issue, marks the top issue ready, labels all fix issues security-fix and dispatches its Ticket run or Spec run.
 End your final message for a single public fix with exactly:
 Proposed public issue:
 Title: <title>
@@ -35,5 +35,5 @@ with each later Ticket naming the 1-based positions of the Tickets that block it
 Private record:
 <recorded Security finding>
 
-You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on. thirdshift records this session as a Session trace, with Model evidence and any review reports beside it.
 ```

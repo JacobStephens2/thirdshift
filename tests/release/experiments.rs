@@ -100,6 +100,7 @@ fn a_passing_experiment_is_checked_before_any_push() {
     let candidate = release.origin(&["rev-parse", "main"]);
     let output = release.run_script("0.2.0");
     assert!(output.status.success(), "{}", stderr(&output));
+    assert!(unstamped(&output).contains(&format!("Experiment {ID}: pass")));
     let calls = calls(&release);
     assert_eq!(calls.len(), 1);
     assert_eq!(
@@ -119,7 +120,7 @@ fn failed_or_inconclusive_experiments_show_intervals_and_require_permission() {
         for answer in ["", "n\n", "yes\n"] {
             cargo_reports(&release, &[verdict(outcome)]);
             let output = release.run_script_with(&["0.2.0"], answer, &[]);
-            let err = stderr(&output);
+            let err = unstamped(&output);
             assert!(err.contains("release anyway?"), "{err}");
             assert!(err.contains("accuracy [-0.25, 0.12]"), "{err}");
             assert!(err.contains("wrong findings [-0.02, 0.18]"), "{err}");
@@ -152,12 +153,9 @@ fn pending_rechecks_are_listed_and_waited_for_before_pushing() {
     cargo_reports(&release, &[waiting.clone(), waiting, verdict("pass")]);
     let output = release.run_script("0.2.0");
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stderr(&output).contains("trial-1"), "{}", stderr(&output));
-    assert!(
-        stderr(&output).contains("waiting for your rechecks"),
-        "{}",
-        stderr(&output)
-    );
+    let err = unstamped(&output);
+    assert!(err.contains("trial-1"), "{err}");
+    assert!(err.contains("waiting for your rechecks"), "{err}");
     let checked = calls(&release);
     assert_eq!(checked.len(), 3);
     for call in &checked[1..] {
@@ -211,7 +209,7 @@ fn skipped_experiments_carry_on_with_a_note() {
         release.ci_reports(GREEN);
         let output = release.run_script("0.2.0");
         assert!(output.status.success(), "{}", stderr(&output));
-        assert!(stderr(&output).contains(reason), "{}", stderr(&output));
+        assert!(unstamped(&output).contains(reason), "{}", stderr(&output));
         assert!(release.origin_tag("v0.2.0").is_some());
     }
 }
