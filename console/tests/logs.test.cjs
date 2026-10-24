@@ -1,4 +1,4 @@
-const { test, describe, before, after } = require("node:test");
+const { test, describe, before, beforeEach, after } = require("node:test");
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
 const { once } = require("node:events");
@@ -9,8 +9,8 @@ const { createInterface } = require("node:readline");
 const { chromium } = require("playwright");
 const { record: traceRecord } = require("./session-trace.cjs");
 
-  describe('Session trace', () => {
-    let home, server, exited, browser, origin, folder, log, recordPath, record;
+  describe('Session trace', { timeout: 120000 }, () => {
+    let home, server, exited, browser, origin, folder, log, recordPath, record, writer, writerExited;
     const encode = event => {
       const raw = JSON.stringify(event);
       return traceRecord(raw);
@@ -28,17 +28,10 @@ const { record: traceRecord } = require("./session-trace.cjs");
       recordPath = join(folder, `${stem}.command.json`);
       await writeFile(log, message("Initial retained line") + message("Tall initial message\n".repeat(150)) + tool("first tool"));
       await writeFile(join(folder, `${stem}.log`), "Command <plain> output\n");
-      // Match the native process identity used by the Linux Console test runner.
-      let processStart = "gone";
-      if (process.platform === "linux") {
-        const stat = await readFile(`/proc/${process.pid}/stat`, "utf8");
-        const fields = stat.slice(stat.lastIndexOf(") ") + 2).trim().split(/\s+/);
-        processStart = `${(await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim()}:${fields[19]}`;
-      }
       record = {
         version: 1, kind: "Spec run", repository: "acme/widgets", name: "acme/widgets#7", hostname: "fixture",
         issue: { number: 7, url: "https://github.com/acme/widgets/issues/7", title: "Widgets" },
-        process_id: process.pid, process_start: processStart, harness: "codex", model: "gpt-6", effort: "high",
+        process_id: 0, process_start: "gone", harness: "codex", model: "gpt-6", effort: "high",
         started_at: new Date().toISOString(), ended_at: null, stages: [], session_log: sessionLog,
         outcome: null, cause: null, issue_branch: null, pull_request: null
       };
@@ -50,8 +43,25 @@ const { record: traceRecord } = require("./session-trace.cjs");
       finally { lines.close(); }
       browser = await chromium.launch({ headless: true });
     });
+    beforeEach(async () => {
+      if (process.platform !== "linux") return;
+      if (!writer || writer.exitCode !== null || writer.signalCode !== null) {
+        writer = spawn(process.execPath, ["-e", "setTimeout(() => {}, 120000)"], { stdio: "ignore" });
+        writerExited = once(writer, "exit");
+        await once(writer, "spawn", { signal: AbortSignal.timeout(10000) });
+        const stat = await readFile(`/proc/${writer.pid}/stat`, "utf8");
+        const fields = stat.slice(stat.lastIndexOf(") ") + 2).trim().split(/\s+/);
+        record.process_id = writer.pid;
+        record.process_start = `${(await readFile("/proc/sys/kernel/random/boot_id", "utf8")).trim()}:${fields[19]}`;
+        record.outcome = null;
+        record.ended_at = null;
+        await writeFile(recordPath, JSON.stringify(record));
+      }
+    });
     after(async () => {
       await browser?.close();
+      if (writer && writer.exitCode === null && writer.signalCode === null) writer.kill();
+      if (writerExited) await writerExited;
       if (server && server.exitCode === null) server.kill();
       await exited;
       if (home) await rm(home, { recursive: true, force: true });
@@ -112,6 +122,10 @@ const { record: traceRecord } = require("./session-trace.cjs");
       record.outcome = "ready for review";
       record.ended_at = new Date().toISOString();
       await writeFile(recordPath, JSON.stringify(record));
+      await page.waitForTimeout(650);
+      assert.equal(await page.getByText("Final unterminated line", { exact: true }).count(), 0);
+      writer.kill();
+      await writerExited;
       await page.getByText("Final unterminated line", { exact: true }).waitFor();
       await page.waitForFunction(() => document.querySelector("#log-status").textContent === "Complete");
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
