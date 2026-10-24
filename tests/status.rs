@@ -9,6 +9,42 @@ const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 const OPENS_PR: &str = "echo work > work.txt\ngit add work.txt\ngit commit -qm 'Make widgets'\ngh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7'\n";
 
 #[test]
+fn fake_gh_call_reads_wait_for_an_in_progress_record_write() {
+    let scenario = Scenario::new();
+    let lock = fs::File::create(scenario.path("gh-state.json.lock")).unwrap();
+    lock.lock().unwrap();
+    fs::write(scenario.path("gh-calls.json"), "").unwrap();
+    std::thread::scope(|scope| {
+        let scenario = &scenario;
+        let (started, ready) = std::sync::mpsc::channel();
+        let (finished, answer) = std::sync::mpsc::channel();
+        scope.spawn(move || {
+            started.send(()).unwrap();
+            finished
+                .send(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || scenario.gh_calls(),
+                )))
+                .unwrap();
+        });
+        ready
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        let early = answer.recv_timeout(std::time::Duration::from_millis(100));
+        fs::write(scenario.path("gh-calls.json"), r#"[["api","rate_limit"]]"#).unwrap();
+        drop(lock);
+        let result = early.unwrap_or_else(|_| {
+            answer
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+        });
+        assert_eq!(
+            result.expect("read a truncated call record during its write"),
+            vec![vec!["api".to_string(), "rate_limit".to_string()]]
+        );
+    });
+}
+
+#[test]
 fn ticket_run_display_preserves_the_stored_command_kind() {
     let scenario = Scenario::new();
     let now = chrono::Local::now().to_rfc3339();
@@ -880,6 +916,7 @@ fn inbox_puts_live_problems_first_and_points_to_silent_landing_without_duplicati
 #[test]
 fn inbox_distinguishes_triage_stops_and_waiting_findings_from_completed_work() {
     let scenario = Scenario::new();
+    scenario.waiting_security_finding();
     scenario.issue_labelled(7, &["needs-triage"]);
     let time = chrono::Local::now().to_rfc3339();
     for number in 7..12 {
@@ -1778,6 +1815,351 @@ fn github_issue_is(scenario: &Scenario, number: u32, state: &str, closed_at: Opt
     scenario.write_gh_state(&gh);
 }
 
+fn security_record(scenario: &Scenario, number: u32, urls: &[&str], failed: bool) {
+    failed_record(scenario, number, &hours_ago(if failed { 48 } else { 240 }));
+    change_record(scenario, number, |record| {
+        record["kind"] = "Security run".into();
+        record["issue"] = Value::Null;
+        record["security_findings_waiting"] = true.into();
+        record["outcome"] = if failed {
+            "failed"
+        } else {
+            "findings recorded"
+        }
+        .into();
+        record["security_findings"] = urls
+            .iter()
+            .map(|url| {
+                serde_json::json!({
+                    "url": url, "title": "Private title", "severity": null
+                })
+            })
+            .collect();
+    });
+}
+
+#[test]
+fn finding_leaves_only_after_its_last_private_record_is_triaged() {
+    let scenario = Scenario::new();
+    let first = "https://github.com/acme/widgets/security/advisories/GHSA-first";
+    let second = "https://github.com/acme/widgets/security/advisories/GHSA-second";
+    security_record(&scenario, 7, &[first, second], false);
+    let mut gh = scenario.gh_state();
+    gh["advisories"] = serde_json::json!([
+        {"ghsa_id":"GHSA-first", "html_url":first, "state":"draft", "severity":null,
+         "summary":"Secret title", "description":"Secret write-up"},
+        {"ghsa_id":"GHSA-second", "html_url":second, "state":"draft", "severity":"high"},
+        {"ghsa_id":"GHSA-unrelated", "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-unrelated",
+         "state":"draft", "severity":null}
+    ]);
+    scenario.write_gh_state(&gh);
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(status["commands"][0]["group"], "needs you", "{status}");
+    gh["advisories"][0]["state"] = "closed".into();
+    scenario.write_gh_state(&gh);
+    age_cache_file(&scenario, 360);
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(status["commands"][0]["group"], "resolved", "{status}");
+    assert_eq!(
+        status["commands"][0]["left_reason"], "findings triaged",
+        "{status}"
+    );
+    let cache = fs::read_to_string(scenario.path(GITHUB_CACHE)).unwrap();
+    for private in ["Secret title", "Secret write-up", "high"] {
+        assert!(!cache.contains(private), "{cache}");
+    }
+    let text = scenario.run(&["status"]);
+    assert!(text.stdout.contains("findings triaged"), "{}", text.stdout);
+}
+
+#[test]
+fn private_findings_and_dismissed_failures_follow_github_triage() {
+    let scenario = Scenario::new();
+    let url = "https://github.com/acme/widgets/issues/21";
+    security_record(&scenario, 7, &[url], true);
+    let mut gh = scenario.gh_state();
+    gh["private"] = true.into();
+    scenario.write_gh_state(&gh);
+    scenario.issue_is(21, "OPEN");
+    scenario.issue_labelled(21, &["security-finding", "needs-triage"]);
+    let path = scenario.path(LOGS).join("7-fixture.command.json");
+    let selector = path.to_str().unwrap();
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(
+        status["commands"][0]["needs_you_kind"], "failed",
+        "{status}"
+    );
+    assert_eq!(scenario.run(&["dismiss", selector]).code, Some(0));
+    let output = scenario.run(&["status", "--json"]);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(
+        status["commands"][0]["needs_you_kind"], "finding",
+        "{status}"
+    );
+
+    for (state, labels, waits) in [
+        ("CLOSED", vec!["security-finding", "needs-triage"], false),
+        ("OPEN", vec!["security-finding", "needs-triage"], true),
+        ("OPEN", vec!["security-finding"], false),
+        ("OPEN", vec!["needs-triage"], false),
+    ] {
+        scenario.issue_is(21, state);
+        scenario.issue_labelled(21, &labels);
+        age_cache_file(&scenario, 360);
+        let output = scenario.run(&["status", "--all", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(
+            status["commands"][0]["group"] == "needs you",
+            waits,
+            "{status}"
+        );
+        if !waits {
+            assert_eq!(
+                status["commands"][0]["left_reason"], "findings triaged",
+                "{status}"
+            );
+            assert!(
+                status["commands"][0]["left_at"].as_str().is_some(),
+                "{status}"
+            );
+        }
+    }
+}
+
+#[test]
+fn findings_share_one_paginated_repository_list_and_respect_the_rest_reserve() {
+    for remaining in [499, 500] {
+        let scenario = Scenario::new();
+        let url = "https://github.com/acme/widgets/security/advisories/GHSA-last";
+        security_record(&scenario, 7, &[url], false);
+        security_record(&scenario, 8, &[url], true);
+        failed_record(&scenario, 9, &hours_ago(1));
+        change_record(&scenario, 9, |record| {
+            record["repository"] = "other/repo".into()
+        });
+        let mut gh = scenario.gh_state();
+        let mut records: Vec<_> = (0..100).map(|number| serde_json::json!({
+            "html_url":format!("https://github.com/acme/widgets/security/advisories/GHSA-{number}"),
+            "state":"published", "severity":null
+        })).collect();
+        records.push(serde_json::json!({"html_url":url, "state":"draft", "severity":null}));
+        gh["advisories"] = records.into();
+        let reset = (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp();
+        gh["rate_limits"] = serde_json::json!({
+            "graphql":{"remaining":4999,"reset":reset},
+            "core":{"remaining":remaining,"reset":reset}
+        });
+        scenario.write_gh_state(&gh);
+        let output = scenario.run(&["status", "--all", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let lists: Vec<_> = scenario
+            .gh_calls()
+            .into_iter()
+            .filter(|call| call.iter().any(|arg| arg.contains("security-advisories?")))
+            .collect();
+        if remaining == 499 {
+            assert!(lists.is_empty(), "{lists:?}");
+        } else {
+            assert_eq!(lists.len(), 1, "{lists:?}");
+            assert!(lists[0].iter().any(|arg| arg == "--paginate"));
+            let status: Value = serde_json::from_str(&output.stdout).unwrap();
+            assert!(
+                status["commands"].as_array().unwrap().iter().any(|row| {
+                    row["kind"] == "Security run" && row["needs_you_kind"] == "finding"
+                }),
+                "{status}"
+            );
+        }
+    }
+}
+
+#[test]
+fn finding_answers_survive_failure_reopen_and_freeze_in_history() {
+    let scenario = Scenario::new();
+    let url = "https://github.com/acme/widgets/security/advisories/GHSA-waiting";
+    security_record(&scenario, 7, &[url], false);
+    scenario.waiting_security_finding();
+    let read = || {
+        let output = scenario.run(&["status", "--all", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        serde_json::from_str::<Value>(&output.stdout).unwrap()
+    };
+    assert_eq!(read()["commands"][0]["group"], "needs you");
+    let mut gh = scenario.gh_state();
+    gh["advisories"][0]["state"] = "published".into();
+    gh["advisory_error"] = "gh: Forbidden (HTTP 403)".into();
+    scenario.write_gh_state(&gh);
+    age_cache_file(&scenario, 360);
+    let failed = read();
+    assert_eq!(failed["commands"][0]["group"], "needs you", "{failed}");
+    assert!(
+        failed["github_failure"]
+            .as_str()
+            .unwrap()
+            .contains("Forbidden")
+    );
+    gh.as_object_mut().unwrap().remove("advisory_error");
+    scenario.write_gh_state(&gh);
+    let triaged = read();
+    assert_eq!(
+        triaged["commands"][0]["left_reason"], "findings triaged",
+        "{triaged}"
+    );
+    age_cache_file(&scenario, 360);
+    let unchanged = read();
+    assert_eq!(
+        unchanged["commands"][0]["left_at"],
+        triaged["commands"][0]["left_at"]
+    );
+    gh["advisories"][0]["state"] = "draft".into();
+    scenario.write_gh_state(&gh);
+    age_cache_file(&scenario, 360);
+    assert_eq!(read()["commands"][0]["group"], "needs you");
+
+    gh["advisories"][0]["state"] = "closed".into();
+    scenario.write_gh_state(&gh);
+    age_cache_file(&scenario, 360);
+    read();
+    let path = scenario.path(GITHUB_CACHE);
+    let mut cache: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    for answer in cache["findings"].as_object_mut().unwrap().values_mut() {
+        answer["triaged_at"] = hours_ago(240).into();
+    }
+    fs::write(&path, serde_json::to_vec(&cache).unwrap()).unwrap();
+    age_cache_file(&scenario, 360);
+    let calls = scenario.gh_calls().len();
+    assert_eq!(read()["commands"][0]["group"], "history");
+    assert_eq!(
+        scenario.gh_calls().len(),
+        calls,
+        "History is not read again"
+    );
+    security_record(&scenario, 8, &[url], false);
+    gh["advisories"][0]["state"] = "draft".into();
+    scenario.write_gh_state(&gh);
+    let status = read();
+    let rows = status["commands"].as_array().unwrap();
+    assert_eq!(
+        rows.iter().filter(|row| row["group"] == "history").count(),
+        1,
+        "{status}"
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|row| row["needs_you_kind"] == "finding")
+            .count(),
+        1,
+        "{status}"
+    );
+}
+
+#[test]
+fn private_finding_discovery_rechecks_the_reserve_before_its_fallback_list() {
+    let scenario = Scenario::new();
+    security_record(
+        &scenario,
+        7,
+        &["https://github.com/acme/widgets/issues/21"],
+        false,
+    );
+    let mut gh = scenario.gh_state();
+    gh["private"] = true.into();
+    let reset = (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp();
+    gh["rate_limits"] = serde_json::json!({
+        "graphql":{"remaining":4999,"reset":reset},
+        "core":{"remaining":500,"reset":reset}
+    });
+    gh["next_rate_limits"] = serde_json::json!({
+        "graphql":{"remaining":4999,"reset":reset},
+        "core":{"remaining":498,"reset":reset}
+    });
+    scenario.write_gh_state(&gh);
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    assert!(
+        !scenario.gh_calls().iter().any(|call| call
+            .iter()
+            .any(|arg| { arg.contains("/issues?state=all&labels=security-finding") })),
+        "a fallback list read below the reserve: {:?}",
+        scenario.gh_calls()
+    );
+}
+
+#[test]
+fn review_graphql_failure_survives_successful_finding_list() {
+    let scenario = Scenario::new();
+    ready_record_with_pr(&scenario, 9, &hours_ago(240), Some(9));
+    github_pr_is(&scenario, 9, "OPEN", None, None);
+    let url = "https://github.com/acme/widgets/security/advisories/GHSA-waiting";
+    security_record(&scenario, 7, &[url], false);
+    scenario.waiting_security_finding();
+    let good = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(good.code, Some(0), "{}", good.stderr);
+    age_cache_file(&scenario, 360);
+    scenario.gh_fails("api graphql");
+    let failed = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(failed.code, Some(0), "{}", failed.stderr);
+    let status: Value = serde_json::from_str(&failed.stdout).unwrap();
+    assert!(
+        status["github_failure"].as_str().is_some(),
+        "a successful finding list erased the GraphQL failure: {status}"
+    );
+    assert!(
+        status["github_answer_age_seconds"].as_u64().unwrap() >= 300,
+        "{status}"
+    );
+}
+
+#[test]
+fn finding_exposed_by_a_settled_failed_fix_leaves_from_its_own_triage_time() {
+    let scenario = Scenario::new();
+    failed_record(&scenario, 8, &hours_ago(240));
+    scenario.waiting_security_finding();
+    let dispatched: Value = serde_json::from_slice(
+        &fs::read(scenario.path(LOGS).join("8-fixture.command.json")).unwrap(),
+    )
+    .unwrap();
+    change_record(&scenario, 8, |record| {
+        record["kind"] = "Security run".into();
+        record["issue"] = Value::Null;
+        record["security_findings_waiting"] = true.into();
+        record["dispatched"] = vec![dispatched].into();
+    });
+    github_issue_is(&scenario, 8, "CLOSED", Some(&hours_ago(216)));
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let row = status["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "Security run")
+        .unwrap();
+    assert_eq!(row["needs_you_kind"], "finding", "{status}");
+    let mut gh = scenario.gh_state();
+    gh["advisories"][0]["state"] = "closed".into();
+    scenario.write_gh_state(&gh);
+    age_cache_file(&scenario, 360);
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let row = status["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "Security run")
+        .unwrap();
+    assert_eq!(row["left_reason"], "findings triaged", "{status}");
+    assert_eq!(row["group"], "resolved", "{status}");
+}
+
 #[test]
 fn closed_issue_takes_a_failed_row_into_resolved_from_its_close_time() {
     let scenario = Scenario::new();
@@ -2059,6 +2441,7 @@ fn github_settlement_bounds_resolved_even_when_the_command_ended_more_recently()
 #[test]
 fn review_security_fix_settlement_preserves_other_waiting_findings() {
     let scenario = Scenario::new();
+    scenario.waiting_security_finding();
     let ended = hours_ago(48);
     let settled = hours_ago(1);
     failed_record(&scenario, 8, &ended);
@@ -2143,6 +2526,7 @@ fn review_later_triage_stop_does_not_inherit_an_older_absence_time() {
 #[test]
 fn review_failed_security_fix_settlement_preserves_other_waiting_findings() {
     let scenario = Scenario::new();
+    scenario.waiting_security_finding();
     let ended = hours_ago(48);
     let settled = hours_ago(1);
     failed_record(&scenario, 8, &ended);

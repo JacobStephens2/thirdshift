@@ -128,6 +128,14 @@ impl Snapshot {
         inbox::github_subjects(&self.commands, self.now, days, github)
     }
 
+    pub(super) fn finding_subjects(
+        &self,
+        days: i64,
+        github: &super::github::Kept,
+    ) -> Vec<super::github::FindingSubject> {
+        inbox::finding_subjects(&self.commands, self.now, days, github)
+    }
+
     pub(super) fn resolve(&self, input: &str) -> Result<selection::Selection<'_>> {
         selection::resolve(&self.commands, input)
     }

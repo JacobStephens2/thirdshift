@@ -9,7 +9,7 @@ use serde::Serialize;
 use super::{Command, Entry, Health, Observation};
 use crate::github::{PrState, PullRequestState};
 use crate::logs::dismiss::{self, DismissalView, READY_KIND};
-use crate::logs::github::{Kept, Subject};
+use crate::logs::github::{FindingSubject, Kept, Subject};
 use crate::logs::stop;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -331,6 +331,37 @@ pub(super) fn github_subjects(
         .collect()
 }
 
+pub(super) fn finding_subjects(
+    entries: &[Entry],
+    now: DateTime<Local>,
+    days: i64,
+    github: &Kept,
+) -> Vec<FindingSubject> {
+    let mut subjects = Vec::new();
+    for item in list(entries, now, true, days, github) {
+        for item in std::iter::once(&item).chain(&item.collapsed) {
+            if let Observation::Record(command) = item.command
+                && command.record.kind == "Security run"
+                && command.record.security_findings_waiting
+                && let Some(row) = item.command.selector()
+                && (item.group != Group::History || github.findings(&row).is_none())
+            {
+                subjects.push(FindingSubject {
+                    row,
+                    repository: command.record.repository.clone(),
+                    urls: command
+                        .record
+                        .security_findings
+                        .iter()
+                        .map(|finding| finding.url.clone())
+                        .collect(),
+                });
+            }
+        }
+    }
+    subjects
+}
+
 pub(super) fn list<'a>(
     entries: &'a [Entry],
     now: DateTime<Local>,
@@ -363,7 +394,9 @@ pub(super) fn list<'a>(
                 .and_then(|selector| dismiss::covering(&record.record_path, &selector)),
             Observation::History(_) => None,
         };
-        let findings_waiting = matches!(command, Observation::Record(command) if command.record.security_findings_waiting);
+        let finding_facts = command.selector().and_then(|row| github.findings(&row));
+        let findings_waiting = matches!(command, Observation::Record(command) if command.record.security_findings_waiting)
+            && finding_facts.is_none_or(|facts| facts.waiting());
         let github_settlement = github_left(&command, github, ended);
         // Settling failed work removes that wait, while another finding
         // from the same audit can still need the Day shift.
@@ -415,7 +448,8 @@ pub(super) fn list<'a>(
                 && github_state(&command, github)
                     .is_some_and(|state| state.state == PrState::Open))
                 || (problem.is_some_and(|kind| kind != NeedsYouKind::Finding)
-                    && github_known(command, github)));
+                    && github_known(command, github))
+                || (problem == Some(NeedsYouKind::Finding) && finding_facts.is_some()));
         let held = (ended
             .or_else(|| time(Some(facts.started_at)))
             // A recent dismissal proves this row was still in the Inbox.
@@ -647,6 +681,31 @@ fn github_left(
     if observation.facts().state == "live" {
         return None;
     }
+    let settled_work = github_work_left(observation, github, ended);
+    let finding_row = observation.problem() == Some(NeedsYouKind::Finding)
+        || (observation.problem() == Some(NeedsYouKind::Failed)
+            && matches!(observation, Observation::Record(command) if command.record.security_findings_waiting
+                && (settled_work.is_some() || observation.selector().and_then(|row| dismiss::covering(&command.record_path, &row))
+                    .is_some_and(|row| row.covers(NeedsYouKind::Failed.title())
+                        && !row.covers(NeedsYouKind::Finding.title())))));
+    if finding_row
+        && let Some(at) = observation
+            .selector()
+            .and_then(|row| github.findings(&row))
+            .and_then(|facts| time(facts.triaged_at.as_deref()))
+    {
+        return Some(("findings triaged".to_string(), at));
+    }
+    settled_work
+}
+
+/// Settlement of the Command's own or dispatched work, independently of
+/// any other findings that its Security audit left waiting.
+fn github_work_left(
+    observation: &Observation<'_>,
+    github: &Kept,
+    ended: Option<DateTime<FixedOffset>>,
+) -> Option<(String, DateTime<FixedOffset>)> {
     if observation.problem().is_some() {
         let row = observation.selector()?;
         let departures = github_records(*observation)

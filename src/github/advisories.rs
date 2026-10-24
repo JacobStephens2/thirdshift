@@ -1,6 +1,8 @@
 //! Private Security finding records. Public repositories use draft advisories;
 //! private repositories whose advisory endpoint is unavailable use issues.
 
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -46,6 +48,40 @@ pub struct ResolvedFinding {
 }
 
 impl SecurityRecords {
+    /// The Inbox needs only private record identities and their triage state.
+    fn inbox_waits(&self) -> Result<BTreeMap<String, bool>> {
+        self.entries()
+            .0
+            .iter()
+            .map(|value| {
+                let url = value["html_url"]
+                    .as_str()
+                    .context("Security finding record has no URL")?;
+                Ok((url.to_owned(), self.untriaged(value)))
+            })
+            .collect()
+    }
+
+    fn untriaged(&self, value: &Value) -> bool {
+        match &self.storage {
+            RecordStorage::Advisories(_) => {
+                value["state"] == "draft" && value["severity"].is_null()
+            }
+            RecordStorage::Issues(_) => {
+                value["state"]
+                    .as_str()
+                    .is_some_and(|state| state.eq_ignore_ascii_case("open"))
+                    && value["labels"].as_array().is_some_and(|labels| {
+                        labels.iter().any(|label| {
+                            label["name"]
+                                .as_str()
+                                .is_some_and(|name| NEEDS_TRIAGE.is_named(name))
+                        })
+                    })
+            }
+        }
+    }
+
     pub(crate) fn advisories(records: Vec<Value>) -> Self {
         Self {
             storage: RecordStorage::Advisories(records),
@@ -188,7 +224,7 @@ impl SecurityRecords {
                     .as_str()
                     .context("Security finding record has no description")?
                     .to_string(),
-                untriaged: value["state"] == "draft" && value["severity"].is_null(),
+                untriaged: self.untriaged(value),
             },
             RecordStorage::Issues(_) => RecordData::Issue {
                 number: value["number"]
@@ -198,16 +234,7 @@ impl SecurityRecords {
                     .as_str()
                     .context("Security finding record has no body")?
                     .to_string(),
-                untriaged: value["state"]
-                    .as_str()
-                    .is_some_and(|state| state.eq_ignore_ascii_case("open"))
-                    && value["labels"].as_array().is_some_and(|labels| {
-                        labels.iter().any(|label| {
-                            label["name"]
-                                .as_str()
-                                .is_some_and(|name| NEEDS_TRIAGE.is_named(name))
-                        })
-                    }),
+                untriaged: self.untriaged(value),
             },
         })
     }
@@ -603,8 +630,12 @@ impl GitHub {
     }
     /// Every state and every page. A 404 selects issues only when repository
     /// metadata confirms they will be private.
-    pub fn security_records(&self, repo: &str) -> Result<SecurityRecords> {
-        let records = match self.gh_api_items(
+    fn list_security_records(
+        &self,
+        repo: &str,
+        before_fallback_list: impl FnOnce() -> Result<()>,
+    ) -> Result<SecurityRecords> {
+        match self.gh_api_items(
             &format!("repos/{repo}/security-advisories?per_page=100"),
             "",
         ) {
@@ -616,6 +647,7 @@ impl GitHub {
                         "security advisories unavailable; refusing to record findings in public issues"
                     );
                 }
+                before_fallback_list()?;
                 let records = self.gh_api_items(
                     &format!("repos/{repo}/issues?state=all&labels=security-finding&per_page=100"),
                     "",
@@ -628,8 +660,21 @@ impl GitHub {
                 ))
             }
             Err(error) => Err(error),
-        };
-        let mut records = records?;
+        }
+    }
+
+    pub(crate) fn inbox_findings(&self, repo: &str) -> Result<BTreeMap<String, bool>> {
+        self.list_security_records(repo, || {
+            if let Some(warning) = self.inbox_quotas()?.warning() {
+                bail!(warning);
+            }
+            Ok(())
+        })?
+        .inbox_waits()
+    }
+
+    pub fn security_records(&self, repo: &str) -> Result<SecurityRecords> {
+        let mut records = self.list_security_records(repo, || Ok(()))?;
         let (_, field, _) = records.entries();
         for record in records.values_mut() {
             if let Some(link) = Description(record[field].as_str().unwrap_or_default()).fix_link() {
