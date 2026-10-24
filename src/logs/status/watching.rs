@@ -32,29 +32,19 @@ pub(crate) fn watching(config: &UserConfig) -> Result<Watching> {
     }
     for entry in snapshot.entries() {
         if let Entry::Record(command) = entry {
-            collect(command, None, now, &mut watching);
+            collect(command, now, &mut watching);
         }
     }
     Ok(watching)
 }
 
-fn collect(
-    command: &Command,
-    outer_log: Option<&std::path::Path>,
-    now: DateTime<Local>,
-    watching: &mut Watching,
-) {
-    let log = outer_log.unwrap_or(&command.command_log);
+fn collect(command: &Command, now: DateTime<Local>, watching: &mut Watching) {
     let process = Process::capture(&command.record);
     if process.live() {
         watching.processes.push(process);
-        let session = command
-            .record
-            .session_log
-            .as_deref()
-            .map(crate::logs::session::path);
-        watching.paths.insert(log.to_path_buf());
-        watching.paths.extend(session.iter().cloned());
+        watching
+            .paths
+            .extend(command.activity_paths().map(PathBuf::from));
     }
     if command.state == "live"
         && let Some(at) = command.next_health_change
@@ -62,7 +52,7 @@ fn collect(
         deadline(at, now, watching);
     }
     for child in command.children.iter().chain(&command.dispatched) {
-        collect(child, Some(log), now, watching);
+        collect(child, now, watching);
     }
 }
 

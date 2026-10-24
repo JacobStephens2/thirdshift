@@ -67,6 +67,14 @@ pub(super) struct Inventory {
     folders: Mutex<HashMap<PathBuf, Arc<Folder>>>,
     /// Session ordering: best effort, with UNIX_EPOCH when unavailable.
     modified: Mutex<HashMap<PathBuf, SystemTime>>,
+    /// Activity is sampled on first use, including unavailable metadata.
+    activity: Mutex<HashMap<PathBuf, FileActivity>>,
+}
+
+#[derive(Clone, Copy, Default)]
+pub(super) struct FileActivity {
+    pub(super) length: u64,
+    pub(super) modified: Option<SystemTime>,
 }
 
 /// An `owner/repository` folder and its real `commands/<kind>` folders.
@@ -136,6 +144,7 @@ impl Inventory {
             repositories: Vec::new(),
             folders: Mutex::new(HashMap::new()),
             modified: Mutex::new(HashMap::new()),
+            activity: Mutex::new(HashMap::new()),
         }
     }
 
@@ -282,6 +291,23 @@ impl Inventory {
 
     pub(super) fn modified(&self, path: &Path) -> Result<Option<SystemTime>> {
         Ok(self.files.metadata(path)?.modified().ok())
+    }
+
+    pub(super) fn activity(&self, path: &Path) -> FileActivity {
+        *self
+            .activity
+            .lock()
+            .unwrap()
+            .entry(path.to_owned())
+            .or_insert_with(|| {
+                self.files.metadata(path).map_or_else(
+                    |_| FileActivity::default(),
+                    |file| FileActivity {
+                        length: file.len(),
+                        modified: file.modified().ok(),
+                    },
+                )
+            })
     }
 
     pub(super) fn is_file(&self, path: &Path) -> bool {
