@@ -7,7 +7,7 @@ use chrono::{DateTime, FixedOffset, Local};
 use serde::Serialize;
 
 use super::{Command, Entry, Health, Observation};
-use crate::logs::dismiss::{self, READY_KIND, DismissalView};
+use crate::logs::dismiss::{self, DismissalView, READY_KIND};
 use crate::logs::stop;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -322,9 +322,7 @@ pub(super) fn list(
             Observation::History(_) => None,
         };
         let dismissed = dismissed_row.is_some();
-        let dismissed_at = dismissed_row
-            .as_ref()
-            .and_then(|row| time(Some(&row.at)));
+        let dismissed_at = dismissed_row.as_ref().and_then(|row| time(Some(&row.at)));
         let dismissal = dismissed_row.as_ref().map(|row| row.view());
         let needs_you_kind = waiting_kind.filter(|_| !dismissed);
         // When this row stopped waiting through the later-Command exit:
@@ -365,9 +363,8 @@ pub(super) fn list(
             || left.is_some_and(|taken| {
                 cutoff.is_none_or(|cutoff| taken.with_timezone(&Local) >= cutoff)
             })
-            || dismissed_at.is_some_and(|at| {
-                cutoff.is_none_or(|cutoff| at.with_timezone(&Local) >= cutoff)
-            })
+            || dismissed_at
+                .is_some_and(|at| cutoff.is_none_or(|cutoff| at.with_timezone(&Local) >= cutoff))
         {
             Group::Resolved
         } else {
@@ -407,8 +404,7 @@ pub(super) fn list(
                 .dismissal
                 .as_ref()
                 .is_some_and(|dismissal| dismissal.kind == NeedsYouKind::Failed.title());
-        if failed
-            && let Some(cause) = item.command.facts().cause.filter(|cause| !cause.is_empty())
+        if failed && let Some(cause) = item.command.facts().cause.filter(|cause| !cause.is_empty())
         {
             // A later failure with a dismissed cause starts a row of one:
             // dismissed rows collapse only with each other.

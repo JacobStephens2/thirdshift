@@ -28,11 +28,7 @@ pub(crate) struct DismissedRow {
 
 impl DismissedRow {
     fn source(&self) -> &'static str {
-        if self.from_console {
-            "Console"
-        } else {
-            "CLI"
-        }
+        if self.from_console { "Console" } else { "CLI" }
     }
 
     pub(crate) fn view(&self) -> DismissalView {
@@ -103,12 +99,7 @@ fn write(record: &Path, file: &DismissalFile) -> Result<()> {
     staged
         .persist(&path)
         .map(|_| ())
-        .with_context(|| {
-            format!(
-                "could not keep the dismissal beside {}",
-                record.display()
-            )
-        })
+        .with_context(|| format!("could not keep the dismissal beside {}", record.display()))
 }
 
 /// One Inbox row holding the named Command: where to record and report the
@@ -157,7 +148,9 @@ fn row_for(snapshot: &Snapshot, input: &str, days: i64, undo: bool) -> Result<Di
                     .iter()
                     .any(|child| child.command.selector().as_deref() == Some(selector.as_str()))
         })
-        .with_context(|| format!("cannot dismiss {input}: row is not in Needs you or Ready for review"))?;
+        .with_context(|| {
+            format!("cannot dismiss {input}: row is not in Needs you or Ready for review")
+        })?;
     for item in std::iter::once(&found).chain(found.collapsed.iter()) {
         if let Observation::Record(command) = item.command
             && let Some(selector) = item.command.selector()

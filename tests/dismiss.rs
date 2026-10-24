@@ -11,12 +11,18 @@ const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 const ACTIVITY: &str = "home/.thirdshift/logs/acme/widgets/activity.log";
 
 fn record_path(scenario: &Scenario, number: u32) -> PathBuf {
-    scenario.path(LOGS).join(format!("{number}-fixture.command.json"))
+    scenario
+        .path(LOGS)
+        .join(format!("{number}-fixture.command.json"))
 }
 
 fn write_record(scenario: &Scenario, number: u32, record: &Value) {
     fs::create_dir_all(scenario.path(LOGS)).unwrap();
-    fs::write(record_path(scenario, number), serde_json::to_vec(record).unwrap()).unwrap();
+    fs::write(
+        record_path(scenario, number),
+        serde_json::to_vec(record).unwrap(),
+    )
+    .unwrap();
 }
 
 fn wrote(scenario: &Scenario, number: u32, started: &str, ended: Option<&str>) -> Value {
@@ -75,7 +81,10 @@ fn activity(scenario: &Scenario) -> String {
 fn dismiss_failed_row_moves_it_out_saying_who_and_leaves_the_command_alone() {
     let scenario = Scenario::new();
     write_failed(&scenario, 7, 0, None);
-    assert_eq!(groups(&read_status(&scenario)), vec![(7, "needs you".into())]);
+    assert_eq!(
+        groups(&read_status(&scenario)),
+        vec![(7, "needs you".into())]
+    );
     let record = fs::read(record_path(&scenario, 7)).unwrap();
     let labels = scenario.gh_state()["labels"].clone();
     let calls = scenario.gh_calls().len();
@@ -83,7 +92,9 @@ fn dismiss_failed_row_moves_it_out_saying_who_and_leaves_the_command_alone() {
     let dismissed = scenario.run(&["dismiss", "widgets#7"]);
     assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
     assert!(
-        dismissed.stdout.contains("dismissed acme/widgets#7 from Needs you"),
+        dismissed
+            .stdout
+            .contains("dismissed acme/widgets#7 from Needs you"),
         "{}",
         dismissed.stdout
     );
@@ -125,7 +136,10 @@ fn dismiss_failed_row_moves_it_out_saying_who_and_leaves_the_command_alone() {
 fn dismiss_ready_row_leaves_ready_for_review() {
     let scenario = Scenario::new();
     write_ready(&scenario, 8);
-    assert_eq!(groups(&read_status(&scenario)), vec![(8, "ready for review".into())]);
+    assert_eq!(
+        groups(&read_status(&scenario)),
+        vec![(8, "ready for review".into())]
+    );
 
     let dismissed = scenario.run(&["dismiss", "widgets#8", "--json"]);
     assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
@@ -145,7 +159,10 @@ fn dismiss_ready_row_leaves_ready_for_review() {
 fn dismiss_old_row_holds_it_in_resolved_after_the_dismissal() {
     let scenario = Scenario::new();
     write_failed(&scenario, 7, 6, None);
-    assert_eq!(groups(&read_status(&scenario)), vec![(7, "needs you".into())]);
+    assert_eq!(
+        groups(&read_status(&scenario)),
+        vec![(7, "needs you".into())]
+    );
 
     let dismissed = scenario.run(&["dismiss", "widgets#7"]);
     assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
@@ -275,11 +292,7 @@ fn undo_takes_the_dismissal_back_wherever_the_row_is() {
 
     let again = scenario.run(&["dismiss", "widgets#7", "--undo"]);
     assert_ne!(again.code, Some(0));
-    assert!(
-        again.stderr.contains("not dismissed"),
-        "{}",
-        again.stderr
-    );
+    assert!(again.stderr.contains("not dismissed"), "{}", again.stderr);
 }
 
 struct SilentRun {
@@ -326,14 +339,16 @@ impl SilentRun {
                 .unwrap()
                 .replace(".command.json", ".log"),
         );
-        for path in [log, PathBuf::from(self.record["session_log"].as_str().unwrap())] {
+        for path in [
+            log,
+            PathBuf::from(self.record["session_log"].as_str().unwrap()),
+        ] {
             File::options()
                 .write(true)
                 .open(path)
                 .unwrap()
                 .set_times(
-                    FileTimes::new()
-                        .set_modified(SystemTime::now() - Duration::from_secs(20 * 60)),
+                    FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(20 * 60)),
                 )
                 .unwrap();
         }
