@@ -44,6 +44,9 @@ pub(super) struct CommandRecord {
     pub started_at: String,
     #[serde(default)]
     pub ended_at: Option<String>,
+    /// Reader-only provenance: legacy retention estimates are not recorded finishes.
+    #[serde(skip)]
+    pub end_time_estimated: bool,
     pub stages: Vec<Stage>,
     pub session_log: Option<PathBuf>,
     pub outcome: Option<String>,
@@ -287,6 +290,7 @@ impl CommandRecord {
             effort: harness.effort.clone(),
             started_at: now.to_rfc3339(),
             ended_at: None,
+            end_time_estimated: false,
             stages: Vec::new(),
             session_log: None,
             outcome: None,
