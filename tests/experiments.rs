@@ -11,6 +11,9 @@ use support::{Scenario, scope_available};
 /// Harnesses stay observable at fixed scenario paths.
 const NO_SANDBOX: [(&str, &str); 1] = [("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")];
 
+#[path = "experiments/code_graders.rs"]
+mod code_graders;
+
 #[path = "experiments/model_graders.rs"]
 mod model_graders;
 
