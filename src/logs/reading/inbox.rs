@@ -105,7 +105,7 @@ pub(in crate::logs) struct InboxItem<'a> {
     /// The later Command's start, RFC 3339: when the row stopped waiting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub left_at: Option<String>,
-    /// Who dismissed the row, when, from where and the kind covered.
+    /// Who dismissed the row, when, from where and all kinds covered.
     /// `None` while the row waits or was never dismissed for its kind.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dismissal: Option<DismissalView>,
@@ -274,7 +274,14 @@ pub(super) fn list(
     for (command, starts) in observations.into_iter().zip(&starts) {
         let facts = command.facts();
         let ended = time(facts.ended_at);
-        let problem = if facts.state == "died" {
+        let recorded_dismissal = match command {
+            Observation::Record(record) => command
+                .selector()
+                .and_then(|selector| dismiss::covering(&record.record_path, &selector)),
+            Observation::History(_) => None,
+        };
+        let findings_waiting = matches!(command, Observation::Record(command) if command.record.security_findings_waiting);
+        let mut problem = if facts.state == "died" {
             Some(NeedsYouKind::Died)
         } else if matches!(command, Observation::Record(command) if facts.state == "ended" && !facts.ready && stop::requested(&command.record_path).is_some_and(|request| !request.requeue))
         {
@@ -284,12 +291,20 @@ pub(super) fn list(
             .is_some_and(|outcome| outcome.contains("failed") || outcome == "review required")
         {
             Some(NeedsYouKind::Failed)
-        } else if matches!(command, Observation::Record(command) if command.record.security_findings_waiting)
-        {
+        } else if findings_waiting {
             Some(NeedsYouKind::Finding)
         } else {
             None
         };
+        // Dismissing the failure does not dismiss the findings it hid.
+        if problem == Some(NeedsYouKind::Failed)
+            && findings_waiting
+            && recorded_dismissal
+                .as_ref()
+                .is_some_and(|row| row.covers(NeedsYouKind::Failed.title()))
+        {
+            problem = Some(NeedsYouKind::Finding);
+        }
         let live_problem = match command {
             Observation::Record(command) if facts.state == "live" => live_problem(command),
             _ => None,
@@ -305,7 +320,7 @@ pub(super) fn list(
                 .iter()
                 .any(|(issue, start)| latest.get(issue).is_some_and(|latest| latest > start));
         let waiting_kind = live_problem.or_else(|| problem.filter(|_| held));
-        // A dismissal holds only for the kind it covered: a row that turns
+        // A dismissal holds for every kind it covered: a row that turns
         // into a kind it wasn't when dismissed waits again. Its kind is
         // independent of age or a later Command taking it up, so those
         // exits do not erase the dismissal or shorten its retention.
@@ -313,16 +328,11 @@ pub(super) fn list(
             .or(problem)
             .map(NeedsYouKind::title)
             .or(if facts.ready { Some(READY_KIND) } else { None });
-        let selector = command.selector();
-        let dismissed_row = match command {
-            Observation::Record(record) => selector
-                .and_then(|selector| dismiss::covering(&record.record_path, &selector))
-                .filter(|row| Some(row.kind.as_str()) == kind_now),
-            Observation::History(_) => None,
-        };
+        let dismissed_row =
+            recorded_dismissal.filter(|row| kind_now.is_none_or(|kind| row.covers(kind)));
         let dismissed = dismissed_row.is_some();
         let dismissed_at = dismissed_row.as_ref().and_then(|row| time(Some(&row.at)));
-        let dismissal = dismissed_row.as_ref().map(|row| row.view());
+        let dismissal = dismissed_row.as_ref().map(|row| row.view(kind_now));
         let needs_you_kind = waiting_kind.filter(|_| !dismissed);
         // When this row stopped waiting through the later-Command exit:
         // the earliest later start on any of its issues. Only rows that
