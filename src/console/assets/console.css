@@ -36,6 +36,9 @@ summary .count { margin-left: 12px; color: var(--dim); font-size: 13px; }
 .plan li::before { content: "☐ "; }
 .children { border-left: 1px solid var(--rule); padding-left: 14px; margin-top: 8px; }
 .empty { margin: 0 0 12px 16px; }
+.active-runs { margin: 12px 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.active-runs strong { font-size: 17px; font-weight: var(--head-weight); }
+.active-runs span { color: var(--dim); font-size: 13px; }
 .idle-notice { margin: 12px 0; padding: 12px; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--panel); }
 .idle-notice h3 { margin: 0; font-size: 17px; }
 .idle-notice p { margin: 6px 0 0; }

@@ -308,6 +308,24 @@ pub(super) fn list(
     collapsed
 }
 
+/// Outer Command trees with live work anywhere in them, whatever their group:
+/// a Spec run's Tickets, and the run a Pass dispatched, count within it.
+pub(super) fn active_runs(entries: &[Entry]) -> usize {
+    entries
+        .iter()
+        .filter(|entry| matches!(entry, Entry::Record(command) if active(command)))
+        .count()
+}
+
+fn active(command: &Command) -> bool {
+    command.state == "live"
+        || command
+            .dispatched
+            .iter()
+            .chain(&command.children)
+            .any(active)
+}
+
 fn live_problem(command: &Command) -> Option<NeedsYouKind> {
     let own = match command.health {
         Some(Health::Silent { .. }) => Some(NeedsYouKind::Silent),

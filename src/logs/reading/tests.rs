@@ -290,3 +290,119 @@ fn outcome_ends_display_but_not_the_captured_process_for_following() {
     let refreshed = Snapshot::load(dir.path(), now()).unwrap();
     assert!(refreshed.resolve("widgets#7").unwrap().process_exited());
 }
+
+fn ended(mut record: Value, outcome: &str) -> Value {
+    record["outcome"] = outcome.into();
+    record["ended_at"] = "2026-10-19T11:30:00-04:00".into();
+    record
+}
+
+fn died(mut record: Value) -> Value {
+    record["process_start"] = "gone".into();
+    record
+}
+
+#[test]
+fn a_spec_run_counts_once_with_its_parallel_tickets_and_another_ticket_run_adds_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut spec = record(20);
+    spec["kind"] = "Spec run".into();
+    let path = write(dir.path(), "20-spec.command.json", &spec);
+    for number in [21, 22] {
+        let mut ticket = record(number);
+        ticket["parent_record"] = json!(path);
+        write(
+            dir.path(),
+            &format!("20-spec.command.issue-{number}.child.json"),
+            &ticket,
+        );
+    }
+    assert_eq!(Snapshot::load(dir.path(), now()).unwrap().active_runs(), 1);
+    write(dir.path(), "7-direct.command.json", &record(7));
+    assert_eq!(Snapshot::load(dir.path(), now()).unwrap().active_runs(), 2);
+}
+
+#[test]
+fn a_pass_counts_once_with_its_dispatches_their_tickets_and_base_fixes() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut pass = record(7);
+    pass["kind"] = "Pickup run".into();
+    pass["name"] = "pickup-20261019T110000-0400".into();
+    let mut spec = record(20);
+    spec["kind"] = "Spec run".into();
+    let ready = {
+        let mut run = ended(record(30), "ready for review");
+        run["pull_request"] = "https://github.com/acme/widgets/pull/30".into();
+        run
+    };
+    pass["dispatched"] = json!([spec, ready]);
+    let path = write(dir.path(), "pickup.command.json", &pass);
+    for number in [21, 22] {
+        let mut ticket = record(number);
+        ticket["parent_record"] = json!(path);
+        ticket["parent_dispatch"] = "https://github.com/acme/widgets/issues/20".into();
+        let ticket_path = write(
+            dir.path(),
+            &format!("pickup.command.dispatch-20-issue-{number}.child.json"),
+            &ticket,
+        );
+        let mut base_fix = record(40 + number);
+        base_fix["kind"] = "Base fix".into();
+        base_fix["parent_record"] = json!(ticket_path);
+        write(
+            dir.path(),
+            &format!("pickup.command.dispatch-20-issue-{number}.issue-4{number}.child.json"),
+            &base_fix,
+        );
+    }
+    let snapshot = Snapshot::load(dir.path(), now()).unwrap();
+    // The ready dispatched run has its own Inbox row but no separate tree.
+    assert_eq!(snapshot.inbox(false, 7).len(), 2);
+    assert_eq!(snapshot.active_runs(), 1);
+}
+
+#[test]
+fn live_work_under_an_ended_or_died_outer_record_counts_and_ended_work_does_not() {
+    let dir = tempfile::tempdir().unwrap();
+    for number in [1, 2] {
+        let mut failed = ended(record(number), "failed");
+        failed["cause"] = "the same cause".into();
+        write(
+            dir.path(),
+            &format!("{number}-failed.command.json"),
+            &failed,
+        );
+    }
+    let mut ready = ended(record(3), "ready for review");
+    ready["pull_request"] = "https://github.com/acme/widgets/pull/3".into();
+    write(dir.path(), "3-ready.command.json", &ready);
+    let died_spec = write(dir.path(), "4-died.command.json", &died(record(4)));
+    let ended_spec = write(
+        dir.path(),
+        "5-ended.command.json",
+        &ended(record(5), "failed"),
+    );
+    let mut finished = ended(record(51), "merged");
+    finished["parent_record"] = json!(ended_spec);
+    write(dir.path(), "5-ended.command.issue-51.child.json", &finished);
+    let repo = dir.path().join("acme/widgets");
+    fs::write(
+        repo.join("activity.log"),
+        "2026-10-19 11:00:00 Pickup run skipped: no Ready issue\n",
+    )
+    .unwrap();
+    let snapshot = Snapshot::load(dir.path(), now()).unwrap();
+    assert_eq!(snapshot.idle_passes.len(), 1);
+    assert_eq!(snapshot.active_runs(), 0);
+
+    for (parent, name) in [(&died_spec, "4-died"), (&ended_spec, "5-ended")] {
+        let mut ticket = record(60);
+        ticket["parent_record"] = json!(parent);
+        write(
+            dir.path(),
+            &format!("{name}.command.issue-60.child.json"),
+            &ticket,
+        );
+    }
+    assert_eq!(Snapshot::load(dir.path(), now()).unwrap().active_runs(), 2);
+}

@@ -111,6 +111,10 @@ impl Snapshot {
         inbox::list(&self.commands, self.now, all, days)
     }
 
+    pub(super) fn active_runs(&self) -> usize {
+        inbox::active_runs(&self.commands)
+    }
+
     pub(super) fn resolve(&self, input: &str) -> Result<selection::Selection<'_>> {
         selection::resolve(&self.commands, input)
     }

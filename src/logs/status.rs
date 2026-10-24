@@ -21,6 +21,7 @@ use crate::issue::IssueUrl;
 struct Status<'a> {
     version: u32,
     hostname: String,
+    active_runs: usize,
     commands: Vec<InboxItem<'a>>,
     idle_passes: &'a [IdlePass],
 }
@@ -87,6 +88,7 @@ pub fn show(json: bool, all: bool) -> Result<()> {
     let status = Status {
         version: 1,
         hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
+        active_runs: snapshot.active_runs(),
         commands: snapshot.inbox(all, config.inbox_days),
         idle_passes: &snapshot.idle_passes,
     };
@@ -94,6 +96,7 @@ pub fn show(json: bool, all: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
         println!("{}", status.hostname);
+        println!("{}", active_runs(status.active_runs));
         for group in Group::ORDER {
             let items: Vec<_> = status
                 .commands
@@ -140,6 +143,11 @@ pub fn show(json: bool, all: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// The Inbox's total of outer Command trees with live work, in every group.
+pub(crate) fn active_runs(count: usize) -> String {
+    format!("{count} active run{}", if count == 1 { "" } else { "s" })
 }
 
 pub(super) fn stage_text(command: &Command) -> String {
