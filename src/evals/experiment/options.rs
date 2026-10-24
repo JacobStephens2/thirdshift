@@ -48,6 +48,22 @@ impl ArmOptions {
     }
 }
 
+enum ArgumentKind {
+    Json,
+    Release,
+    ValuedFlag,
+    Positional,
+}
+
+fn argument_kind(word: &str) -> ArgumentKind {
+    match word {
+        "--json" => ArgumentKind::Json,
+        "--release" => ArgumentKind::Release,
+        flag if flag.starts_with("--") => ArgumentKind::ValuedFlag,
+        _ => ArgumentKind::Positional,
+    }
+}
+
 /// Translate a captured legacy command for readers, retaining every other
 /// argument literally and taking both levels from its recorded Bar.
 pub(super) fn resume_command(command: &str, levels: crate::verdict::Levels) -> Option<String> {
@@ -63,8 +79,7 @@ pub(super) fn resume_command(command: &str, levels: crate::verdict::Levels) -> O
         ) {
             original.next()?;
         } else {
-            let takes_value =
-                word.starts_with("--") && !matches!(word.as_str(), "--json" | "--release");
+            let takes_value = matches!(argument_kind(&word), ArgumentKind::ValuedFlag);
             updated.push(word);
             if takes_value {
                 updated.push(original.next()?);
@@ -88,30 +103,35 @@ pub fn parse(args: &[String]) -> Result<Options> {
     let mut release = false;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
-        if arg == "--json" {
-            ensure!(!json, "repeated --json");
-            json = true;
-        } else if arg == "--release" {
-            ensure!(!release, "repeated --release");
-            release = true;
-        } else if arg.starts_with("--") {
-            let value = args
-                .next()
-                .with_context(|| format!("{arg} requires a value"))?;
-            if arg == "--suite" {
-                crate::evals::format::name(value)?;
-                ensure!(suites.insert(value.clone()), "repeated suite {value}");
-            } else {
+        match argument_kind(arg) {
+            ArgumentKind::Json => {
+                ensure!(!json, "repeated --json");
+                json = true;
+            }
+            ArgumentKind::Release => {
+                ensure!(!release, "repeated --release");
+                release = true;
+            }
+            ArgumentKind::ValuedFlag => {
+                let value = args
+                    .next()
+                    .with_context(|| format!("{arg} requires a value"))?;
+                if arg == "--suite" {
+                    crate::evals::format::name(value)?;
+                    ensure!(suites.insert(value.clone()), "repeated suite {value}");
+                } else {
+                    ensure!(
+                        flags.insert(arg.as_str(), value.as_str()).is_none(),
+                        "repeated {arg}"
+                    );
+                }
+            }
+            ArgumentKind::Positional => {
                 ensure!(
-                    flags.insert(arg.as_str(), value.as_str()).is_none(),
-                    "repeated {arg}"
+                    candidate.replace(arg.clone()).is_none(),
+                    "only one Candidate is accepted"
                 );
             }
-        } else {
-            ensure!(
-                candidate.replace(arg.clone()).is_none(),
-                "only one Candidate is accepted"
-            );
         }
     }
     let mut arm = |prefix: &str| -> Result<ArmOptions> {
