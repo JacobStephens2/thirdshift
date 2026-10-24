@@ -1,7 +1,7 @@
 //! Current-layout log inventory shared by the CLI and Console. IDs name exact
 //! retained files, including older Commands with the same issue or start stamp.
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::Local;
@@ -63,12 +63,44 @@ pub(crate) fn id(path: &Path) -> String {
 }
 
 /// The filename predicate shared by listing and each inventory-created read.
-pub(super) fn listed(path: &Path) -> bool {
+fn listed_name(path: &Path) -> bool {
     owner::inventory_session(path)
         && matches!(
             path.extension().and_then(|ext| ext.to_str()),
             Some("log" | "jsonl")
         )
+}
+
+pub(super) const UNLISTED: &str = "log is not in the current inventory";
+
+/// Check only the selected entries, as `load` sees them: the root and
+/// literal `commands` path may be aliases, but owner, repository, kind and
+/// file must be real entries rather than symlinks.
+pub(super) fn still_listed(root: &Path, path: &Path) -> bool {
+    fn directory(path: &Path) -> bool {
+        std::fs::symlink_metadata(path).is_ok_and(|entry| entry.is_dir())
+    }
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    let [
+        Component::Normal(owner),
+        Component::Normal(repository),
+        Component::Normal(commands),
+        Component::Normal(kind),
+        Component::Normal(_),
+    ] = relative.components().collect::<Vec<_>>()[..]
+    else {
+        return false;
+    };
+    let owner = root.join(owner);
+    let repository = owner.join(repository);
+    commands == "commands"
+        && directory(&owner)
+        && directory(&repository)
+        && directory(&repository.join(commands).join(kind))
+        && std::fs::symlink_metadata(path).is_ok_and(|entry| entry.is_file())
+        && listed_name(path)
 }
 
 pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<Vec<Log>> {
@@ -145,7 +177,7 @@ pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<
             for folder in directories(&repo.join("commands"))? {
                 for entry in entries(&folder)? {
                     let path = entry.path();
-                    if !entry.file_type()?.is_file() || !listed(&path) {
+                    if !entry.file_type()?.is_file() || !listed_name(&path) {
                         continue;
                     }
                     let path = if path.extension().is_some_and(|ext| ext == "jsonl") {
@@ -201,7 +233,7 @@ pub(crate) fn find(config: &UserConfig, selected: &str) -> Result<Log> {
     load(config, None)?
         .into_iter()
         .find(|log| log.id == selected)
-        .context("log is not in the current inventory")
+        .context(UNLISTED)
 }
 
 pub(crate) fn show(json: bool, owner: Option<&str>) -> Result<()> {

@@ -44,7 +44,7 @@ fn config(root: &Path) -> crate::config::UserConfig {
     config
 }
 
-fn listed(root: &Path, path: &Path) -> Result<catalog::Log> {
+fn find(root: &Path, path: &Path) -> Result<catalog::Log> {
     catalog::find(
         &config(root),
         &catalog::id(path.strip_prefix(root).unwrap()),
@@ -52,7 +52,7 @@ fn listed(root: &Path, path: &Path) -> Result<catalog::Log> {
 }
 
 fn exact(root: &Path, path: &Path) -> Reader {
-    listed(root, path).unwrap().reader
+    find(root, path).unwrap().reader
 }
 
 #[test]
@@ -85,7 +85,7 @@ fn inventory_reads_unowned_files_by_path_bytes_and_refuses_excluded_storage() {
         commands.join("loose.log"),
     ] {
         fs::write(&path, b"excluded\n").unwrap();
-        assert!(listed(dir.path(), &path).is_err(), "{}", path.display());
+        assert!(find(dir.path(), &path).is_err(), "{}", path.display());
     }
 }
 
@@ -107,6 +107,8 @@ fn removing_or_symlinking_an_enumerated_entry_ends_inventory_reads() {
         let path = record_path.with_file_name("7-20261019T110000-0400~gone.log");
         fs::write(&path, b"kept\n").unwrap();
         let reader = exact(dir.path(), &path);
+        let snapshot = Snapshot::load(dir.path(), now()).unwrap();
+        let selected = snapshot.resolve("widgets#7").unwrap().reader(path.clone());
         assert_eq!(
             reader.read(0, Framing::Lines, 100).unwrap().bytes,
             b"kept\n"
@@ -121,14 +123,26 @@ fn removing_or_symlinking_an_enumerated_entry_ends_inventory_reads() {
             error.to_string().contains("not in the current inventory"),
             "{replaced}: {error:#}"
         );
-        assert!(listed(dir.path(), &path).is_err(), "{replaced}");
+        assert!(find(dir.path(), &path).is_err(), "{replaced}");
+        // Command selection never required inventory layout.
+        let unconstrained = selected.read(0, Framing::Lines, 100).unwrap();
+        assert_eq!(unconstrained.bytes, b"kept\n", "{replaced}");
+        assert!(!unconstrained.done, "{replaced}");
     }
+}
+
+#[test]
+fn removing_a_finished_listed_file_ends_its_inventory_reads() {
     let dir = tempfile::tempdir().unwrap();
     let path = write(dir.path(), "notes.log", &Value::Null);
     let reader = exact(dir.path(), &path);
     assert!(reader.read(0, Framing::Raw, 100).unwrap().done);
     fs::remove_file(&path).unwrap();
-    assert!(reader.read(0, Framing::Raw, 100).is_err());
+    let error = reader.read(0, Framing::Raw, 100).unwrap_err();
+    assert!(
+        error.to_string().contains("not in the current inventory"),
+        "{error:#}"
+    );
 }
 
 #[test]
