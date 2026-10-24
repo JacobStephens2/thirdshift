@@ -225,7 +225,14 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     row.state = item.state_word().into();
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
-                    row.left = item.left_line().unwrap_or_default();
+                    row.left = item
+                        .dismissal
+                        .as_ref()
+                        .map(|dismissal| dismissal.line())
+                        .into_iter()
+                        .chain(item.left_line())
+                        .collect::<Vec<_>>()
+                        .join("; ");
                     Ok(row)
                 })
                 .collect::<Result<_>>()?;
