@@ -1197,6 +1197,7 @@ pull = true
 
 [email]
 always = true
+unless_merged = false
 to = \"mine@example.net\"
 from = \"ts@acme.dev\"
 
@@ -1232,6 +1233,7 @@ max_load_per_cpu_percent = 0
 [pickup]
 limit = 5
 wait_minutes = 60
+order = \"highest-first\"
 
 [security]
 harness = \"codex\"
@@ -1651,6 +1653,38 @@ always = false # quiet, please
         assert!(outside.said().is_empty(), "{:?}", outside.said());
         assert_eq!(outside.effects().len(), 1, "{:?}", outside.effects());
         assert_eq!(table(&outside)["email"]["always"].as_bool(), Some(false));
+    }
+
+    #[test]
+    fn unless_merged_alone_counts_as_notifications_on_and_answering_no_turns_it_off() {
+        let mut outside = Scripted {
+            user_config: Some("[email]\nunless_merged = true\n".to_string()),
+            key: Ok(Some(Source::Credentials(CREDENTIALS.into()))),
+            ..Scripted::answering(&[
+                (MERGE, ""),
+                (BASE_FIX, ""),
+                (PULL, ""),
+                (SECURITY_FIX, ""),
+                (SECURITY_REVIEW, ""),
+                (NOTIFY, "n"),
+                (CLAUDE_TOKEN, ""),
+                (CONSOLE, "n"),
+            ])
+        };
+
+        setup(&mut outside).unwrap();
+
+        assert!(
+            outside
+                .prompts()
+                .iter()
+                .any(|prompt| prompt.contains(NOTIFY) && prompt.ends_with("[Y/n] ")),
+            "{:?}",
+            outside.prompts()
+        );
+        let config = table(&outside);
+        assert_eq!(config["email"]["always"].as_bool(), Some(false));
+        assert_eq!(config["email"]["unless_merged"].as_bool(), Some(false));
     }
 
     #[test]

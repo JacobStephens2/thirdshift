@@ -724,6 +724,79 @@ fn peek_and_full_logs_use_the_exact_selected_command_and_share_show_details() {
 }
 
 #[test]
+fn ready_dispatches_leave_ready_for_review_and_are_shown_at_most_once() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    // Pickup run 1 dispatched a ready Run on issue 7, replaced by record 2;
+    // Pickup run 3 dispatched a ready Run on issue 9, older than inbox.days.
+    for (file, issue, hours) in [(1, 7, 2), (3, 9, 8 * 24 + 1)] {
+        let ended = (chrono::Local::now() - chrono::Duration::hours(hours)).to_rfc3339();
+        let mut outer = record(home.path(), file, Some("ready for review"), 0);
+        outer["kind"] = json!("Pickup run");
+        outer["name"] = json!("pickup-fixture");
+        outer["issue"] = Value::Null;
+        outer["pull_request"] = Value::Null;
+        outer["started_at"] = json!(ended);
+        outer["ended_at"] = json!(ended);
+        let mut dispatched = record(home.path(), file, Some("ready for review"), 0);
+        dispatched["kind"] = json!("Run");
+        dispatched["name"] = json!(format!("acme/widgets#{issue}"));
+        dispatched["issue"]["number"] = json!(issue);
+        dispatched["started_at"] = json!(ended);
+        dispatched["ended_at"] = json!(ended);
+        outer["dispatched"] = json!([dispatched]);
+        write_record(home.path(), file, &outer);
+    }
+    let mut later = record(home.path(), 2, Some("merged"), 0);
+    later["issue"]["number"] = json!(7);
+    write_record(home.path(), 2, &later);
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let groups = |flags: &[&str]| {
+        let status = Command::new(binary)
+            .args(flags)
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+        status["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["kind"].as_str().unwrap().to_owned(),
+                    row["issue"]["number"].as_u64(),
+                    row["group"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let row = |kind: &str, issue: Option<u64>, group: &str| (kind.into(), issue, group.into());
+    let current = [
+        row("Spec run", Some(7), "done"),
+        row("Pickup run", None, "done"),
+        row("Run", Some(7), "done"),
+    ];
+    assert_eq!(groups(&["status", "--json"]), current);
+    let mut all = current.to_vec();
+    all.extend([
+        row("Pickup run", None, "history"),
+        row("Run", Some(9), "history"),
+    ]);
+    assert_eq!(groups(&["status", "--all", "--json"]), all);
+    let console = Console::start(binary, home.path());
+    let html = console.get("/").text().unwrap();
+    let folder = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    for (file, issue, shown) in [(1, 7, 1), (3, 9, 0)] {
+        let path = folder.join(format!("{file}-fixture.command.json"));
+        let row = format!("data-command=\"{}::acme/widgets#{issue}\"", path.display());
+        assert_eq!(html.matches(&row).count(), shown, "{html}");
+    }
+}
+
+#[test]
 fn dispatched_run_and_its_security_command_have_distinct_peeks() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

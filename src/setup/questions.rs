@@ -35,7 +35,8 @@ pub struct Answers {
     pub security_close: bool,
     pub security_review: bool,
     /// With Run notifications on, `email.always`, their settings; with them
-    /// off, `None`, and the email settings stay as they were.
+    /// off, `None`, which turns `email.unless_merged` off too, and the
+    /// addresses stay as they were.
     pub notifications: Option<Notifications>,
     /// A Claude setup token to save for Trials, independent of notifications.
     pub claude_setup_token: Option<String>,
@@ -212,7 +213,7 @@ fn ask_notifications(
     if !yes_or_no(
         outside,
         "Run notifications, an email as each Ticket run ends?",
-        current.email.always,
+        current.email.always || current.email.unless_merged,
     )? {
         return Ok(None);
     }

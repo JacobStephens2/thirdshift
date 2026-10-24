@@ -15,6 +15,7 @@ use toml::{Table, Value};
 use toml_edit::{DocumentMut, Item};
 
 use crate::harness::{self, Harness, ModelAndEffort};
+use crate::ready::PickupOrder;
 
 pub mod console;
 pub use console::{ConsoleAccess, ConsoleSettings};
@@ -43,7 +44,7 @@ pub struct UserConfig {
     pub waiting_line_interval: Duration,
     /// `inbox.silent_minutes`: how long both logs may be quiet, default ten minutes.
     pub silent_interval: Duration,
-    /// `inbox.days`: retention of ended problems and Resolved, default seven days.
+    /// `inbox.days`: retention of ended problems, Ready for review and Resolved, default seven days.
     pub inbox_days: i64,
     /// `activity.quiet_skips`: a skipped Pass prints
     /// nothing, its Activity log line its only trace.
@@ -60,6 +61,9 @@ pub struct UserConfig {
     /// issue becomes a Ready issue, by default 30 minutes. Zero disables
     /// the settling window.
     pub pickup_wait: TimeDelta,
+    /// `pickup.order`: which end of the issue numbers a Pickup run takes
+    /// its Ready issue from, by default the lowest-numbered one.
+    pub pickup_order: PickupOrder,
     /// The `[harness]` section: the Harness every Command runs its sessions
     /// on, and a Model and Effort for each Harness.
     pub harness: harness::Settings,
@@ -83,6 +87,10 @@ pub struct EmailSettings {
     /// `email.always`: every Run, and every Architect run, sends a Run
     /// notification unless told `no-email`.
     pub always: bool,
+    /// `email.unless_merged`: every Run, and every Architect run, sends a
+    /// Run notification as if told `email-unless-merged`, with or without
+    /// `email.always`, unless told `email` or `no-email`.
+    pub unless_merged: bool,
     /// `email.to`: the address email goes to when the command names none.
     pub to: Option<String>,
     /// `email.from`: the sender, in place of Resend's shared test sender.
@@ -129,6 +137,7 @@ impl UserConfig {
             spec_parallel: NonZeroUsize::new(3).unwrap(),
             pickup_limit: NonZeroUsize::new(3).unwrap(),
             pickup_wait: TimeDelta::minutes(30),
+            pickup_order: PickupOrder::LowestFirst,
             harness: harness::Settings::default(),
             security_harness: None,
             security_fix: None,
@@ -232,6 +241,12 @@ impl UserConfig {
                     }
                     ("email", "always", Value::Boolean(always)) => config.email.always = *always,
                     ("email", "always", _) => bail!("email.always must be true or false in {file}"),
+                    ("email", "unless_merged", Value::Boolean(unless_merged)) => {
+                        config.email.unless_merged = *unless_merged
+                    }
+                    ("email", "unless_merged", _) => {
+                        bail!("email.unless_merged must be true or false in {file}")
+                    }
                     ("email", "to", Value::String(to)) => config.email.to = Some(to.clone()),
                     ("email", "from", Value::String(from)) => {
                         config.email.from = Some(from.clone())
@@ -256,6 +271,19 @@ impl UserConfig {
                                      within the supported range in {file}"
                                 )
                             })?;
+                    }
+                    ("pickup", "order", Value::String(order)) => {
+                        config.pickup_order =
+                            PickupOrder::parse(order.trim()).with_context(|| {
+                                format!(
+                                    "pickup.order must be {} or {}, not {order:?}, in {file}",
+                                    PickupOrder::LowestFirst,
+                                    PickupOrder::HighestFirst,
+                                )
+                            })?;
+                    }
+                    ("pickup", "order", _) => {
+                        bail!("pickup.order must be a quoted order in {file}")
                     }
                     ("security", "review", Value::Boolean(review)) => {
                         config.security_review = *review
@@ -398,6 +426,9 @@ impl UserConfigDocument {
                 "always",
                 changes.notifications.is_some(),
             );
+            if changes.notifications.is_none() {
+                set(&mut document, "email", "unless_merged", false);
+            }
             if let Some(notifications) = &changes.notifications {
                 set(&mut document, "email", "from", notifications.from.as_str());
                 set_email_to(&mut document, &notifications.to);
@@ -868,6 +899,7 @@ pull = false     # every Ticket run first fast-forwards your checkout of the Bas
 
 [email]
 always = false                  # every Ticket run sends a Run notification, without the email word; default false
+unless_merged = false           # every Ticket run sends a Run notification unless it merged, without the email-unless-merged word; default false
 # to = "you@example.com"        # where email goes when the command names no address; no default
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 
@@ -879,7 +911,7 @@ waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting li
 endpoint = ""   # optional OTLP/HTTP traces URL, including /v1/traces; default blank (off); Security runs never export
 
 [inbox]
-days = 7             # days to keep ended problems and Resolved; default 7
+days = 7             # days to keep ended problems, Ready for review and Resolved; default 7
 silent_minutes = 10   # minutes without growth in either log before a Ticket run is Silent; default 10
 
 [console]
@@ -903,6 +935,7 @@ max_load_per_cpu_percent = 0  # delay new sessions above this one-minute load pe
 [pickup]
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
 wait_minutes = 30   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 30
+order = "lowest-first"   # which Ready issue a Pickup run takes, lowest-first or highest-first; default lowest-first
 
 [harness]
 default = "claude"   # the Harness every Ticket run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
@@ -1089,6 +1122,7 @@ mod tests {
                 "base.fix",
                 "launch.pull",
                 "email.always",
+                "email.unless_merged",
                 "email.to",
                 "email.from",
                 "logs.dir",
@@ -1108,6 +1142,7 @@ mod tests {
                 "resources.max_load_per_cpu_percent",
                 "pickup.limit",
                 "pickup.wait_minutes",
+                "pickup.order",
                 "harness.default",
                 "harness.claude.model",
                 "harness.claude.effort",
@@ -1299,6 +1334,30 @@ mod tests {
     }
 
     #[test]
+    fn pickup_order_is_read_and_defaults_to_lowest_first() {
+        use crate::ready::PickupOrder;
+
+        let config = parse("[pickup]\norder = \"highest-first\"\n").unwrap();
+        assert_eq!(config.pickup_order, PickupOrder::HighestFirst);
+        let config = parse("[pickup]\norder = \"lowest-first\"\n").unwrap();
+        assert_eq!(config.pickup_order, PickupOrder::LowestFirst);
+        for text in ["", "[pickup]\n"] {
+            assert_eq!(
+                parse(text).unwrap().pickup_order,
+                PickupOrder::LowestFirst,
+                "{text:?}"
+            );
+        }
+        for value in ["\"lowest\"", "\"highest\"", "\"\"", "true", "3"] {
+            let error = parse(&format!("[pickup]\norder = {value}\n")).unwrap_err();
+            assert!(
+                error.to_string().contains("pickup.order must be"),
+                "{error:#}"
+            );
+        }
+    }
+
+    #[test]
     fn email_settings_are_read() {
         let config = parse("[email]\nto = \"me@example.com\"\nfrom = \"ts@acme.dev\"\n").unwrap();
         assert_eq!(config.email.to.as_deref(), Some("me@example.com"));
@@ -1306,6 +1365,18 @@ mod tests {
         assert_eq!(parse("[email]\n").unwrap().email, EmailSettings::default());
         assert!(parse("[email]\nalways = true\n").unwrap().email.always);
         assert!(!parse("[email]\nalways = false\n").unwrap().email.always);
+        assert!(
+            parse("[email]\nunless_merged = true\n")
+                .unwrap()
+                .email
+                .unless_merged
+        );
+        assert!(
+            !parse("[email]\nalways = true\n")
+                .unwrap()
+                .email
+                .unless_merged
+        );
     }
 
     #[test]
@@ -1415,6 +1486,10 @@ mod tests {
             (
                 "[email]\nalways = \"yes\"\n",
                 "email.always must be true or false",
+            ),
+            (
+                "[email]\nunless_merged = 1\n",
+                "email.unless_merged must be true or false",
             ),
             (
                 "[email]\nto = 1\n",

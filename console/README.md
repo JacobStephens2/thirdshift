@@ -80,8 +80,8 @@ other_consoles = ["https://console.example.test"]
 theme = "focus-auto" # also focus-light or focus-dark
 ```
 
-For a persistent service behind Caddy, Apache or nginx, see the root README's
-[server installation instructions](../README.md#console-on-a-server).
+For a persistent service behind Caddy, Apache or nginx, see the manual's
+[server installation instructions](../docs/guide.md#console-on-a-server).
 
 Each allowed address must contain exactly one `@`, a nonempty local part,
 and a domain containing a dot, with no leading or trailing dot. Whitespace
