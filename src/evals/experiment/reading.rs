@@ -102,10 +102,7 @@ impl Observation {
                 continue;
             }
             let mut result: TrialResult = serde_json::from_slice(&files.read(&entry.path)?)?;
-            let key = result.key();
-            if let Some(score) = &mut result.score {
-                score.rechecks = stored.rechecks.get(&key).cloned().unwrap_or_default();
-            }
+            stored.apply_rechecks(&mut result);
             observation.results.push(result);
         }
         let terminal: BTreeSet<_> = observation.results.iter().map(TrialResult::key).collect();

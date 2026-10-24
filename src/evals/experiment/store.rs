@@ -243,13 +243,17 @@ impl Stored {
         let mut results = Vec::new();
         for path in result_paths(&self.directory)? {
             let mut result: TrialResult = serde_json::from_slice(&fs::read(path)?)?;
-            let key = result.key();
-            if let Some(score) = &mut result.score {
-                score.rechecks = self.rechecks.get(&key).cloned().unwrap_or_default();
-            }
+            self.apply_rechecks(&mut result);
             results.push(result);
         }
         Ok(results)
+    }
+
+    pub(super) fn apply_rechecks(&self, result: &mut TrialResult) {
+        let key = result.key();
+        if let Some(score) = &mut result.score {
+            score.rechecks = self.rechecks.get(&key).cloned().unwrap_or_default();
+        }
     }
 
     pub fn refresh_verdict(&mut self) -> Result<()> {
