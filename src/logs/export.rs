@@ -43,13 +43,20 @@ pub fn export(input: &str, directory: &Path) -> Result<()> {
         recorded.extend(record_span(node)?);
     }
     // Attachments select Session files; their requests keep recorded parents.
-    let sessions: BTreeSet<_> = nodes
+    let mut sessions: BTreeSet<_> = nodes
         .iter()
         .filter_map(|node| match &node.fact {
-            Fact::Session(attachment) => Some(&attachment.original),
+            Fact::Session(attachment) => Some(attachment.original.clone()),
             _ => None,
         })
         .collect();
+    for node in &nodes {
+        if matches!(node.fact, Fact::Run)
+            && let Some(experiment) = &node.command.record.experiment
+        {
+            sessions.extend(experiment.trace_sessions(&context)?);
+        }
+    }
     for span in &recorded {
         validation.span(span, &context)?;
     }

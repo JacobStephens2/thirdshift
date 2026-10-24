@@ -20,9 +20,11 @@ With `harness codex`, each session runs `codex exec --json --dangerously-bypass-
 
 | Prompt | When it is sent | File |
 | --- | --- | --- |
+| Grader | In an Experiment, starts a fresh model Grader for one Eval task's blind packet after code checks finish. | [grader.md](grader.md) |
 | Fresh | Starts the implement session, which goes on to review and open the pull request, when the Ticket run starts a new Issue branch. | [fresh.md](fresh.md) |
 | Continuation, with no pull request | Starts the implement session when the Ticket run is a Continuation of an Issue branch that has no pull request. | [continuation.md](continuation.md) |
 | Continuation, with an open pull request | Starts the implement session when the Ticket run is a Continuation of an Issue branch whose pull request is open. | [continuation-pr.md](continuation-pr.md) |
+| Code review | In an Eval Trial, reviews the prepared historical diff with the production code-review Factory skill, under the implement session's sub-agent rules. Writes reports without fixing or publishing anything. | [code-review.md](code-review.md) |
 | Spec review | In a Spec run, starts the Spec review once every Ticket has landed on the Spec branch, before the Spec PR, a draft until then, is marked ready. | [spec-review.md](spec-review.md) |
 | Architecture review | Starts the Architecture review, the session an Architect run opens with, in a worktree at the head of the Base branch. The line naming the focus is left out when the command gives none. | [architecture-review.md](architecture-review.md) |
 | Security review | When enabled, runs one guidance review after a Ticket run's opening session or a Spec run's Spec review, before Delivery pushes and enters the Repair loop. Each Ticket run and Base fix gets one too. Introduced findings, refusals or incomplete reviews hold Self-merge. | [security-review.md](security-review.md) |

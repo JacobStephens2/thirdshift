@@ -4,6 +4,7 @@ mod accounts;
 mod auth;
 pub(crate) mod conversation;
 mod cronjobs;
+mod experiments;
 mod filters;
 mod github;
 pub use account_commands::{password, print_log, sign_out};
@@ -69,6 +70,10 @@ struct PageRoute {
 }
 
 enum View {
+    Experiments,
+    Experiment,
+    ExperimentSession,
+    ApproveEvalTask,
     CronJobs,
     Resources,
     Inbox,
@@ -100,6 +105,30 @@ enum View {
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/experiments/proposals/{suite}/{task}/approve",
+        cli: &["thirdshift evals approve suite task --json"],
+        method: Method::POST,
+        view: View::ApproveEvalTask,
+    },
+    PageRoute {
+        path: "/experiments/{id}/sessions/{session}",
+        cli: &["thirdshift experiments id --session session --json"],
+        method: Method::GET,
+        view: View::ExperimentSession,
+    },
+    PageRoute {
+        path: "/experiments",
+        cli: &["thirdshift experiments --json"],
+        method: Method::GET,
+        view: View::Experiments,
+    },
+    PageRoute {
+        path: "/experiments/{id}",
+        cli: &["thirdshift experiments id --json"],
+        method: Method::GET,
+        view: View::Experiment,
+    },
     PageRoute {
         path: "/dismiss",
         cli: &[
@@ -401,6 +430,10 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
         let cli = page.cli[0];
         let path = page.path;
         let handler = match (&page.view, page.method.clone()) {
+            (View::Experiments, Method::GET) => get(experiments::index),
+            (View::Experiment, Method::GET) => get(experiments::detail),
+            (View::ExperimentSession, Method::GET) => get(experiments::session),
+            (View::ApproveEvalTask, Method::POST) => post(experiments::approve),
             (View::CronJobs, Method::GET) => get(cronjobs::show),
             (View::Resources, Method::GET) => get(resources::show),
             (View::Inbox, Method::GET) => get(move |query| inbox(cli, path, query)),

@@ -197,6 +197,7 @@ impl<'a> Observation<'a> {
         } else if facts
             .outcome
             .is_some_and(|outcome| outcome.contains("failed") || outcome == "review required")
+            || matches!(self, Observation::Record(command) if command.record.kind == "Experiment" && matches!(facts.outcome, Some("fail" | "inconclusive" | "waiting_on_rechecks")))
         {
             Some(NeedsYouKind::Failed)
         } else if matches!(self, Observation::Record(command) if command.record.security_findings_waiting)

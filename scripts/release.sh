@@ -15,7 +15,8 @@
 # release-summary.md beside this script. If it fails, the summary is GitHub's
 # generated notes instead, and the script warns and carries on. With --review,
 # it then prints the summary and asks whether to carry on with it, edit it in
-# $EDITOR first, or stop with nothing pushed. Without it, it never reads stdin.
+# $EDITOR first, or stop with nothing pushed. A failed or inconclusive release
+# Experiment also asks whether to carry on, even without --review.
 #
 # Before it pushes anything, it refuses a release that can't be cut: a version
 # that isn't plain X.Y.Z, or isn't higher than the one on main, a v<version>
@@ -23,6 +24,10 @@
 # didn't succeed. It waits for that tip's run to appear and finish, following
 # main if it moves and naming each move. The version bump starts from the tip
 # whose CI succeeded, with the requested version checked against that tip.
+# Then an Experiment compares that content commit with its last release tag,
+# selecting touched suites. A pass carries on; pending Scores are listed and
+# waited for; fail/inconclusive Verdicts show intervals and require an override.
+# Untouched suites or a Baseline with no Trial flag need no Experiment.
 #
 # If a run is interrupted, running it again with the same version carries on
 # from the first step not yet done: it opens the PR for a pushed branch, waits
@@ -36,6 +41,12 @@
 # it is refused, even once tagged. Its tree (or a pushed branch with no PR)
 # must also be exactly the version bump in Cargo.toml and Cargo.lock from
 # its merge base, or it is refused before merging or tagging.
+# A pushed branch is checked against the same release Experiment before its
+# PR is opened. A release already tagged only resumes the release workflow.
+# Before the branch exists, a local Git ref pins the content commit so a
+# restart keeps the same Candidate even if main advances during interruption.
+# If main gains different content after that selection, the script refuses
+# to merge or tag it under the old Experiment; choose a fresh release version.
 #
 # Prints a progress line on stderr for each step, stamped with the local time
 # as HH:MM:SS, with the release workflow run's URL once it waits for that run,
@@ -84,10 +95,13 @@ main() {
 		if [ -z "$head" ]; then
 			commit_bump
 			write_summary "nothing was pushed"
+			validate_main_content
 			git push --quiet origin "$head:refs/heads/$branch"
+			git update-ref -d "refs/thirdshift/release-candidates/$version"
 		else
 			progress "resuming: $branch is on origin at ${head:0:7} with no PR"
 			validate_bump_pr
+			wait_for_experiment "$(git rev-parse "$head^1")"
 			write_summary "no PR was opened"
 		fi
 		open_pr
@@ -95,16 +109,23 @@ main() {
 		;;
 	OPEN)
 		progress "resuming: $url is open"
+		wait_for_experiment "$(git rev-parse "$head^1")"
 		wait_and_merge
 		;;
 	MERGED)
 		progress "resuming: $url was merged as ${merge:0:7}"
+		wait_for_experiment "$(git rev-parse "$head^1")"
 		;;
 	*)
 		refuse "$url was closed without merging, so there is nothing to resume; reopen it or delete $branch to start over"
 		;;
 	esac
 
+	# A merge can race the last main check, or have completed before a resume.
+	# Never publish a tree containing changes outside the measured Candidate.
+	if [ "$(git rev-parse "$merge^{tree}")" != "$(git rev-parse "$head^{tree}")" ]; then
+		refuse "the release merge contains content absent from its measured Candidate; no tag was pushed"
+	fi
 	git push --quiet origin "$merge:refs/tags/$tag"
 	progress "tagged $tag on ${merge:0:7} and pushed the tag"
 	wait_for_release
@@ -200,11 +221,21 @@ finish_if_tagged() {
 }
 
 # commit_bump
-# Refuses a release that can't be cut, then commits the version bump on main
-# in a temporary worktree and sets head to it.
+# Selects and saves main's checked content commit, or reuses that selection
+# after interruption, then commits the bump in a worktree and sets head to it.
 commit_bump() {
-	local base
-	base=$(check_can_release "$version" "$tag")
+	local base candidate_ref=refs/thirdshift/release-candidates/$version
+	if is_plain_version "$version" && base=$(git rev-parse --quiet --verify "$candidate_ref^{commit}"); then
+		progress "resuming release Experiment from saved content commit ${base:0:7}"
+	else
+		base=$(check_can_release "$version" "$tag")
+		# Keep the selection even if the Experiment is interrupted before a
+		# branch exists. The empty old value refuses a competing selection.
+		git update-ref "$candidate_ref" "$base" ''
+	fi
+	# The content commit is stable across interruptions before the push;
+	# the version-only bump made below adds no Eval suite dependencies.
+	wait_for_experiment "$base"
 	repo=$PWD
 	work=$(mktemp -d)
 	trap 'git -C "$repo" worktree remove --force "$work" 2>/dev/null || rm -rf "$work"' EXIT
@@ -217,6 +248,55 @@ commit_bump() {
 		git commit --quiet --all --message "Release $version"
 	)
 	head=$(git -C "$work" rev-parse HEAD)
+}
+
+# wait_for_experiment <content commit>
+# Use this checkout's runner and private Eval suites, as for summary_agent.
+wait_for_experiment() {
+	local snapshot status outcome id answer
+	progress "checking release Experiment for ${1:0:7}"
+	snapshot=$(cargo run --quiet --manifest-path "$summary_manifest" -- experiment --release "$1" --json)
+	while :; do
+		status=$(printf '%s\n' "$snapshot" | experiment_status)
+		read -r outcome id <<<"$status"
+		case $outcome in
+		pass | skip) return ;;
+		waiting_on_rechecks)
+			sleep "$poll_seconds"
+			snapshot=$(cargo run --quiet --manifest-path "$summary_manifest" -- experiments "$id" --json)
+			;;
+		fail | inconclusive)
+			{ stamp && printf 'Experiment %s; release anyway? [y/N] ' "$outcome"; } >&2
+			read -r answer || refuse "Experiment $outcome; no release override given"
+			case $answer in
+			y | yes) return ;;
+			*) refuse "Experiment $outcome; release declined" ;;
+			esac
+			;;
+		*) refuse "unexpected release Experiment state: $outcome" ;;
+		esac
+	done
+}
+
+# experiment_status
+# Keep the renderer's state on stdout and stamp its progress through the same
+# helper as every other release step. Preserve parser diagnostics on failure.
+experiment_status() {
+	local rendered result=0 line
+	rendered=$(python3 "$(dirname "$summary_prompt")/release-experiment.py" 2>&1) || result=$?
+	while IFS= read -r line; do
+		case $line in
+		"release: "*) progress "${line#release: }" ;;
+		*)
+			if [ "$result" -eq 0 ]; then
+				printf '%s\n' "$line"
+			else
+				printf '%s\n' "$line" >&2
+			fi
+			;;
+		esac
+	done <<<"$rendered"
+	return "$result"
 }
 
 # write_summary <what stopping leaves undone>
@@ -255,10 +335,21 @@ wait_and_merge() {
 		exit 1
 	fi
 
+	validate_main_content
 	gh pr merge "$url" --merge --match-head-commit "$head" >/dev/null
 	fetch_main
 	merge=$(merge_commit_of "$head")
 	progress "merged $url as ${merge:0:7}"
+}
+
+# validate_main_content
+# A version-only merge must retain exactly the measured Candidate's content.
+# Recheck after waiting too; main may move while the Experiment or CI runs.
+validate_main_content() {
+	fetch_main
+	if [ "$(bump_tree origin/main)" != "$(git rev-parse "$head^{tree}")" ]; then
+		refuse "main contains content absent from the measured Candidate; choose a fresh release version to measure current main"
+	fi
 }
 
 # wait_for_release

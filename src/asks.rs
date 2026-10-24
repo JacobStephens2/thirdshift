@@ -317,6 +317,7 @@ mod tests {
             security_fix: None,
             security_close: None,
             security_review: false,
+            trial_caps: crate::scope::Caps::default(),
         }
     }
 

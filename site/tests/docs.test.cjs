@@ -3,6 +3,16 @@ const assert = require("node:assert/strict");
 const { readFile, stat } = require("node:fs/promises");
 const { resolve, dirname } = require("node:path");
 
+test("the Setup defaults example includes the Trial and Grader caps", async () => {
+  const { marked } = await import("marked");
+  const source = await readFile(resolve(__dirname, "../../docs/guide.md"), "utf8");
+  const defaults = marked.lexer(source).find(token => token.type === "code" && token.lang === "toml" && token.text.includes("always = false"));
+  assert.ok(defaults, "the manual includes the complete Setup defaults");
+  for (const setting of ["[trial]", 'memory_high = "1G"', 'memory_max = "2G"', 'memory_swap_max = "1G"']) {
+    assert.ok(defaults.text.includes(setting), `Setup defaults lack ${setting}`);
+  }
+});
+
 test("notification documentation limits suppression to child Ticket runs", async () => {
   const glossary = (await readFile(resolve(__dirname, "../../GLOSSARY.md"), "utf8"))
     .split("\n**Run notification**:\n")[1].split("\n_Avoid_:")[0].replaceAll("**", "");

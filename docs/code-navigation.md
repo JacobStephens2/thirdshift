@@ -4,6 +4,7 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 
 | Issue term | Owning implementation / search symbol | Supporting tests |
 | --- | --- | --- |
+| Verdict, Bar, paired Scores | `src/verdict.rs` — `judge`; `src/verdict/prediction.rs` — posterior-predictive assurance | `src/verdict/tests.rs` (parent #977's standalone Verdict seam) |
 | Claim | `src/claim.rs` — `Claim`, `make`, `end` | Inline tests; `tests/pickup_run.rs` |
 | Ready issue, Claim limit, Sweep | `src/ready.rs` — `ReadyIssue`, `first`, `refresh`; `src/pickup.rs` — `gates`, `sweep`; `src/pickup/reservation.rs` — cross-machine Pickup reservation | Inline tests; `tests/pickup_run.rs` |
 | Ticket run, Continuation, Issue branch | `src/run.rs`; `src/branch.rs` | `tests/fresh_run.rs`, `tests/continuation.rs`, `tests/numbered_branches.rs` |
@@ -26,6 +27,14 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | Session trace recording and Trace ancestry | `src/session/trace.rs` — recording adapter: streaming records, flushing first completions, closing unfinished calls and rewriting one final span per ID; `src/logs/trace.rs` — deterministic Command, Ticket run and stage identities; `src/logs/trace/ancestry.rs` — `of`: the one record-derived ancestry and Session attachment for a selected record subtree under its owning Command, shared by the Waterfall and whole Trace export (dispatch-parent stage, descendant-first Session claims, first naming stage, Run fallback) | `tests/session_traces.rs`, `src/session/trace/tests.rs`, `src/session/recording/tests.rs`, `src/logs/recording/tests.rs`, `src/logs/trace/ancestry/tests.rs` |
 | Whole Trace export | `src/logs/export.rs` — export adapter over Trace ancestry: OTLP record times, validation and byte-for-byte Session requests | `tests/export_trace.rs`, `tests/console/spans.rs` |
 | Session trace reading | `src/logs/session.rs` — readable file selection and raw-event unwrapping for the Console, `show`, Silent and heartbeat | `tests/console.rs`, `tests/show_logs.rs`, `tests/run_health.rs`, `console/tests/logs.test.cjs`, `console/tests/inbox.test.cjs` |
+| Trial, Code review | `src/trial.rs` — versioned request/result protocol for Code review and Spec review, shared `Sessions` execution with output outside factory logs; `src/prompt.rs` — Session prompts; `src/sandbox.rs` — the Trial session's bwrap sandbox (fresh home, Harness logins, Grok Trials-home lock, own network, proxy socket and relay); `src/proxy.rs` — the allowlisting CONNECT proxy (per-Harness provider hosts, loopback and host-address refusal); `src/scope.rs` — the Trial and Grader memory-capped scopes (caps, `oom_score_adj`, cap-kill evidence) | `src/sandbox.rs` (bwrap-gated tests); `src/scope.rs` (scope-gated tests); `tests/trial.rs`; protocol: `docs/trial.md` |
+| Experiment, Bar, running Trials | `src/evals/experiment.rs` and `src/evals/experiment/` — fixed inputs, private storage, two workers and resume; ordinary Command recording in `src/logs/` | `tests/experiments.rs`; CLI: `docs/guide.md#experiments` |
+| Console Experiments, Trial Peek, Trial session evidence | `src/console/experiments.rs` and `src/console/experiments/render.rs` — list and live Experiment page; `src/evals/experiment/store.rs` — shared CLI/Console view; `src/evals/experiment/evidence.rs` — active Trials and confined session inventory | `tests/console/experiments.rs`, `console/tests/experiments.test.cjs` |
+| Plan-limit warnings | `src/harness/interpretation/limits.rs` — Claude/Codex quota detection; `src/harness/codex/limits.rs` — live native reports; `src/session/limits.rs` and `src/session/recording.rs` — Eval stop policy and shared pause signal; `src/evals/experiment/limits.rs` — supervision of older Arm builds | `src/harness/interpretation_tests.rs`, `tests/trial.rs`, `tests/experiments.rs`, `tests/fresh_run.rs` |
+| Code Grader, Experiment Scores and Verdict, Arm minutes | `src/evals/experiment/grading.rs` — mechanical checks and paired suite Verdicts; `src/evals/experiment/integrity.rs` — repository snapshots; `src/evals/experiment/store.rs` — saved Verdict and minutes | `tests/experiments.rs`; check environment: `docs/eval-tasks.md` |
+| Model Grader, blind packet, borderline Score | `src/evals/experiment/model_grader.rs` — fixed Grader choice, shuffled packets, validated Scores and resume; `src/prompt.rs` — Grader Session prompt | `tests/experiments/model_graders.rs`; packet contract: `docs/eval-tasks.md` |
+| Score recheck, decisive Score, waiting Verdict | `src/evals/experiment/rechecks.rs` — CLI, history and pending Scores; `src/evals/experiment/store.rs` — atomic publication and saved views | `tests/experiments/rechecks.rs`; CLI: `docs/guide.md#experiments` |
+| Experiment Trace, Arm tokens and cost | `src/evals/experiment/trace.rs` — Trial ancestry and private trace discovery; `src/evals/experiment/usage.rs` — Session-trace usage totals | `tests/experiments.rs` |
 | Command log, Activity log | `src/logs.rs`; `src/logs/recording.rs` — `Record` | `src/logs/recording/tests.rs`, `tests/command_logs.rs`, `tests/activity_log.rs` |
 | Command-log allocation, Session naming, child inheritance and filename decoding | `src/logs/owner.rs` — `allocate`, `Owner`, `decode`, `SessionOwner` (Model evidence over filename identity); `src/session/recording.rs` — captured Model recording | `src/logs/owner/tests.rs`, `src/logs/recording/tests.rs`, `src/session/recording/tests.rs`, `tests/command_logs.rs`, `tests/status.rs`, `tests/show_logs.rs` |
 | Command record, status | `src/logs/recording.rs`; `src/logs/command_record.rs`; `src/logs/reading.rs` — `Snapshot`, exact-parent trees and observations; `src/logs/reading/history.rs` — historical recovery; `src/logs/status.rs` — formatting; `src/logs/process_identity.rs` | `src/logs/reading/tests.rs`, `tests/status.rs`, `src/logs/recording/tests.rs` |
@@ -48,6 +57,12 @@ Start with the issue's terms in `GLOSSARY.md`, then use this index to find their
 | User config, Setup | `src/config.rs`; `src/setup.rs` | `tests/user_config.rs`, `tests/setup.rs` |
 | Architecture review, Architect run | `src/architect.rs` | `tests/architect_run.rs` |
 | Security audit, Security review, Security run | `src/security.rs` and `src/security/`; which Ticket runs run a Security review, and what every child Ticket run is handed: `src/child_run/asks.rs` — `ChildAsks` | Inline tests; `tests/security_review.rs`, `tests/security_run.rs` |
+
+Eval task manifests, suite dependency selection and repository preparation live in
+`src/evals.rs` and `src/evals/`; `tests/evals.rs` tests the CLI with real Git
+repositories. The private data format is documented in `docs/eval-tasks.md`.
+The one-time #429 replay import is owned by `src/evals/import.rs` and exercised
+through the same CLI tests with made-up manifests and grading files.
 
 For example, `rg -n 'Claim|TicketBoard|RunNotification' src/claim.rs src/spec_run/ticket_board.rs src/notification.rs` locates the owners of Claim, Ticket board and Run notification without reading the whole glossary or README. Ticket board is an implementation term; the glossary defines its Spec run and Ticket vocabulary.
 

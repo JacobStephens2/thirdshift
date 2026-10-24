@@ -20,6 +20,7 @@ const TIME_FORMAT_LENGTH: usize = "2026-10-03 10:41:01".len();
 pub(super) enum Kind {
     Run,
     SpecRun,
+    Experiment,
     Pass(Pass),
 }
 
@@ -28,6 +29,7 @@ impl Display for Kind {
         match self {
             Kind::Run => f.write_str("Run"),
             Kind::SpecRun => f.write_str("Spec run"),
+            Kind::Experiment => f.write_str("Experiment"),
             Kind::Pass(pass) => pass.fmt(f),
         }
     }

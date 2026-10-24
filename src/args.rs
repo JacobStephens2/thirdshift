@@ -23,6 +23,10 @@ pub enum Command {
     Version,
     Update,
     Setup,
+    Evals(crate::evals::Action),
+    Experiment(crate::evals::experiment::Options),
+    Experiments(Vec<String>),
+    Recheck(Vec<String>),
     CronJobs {
         json: bool,
     },
@@ -96,6 +100,15 @@ pub enum Command {
     },
     /// Internal interface for scripts/release.sh: prompt on stdin.
     ReleaseSummary,
+    /// Internal versioned session protocol for Evals.
+    Trial(std::path::PathBuf),
+    /// Internal scope wrapper for Evals: raise this scope's own `oom_score_adj`,
+    /// then become `program`, keeping the raised score, the scope and every
+    /// stdio descriptor.
+    OomExec {
+        program: String,
+        args: Vec<String>,
+    },
     /// `email-test`, with the address it was given, if any.
     EmailTest(Option<String>),
     Architect(ArchitectArgs),
@@ -304,9 +317,30 @@ pub(crate) fn shell_command(words: Vec<String>) -> String {
 /// given.
 pub fn parse(args: &[String]) -> Result<Command> {
     match args.first().map(String::as_str) {
+        Some("--trial") => {
+            let [_, request] = args else {
+                bail!("usage: thirdshift --trial <request.json>");
+            };
+            return Ok(Command::Trial(request.into()));
+        }
+        Some("--oom-exec") => {
+            let [_, program, rest @ ..] = args else {
+                bail!("usage: thirdshift --oom-exec <program> [args...]");
+            };
+            return Ok(Command::OomExec {
+                program: program.clone(),
+                args: rest.to_vec(),
+            });
+        }
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
+        Some("evals") => return crate::evals::parse(&args[1..]).map(Command::Evals),
+        Some("experiment") => {
+            return crate::evals::experiment::parse(&args[1..]).map(Command::Experiment);
+        }
+        Some("experiments") => return Ok(Command::Experiments(args[1..].to_vec())),
+        Some("recheck") => return Ok(Command::Recheck(args[1..].to_vec())),
         Some("console") => {
             if args.get(1).is_some_and(|action| action == "theme") {
                 let json = args.last().is_some_and(|arg| arg == "--json");

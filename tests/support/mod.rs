@@ -326,6 +326,19 @@ impl HeldRun {
     }
 }
 
+/// Whether Trial scopes can run here: systemd-run plus a reachable user
+/// manager, which logged-out launchers need lingering for.
+pub fn scope_available() -> bool {
+    std::process::Command::new("systemd-run")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+        && std::process::Command::new("systemctl")
+            .args(["--user", "show", "-p", "SystemState", "--value"])
+            .output()
+            .is_ok_and(|output| output.status.success())
+}
+
 /// A script in which the agent starts a background task described as
 /// `description`, then ends its turn with it still running, so the task is
 /// killed after the session's last `result`.

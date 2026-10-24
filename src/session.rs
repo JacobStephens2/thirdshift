@@ -25,6 +25,7 @@ use crate::prompt;
 use crate::skills;
 
 pub mod kind;
+pub(crate) mod limits;
 pub mod recording;
 mod review_reports;
 pub(crate) mod trace;
@@ -63,6 +64,15 @@ pub struct Logs {
 }
 
 impl Logs {
+    /// An isolated Trial's artifacts, with no Command owner or factory logs.
+    pub fn of_trial(dir: &Path) -> Self {
+        Logs {
+            name: "trial".to_string(),
+            dir: dir.to_path_buf(),
+            recording: recording::Recording::for_trial().into(),
+        }
+    }
+
     /// The logs of the Run on `issue`.
     pub fn of_run(issue: &IssueUrl) -> Self {
         Logs {
@@ -143,6 +153,41 @@ impl<'a> Sessions<'a> {
         Self::checked_within(logs, worktree, harness, None, None, &|| Ok(()), steps)
     }
 
+    /// [`Sessions::within`], with every session run in `sandbox`: the
+    /// Trial's bwrap sandbox, prepared before its output directory's home.
+    /// The Factory skills are linked as usual; the sandbox binds them in.
+    pub fn within_sandboxed<T>(
+        logs: &'a Logs,
+        worktree: &'a Path,
+        harness: &'a Choice,
+        sandbox: &crate::sandbox::Prepared,
+        steps: impl FnOnce(&Self) -> Result<T>,
+    ) -> (Result<T>, Option<PathBuf>) {
+        let adapter = harness.harness.adapter();
+        if let Err(error) = skills::link_into(worktree, adapter)
+            .and_then(|()| adapter.link_instruction_fallback(worktree))
+        {
+            return (Err(error), None);
+        }
+        let on_machine = OnMachine {
+            worktree: worktree.to_path_buf(),
+            harness: harness.clone(),
+            adapter,
+            security_review: None,
+            security_review_default: None,
+            recording: logs.recording().clone(),
+            sandbox: Some(sandbox.launch()),
+        };
+        let (taken, log) = Sessions::taking(
+            logs,
+            worktree,
+            Box::new(on_machine),
+            crate::resources::wait,
+            steps,
+        );
+        (taken, log.filter(|log| log.exists()))
+    }
+
     /// [`Sessions::within`], checking `before_each` before each session
     /// starts, a Resume included: a session it fails is not started. A
     /// Security review, and its Resume, run on `security_review` instead of
@@ -175,6 +220,7 @@ impl<'a> Sessions<'a> {
             security_review,
             security_review_default: security_review_default.cloned(),
             recording: logs.recording().clone(),
+            sandbox: None,
         };
         let (taken, log) = Sessions::taking(
             logs,
@@ -247,6 +293,13 @@ impl<'a> Sessions<'a> {
         kind: Kind,
         prompt: &str,
     ) -> Result<Option<String>> {
+        self.run_to_end(purpose, kind, prompt)
+            .map(|ended| ended.final_message)
+    }
+
+    /// The same session and Resume policy, retaining the Harness session ID
+    /// for a Trial's result as well as its final message.
+    pub fn run_to_end(&self, purpose: Purpose, kind: Kind, prompt: &str) -> Result<Ended> {
         // Progress lines name the session by its kind's token.
         let label = kind.token();
         let reports = if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
@@ -287,13 +340,22 @@ impl<'a> Sessions<'a> {
             self.step(format!(
                 "{label}: background work was killed as the session ended; resuming it once"
             ));
-            ended = self.start(
-                purpose,
-                Logged::resume_of(kind),
-                Some(session_id),
-                &resume_prompt,
-                reports.as_ref(),
-            )?;
+            ended = self
+                .start(
+                    purpose,
+                    Logged::resume_of(kind),
+                    Some(session_id),
+                    &resume_prompt,
+                    reports.as_ref(),
+                )
+                .map_err(|mut error| {
+                    // Work was observed before this Resume, even if its first
+                    // turn fails.
+                    if let Some(failure) = error.downcast_mut::<SessionFailure>() {
+                        failure.before_first_turn = false;
+                    }
+                    error
+                })?;
             ended_last = "Resume";
         }
         if !ended.killed.is_empty() {
@@ -313,7 +375,7 @@ impl<'a> Sessions<'a> {
                 .borrow_mut()
                 .push(format!("{label} session {ending}"));
         }
-        Ok(ended.final_message)
+        Ok(ended)
     }
 
     /// Run `session`, logged under its own path, which becomes the last log,
@@ -402,6 +464,7 @@ struct OnMachine {
     security_review: Option<(Choice, &'static dyn Adapter)>,
     security_review_default: Option<Choice>,
     recording: recording::Recording,
+    sandbox: Option<crate::sandbox::Launch>,
 }
 
 impl Outside for OnMachine {
@@ -456,8 +519,13 @@ impl Outside for OnMachine {
             }
             _ => (&self.harness, self.adapter),
         };
-        let interpretation = adapter.interpretation(&self.worktree, prompt);
-        let (invocation, interpretation) = match purpose {
+        let mut interpretation = adapter.interpretation(&self.worktree, prompt);
+        if let Some(launch) = &self.sandbox
+            && let Some((_, home)) = launch.env.iter().find(|(name, _)| name == "HOME")
+        {
+            interpretation.set_home(Path::new(home));
+        }
+        let (mut invocation, interpretation) = match purpose {
             Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview => (
                 adapter.security_session(
                     harness,
@@ -473,8 +541,23 @@ impl Outside for OnMachine {
                 interpretation,
             ),
         };
-        let mut command = Command::new(adapter.name());
-        command.args(&invocation.args).current_dir(&self.worktree);
+        // A sandboxed session is always a Trial's: it runs with the Harness's
+        // web search switched off, behind the sandbox's allowlisting proxy.
+        if self.sandbox.is_some() && matches!(purpose, Purpose::CodeReview) {
+            invocation = adapter.trial_session(harness, resume, prompt);
+        }
+        let mut command = match &self.sandbox {
+            Some(launch) => {
+                let mut command = launch.command(&invocation.args)?;
+                command.current_dir(&self.worktree);
+                command
+            }
+            None => {
+                let mut command = Command::new(adapter.name());
+                command.args(&invocation.args).current_dir(&self.worktree);
+                command
+            }
+        };
         // Keep the empty config alive until the process and descendants
         // finish. A fresh one on each launch also fences the Resume.
         let github_config = if matches!(purpose, Purpose::SecurityPublishing) {
@@ -504,6 +587,7 @@ impl Outside for OnMachine {
             recording::Input {
                 prompt,
                 stdin: invocation.stdin.as_deref(),
+                ..Default::default()
             },
             log,
             interpretation,

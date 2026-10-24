@@ -69,7 +69,7 @@ The billing failures and the other failed Security run are what dismissal is for
 
 *Recommended:* (a). You judged what you saw, and something new needs a new look. A Run that dies after you dismissed it as Slow is the row Needs you most needs to show, and (b) would hide it. (c) would bring a long Spec run back at every stage that runs past its Usual range. (d) brings rows back on a clock, whatever the Run did. A second silence isn't hidden under (a) either: the Run's row in Working says "silent 12 min".
 
-*Answer:* agree 
+*Answer:* agree
 
 **Q2.2 - A row that stands for many Commands.** The Inbox folds Failed rows with the same cause into one. On `stephens`, one row stands for 48 chart35 Architect runs and another for 7. On `thirdshift`, #972's stands for 10. The options:
 - (a) **Dismissing the row dismisses every Command it stands for.** A later Command that fails the same way starts the row again.

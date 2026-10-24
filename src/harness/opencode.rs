@@ -195,4 +195,20 @@ mod tests {
         );
         assert!(ended.killed.is_empty());
     }
+
+    /// A Trial keeps the code review session unchanged: its web search and
+    /// web fetch stay off through the sandbox's config, which denies both.
+    #[test]
+    fn trials_keep_the_code_review_session_unchanged() {
+        let choice = Choice {
+            harness: Harness::OpenCode,
+            model: None,
+            effort: None,
+            chosen_by: super::super::ChosenBy::Command,
+        };
+        assert_eq!(
+            OpenCode.trial_session(&choice, None, "review").args,
+            OpenCode.code_review_session(&choice, None, "review").args
+        );
+    }
 }

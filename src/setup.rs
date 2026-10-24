@@ -369,7 +369,7 @@ impl Outside for OnMachine<'_> {
             Some(credentials) => credentials,
             None => Credentials::read()?,
         };
-        credentials.save(edits.resend_key, edits.claude_setup_token)?;
+        credentials.save(edits.resend_key, edits.claude_setup_token, None)?;
         Ok(format!("wrote {credentials}"))
     }
 
@@ -1267,6 +1267,11 @@ effort = \"\"
 [harness.opencode]
 model = \"\"
 effort = \"\"
+
+[trial]
+memory_high = \"1G\"
+memory_max = \"2G\"
+memory_swap_max = \"1G\"
 ";
         let mut outside = Scripted {
             user_config: Some(mine.to_string()),

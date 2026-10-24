@@ -48,6 +48,20 @@ impl Adapter for Claude {
             stdin: None,
         }
     }
+    /// A Trial runs behind the allowlisting proxy, so its web search and web
+    /// fetch stay off: the provider cannot search past the proxy for it.
+    fn trial_session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation {
+        let mut invocation = self.code_review_session(choice, resume, prompt);
+        let at = invocation.args.len() - 1;
+        invocation.args.splice(
+            at..at,
+            [
+                "--disallowedTools".to_string(),
+                "WebSearch,WebFetch".to_string(),
+            ],
+        );
+        invocation
+    }
     fn check(&self, choice: &mut Choice) -> Result<()> {
         super::check_sign_in(self, &["auth", "status"])?;
         test_call(choice)
@@ -208,6 +222,28 @@ mod tests {
             ]
         );
         assert_eq!(invocation.stdin.as_deref(), Some("summarize"));
+    }
+
+    #[test]
+    fn trials_deny_web_search_and_web_fetch() {
+        let choice = Choice::default();
+        for resume in [None, Some("session-id")] {
+            let trial = Claude.trial_session(&choice, resume, "review");
+            let at = trial
+                .args
+                .iter()
+                .position(|arg| arg == "--disallowedTools")
+                .expect("a Trial must deny web tools");
+            assert_eq!(trial.args[at + 1], "WebSearch,WebFetch");
+            assert_eq!(trial.args.last().unwrap(), "review");
+            assert!(
+                !Claude
+                    .session(&choice, resume, "review")
+                    .args
+                    .iter()
+                    .any(|arg| arg == "--disallowedTools")
+            );
+        }
     }
 
     #[test]

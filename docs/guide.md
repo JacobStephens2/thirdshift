@@ -463,12 +463,220 @@ thirdshift secure                   # audit the Base branch and record findings 
 thirdshift secure base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
 thirdshift email-test [<address>]   # send a test email through Resend (see Email)
 thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
+thirdshift evals list               # list private Eval suites and approved/proposed Eval tasks
+thirdshift evals approve <suite> <task> [--json]  # approve a proposed Eval task in its suite
+thirdshift evals import-replays     # import #429's private manifests and grading files once
+thirdshift evals touched <path>...  # select suites from their declared source dependencies
+thirdshift evals prepare <suite> <task> <destination>  # prepare a throwaway repository at its base
+thirdshift evals verify <repository> <base>  # refuse history beyond the base commit
+thirdshift evals prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>  # cache builds and record fixed Harness paths
+thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json]  # run or resume an Experiment
+thirdshift experiment --release <commit> [--json]  # use the last release tag and touched suites
+thirdshift experiments [<id>] [--json]  # list Experiments or show one
+thirdshift experiments <id> --session <session-id> [--json]  # read a Trial's retained session from its inventory
+thirdshift recheck <id> <trial> <pass|fail> --reason <text> [--wrong-finding <true|false>] [--json]
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print a compact command and option reference
 ```
 
 `help` lists commands and shared options, with a link to this manual for workflow details, settings, Harness setup, email, logs and scheduling.
+
+### Eval tasks
+
+Eval suites live privately under `~/.thirdshift/evals/suites/<suite>/`. Their
+manifests declare Factory skill, Session prompt and Harness, Model and Effort
+default dependencies, plus Trials per Arm. `evals touched` selects suites from
+those declarations. `evals list` includes proposed Eval tasks, while `evals
+prepare` refuses them until approved. `evals approve <suite> <task> [--json]`
+approves one in its suite without changing its inputs or starting work. The
+Console offers the same action under Proposed Eval tasks on the Experiments
+list and, for its suites, on an Experiment page. Approval affects future
+Experiments; existing Experiments keep their fixed Eval tasks when resumed.
+Preparation keeps only base history, applies
+the change under review without its commit objects, and gives Spec-review Eval
+tasks a local bare origin. These commands write JSON and start no agent sessions.
+`evals prepare-arms` prepares both Arms before Trials: it caches release builds
+by commit under `~/.thirdshift/evals/builds/` and records their commits, binaries,
+and each Harness's real path and version in a new JSON file. A failed build or
+version lookup stops preparation. Trials use the recorded Harness path so an
+installation's symlink update cannot change the Harness between Arms.
+The [Eval task format](https://github.com/JacobStephens2/thirdshift/blob/main/docs/eval-tasks.md)
+documents the manifests with made-up data and the Arm record.
+
+On the host holding #429's material, `thirdshift evals import-replays` reads
+the private replay manifests, cached original issue bodies and grading index
+under `~/.thirdshift/replays/` into the code-review and Spec-review suites.
+Rerunning adds missing Eval tasks and completes missing Trial inputs in both suites,
+preserving local edits. The format document also describes the
+grading index to prepare on that host; private material stays outside the repository.
+
+### Experiments
+
+From a local thirdshift clone, `thirdshift experiment <candidate>` compares a
+branch or commit with its merge-base with `main`. Use `--baseline <ref>` to name
+another Baseline. Suites default to those touched by the change, using their
+declarations; repeat `--suite <name>` to select them explicitly, including for a
+Harness, Model or Effort comparison with the same build in both Arms.
+Before building either Arm, an Experiment names every selected approved Eval
+task missing a `[trial]` table. This check also precedes the release Baseline probe.
+
+`thirdshift experiment --release <commit>` uses the last reachable `v<version>`
+tag as its Baseline and selects suites touched since that tag. `--baseline`
+and `--suite` do not apply in this mode. When no suite is touched, or the last
+release's build has no Trial flag, it prints a note and succeeds without an
+Experiment. With `--json`, these cases return `release_skip` (`no_suites` or
+`baseline_without_trial`) and `reason`; otherwise the ordinary Experiment
+result and resume rules apply.
+
+Each Arm accepts `--baseline-harness`, `--baseline-model`, `--baseline-effort`
+or the corresponding `--candidate-*` flag, followed by a value. Unspecified
+choices follow the User config, then the Harness defaults. Both builds must
+support the [versioned Trial protocol](https://github.com/JacobStephens2/thirdshift/blob/main/docs/trial.md).
+Both Code review and Spec review Eval tasks run. Code review Trials use the
+production code-review Factory skill on the historical diff and retain both
+axis reports without fixing or publishing anything. Spec review Trials keep
+the production Spec review prompt. They have no PR service: `gh` calls fail
+inside the sandbox and only their reports are graded.
+
+The Bar is saved before the first Trial: margin `-0.10`, credible level `0.95`,
+prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
+`1800`-second per-Trial timeout, and up to two fresh retries for Void Trials.
+Override these with `--margin`, `--credible-level`, `--prior`, `--seed`,
+`--draws`, `--trials-per-task`, `--timeout` (seconds), or `--void-retries`.
+`--void-retries` accepts zero, one or two. A sandbox that cannot start, a
+provider connection or login failure, a provider server error before work, a
+plan-limit stop, or a host kill or Trial-only memory cap makes a Trial void.
+Timeouts, context-window overflow, refusals and agent failures count as failed
+Trials. Void Trials retry fresh up to the Bar's limit and remain void if
+exhausted. A task still void in either Arm drops out of both Arms.
+
+Usage/rate limits pause scheduling until the same Experiment is started again.
+Claude's warning and rejection events also pause it immediately, as do Codex quota reports at
+85% usage in either window. A Trial cut short by a warning is void; a Trial
+already running on the other worker may finish, but neither worker starts
+another Trial or retry. Ordinary Runs do not stop at these warnings.
+The Experiment watches each Trial with the current detectors, including when
+an Arm's build predates warning detection.
+
+Two workers take alternating Baseline and Candidate Trials, each in a fresh
+prepared repository. Trial artifacts and one result per finished Trial live
+privately in `~/.thirdshift/evals/experiments/<id>/`. Trials run in a bwrap
+sandbox with a fresh home and provider-only network. Code Graders then score each Trial:
+a changed repository makes it void, a review with no reports fails, and the
+Eval task's mechanical checks must pass. Scores retain each check and its reason.
+Then a fresh model Grader scores one blind packet per Eval task against its
+written success criteria. Each packet holds every Trial's review reports with
+shuffled neutral labels and identifying Harness, Model, Effort and Arm lines
+removed. Graders see report text, never Trial paths or raw session streams.
+When an installed Harness has a configured Model different from both Arms,
+that Model grades; otherwise the User config's default choice grades. The
+Grader choice and executable are fixed before Trials start. Model Graders run
+in the same sandbox, seeing only their packet workspace. Code Graders run
+offline with their report packet and prepared repository. Neither can read
+Trial logs, Arm mappings or the Experiment's other files. An unavailable
+model Grader pauses grading without publishing Scores; resume reuses Trials.
+`THIRDSHIFT_TRIAL_NO_SANDBOX=1` selects the pass-through launcher for tests
+and emergency use, for both Trials and Graders.
+
+Each Trial and each Grader runs in a scope of its own, with the `[trial]` caps, and raises its own `oom_score_adj` to the maximum, so it gives way before the factory under system-wide memory pressure. A Trial its cap kills dies alone and is void with `memory_cap`, from the scope's `memory.events` or journal evidence. An agent's own out-of-memory error stays failed. Each code check has its own Grader scope and the Trial timeout. A Grader killed by its cap stops the Experiment with a diagnostic so you can raise the cap and retry.
+
+Each Trial retains the model's pass/fail, reason, wrong-finding flag and
+borderline mark beside its mechanical checks. A mechanical failure still fails
+the Trial. Wrong-finding flags enter the paired Verdict; the Verdict also shows
+the number of borderline Trials for rechecking, without changing the Bar.
+Packets, Grader session output and validated Scores stay in the private
+Experiment directory. Grader sessions retain OTLP log records and spans, model
+evidence and stderr there, including after interruption or timeout. A failed,
+incomplete or malformed Grader response pauses the Experiment; resuming retries
+grading without rerunning finished Trials,
+and reuses already validated Scores.
+
+The Verdict stays `waiting_on_rechecks` until you have rechecked every borderline
+Score and every decisive Score. A Score is decisive when flipping its pass/fail
+or wrong-finding flag changes the Experiment's pass/fail/inconclusive decision
+under the fixed Bar. Scores from a task dropped as void are excluded.
+`thirdshift experiments <id> --json` lists these under `pending_rechecks`, with
+each Trial's `id`, suite, task, Arm, Trial number and borderline/decisive flags.
+The text view lists the same IDs. `verdict.provisional_verdict` and suite
+intervals show the calculation while `verdict.verdict` waits.
+
+Read the Trial's reports and record your decision:
+
+```sh
+thirdshift recheck <experiment-id> <trial-id> pass --reason 'The report meets the written criteria.'
+thirdshift recheck <experiment-id> <trial-id> fail --reason 'This finding is wrong.' --wrong-finding true
+```
+
+Your latest recheck supplies the pass/fail used in the Verdict; the optional
+`--wrong-finding true|false` corrects that flag too. Omission retains its last
+value. Each Trial's `score` keeps the original Grader's decision, checks and
+model evidence, with your timestamped decisions and reasons in `score.rechecks`.
+Rechecking again appends to that history. The command atomically saves the
+history and recalculated Verdict, then prints the updated Experiment, with
+`--json` available. A changed Score can make another Score decisive, so consult
+the updated pending list. Trials and Graders never rerun for a recheck, and the
+Bar stays fixed. An Experiment being run or rechecked refuses concurrent writes.
+
+Each suite gets a paired Verdict using its recorded Trials per Eval task (one
+or three). Any failed suite fails the Experiment; otherwise any inconclusive
+suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
+also makes it inconclusive. Results include the suite intervals, the Bar and
+each Arm's minutes across all attempts, including Void Trials and timeouts.
+The code-review suite runs three Trials per Arm per Eval task by default; the
+Spec-review suite runs one. For three-Trial suites, `experiments --json` reports
+`pass_cubed`: the share of retained Eval tasks where all three Trials passed,
+separately for each Arm.
+Provider usage/rate limits pause scheduling until the same Experiment is
+started again, consuming the same fresh-retry budget across resumes. Completed
+attempts count toward minutes and per-Arm Void totals even while paused or
+after resume. Stop preserves completed attempts and the remaining budget.
+
+The same Arms and suite names identify the same Experiment. Running it again
+skips finished Trials and re-runs interrupted ones; a completed Experiment only
+reports its saved results. A changed Bar is refused after the first Trial.
+`thirdshift experiments --json` lists them and `thirdshift experiments <id>
+--json` shows one. The starting command's `--json` ends with one JSON line
+containing the Verdict and suite intervals alongside the Trial results and Arm
+minutes. Both views also show each Arm's tokens by observed Model and its cost
+in USD where the Harness reports one. JSON keeps these under `usage.baseline`
+and `usage.candidate`, with `models` and `cost_usd`; missing measurements are
+`null`, and tokens without a reported Model are grouped under `unknown`.
+Input tokens include cache reads and writes, which are also shown separately.
+Totals include all attempts and Resume sessions; Grader usage is not charged
+to either Arm. The text view shows usage beside each Arm's minutes.
+Both views show Void counts and causes per Arm, and report repeated
+Trial-only memory-cap stops as a finding against that Arm.
+
+The Console's **Experiments** link opens `/experiments`, grouped into Running,
+Needs you and Done, newest first within each. Open an Experiment for its live
+Trial grid, per-suite Verdict intervals, Arm comparison and folded Bar. Select
+a Trial or Eval task to open its Peek, including Grader reasons, rechecks,
+Void causes and links to retained Session logs or Session traces. Both pages
+pair with `experiments --json`; its view includes task names, active Trial start
+times and the `sessions` inventory. Read one with
+`thirdshift experiments <id> --session <session-id>`. Pending rechecks offer a
+copyable CLI command and a filter for their Eval tasks; the Console records no
+recheck itself. The page polls every two seconds, including after completion
+so rechecks recorded in the CLI appear. Older records show unknown refs,
+versions or end times where those facts were not retained.
+
+Each invocation that does work keeps a Command record, Command log and Activity
+log lines under `<logs.dir>/JacobStephens2/thirdshift/commands/experiment/`
+(the Activity log is at the repository level). The record names both Arms and
+the Bar and moves through Arm builds, Eval tasks and Trials. It appears in the
+Inbox: a pass goes in Done, and a fail, inconclusive Verdict or waiting rechecks
+go in Needs you. Rechecking a Score updates the latest invocation's Command
+outcome and Inbox group alongside the saved Verdict, keeping its completion time.
+Use the name from `status` with `thirdshift stop <command>` to Stop it.
+The individual Trials keep no factory Command records.
+Trial and model Grader Session traces and code Grader spans join the invocation's
+Command Trace. Export it with `thirdshift logs <command> --export <dir>`; the
+private Trial and Grader artifacts stay under the Experiment's Eval folder.
+On resume, each invocation's Trace keeps the Trial attempts and Grader sessions
+it started, while Arm totals cover the whole Experiment.
+Older Arms with Session traces are joined after completion; Arms predating
+Session traces contribute minutes only.
 
 `version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Ticket run's rule: stdout stays empty, messages go to stderr. `architect` follows it too: stdout carries the pull request's URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with `--plan-only`, or its idea when the review published no plan. A skipped Architect run prints nothing there when [another is still running](#one-at-a-time), the URL of each Architect plan that is [still open](#one-architect-plan-at-a-time), the URL of each [Architect idea waiting for triage](#an-architect-idea-waits-for-triage), and the URL of the [Ready issue, or issue still settling, that goes first](#a-ready-issue-goes-first). `pickup` follows it as well: stdout carries the pull request's URL of the run it dispatches, and nothing when the [Pickup run](#pickup-runs) is skipped. So does `secure`: stdout carries the pull request's URL of a fix it dispatches, and nothing otherwise.
 
@@ -623,6 +831,11 @@ fix = false   # Security runs may fix reproduced findings; default false
 close = false   # Security runs may close a finding their fix merged, when fixing is allowed; default false
 review = false   # Ticket runs review their change for Security findings; default false
 harness = ""   # the Harness for Security runs, unless the command names one, and for every Security review; default blank; blank or missing leaves Security runs on harness.default, or Claude Code if that is missing, and Security reviews on their Command's Harness
+
+[trial]
+memory_high = "1G"   # throttle each Trial and Grader scope past this; default 1G
+memory_max = "2G"   # kill each Trial and Grader scope past this, voiding the Trial; default 2G
+memory_swap_max = "1G"   # swap each Trial and Grader scope may use; default 1G
 ```
 
 Every key holds its real value, so a Ticket run reading it does exactly what it does with no file. `email.to` has no default, so `setup` suggests one: the public email of your GitHub profile (from `gh api user`), else your global git `user.email`, unless that is a `@users.noreply.github.com` address, which can't receive mail. With neither, `email.to` is the only line written commented out, as above. `setup` never asks `gh` for more scopes, so a private GitHub email is not read, and a Ticket run never looks the suggestion up: `--email` with no address and no `email.to` still stops the Ticket run. From a terminal (stdin and stderr both terminals), `setup` first asks, on stderr:
@@ -636,7 +849,7 @@ Every key holds its real value, so a Ticket run reading it does exactly what it 
 7. `Ticket runs review their change for Security findings?` (`security.review`), off by default.
 8. Run notifications? (`email.always`). If yes, the address (`email.to`), asked again until it has an `@`, then the sender (`email.from`).
 9. With notifications on, the Resend API key, with input hidden. With none saved it asks `Resend API key (input hidden, Enter to skip):`; with one in the [Credentials](#email), `Resend API key (input hidden, Enter keeps the saved one):`, and a new one replaces it. Surrounding spaces are trimmed, and anything that doesn't start with `re_` is asked again. A key you give is saved in the Credentials, `~/.thirdshift/credentials.toml`, created with mode 600 (and `~/.thirdshift` with it) or edited in place, keeping its comments and anything else in it and changing only `resend.key`; `setup` then prints `wrote the Credentials <path>`. The key is never printed, nor written to the User config. Skipping writes no Credentials and says how to add a key later: rerun `thirdshift setup`, or set `RESEND_API_KEY`. With `RESEND_API_KEY` set and not empty, which wins over the Credentials, nothing is asked, and it says the key comes from `RESEND_API_KEY`. With a key found or given, it offers to send a test email (default No), as `thirdshift email-test` does, once the files are written.
-10. A Claude setup token, made separately with `claude setup-token`, with input hidden, whether notifications are on or off. Enter skips it, or keeps the saved token; a new one replaces `claude.setup_token` in the Credentials, keeping comments and the Resend key. Saving Credentials sets mode 600. The token is never printed or written to the User config. It is reserved for Trials; passing it to a Trial as `CLAUDE_CODE_OAUTH_TOKEN` is tracked in #1012. Ordinary Runs keep using the Harness's existing login.
+10. A Claude setup token, made separately with `claude setup-token`, with input hidden, whether notifications are on or off. Enter skips it, or keeps the saved token; a new one replaces `claude.setup_token` in the Credentials, keeping comments and the Resend key. Saving Credentials sets mode 600. The token is never printed or written to the User config. It is reserved for Trials; a Trial receives it as `CLAUDE_CODE_OAUTH_TOKEN`. Ordinary Runs keep using the Harness's existing login.
 
 When the saved `security.review` or `security.fix` is on, Setup also prints a Security sandbox probe result. On Linux it starts a real `bwrap` sandbox and tries a connection to a temporary host-loopback listener (no internet), opening the saved User config for writing without changing its contents, and writing a scratch file with a throwaway HOME. A failed check names the capability and prints operator-run commands for installing bubblewrap and granting `/usr/bin/bwrap` user namespaces through AppArmor on Ubuntu; Setup runs none of those commands and still saves the User config. The sandbox has a three-second deadline. With both settings off, no probe runs. On macOS the probe reports that it is unavailable. Passing checks these capabilities only: Security sessions must still enforce all the audit skill's controls, including credential isolation and resource limits.
 
@@ -655,6 +868,8 @@ With `email.always = true`, every Ticket run sends a [Run notification](#run-not
 `spec.parallel` sets how many Tickets a [Spec run](#spec-runs) runs at once, by default 3. It must be a whole number from 1 up; `parallel <n>` on the command line wins over it for one Spec run.
 
 `pickup.limit` sets the [Claim limit](#the-claim-limit): how many open issues labelled `in-progress` stop a [Pickup run](#pickup-runs) from taking another, by default 3. It must be a whole number from 1 up. There is no command-line flag for it.
+
+`trial.memory_high`, `trial.memory_max` and `trial.memory_swap_max` cap each Trial and each Grader in its own scope, from `systemd-run --user --scope`. Past `memory_high` the scope throttles. Past `memory_max` its processes are killed together and the Trial is void. `memory_swap_max` bounds its swap. They default to `1G`, `2G` and `1G`, chosen with headroom above #1009's largest observed Harness resident size of about 480 MiB. That snapshot had no builds running; a Trial's footprint beside two building Runs remains unmeasured. Each limit must be a byte count systemd accepts, such as `512M`, `2G` or `infinity`. There is no command-line flag for them. The Experiment suite overrides them with `THIRDSHIFT_TRIAL_MEMORY_HIGH`, `THIRDSHIFT_TRIAL_MEMORY_MAX` and `THIRDSHIFT_TRIAL_MEMORY_SWAP_MAX` for a small test cap. Scopes need your user manager: run `loginctl enable-linger <user>` once, so they work while you are logged out. A logged-out launcher discovers the user's runtime directory if its environment omits it. Without a reachable manager the Experiment stops before dispatch and names the linger step.
 
 `pickup.order` sets which end of the issue numbers a [Pickup run](#pickup-runs) takes its Ready issue from: `lowest-first`, the default, or `highest-first`. Anything else, or anything but a quoted string, stops the pass before any work, naming the file and the key, as a Ticket run would refuse it. `lowest-first` and `highest-first` on the command line win over it for one pass.
 
@@ -745,7 +960,7 @@ no Resend API key. Either:
     (a crontab line, CI secret, or a shell profile the Ticket run's shell reads)
 ```
 
-Setup validates the Credentials before asking questions on a terminal. For email, `email-test`, the Console and a Ticket run or a Pass that asks for a notification read them only when `RESEND_API_KEY` is unset or empty. A missing file just means no key from it. The file accepts quoted `resend.key` and `claude.setup_token` values. Invalid TOML, unknown sections or keys (such as `kye`), and values of other types stop the command with exit `1`, naming the file and the offending key, and nothing is sent. One that others can read is still used, with a `warning:` line on stderr saying to `chmod 600` it. Nothing is sent to check the key itself. When Resend accepts the email, it prints `accepted by Resend; check your inbox` and exits `0`; that is all it can verify, so check that the email arrives. When Resend refuses it, for example for a bad key or a sender it won't send from, it prints Resend's error text word for word, with where the key came from, and exits `1`. It gives up after 30 seconds without an answer.
+Setup validates the Credentials before asking questions on a terminal. For email, `email-test`, the Console and a Run or a Pass that asks for a notification read them only when `RESEND_API_KEY` is unset or empty. A missing file just means no key from it. The file accepts quoted `resend.key`, `claude.setup_token` and `opencode.api_key` values. Invalid TOML, unknown sections or keys (such as `kye`), and values of other types stop the command with exit `1`, naming the file and the offending key, and nothing is sent. An OpenCode Trial's provider key goes there by hand until `setup` asks for it, as `api_key` under `[opencode]`; without it, an OpenCode Trial fails before its session starts. A Grok Trial signs its own Trials home in once, with `GROK_HOME=~/.thirdshift/trials/grok grok login`; without that login, a Grok Trial fails before its session starts. One that others can read is still used, with a `warning:` line on stderr saying to `chmod 600` it. Nothing is sent to check the key itself. When Resend accepts the email, it prints `accepted by Resend; check your inbox` and exits `0`; that is all it can verify, so check that the email arrives. When Resend refuses it, for example for a bad key or a sender it won't send from, it prints Resend's error text word for word, with where the key came from, and exits `1`. It gives up after 30 seconds without an answer.
 
 #### Run notifications
 
@@ -1470,13 +1685,35 @@ cargo test
 
 ## Releasing
 
+Before pushing anything, the release script runs `thirdshift experiment
+--release <commit>` using this checkout's runner and private Eval suites.
+It evaluates the content commit beneath the version-only bump, so reruns use
+the same Experiment even before a bump branch exists. It pins that commit in a
+local Git ref before starting, so a merge to `main` during interruption does
+not change the Candidate on restart. The pin is removed after the branch push,
+when the pushed bump retains the selection. A pass carries on;
+a fail or inconclusive Verdict shows each suite's accuracy and wrong-finding
+intervals and asks `release anyway? [y/N]`, including without `--review`.
+Only `y` or `yes` continues; EOF or any other answer stops. Pending borderline
+and decisive Scores are listed with their recheck commands and polled until
+you have rechecked them. No touched suite or a last release with no Trial flag
+prints a note and carries on. An interrupted invocation resumes its saved
+Trials. A pushed bump branch is checked again before opening its PR, and an
+open or merged bump PR before merging or tagging. An already pushed tag only
+resumes the release workflow. Python 3 is needed to read the Experiment results.
+
+If `main` gains different content after the Candidate was selected, the script
+refuses to push or merge that release under its old Experiment; choose a fresh
+release version to measure current `main`. It also checks the merged tree before
+tagging, so a concurrent merge cannot publish unmeasured content.
+
 From a clone of this repo, signed in to `gh` and the User config's default Harness, run the release script with the new version:
 
 ```sh
 scripts/release.sh 0.4.0
 ```
 
-It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged since the last tag, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review` it never prompts. It waits for the pull request's checks, merges it with a merge commit, then tags that merge commit `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below), and the script then waits for that workflow's run on the merge commit, printing the run's URL so you can watch it. CI's run on `main` for the same commit isn't waited for. Once the release workflow run succeeds, the GitHub Release is published with its final body and the crate is on crates.io, and the script prints the GitHub Release's URL and exits `0`. It prints a line on stderr for each step, stamped with the local time as `HH:MM:SS` as thirdshift's own progress lines are, so a long wait can be told from a stalled one. If the checks fail, it stops before merging and leaves the pull request open. If the release workflow run fails, it exits `1`, naming the failed jobs and the run's URL, and leaves the tag in place: the tag is already public, so rerun the failed jobs with `gh run rerun --failed <run id>` rather than cutting a new version. Neither wait has an overall timeout.
+It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged since the last tag, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review`, only a failed or inconclusive Experiment prompts. It waits for the pull request's checks, merges it with a merge commit, then tags that merge commit `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below), and the script then waits for that workflow's run on the merge commit, printing the run's URL so you can watch it. CI's run on `main` for the same commit isn't waited for. Once the release workflow run succeeds, the GitHub Release is published with its final body and the crate is on crates.io, and the script prints the GitHub Release's URL and exits `0`. It prints a line on stderr for each step, stamped with the local time as `HH:MM:SS` as thirdshift's own progress lines are, so a long wait can be told from a stalled one. If the checks fail, it stops before merging and leaves the pull request open. If the release workflow run fails, it exits `1`, naming the failed jobs and the run's URL, and leaves the tag in place: the tag is already public, so rerun the failed jobs with `gh run rerun --failed <run id>` rather than cutting a new version. Neither wait has an overall timeout.
 
 Before it pushes anything, it refuses a release that can't be cut and says why: a version that isn't plain `X.Y.Z` (no leading `v`), a version that isn't higher than the one in `Cargo.toml` on `origin/main`, a `v<version>` tag that already exists locally or on origin, or a CI run on main's current tip that ended without success. It prints a progress line and waits for that tip's CI run to appear and finish, with no overall timeout. While waiting, it fetches `main` again: if the tip moves, it names the old and new commits and waits for the new tip's CI, checking that the requested version is still higher. Once CI succeeds, it bumps the version from that commit and starts the release automatically; if CI ends without success, it names the commit and conclusion and stops without pushing anything.
 

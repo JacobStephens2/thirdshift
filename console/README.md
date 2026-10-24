@@ -280,6 +280,24 @@ escaping and 390 px. Retained timing checks also run with
 `python3 console/reproductions/waterfall-stage.py`, and
 `python3 console/reproductions/waterfall-trace-axis.py` after a build.
 
+Experiments (`/experiments`, or `g` then `x`) uses Running, Needs you and Done
+groups. Its Experiment page shows the live Trial grid, per-suite Verdict
+intervals, pending rechecks, Arm comparison and folded Bar. A Trial or Eval task
+opens the Peek; each retained attempt links to its Session log or Session trace.
+Both pages use the same view as `thirdshift experiments [<id>] --json`, including
+the saved refs/title, end time, resume command, active Trials and session IDs.
+`thirdshift experiments <id> --session <session-id> [--json]` reads a listed
+session; JSON returns its `id`, `trace` flag and `contents`.
+These pages poll every two seconds independently of Command-record events, and
+retain folds, filters and the open Peek. Rechecks stay in the CLI; Copy command
+copies the current Trial's command. `node --test console/tests/experiments.test.cjs`
+checks live updates and interaction at 390 px after a build.
+The Experiments list also shows proposed Eval tasks; each Experiment page shows
+proposals for its suites. Approve one there or with
+`thirdshift evals approve <suite> <task> [--json]`. Both change only the manifest's
+state and start no work. Approval affects future Experiments; an existing
+Experiment keeps its fixed Eval tasks on resume.
+
 `j` / `k` select headings and visible rows, wrapping at either end. `Space`
 folds a heading or toggles a row's peek; `Enter` opens that row's full Command
 log. `z` folds the current section. `Escape` closes help, jumps or the peek,

@@ -29,6 +29,9 @@ libc = "0.2.189"
 notify = "8.2.0"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "blocking", "json", "form"] }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
+rand = "=0.10.3"
+rand_distr = "=0.6.0"
+rand_pcg = "=0.10.2"
 serde = { version = "1.0.229", features = ["derive"] }
 # OTLP must preserve f64 values and parse decimal integers without an f64 hop.
 serde_json = { version = "1.0.151", features = ["float_roundtrip", "arbitrary_precision"] }

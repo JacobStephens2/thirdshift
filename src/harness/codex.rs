@@ -2,6 +2,7 @@
 
 mod catalog;
 mod events;
+mod limits;
 mod patches;
 pub(crate) mod stream;
 pub use catalog::Catalog;
@@ -56,6 +57,17 @@ impl Adapter for Codex {
         prompt: &str,
     ) -> Invocation {
         self.session(choice, resume, &format!("{prompt}\n{FRESH_SUB_AGENTS}\n"))
+    }
+    /// A Trial runs behind the allowlisting proxy, so its web search stays
+    /// off, as a release summary's does.
+    fn trial_session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation {
+        let mut invocation = self.code_review_session(choice, resume, prompt);
+        // After `exec`, before any Resume subcommand: repeated on each launch.
+        invocation.args.splice(
+            1..1,
+            ["-c".to_string(), "web_search=\"disabled\"".to_string()],
+        );
+        invocation
     }
     fn security_session(
         &self,
@@ -257,4 +269,29 @@ fn ask_codex(
 #[cfg(test)]
 pub fn codex_prompt(prompt: &str) -> String {
     SkillLoading::Dollar.prompt(prompt)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trials_disable_web_search() {
+        let choice = Choice {
+            harness: Harness::Codex,
+            model: None,
+            effort: None,
+            chosen_by: super::super::ChosenBy::Command,
+        };
+        let trial = Codex.trial_session(&choice, None, "review");
+        assert_eq!(&trial.args[..3], ["exec", "-c", "web_search=\"disabled\""]);
+        assert!(trial.args.last().unwrap().starts_with("review"));
+        assert!(
+            !Codex
+                .session(&choice, None, "review")
+                .args
+                .iter()
+                .any(|arg| arg.contains("web_search"))
+        );
+    }
 }

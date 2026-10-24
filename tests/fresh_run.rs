@@ -16,6 +16,26 @@ gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
 "#;
 
 #[test]
+fn ordinary_runs_keep_working_after_claude_and_codex_quota_warnings() {
+    for (harness, event) in [
+        (
+            "claude",
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning"}}"#,
+        ),
+        (
+            "codex",
+            r#"{"type":"token_count","rate_limits":{"primary":{"used_percent":95}}}"#,
+        ),
+    ] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&format!("echo '{event}'\n{AGENT_COMMITS_AND_OPENS_PR}"));
+        let result = scenario.run(&[&scenario.issue_url(7), "--harness", harness]);
+        assert_eq!(result.code, Some(0), "{harness}: {}", result.stderr);
+        assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    }
+}
+
+#[test]
 fn prints_only_the_pr_url_and_exits_zero() {
     let scenario = Scenario::new();
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);

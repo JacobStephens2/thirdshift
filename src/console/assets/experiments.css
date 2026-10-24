@@ -1,0 +1,57 @@
+#experiments { min-width: 0; }
+#experiments h2 { margin: 20px 0 8px; font-size: 17px; }
+#experiments h3 { font-size: 15px; margin: 14px 0 6px; }
+.experiment-group .commands { max-height: none; }
+.experiment-row .now { white-space: normal; overflow: visible; }
+.experiment-row[data-tone="urgent"] { border-left: 3px solid var(--urgent); background: var(--panel); }
+.experiment-row[data-tone="look"], .experiment-callout { border-left: 3px solid var(--look); background: var(--panel); }
+.experiment-tag { display: inline-block; border: 1px solid var(--rule); border-radius: var(--radius); padding: 0 4px; font-size: 12px; background: var(--tag-done-bg); color: var(--tag-done-text); }
+.experiment-tag[data-tone="working"] { background: var(--tag-working-bg); color: var(--tag-working-text); }
+.experiment-tag:is([data-tone="look"], [data-tone="inconclusive"]) { background: var(--tag-look-bg); color: var(--tag-look-text); }
+.experiment-tag:is([data-tone="urgent"], [data-tone="fail"]) { background: var(--tag-urgent-bg); color: var(--tag-urgent-text); }
+.experiment-lead { border-bottom: 1px solid var(--rule); padding: 8px 0; }
+.experiment-lead > p { font-weight: var(--head-weight); margin-top: 6px; }
+.experiment-callout { padding: 10px 14px; margin: 18px 0; border-radius: var(--radius); overflow-wrap: anywhere; }
+.experiment-callout h2 { margin-top: 0 !important; }
+.experiment-callout ol { padding: 0; list-style: none; }
+.experiment-callout li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 12px; padding: 8px 0; border-top: 1px solid var(--rule); font-size: 13px; }
+.experiment-callout li > span { flex: 1 1 16em; color: var(--dim); }
+.experiment-link { padding: 0; background: none; border: 0; color: var(--link); text-decoration: underline; cursor: pointer; text-align: left; overflow-wrap: anywhere; }
+.experiment-dim, .experiment-why, .experiment-legend { font-size: 12px; color: var(--dim); }
+.experiment-figure, .experiment-list-interval { display: grid; grid-template-columns: 14em minmax(110px, 1fr) 10em; align-items: center; gap: 10px; max-width: 760px; font-size: 13px; }
+.experiment-interval { display: inline-block; height: 16px; color: var(--text); }
+.experiment-interval svg { display: block; width: 100%; height: 16px; overflow: visible; }
+.experiment-interval[data-tone="fail"] { color: var(--urgent); }
+.experiment-interval[data-tone="inconclusive"] { color: var(--look); }
+.interval-axis { stroke: var(--rule); }
+.interval-margin { stroke: var(--look); stroke-dasharray: 2 2; }
+.interval-zero { stroke: var(--dim); }
+.interval-bar { fill: currentColor; }
+.interval-arrow { stroke: currentColor; fill: none; }
+.experiment-interval line, .interval-arrow { vector-effect: non-scaling-stroke; }
+.interval-range, .experiment-axis { font: 12px var(--font-mono); }
+.experiment-axis { color: var(--dim); max-width: 760px; text-align: center; }
+.experiment-arms { border-collapse: collapse; width: 100%; max-width: 800px; table-layout: fixed; font-size: 13px; }
+.experiment-arms th, .experiment-arms td { text-align: left; vertical-align: top; padding: 7px 9px; border-bottom: 1px solid var(--rule); overflow-wrap: anywhere; }
+.experiment-arms th:first-child { width: 28%; color: var(--dim); font-weight: normal; }
+.experiment-differs { background: var(--sel-bg); }
+.trial-grid { --cell-width: 4.8rem; max-width: 800px; }
+.trial-grid[data-trials="3"] { --cell-width: 90px; }
+.trial-row { display: grid; grid-template-columns: minmax(0, 1fr) var(--cell-width) var(--cell-width) 3.8em; align-items: center; gap: 0 12px; border-bottom: 1px solid var(--rule); padding: 4px 0; font-size: 12px; }
+.trial-cells { display: flex; gap: 3px; }
+.trial-cell { position: relative; width: 27px; height: 27px; padding: 2px; font-size: 12px; color: var(--text); }
+.trial-cell[data-tone="fail"] { border-color: var(--urgent); color: var(--urgent-text); }
+.trial-cell[data-tone="working"] { border-color: var(--working); color: var(--working-text); }
+.trial-cell sup { position: absolute; bottom: -5px; right: -3px; font-size: 9px; color: var(--look-text); background: var(--bg); }
+.trial-dropped .trial-task { text-decoration: line-through; color: var(--dim); }
+.trial-task { max-width: 100%; }
+#experiment-bar { margin-top: 20px; }
+@media (max-width: 600px) {
+  .experiment-figure, .experiment-list-interval { grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; }
+  .experiment-figure .experiment-interval, .experiment-list-interval .experiment-interval { grid-column: 1 / -1; grid-row: 2; }
+  .trial-row { gap: 0 5px; grid-template-columns: minmax(0, 1fr) var(--cell-width) var(--cell-width) 3.3em; }
+  .trial-grid { --cell-width: 4rem; }
+  .trial-grid[data-trials="3"] { --cell-width: 84px; }
+  .trial-cell { width: 25px; height: 25px; }
+  .experiment-arms th, .experiment-arms td { padding: 6px 5px; font-size: 12px; }
+}
