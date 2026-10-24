@@ -89,9 +89,13 @@ pub(crate) fn covering(record: &Path, selector: &str) -> Option<DismissedRow> {
 fn write(record: &Path, file: &DismissalFile) -> Result<()> {
     let path = dismissal_path(record);
     if file.rows.is_empty() {
-        // Taking back the only dismissal already removed the file.
-        let _ = std::fs::remove_file(&path);
-        return Ok(());
+        return match std::fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error).with_context(|| {
+                format!("could not remove the dismissal beside {}", record.display())
+            }),
+        };
     }
     let parent = path.parent().context("Command record has no directory")?;
     let mut staged = tempfile::NamedTempFile::new_in(parent)?;
@@ -206,7 +210,11 @@ pub fn dismiss(input: &str, undo: bool, json: bool) -> Result<()> {
     let who = String::from_utf8(user.stdout)?.trim().to_owned();
     let at = chrono::Local::now().to_rfc3339();
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load(&config.logs_dir, chrono::Local::now())?;
+    let snapshot = Snapshot::load_with_silence(
+        &config.logs_dir,
+        chrono::Local::now(),
+        config.silent_interval,
+    )?;
     let target = row_for(&snapshot, input, config.inbox_days, undo)?;
     if target.members.is_empty() {
         bail!("cannot dismiss {input}: row has no Command record");
@@ -279,23 +287,4 @@ pub fn dismiss(input: &str, undo: bool, json: bool) -> Result<()> {
         println!("dismissed {} from {}", target.name, target.group.title());
     }
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use anyhow::Context;
-
-    /// anyhow's `.context()` takes a plain `Display`, so brace placeholders
-    /// never interpolate: the refusal contexts in `row_for` must keep the
-    /// `with_context` plus `format!` construction pinned here. The old
-    /// `.context("cannot dismiss {input}...")` form printed `{input}`
-    /// literally on all three sites.
-    #[test]
-    fn refusal_contexts_interpolate_the_command() {
-        let input = "widgets#7";
-        let err = Err::<(), _>(anyhow::anyhow!("base"))
-            .with_context(|| format!("cannot dismiss {input}: row has no Command record"))
-            .unwrap_err();
-        assert!(format!("{err:#}").contains("widgets#7"), "{err:#}");
-    }
 }

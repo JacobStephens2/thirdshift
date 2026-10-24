@@ -306,14 +306,13 @@ pub(super) fn list(
                 .any(|(issue, start)| latest.get(issue).is_some_and(|latest| latest > start));
         let waiting_kind = live_problem.or_else(|| problem.filter(|_| held));
         // A dismissal holds only for the kind it covered: a row that turns
-        // into a kind it wasn't when dismissed waits again.
-        let kind_now = waiting_kind
+        // into a kind it wasn't when dismissed waits again. Its kind is
+        // independent of age or a later Command taking it up, so those
+        // exits do not erase the dismissal or shorten its retention.
+        let kind_now = live_problem
+            .or(problem)
             .map(NeedsYouKind::title)
-            .or(if facts.ready && held {
-                Some(READY_KIND)
-            } else {
-                None
-            });
+            .or(if facts.ready { Some(READY_KIND) } else { None });
         let selector = command.selector();
         let dismissed_row = match command {
             Observation::Record(record) => selector

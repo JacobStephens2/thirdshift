@@ -25,7 +25,7 @@ fn write_record(scenario: &Scenario, number: u32, record: &Value) {
     .unwrap();
 }
 
-fn wrote(scenario: &Scenario, number: u32, started: &str, ended: Option<&str>) -> Value {
+fn record_value(scenario: &Scenario, number: u32, started: &str, ended: Option<&str>) -> Value {
     json!({
         "version": 1, "kind": "Run", "repository": "acme/widgets",
         "name": format!("acme/widgets#{number}"),
@@ -40,14 +40,14 @@ fn wrote(scenario: &Scenario, number: u32, started: &str, ended: Option<&str>) -
 
 fn write_failed(scenario: &Scenario, number: u32, days_ago: i64, cause: Option<&str>) {
     let time = (chrono::Local::now() - chrono::Duration::days(days_ago)).to_rfc3339();
-    let mut record = wrote(scenario, number, &time, Some(&time));
+    let mut record = record_value(scenario, number, &time, Some(&time));
     record["cause"] = cause.into();
     write_record(scenario, number, &record);
 }
 
 fn write_ready(scenario: &Scenario, number: u32) {
     let now = chrono::Local::now().to_rfc3339();
-    let mut record = wrote(scenario, number, &now, Some(&now));
+    let mut record = record_value(scenario, number, &now, Some(&now));
     record["outcome"] = "ready for review".into();
     record["pull_request"] = format!("https://github.com/acme/widgets/pull/{number}").into();
     write_record(scenario, number, &record);
@@ -228,6 +228,35 @@ fn dismiss_refuses_rows_outside_needs_you_and_ready_for_review() {
 }
 
 #[test]
+fn dismiss_refuses_a_row_without_a_command_record_and_names_it() {
+    let scenario = Scenario::new();
+    fs::create_dir_all(scenario.path(LOGS)).unwrap();
+    let stamp = chrono::Local::now().format("%Y%m%dT%H%M%S%z").to_string();
+    let time = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let log = format!("commands/issue/7-{stamp}.log");
+    fs::write(
+        scenario.path(ACTIVITY),
+        format!("{time} Run #7 started: {log}, on claude\n{time} Run #7 ended: failed: fixture\n"),
+    )
+    .unwrap();
+    let status = read_status(&scenario);
+    assert_eq!(status["commands"][0]["source"], "activity_log");
+    assert_eq!(status["commands"][0]["group"], "needs you");
+
+    let calls = scenario.gh_calls().len();
+    let refused = scenario.run(&["dismiss", "widgets#7"]);
+    assert_ne!(refused.code, Some(0));
+    assert!(
+        refused
+            .stderr
+            .contains("cannot dismiss widgets#7: row has no Command record"),
+        "{}",
+        refused.stderr
+    );
+    assert_eq!(scenario.gh_calls().len(), calls);
+}
+
+#[test]
 fn dismiss_collapsed_row_covers_every_command_it_stands_for() {
     let scenario = Scenario::new();
     write_failed(&scenario, 7, 0, Some("boom"));
@@ -331,6 +360,10 @@ impl SilentRun {
             "name": stage, "began_at": began, "session_log": null
         }]);
         fs::write(&self.path, serde_json::to_vec(&self.record).unwrap()).unwrap();
+        self.quiet_logs_for(20);
+    }
+
+    fn quiet_logs_for(&self, minutes: u64) {
         let log = self.path.with_file_name(
             self.path
                 .file_name()
@@ -348,7 +381,8 @@ impl SilentRun {
                 .open(path)
                 .unwrap()
                 .set_times(
-                    FileTimes::new().set_modified(SystemTime::now() - Duration::from_secs(20 * 60)),
+                    FileTimes::new()
+                        .set_modified(SystemTime::now() - Duration::from_secs(minutes * 60)),
                 )
                 .unwrap();
         }
@@ -406,15 +440,65 @@ fn dismiss_live_landing_row_moves_it_to_landing() {
 }
 
 #[test]
+fn dismiss_refuses_a_working_row_using_the_configured_silent_interval() {
+    let mut run = SilentRun::new();
+    run.scenario
+        .user_config_is("[inbox]\nsilent_minutes = 30\n");
+    run.go_silent("implement");
+    let status = read_status(&run.scenario);
+    assert_eq!(status["commands"][0]["group"], "working", "{status}");
+    let refused = run.scenario.run(&["dismiss", "widgets#7"]);
+    assert_ne!(refused.code, Some(0), "{}", refused.stdout);
+    assert!(
+        refused.stderr.contains("not Needs you or Ready for review"),
+        "{}",
+        refused.stderr
+    );
+}
+
+#[test]
+fn dismiss_refuses_a_row_working_under_configured_silence() {
+    let mut run = SilentRun::new();
+    run.scenario
+        .user_config_is("[inbox]\nsilent_minutes = 30\n");
+    run.go_silent("implement");
+    let status = read_status(&run.scenario);
+    assert_eq!(status["commands"][0]["group"], "working", "{status}");
+
+    let dismissed = run.scenario.run(&["dismiss", "widgets#7"]);
+    assert_ne!(dismissed.code, Some(0), "{}", dismissed.stdout);
+    assert!(
+        dismissed
+            .stderr
+            .contains("not Needs you or Ready for review"),
+        "{}",
+        dismissed.stderr
+    );
+
+    // A shorter configured interval also makes the visible Silent row
+    // dismissible before the default ten minutes have elapsed.
+    run.scenario.user_config_is("[inbox]\nsilent_minutes = 5\n");
+    run.quiet_logs_for(6);
+    let status = read_status(&run.scenario);
+    assert_eq!(status["commands"][0]["group"], "needs you", "{status}");
+    assert_eq!(status["commands"][0]["needs_you_kind"], "silent");
+    let dismissed = run.scenario.run(&["dismiss", "widgets#7", "--json"]);
+    assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+    let status = read_status(&run.scenario);
+    assert_eq!(status["commands"][0]["group"], "working", "{status}");
+    assert_eq!(status["commands"][0]["dismissal"]["kind"], "Silent");
+}
+
+#[test]
 fn dismiss_dispatched_row_covers_only_that_row_of_the_record() {
     let scenario = Scenario::new();
     let now = chrono::Local::now().to_rfc3339();
-    let mut outer = wrote(&scenario, 7, &now, Some(&now));
+    let mut outer = record_value(&scenario, 7, &now, Some(&now));
     outer["kind"] = "Pickup run".into();
     outer["name"] = "pickup-20261018T120000-0400".into();
     outer["issue"] = Value::Null;
     outer["outcome"] = "merged".into();
-    let mut dispatched = wrote(&scenario, 7, &now, Some(&now));
+    let mut dispatched = record_value(&scenario, 7, &now, Some(&now));
     dispatched["outcome"] = "ready for review".into();
     dispatched["pull_request"] = "https://github.com/acme/widgets/pull/7".into();
     outer["dispatched"] = json!([dispatched]);
@@ -466,4 +550,116 @@ fn undo_collapsed_row_takes_back_every_command_it_stood_for() {
     assert_eq!(status["commands"].as_array().unwrap().len(), 1, "{status}");
     assert_eq!(status["commands"][0]["group"], "needs you");
     assert_eq!(status["commands"][0]["count"], 2);
+}
+
+#[test]
+fn dismissal_retention_is_measured_from_dismissal() {
+    let scenario = Scenario::new();
+    // Eight-day-old failure dismissed two days ago, while still in Needs you.
+    write_failed(&scenario, 7, 8, None);
+    let path = record_path(&scenario, 7);
+    let at = (chrono::Local::now() - chrono::Duration::days(2)).to_rfc3339();
+    fs::write(
+        path.with_extension("dismiss.json"),
+        serde_json::to_vec(&json!({"rows": [{
+            "selector": format!("{}::acme/widgets#7", path.display()),
+            "kind": "Failed", "who": "reviewer", "at": at,
+            "from_console": false
+        }]}))
+        .unwrap(),
+    )
+    .unwrap();
+    let status = read_status(&scenario);
+    assert_eq!(groups(&status), vec![(7, "resolved".into())], "{status}");
+    assert_eq!(status["commands"][0]["dismissal"]["who"], "reviewer");
+
+    // Once the dismissal's own retention ends, History still says who
+    // dismissed it, and undo works there too.
+    let mut file: Value =
+        serde_json::from_slice(&fs::read(path.with_extension("dismiss.json")).unwrap()).unwrap();
+    file["rows"][0]["at"] = (chrono::Local::now() - chrono::Duration::days(8))
+        .to_rfc3339()
+        .into();
+    fs::write(
+        path.with_extension("dismiss.json"),
+        serde_json::to_vec(&file).unwrap(),
+    )
+    .unwrap();
+    assert!(groups(&read_status(&scenario)).is_empty());
+    let all = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(all.code, Some(0), "{}", all.stderr);
+    let all: Value = serde_json::from_str(&all.stdout).unwrap();
+    assert_eq!(all["commands"][0]["group"], "history");
+    assert_eq!(all["commands"][0]["dismissal"]["who"], "reviewer");
+    let undone = scenario.run(&["dismiss", "widgets#7", "--undo"]);
+    assert_eq!(undone.code, Some(0), "{}", undone.stderr);
+    let all = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(all.code, Some(0), "{}", all.stderr);
+    let all: Value = serde_json::from_str(&all.stdout).unwrap();
+    assert!(all["commands"][0]["dismissal"].is_null(), "{all}");
+}
+
+#[test]
+fn dismissal_retention_survives_the_original_wait_cutoff() {
+    let scenario = Scenario::new();
+    write_failed(&scenario, 7, 6, None);
+    let dismissed = scenario.run(&["dismiss", "widgets#7"]);
+    assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+
+    // Represent two days passing: the Command ended eight days ago,
+    // and its Dismissal was made two days ago.
+    write_failed(&scenario, 7, 8, None);
+    let sidecar = record_path(&scenario, 7).with_extension("dismiss.json");
+    let mut file: Value = serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+    file["rows"][0]["at"] = (chrono::Local::now() - chrono::Duration::days(2))
+        .to_rfc3339()
+        .into();
+    fs::write(sidecar, serde_json::to_vec(&file).unwrap()).unwrap();
+
+    let status = read_status(&scenario);
+    assert_eq!(groups(&status), vec![(7, "resolved".into())], "{status}");
+    assert_eq!(status["commands"][0]["dismissal"]["kind"], "Failed");
+
+    let original_start = status["commands"][0]["started_at"].clone();
+    let now = chrono::Local::now().to_rfc3339();
+    let mut later = record_value(&scenario, 7, &now, Some(&now));
+    later["outcome"] = "merged".into();
+    write_record(&scenario, 8, &later);
+    let status = read_status(&scenario);
+    let original = status["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["started_at"] == original_start)
+        .unwrap();
+    assert_eq!(original["group"], "resolved");
+    assert_eq!(original["dismissal"]["kind"], "Failed");
+}
+
+#[cfg(unix)]
+#[test]
+fn undo_reports_sidecar_removal_failure() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let scenario = Scenario::new();
+    write_failed(&scenario, 7, 0, None);
+    let dismissed = scenario.run(&["dismiss", "widgets#7"]);
+    assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+
+    let record = record_path(&scenario, 7);
+    let directory = record.parent().unwrap();
+    let activity_before = activity(&scenario);
+    let original = fs::metadata(directory).unwrap().permissions();
+    fs::set_permissions(directory, fs::Permissions::from_mode(0o555)).unwrap();
+    let undone = scenario.run(&["dismiss", "widgets#7", "--undo", "--json"]);
+    fs::set_permissions(directory, original).unwrap();
+
+    assert!(record.with_extension("dismiss.json").exists());
+    assert_ne!(undone.code, Some(0), "{}", undone.stdout);
+    assert_eq!(activity(&scenario), activity_before);
+    assert!(
+        undone.stderr.contains("could not remove the dismissal"),
+        "{}",
+        undone.stderr
+    );
 }
