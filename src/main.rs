@@ -82,8 +82,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift score                               Sample merged factory pull requests
-       thirdshift scores [<pull request>] [--json]     Show Scores and calibration
-       thirdshift scores <pull request> --mine        Enter your five Scores, then reveal the model's
+       thirdshift scores [<pull request>] [--json|--mine]  Show Scores; --mine enters yours
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
        thirdshift status [--all] [--json]             List this machine's Commands
