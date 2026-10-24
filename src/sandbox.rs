@@ -217,12 +217,22 @@ pub(crate) fn code_grader(repository: &Path, packet: &Path, args: &[String]) -> 
         binds.read_write(packet, Path::new("/sandbox/packet"));
         // Spec-review repositories have a local origin whose absolute host
         // path identifies the Arm. Keep Git usable without exposing that path.
-        if repository.join(".git/eval-origin.git").is_dir() {
-            let config = repository.join(".git/config");
+        // The snapshot holds Trial-controlled contents: a symlinked `.git`
+        // or config would redirect this host-side rewrite outside it, so
+        // only touch a real directory holding a real (or missing) config.
+        let git_dir = repository.join(".git");
+        let git_config = git_dir.join("config");
+        let confined = fs::symlink_metadata(&git_dir).is_ok_and(|kind| kind.is_dir())
+            && match fs::symlink_metadata(&git_config) {
+                Ok(kind) => kind.is_file(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                Err(_) => false,
+            };
+        if confined && git_dir.join("eval-origin.git").is_dir() {
             crate::git::Git::new(repository).run(&[
                 "config",
                 "--file",
-                config.to_str().context("invalid Grader config path")?,
+                git_config.to_str().context("invalid Grader config path")?,
                 "remote.origin.url",
                 "/sandbox/repository/.git/eval-origin.git",
             ])?;
@@ -1212,6 +1222,38 @@ mod tests {
                     .collect(),
             }
         }
+    }
+
+    /// A Trial-controlled `.git` symlink must not redirect the Grader's
+    /// origin-URL rewrite to a git config outside its snapshot.
+    #[test]
+    fn code_grader_git_rewrite_stays_inside_its_snapshot() {
+        if !bwrap_or_skip("Grader git confinement") {
+            return;
+        }
+        let root = tempfile::TempDir::new().unwrap();
+        // An outside directory shaped like a prepared repository's `.git`.
+        let outside = root.path().join("outside.git");
+        fs::create_dir_all(outside.join("eval-origin.git")).unwrap();
+        let config = outside.join("config");
+        fs::write(&config, "[remote \"origin\"]\n\turl = /experiments/real\n").unwrap();
+        // The snapshot's `.git` is a symlink planted in Trial-controlled content.
+        let snapshot = root.path().join("snapshot");
+        fs::create_dir_all(&snapshot).unwrap();
+        std::os::unix::fs::symlink(&outside, snapshot.join(".git")).unwrap();
+        let packet = root.path().join("packet");
+        fs::create_dir_all(&packet).unwrap();
+        code_grader(
+            &snapshot,
+            &packet,
+            &["sh".into(), "-c".into(), "true".into()],
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(&config).unwrap(),
+            "[remote \"origin\"]\n\turl = /experiments/real\n",
+            "grader rewrote a git config outside its snapshot",
+        );
     }
 
     /// Run the sandbox's Harness with `script` as its body, in the bound
