@@ -9,6 +9,8 @@ use crate::logs::command_record::Issue;
 use crate::logs::reading::{Command, Entry, Group, Health, Observation, Snapshot};
 
 pub(crate) struct Inbox {
+    /// Outer Command trees with live work, independent of sections and rows.
+    pub active_runs: usize,
     pub sections: Vec<Section>,
     pub idle_passes: Vec<String>,
     pub warning: Option<&'static str>,
@@ -294,6 +296,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
         })
         .collect::<Result<_>>()?;
     Ok(Inbox {
+        active_runs: snapshot.active_runs(),
         sections,
         idle_passes: snapshot.idle_passes.iter().map(|pass| format!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason)).collect(),
         warning: (config.effective_waiting_line_interval() != config.waiting_line_interval).then_some(
