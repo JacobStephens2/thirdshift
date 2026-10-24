@@ -9,7 +9,7 @@
   <script src="/assets/vendor/idiomorph-0.7.4.min.js" defer></script>
   <script src="/assets/console.js" type="module"></script>
 </head>
-<body>
+<body{% if title == "Stages" %} class="full-width"{% endif %}>
   {% include "console/header.html" %}
   {% include "console/nav.html" %}
   <main data-time-page>
