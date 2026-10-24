@@ -1,6 +1,8 @@
 //! Escaped Experiment markup. The same facts feed the list, grid and Peeks.
 use crate::console::filters::escaped as esc;
-use crate::evals::experiment::{Arm, Flip, Pending, TrialResult, View, trial_key};
+use crate::evals::experiment::{
+    Arm, Conclusion, Flip, Pending, State, TrialResult, View, trial_key,
+};
 use crate::trial::Outcome;
 use crate::verdict::Decision;
 
@@ -47,42 +49,61 @@ fn short(text: &str) -> String {
     text.chars().take(10).collect()
 }
 fn active(view: &View) -> bool {
-    matches!(view.state.to_string().as_str(), "running" | "prepared")
+    matches!(view.state, State::Running | State::Prepared)
 }
-fn status(view: &View) -> &str {
-    view.verdict.as_ref().map_or_else(
-        || if active(view) { "Running" } else { "Paused" },
-        |v| match v.outcome() {
-            "pass" => "Pass",
-            "fail" => "Fail",
-            "waiting_on_rechecks" => "Waiting on rechecks",
-            _ => "Inconclusive",
+
+struct Status {
+    label: &'static str,
+    tone: &'static str,
+    group: usize,
+}
+
+fn status(view: &View) -> Status {
+    match view.verdict.as_ref().map(|v| &v.verdict) {
+        Some(Conclusion::Pass) => Status {
+            label: "Pass",
+            tone: "done",
+            group: 2,
         },
-    )
-}
-fn tone(view: &View) -> &str {
-    match status(view) {
-        "Fail" => "urgent",
-        "Pass" => "done",
-        "Running" => "working",
-        _ => "look",
+        Some(Conclusion::Fail) => Status {
+            label: "Fail",
+            tone: "urgent",
+            group: 1,
+        },
+        Some(Conclusion::Inconclusive) => Status {
+            label: "Inconclusive",
+            tone: "look",
+            group: 1,
+        },
+        Some(Conclusion::WaitingOnRechecks) => Status {
+            label: "Waiting on rechecks",
+            tone: "look",
+            group: 1,
+        },
+        None if active(view) => Status {
+            label: "Running",
+            tone: "working",
+            group: 0,
+        },
+        None => Status {
+            label: "Paused",
+            tone: "look",
+            group: 1,
+        },
     }
 }
+fn tone(view: &View) -> &str {
+    status(view).tone
+}
 fn tag(view: &View) -> String {
+    let status = status(view);
     format!(
         "<span class=\"experiment-tag\" data-tone=\"{}\">{}</span>",
-        tone(view),
-        status(view)
+        status.tone, status.label
     )
 }
 fn group(view: &View) -> usize {
-    if active(view) {
-        0
-    } else if status(view) == "Pass" {
-        2
-    } else {
-        1
-    }
+    status(view).group
 }
 fn total(view: &View) -> usize {
     view.tasks
@@ -91,50 +112,48 @@ fn total(view: &View) -> usize {
         .sum()
 }
 fn now(view: &View) -> String {
-    if view.verdict.is_none() {
-        format!(
+    let Some(verdict) = &view.verdict else {
+        return format!(
             "Trials {} of {}, {} running{}",
             view.results.len(),
             total(view),
             view.running_trials.len(),
             if active(view) { "" } else { "; paused" }
-        )
-    } else {
-        let verdict = view.verdict.as_ref().unwrap();
-        let mut reasons = Vec::new();
-        if !view.pending_rechecks.is_empty() {
+        );
+    };
+    let mut reasons = Vec::new();
+    if !view.pending_rechecks.is_empty() {
+        reasons.push(format!(
+            "{} rechecks waiting, provisionally {}",
+            view.pending_rechecks.len(),
+            decision(
+                verdict
+                    .provisional_verdict
+                    .unwrap_or(Decision::Inconclusive)
+            )
+        ));
+    }
+    for (name, suite) in &verdict.suites {
+        if suite.dropped_tasks > (suite.retained_tasks + suite.dropped_tasks) / 10 {
             reasons.push(format!(
-                "{} rechecks waiting, provisionally {}",
-                view.pending_rechecks.len(),
-                decision(
-                    verdict
-                        .provisional_verdict
-                        .unwrap_or(Decision::Inconclusive)
-                )
+                "{name}: {} Eval tasks dropped",
+                suite.dropped_tasks
             ));
-        }
-        for (name, suite) in &verdict.suites {
-            if suite.dropped_tasks > (suite.retained_tasks + suite.dropped_tasks) / 10 {
-                reasons.push(format!(
-                    "{name}: {} Eval tasks dropped",
-                    suite.dropped_tasks
-                ));
-            } else {
-                for (metric, assessment) in [
-                    ("accuracy", &suite.accuracy),
-                    ("wrong findings", &suite.wrong_findings),
-                ] {
-                    if assessment.verdict != Decision::Pass {
-                        reasons.push(format!("{name} {metric}: {}", decision(assessment.verdict)));
-                    }
+        } else {
+            for (metric, assessment) in [
+                ("accuracy", &suite.accuracy),
+                ("wrong findings", &suite.wrong_findings),
+            ] {
+                if assessment.verdict != Decision::Pass {
+                    reasons.push(format!("{name} {metric}: {}", decision(assessment.verdict)));
                 }
             }
         }
-        if reasons.is_empty() {
-            "Every suite passed under the Bar.".into()
-        } else {
-            reasons.join(" · ")
-        }
+    }
+    if reasons.is_empty() {
+        "Every suite passed under the Bar.".into()
+    } else {
+        reasons.join(" · ")
     }
 }
 fn decision(value: Decision) -> &'static str {
@@ -254,7 +273,7 @@ pub(super) fn detail(view: &View) -> String {
         ));
     }
     html.push_str(&rechecks(view));
-    if view.state.to_string() == "completed" {
+    if view.state == State::Completed {
         html.push_str(&arms(view));
         html.push_str(&grid(view));
     } else {
@@ -266,8 +285,8 @@ pub(super) fn detail(view: &View) -> String {
 }
 
 fn lead(view: &View) -> String {
-    match view.verdict.as_ref().map(|v| v.outcome()) {
-        Some("waiting_on_rechecks") => format!(
+    match view.verdict.as_ref().map(|v| &v.verdict) {
+        Some(Conclusion::WaitingOnRechecks) => format!(
             "Provisionally {}, until you recheck {} Scores.",
             decision(
                 view.verdict
@@ -278,9 +297,13 @@ fn lead(view: &View) -> String {
             ),
             view.pending_rechecks.len()
         ),
-        Some("pass") => "Pass: the Candidate is no worse than the Baseline under the Bar.".into(),
-        Some("fail") => "Fail: the Candidate is worse than the Baseline under the Bar.".into(),
-        Some(_) => {
+        Some(Conclusion::Pass) => {
+            "Pass: the Candidate is no worse than the Baseline under the Bar.".into()
+        }
+        Some(Conclusion::Fail) => {
+            "Fail: the Candidate is worse than the Baseline under the Bar.".into()
+        }
+        Some(Conclusion::Inconclusive) => {
             "Inconclusive: these Trials cannot settle whether the Candidate is worse.".into()
         }
         None => now(view),
@@ -471,9 +494,9 @@ fn grid(view: &View) -> String {
                     (0..n).map(move |index| Cell::new(view, suite, &task.name, arm, index))
                 })
                 .collect();
-            let dropped = cells
-                .iter()
-                .any(|cell| cell.result.is_some_and(|r| r.outcome == Outcome::Void));
+            let dropped = cells.iter().any(|cell| {
+                cell.terminal && cell.result.is_some_and(|r| r.outcome == Outcome::Void)
+            });
             let complete = cells.iter().all(Cell::graded);
             let difference: i32 = cells
                 .iter()
@@ -548,12 +571,33 @@ struct Cell<'a> {
     index: usize,
     key: String,
     result: Option<&'a TrialResult>,
+    terminal: bool,
+}
+
+struct Mark {
+    label: String,
+    symbol: &'static str,
+    tone: &'static str,
+    decorations: String,
+}
+
+impl Mark {
+    fn plain(label: &str, symbol: &'static str, tone: &'static str) -> Self {
+        Self {
+            label: label.into(),
+            symbol,
+            tone,
+            decorations: String::new(),
+        }
+    }
 }
 
 impl<'a> Cell<'a> {
     fn new(view: &'a View, suite: &'a str, task: &'a str, arm: Arm, index: usize) -> Self {
         let key = trial_key(suite, task, arm, index);
         let result = view.results.iter().find(|r| r.key() == key);
+        let terminal = result.is_some();
+        let result = result.or_else(|| view.unfinished_trials.iter().find(|r| r.key() == key));
         Self {
             view,
             task,
@@ -562,15 +606,17 @@ impl<'a> Cell<'a> {
             index,
             key,
             result,
+            terminal,
         }
     }
     fn graded(&self) -> bool {
-        self.result.is_some_and(|r| {
-            r.outcome != Outcome::Void
-                && r.score
-                    .as_ref()
-                    .is_some_and(|s| s.model.is_some() || s.checks.iter().any(|c| !c.passed))
-        })
+        self.terminal
+            && self.result.is_some_and(|r| {
+                r.outcome != Outcome::Void
+                    && r.score
+                        .as_ref()
+                        .is_some_and(|s| s.model.is_some() || s.checks.iter().any(|c| !c.passed))
+            })
     }
     fn passed(&self) -> bool {
         self.graded()
@@ -579,56 +625,61 @@ impl<'a> Cell<'a> {
                 .and_then(|r| r.score.as_ref())
                 .is_some_and(|s| s.effective().passed)
     }
-    fn mark(&self) -> (String, &'static str, &'static str) {
+    fn mark(&self) -> Mark {
+        if !self.terminal && self.view.running_trials.iter().any(|r| r.id == self.key) {
+            return Mark::plain("Running", "◌", "working");
+        }
         let Some(result) = self.result else {
-            return if self.view.running_trials.iter().any(|r| r.id == self.key) {
-                ("Running".into(), "◌", "working")
-            } else {
-                ("Queued".into(), "·", "queued")
-            };
+            return Mark::plain("Queued", "·", "queued");
         };
         if result.outcome == Outcome::Void {
-            return ("Void".into(), "⊘", "look");
+            return Mark::plain(
+                if self.terminal {
+                    "Void"
+                } else {
+                    "Void, awaiting retry"
+                },
+                "⊘",
+                "look",
+            );
         }
         if !self.graded() {
-            return ("Not graded".into(), "–", "queued");
+            return Mark::plain("Not graded", "–", "queued");
         }
         let score = result.score.as_ref().unwrap();
         let passed = score.effective().passed;
         let mut label = if passed { "Passed" } else { "Failed" }.to_owned();
+        let mut decorations = String::new();
         if score.effective().wrong_finding {
             label.push_str(", wrong finding");
+            decorations.push('!');
         }
         if score.borderline {
             label.push_str(", borderline");
+            decorations.push('?');
         }
         if !score.rechecks.is_empty() {
             label.push_str(", rechecked");
+            decorations.push('↺');
         }
         if self.view.pending_rechecks.iter().any(|p| p.id == self.key) {
             label.push_str(", recheck waiting");
-        }
-        (
-            label,
-            if passed { "✓" } else { "✗" },
-            if passed { "pass" } else { "fail" },
-        )
-    }
-    fn button(&self) -> String {
-        let (label, mark, tone) = self.mark();
-        let mut decorations = String::new();
-        if label.contains("wrong finding") {
-            decorations.push('!');
-        }
-        if label.contains("borderline") {
-            decorations.push('?');
-        }
-        if label.contains("recheck waiting") {
             decorations.push('◇');
         }
-        if label.contains("rechecked") {
-            decorations.push('↺');
+        Mark {
+            label,
+            symbol: if passed { "✓" } else { "✗" },
+            tone: if passed { "pass" } else { "fail" },
+            decorations,
         }
+    }
+    fn button(&self) -> String {
+        let Mark {
+            label,
+            symbol: mark,
+            tone,
+            decorations,
+        } = self.mark();
         format!(
             "<button type=\"button\" class=\"trial-cell\" data-tone=\"{tone}\" data-experiment-peek=\"trial-{}\" title=\"{}\" aria-label=\"{} Trial {}: {}\">{mark}<sup aria-hidden=\"true\">{decorations}</sup></button>",
             self.key,
@@ -659,7 +710,7 @@ impl<'a> Cell<'a> {
             .join(" · ")
     }
     fn peek(&self) -> String {
-        let (label, _, _) = self.mark();
+        let label = self.mark().label;
         let mut html = format!(
             "<section aria-label=\"Trial details\"><h2>{} · Trial {}</h2><p>{} · {}</p><p><strong>{}</strong></p>",
             arm_title(self.arm),
@@ -741,20 +792,32 @@ impl<'a> Cell<'a> {
                 ));
             }
             html.push_str("</ol>");
-        } else if let Some(running) = self.view.running_trials.iter().find(|r| r.id == self.key) {
+        }
+        if let Some(running) = self.view.running_trials.iter().find(|r| r.id == self.key) {
             html.push_str(&format!(
                 "<p>Started {}</p><p>{}</p>",
                 esc(&running.started_at),
                 self.view
                     .sessions
                     .iter()
-                    .filter(|log| log.trial_id == self.key)
+                    .filter(|log| log.trial_id == self.key
+                        && self.result.is_none_or(|r| log.attempt >= r.attempts.len()))
                     .map(|log| self.sessions(log.attempt))
                     .collect::<Vec<_>>()
                     .join(" · ")
             ));
-        } else {
+        } else if self.result.is_none() {
             html.push_str("<p>Queued. It starts when a worker is free, or after the paused Experiment resumes.</p>");
+            let logs: std::collections::BTreeSet<_> = self
+                .view
+                .sessions
+                .iter()
+                .filter(|log| log.trial_id == self.key)
+                .map(|log| log.attempt)
+                .collect();
+            for attempt in logs {
+                html.push_str(&format!("<p>{}</p>", self.sessions(attempt)));
+            }
         }
         let setup = if self.arm.name() == "baseline" {
             &self.view.description.baseline
@@ -778,6 +841,28 @@ fn table_row(label: &str, baseline: &str, candidate: &str) -> String {
         },
         esc(candidate)
     )
+}
+
+struct ArmStats {
+    passed: usize,
+    wrong_findings: usize,
+    all_passed_tasks: usize,
+    trials: usize,
+}
+
+impl ArmStats {
+    fn share(&self) -> String {
+        if self.trials == 0 {
+            "not graded".into()
+        } else {
+            format!(
+                "{}/{} ({:.0}%)",
+                self.passed,
+                self.trials,
+                self.passed as f64 / self.trials as f64 * 100.0
+            )
+        }
+    }
 }
 
 fn arms(view: &View) -> String {
@@ -879,33 +964,31 @@ fn arms(view: &View) -> String {
                 .iter()
                 .filter(|task| (0..n).all(|i| Cell::new(view, suite, &task.name, arm, i).passed()))
                 .count();
-            (passed, wrong, all, cells.len())
+            ArmStats {
+                passed,
+                wrong_findings: wrong,
+                all_passed_tasks: all,
+                trials: cells.len(),
+            }
         };
         let b = stats(Arm::Baseline);
         let c = stats(Arm::Candidate);
-        let share = |s: (usize, usize, usize, usize)| {
-            if s.3 == 0 {
-                "not graded".into()
-            } else {
-                format!("{}/{} ({:.0}%)", s.0, s.3, s.0 as f64 / s.3 as f64 * 100.0)
-            }
-        };
         html.push_str(&table_row(
             &format!("{suite} pass share"),
-            &share(b),
-            &share(c),
+            &b.share(),
+            &c.share(),
         ));
         if n == 3 {
             html.push_str(&table_row(
                 &format!("{suite} pass³"),
-                &format!("{}/{}", b.2, retained.len()),
-                &format!("{}/{}", c.2, retained.len()),
+                &format!("{}/{}", b.all_passed_tasks, retained.len()),
+                &format!("{}/{}", c.all_passed_tasks, retained.len()),
             ));
         }
         html.push_str(&table_row(
             &format!("{suite} wrong findings"),
-            &format!("{} of {}", b.1, b.3),
-            &format!("{} of {}", c.1, c.3),
+            &format!("{} of {}", b.wrong_findings, b.trials),
+            &format!("{} of {}", c.wrong_findings, c.trials),
         ));
     }
     html.push_str(&table_row(

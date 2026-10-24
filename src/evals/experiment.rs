@@ -20,7 +20,6 @@ use std::path::Path;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use store::State;
 
 use super::{arms, format, suite};
 use crate::config::UserConfig;
@@ -31,10 +30,11 @@ use crate::trial::VoidCause;
 use crate::{interrupt, logs, progress};
 
 pub(crate) use evidence::{RunningTrial, SessionLog};
+pub(crate) use grading::Conclusion;
 pub use options::{Options, parse};
 pub(crate) use rechecks::record as recheck;
 pub(crate) use rechecks::{Flip, Pending};
-pub(crate) use store::{View, read};
+pub(crate) use store::{State, View, read};
 pub(crate) use workers::{Arm, TrialResult, trial_key};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

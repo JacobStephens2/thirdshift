@@ -6,9 +6,10 @@ const content = document.getElementById('peek-content');
 let currentPeek, pendingOnly = false, allRechecks = false, refreshing = false;
 
 function controls() {
+  const filter = main.querySelector('[data-pending-only]');
+  if (!filter) pendingOnly = false;
   for (const row of main.querySelectorAll('.trial-row[data-task]')) row.hidden = pendingOnly && row.dataset.pending !== 'true';
   for (const row of main.querySelectorAll('[data-recheck-extra]')) row.hidden = !allRechecks;
-  const filter = main.querySelector('[data-pending-only]');
   if (filter) {
     filter.setAttribute('aria-pressed', String(pendingOnly));
     filter.textContent = pendingOnly ? 'Show every Eval task below' : 'Show only their Eval tasks below';

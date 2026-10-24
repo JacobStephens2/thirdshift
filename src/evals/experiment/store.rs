@@ -46,6 +46,7 @@ pub(crate) struct View {
     pub running_trials: Vec<super::RunningTrial>,
     pub sessions: Vec<super::SessionLog>,
     pub results: Vec<TrialResult>,
+    pub unfinished_trials: Vec<TrialResult>,
     pub verdict: Option<super::grading::Verdict>,
     pub pending_rechecks: Vec<super::rechecks::Pending>,
     pub minutes: Minutes,
@@ -300,6 +301,9 @@ impl Stored {
         let (running_trials, sessions) = super::evidence::inventory(self)?;
         let mut minutes = Minutes::default();
         let mut voids = Voids::default();
+        let terminal: std::collections::BTreeSet<_> =
+            results.iter().map(TrialResult::key).collect();
+        let mut unfinished_trials = Vec::new();
         let trials = self.directory.join("trials");
         if trials.exists() {
             for trial in fs::read_dir(trials)? {
@@ -308,9 +312,12 @@ impl Stored {
                     // Every completed attempt is retained here before a pause
                     // or final publication. Read it once per Trial, so live
                     // and paused Experiments include time already spent too.
-                    let result = serde_json::from_slice(&fs::read(pending)?)?;
+                    let result: TrialResult = serde_json::from_slice(&fs::read(pending)?)?;
                     minutes.include(&result);
                     voids.include(&result);
+                    if !terminal.contains(&result.key()) {
+                        unfinished_trials.push(result);
+                    }
                 }
             }
         }
@@ -331,6 +338,7 @@ impl Stored {
             running_trials,
             sessions,
             results,
+            unfinished_trials,
             verdict: self.verdict.clone(),
             pending_rechecks: self.pending_rechecks.clone(),
             minutes,
