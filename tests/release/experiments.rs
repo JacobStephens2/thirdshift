@@ -142,6 +142,38 @@ fn failed_or_inconclusive_experiments_show_intervals_and_require_permission() {
 }
 
 #[test]
+fn two_level_experiments_show_both_intervals_before_the_release_prompt() {
+    let release = Release::new();
+    release.ci_reports(GREEN);
+    let mut view = verdict("inconclusive");
+    let suite = &mut view["verdict"]["suites"]["code-review"];
+    suite["bar"] = json!({"pass_level": 0.8, "fail_level": 0.95});
+    for metric in ["accuracy", "wrong_findings"] {
+        let assessment = suite[metric].as_object_mut().unwrap();
+        let interval = assessment.remove("interval").unwrap();
+        assessment.insert("pass_interval".into(), interval);
+        assessment.insert("fail_interval".into(), json!({"lower": -0.3, "upper": 0.2}));
+    }
+    cargo_reports(&release, &[view]);
+    let before = release.origin_refs();
+    let output = release.run_script_with(&["0.2.0"], "n\n", &[]);
+    let err = unstamped(&output);
+    assert!(!output.status.success());
+    assert!(err.contains("accuracy pass (80%) [-0.25, 0.12]"), "{err}");
+    assert!(err.contains("accuracy fail (95%) [-0.3, 0.2]"), "{err}");
+    assert!(
+        err.contains("wrong findings pass (80%) [-0.02, 0.18]"),
+        "{err}"
+    );
+    assert!(
+        err.contains("wrong findings fail (95%) [-0.3, 0.2]"),
+        "{err}"
+    );
+    assert!(err.contains("release anyway?"), "{err}");
+    assert_eq!(release.origin_refs(), before);
+}
+
+#[test]
 fn pending_rechecks_are_listed_and_waited_for_before_pushing() {
     let release = Release::new();
     release.ci_reports(GREEN);

@@ -1,6 +1,32 @@
 use super::*;
 
 #[test]
+fn legacy_flip_verdicts_are_enriched_without_replacing_the_recorded_verdict() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(review_reports_prelude());
+    let run = fixture.run(&["--prior", "0.01"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let expected = fixture.experiment();
+    assert!(!expected["pending_rechecks"].as_array().unwrap().is_empty());
+    let id = expected["id"].as_str().unwrap();
+    let path = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{id}/experiment.json"
+    ));
+    let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    single_level_experiment(&mut saved);
+    for pending in saved["pending_rechecks"].as_array_mut().unwrap() {
+        pending.as_object_mut().unwrap().remove("decisive_verdicts");
+    }
+    fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let bytes = fs::read(&path).unwrap();
+    let shown = fixture.experiment();
+    assert_eq!(shown["bar"], saved["bar"]);
+    assert_eq!(shown["verdict"], saved["verdict"]);
+    assert_eq!(shown["pending_rechecks"], expected["pending_rechecks"]);
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+}
+
+#[test]
 fn batch_rechecks_record_the_reviewed_pending_scores_and_retain_history() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does(review_reports_prelude());

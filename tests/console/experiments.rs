@@ -16,6 +16,49 @@ fn fixture(home: &Path, id: &str, created: &str) -> std::path::PathBuf {
     directory
 }
 
+#[test]
+fn legacy_paused_experiment_advertises_a_supported_resume_command() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "e".repeat(64);
+    let directory = fixture(home.path(), &id, "2026-10-24T10:00:00Z");
+    let path = directory.join("experiment.json");
+    let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    saved["state"] = json!("paused");
+    saved["bar"]["credible_level"] = json!(0.8);
+    saved["resume_command"] = json!(
+        "thirdshift experiment candidate --baseline baseline --suite code-review --credible-level 0.8 --json"
+    );
+    fs::write(path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let html = console.get(&format!("/experiments/{id}")).text().unwrap();
+    let resume = html
+        .split("Run the same command to resume: <code>")
+        .nth(1)
+        .unwrap()
+        .split("</code>")
+        .next()
+        .unwrap();
+    // This deliberately quote-free fixture allows executing the displayed
+    // words directly; no shell or HTML entity decoding is needed.
+    let attempted = Command::new(binary)
+        .env("HOME", home.path())
+        .args(resume.split_whitespace().skip(1))
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&attempted.stderr);
+    assert!(
+        !stderr.contains("unknown Experiment flag: --credible-level"),
+        "displayed command is rejected by the CLI: {stderr}"
+    );
+    assert!(!resume.contains("--credible-level"), "{resume}");
+    assert!(
+        resume.contains("--pass-level") && resume.contains("--fail-level"),
+        "{resume}"
+    );
+}
+
 fn proposal(home: &Path, suite: &str, task: &str) {
     let directory = home.join(".thirdshift/evals/suites").join(suite);
     fs::create_dir_all(directory.join("tasks").join(task)).unwrap();

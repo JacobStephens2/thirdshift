@@ -203,6 +203,13 @@ impl Stored {
                     .causes
                     .clone_from(&stored.description.bar.void_rules.causes);
             }
+            if let crate::verdict::Levels::Legacy { credible_level } = stored.description.bar.levels
+                && description.bar.levels.pass() == credible_level
+                && description.bar.levels.fail() == credible_level
+            {
+                // Equivalent CLI settings resume the original method and JSON.
+                description.bar.levels = stored.description.bar.levels;
+            }
             if stored.description.bar != description.bar {
                 ensure!(!started, "Bar cannot change after the first Trial");
                 stored.description.bar = description.bar;
@@ -261,15 +268,33 @@ impl Stored {
     }
 
     fn upgrade_verdict(&mut self) -> Result<()> {
+        let missing_flip_verdicts = self
+            .pending_rechecks
+            .iter()
+            .any(|pending| pending.decisive && pending.decisive_verdicts.is_empty());
+        if matches!(
+            self.description.bar.levels,
+            crate::verdict::Levels::Legacy { .. }
+        ) && self.verdict.is_some()
+        {
+            // A saved single-level Verdict is evidence, not an invitation to
+            // recalculate it under a newer runner's recheck policy.
+            if self.state == State::Completed && missing_flip_verdicts {
+                let (_, pending) = super::rechecks::assess(
+                    &self.tasks,
+                    &mut self.results()?,
+                    &self.description.bar,
+                )?;
+                self.pending_rechecks = pending;
+            }
+            return Ok(());
+        }
         if self.state == State::Completed
             && (self
                 .verdict
                 .as_ref()
-                .is_none_or(|verdict| verdict.provisional_verdict.is_none())
-                || self
-                    .pending_rechecks
-                    .iter()
-                    .any(|pending| pending.decisive && pending.decisive_verdicts.is_empty()))
+                .is_none_or(|verdict| verdict.provisional_verdict.decision().is_none())
+                || missing_flip_verdicts)
         {
             self.refresh_verdict()?;
         }
@@ -331,10 +356,14 @@ impl Stored {
             }
         }
         let findings = voids.findings();
+        let mut details = self.details.clone();
+        details.resume_command = details.resume_command.as_deref().and_then(|command| {
+            super::options::resume_command(command, self.description.bar.levels)
+        });
         Ok(View {
             description: self.description.clone(),
             state: self.state,
-            details: self.details.clone(),
+            details,
             created_at: self.created_at.clone(),
             tasks: self
                 .tasks

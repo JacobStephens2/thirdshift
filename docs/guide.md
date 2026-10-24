@@ -561,11 +561,14 @@ axis reports without fixing or publishing anything. Spec review Trials keep
 the production Spec review prompt. They have no PR service: `gh` calls fail
 inside the sandbox and only their reports are graded.
 
-The Bar is saved before the first Trial: margin `-0.10`, credible level `0.95`,
+The Bar is saved before the first Trial: margin `-0.10`, pass level `0.95`, fail level `0.95`,
 prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
 `1800`-second per-Trial timeout, and up to two fresh retries for Void Trials.
-Override these with `--margin`, `--credible-level`, `--prior`, `--seed`,
+Override these with `--margin`, `--pass-level`, `--fail-level`, `--prior`, `--seed`,
 `--draws`, `--trials-per-task`, `--timeout` (seconds), or `--void-retries`.
+Both levels are credible levels strictly between zero and one. They stay at
+95% by default until the pass level is set from the A/A measurement. Changing
+either level after the first Trial is refused, as with the rest of the Bar.
 `--void-retries` accepts zero, one or two. A sandbox that cannot start, a
 provider connection or login failure, a provider server error before work, a
 plan-limit stop, or a host kill or Trial-only memory cap makes a Trial void.
@@ -664,7 +667,13 @@ only covers the reviewed list: its decisions may make other Scores decisive,
 so check the updated pending list afterwards. Rechecks stay in the CLI.
 
 Each suite gets a paired Verdict using its recorded Trials per Eval task (one
-or three). Any failed suite fails the Experiment; otherwise any inconclusive
+or three). For each metric, fail when the upper bound at the fail level is below
+zero. Otherwise pass when the lower bound at the pass level is above the margin
+and its upper bound is at least zero; otherwise the metric is inconclusive.
+One set of draws supplies both intervals. Both accuracy and wrong findings must
+pass; either can fail the suite. The prediction of how many more Eval tasks
+would settle an inconclusive metric uses the same two-level decision.
+Any failed suite fails the Experiment; otherwise any inconclusive
 suite makes it inconclusive. More than a tenth of all Eval tasks dropped as void
 also makes it inconclusive. Results include the suite intervals, the Bar and
 each Arm's minutes across all attempts, including Void Trials and timeouts.
@@ -672,6 +681,13 @@ The code-review suite runs three Trials per Arm per Eval task by default; the
 Spec-review suite runs one. For three-Trial suites, `experiments --json` reports
 `pass_cubed`: the share of retained Eval tasks where all three Trials passed,
 separately for each Arm.
+The Bar's JSON carries `pass_level` and `fail_level`; each metric carries
+`pass_interval` and `fail_interval`. New Verdicts use `paired-dirichlet-v2`.
+Saved Experiments under `paired-dirichlet-v1` remain readable with their stored
+single-level Bar and Verdict unchanged. See [ADR-0024](adr/0024-pass-and-fail-use-separate-levels.md).
+For a paused single-level Experiment, its saved view and Console show a resume
+command using both recorded levels in place of the removed `--credible-level`
+flag. Reading that command does not rewrite its stored Bar or Verdict.
 Provider usage/rate limits pause scheduling until the same Experiment is
 started again, consuming the same fresh-retry budget across resumes. Completed
 attempts count toward minutes and per-Arm Void totals even while paused or

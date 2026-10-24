@@ -129,6 +129,7 @@ fn now(view: &View) -> String {
             decision(
                 verdict
                     .provisional_verdict
+                    .decision()
                     .unwrap_or(Decision::Inconclusive)
             )
         ));
@@ -293,6 +294,7 @@ fn lead(view: &View) -> String {
                     .as_ref()
                     .unwrap()
                     .provisional_verdict
+                    .decision()
                     .unwrap_or(Decision::Inconclusive)
             ),
             view.pending_rechecks.len()
@@ -314,14 +316,19 @@ fn points(value: f64) -> String {
     format!("{:+.0}", value * 100.0)
 }
 
-fn interval(assessment: &crate::verdict::Assessment, margin: f64, label: &str) -> String {
-    let lower = assessment.interval.lower;
-    let upper = assessment.interval.upper;
+fn interval(
+    bounds: crate::verdict::Interval,
+    verdict: Decision,
+    margin: f64,
+    label: &str,
+) -> String {
+    let lower = bounds.lower;
+    let upper = bounds.upper;
     let pos = |value: f64| ((value + 0.5) * 100.0).clamp(0.0, 100.0);
     let range = format!("{} to {} points", points(lower), points(upper));
     format!(
         "<span class=\"experiment-interval\" data-tone=\"{}\" role=\"img\" aria-label=\"{}: {}; margin {} points; axis −50 to +50\"><svg viewBox=\"0 0 100 16\" preserveAspectRatio=\"none\" aria-hidden=\"true\"><line class=\"interval-axis\" x1=\"0\" x2=\"100\" y1=\"8\" y2=\"8\"/><line class=\"interval-margin\" x1=\"{}\" x2=\"{}\" y1=\"0\" y2=\"16\"/><line class=\"interval-zero\" x1=\"50\" x2=\"50\" y1=\"0\" y2=\"16\"/><rect class=\"interval-bar\" x=\"{}\" y=\"4\" width=\"{}\" height=\"8\"/>{}{}</svg></span><span class=\"interval-range\">{}</span>",
-        decision(assessment.verdict),
+        decision(verdict),
         esc(label),
         esc(&range),
         points(margin),
@@ -348,13 +355,28 @@ fn list_intervals(view: &View) -> String {
         v.suites
             .iter()
             .map(|(name, suite)| {
+                let (bounds, level, kind) = if suite.accuracy.verdict == Decision::Fail {
+                    (
+                        suite.accuracy.intervals.fail(),
+                        suite.bar.levels.fail(),
+                        "fail",
+                    )
+                } else {
+                    (
+                        suite.accuracy.intervals.pass(),
+                        suite.bar.levels.pass(),
+                        "pass",
+                    )
+                };
+                let label = format!("{name} accuracy · {kind} ({:.0}%)", level * 100.0);
                 format!(
-                    "<p class=\"experiment-list-interval\"><span>{} accuracy</span>{}</p>",
-                    esc(name),
+                    "<p class=\"experiment-list-interval\"><span>{}</span>{}</p>",
+                    esc(&label),
                     interval(
-                        &suite.accuracy,
+                        bounds,
+                        suite.accuracy.verdict,
                         view.description.bar.margin,
-                        &format!("{name} accuracy")
+                        &label
                     )
                 )
             })
@@ -379,16 +401,32 @@ fn verdict(view: &View) -> String {
             ("Accuracy", &suite.accuracy),
             ("Wrong findings", &suite.wrong_findings),
         ] {
-            html.push_str(&format!("<div class=\"experiment-figure\"><span>{metric} <span class=\"experiment-tag\" data-tone=\"{}\">{}</span></span>{}</div>", decision(assessment.verdict), decision(assessment.verdict), interval(assessment, view.description.bar.margin, metric)));
+            let intervals = match assessment.intervals {
+                crate::verdict::Intervals::Separate {
+                    pass_interval,
+                    fail_interval,
+                } => vec![
+                    ("pass", suite.bar.levels.pass(), pass_interval),
+                    ("fail", suite.bar.levels.fail(), fail_interval),
+                ],
+                crate::verdict::Intervals::Legacy { interval } => {
+                    vec![("credible", suite.bar.levels.pass(), interval)]
+                }
+            };
+            for (kind, level, bounds) in intervals {
+                let label = format!("{metric} · {kind} ({:.0}%)", level * 100.0);
+                html.push_str(&format!("<div class=\"experiment-figure\"><span>{} <span class=\"experiment-tag\" data-tone=\"{}\">{}</span></span>{}</div>", esc(&label), decision(assessment.verdict), decision(assessment.verdict), interval(bounds, assessment.verdict, view.description.bar.margin, &label)));
+            }
             let why = match assessment.verdict {
                 Decision::Pass => format!(
-                    "The {metric} interval sits above the {}-point margin and reaches zero or above.",
+                    "At the pass level, the {metric} interval sits above the {}-point margin and reaches zero or above. The interval at the fail level reaches zero or above too.",
                     points(view.description.bar.margin)
                 ),
-                Decision::Fail => format!("The whole {metric} interval is below zero."),
+                Decision::Fail => {
+                    format!("At the fail level, the whole {metric} interval is below zero.")
+                }
                 Decision::Inconclusive => format!(
-                    "The {metric} interval reaches below the {}-point margin and reaches zero or above.",
-                    points(view.description.bar.margin)
+                    "The {metric} intervals establish neither a pass nor a fail under the Bar."
                 ),
             };
             html.push_str(&format!("<p class=\"experiment-why\">{why}"));
@@ -414,7 +452,7 @@ fn verdict(view: &View) -> String {
             ));
         }
     }
-    html.push_str(&format!("</section><p class=\"experiment-dim\">Points of pass share, Candidate minus Baseline, at {:.0}% credibility. The axis runs from −50 to +50; the dashed line is the {}-point margin. Arrows mark intervals continuing beyond the axis. For wrong findings, plus means fewer in the Candidate.</p>", view.description.bar.credible_level*100.0, points(view.description.bar.margin)));
+    html.push_str(&format!("</section><p class=\"experiment-dim\">Points of pass share, Candidate minus Baseline. Each interval is labelled with its credible level. The axis runs from −50 to +50; the dashed line is the {}-point margin. Arrows mark intervals continuing beyond the axis. For wrong findings, plus means fewer in the Candidate.</p>", points(view.description.bar.margin)));
     html
 }
 
@@ -1040,6 +1078,20 @@ fn change(baseline: Option<f64>, candidate: Option<f64>) -> String {
 
 fn bar(view: &View) -> String {
     let b = &view.description.bar;
+    let levels = match b.levels {
+        crate::verdict::Levels::Separate {
+            pass_level,
+            fail_level,
+        } => format!(
+            "<dt>Pass level</dt><dd>{:.0}%</dd><dt>Fail level</dt><dd>{:.0}%</dd>",
+            pass_level * 100.0,
+            fail_level * 100.0
+        ),
+        crate::verdict::Levels::Legacy { credible_level } => format!(
+            "<dt>Credible level</dt><dd>{:.0}%</dd>",
+            credible_level * 100.0
+        ),
+    };
     let method = view
         .verdict
         .as_ref()
@@ -1058,9 +1110,8 @@ fn bar(view: &View) -> String {
         })
         .unwrap_or_default();
     format!(
-        "<details id=\"experiment-bar\"><summary>The Bar</summary><dl><dt>Margin</dt><dd>{:.0} points</dd><dt>Credible level</dt><dd>{:.0}%</dd><dt>Prior</dt><dd>{} pseudo Eval tasks, spread evenly over possible differences</dd><dt>Seed and draws</dt><dd>{}, {}</dd><dt>Trials per Eval task</dt><dd>{}</dd><dt>Timeout</dt><dd>{} seconds</dd><dt>Void rules</dt><dd>Up to {} fresh retries. Causes: {}. An exhausted Eval task drops out of both Arms. More than a tenth dropped makes the Verdict inconclusive.</dd><dt>Recorded</dt><dd>{}, before the first Trial</dd>{method}</dl></details>",
+        "<details id=\"experiment-bar\"><summary>The Bar</summary><dl><dt>Margin</dt><dd>{:.0} points</dd>{levels}<dt>Prior</dt><dd>{} pseudo Eval tasks, spread evenly over possible differences</dd><dt>Seed and draws</dt><dd>{}, {}</dd><dt>Trials per Eval task</dt><dd>{}</dd><dt>Timeout</dt><dd>{} seconds</dd><dt>Void rules</dt><dd>Up to {} fresh retries. Causes: {}. An exhausted Eval task drops out of both Arms. More than a tenth dropped makes the Verdict inconclusive.</dd><dt>Recorded</dt><dd>{}, before the first Trial</dd>{method}</dl></details>",
         b.margin * 100.0,
-        b.credible_level * 100.0,
         b.prior,
         b.seed,
         b.draws,

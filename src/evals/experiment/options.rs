@@ -48,6 +48,53 @@ impl ArmOptions {
     }
 }
 
+enum ArgumentKind {
+    Json,
+    Release,
+    ValuedFlag,
+    Positional,
+}
+
+fn argument_kind(word: &str) -> ArgumentKind {
+    match word {
+        "--json" => ArgumentKind::Json,
+        "--release" => ArgumentKind::Release,
+        flag if flag.starts_with("--") => ArgumentKind::ValuedFlag,
+        _ => ArgumentKind::Positional,
+    }
+}
+
+/// Translate a captured legacy command for readers, retaining every other
+/// argument literally and taking both levels from its recorded Bar.
+pub(super) fn resume_command(command: &str, levels: crate::verdict::Levels) -> Option<String> {
+    if !matches!(levels, crate::verdict::Levels::Legacy { .. }) {
+        return Some(command.to_owned());
+    }
+    let mut original = shlex::split(command)?.into_iter();
+    let mut updated = Vec::new();
+    while let Some(word) = original.next() {
+        if matches!(
+            word.as_str(),
+            "--credible-level" | "--pass-level" | "--fail-level"
+        ) {
+            original.next()?;
+        } else {
+            let takes_value = matches!(argument_kind(&word), ArgumentKind::ValuedFlag);
+            updated.push(word);
+            if takes_value {
+                updated.push(original.next()?);
+            }
+        }
+    }
+    updated.extend([
+        "--pass-level".into(),
+        levels.pass().to_string(),
+        "--fail-level".into(),
+        levels.fail().to_string(),
+    ]);
+    Some(crate::args::shell_command(updated))
+}
+
 pub fn parse(args: &[String]) -> Result<Options> {
     let mut flags = BTreeMap::new();
     let mut suites = BTreeSet::new();
@@ -56,30 +103,35 @@ pub fn parse(args: &[String]) -> Result<Options> {
     let mut release = false;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
-        if arg == "--json" {
-            ensure!(!json, "repeated --json");
-            json = true;
-        } else if arg == "--release" {
-            ensure!(!release, "repeated --release");
-            release = true;
-        } else if arg.starts_with("--") {
-            let value = args
-                .next()
-                .with_context(|| format!("{arg} requires a value"))?;
-            if arg == "--suite" {
-                crate::evals::format::name(value)?;
-                ensure!(suites.insert(value.clone()), "repeated suite {value}");
-            } else {
+        match argument_kind(arg) {
+            ArgumentKind::Json => {
+                ensure!(!json, "repeated --json");
+                json = true;
+            }
+            ArgumentKind::Release => {
+                ensure!(!release, "repeated --release");
+                release = true;
+            }
+            ArgumentKind::ValuedFlag => {
+                let value = args
+                    .next()
+                    .with_context(|| format!("{arg} requires a value"))?;
+                if arg == "--suite" {
+                    crate::evals::format::name(value)?;
+                    ensure!(suites.insert(value.clone()), "repeated suite {value}");
+                } else {
+                    ensure!(
+                        flags.insert(arg.as_str(), value.as_str()).is_none(),
+                        "repeated {arg}"
+                    );
+                }
+            }
+            ArgumentKind::Positional => {
                 ensure!(
-                    flags.insert(arg.as_str(), value.as_str()).is_none(),
-                    "repeated {arg}"
+                    candidate.replace(arg.clone()).is_none(),
+                    "only one Candidate is accepted"
                 );
             }
-        } else {
-            ensure!(
-                candidate.replace(arg.clone()).is_none(),
-                "only one Candidate is accepted"
-            );
         }
     }
     let mut arm = |prefix: &str| -> Result<ArmOptions> {
@@ -115,7 +167,14 @@ pub fn parse(args: &[String]) -> Result<Options> {
         };
     }
     number!("--margin", bar.margin);
-    number!("--credible-level", bar.credible_level);
+    let mut pass_level = bar.levels.pass();
+    let mut fail_level = bar.levels.fail();
+    number!("--pass-level", pass_level);
+    number!("--fail-level", fail_level);
+    bar.levels = crate::verdict::Levels::Separate {
+        pass_level,
+        fail_level,
+    };
     number!("--prior", bar.prior);
     number!("--seed", bar.seed);
     number!("--draws", bar.draws);
@@ -138,10 +197,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
         bar.margin.is_finite() && (-1.0..=1.0).contains(&bar.margin),
         "margin must be within [-1, 1]"
     );
-    ensure!(
-        bar.credible_level.is_finite() && bar.credible_level > 0.0 && bar.credible_level < 1.0,
-        "credible level must be between zero and one"
-    );
+    bar.levels.validate()?;
     ensure!(
         bar.prior.is_finite() && bar.prior > 0.0 && bar.draws >= 2 && bar.timeout_seconds > 0,
         "prior and timeout must be positive; at least two draws are required"
