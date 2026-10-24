@@ -9,6 +9,42 @@ const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 const OPENS_PR: &str = "echo work > work.txt\ngit add work.txt\ngit commit -qm 'Make widgets'\ngh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7'\n";
 
 #[test]
+fn fake_gh_call_reads_wait_for_an_in_progress_record_write() {
+    let scenario = Scenario::new();
+    let lock = fs::File::create(scenario.path("gh-state.json.lock")).unwrap();
+    lock.lock().unwrap();
+    fs::write(scenario.path("gh-calls.json"), "").unwrap();
+    std::thread::scope(|scope| {
+        let scenario = &scenario;
+        let (started, ready) = std::sync::mpsc::channel();
+        let (finished, answer) = std::sync::mpsc::channel();
+        scope.spawn(move || {
+            started.send(()).unwrap();
+            finished
+                .send(std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                    || scenario.gh_calls(),
+                )))
+                .unwrap();
+        });
+        ready
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        let early = answer.recv_timeout(std::time::Duration::from_millis(100));
+        fs::write(scenario.path("gh-calls.json"), r#"[["api","rate_limit"]]"#).unwrap();
+        drop(lock);
+        let result = early.unwrap_or_else(|_| {
+            answer
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+        });
+        assert_eq!(
+            result.expect("read a truncated call record during its write"),
+            vec![vec!["api".to_string(), "rate_limit".to_string()]]
+        );
+    });
+}
+
+#[test]
 fn ticket_run_display_preserves_the_stored_command_kind() {
     let scenario = Scenario::new();
     let now = chrono::Local::now().to_rfc3339();
