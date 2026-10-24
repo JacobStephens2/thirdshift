@@ -2,6 +2,7 @@
 //! Loading uses one sampled time; reading never prints or performs Stop effects.
 
 mod cache;
+mod captured_activity;
 pub(crate) mod catalog;
 mod health;
 mod history;
@@ -99,14 +100,12 @@ impl Snapshot {
             })
             .map(|(path, _)| path.clone())
             .collect();
-        commands.extend(
-            roots
-                .into_iter()
-                .map(|path| Entry::Record(Box::new(tree(&inventory, &path, &mut records, &now)))),
-        );
+        commands.extend(roots.into_iter().map(|path| {
+            Entry::Record(Box::new(tree(&inventory, &path, None, &mut records, &now)))
+        }));
         for entry in &mut commands {
             if let Entry::Record(command) = entry {
-                health::observe(command, &now, silent, None, &ranges);
+                health::observe(command, &now, silent, &ranges);
             }
         }
         idle_passes.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
@@ -141,7 +140,7 @@ pub(super) fn retained_work(path: &Path, now: DateTime<Local>) -> Result<Retaine
     let folder = inventory.folder(path.parent().context("Command record has no directory")?)?;
     let mut records = read_records(&inventory, &folder)?;
     anyhow::ensure!(records.contains_key(path), "Command record is unavailable");
-    let command = tree(&inventory, path, &mut records, &now);
+    let command = tree(&inventory, path, None, &mut records, &now);
     let mut work = RetainedWork::default();
     fn collect(command: &Command, work: &mut RetainedWork) {
         work.branches
@@ -194,6 +193,8 @@ pub(super) struct Command {
     pub(super) usual_ranges: BTreeMap<String, UsualRange>,
     #[serde(skip)]
     inventory: Arc<Inventory>,
+    #[serde(skip)]
+    activity: captured_activity::Activity,
 }
 
 #[derive(Serialize)]
@@ -209,6 +210,7 @@ impl Command {
         record: CommandRecord,
         record_path: PathBuf,
         now: DateTime<Local>,
+        log: &Path,
     ) -> Self {
         let state = if record.outcome.is_some() {
             "ended"
@@ -225,6 +227,7 @@ impl Command {
                 .unwrap_or(0),
         });
         Self {
+            activity: captured_activity::Activity::new(log, record.session_log.as_deref(), now),
             command_log: command_log(&record_path),
             record_path,
             record,
@@ -281,23 +284,25 @@ fn command_stamp(path: &Path) -> Option<(&str, DateTime<chrono::FixedOffset>)> {
 fn tree(
     inventory: &Arc<Inventory>,
     path: &Path,
+    outer_log: Option<&Path>,
     records: &mut BTreeMap<PathBuf, CommandTree>,
     now: &DateTime<Local>,
 ) -> Command {
     let tree = records.remove(path).expect("a discovered record exists");
-    let mut command = Command::new(inventory, tree.command, path.to_owned(), *now);
-    command.children = children(inventory, path, None, records, now);
+    let log = outer_log.map_or_else(|| command_log(path), Path::to_path_buf);
+    let mut command = Command::new(inventory, tree.command, path.to_owned(), *now, &log);
+    command.children = children(inventory, path, None, &log, records, now);
     command.dispatched = tree
         .dispatched
         .into_iter()
         .map(|record| {
-            let mut dispatched = Command::new(inventory, record, path.to_owned(), *now);
+            let mut dispatched = Command::new(inventory, record, path.to_owned(), *now, &log);
             let issue = dispatched
                 .record
                 .issue
                 .as_ref()
                 .map(|issue| issue.url.as_str());
-            dispatched.children = children(inventory, path, issue, records, now);
+            dispatched.children = children(inventory, path, issue, &log, records, now);
             dispatched
         })
         .collect();
@@ -308,6 +313,7 @@ fn children(
     inventory: &Arc<Inventory>,
     path: &Path,
     dispatch: Option<&str>,
+    log: &Path,
     records: &mut BTreeMap<PathBuf, CommandTree>,
     now: &DateTime<Local>,
 ) -> Vec<Command> {
@@ -321,7 +327,7 @@ fn children(
         .collect();
     let mut children: Vec<_> = paths
         .into_iter()
-        .map(|path| tree(inventory, &path, records, now))
+        .map(|path| tree(inventory, &path, Some(log), records, now))
         .collect();
     children.sort_by_key(|child| child.record.issue.as_ref().map(|issue| issue.number));
     children

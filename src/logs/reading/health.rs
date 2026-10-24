@@ -1,7 +1,6 @@
 //! Health is an observation of live work, never a persisted Command fact.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::time::Duration;
 
 use chrono::{DateTime, Local};
@@ -148,10 +147,8 @@ pub(super) fn observe(
     command: &mut Command,
     now: &DateTime<Local>,
     silent: Duration,
-    outer_log: Option<&Path>,
     ranges: &UsualRanges,
 ) {
-    let log = outer_log.unwrap_or(&command.command_log);
     let mut next_change = None;
     command.usual_ranges = command
         .record
@@ -192,21 +189,7 @@ pub(super) fn observe(
             }
             // A newly entered stage cannot already be Silent. Missing logs use
             // its start time, rather than inventing activity at read time.
-            let mut quiet = stage.age_seconds as u64;
-            let session = command
-                .record
-                .session_log
-                .as_deref()
-                .map(crate::logs::session::path);
-            for path in std::iter::once(log).chain(session.as_deref()) {
-                if let Ok(modified) = std::fs::metadata(path).and_then(|file| file.modified()) {
-                    quiet = quiet.min(
-                        now.signed_duration_since(DateTime::<Local>::from(modified))
-                            .num_seconds()
-                            .max(0) as u64,
-                    );
-                }
-            }
+            let quiet = command.quiet_age();
             for threshold in [silent.as_secs(), silent.as_secs().saturating_mul(3)] {
                 schedule_transition(&mut next_change, now, threshold, quiet);
             }
@@ -225,7 +208,7 @@ pub(super) fn observe(
     }
     command.next_health_change = next_change;
     for child in command.children.iter_mut().chain(&mut command.dispatched) {
-        observe(child, now, silent, Some(log), ranges);
+        observe(child, now, silent, ranges);
     }
 }
 

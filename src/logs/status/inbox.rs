@@ -192,7 +192,7 @@ pub(crate) fn archive(
 
 fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Path) -> Result<Row> {
     match entry {
-        Observation::Record(command) => row(command, now, None, root),
+        Observation::Record(command) => row(command, now, root),
         Observation::History(command) => {
             let (subject, title) =
                 subject(&command.repository, &command.kind, command.issue.as_ref());
@@ -346,14 +346,9 @@ fn issue_url(issue: Option<&Issue>) -> Option<String> {
         .filter(|url| url.starts_with("https://"))
 }
 
-fn row(
-    command: &Command,
-    now: DateTime<Local>,
-    outer_log: Option<&Path>,
-    root: &Path,
-) -> Result<Row> {
+fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
     let facts = &command.record;
-    let log = outer_log.unwrap_or(&command.command_log);
+    let (log_length, session_length) = command.activity_lengths();
     let live = command.state == "live";
     let (subject, title) = subject(&facts.repository, &facts.name, facts.issue.as_ref());
     Ok(Row {
@@ -371,17 +366,7 @@ fn row(
         occurred_ms: timestamp(facts.ended_at.as_deref().unwrap_or(&facts.started_at)),
         live,
         logging: live && !matches!(command.health, Some(Health::Silent { .. })),
-        log_growth: format!(
-            "{}:{}",
-            log_length(Some(log)),
-            log_length(
-                facts
-                    .session_log
-                    .as_deref()
-                    .map(crate::logs::session::path)
-                    .as_deref()
-            )
-        ),
+        log_growth: format!("{log_length}:{session_length}"),
         selector: Observation::Record(command).selector().unwrap_or_default(),
         logs_url: logs_url(&command.record_path, root),
         subject,
@@ -417,7 +402,7 @@ fn row(
             .dispatched
             .iter()
             .chain(&command.children)
-            .map(|child| row(child, now, Some(log), root))
+            .map(|child| row(child, now, root))
             .collect::<Result<_>>()?,
         findings: facts.security_findings.clone(),
         sessions: command.sessions()?,
@@ -428,11 +413,6 @@ fn logs_url(path: &std::path::Path, root: &std::path::Path) -> String {
     path.strip_prefix(root)
         .map(|path| format!("/logs/command/{}", crate::logs::catalog::id(path)))
         .unwrap_or_else(|_| "/?page=logs".into())
-}
-
-fn log_length(path: Option<&Path>) -> u64 {
-    path.and_then(|path| std::fs::metadata(path).ok())
-        .map_or(0, |file| file.len())
 }
 
 fn timestamp(value: &str) -> i64 {
