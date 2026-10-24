@@ -846,6 +846,55 @@ fn a_bwrap_failure_after_its_startup_check_still_makes_a_trial_void() {
 }
 
 #[test]
+fn an_unlaunchable_passthrough_harness_is_a_void_trial() {
+    use std::os::unix::fs::PermissionsExt;
+    let scenario = Scenario::new();
+    let request = request(&scenario);
+    let claude = scenario.path("bin/claude");
+    fs::remove_file(&claude).unwrap();
+    fs::write(&claude, b"not an executable format\n").unwrap();
+    fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+    let result = scenario.run_with_env(
+        &["--trial", request.to_str().unwrap()],
+        &[("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(output["outcome"], "void", "{output}");
+    assert_eq!(output["void_cause"], "session_unavailable", "{output}");
+}
+
+#[test]
+fn an_unstartable_passthrough_harness_makes_a_trial_void() {
+    use std::os::unix::fs::PermissionsExt;
+    let scenario = Scenario::new();
+    let request = request(&scenario);
+    let binary = scenario.path("bin/claude");
+    fs::remove_file(&binary).unwrap();
+    fs::write(&binary, "#!/thirdshift-missing-interpreter\n").unwrap();
+    fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).unwrap();
+    let git = std::process::Command::new("sh")
+        .args(["-c", "command -v git"])
+        .output()
+        .unwrap();
+    assert!(git.status.success());
+    let git = String::from_utf8(git.stdout).unwrap();
+    std::os::unix::fs::symlink(git.trim(), scenario.path("bin/git")).unwrap();
+    let bin = scenario.path("bin");
+    let result = scenario.run_with_env(
+        &["--trial", request.to_str().unwrap()],
+        &[
+            ("THIRDSHIFT_TRIAL_NO_SANDBOX", "1"),
+            ("PATH", bin.to_str().unwrap()),
+        ],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(output["outcome"], "void", "{output}");
+    assert_eq!(output["void_cause"], "session_unavailable", "{output}");
+}
+
+#[test]
 fn a_trial_without_its_sandbox_runs_its_session_directly() {
     let scenario = Scenario::new();
     let request = request(&scenario);

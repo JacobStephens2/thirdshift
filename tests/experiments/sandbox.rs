@@ -1,5 +1,27 @@
 use super::*;
 
+#[test]
+fn a_check_diagnostic_cannot_claim_sandbox_failure() {
+    let fixture = fixture_with_passthrough_trials();
+    set_check(
+        &fixture,
+        &[
+            "sh",
+            "-c",
+            "printf 'bwrap: fixture check failed\\n' >&2; exit 1",
+        ],
+    );
+    let _run = fixture.scenario.run(&["experiment", "candidate", "--json"]);
+    let experiment = fixture.experiment();
+    let results = experiment["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    for result in results {
+        assert_eq!(result["outcome"], "succeeded", "{result}");
+        assert_eq!(result["attempts"].as_array().unwrap().len(), 1, "{result}");
+        assert_eq!(result["score"]["passed"], false, "{result}");
+    }
+}
+
 fn fixture_with_passthrough_trials() -> Fixture {
     let fixture = Fixture::new();
     for commit in [&fixture.baseline, &fixture.candidate] {

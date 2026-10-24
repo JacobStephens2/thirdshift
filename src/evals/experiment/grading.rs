@@ -90,7 +90,7 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
         for command in &task.manifest.checks {
             let mut child = crate::sandbox::code_grader(&snapshot, packet.path(), command)?;
             let result = process::output_until(
-                &mut child,
+                child.command(),
                 None,
                 Control {
                     name: "code Grader",
@@ -101,7 +101,7 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
                 &|| Ok(()),
             );
             crate::interrupt::check()?;
-            crate::sandbox::check_started(&result)?;
+            child.check_started(&result)?;
             let (passed, reason) = match result {
                 Ok(result) => (
                     result.status.success(),

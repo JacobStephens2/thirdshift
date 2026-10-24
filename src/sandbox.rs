@@ -30,6 +30,9 @@
 
 use std::ffi::OsString;
 use std::fs;
+use std::io::{Read, Seek};
+use std::os::fd::AsRawFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -195,7 +198,10 @@ fn disabled() -> bool {
 
 /// Code Graders need no login or provider. Bind only their report packet and
 /// prepared repository, at neutral paths, and leave their network offline.
-pub(crate) fn code_grader(repository: &Path, packet: &Path, args: &[String]) -> Result<Command> {
+pub(crate) fn code_grader(repository: &Path, packet: &Path, args: &[String]) -> Result<CodeGrader> {
+    // An unlinked status file stays outside the packet and the sandbox. Only
+    // bwrap writes it; the check's stdout and stderr cannot claim startup.
+    let status = (!disabled()).then(tempfile::tempfile).transpose()?;
     let mut command = if disabled() {
         let mut command = Command::new(&args[0]);
         command.args(&args[1..]);
@@ -226,6 +232,14 @@ pub(crate) fn code_grader(repository: &Path, packet: &Path, args: &[String]) -> 
         environment.set_str("HOME", "/sandbox/home");
         let mut argv = base_argv();
         binds.argv(&mut argv);
+        let status_fd = status
+            .as_ref()
+            .expect("sandbox has a status file")
+            .as_raw_fd();
+        argv.extend([
+            OsString::from("--json-status-fd"),
+            status_fd.to_string().into(),
+        ]);
         argv.extend(
             ["--tmpfs", "/sandbox/home", "--chdir", "/sandbox/repository"].map(OsString::from),
         );
@@ -246,6 +260,16 @@ pub(crate) fn code_grader(repository: &Path, packet: &Path, args: &[String]) -> 
             stderr: None,
         };
         let mut command = launch.command(&args[1..])?;
+        // SAFETY: fcntl is async-signal-safe. The status file remains owned
+        // by CodeGrader until its child has ended; no allocation occurs here.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::fcntl(status_fd, libc::F_SETFD, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
         command.env_clear();
         command.envs(launch.env);
         command
@@ -271,25 +295,47 @@ pub(crate) fn code_grader(repository: &Path, packet: &Path, args: &[String]) -> 
     command
         .env("THIRDSHIFT_TRIAL_LOG", "")
         .current_dir(repository);
-    Ok(command)
+    Ok(CodeGrader { command, status })
 }
 
-/// bwrap could not enter its sandbox. The check itself runs through a shell,
-/// so a missing check executable does not produce this launcher diagnostic.
-pub(crate) fn check_started(result: &Result<std::process::Output>) -> Result<()> {
-    let diagnostic = match result {
-        Err(error) if !disabled() && error.is::<crate::process::NotStarted>() => {
-            format!("{error:#}")
-        }
-        Ok(output)
-            if !output.status.success()
-                && String::from_utf8_lossy(&output.stderr).starts_with("bwrap:") =>
-        {
-            String::from_utf8_lossy(&output.stderr).into_owned()
-        }
-        _ => return Ok(()),
-    };
-    Err(anyhow::Error::new(Unavailable { diagnostic }))
+/// A Code Grader's command and launcher-owned startup evidence travel together.
+pub(crate) struct CodeGrader {
+    command: Command,
+    status: Option<fs::File>,
+}
+
+impl CodeGrader {
+    pub(crate) fn command(&mut self) -> &mut Command {
+        &mut self.command
+    }
+
+    /// Only the launcher's status decides whether a check started. A check
+    /// can fail normally even when its own diagnostic mentions bwrap.
+    pub(crate) fn check_started(&self, result: &Result<std::process::Output>) -> Result<()> {
+        let Some(status) = &self.status else {
+            return Ok(());
+        };
+        let diagnostic = match result {
+            Err(error) if error.is::<crate::process::NotStarted>() => format!("{error:#}"),
+            Ok(output) => {
+                let mut status = status.try_clone()?;
+                status.rewind()?;
+                let mut records = String::new();
+                status.read_to_string(&mut records)?;
+                let started = records.lines().any(|line| {
+                    serde_json::from_str::<serde_json::Value>(line)
+                        .ok()
+                        .is_some_and(|record| record["child-pid"].as_u64().is_some())
+                });
+                if started {
+                    return Ok(());
+                }
+                String::from_utf8_lossy(&output.stderr).into_owned()
+            }
+            _ => return Ok(()),
+        };
+        Err(anyhow::Error::new(Unavailable { diagnostic }))
+    }
 }
 
 impl Prepared {

@@ -100,7 +100,6 @@ impl std::error::Error for TimedOut {}
 #[derive(Debug)]
 pub(crate) struct NotStarted {
     name: String,
-    error: std::io::Error,
 }
 
 impl std::fmt::Display for NotStarted {
@@ -109,11 +108,7 @@ impl std::fmt::Display for NotStarted {
     }
 }
 
-impl std::error::Error for NotStarted {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        Some(&self.error)
-    }
-}
+impl std::error::Error for NotStarted {}
 
 fn captured(
     command: &mut Command,
@@ -230,10 +225,9 @@ fn execute<'a, T: Send + 'static>(
         if capture_stderr {
             command.stderr(Stdio::piped());
         }
-        let child = command.spawn().map_err(|error| NotStarted {
-            name: cli.clone(),
-            error,
-        })?;
+        let child = command
+            .spawn()
+            .with_context(|| NotStarted { name: cli.clone() })?;
         // Install ownership immediately: every fallible step after spawn is
         // covered, including pipe extraction and starting workers.
         let mut owned = Execution {
