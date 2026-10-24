@@ -124,6 +124,7 @@ pub(crate) struct Prepared {
     env: Vec<(OsString, OsString)>,
     program: PathBuf,
     prefix: Vec<OsString>,
+    stderr: PathBuf,
     _grok: Option<GrokGuard>,
     _proxy: proxy::Guard,
 }
@@ -211,8 +212,7 @@ pub(crate) fn code_grader(repository: &Path, packet: &Path, args: &[String]) -> 
         // Spec-review repositories have a local origin whose absolute host
         // path identifies the Arm. Keep Git usable without exposing that path.
         if repository.join(".git/eval-origin.git").is_dir() {
-            let config = packet.join("repository.gitconfig");
-            fs::copy(repository.join(".git/config"), &config)?;
+            let config = repository.join(".git/config");
             crate::git::Git::new(repository).run(&[
                 "config",
                 "--file",
@@ -220,20 +220,9 @@ pub(crate) fn code_grader(repository: &Path, packet: &Path, args: &[String]) -> 
                 "remote.origin.url",
                 "/sandbox/repository/.git/eval-origin.git",
             ])?;
-            binds.read_only(&config, Path::new("/sandbox/repository/.git/config"));
         }
         let mut environment = Environment::default();
-        let roots = toolchains(&config::home()?);
-        for root in &roots {
-            binds.read_only(root, root);
-            let bin = root.join("bin");
-            if bin.is_dir() {
-                environment.prepend_path(&bin);
-            }
-        }
-        for bin in tool_bin_dirs(&roots) {
-            environment.prepend_path(&bin);
-        }
+        toolchains_into(&config::home()?, &mut binds, &mut environment);
         environment.set_str("HOME", "/sandbox/home");
         let mut argv = base_argv();
         binds.argv(&mut argv);
@@ -254,8 +243,9 @@ pub(crate) fn code_grader(repository: &Path, packet: &Path, args: &[String]) -> 
             prefix: [SHELL, "-c", "exec \"$0\" \"$@\""]
                 .map(OsString::from)
                 .to_vec(),
+            stderr: None,
         };
-        let mut command = launch.command(&args[1..]);
+        let mut command = launch.command(&args[1..])?;
         command.env_clear();
         command.envs(launch.env);
         command
@@ -286,13 +276,20 @@ pub(crate) fn code_grader(repository: &Path, packet: &Path, args: &[String]) -> 
 
 /// bwrap could not enter its sandbox. The check itself runs through a shell,
 /// so a missing check executable does not produce this launcher diagnostic.
-pub(crate) fn check_started(output: &std::process::Output) -> Result<()> {
-    if !output.status.success() && String::from_utf8_lossy(&output.stderr).starts_with("bwrap:") {
-        return Err(anyhow::Error::new(Unavailable {
-            diagnostic: String::from_utf8_lossy(&output.stderr).into_owned(),
-        }));
-    }
-    Ok(())
+pub(crate) fn check_started(result: &Result<std::process::Output>) -> Result<()> {
+    let diagnostic = match result {
+        Err(error) if !disabled() && error.is::<crate::process::NotStarted>() => {
+            format!("{error:#}")
+        }
+        Ok(output)
+            if !output.status.success()
+                && String::from_utf8_lossy(&output.stderr).starts_with("bwrap:") =>
+        {
+            String::from_utf8_lossy(&output.stderr).into_owned()
+        }
+        _ => return Ok(()),
+    };
+    Err(anyhow::Error::new(Unavailable { diagnostic }))
 }
 
 impl Prepared {
@@ -304,7 +301,25 @@ impl Prepared {
             env: self.env.clone(),
             program: self.program.clone(),
             prefix: self.prefix.clone(),
+            stderr: Some(self.stderr.clone()),
         }
+    }
+
+    /// A later launch (including Resume) may fail even after the startup
+    /// check succeeded. Retain bwrap's stderr outside the Harness protocol.
+    pub(crate) fn startup_failure(&self, error: &anyhow::Error) -> Option<Unavailable> {
+        if error.is::<crate::process::NotStarted>() {
+            return Some(Unavailable {
+                diagnostic: format!("{error:#}"),
+            });
+        }
+        let failure = error.downcast_ref::<crate::harness::interpretation::SessionFailure>()?;
+        if !failure.before_first_turn {
+            return None;
+        }
+        let stderr = fs::read_to_string(&self.stderr).ok()?;
+        (stderr.starts_with("bwrap:") || stderr.contains("sandbox failed to start:"))
+            .then_some(Unavailable { diagnostic: stderr })
     }
 }
 
@@ -315,6 +330,7 @@ pub(crate) struct Launch {
     pub env: Vec<(OsString, OsString)>,
     pub program: PathBuf,
     prefix: Vec<OsString>,
+    stderr: Option<PathBuf>,
 }
 
 impl Launch {
@@ -324,7 +340,7 @@ impl Launch {
     /// sandbox's overrides applied over it. The Harness runs behind the
     /// relay: `prefix` starts the relay, then runs the program as `$0` with
     /// `args` as `$@`, so the relay dies with the session.
-    pub fn command(&self, args: &[String]) -> Command {
+    pub fn command(&self, args: &[String]) -> Result<Command> {
         let mut command = Command::new(find_bwrap().unwrap_or_else(|| PathBuf::from("bwrap")));
         command.args(&self.argv);
         command.arg("--");
@@ -332,7 +348,10 @@ impl Launch {
         command.arg(&self.program);
         command.args(args);
         command.envs(self.env.iter().map(|(name, value)| (name, value)));
-        command
+        if let Some(stderr) = &self.stderr {
+            command.stderr(fs::File::create(stderr)?);
+        }
+        Ok(command)
     }
 }
 
@@ -423,19 +442,7 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
     // working directory is unchanged.
     binds.read_write(request.repository, request.repository);
     binds.read_only(request.skills_dir, request.skills_dir);
-    let roots = toolchains(request.home);
-    for root in &roots {
-        binds.read_only(root, root);
-        // A toolchain's own `bin` directory carries its shims: `cargo` lives
-        // in `~/.cargo/bin`, and its name resolves at the same path inside.
-        let bin = root.join("bin");
-        if bin.is_dir() {
-            environment.prepend_path(&bin);
-        }
-    }
-    for bin in tool_bin_dirs(&roots) {
-        environment.prepend_path(&bin);
-    }
+    toolchains_into(request.home, &mut binds, &mut environment);
     let _grok = home_into(request, &mut binds, &mut environment)?;
     // The proxy allows only this Trial Harness's provider hosts. An OpenCode
     // Trial with no key fails in the homes above, as before; one naming an
@@ -500,6 +507,7 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
         env,
         program,
         prefix,
+        stderr: request.fresh_home.join("launcher.stderr"),
         _grok,
         _proxy: proxy,
     })
@@ -657,6 +665,21 @@ fn base_argv() -> Vec<OsString> {
 /// The toolchain roots a session may need, read-only: each is bound only
 /// when it exists, at its own path. Environment overrides win over the
 /// defaults, as they do outside the sandbox.
+fn toolchains_into(home: &Path, binds: &mut Binds, environment: &mut Environment) {
+    let roots = toolchains(home);
+    for root in &roots {
+        binds.read_only(root, root);
+        // Toolchain bin directories carry their shims at the same paths.
+        let bin = root.join("bin");
+        if bin.is_dir() {
+            environment.prepend_path(&bin);
+        }
+    }
+    for bin in tool_bin_dirs(&roots) {
+        environment.prepend_path(&bin);
+    }
+}
+
 fn toolchains(home: &Path) -> Vec<PathBuf> {
     let roots = [
         std::env::var_os("RUSTUP_HOME").map(PathBuf::from),
@@ -1151,6 +1174,7 @@ mod tests {
         prepared
             .launch()
             .command(&[])
+            .unwrap()
             .current_dir(repository)
             .output()
             .expect("sandboxed session did not run")
@@ -1813,6 +1837,7 @@ mod tests {
         let mut child = prepared
             .launch()
             .command(&[])
+            .unwrap()
             .current_dir(&layout.repo)
             .spawn()
             .expect("sandboxed session did not start");

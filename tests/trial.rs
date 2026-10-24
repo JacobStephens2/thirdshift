@@ -827,6 +827,25 @@ fn a_bwrap_startup_failure_makes_a_trial_void() {
 }
 
 #[test]
+fn a_bwrap_failure_after_its_startup_check_still_makes_a_trial_void() {
+    use std::os::unix::fs::PermissionsExt;
+    let scenario = Scenario::new();
+    let request = request(&scenario);
+    let bwrap = scenario.path("bin/bwrap");
+    fs::write(&bwrap, "#!/bin/sh\ncase \"$*\" in *'/bin/true') exit 0;; esac\necho 'bwrap: Creating new namespace failed after probe' >&2\nexit 1\n").unwrap();
+    fs::set_permissions(bwrap, fs::Permissions::from_mode(0o755)).unwrap();
+    let result = scenario.run(&["--trial", request.to_str().unwrap()]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(output["outcome"], "void", "{output}");
+    assert_eq!(output["void_cause"], "sandbox_unavailable", "{output}");
+    assert!(
+        output["cause"].as_str().unwrap().contains("after probe"),
+        "{output}"
+    );
+}
+
+#[test]
 fn a_trial_without_its_sandbox_runs_its_session_directly() {
     let scenario = Scenario::new();
     let request = request(&scenario);

@@ -317,7 +317,7 @@ fn grade(grader: &Grader, directory: &Path, packet: &Packet, timeout: u64) -> Re
     let sandbox =
         crate::sandbox::for_session(&choice, &grader.harness.path, &workspace, &workspace)?;
     let mut command = match &sandbox {
-        Some(prepared) => prepared.launch().command(&invocation.args),
+        Some(prepared) => prepared.launch().command(&invocation.args)?,
         None => {
             let mut command = Command::new(&grader.harness.path);
             command.args(&invocation.args);

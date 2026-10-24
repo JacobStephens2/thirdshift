@@ -70,8 +70,12 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
             reason: "review must leave at least one report".into(),
         },
     ];
-    if output.outcome != Outcome::Void {
+    if output.outcome != Outcome::Void && !task.manifest.checks.is_empty() {
         let packet = tempfile::Builder::new().prefix("grader-").tempdir()?;
+        // Bind sources remain visible in /proc/self/mountinfo. A neutral
+        // destination alone cannot hide the original Trial's Arm pathname.
+        let snapshot = packet.path().join("repository");
+        copy_repository(repository, &snapshot)?;
         for (source, name) in [
             (&output.reports.standards, "standards.md"),
             (&output.reports.spec, "spec.md"),
@@ -84,7 +88,7 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
             }
         }
         for command in &task.manifest.checks {
-            let mut child = crate::sandbox::code_grader(repository, packet.path(), command)?;
+            let mut child = crate::sandbox::code_grader(&snapshot, packet.path(), command)?;
             let result = process::output_until(
                 &mut child,
                 None,
@@ -97,9 +101,7 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
                 &|| Ok(()),
             );
             crate::interrupt::check()?;
-            if let Ok(output) = &result {
-                crate::sandbox::check_started(output)?;
-            }
+            crate::sandbox::check_started(&result)?;
             let (passed, reason) = match result {
                 Ok(result) => (
                     result.status.success(),
@@ -129,6 +131,23 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
         checks,
         rechecks: Vec::new(),
     })
+}
+
+fn copy_repository(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            copy_repository(&entry.path(), &target)?;
+        } else if kind.is_symlink() {
+            std::os::unix::fs::symlink(fs::read_link(entry.path())?, &target)?;
+        } else {
+            fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]

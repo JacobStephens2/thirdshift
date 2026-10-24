@@ -234,6 +234,13 @@ pub fn run(path: &Path) -> Result<String> {
         Some(prepared) => Sessions::within_sandboxed(&logs, &repository, &choice, prepared, run),
         None => Sessions::within(&logs, &repository, &choice, run),
     };
+    let ended = ended.map_err(|error| {
+        sandbox
+            .as_ref()
+            .and_then(|prepared| prepared.startup_failure(&error))
+            .map(anyhow::Error::new)
+            .unwrap_or(error)
+    });
     skills::remove_written();
     let session_ms = session_started.elapsed().as_millis();
     let artifact = |extension| {

@@ -779,15 +779,15 @@ fn mechanical_scores_determine_the_provisional_verdict_inbox_and_arm_minutes() {
             .scenario
             .path("home/.thirdshift/evals/suites/spec-review/tasks/fixture/task.toml");
         let manifest = fs::read_to_string(&task).unwrap();
-        fs::write(&task, manifest.replace("[inputs]", &format!(
-            "checks = [[\"sh\", \"-c\", 'grep -q {passing_arm} \"$THIRDSHIFT_TRIAL_SPEC_REPORT\"']]\n[inputs]"
-        ))).unwrap();
+        fs::write(&task, manifest.replace("[inputs]",
+            "checks = [[\"sh\", \"-c\", 'grep -q caught \"$THIRDSHIFT_TRIAL_SPEC_REPORT\"']]\n[inputs]"
+        )).unwrap();
         fixture.scenario.agent_does(&format!(
             r#"
 {reports}
 case "$PWD" in
-  *--candidate--*) printf 'candidate\n' > "$reports/spec.md" ;;
-  *) printf 'baseline\n' > "$reports/spec.md" ;;
+  *--{passing_arm}--*) printf 'caught\n' > "$reports/spec.md" ;;
+  *) printf 'missed\n' > "$reports/spec.md" ;;
 esac
 "#,
             reports = review_reports_prelude()
