@@ -2,7 +2,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, FixedOffset, Local};
 
 use crate::config::UserConfig;
 use crate::logs::command_record::{Issue, StageName};
@@ -26,8 +26,10 @@ pub(crate) struct Run {
     pub issue_url: Option<String>,
     pub issue_label: String,
     pub stages: Vec<Stage>,
+    pub context: String,
+    pub group_start: bool,
     repository: String,
-    started: Option<i64>,
+    started: Option<DateTime<FixedOffset>>,
     ended: Option<i64>,
     stage_metadata: bool,
 }
@@ -45,19 +47,44 @@ pub(crate) struct Stage {
 
 pub(crate) struct Grid {
     pub repository: String,
+    pub groups: Vec<Group>,
     pub runs: Vec<Run>,
     pub rows: Vec<GridRow>,
 }
 
 pub(crate) struct GridRow {
     pub name: String,
-    pub usual: String,
     pub cells: Vec<Cell>,
 }
 
 pub(crate) struct Cell {
     pub text: String,
     pub running: bool,
+    pub usual: String,
+    pub group_start: bool,
+}
+
+#[derive(Clone)]
+pub(crate) struct Group {
+    pub identity: String,
+    pub subject: String,
+    pub started: String,
+    pub runs: Vec<Run>,
+}
+
+impl Group {
+    fn new(run: Run, started: &str) -> Self {
+        Self {
+            identity: run.selector.clone(),
+            subject: run.subject.clone(),
+            started: if run.started.is_some() {
+                started.into()
+            } else {
+                "unknown".into()
+            },
+            runs: vec![run],
+        }
+    }
 }
 
 fn timestamp(value: &str) -> Option<i64> {
@@ -164,30 +191,153 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
         issue_label,
         selector,
         repository: record.repository.clone(),
+        context: String::new(),
+        group_start: true,
         stages,
-        started: timestamp(&record.started_at),
+        started: DateTime::parse_from_rfc3339(&record.started_at).ok(),
         ended: record.ended_at.as_deref().and_then(timestamp),
         stage_metadata: true,
     }
 }
 
-fn collect(command: &Command, now: DateTime<Local>, cutoff: i64, runs: &mut Vec<Run>) {
-    runs.push(run(command, now, cutoff));
-    for child in command.dispatched.iter().chain(&command.children) {
-        collect(child, now, cutoff, runs);
+// Membership follows exact recorded ancestry, never an issue number shared by attempts.
+fn collect(
+    command: &Command,
+    now: DateTime<Local>,
+    cutoff: i64,
+    spec: Option<usize>,
+    context: &str,
+    groups: &mut Vec<Group>,
+    runs: &mut Vec<Run>,
+) {
+    let mut current = run(command, now, cutoff);
+    runs.push(current.clone());
+    current.context = context.into();
+    let spec = if command.record.kind == "Run"
+        && let Some(index) = spec
+    {
+        current.context = format!(
+            "Ticket of {} · Started {}",
+            groups[index].subject, groups[index].started
+        );
+        current.group_start = false;
+        groups[index].runs.push(current);
+        spec
+    } else {
+        let index = groups.len();
+        groups.push(Group::new(current, &command.record.started_at));
+        (command.record.kind == "Spec run").then_some(index)
+    };
+    let parent = subject(
+        &command.record.kind,
+        &command.record.repository,
+        command.record.issue.as_ref(),
+    );
+    for dispatched in &command.dispatched {
+        collect(
+            dispatched,
+            now,
+            cutoff,
+            spec,
+            &format!("Dispatched by {parent}"),
+            groups,
+            runs,
+        );
+    }
+    for child in &command.children {
+        collect(
+            child,
+            now,
+            cutoff,
+            spec,
+            &format!("Child of {parent}"),
+            groups,
+            runs,
+        );
     }
 }
 
-pub(crate) fn load(config: &UserConfig, hours: f64) -> Result<Views> {
+fn grid(repository: String, groups: Vec<Group>) -> Grid {
+    let runs: Vec<_> = groups.iter().flat_map(|group| group.runs.clone()).collect();
+    let names: BTreeSet<_> = runs
+        .iter()
+        .flat_map(|run| {
+            run.stages
+                .iter()
+                .map(|stage| (StageName::order(&stage.name), stage.name.clone()))
+        })
+        .collect();
+    let rows = names
+        .into_iter()
+        .map(|(_, name)| {
+            let cells = runs
+                .iter()
+                .map(|run| {
+                    let stages: Vec<_> = run
+                        .stages
+                        .iter()
+                        .filter(|stage| stage.name == name)
+                        .collect();
+                    let text = if !run.stage_metadata {
+                        "Unknown · no stage times retained".into()
+                    } else if stages.is_empty() {
+                        "Not reached · —".into()
+                    } else {
+                        stages
+                            .iter()
+                            .map(|stage| stage.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("; ")
+                    };
+                    let usual = if StageName::is_dispatch(&name) {
+                        "—".into()
+                    } else {
+                        runs.iter()
+                            .filter(|sample| sample.repository == run.repository)
+                            .flat_map(|sample| &sample.stages)
+                            .find(|stage| stage.name == name)
+                            .map(|stage| stage.usual.clone())
+                            .unwrap_or_else(|| "Not enough samples".into())
+                    };
+                    Cell {
+                        text,
+                        running: stages.iter().any(|stage| stage.running),
+                        usual,
+                        group_start: run.group_start,
+                    }
+                })
+                .collect();
+            GridRow { name, cells }
+        })
+        .collect();
+    Grid {
+        repository,
+        groups,
+        runs,
+        rows,
+    }
+}
+
+pub(crate) fn load(config: &UserConfig, hours: f64, by_repository: bool) -> Result<Views> {
     let now = Local::now();
     let cutoff = now - chrono::Duration::seconds((hours * 3600.0) as i64);
     let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
     let mut lanes = Vec::new();
-    let mut repositories: BTreeMap<String, Vec<Run>> = BTreeMap::new();
+    let mut groups = Vec::new();
     for entry in snapshot.entries() {
         let mut runs = Vec::new();
         match entry {
-            Entry::Record(command) => collect(command, now, cutoff.timestamp(), &mut runs),
+            Entry::Record(command) => {
+                collect(
+                    command,
+                    now,
+                    cutoff.timestamp(),
+                    None,
+                    "",
+                    &mut groups,
+                    &mut runs,
+                );
+            }
             Entry::History(command) => {
                 let selector = Observation::History(command).selector().unwrap_or_default();
                 let (issue_url, issue_label) = issue_link(command.issue.as_ref());
@@ -204,104 +354,58 @@ pub(crate) fn load(config: &UserConfig, hours: f64) -> Result<Views> {
                     issue_label,
                     selector,
                     repository: command.repository.clone(),
+                    context: String::new(),
+                    group_start: true,
                     stages: Vec::new(),
-                    started: timestamp(&command.started_at),
+                    started: DateTime::parse_from_rfc3339(&command.started_at).ok(),
                     ended: command.ended_at.as_deref().and_then(timestamp),
                     stage_metadata: false,
                 });
+                groups.push(Group::new(runs[0].clone(), &command.started_at));
             }
-        }
-        for run in &runs {
-            repositories
-                .entry(run.repository.clone())
-                .or_default()
-                .push(run.clone());
         }
         if runs.iter().any(|run| {
             run.state == "live"
                 || run.started.is_some_and(|start| {
+                    let start = start.timestamp();
                     start <= now.timestamp() && run.ended.unwrap_or(start) > cutoff.timestamp()
                 })
         }) {
             lanes.push(runs);
         }
     }
-    lanes.sort_by_key(|runs| std::cmp::Reverse(runs.first().and_then(|run| run.started)));
-    let mut ordered: Vec<_> = repositories.values().flatten().cloned().collect();
-    ordered.sort_by_key(|run| {
-        (
-            run.state != "live",
-            std::cmp::Reverse(run.ended.or(run.started)),
+    lanes.sort_by_key(|runs| {
+        std::cmp::Reverse(
+            runs.first()
+                .and_then(|run| run.started.map(|start| start.timestamp())),
         )
     });
-    // Keep global ordering, continuing a repository's table whenever the next
-    // Run belongs elsewhere or three columns have filled the available width.
-    let mut batches: Vec<Vec<Run>> = Vec::new();
-    for run in ordered {
-        if let Some(batch) = batches.last_mut()
-            && batch.len() < 3
-            && batch[0].repository == run.repository
-        {
-            batch.push(run);
-        } else {
-            batches.push(vec![run]);
+    groups.sort_by_key(|group| {
+        (
+            std::cmp::Reverse(group.runs[0].started),
+            group.identity.clone(),
+        )
+    });
+    for group in &mut groups {
+        group.runs[1..].sort_by_key(|run| (std::cmp::Reverse(run.started), run.selector.clone()));
+    }
+    let grids = if by_repository {
+        let mut repositories: BTreeMap<String, Vec<Group>> = BTreeMap::new();
+        for group in groups {
+            repositories
+                .entry(group.runs[0].repository.clone())
+                .or_default()
+                .push(group);
         }
-    }
-    let mut grids = Vec::new();
-    for batch in batches {
-        let repository = &batch[0].repository;
-        let runs = &repositories[repository];
-        let names: BTreeSet<_> = runs
-            .iter()
-            .flat_map(|run| {
-                run.stages
-                    .iter()
-                    .map(|stage| (StageName::order(&stage.name), stage.name.clone()))
-            })
-            .collect();
-        let rows = names
-            .iter()
-            .map(|(_, name)| GridRow {
-                name: name.clone(),
-                usual: runs
-                    .iter()
-                    .flat_map(|run| &run.stages)
-                    .find(|stage| &stage.name == name)
-                    .map(|stage| stage.usual.clone())
-                    .unwrap_or_default(),
-                cells: batch
-                    .iter()
-                    .map(|run| {
-                        let stages: Vec<_> = run
-                            .stages
-                            .iter()
-                            .filter(|stage| &stage.name == name)
-                            .collect();
-                        let text = if !run.stage_metadata {
-                            "Unknown · no stage times retained".into()
-                        } else if stages.is_empty() {
-                            "Not reached · —".into()
-                        } else {
-                            stages
-                                .iter()
-                                .map(|stage| stage.text.as_str())
-                                .collect::<Vec<_>>()
-                                .join("; ")
-                        };
-                        Cell {
-                            text,
-                            running: stages.iter().any(|stage| stage.running),
-                        }
-                    })
-                    .collect(),
-            })
-            .collect();
-        grids.push(Grid {
-            repository: repository.clone(),
-            runs: batch,
-            rows,
-        });
-    }
+        repositories
+            .into_iter()
+            .map(|(repository, groups)| grid(repository, groups))
+            .collect()
+    } else if groups.is_empty() {
+        Vec::new()
+    } else {
+        vec![grid("All runs".into(), groups)]
+    };
     Ok(Views {
         lanes,
         grids,

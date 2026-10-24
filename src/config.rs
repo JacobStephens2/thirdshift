@@ -25,6 +25,7 @@ pub use console::{ConsoleAccess, ConsoleSettings};
 #[derive(Debug, PartialEq, Eq)]
 pub struct UserConfig {
     pub console: ConsoleSettings,
+    pub resources: crate::resources::Limits,
     /// `merge.always`: every Run is a Merge run unless told `no-merge`.
     pub merge_always: bool,
     /// `base.fix`: every Run may start a Base fix unless told `no-base-fix`.
@@ -57,7 +58,7 @@ pub struct UserConfig {
     /// Claim stop a Pickup run from taking another, by default 3.
     pub pickup_limit: NonZeroUsize,
     /// `pickup.wait_minutes`: how long after its latest shaping event an
-    /// issue becomes a Ready issue, by default 30 minutes. Zero disables
+    /// issue becomes a Ready issue, by default 5 minutes. Zero disables
     /// the settling window.
     pub pickup_wait: TimeDelta,
     /// `pickup.order`: which end of the issue numbers a Pickup run takes
@@ -86,6 +87,10 @@ pub struct EmailSettings {
     /// `email.always`: every Run, and every Architect run, sends a Run
     /// notification unless told `no-email`.
     pub always: bool,
+    /// `email.unless_merged`: every Run, and every Architect run, sends a
+    /// Run notification as if told `email-unless-merged`, with or without
+    /// `email.always`, unless told `email` or `no-email`.
+    pub unless_merged: bool,
     /// `email.to`: the address email goes to when the command names none.
     pub to: Option<String>,
     /// `email.from`: the sender, in place of Resend's shared test sender.
@@ -117,6 +122,7 @@ impl UserConfig {
     /// What a Run does with no User config under `home`.
     fn defaults(home: &Path) -> Self {
         UserConfig {
+            resources: crate::resources::Limits::default(),
             console: ConsoleSettings::default(),
             merge_always: false,
             base_fix: false,
@@ -130,7 +136,7 @@ impl UserConfig {
             email: EmailSettings::default(),
             spec_parallel: NonZeroUsize::new(3).unwrap(),
             pickup_limit: NonZeroUsize::new(3).unwrap(),
-            pickup_wait: TimeDelta::minutes(30),
+            pickup_wait: TimeDelta::minutes(5),
             pickup_order: PickupOrder::LowestFirst,
             harness: harness::Settings::default(),
             security_harness: None,
@@ -151,6 +157,13 @@ impl UserConfig {
             .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::defaults(home);
         for (section, value) in &table {
+            if section == "resources" {
+                config.resources = value
+                    .clone()
+                    .try_into()
+                    .with_context(|| format!("invalid [resources] in {file}"))?;
+                continue;
+            }
             if section == "console" {
                 config.console = value
                     .clone()
@@ -228,6 +241,12 @@ impl UserConfig {
                     }
                     ("email", "always", Value::Boolean(always)) => config.email.always = *always,
                     ("email", "always", _) => bail!("email.always must be true or false in {file}"),
+                    ("email", "unless_merged", Value::Boolean(unless_merged)) => {
+                        config.email.unless_merged = *unless_merged
+                    }
+                    ("email", "unless_merged", _) => {
+                        bail!("email.unless_merged must be true or false in {file}")
+                    }
                     ("email", "to", Value::String(to)) => config.email.to = Some(to.clone()),
                     ("email", "from", Value::String(from)) => {
                         config.email.from = Some(from.clone())
@@ -407,6 +426,9 @@ impl UserConfigDocument {
                 "always",
                 changes.notifications.is_some(),
             );
+            if changes.notifications.is_none() {
+                set(&mut document, "email", "unless_merged", false);
+            }
             if let Some(notifications) = &changes.notifications {
                 set(&mut document, "email", "from", notifications.from.as_str());
                 set_email_to(&mut document, &notifications.to);
@@ -877,6 +899,7 @@ pull = false     # every Ticket run first fast-forwards your checkout of the Bas
 
 [email]
 always = false                  # every Ticket run sends a Run notification, without the email word; default false
+unless_merged = false           # every Ticket run sends a Run notification unless it merged, without the email-unless-merged word; default false
 # to = "you@example.com"        # where email goes when the command names no address; no default
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 
@@ -905,9 +928,13 @@ quiet_skips = false   # a skipped Pass prints nothing, leaving only its Activity
 [spec]
 parallel = 3   # how many Tickets a Spec run runs at once; default 3
 
+[resources]
+min_available_memory_mb = 0   # delay new sessions below this available RAM in MB; 0 disables; default 0
+max_load_per_cpu_percent = 0  # delay new sessions above this one-minute load per logical CPU (%); 0 disables; default 0
+
 [pickup]
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
-wait_minutes = 30   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 30
+wait_minutes = 5   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 5
 order = "lowest-first"   # which Ready issue a Pickup run takes, lowest-first or highest-first; default lowest-first
 
 [harness]
@@ -1036,6 +1063,26 @@ mod tests {
     }
 
     #[test]
+    fn resource_limits_are_opt_in_and_accept_machine_thresholds() {
+        let defaults = parse("").unwrap();
+        assert_eq!(defaults.resources.min_available_memory_mb, 0);
+        assert_eq!(defaults.resources.max_load_per_cpu_percent, 0);
+        let config =
+            parse("[resources]\nmin_available_memory_mb = 2048\nmax_load_per_cpu_percent = 100\n")
+                .unwrap();
+        assert_eq!(config.resources.min_available_memory_mb, 2048);
+        assert_eq!(config.resources.max_load_per_cpu_percent, 100);
+        for text in [
+            "[resources]\nmin_available_memory_mb = -1\n",
+            "[resources]\nmin_available_memory_mb = 1.5\n",
+            "[resources]\nmax_load_per_cpu_percent = -1\n",
+            "[resources]\nunknown = 3\n",
+        ] {
+            assert!(parse(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
     fn the_defaults_setup_writes_are_what_a_run_does_with_no_user_config() {
         let mut config = parse(DEFAULTS).unwrap();
         assert_eq!(
@@ -1075,6 +1122,7 @@ mod tests {
                 "base.fix",
                 "launch.pull",
                 "email.always",
+                "email.unless_merged",
                 "email.to",
                 "email.from",
                 "logs.dir",
@@ -1090,6 +1138,8 @@ mod tests {
                 "console.hidden_sections",
                 "activity.quiet_skips",
                 "spec.parallel",
+                "resources.min_available_memory_mb",
+                "resources.max_load_per_cpu_percent",
                 "pickup.limit",
                 "pickup.wait_minutes",
                 "pickup.order",
@@ -1315,6 +1365,18 @@ mod tests {
         assert_eq!(parse("[email]\n").unwrap().email, EmailSettings::default());
         assert!(parse("[email]\nalways = true\n").unwrap().email.always);
         assert!(!parse("[email]\nalways = false\n").unwrap().email.always);
+        assert!(
+            parse("[email]\nunless_merged = true\n")
+                .unwrap()
+                .email
+                .unless_merged
+        );
+        assert!(
+            !parse("[email]\nalways = true\n")
+                .unwrap()
+                .email
+                .unless_merged
+        );
     }
 
     #[test]
@@ -1424,6 +1486,10 @@ mod tests {
             (
                 "[email]\nalways = \"yes\"\n",
                 "email.always must be true or false",
+            ),
+            (
+                "[email]\nunless_merged = 1\n",
+                "email.unless_merged must be true or false",
             ),
             (
                 "[email]\nto = 1\n",

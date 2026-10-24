@@ -106,7 +106,7 @@ The designed behaviour described in this manual is implemented. Known gaps and p
 
 ## Machine status
 
-`thirdshift status` names this host and shows its **Inbox** across every repository in `logs.dir`, in this order:
+`thirdshift status` names this host, counts its active runs, such as `2 active runs`, and shows its **Inbox** across every repository in `logs.dir`. The count takes each Command with live work anywhere in it once, whatever its group: a Spec run with two parallel Tickets is one, and a Pass with the Spec run or Ticket run it dispatched, their Tickets and any Base fix, is one. A live child still counts when its outer record has ended or died; ended, died, ready and skipped work counts none. The Inbox groups come in this order:
 
 - **Needs you:** live Silent Ticket runs, then Slow Ticket runs, then ended problems newest first: Died, Failed, Triage (a Stop without requeue), or a Security finding waiting on a decision. An ended problem leaves when a later Command on the same issue starts on this machine, or when GitHub shows its issue closed or its pull request merged. A Triage row also leaves once its issue loses `needs-triage`; Resolved counts from the first read showing the label gone. Architect and Security runs use the issue and pull request of the Spec run or Ticket run they dispatched. A failed Ticket run whose pull request closed unmerged stays while its issue is open. Live Silent and Slow rows stay until their Commands end, whatever GitHub shows. A row GitHub can speak for no longer ages out; rows with no issue or pull request, no Command record, no read yet or nothing GitHub can find still age out after `inbox.days` (7 by default), straight to History. Reopening an issue brings back a row still in Done or Resolved. Dismissals hold across GitHub changes; Undo uses the latest kept facts. Failures with the same nonempty cause collapse into one item with a count; unknown causes stay separate.
 - **Ready for review:** Commands that ended ready, with a pull request. One leaves when a later Command on the same issue starts on this machine, or when GitHub shows its pull request merged or closed; a pull request GitHub still shows as open keeps its row however old it is. A row GitHub can't speak for still leaves after `inbox.days`: one with no pull request, one with no Command record, one not read yet, or one whose pull request GitHub can't resolve. A merged pull request takes its row to Resolved for `inbox.days` from the merge time (a closed one from the close time); a pull request reopened while its row is in Done or Resolved brings the row back. From History on, a row keeps what GitHub last showed and its issue and pull request aren't read again. The Console reads ready rows' pull requests and Needs you rows' issues and pull requests in a batched query in the background once a minute, even with no pages open, and keeps the answer in one file on the machine. Changed answers wake open Inbox pages; unchanged reads leave pages idle. `status` uses the same answer while it is under 5 minutes old, and otherwise reads GitHub itself. Neither timing is a User config setting. The reads never write to GitHub. `status --json` gives each row what GitHub last showed and when, and how old the Inbox's answer is.
@@ -133,12 +133,13 @@ For each repository and kind of Pass whose latest Activity log line is a skip, s
 Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: https://github.com/acme/widgets/issues/7
 ```
 
-`thirdshift status --json` is the versioned API for agents and the coming [Console](adr/0016-the-console-is-a-long-running-reader.md). It runs outside a repository too. Version 1 has this shape:
+`thirdshift status --json` is the versioned API for agents; the [Console](adr/0016-the-console-is-a-long-running-reader.md) shows the same Inbox. It runs outside a repository too. Version 1 has this shape:
 
 ```json
 {
   "version": 1,
   "hostname": "factory",
+  "active_runs": 1,
   "commands": [{
     "version": 1,
     "kind": "Run",
@@ -182,7 +183,7 @@ Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: ht
 }
 ```
 
-Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `issue` is null for a Pass with no issue; `session_log`, `issue_branch`, `pull_request`, `outcome`, `cause`, `ended_at`, `parent_record` and `parent_dispatch` are nullable. Command kinds are `Run`, `Spec run`, `Architect run`, `Pickup run`, `Security run` and `Base fix`. Text output and the Console display the stored `Run` kind as **Ticket run**; Command records, the Activity log and JSON retain `Run`, including when reading older records ([ADR 0022](adr/0022-ticket-runs-and-plain-schedules.md)). `name` identifies an issue or a Pass's kind and stamp. `dispatched` is an array of the Ticket runs or Spec runs a Pass dispatched, with the same fields as its parent (and an empty `dispatched` array); it shares the Pass's process identity and Command log. It retains its own outcome, end time, cause, Issue branch and pull request. The retained Command record has the same fields, including dispatched work, without the computed `state`, `stage`, `source`, `command_log` and `children` or empty leaf `dispatched` arrays. Older records without an end time use their last modification time. `idle_passes` contains one entry per repository and kind whose latest Activity log line is a skip; it is independent of `commands`, and never creates a Command record or log for a skipped Pass.
+Times are RFC 3339; ages are nonnegative seconds. `model` and `effort` are null when left to the Harness. `issue` is null for a Pass with no issue; `session_log`, `issue_branch`, `pull_request`, `outcome`, `cause`, `ended_at`, `parent_record` and `parent_dispatch` are nullable. Command kinds are `Run`, `Spec run`, `Architect run`, `Pickup run`, `Security run` and `Base fix`. Text output and the Console display the stored `Run` kind as **Ticket run**; Command records, the Activity log and JSON retain `Run`, including when reading older records ([ADR 0022](adr/0022-ticket-runs-and-plain-schedules.md)). `name` identifies an issue or a Pass's kind and stamp. `dispatched` is an array of the Ticket runs or Spec runs a Pass dispatched, with the same fields as its parent (and an empty `dispatched` array); it shares the Pass's process identity and Command log. It retains its own outcome, end time, cause, Issue branch and pull request. The retained Command record has the same fields, including dispatched work, without the computed `state`, `stage`, `source`, `command_log` and `children` or empty leaf `dispatched` arrays. Older records without an end time use their last modification time. `active_runs` is the count above, computed from the same observations as `commands`, whatever `--all` asks; the Console shows the same total. `idle_passes` contains one entry per repository and kind whose latest Activity log line is a skip; it is independent of `commands`, and never creates a Command record or log for a skipped Pass.
 
 Each top-level `commands` entry adds the computed `group` (`needs you`, `ready for review`, `landing`, `working`, `done`, `resolved` or `history`), nullable `needs_you_kind` (`silent`, `slow`, `died`, `failed`, `triage`, `finding`), `landing` (also true for a Needs you item referenced from Landing), `stopping` (true while a live Command given a [Stop](#stopping-a-command) is still ending), and `count`. A row a later Command took up also carries `left_from` (the waiting group it left), `left_reason` (`taken up by a later Command`) and `left_at` (that Command's start); rows still waiting, that never waited, or that aged out omit all three. With `group` and `needs_you_kind`, `stopping` gives the row's state word shown in text output and the Console; `state` stays the Command's own. A dismissed row also carries `dismissal` with `who`, `dismissed_at`, `source` (`CLI` or `Console`), the current covered `kind`, and all covered `kinds` in dismissal order. While a live row has no problem, `kind` is the last kind dismissed. Rows waiting on an uncovered kind, and rows never dismissed, omit `dismissal`. A collapsed failure has a `collapsed` array containing the other Commands, each with its own group and kind. These fields are observations, absent from durable records and `show`; child Ticket runs remain within their Command. The durable `security_findings_waiting` flag defaults to false for older records.
 
@@ -261,7 +262,7 @@ Both JSON views add `health` to recorded Commands: `{"state":"ok"}`, `{"state":"
 
 The Command excerpt omits the common fields documented for `status --json`; all those fields are retained, including process identity, issue, Harness, Model, Effort and nullable outcome. `children` and `dispatched` retain the same recursive shape. `session_logs` lists the selected Ticket run's Session trace paths, including original sessions and Resumes that share a stage. `latest_event` is optional, present only when a live Ticket run has a readable event, including in child Ticket runs. History without a Command record uses the same Activity-log or Session-trace shape as `status --all --json`, with Session traces discovered by issue/kind and exact Command owner, without invented stages or liveness.
 
-`logs` writes the Command log verbatim. `--session <kind>` writes that kind's latest Session trace as raw JSON lines; `implement` and `spec-review` include a later Resume, and `repair` selects the latest numbered Repair. A missing log or session kind gives an error. `--follow` first prints the selected log, then flushes appended bytes until the owning Command ends or dies, including its final output. A Ticket shares its Command's Command log but selects its own Session traces. The selected Command and Session trace stay fixed while following.
+`logs` writes the Command log verbatim. `--session <kind>` writes that kind's latest Session trace as raw JSON lines; `implement` and `spec-review` include a later Resume, and `repair` selects the latest numbered Repair. A missing log or session kind gives an error. `--follow` first prints the selected log, then flushes appended bytes until the captured outer Command process exits, including output written after its outcome was recorded. A Ticket shares its Command's Command log but selects its own Session traces. The selected Command and Session trace stay fixed while following. Exact-file following (`logs --file <id> --follow`) and the Console also drain through writer exit; an exact Session trace becomes complete when its owning record names a later Session. Retained files without a captured writer are finite. Each exact-file or Console read first checks that the selected file is still in the log inventory: removing it, or replacing its owner, repository or kind folder or the file itself with a symlink, ends the read with an error. Following by Command is unaffected. The CLI emits raw bytes; the Console holds an unfinished live line until its newline arrives or the selected file is complete.
 
 ## Install
 
@@ -281,9 +282,66 @@ cargo install thirdshift
 
 ### Console installation
 
-On Linux, `thirdshift console install` prints a script to read and run with sudo; `--output install-console.sh` saves it instead. For Caddy or Apache (Debian's `apache2` or Red Hat's `httpd`), the script first checks the configured Console address through the system resolver with `getent hosts`. If the name doesn't resolve, it exits before writing files, enabling services or restarting anything, and asks you to add an A or AAAA record pointing at this server and run the script again. It doesn't check whether the address points at this machine. Once the name resolves, installation continues with the Console's systemd service, proxy site and HTTPS certificate.
+To open this machine's Inbox locally, run:
 
-With neither proxy, the script installs a localhost-only service and prints an SSH tunnel command, without checking an address. See the [Console setup instructions](../README.md#console-on-a-server) for settings and proxy prerequisites.
+```sh
+thirdshift console --no-sign-in
+```
+
+Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. Ended rows show their recorded finish date and time in UTC and an explicit relative age, for example **Ended Oct 23, 2026 at 23:03:17 UTC · 52 min ago**. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. The Console never starts work; start Commands from the CLI or the operating system's scheduler.
+
+#### Console on a server
+
+Set the machine's address, fixed localhost port and sign-in allowlist in `~/.thirdshift/config.toml`:
+
+```toml
+[console]
+address = "https://console.example.com" # a DNS name, with or without https://; no port or path
+port = 8711
+allowed_emails = ["you@example.com"]
+```
+
+Point that DNS name at the machine, then run these commands as the owner:
+
+```sh
+thirdshift console password --email you@example.com
+thirdshift console install --output install-console.sh
+# Read the script, then install it:
+sudo sh install-console.sh
+```
+
+`console install` only prints a script; `--output <file>` saves it to that file instead, replacing any earlier copy, and writes nothing if the settings can't make a script. On Linux it prefers a running Caddy or Apache service; otherwise it checks for `caddy`, `apache2ctl` or `httpd` on PATH. For either proxy, the script first checks the Console's address with the system resolver (`getent hosts`). If it doesn't resolve, it stops before writing files or changing services and asks you to add an A or AAAA record pointing at this server, then run the script again. It checks resolution only, not whether the address points at this machine. The script writes `thirdshift-console.service`, running the installed binary as you with your HOME and automatic restarts. Only the script needs root. It enables the service, then restarts the proxy.
+
+For Caddy it writes `/etc/caddy/sites/thirdshift-console.caddy`, imports the sites folder from `/etc/caddy/Caddyfile` if needed, and disables proxy buffering with `flush_interval -1`. Caddy handles HTTPS. It **restarts**, rather than reloads, Caddy to preserve HTTP/3 on Android. For Apache it writes the port-80 site under `/etc/apache2/sites-available` or `/etc/httpd/conf.d`, preserves Host, forwards the request protocol and disables gzip on the Console's event streams. Install certbot with its Apache plugin first; the script runs `certbot --apache -d <name>`. Debian's module/site helpers are included. On an `httpd` machine, enable `proxy`, `proxy_http`, `headers`, `ssl` and `setenvif` and permit proxy connections in the host's SELinux policy first.
+
+With neither proxy, the script installs a localhost-only service with `--no-sign-in` and prints an SSH tunnel command. No address or accounts are needed for that mode. Run the tunnel on your computer and open the printed `http://localhost:<port>` address. On other operating systems, run `thirdshift console --no-sign-in` directly and use the same tunnel; only the Linux installer assumes systemd.
+
+#### nginx
+
+For nginx, use the generated service but remove `--no-sign-in` from its `ExecStart` before installing it. Configure the allowlist and password above. Obtain an HTTPS certificate for your DNS name, then add a site like this, adjusting the name, certificate paths and port:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name console.example.com;
+    ssl_certificate /etc/letsencrypt/live/console.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/console.example.com/privkey.pem;
+
+    location / {
+        proxy_pass http://127.0.0.1:8711;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+        proxy_cache off;
+        gzip off;
+        proxy_read_timeout 1h;
+    }
+}
+```
+
+Run `sudo nginx -t`, then `sudo systemctl restart nginx` on a systemd host. The Console still binds only to 127.0.0.1; nginx terminates HTTPS and passes live updates without buffering.
 
 ### Updating
 
@@ -410,11 +468,29 @@ thirdshift version                  # print thirdshift <version>
 thirdshift help                     # print a compact command and option reference
 ```
 
-`help` lists commands and shared options, with a link to the [README](../README.md), which points here for workflow details, settings, Harness setup, email, logs and scheduling.
+`help` lists commands and shared options, with a link to this manual for workflow details, settings, Harness setup, email, logs and scheduling.
 
 `version` and `help` print to stdout and exit `0`. `update`, `setup` and `email-test` follow the Ticket run's rule: stdout stays empty, messages go to stderr. `architect` follows it too: stdout carries the pull request's URL of the run it dispatches, or, in its place, the URL of the issue it ended on: its plan with `--plan-only`, or its idea when the review published no plan. A skipped Architect run prints nothing there when [another is still running](#one-at-a-time), the URL of each Architect plan that is [still open](#one-architect-plan-at-a-time), the URL of each [Architect idea waiting for triage](#an-architect-idea-waits-for-triage), and the URL of the [Ready issue, or issue still settling, that goes first](#a-ready-issue-goes-first). `pickup` follows it as well: stdout carries the pull request's URL of the run it dispatches, and nothing when the [Pickup run](#pickup-runs) is skipped. So does `secure`: stdout carries the pull request's URL of a fix it dispatches, and nothing otherwise.
 
 Uncommitted changes in your clone are fine: the Ticket run works in its own worktree from `origin`, so they are simply left out. Unpushed commits on the Base branch are not: push them first, or the Ticket run stops.
+
+### Host resources
+
+`thirdshift resources` (or `thirdshift resources --json`) reports this host's available and total RAM in MB (1,000,000 bytes), logical CPU count, one-minute load average, configured limits and whether another session may start. The Console's **Resources** page shows the same snapshot; reload to update it.
+
+Set `[resources]` in `~/.thirdshift/config.toml` to delay new sessions when this machine is busy:
+
+```toml
+[resources]
+min_available_memory_mb = 2048
+max_load_per_cpu_percent = 100
+```
+
+Both settings default to `0`, disabling that limit. Values are nonnegative whole numbers; `max_load_per_cpu_percent` is at most 4,294,967,295. A load limit of 100 permits a one-minute load of 8 on eight logical CPUs. Load includes runnable work and, on Linux, tasks waiting for IO; it is not instantaneous CPU usage.
+
+Before every session, including a Resume, Repair, Security review or a preflight Model test call, thirdshift checks the host. If available RAM is below the minimum or load per CPU exceeds the maximum, it reports why and waits, rechecking every ten seconds. Running sessions continue. Limits are read again on every check, so editing the config can release a waiting Command. Stop or Ctrl-C interrupts the wait through normal cleanup. A failed resource read with limits enabled fails the Command rather than starting a session without a measurement.
+
+These are host snapshots, not resource reservations or per-session budgets: simultaneous Commands may both pass a check, and container quotas are not measured. `spec.parallel` still sets the upper bound on parallel Ticket runs. Limits apply to sessions; they do not prevent worktree preparation or Claims.
 
 ### User config
 
@@ -450,7 +526,7 @@ parallel = 2   # how many Tickets a Spec run runs at once, instead of 3
 
 [pickup]
 limit = 5   # how many open issues labelled in-progress stop a Pickup run taking another, instead of 3
-wait_minutes = 60   # minutes since the latest shaping event before an issue is Ready, instead of 30; 0 disables waiting
+wait_minutes = 60   # minutes since the latest shaping event before an issue is Ready, instead of 5; 0 disables waiting
 order = "highest-first"   # take the highest-numbered Ready issue, instead of the lowest-numbered
 
 [security]
@@ -489,6 +565,7 @@ pull = false     # every Ticket run first fast-forwards your checkout of the Bas
 
 [email]
 always = false                  # every Ticket run sends a Run notification, without the email word; default false
+unless_merged = false           # every Ticket run sends a Run notification unless it merged, without the email-unless-merged word; default false
 # to = "you@example.com"        # where email goes when the command names no address; no default
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 
@@ -511,7 +588,7 @@ parallel = 3   # how many Tickets a Spec run runs at once; default 3
 
 [pickup]
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
-wait_minutes = 30   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 30
+wait_minutes = 5   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 5
 order = "lowest-first"   # which Ready issue a Pickup run takes, lowest-first or highest-first; default lowest-first
 
 [harness]
@@ -573,7 +650,7 @@ With `base.fix = true`, every Ticket run may start a [Base fix](#base-fix), as i
 
 With `launch.pull = true`, every Ticket run brings the Base branch checked out in the directory you start it from (the **Launch directory**) up to date with `origin`, so you no longer `git pull` by hand before each Ticket run. It happens after the pre-flight checks pass and before the worktree is created, as `git merge --ff-only origin/<Base branch>`: fast-forward only, never a merge commit or a rebase, always from `origin`, whatever the branch's upstream or your `pull.*` settings. A progress line on stderr says when it updates the branch; an already up-to-date branch is left quietly as it is. It is skipped when the checked-out branch isn't the Base branch, as in a Continuation whose open pull request targets another base, or on a detached HEAD. If the update can't happen, for example because uncommitted changes are in the way, stderr gets a `warning:` line with git's error and the command to run by hand, your changes are left as they were, and the Ticket run carries on with the same outcome and exit code. The setting only affects your checkout: the Ticket run's worktree starts from `origin/<Base branch>` either way.
 
-With `email.always = true`, every Ticket run sends a [Run notification](#run-notifications) to `email.to`, as if given `--email`, and `thirdshift --no-email <Issue URL>` (or `no-email`, before or after the URL) sends none for that one Ticket run.
+With `email.always = true`, every Ticket run sends a [Run notification](#run-notifications) to `email.to`, as if given `--email`, and `thirdshift --no-email <Issue URL>` (or `no-email`, before or after the URL) sends none for that one Ticket run. With `email.unless_merged = true`, with or without `email.always`, every Ticket run sends one only when it did not end merged, as if given `--email-unless-merged`; `--email` on the command line still emails that one Ticket run whatever its outcome, and `--no-email` sends none. Answering no to Setup's Run notifications question turns both off.
 
 `spec.parallel` sets how many Tickets a [Spec run](#spec-runs) runs at once, by default 3. It must be a whole number from 1 up; `parallel <n>` on the command line wins over it for one Spec run.
 
@@ -672,9 +749,11 @@ Setup validates the Credentials before asking questions on a terminal. For email
 
 #### Run notifications
 
-`--email` (or `email`) asks a Ticket run for a **Run notification**: one email, sent when the Ticket run ends, whatever the outcome. The word after the flag is the address only if it contains `@` and doesn't start with `https://`, so the Issue URL is never taken for it; otherwise the email goes to `email.to`. With `email.always = true` in the [User config](#user-config), a Ticket run asks for one without the flag, and `--no-email` (or `no-email`) skips it for that Ticket run; an address after `--email` still wins over `email.to`. Giving a flag twice, or `--email` together with `--no-email`, is an argument error.
+`--email` (or `email`) asks a Ticket run for a **Run notification**: one email, sent when the Ticket run ends, whatever the outcome. The word after the flag is the address only if it contains `@` and doesn't start with `https://`, so the Issue URL is never taken for it; otherwise the email goes to `email.to`. With `email.always = true` in the [User config](#user-config), a Ticket run asks for one without the flag, and `--no-email` (or `no-email`) skips it for that Ticket run; an address after `--email` still wins over `email.to`. Giving a flag twice, or any two of `--email`, `--email-unless-merged` and `--no-email`, is an argument error.
 
-A Ticket run that asks for a notification, by the flag or by `email.always`, makes the same checks as `email-test` before any other work: an address is known, and a key is found, in `RESEND_API_KEY` or else the Credentials. If either fails, or the Credentials are broken, the Ticket run stops, exits `1` naming what's wrong (with no key, the message above listing every way to give one), and sends nothing. A Ticket run that asks for no notification never reads the Credentials, so a broken file can't stop it, and `update`, `version` and `help` never read it either. Once they pass, every way the Ticket run ends sends exactly one notification, after its outcome is final and its cleanup done: ready for review, merged, a [Failed ticket run](#failed-ticket-runs) (including a later preflight failure such as an origin mismatch), or interrupted by Ctrl-C, SIGTERM or a closed terminal.
+`--email-unless-merged` (or `email-unless-merged`), optionally followed by an address as `--email` is, asks for a Run notification that is emailed only when the command did not end `merged`, whatever else it ended as. A merged one is still saved beside the [Command log](#logs), with nothing sent, unless it is a [Security run](#security-runs) whose fix left its finding open or whose audit left findings waiting for the Day shift: that one is emailed. It makes the same checks as `--email` before any work.
+
+A Ticket run that asks for a notification, by either flag or by `email.always` or `email.unless_merged`, makes the same checks as `email-test` before any other work: an address is known, and a key is found, in `RESEND_API_KEY` or else the Credentials. If either fails, or the Credentials are broken, the Ticket run stops, exits `1` naming what's wrong (with no key, the message above listing every way to give one), and sends nothing. A Ticket run that asks for no notification never reads the Credentials, so a broken file can't stop it, and `update`, `version` and `help` never read it either. Once they pass, every way the Ticket run ends sends exactly one notification, after its outcome is final and its cleanup done: ready for review, merged, a [Failed ticket run](#failed-ticket-runs) (including a later preflight failure such as an origin mismatch), or interrupted by Ctrl-C, SIGTERM or a closed terminal.
 
 - **Subject**: `[thirdshift] <owner>/<repo>#<n> <issue title>: <outcome>`, where the outcome is `ready for review`, `merged`, `failed` or `interrupted`. The title is left out if it can't be read from GitHub.
 - **Body**, plain text: a `Result:` line with the same outcome as the subject, so it is readable even when a long issue title hides the end of the subject; immediately followed by one `Issue:` line with the full original Issue URL, including after failure or interruption with no pull request, and a `Title:` line with the issue title when it was read; then the pull request URL (if any), the failure cause (if failed), after an Inherited failure with no Base fix taken its [`Base check:`, `Retry with:` and `Or set:` lines](#an-inherited-failure-links-the-base-branchs-checks), the session trace path (if any), the same one stderr gives, the [Command log](#logs) path as a `Command log:` line, a `Sent by:      thirdshift` line, the hostname and how long the Ticket run took. The body tells everything the subject does, so copying the body alone is enough.
@@ -683,9 +762,9 @@ The email's `Built with` line names the command's configured Harness, Model and 
 
 A [Spec run](#spec-runs) sends at most one notification for the whole Spec, under the same rules, with its checks made once before any Ticket starts. Its subject names the Spec, its `Issue:` line links the parent Spec rather than a Ticket or pull request, its outcome is the Spec run's, and its body, after what a Ticket run's holds (the Spec PR, if any), lists each Ticket's outcome, one line per Ticket as in the summary on stderr, such as `#21 landed with https://github.com/acme/widgets/pull/1` or `#22 blocked by #21`. The Ticket runs inside it never send a notification of their own, whatever the User config says.
 
-An [Architect run](#architect-runs) takes the same flags and the same `email.always`, and sends [one notification](#one-run-notification) covering its review and the run it dispatched.
+An [Architect run](#architect-runs) takes the same flags and the same `email.always` and `email.unless_merged`, and sends [one notification](#one-run-notification) covering its review and the run it dispatched.
 
-A [Pickup run](#pickup-runs) takes the same flags and the same `email.always` too. One that took an issue sends [one notification](#one-run-notification-for-the-issue-taken), the one the run it dispatched would have sent by hand, and a skipped one sends none.
+A [Pickup run](#pickup-runs) takes the same flags and the same `email.always` and `email.unless_merged` too. One that took an issue sends [one notification](#one-run-notification-for-the-issue-taken), the one the run it dispatched would have sent by hand, and a skipped one sends none.
 
 A notification that can't be sent is a `warning:` line on stderr with Resend's error. It never changes the Ticket run's outcome, stdout or exit code.
 
@@ -977,11 +1056,11 @@ thirdshift architect --email you@example.com      # email how the Architect run 
 
 The focus is optional free text, given as one argument, anywhere among the flags; it goes into the Session prompt. `architect` is a command only as the first argument.
 
-`merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel <n>`, `harness <name>`, `model <name>` and `effort <level>` (or the same with dashes) are for the run the plan is dispatched as, and mean what they do for `thirdshift <Issue URL>`, so none of them is ever read as the focus. The [Harness, Model and Effort](#harness-model-and-effort) are the Architecture review's too. `--plan-only` stops the Architect run once the plan is marked ready, and dispatches nothing. `email`, optionally followed by an address, and `no-email` (or `--email` and `--no-email`) are for the Architect run's own [Run notification](#one-run-notification), with or without `--plan-only`. The word after `email` is the address only if it contains `@`, so a focus without one is never taken for it.
+`merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel <n>`, `harness <name>`, `model <name>` and `effort <level>` (or the same with dashes) are for the run the plan is dispatched as, and mean what they do for `thirdshift <Issue URL>`, so none of them is ever read as the focus. The [Harness, Model and Effort](#harness-model-and-effort) are the Architecture review's too. `--plan-only` stops the Architect run once the plan is marked ready, and dispatches nothing. `email` or `email-unless-merged`, optionally followed by an address, and `no-email` (or the same with dashes) are for the Architect run's own [Run notification](#one-run-notification), with or without `--plan-only`. The word after `email` or `email-unless-merged` is the address only if it contains `@`, so a focus without one is never taken for it.
 
 `base <branch>` (or `--base <branch>`) names the Architect run's **Base branch**, so the branch your clone has checked out stops mattering: start it from a clone on another branch, on a detached HEAD, or with uncommitted changes. The Architecture review's worktree starts at the head of `<branch>` on `origin`, and the run the plan is dispatched as takes `<branch>` as its Base branch too: a Ticket run's **Issue branch**, or a Spec run's **Spec branch**, is branched off it, and the pull request or **Spec PR** targets it. It goes before or after the focus and the other flags, `--plan-only` included, and the word after it is always the branch, never the focus. Without `base`, the Base branch is the branch checked out. `base` is a flag of a Pass only: `thirdshift <Issue URL>` doesn't take it. It is what lets an Architect run be started [on a schedule](#on-a-schedule).
 
-A second focus, a repeated flag, `merge` with `no-merge`, `base-fix` with `no-base-fix`, `email` with `no-email`, `parallel` without a whole number from 1 up, `base` with no branch after it, any other argument starting with a dash, or an empty focus is an argument error (exit `2`). So is `merge`, `no-merge`, `base-fix`, `no-base-fix` or `parallel` with `--plan-only`, since nothing is dispatched for them to apply to.
+A second focus, a repeated flag, `merge` with `no-merge`, `base-fix` with `no-base-fix`, any two of `email`, `email-unless-merged` and `no-email`, `parallel` without a whole number from 1 up, `base` with no branch after it, any other argument starting with a dash, or an empty focus is an argument error (exit `2`). So is `merge`, `no-merge`, `base-fix`, `no-base-fix` or `parallel` with `--plan-only`, since nothing is dispatched for them to apply to.
 
 An Architect run:
 
@@ -1130,7 +1209,7 @@ thirdshift secure base main harness claude
 thirdshift secure base main harness codex model gpt-6.1-sol effort high
 ```
 
-The command takes the Harness, Model and Effort words and the shared Pass words (`merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel`, `email`, `no-email`, `security-fix`, `no-security-fix`, `security-close` and `no-security-close`, with or without dashes). After recording findings, it tries to reproduce each untriaged one in a fresh throwaway worktree at the recorded audited commit, and keeps the outcome, severity when reproduced, notes and test in the private record. It preserves findings already triaged by the Day shift. It never publishes an advisory.
+The command takes the Harness, Model and Effort words and the shared Pass words (`merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel`, `email`, `email-unless-merged`, `no-email`, `security-fix`, `no-security-fix`, `security-close` and `no-security-close`, with or without dashes). After recording findings, it tries to reproduce each untriaged one in a fresh throwaway worktree at the recorded audited commit, and keeps the outcome, severity when reproduced, notes and test in the private record. It preserves findings already triaged by the Day shift. It never publishes an advisory.
 
 Fixing is off by default. `security-fix` on the command or `fix = true` under `[security]` allows one fix; `no-security-fix` overrides the setting. Both words are accepted on every command that starts Ticket runs and passed to those Ticket runs. With fixing allowed, a Security run takes the most severe reproduced finding still awaiting a fix before auditing, with ties in private-record order. After an audit reproduces findings, it goes on to the most severe one.
 
@@ -1142,7 +1221,7 @@ On a private repository, the finding's own issue is the fix's Ticket or Spec, ke
 
 A failed fix keeps its **Claim**, even if it pushed nothing, and stays open for the **Day shift**. No later Security run or Pickup run retries it. Security runs pause while that fix's issue is open; closing the issue lets them go on.
 
-`email`, optionally followed by an address, or `email.always` in the User config asks for one **Run notification** when the Security run ends, whether the audit succeeded, failed or was interrupted. `no-email` overrides the default. The notification says how the audit ended and lists each finding it recorded or matched to an existing private record: its severity when known, title and private link. It includes no finding write-up, trace or evidence, since it passes through Resend. When the Security run dispatches a fix, the notification lists that finding under `Addressed by the pull request:`, or under `Fix attempted, not fixed:` when the fix failed or was interrupted, and its audit's other findings under `Recorded, waiting for the Day shift:` while their records wait for triage, else under `Also recorded by the audit:`. Findings left waiting put the Security run in the Inbox's Needs you; the fixed one does not. Its `Audit:` line then says how the audit ended, or `not run` when it fixed an earlier finding without auditing; the `Result:` and `Pull request:` lines tell how the fix ended. When a fix merged, it also says which finding was closed by which pull request, or that the finding was left open and why. Detailed failure causes stay in the local logs; the notification gives the audit's status and log paths. A recording failure still lists the records reached before it failed. When a run leaves a reproduced finding unfixed and neither the command nor the User config decided against fixing, its notification and stderr offer both `thirdshift secure security-fix` and `fix = true` under `[security]`. With `no-security-fix`, or the setting turned off, it offers nothing. A skipped Security run sends none. The usual address and Resend API key checks run before the skip checks or any work; a failed send is a warning and never changes the run's outcome.
+`email` or `email-unless-merged`, optionally followed by an address, or `email.always` or `email.unless_merged` in the User config asks for one **Run notification** when the Security run ends, whether the audit succeeded, failed or was interrupted. `no-email` overrides the default. The notification says how the audit ended and lists each finding it recorded or matched to an existing private record: its severity when known, title and private link. It includes no finding write-up, trace or evidence, since it passes through Resend. When the Security run dispatches a fix, the notification lists that finding under `Addressed by the pull request:`, or under `Fix attempted, not fixed:` when the fix failed or was interrupted, and its audit's other findings under `Recorded, waiting for the Day shift:` while their records wait for triage, else under `Also recorded by the audit:`. Findings left waiting put the Security run in the Inbox's Needs you; the fixed one does not. Its `Audit:` line then says how the audit ended, or `not run` when it fixed an earlier finding without auditing; the `Result:` and `Pull request:` lines tell how the fix ended. When a fix merged, it also says which finding was closed by which pull request, or that the finding was left open and why. Detailed failure causes stay in the local logs; the notification gives the audit's status and log paths. A recording failure still lists the records reached before it failed. When a run leaves a reproduced finding unfixed and neither the command nor the User config decided against fixing, its notification and stderr offer both `thirdshift secure security-fix` and `fix = true` under `[security]`. With `no-security-fix`, or the setting turned off, it offers nothing. A skipped Security run sends none. The usual address and Resend API key checks run before the skip checks or any work; a failed send is a warning and never changes the run's outcome.
 
 If a Security run fails before its audit starts, its Run notification says `Result: pre-audit failed` and `Audit: not started`. A Base branch missing both locally and on `origin` gives `Cause: Base branch not found`. A branch present only locally, a detached HEAD with no Base branch named, or local Base branch commits absent from `origin` gets a fixed Base branch Cause too. GitHub failures keep their fixed dependency or rate-limit Cause; other failures say `pre-audit checks failed`. Raw diagnostics stay on the machine; the notification says which host and start time to check on stderr.
 
@@ -1209,7 +1288,7 @@ A Ready issue is an open issue that:
 - has no open blocker, by GitHub's "blocked by" links, never the text of its body. Once every blocker is closed, it can be taken;
 - either was never started (no **Issue branch** on `origin` and no pull request from one, open, merged or closed), or you handed it back by applying `ready-for-agent` after its last [Claim](#the-claim) ended. For started work, the full label history must show `in-progress` applied, then removed, then `ready-for-agent` applied. Work never Claimed, or without that later hand-back, stays with you. An eligible branch with no PR or an open PR follows the existing [Continuation](#continuation) rule; merged or closed PRs follow ADR 0002 and start a fresh numbered branch. This is deliberate hand-back, not automatic retries;
 - is not a **Spec** whose **Tickets** are all closed. With nothing started on it, such a Spec was done some other way, and the [Spec run](#spec-runs) it would be dispatched as stops with nothing to do, so a Pickup run passes it over rather than take it on every pass. Waiting never makes it a Ready issue, so this comes before the next condition, however lately the Spec was labelled: close it, or take its `ready-for-agent` off. A Spec with at least one open Ticket is taken if it meets the conditions below;
-- is settled: by default, thirty minutes have passed since the latest of `ready-for-agent` being applied to it, a sub-issue being added to it or removed, and a "blocked by" link being added to it or removed. So a Spec is not taken while its Tickets are still being attached. These are read from the issue's timeline, since adding a sub-issue does not change the issue's update time, and `pickup.wait_minutes` in the [User config](#user-config) sets the window in whole minutes from 0 up, within the supported duration range; 0 disables waiting. An Architect run also waits for an issue that meets every other Ready issue condition while it is settling. A later pass takes the issue once it has settled;
+- is settled: by default, five minutes have passed since the latest of `ready-for-agent` being applied to it, a sub-issue being added to it or removed, and a "blocked by" link being added to it or removed. So a Spec is not taken while its Tickets are still being attached. These are read from the issue's timeline, since adding a sub-issue does not change the issue's update time, and `pickup.wait_minutes` in the [User config](#user-config) sets the window in whole minutes from 0 up, within the supported duration range; 0 disables waiting. An Architect run also waits for an issue that meets every other Ready issue condition while it is settling. A later pass takes the issue once it has settled;
 - if it is a **Spec**, has a **Startable Ticket**: an open Ticket in the Spec's repository, with no sub-issues, no open blocker and none of the labels that make an Unready Ticket. That is the rule a [Spec run](#spec-runs) picks its next Ticket by, as if nothing were running yet, so a Spec whose open Tickets all wait on you, such as one whose last open Ticket is `needs-info`, is passed over rather than Claimed for a Spec run that could start nothing and would fail. This applies to a Spec handed back with `ready-for-agent` too. A Spec with one Startable Ticket is taken, and the Spec run handles its other Tickets as usual. Once a Ticket becomes startable, because its Unready label comes off or its blocker closes, a later pass takes the Spec. Its Tickets are read only for a Spec that meets every other condition.
 
 A Pickup run:
@@ -1224,7 +1303,7 @@ A Pickup run:
 
 Every Pickup host must run a version that honors reservations. The reservation branch is `thirdshift/pickup/<issue-number>`; direct Issue URL commands and other Pass kinds keep their existing behavior. A crash or an uncertain remote failure can leave a reservation behind. Before releasing one, confirm its host's Command has stopped. Inspect `git ls-remote origin refs/heads/thirdshift/pickup/7`, fetch that ref, and read its commit message for the launch path, process and start time. Then delete it with the observed SHA as an exact lease: `git push --force-with-lease=refs/heads/thirdshift/pickup/7:<observed-sha> origin :refs/heads/thirdshift/pickup/7`. Never delete a live owner's reservation or remove one on a timer. Repository permissions must allow creating and deleting these branches. See [ADR 0017](adr/0017-pickup-reserves-issues-on-origin.md).
 
-`merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel <n>`, `harness <name>`, `model <name>` and `effort <level>`, with or without dashes, are for the dispatched run, and mean what they do for `thirdshift <Issue URL>`, as do `email`, optionally followed by an address, and `no-email` for the Pickup run's [Run notification](#one-run-notification-for-the-issue-taken). The [User config](#user-config) sets what they leave unsaid: `merge.always`, `base.fix`, `spec.parallel`, `email.always`, `launch.pull` and `logs.dir`. A User config a Ticket run would refuse stops the pass the same way, before any check. `parallel <n>` applies when the Ready issue is a Spec and is ignored, with no error, when it isn't, unlike on an Issue URL: the command can't know which it will take. `base <branch>` (or `--base <branch>`) names the Base branch as it does for [`architect`](#architect-runs), and the dispatched run takes it: its Issue branch or Spec branch is branched off `<branch>`, and its pull request targets it. With `base <branch>`, a Pickup run started [on a schedule](#a-pickup-run-on-a-schedule) runs from the clone you work in, whatever branch you left it on.
+`merge`, `no-merge`, `base-fix`, `no-base-fix`, `parallel <n>`, `harness <name>`, `model <name>` and `effort <level>`, with or without dashes, are for the dispatched run, and mean what they do for `thirdshift <Issue URL>`, as do `email` or `email-unless-merged`, optionally followed by an address, and `no-email` for the Pickup run's [Run notification](#one-run-notification-for-the-issue-taken). The [User config](#user-config) sets what they leave unsaid: `merge.always`, `base.fix`, `spec.parallel`, `email.always`, `email.unless_merged`, `launch.pull` and `logs.dir`. A User config a Ticket run would refuse stops the pass the same way, before any check. `parallel <n>` applies when the Ready issue is a Spec and is ignored, with no error, when it isn't, unlike on an Issue URL: the command can't know which it will take. `base <branch>` (or `--base <branch>`) names the Base branch as it does for [`architect`](#architect-runs), and the dispatched run takes it: its Issue branch or Spec branch is branched off `<branch>`, and its pull request targets it. With `base <branch>`, a Pickup run started [on a schedule](#a-pickup-run-on-a-schedule) runs from the clone you work in, whatever branch you left it on.
 
 `lowest-first` and `highest-first`, with or without dashes, are for the Pickup run itself: they set its order for that one pass, winning over `pickup.order`. `secure` and `thirdshift <Issue URL>` take neither.
 
@@ -1266,9 +1345,9 @@ thirdshift: 03:00:04 #30 blocked by #29
 thirdshift: 03:00:05 #31 started: issue-31 is on origin; no ready-for-agent hand-back after the last Claim ended
 thirdshift: 03:00:06 #32 started: PR https://github.com/acme/widgets/pull/37; no ready-for-agent hand-back after the last Claim ended
 thirdshift: 03:00:06 #33 every Ticket is closed
-thirdshift: 03:00:07 #34 not settled: labelled ready-for-agent less than 30 minutes ago
-thirdshift: 03:00:07 #35 not settled: a sub-issue added or removed less than 30 minutes ago
-thirdshift: 03:00:08 #36 not settled: a "blocked by" link added or removed less than 30 minutes ago
+thirdshift: 03:00:07 #34 not settled: labelled ready-for-agent less than 5 minutes ago
+thirdshift: 03:00:07 #35 not settled: a sub-issue added or removed less than 5 minutes ago
+thirdshift: 03:00:08 #36 not settled: a "blocked by" link added or removed less than 5 minutes ago
 thirdshift: 03:00:09 #38 has no Ticket that can start: #39 labelled needs-info; #40 blocked by #39; #41 blocked by #12 (outside the Spec)
 thirdshift: 03:00:09 no Ready issue on acme/widgets
 ```
@@ -1285,7 +1364,7 @@ thirdshift: 03:00:04 logging this command to ~/.thirdshift/logs/acme/widgets/com
 
 ### One Run notification for the issue taken
 
-A Pickup run asked for a [Run notification](#run-notifications), by `email` or by `email.always = true` in the [User config](#user-config) without `no-email`, sends exactly one when it took a Ready issue: the notification the Spec run or Ticket run it dispatched would have sent started by hand. An address after `email` wins over `email.to`, as for a Ticket run.
+A Pickup run asked for a [Run notification](#run-notifications), by `email` or by `email.always = true` in the [User config](#user-config) without `no-email`, sends exactly one when it took a Ready issue (asked by `email-unless-merged` or `email.unless_merged`, only when the dispatched run did not merge): the notification the Spec run or Ticket run it dispatched would have sent started by hand. An address after `email` wins over `email.to`, as for a Ticket run.
 
 - **Subject**: that run's, `[thirdshift] <owner>/<repo>#<n> <issue title>: <outcome>`, naming the issue taken, with the outcome `ready for review`, `merged`, `failed` or `interrupted`.
 - **Body**: that run's too: what a Ticket run's notification holds, with `Issue:` immediately after `Result:` linking the issue it took, then its `Title:` (the parent Spec when it dispatched a Spec run), and after a Spec run a line per Ticket. The time it gives is the whole pass's, the search for the Ready issue included.
@@ -1307,10 +1386,10 @@ PATH=/home/you/.local/bin:/home/you/.cargo/bin:/usr/local/bin:/usr/bin:/bin
 
 The `PATH` line, the `cd` and `base main`, the log file's directory, the logins the Harness's CLI and `gh` need, and schedulers other than cron are as for an Architect run: see its [On a schedule](#on-a-schedule). What differs for a Pickup run:
 
-- **The interval** sets how soon a Ready issue is taken and how much work is started: a pass takes one issue, so `*/30` starts at most one every half hour. A pass lasts as long as the run it dispatched, and the passes that fire meanwhile are skipped, so the schedule builds one issue of a repository at a time on a machine, and the first pass after it ends takes the next, unless the repository is by then at its [Claim limit](#the-claim-limit): each pull request left for review, and each failure left for you, holds a Claim, and at 3 of them, or the `pickup.limit` you set, the passes take nothing until you have dealt with one. An issue you have just labelled also waits thirty minutes by default, or the `pickup.wait_minutes` you set, until it is settled. A Ticket run you start by hand on an Issue URL is outside all this: it neither waits for a pass nor makes one skip.
+- **The interval** sets how soon a Ready issue is taken and how much work is started: a pass takes one issue, so `*/30` starts at most one every half hour. A pass lasts as long as the run it dispatched, and the passes that fire meanwhile are skipped, so the schedule builds one issue of a repository at a time on a machine, and the first pass after it ends takes the next, unless the repository is by then at its [Claim limit](#the-claim-limit): each pull request left for review, and each failure left for you, holds a Claim, and at 3 of them, or the `pickup.limit` you set, the passes take nothing until you have dealt with one. An issue you have just labelled also waits five minutes by default, or the `pickup.wait_minutes` you set, until it is settled. A Ticket run you start by hand on an Issue URL is outside all this: it neither waits for a pass nor makes one skip.
 - **One line per repository.** thirdshift keeps no list of repositories. Each Pass on one repository skips while another is still running, the Spec run or Ticket run it dispatched included, so both lines can go in one crontab and two Passes never build that repository at once. Passes on different repositories do run at the same time: give their lines different minutes, such as `15,45`, if they would compete for the machine.
 - **A pass is skipped** when the [lock is held](#one-at-a-time), when the repository has no Ready issue, and when it is at its Claim limit. A skip exits `0`, so the scheduler sees no failure, and sends no email, even with Run notifications on. The repository's [Activity log](#logs) records a skip when its reason changes. Unless `activity.quiet_skips` is set, the log file holds each skip's line too, and before the line of a pass that found no Ready issue, as before the line of one that took an issue, [why each issue was passed over](#why-an-issue-was-passed-over). A pass skipped for the lock or the Claim limit looks at no issue, so it has no such lines.
-- **A Run notification**, by `email.always = true` in the [User config](#user-config) or `email` on the line, is sent [only for an issue taken](#one-run-notification-for-the-issue-taken). So a day without email doesn't say the passes are running: a pass that fails before it takes an issue, on a broken User config, a missing Resend key or a failed check, shows up only in the log file.
+- **A Run notification**, by `email.always = true` or `email.unless_merged = true` in the [User config](#user-config), or `email` or `email-unless-merged` on the line, is sent [only for an issue taken](#one-run-notification-for-the-issue-taken). So a day without email doesn't say the passes are running: a pass that fails before it takes an issue, on a broken User config, a missing Resend key or a failed check, shows up only in the log file.
 
 A whole crontab with both frequent Architect runs and a Pickup run on one repository looks like this, with `activity.quiet_skips = true` in the User config, every line sending its output to the one log file, which catches only what went wrong, so `tail ~/.thirdshift/logs/acme/widgets/activity.log` shows what the factory has been doing on the repository lately:
 
@@ -1335,7 +1414,7 @@ The command's flags and the User config decide what a pass does with the issue i
 
 An issue whose run failed [keeps its Claim](#when-the-claim-ends) and waits for the **Day shift**: it stays `in-progress`, with the Issue branch and any draft pull request the run left, no later pass takes it, and it counts towards the Claim limit until it is closed or you take the label off. To send it round again by hand, run `thirdshift <Issue URL>` from the clone, with the Base branch checked out, since that command takes no `base <branch>`: it picks up where the failed ticket run stopped, as a [Continuation](#continuation) does. To hand it back to Pickup instead, remove `in-progress` and then apply `ready-for-agent`: after settling, a pass can continue it if every other Ready issue gate still permits it. Applying the ready label before the last Claim ends does not hand it back. For an ordinary Ticket run, the one failure a later pass does retry is one that left nothing on `origin`, such as a usage limit or an expired login: its Claim is released, so the issue is a Ready issue again once it has settled. A failed Security fix is always left for the Day shift, even with nothing on `origin`.
 
-When shaping issues with `to-spec` and `to-tickets` from [mattpocock/skills](https://github.com/mattpocock/skills), keep a **Spec** labelled `needs-triage` until every **Ticket** is published, attached as a sub-issue and linked to its blockers; then replace it with `ready-for-agent`. A Spec with no Tickets yet looks exactly like a standalone Ticket, so a pass would start a plain Ticket run on it. This repository's Day shift follows the publication procedure in [`docs/agents/triage-labels.md`](agents/triage-labels.md), required by [`AGENTS.md`](../AGENTS.md), which overrides the imported skills' defaults and survives their updates. The settling window (thirty minutes by default) is only a second line of defence: it covers Tickets attached within minutes of the label, not a Spec left labelled and without Tickets for longer.
+When shaping issues with `to-spec` and `to-tickets` from [mattpocock/skills](https://github.com/mattpocock/skills), keep a **Spec** labelled `needs-triage` until every **Ticket** is published, attached as a sub-issue and linked to its blockers; then replace it with `ready-for-agent`. A Spec with no Tickets yet looks exactly like a standalone Ticket, so a pass would start a plain Ticket run on it. This repository's Day shift follows the publication procedure in [`docs/agents/triage-labels.md`](agents/triage-labels.md), required by [`AGENTS.md`](../AGENTS.md), which overrides the imported skills' defaults and survives their updates. The settling window (five minutes by default) is only a second line of defence: it covers Tickets attached within minutes of the label, not a Spec left labelled and without Tickets for longer.
 
 ## Building from source
 

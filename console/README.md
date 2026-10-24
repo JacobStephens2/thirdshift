@@ -15,6 +15,11 @@ npm test
 home folder and a free localhost port, and closes its own server and browser.
 Node and npm are test tools only; the release build embeds its assets.
 
+The **Resources** page (`9`, or `g e`) shows a host snapshot and the configured
+session admission decision, also available with `thirdshift resources --json`.
+Reload to refresh it. Set `[resources] min_available_memory_mb` and
+`max_load_per_cpu_percent` in User config; zero disables each limit.
+
 The Themes picker offers **Make a Theme from this**, starting from any built-in
 or custom Theme. Edit its JSON name and tokens, then **Save / import JSON**.
 Choose the saved name in the picker to apply it. **Export JSON** gives a document
@@ -75,8 +80,8 @@ other_consoles = ["https://console.example.test"]
 theme = "focus-auto" # also focus-light or focus-dark
 ```
 
-For a persistent service behind Caddy, Apache or nginx, see the root README's
-[server installation instructions](../README.md#console-on-a-server).
+For a persistent service behind Caddy, Apache or nginx, see the manual's
+[server installation instructions](../docs/guide.md#console-on-a-server).
 
 Each allowed address must contain exactly one `@`, a nonempty local part,
 and a domain containing a dot, with no leading or trailing dot. Whitespace
@@ -133,6 +138,21 @@ and Ready tag colours, Landing keeps Working's live-activity marker, and a live
 row given a Stop shows Stopping with a drifting stripe until it ends. Pause
 motion and reduced motion hold the stripe still.
 
+Ended rows show their recorded finish date and time in UTC, followed by an
+explicit relative age, such as “Ended Oct 23, 2026 at 23:03:17 UTC · 52 min ago”.
+That age is time since finish, not run duration. Each nested Ticket run uses its
+own finish time, including in History. Refreshing recomputes the relative age
+and keeps the recorded instant. The information is rendered by the server and
+remains visible without JavaScript. Missing or invalid finish times say “End
+time unknown”; file modification times are not presented as recorded finishes.
+
+Above its sections, the Inbox shows how many runs are active, such as
+`2 active runs`, the same `active_runs` total as `thirdshift status --json`.
+Each Command with live work anywhere in it counts once, whatever its group or
+whether that section is folded or hidden: a Spec run's Tickets, and the Spec run
+or Ticket run a Pass dispatched, are part of that one. The live update refreshes
+it as Commands start and end.
+
 When no Commands are live on this machine, the Inbox explains that above its
 sections. It points to ended problems in Needs you and pull requests in Ready
 for review, and shows the last recorded skipped Pass reasons from Activity logs.
@@ -183,19 +203,26 @@ or starts a Command.
 Lanes shows each Command and its child Runs on a shared time axis, over the last
 3.5, 12 or 24 hours. The window is kept in `hours=`; bars clip to that window,
 while their text retains the whole stage's time. Older Commands are on History.
-Stages keeps live Runs first across repositories, then finished Runs newest first.
+Stages defaults to **All runs**, one grid across repositories. **By repository**
+shows one grid per repository; the browser remembers an explicit view choice.
+Each Spec run stays with its exact Ticket runs, including repeated attempts on
+the same issue. Groups are newest-started first by their owning run, and Ticket
+runs are newest-started first within each Spec group. Live state and finish
+times do not change that order. Dispatch ancestry stays visible.
 Rows follow the Command record's stage order: implement through cleanup, then
 the stages of other Command kinds. Unrecognised stage names follow all known
 stages in alphabetical order.
-Tables continue when the repository changes or three columns are filled, so
-each stage's Usual range belongs to that table's repository. On phones each
-stage stacks its labelled cells. Historical Runs without stage metadata show
+More runs extend the grid to the right on desktop and phones, with stage names
+fixed at the left. Each cell's Usual range belongs to that run's repository.
+Live updates keep the visible run, selection and focus; **Newest runs** returns
+the relevant grid to its left edge. Historical Runs without stage metadata show
 an unknown time, distinct from a stage that was not reached. Choose
 a column's Run link to open its exact peek. Repeated stages retain every visit;
 missing end timestamps say “time unknown” rather than inventing a duration.
 Both pages use the observations from `status --all --json`. The Rust parity
 test checks their stage times and Usual ranges against the CLI; the Playwright
-time tests check scale in all windows, child selection, live ordering and 390 px.
+time tests check scale in all windows, grouping, both views, preferences, live
+insertions, keyboard access, Themes and 390 px.
 
 Waterfall chooses one retained Command with live, died and ended chips, keeping
 its exact selection in `command=`. A span tree replaces the old Run sections:

@@ -25,7 +25,7 @@ summary .count { margin-left: 12px; color: var(--dim); font-size: 13px; }
 .row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .state { color: var(--text); }
 .heartbeat { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--working); opacity: .4; }
-.age { margin-left: auto; white-space: nowrap; }
+.age { margin-left: auto; }
 .issue-title { flex: 1 1 160px; }
 .command p { margin: 4px 0 0; }
 .now { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -36,11 +36,17 @@ summary .count { margin-left: 12px; color: var(--dim); font-size: 13px; }
 .plan li::before { content: "☐ "; }
 .children { border-left: 1px solid var(--rule); padding-left: 14px; margin-top: 8px; }
 .empty { margin: 0 0 12px 16px; }
+.active-runs { margin: 12px 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.active-runs strong { font-size: 17px; font-weight: var(--head-weight); }
+.active-runs span { color: var(--dim); font-size: 13px; }
 .idle-notice { margin: 12px 0; padding: 12px; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--panel); }
 .idle-notice h3 { margin: 0; font-size: 17px; }
 .idle-notice p { margin: 6px 0 0; }
 .idle-notice ul { margin: 6px 0; padding-left: 20px; overflow-wrap: anywhere; }
 .idle-notice + .group > .commands { max-height: 160px; }
+@media (min-width: 960px) and (max-height: 920px) {
+  .idle-notice + .group > .commands { max-height: 96px; }
+}
 aside { font-size: 12px; }
 :focus-visible { outline: 2px solid var(--head); outline-offset: 2px; }
 .is-selected { outline: 2px solid var(--head); outline-offset: -2px; background: var(--sel-bg); }
@@ -121,19 +127,19 @@ header::after { content: ""; display: block; height: 4px; background: var(--acti
 .command-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
 .command-chips a { border: 1px solid var(--rule); border-radius: var(--radius); padding: 6px; overflow-wrap: anywhere; }
 .command-chips [aria-current] { outline: 2px solid var(--head); }
-.stage-grid { width: 100%; table-layout: fixed; border-collapse: collapse; margin: 20px 0; }
+.stage-section { min-width: 0; margin: 20px 0; }
+.stage-section h3 { display: inline; margin-right: 16px; }
+.stage-scroll { overflow-x: auto; max-width: 100%; margin-top: 10px; overflow-anchor: none; }
+.stage-grid { width: max-content; min-width: 100%; border-collapse: separate; border-spacing: 0; }
 .stage-grid caption { text-align: left; font-weight: var(--head-weight); }
-.stage-grid th, .stage-grid td { border: 1px solid var(--rule); padding: 8px; text-align: left; vertical-align: top; overflow-wrap: anywhere; }
+.stage-grid th, .stage-grid td { border: 1px solid var(--rule); padding: 8px; text-align: left; vertical-align: top; overflow-wrap: anywhere; min-width: 240px; max-width: 240px; }
 .stage-grid th { font-weight: var(--head-weight); }
+.stage-grid tr > :first-child { position: sticky; left: 0; z-index: 1; min-width: 140px; max-width: 140px; background: var(--panel-2); color: var(--text); }
+.stage-grid [scope="colgroup"] { background: var(--panel); border: 2px solid var(--head); }
+.stage-grid .group-start { border-left: 3px solid var(--head); }
+.run-context { font-weight: normal; color: var(--text); }
 .usual { font-size: 12px; font-weight: normal; color: var(--dim); }
 .cell-run { display: none; }
-@media (max-width: 760px) {
-  .stage-grid, .stage-grid thead, .stage-grid tbody, .stage-grid tr, .stage-grid th, .stage-grid td { display: block; }
-  .stage-grid thead tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  .stage-grid thead th:first-child { grid-column: 1 / -1; }
-  .stage-grid tbody th { background: var(--panel-2); }
-  .cell-run { display: inline; font-weight: var(--head-weight); }
-}
 @media (max-width: 500px) {
   body { padding: 14px 12px; }
   .issue-title { flex-basis: 100%; order: 1; }

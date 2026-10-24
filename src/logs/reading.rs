@@ -6,6 +6,7 @@ pub(crate) mod catalog;
 mod health;
 mod history;
 mod inbox;
+mod reader;
 mod selection;
 #[cfg(test)]
 mod tests;
@@ -24,6 +25,7 @@ use super::{Pass, activity};
 pub(super) use health::{Health, UsualRange};
 pub(super) use history::Command as HistoricalCommand;
 pub(super) use inbox::{Group, InboxItem};
+pub(crate) use reader::{Framing, Reader, Writer};
 pub(super) use selection::{Detailed, Observation};
 
 pub(super) struct Snapshot {
@@ -134,6 +136,10 @@ impl Snapshot {
         github: &super::github::Kept,
     ) -> Vec<super::github::FindingSubject> {
         inbox::finding_subjects(&self.commands, self.now, days, github)
+    }
+
+    pub(super) fn active_runs(&self) -> usize {
+        inbox::active_runs(&self.commands)
     }
 
     pub(super) fn resolve(&self, input: &str) -> Result<selection::Selection<'_>> {
@@ -262,6 +268,7 @@ fn read_records(folder: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
         // Records written before completion times existed were last
         // replaced when their outcome was recorded.
         if record.outcome.is_some() && record.ended_at.is_none() {
+            record.end_time_estimated = true;
             record.ended_at = entry
                 .metadata()?
                 .modified()

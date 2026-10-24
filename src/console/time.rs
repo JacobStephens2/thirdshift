@@ -12,6 +12,7 @@ struct TimePage {
     page: super::PageContext,
     title: &'static str,
     hours: String,
+    by_repository: bool,
     views: Views,
 }
 
@@ -24,11 +25,13 @@ pub(super) async fn show(stages: bool, query: Option<String>) -> Response {
                 "24" => 24.0,
                 _ => 3.5,
             };
+            let by_repository = super::query_value(&query, "view") == "repository";
             Ok(TimePage {
                 page: super::PageContext::new(&config),
                 title: if stages { "Stages" } else { "Lanes" },
                 hours: hours.to_string(),
-                views: time::load(&config, hours)?,
+                by_repository,
+                views: time::load(&config, hours, by_repository)?,
             }
             .render()?)
         })

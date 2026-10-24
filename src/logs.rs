@@ -20,6 +20,7 @@ pub(crate) mod github;
 pub(crate) mod owner;
 mod process_identity;
 mod reading;
+pub(crate) use reading::Framing;
 pub(crate) use reading::catalog;
 mod recording;
 pub(crate) mod session;

@@ -16,8 +16,10 @@ pub use look::{export_theme, import_theme, sections, theme};
 mod changes;
 mod dismiss;
 mod peek;
+mod resources;
 mod restart;
 mod stop;
+mod subscription;
 mod time;
 mod watching;
 mod waterfall;
@@ -68,6 +70,7 @@ struct PageRoute {
 
 enum View {
     CronJobs,
+    Resources,
     Inbox,
     Inspect,
     Spans,
@@ -114,6 +117,12 @@ const PAGES: &[PageRoute] = &[
         ],
         method: Method::POST,
         view: View::UndoDismissal,
+    },
+    PageRoute {
+        path: "/resources",
+        cli: &["thirdshift resources --json"],
+        method: Method::GET,
+        view: View::Resources,
     },
     PageRoute {
         path: "/cronjobs",
@@ -393,6 +402,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
         let path = page.path;
         let handler = match (&page.view, page.method.clone()) {
             (View::CronJobs, Method::GET) => get(cronjobs::show),
+            (View::Resources, Method::GET) => get(resources::show),
             (View::Inbox, Method::GET) => get(move |query| inbox(cli, path, query)),
             (View::Inspect, Method::GET) => get(inspect),
             (View::Spans, Method::GET) => get(waterfall::data),
@@ -458,11 +468,11 @@ impl InboxPage {
     }
 
     fn idle(&self) -> bool {
-        !self
-            .inbox
-            .sections
-            .iter()
-            .any(|section| section.rows.iter().any(|row| row.live))
+        self.inbox.active_runs == 0
+    }
+
+    fn active_runs(&self) -> String {
+        status::active_runs_text(self.inbox.active_runs)
     }
 
     fn ready_for_review(&self) -> usize {

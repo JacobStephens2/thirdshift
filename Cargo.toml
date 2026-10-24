@@ -1,6 +1,6 @@
 [package]
 name = "thirdshift"
-version = "0.14.6"
+version = "0.14.10"
 edition = "2024"
 description = "Turn a GitHub issue into a ready-for-review pull request, unattended"
 license = "MIT"
@@ -35,6 +35,7 @@ serde_json = { version = "1.0.151", features = ["float_roundtrip", "arbitrary_pr
 serde_urlencoded = "0.7.1"
 sha2 = "0.10.9"
 subtle = "2.6.1"
+sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 signal-hook = "0.4.4"
 tempfile = "3.27.0"
 toml = "1.1.6"

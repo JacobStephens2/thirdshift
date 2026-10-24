@@ -804,10 +804,10 @@ fn an_issue_with_an_open_blocker_is_not_taken_and_with_that_blocker_closed_it_is
 /// What a Pickup run says of #7 when it was labelled `ready-for-agent` too
 /// recently to have settled.
 const LABELLED_TOO_RECENTLY: &str =
-    "#7 not settled: labelled ready-for-agent less than 30 minutes ago";
+    "#7 not settled: labelled ready-for-agent less than 5 minutes ago";
 
 #[test]
-fn an_issue_labelled_ready_for_agent_less_than_thirty_minutes_ago_is_not_taken() {
+fn an_issue_labelled_ready_for_agent_less_than_five_minutes_ago_is_not_taken() {
     let scenario = ready_ticket();
     // Its other labels, however recent, and an earlier `ready-for-agent`
     // don't count: only the last time `ready-for-agent` was applied does.
@@ -815,7 +815,7 @@ fn an_issue_labelled_ready_for_agent_less_than_thirty_minutes_ago_is_not_taken()
         7,
         &[
             (TimelineEvent::Labelled(READY_FOR_AGENT), 60),
-            (TimelineEvent::Labelled(READY_FOR_AGENT), 29),
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 4),
             (TimelineEvent::Labelled("bug"), 1),
         ],
     );
@@ -828,12 +828,12 @@ fn an_issue_labelled_ready_for_agent_less_than_thirty_minutes_ago_is_not_taken()
 }
 
 #[test]
-fn an_issue_labelled_ready_for_agent_more_than_thirty_minutes_ago_is_taken() {
+fn an_issue_labelled_ready_for_agent_more_than_five_minutes_ago_is_taken() {
     let scenario = ready_ticket();
     scenario.issue_timeline(
         7,
         &[
-            (TimelineEvent::Labelled(READY_FOR_AGENT), 31),
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 6),
             (TimelineEvent::Labelled("bug"), 1),
         ],
     );
@@ -845,7 +845,7 @@ fn an_issue_labelled_ready_for_agent_more_than_thirty_minutes_ago_is_taken() {
 
 #[test]
 fn pickup_wait_in_the_user_config_shortens_lengthens_or_disables_settling() {
-    for (wait, ago, taken) in [(5, 6, true), (60, 31, false), (0, 0, true)] {
+    for (wait, ago, taken) in [(1, 2, true), (30, 6, false), (0, 0, true)] {
         for (event, shaped) in [
             (
                 TimelineEvent::Labelled(READY_FOR_AGENT),
@@ -906,7 +906,7 @@ fn zero_pickup_wait_ignores_server_timestamps_ahead_of_local_clock() {
 }
 
 #[test]
-fn a_spec_labelled_long_ago_whose_sub_issues_or_blockers_changed_less_than_thirty_minutes_ago_is_not_taken()
+fn a_spec_labelled_long_ago_whose_sub_issues_or_blockers_changed_less_than_five_minutes_ago_is_not_taken()
  {
     for (event, changed) in [
         (TimelineEvent::SubIssueAdded, "a sub-issue"),
@@ -920,13 +920,13 @@ fn a_spec_labelled_long_ago_whose_sub_issues_or_blockers_changed_less_than_thirt
             &[
                 (TimelineEvent::Labelled(READY_FOR_AGENT), 600),
                 (TimelineEvent::SubIssueAdded, 590),
-                (event, 29),
+                (event, 4),
             ],
         );
 
         let result = scenario.run(&["pickup"]);
 
-        let line = format!("#7 not settled: {changed} added or removed less than 30 minutes ago");
+        let line = format!("#7 not settled: {changed} added or removed less than 5 minutes ago");
         assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
         assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
     }
@@ -1747,6 +1747,44 @@ fn the_notification_of_a_failed_spec_run_has_each_tickets_outcome() {
     let landed = format!("#8 landed with {}\n", landed["url"].as_str().unwrap());
     assert!(tickets.contains(&landed), "expected {landed:?} in: {text}");
     assert!(tickets.contains("#9 failed: "), "{text}");
+}
+
+#[test]
+fn a_spec_notification_promotes_exhausted_usage_and_keeps_other_failures() {
+    let scenario = ready_spec(
+        "echo 'API error 429: Subscription quota exhausted. Your usage window resets at 2026-10-24T03:28:16Z.' > \"$FAKE_MUSE_ERROR\"\nexit 1",
+    );
+    scenario.spec_has_tickets(7, &[(8, &[]), (9, &[]), (10, &[9]), (11, &[])]);
+    scenario.agent_does_for(
+        11,
+        "echo 'stream protocol error' > \"$FAKE_MUSE_ERROR\"\nexit 1",
+    );
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(
+        &scenario,
+        &resend,
+        &["pickup", "harness", "muse", "email", "me@example.com"],
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert!(subject.ends_with(": failed"), "{subject}");
+    let (summary, tickets) = text.split_once("\nTickets:\n").expect(&text);
+    assert!(
+        summary.contains("Usage limit:  Harness usage allowance exhausted in Tickets #9. Retry when usage is available.\n"),
+        "{text}"
+    );
+    for detail in [
+        "#8 landed with ",
+        "#9 failed: muse exited 1: API error 429: Subscription quota exhausted.",
+        "Your usage window resets at 2026-10-24T03:28:16Z.",
+        "#10 blocked by #9",
+        "#11 failed: muse exited 1: stream protocol error",
+    ] {
+        assert!(tickets.contains(detail), "{text}");
+    }
+    assert_saved_notification(&scenario, "pickup", &resend.requests()[0]);
 }
 
 #[test]

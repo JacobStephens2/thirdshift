@@ -9,17 +9,7 @@ use chrono::{DateTime, Local};
 use super::super::reading::{Command, Entry, Snapshot};
 use crate::config::UserConfig;
 
-#[derive(Clone, Debug)]
-pub(crate) struct Process {
-    pub pid: u32,
-    start: String,
-}
-
-impl Process {
-    pub fn live(&self) -> bool {
-        super::super::process_identity::start(self.pid).as_deref() == Some(&self.start)
-    }
-}
+pub(crate) use super::super::reading::Writer as Process;
 
 #[derive(Default, Debug)]
 pub(crate) struct Watching {
@@ -52,11 +42,9 @@ fn collect(
     watching: &mut Watching,
 ) {
     let log = outer_log.unwrap_or(&command.command_log);
-    if command.state == "live" {
-        watching.processes.push(Process {
-            pid: command.record.process_id,
-            start: command.record.process_start.clone(),
-        });
+    let process = Process::capture(&command.record);
+    if process.live() {
+        watching.processes.push(process);
         let session = command
             .record
             .session_log
@@ -64,9 +52,11 @@ fn collect(
             .map(crate::logs::session::path);
         watching.paths.insert(log.to_path_buf());
         watching.paths.extend(session.iter().cloned());
-        if let Some(at) = command.next_health_change {
-            deadline(at, now, watching);
-        }
+    }
+    if command.state == "live"
+        && let Some(at) = command.next_health_change
+    {
+        deadline(at, now, watching);
     }
     for child in command.children.iter().chain(&command.dispatched) {
         collect(child, Some(log), now, watching);

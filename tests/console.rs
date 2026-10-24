@@ -1,6 +1,9 @@
 //! The Console's public seam: the binary, fixture records and HTTP.
 mod support;
 
+#[path = "console/resources.rs"]
+mod resources;
+
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -410,6 +413,90 @@ fn time_pages_name_the_command_kind_without_repeating_it_for_commands_without_is
 }
 
 #[test]
+fn stages_groups_exact_spec_attempts_by_owner_start_and_keeps_dispatches() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    for (number, kind, started, parent) in [
+        (1, "Spec run", "2026-01-01T01:00:00Z", None),
+        (2, "Run", "2026-01-01T05:00:00Z", Some(1)),
+        (3, "Run", "2026-01-01T03:00:00Z", Some(1)),
+        (4, "Spec run", "2026-01-01T02:00:00Z", None),
+        (5, "Run", "2026-01-01T04:00:00Z", Some(4)),
+        (6, "Run", "unknown", None),
+        (8, "Run", "2026-01-01T03:30:00Z", Some(4)),
+        (9, "Run", "unknown", Some(4)),
+        (10, "Run", "2026-01-01T04:00:00Z", Some(4)),
+        (12, "Run", "2026-01-01T05:30:00Z", Some(11)),
+        (13, "Run", "2026-01-01T06:00:00Z", Some(11)),
+    ] {
+        let mut value = record(home.path(), number, Some("merged"), 0);
+        value["kind"] = json!(kind);
+        value["started_at"] = json!(started);
+        if kind == "Spec run" {
+            value["issue"]["number"] = json!(99);
+        }
+        if let Some(parent) = parent {
+            value["parent_record"] = json!(home.path().join(format!(
+                ".thirdshift/logs/acme/widgets/commands/issue/{parent}-fixture.command.json"
+            )));
+            if parent == 11 {
+                value["parent_dispatch"] = json!("https://github.com/acme/widgets/issues/99");
+            }
+        }
+        write_record(home.path(), number, &value);
+    }
+    let mut pickup = record(home.path(), 11, Some("merged"), 0);
+    let mut dispatched = pickup.clone();
+    dispatched["name"] = json!("dispatched-spec");
+    dispatched["issue"]["number"] = json!(99);
+    dispatched["issue"]["url"] = json!("https://github.com/acme/widgets/issues/99");
+    dispatched["started_at"] = json!("2026-01-01T00:10:00Z");
+    pickup["kind"] = json!("Pickup run");
+    pickup["issue"] = Value::Null;
+    pickup["started_at"] = json!("2026-01-01T00:00:00Z");
+    pickup["dispatched"] = json!([dispatched]);
+    write_record(home.path(), 11, &pickup);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/stages").text().unwrap();
+    assert_eq!(html.matches("class=\"stage-grid\"").count(), 1, "{html}");
+    assert_eq!(html.matches("scope=\"colgroup\"").count(), 5, "{html}");
+    let columns: Vec<_> = html
+        .match_indices("data-command=\"")
+        .map(|(index, _)| html[index..].split('"').nth(1).unwrap().to_owned())
+        .collect();
+    let numbers: Vec<_> = columns
+        .iter()
+        .map(|column| {
+            column
+                .rsplit('/')
+                .next()
+                .unwrap()
+                .split('-')
+                .next()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(
+        numbers,
+        [
+            "4", "10", "5", "8", "9", "1", "2", "3", "11", "13", "12", "11", "6"
+        ]
+    );
+    assert_eq!(
+        columns
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        13
+    );
+    assert!(html.contains("Dispatched by Pickup run on acme/widgets"));
+    assert!(
+        html.contains("Ticket of Spec run · acme/widgets#99"),
+        "{html}"
+    );
+}
+
+#[test]
 fn time_pages_pair_with_all_status_stages_and_repository_usual_ranges() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
@@ -510,7 +597,7 @@ fn stages_orders_known_rows_by_run_progression_then_unknown_names() {
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     for page in ["/stages", "/?page=stages"] {
         let html = console.get(page).text().unwrap();
-        assert_eq!(html.matches("<tbody>").count(), 2, "{html}");
+        assert_eq!(html.matches("<tbody>").count(), 1, "{html}");
         for table in html.split("<tbody>").skip(1) {
             let names: Vec<_> = table
                 .split("</tbody>")
@@ -589,13 +676,11 @@ fn stages_distinguishes_dispatch_from_insufficient_usual_range_samples() {
             .find(|row| row.starts_with(&format!("<th scope=\"row\">{name}<br>")))
             .unwrap();
         assert!(row.contains("Usual range: —</span>"), "{row}");
-        assert!(row.contains("class=\"running-stage\""), "{row}");
+        assert!(row.contains("class=\"running-stage "), "{row}");
         assert!(row.contains("Running · 1 min"), "{row}");
         assert!(row.contains("Not reached · —"), "{row}");
     }
-    assert!(
-        html.contains("implement<br><span class=\"usual\">Usual range: Not enough samples</span>")
-    );
+    assert!(html.contains("Usual range: Not enough samples</span>"));
 }
 
 #[test]
@@ -1077,6 +1162,67 @@ fn log_stream_starts_at_the_byte_offset_and_sends_only_appended_html() {
         "{events}"
     );
     assert!(events.contains("\"done\":true"));
+}
+
+#[test]
+fn a_log_buffered_across_several_batches_streams_every_byte_without_another_change() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 81, Some("merged"), 0);
+    // More than three 256 KiB batch budgets, all written before the reader opens.
+    let log: String = (0..40_000)
+        .map(|line| format!("buffered line {line:06}\n"))
+        .collect();
+    assert!(log.len() > 3 * 256 * 1024);
+    fs::write(
+        home.path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue/81-fixture.log"),
+        &log,
+    )
+    .unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let link = console.log_link("81-fixture.log");
+    let events = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap()
+        .get(format!("{}{link}/stream/0", console.address))
+        .send()
+        .unwrap()
+        .text()
+        .expect("the stream ends after its final batch without another change");
+    let batches: Vec<Value> = events
+        .split("\n\n")
+        .filter_map(|event| event.lines().find_map(|line| line.strip_prefix("data: ")))
+        .map(|data| serde_json::from_str(data).unwrap())
+        .collect();
+    assert!(batches.len() > 3, "{} batches", batches.len());
+    let offsets: Vec<u64> = batches
+        .iter()
+        .map(|batch| batch["offset"].as_u64().unwrap())
+        .collect();
+    assert!(
+        offsets.windows(2).all(|pair| pair[0] < pair[1]),
+        "{offsets:?}"
+    );
+    assert_eq!(*offsets.last().unwrap(), log.len() as u64);
+    let done: Vec<bool> = batches
+        .iter()
+        .map(|batch| batch["done"].as_bool().unwrap())
+        .collect();
+    assert_eq!(done.iter().filter(|done| **done).count(), 1);
+    assert!(done.last().unwrap());
+    let html: String = batches
+        .iter()
+        .map(|batch| batch["html"].as_str().unwrap())
+        .collect();
+    let mut from = 0;
+    for line in 0..40_000 {
+        let marker = format!("buffered line {line:06}");
+        from += html[from..]
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{marker} missing or out of order"));
+    }
 }
 
 #[test]

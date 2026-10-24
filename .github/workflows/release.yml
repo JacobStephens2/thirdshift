@@ -63,6 +63,9 @@ concurrency:
 jobs:
   # Run 'dist plan' (or host) to determine what tasks we need to do
   plan:
+    permissions:
+      "actions": "write"
+      "contents": "read"
     runs-on: "ubuntu-24.04"
     outputs:
       val: ${{ steps.plan.outputs.manifest }}
@@ -105,6 +108,9 @@ jobs:
 
   # Build and packages all the platform-specific things
   build-local-artifacts:
+    permissions:
+      "actions": "write"
+      "contents": "read"
     name: build-local-artifacts (${{ join(matrix.targets, ', ') }})
     # Let the initial task tell us to not run (currently very blunt)
     needs:
@@ -187,6 +193,9 @@ jobs:
 
   # Build and package all the platform-agnostic(ish) things
   build-global-artifacts:
+    permissions:
+      "actions": "write"
+      "contents": "read"
     needs:
       - plan
       - build-local-artifacts
@@ -239,7 +248,6 @@ jobs:
     uses: ./.github/workflows/release-smoke.yml
     with:
       plan: ${{ needs.plan.outputs.val }}
-    secrets: inherit
   # Determines if we should publish/announce
   host:
     needs:

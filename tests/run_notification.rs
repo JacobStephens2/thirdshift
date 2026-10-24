@@ -654,6 +654,10 @@ EVENTS
         let cause = format!("{prefix}: {MESSAGE}");
         assert_contains(&result.stderr, &cause);
         assert_contains(text(&request), &format!("Cause:        {cause}"));
+        assert_contains(
+            text(&request),
+            "Usage limit:  Harness usage allowance exhausted. Retry when usage is available.",
+        );
         for output in [result.stderr.as_str(), text(&request)] {
             for fact in [
                 "api_error: usage_limit_reached",
@@ -669,6 +673,36 @@ EVENTS
         }
         assert_eq!(scenario.claude_calls().len(), 1, "unexpected Resume");
     }
+}
+
+#[test]
+fn a_muse_usage_failure_is_explained_in_the_saved_and_emailed_notification() {
+    const CAUSE: &str = "API error 429: Subscription quota exhausted. Your usage window resets at 2026-10-24T03:28:16Z. (rate_limit_error)";
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!("echo '{CAUSE}' > \"$FAKE_MUSE_ERROR\"\nexit 1\n"));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[
+            "harness",
+            "muse",
+            "email",
+            "me@example.com",
+            &scenario.issue_url(7),
+        ],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let request = the_one_request(&resend);
+    assert_contains(text(&request), CAUSE);
+    assert_contains(
+        text(&request),
+        "Usage limit:  Harness usage allowance exhausted. Retry when usage is available.",
+    );
+    assert_saved_notification(&scenario, "issue", &request);
 }
 
 #[test]
@@ -801,6 +835,169 @@ fn merge_after_a_bare_flag_reaches_the_run_notification_as_the_goal() {
         "{}",
         subject(&request)
     );
+}
+
+#[test]
+fn email_unless_merged_saves_a_merged_ticket_runs_notification_without_emailing_it() {
+    let scenario = Scenario::new();
+    scenario.issue_titled(7, "Add export button");
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[
+            "email-unless-merged",
+            "me@example.com",
+            "merge",
+            &scenario.issue_url(7),
+        ],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{PR_URL}\n"));
+    assert!(resend.requests().is_empty(), "{:?}", resend.requests());
+    let (_, saved) = saved_notification(&scenario, "issue");
+    assert!(
+        saved.starts_with(
+            "Subject: [thirdshift] acme/widgets#7 Add export button: merged\n\n\
+             Result:       merged\n"
+        ),
+        "{saved}"
+    );
+}
+
+#[test]
+fn email_unless_merged_emails_a_ticket_run_left_ready_for_review() {
+    let scenario = Scenario::new();
+    scenario.issue_titled(7, "Add export button");
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[
+            &scenario.issue_url(7),
+            "--email-unless-merged",
+            "me@example.com",
+        ],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    let request = the_one_request(&resend);
+    assert_eq!(request.body["to"], "me@example.com");
+    assert_eq!(
+        subject(&request),
+        "[thirdshift] acme/widgets#7 Add export button: ready for review"
+    );
+    assert_saved_notification(&scenario, "issue", &request);
+}
+
+#[test]
+fn email_unless_merged_emails_a_failed_ticket_run() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[email]\nto = \"config@example.com\"\n");
+    scenario.agent_does("exit 3\n");
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &["merge", "email-unless-merged", &scenario.issue_url(7)],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
+    let request = the_one_request(&resend);
+    assert_eq!(request.body["to"], "config@example.com");
+    assert!(
+        subject(&request).ends_with(": failed"),
+        "{}",
+        subject(&request)
+    );
+}
+
+#[test]
+fn email_unless_merged_checks_for_a_key_before_any_work() {
+    let scenario = Scenario::new();
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[
+            &scenario.issue_url(7),
+            "email-unless-merged",
+            "me@example.com",
+        ],
+        None,
+    );
+
+    scenario.assert_rejected_before_any_work(&result, "RESEND_API_KEY");
+    assert!(scenario.gh_calls().is_empty(), "{:?}", scenario.gh_calls());
+    assert!(resend.requests().is_empty());
+}
+
+#[test]
+fn email_unless_merged_in_the_user_config_emails_only_a_ticket_run_that_did_not_merge() {
+    for (goal, emailed) in [("merge", false), ("no-merge", true)] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(
+            "[email]\nalways = true\nunless_merged = true\nto = \"me@example.com\"\n",
+        );
+        scenario.agent_does(AGENT_OPENS_PR);
+        let resend = ResendStandIn::replying(200, ACCEPTED);
+
+        let result = run(
+            &scenario,
+            &resend,
+            &[goal, &scenario.issue_url(7)],
+            Some(KEY),
+        );
+
+        assert_eq!(result.code, Some(0), "{goal}: {}", result.stderr);
+        assert_eq!(resend.requests().len(), usize::from(emailed), "{goal}");
+        saved_notification(&scenario, "issue");
+    }
+}
+
+#[test]
+fn unless_merged_alone_in_the_user_config_emails_a_ticket_run_that_did_not_merge() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[email]\nunless_merged = true\nto = \"me@example.com\"\n");
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let result = run(
+        &scenario,
+        &resend,
+        &["no-merge", &scenario.issue_url(7)],
+        Some(KEY),
+    );
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(resend.requests().len(), 1, "{:?}", resend.requests());
+}
+
+#[test]
+fn the_email_flag_wins_over_unless_merged_in_the_user_config() {
+    let scenario = Scenario::new();
+    scenario
+        .user_config_is("[email]\nalways = true\nunless_merged = true\nto = \"me@example.com\"\n");
+    scenario.agent_does(AGENT_OPENS_PR);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &["merge", "email", &scenario.issue_url(7)],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert!(subject(&the_one_request(&resend)).ends_with(": merged"));
 }
 
 #[test]

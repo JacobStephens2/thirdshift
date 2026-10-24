@@ -8,7 +8,7 @@ use std::num::NonZeroUsize;
 use crate::args;
 use crate::base_fix::BaseFixAsk;
 use crate::child_run::Given;
-use crate::config::UserConfig;
+use crate::config::{EmailSettings, UserConfig};
 use crate::harness::{self, Choice};
 use crate::issue::IssueUrl;
 use crate::notification::NotificationAsk;
@@ -20,7 +20,7 @@ use crate::run::Goal;
 pub struct Flags {
     /// The goal `merge` or `no-merge` asked for.
     pub goal: Option<Goal>,
-    /// What `email` or `no-email` asked for.
+    /// What `email`, `email-unless-merged` or `no-email` asked for.
     pub email: Option<NotificationAsk>,
     /// How many Tickets a Spec run runs at once, as `parallel <n>` gave it.
     pub parallel: Option<NonZeroUsize>,
@@ -216,7 +216,7 @@ impl Flags {
         }
     }
     /// Whether any flag here is for the Spec run or Run that a Pass
-    /// dispatches: every one but `email` and `no-email`,
+    /// dispatches: every one but `email`, `email-unless-merged` and `no-email`,
     /// which ask that run for its own Run notification.
     pub fn any_for_dispatched_run(&self) -> bool {
         let for_dispatched_run = Flags {
@@ -227,15 +227,23 @@ impl Flags {
     }
 
     /// What a run with these flags is asked about its own Run notification:
-    /// what `email` or `no-email` asked for, else what `config` says. It is
-    /// a Run's ask, and a Pass's for the one
-    /// notification it sends itself.
+    /// what `email`, `email-unless-merged` or `no-email` asked for, else what
+    /// `config` says, `email.unless_merged` with or without `email.always`
+    /// asking as `email-unless-merged` does. It is a Run's ask, and a Pass's
+    /// for the one notification it sends itself.
     pub fn notification(&self, config: &UserConfig) -> NotificationAsk {
-        self.email.clone().unwrap_or(if config.email.always {
-            NotificationAsk::Send(None)
-        } else {
-            NotificationAsk::Skip
-        })
+        match (&self.email, &config.email) {
+            (Some(asked), _) => asked.clone(),
+            (
+                None,
+                EmailSettings {
+                    unless_merged: true,
+                    ..
+                },
+            ) => NotificationAsk::SendUnlessMerged(None),
+            (None, EmailSettings { always: true, .. }) => NotificationAsk::Send(None),
+            (None, _) => NotificationAsk::Skip,
+        }
     }
 
     /// The Harness, Model and Effort a command with these flags runs its
@@ -288,6 +296,7 @@ mod tests {
     /// default.
     fn no_settings() -> UserConfig {
         UserConfig {
+            resources: crate::resources::Limits::default(),
             console: crate::config::ConsoleSettings::default(),
             merge_always: false,
             base_fix: false,
@@ -319,6 +328,7 @@ mod tests {
             launch_pull: true,
             email: EmailSettings {
                 always: true,
+                unless_merged: false,
                 to: Some("config@example.com".to_string()),
                 from: None,
             },
@@ -798,6 +808,31 @@ mod tests {
                 every_setting(),
                 to("flag@example.com"),
             ),
+            (
+                Some(NotificationAsk::SendUnlessMerged(None)),
+                no_settings(),
+                NotificationAsk::SendUnlessMerged(None),
+            ),
+            (
+                None,
+                unless_merged_with_always(true),
+                NotificationAsk::SendUnlessMerged(None),
+            ),
+            (
+                None,
+                unless_merged_with_always(false),
+                NotificationAsk::SendUnlessMerged(None),
+            ),
+            (
+                Some(NotificationAsk::Send(None)),
+                unless_merged_with_always(true),
+                NotificationAsk::Send(None),
+            ),
+            (
+                Some(NotificationAsk::Skip),
+                unless_merged_with_always(false),
+                NotificationAsk::Skip,
+            ),
         ] {
             let flags = Flags {
                 email,
@@ -805,6 +840,19 @@ mod tests {
             };
 
             assert_eq!(flags.notification(&config), asked, "{flags:?}");
+        }
+    }
+
+    /// A User config with `email.unless_merged` set, and `email.always` as
+    /// `always` says.
+    fn unless_merged_with_always(always: bool) -> UserConfig {
+        UserConfig {
+            email: EmailSettings {
+                always,
+                unless_merged: true,
+                ..EmailSettings::default()
+            },
+            ..no_settings()
         }
     }
 

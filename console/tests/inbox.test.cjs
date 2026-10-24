@@ -207,6 +207,48 @@ test("Inbox folds, loads only its own resources and fits a 390 px phone", async 
   assert.equal(await page.evaluate(() => document.fonts.check('14px "IBM Plex Sans"') && document.fonts.check('12px "IBM Plex Mono"')), true);
 });
 
+test("finish information is visible without JavaScript on a narrow phone", async t => {
+  const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 320, height: 844 } });
+  await page.goto(origin);
+  const age = page.locator('[data-group="needs you"] .command > .row-head > .age').first();
+  assert.equal(await age.isVisible(), true);
+  assert.match(await age.innerText(), /^Ended \w+ \d+, \d{4} at \d\d:\d\d:\d\d UTC · \d+ (sec|min|hr \d+ min) ago$/);
+  assert.ok(Number.isFinite(Date.parse(await age.locator('time').getAttribute('datetime'))));
+  const box = await age.boundingBox();
+  assert.ok(box.x >= 0 && box.x + box.width <= 320, JSON.stringify(box));
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  assert.equal(await page.locator('.command .peek-link').first().isVisible(), true);
+});
+
+test("existing refresh advances finish age while keeping its recorded instant", async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/71-fixture.command.json');
+  const end = new Date(Date.now() - 55000).toISOString();
+  const fixture = JSON.parse(await readFile(join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json'), 'utf8'));
+  fixture.issue = { number: 71, url: 'https://github.com/acme/widgets/issues/71', title: 'Finish refresh fixture' };
+  fixture.started_at = new Date(Date.parse(end) - 140 * 60000).toISOString();
+  fixture.ended_at = end;
+  fixture.cause = 'finish refresh fixture';
+  await writeFile(path, JSON.stringify(fixture));
+  t.after(() => rm(path, { force: true }));
+  const page = await pageFor(t);
+  await page.goto(origin);
+  const row = page.locator('.command').filter({ has: page.locator('a[href="https://github.com/acme/widgets/issues/71"]') });
+  const time = row.locator('time');
+  assert.equal(await time.getAttribute('datetime'), end);
+  assert.match(await row.locator('.age').textContent(), /\d+ sec ago$/);
+  const absolute = await time.textContent();
+  // Cross the server's minute boundary, then wake the ordinary filesystem refresh.
+  await page.waitForTimeout(Math.max(0, Date.parse(end) + 61000 - Date.now()));
+  await appendFile(join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.log'), 'Refresh finish age\n');
+  await page.waitForFunction(() => [...document.querySelectorAll('.command')].some(row =>
+    row.querySelector('a[href="https://github.com/acme/widgets/issues/71"]') && row.querySelector('.age')?.textContent.includes('1 min ago')));
+  assert.equal(await time.getAttribute('datetime'), end);
+  assert.equal(await time.textContent(), absolute);
+  await page.reload();
+  assert.match(await row.locator('.age').textContent(), /1 min ago$/);
+  assert.equal(await time.getAttribute('datetime'), end);
+});
+
 test("all section headings fit above the fold on a 14 inch laptop with a busy Needs you", async t => {
   const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
   await page.goto(origin);
@@ -864,4 +906,62 @@ test('Logs rows open the shared reader and page keys work from the reader', asyn
   await page.keyboard.press('g');
   await page.keyboard.press('o');
   await page.waitForURL('**/?page=logs');
+});
+
+test('the active-run total follows live trees, stays visible and fits every Theme on a phone', { skip: process.platform !== 'linux' }, async t => {
+  // The live fixtures borrow the Console's own process identity, as above.
+  const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
+  const start = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const config = join(home, '.thirdshift/config.toml');
+  const base = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+  const now = new Date().toISOString();
+  const live = { kind: 'Run', process_id: server.pid, process_start: start, ended_at: null, outcome: null, cause: null, tickets: [], stages: [{ name: 'implement', began_at: now, session_log: null }] };
+  const issue = number => ({ ...base.issue, number, url: `https://github.com/acme/widgets/issues/${number}` });
+  const spec = join(dir, '221-fixture.command.json');
+  const tickets = [222, 223].map(number => join(dir, `221-fixture.command.issue-${number}.child.json`));
+  const separate = join(dir, '224-fixture.command.json');
+  const write = (path, number, change = {}) => writeFile(path, JSON.stringify({ ...base, ...live, issue: issue(number), ...change }));
+  const ended = { outcome: 'merged', ended_at: now };
+  try {
+    const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
+    await page.goto(origin);
+    const total = page.locator('#inbox > .active-runs');
+    assert.equal(await total.locator('strong').textContent(), '0 active runs');
+    await write(spec, 221, { kind: 'Spec run' });
+    for (const [index, path] of tickets.entries()) await write(path, 222 + index, { parent_record: spec });
+    await page.waitForFunction(() => document.querySelector('#inbox > .active-runs strong').textContent === '1 active run');
+    assert.equal(await page.getByRole('region', { name: 'No running Commands' }).count(), 0);
+    await write(separate, 224);
+    await page.waitForFunction(() => document.querySelector('#inbox > .active-runs strong').textContent === '2 active runs');
+    // Opening and folding the section holding live work leaves the total alone.
+    for (const open of [1, 0]) {
+      await page.locator('[data-group="working"] > summary').click();
+      assert.equal(await page.locator('[data-group="working"][open]').count(), open);
+      assert.equal(await total.locator('strong').textContent(), '2 active runs');
+    }
+    // A Spec's Ticket ending while the Spec continues keeps its one run.
+    await write(tickets[0], 222, { parent_record: spec, ...ended });
+    await page.waitForTimeout(1500);
+    assert.equal(await total.locator('strong').textContent(), '2 active runs');
+    // Hidden sections and every built-in Theme keep the total readable on a phone.
+    await writeFile(config, '[console]\nport = 0\nhidden_sections = ["needs-you", "ready-for-review", "landing", "working", "done", "resolved"]\n');
+    await page.waitForFunction(() => document.querySelectorAll('#inbox > details:not([hidden])').length === 0);
+    for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
+      for (const mode of ['light', 'dark']) {
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, `${family}-${mode}`);
+        assert.equal(await total.isVisible(), true, `${family}-${mode}`);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${family}-${mode}`);
+      }
+    }
+    await write(separate, 224, ended);
+    await page.waitForFunction(() => document.querySelector('#inbox > .active-runs strong').textContent === '1 active run');
+    await write(tickets[1], 223, { parent_record: spec, ...ended });
+    await write(spec, 221, { kind: 'Spec run', ...ended });
+    await page.waitForFunction(() => document.querySelector('#inbox > .active-runs strong').textContent === '0 active runs');
+    await page.getByRole('region', { name: 'No running Commands' }).waitFor();
+  } finally {
+    await Promise.all([spec, separate, ...tickets].map(path => rm(path, { force: true })));
+    await writeFile(config, '[console]\nport = 0\n');
+  }
 });
