@@ -36,6 +36,8 @@
 //!  "after_merge"?: "<script>",
 //!  "failing"?: ["<command> <subcommand>", ...],
 //!  "failing_stderr"?: "<stderr for failing commands>",
+//!  "rate_limits"?: {"core": {"remaining", "reset"}, "graphql": {"remaining", "reset"}},
+//!  "inbox_rate_limit"?: {"remaining", "resetAt"},
 //!  "fail_next"?: {"call": "<command prefix>", "times": <count>, "error": "<stderr>"},
 //!  "advisory_create_fails_after"?: <number of records>,
 //!  "user_email"?: "<address>" | null,
@@ -134,6 +136,11 @@
 //! own `rateLimit`. An alias for a pull request the state does not know, or
 //! for another repository, answers a null `pullRequest` and a scoped GraphQL
 //! error. Like `gh`, the fake prints the partial data and exits 1.
+//! `rate_limits` supplies the resources from `gh api rate_limit` (otherwise
+//! 4999 remaining, resetting in an hour). `inbox_rate_limit` overrides the
+//! batched GraphQL response's quota, e.g. when that query spends the reserve.
+//! `failing` with `failing_stderr` models unreachable, signed-out and
+//! rate-limited reads with gh's actual diagnostics and a nonzero exit.
 //! Issues answer `state`, `closedAt` from `issue_closed_at` and label nodes
 //! from `labels`, with the same null/scoped error for an unknown issue.
 //!
@@ -1337,6 +1344,29 @@ fn membership_response(state: &Json, key: &str, login: &str) {
 
 fn api(state: &mut Json, positional: &[String], flags: &Flags) {
     let path = &positional[0];
+    if path == "rate_limit" {
+        let reset = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            + 3600;
+        let defaults = object([("remaining", number(4999)), ("reset", number(reset))]);
+        let resource = |name| {
+            state
+                .get("rate_limits")
+                .and_then(|limits| limits.get(name))
+                .cloned()
+                .unwrap_or_else(|| defaults.clone())
+        };
+        println!(
+            "{}",
+            object([(
+                "resources",
+                object([("core", resource("core")), ("graphql", resource("graphql")),])
+            )])
+        );
+        return;
+    }
     if let Some((repo, rest)) = repo_prefix(path) {
         if let Some(n) = rest
             .strip_prefix("issues/")
@@ -2156,12 +2186,14 @@ fn pull_requests(state: &Json, query: &str) {
     }
     data.push((
         "rateLimit".to_owned(),
-        object([
-            ("limit", number(5000)),
-            ("cost", number(1)),
-            ("remaining", number(4999)),
-            ("resetAt", string(now())),
-        ]),
+        state.get("inbox_rate_limit").cloned().unwrap_or_else(|| {
+            object([
+                ("limit", number(5000)),
+                ("cost", number(1)),
+                ("remaining", number(4999)),
+                ("resetAt", string(now())),
+            ])
+        }),
     ));
     let mut answer = Json::Object(vec![("data".to_owned(), Json::Object(data))]);
     let failed = !errors.is_empty();

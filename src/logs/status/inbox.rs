@@ -12,6 +12,7 @@ pub(crate) struct Inbox {
     pub sections: Vec<Section>,
     pub idle_passes: Vec<String>,
     pub warning: Option<&'static str>,
+    pub github_warning: Option<String>,
 }
 
 pub(crate) struct Section {
@@ -279,6 +280,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
         .collect::<Result<_>>()?;
     Ok(Inbox {
         sections,
+        github_warning: kept.warning(),
         idle_passes: snapshot.idle_passes.iter().map(|pass| format!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason)).collect(),
         warning: (config.effective_waiting_line_interval() != config.waiting_line_interval).then_some(
             "logs.waiting_line_minutes must be less than inbox.silent_minutes; using half the silent time for waiting lines"),

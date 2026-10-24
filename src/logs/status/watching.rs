@@ -33,6 +33,7 @@ pub(crate) fn watching(config: &UserConfig) -> Result<Watching> {
     let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
     let mut watching = Watching::default();
     let kept = crate::logs::github::load(&config.logs_dir);
+    watching.deadline = kept.next_warning_change();
     if let Some(at) = snapshot.next_inbox_change(config.inbox_days, &kept) {
         deadline(at, now, &mut watching);
     }
