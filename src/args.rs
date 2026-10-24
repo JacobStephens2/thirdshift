@@ -25,6 +25,8 @@ pub enum Command {
     Setup,
     Score,
     Scores {
+        pull_request: Option<String>,
+        mine: bool,
         json: bool,
     },
     Evals(crate::evals::Action),
@@ -625,11 +627,27 @@ pub fn parse(args: &[String]) -> Result<Command> {
             };
         }
         Some("scores") => {
-            return match &args[1..] {
-                [] => Ok(Command::Scores { json: false }),
-                [flag] if flag == "--json" => Ok(Command::Scores { json: true }),
-                _ => bail!("usage: thirdshift scores [--json]"),
-            };
+            let mut pull_request = None;
+            let mut mine = false;
+            let mut json = false;
+            for argument in &args[1..] {
+                match argument.as_str() {
+                    "--mine" if !mine => mine = true,
+                    "--json" if !json => json = true,
+                    value if !value.starts_with('-') && pull_request.is_none() => {
+                        pull_request = Some(value.to_owned());
+                    }
+                    _ => bail!("usage: thirdshift scores [<pull request>] [--mine | --json]"),
+                }
+            }
+            if mine && (pull_request.is_none() || json) {
+                bail!("usage: thirdshift scores <pull request> --mine");
+            }
+            return Ok(Command::Scores {
+                pull_request,
+                mine,
+                json,
+            });
         }
         Some("resources") => {
             return match &args[1..] {

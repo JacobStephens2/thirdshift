@@ -462,7 +462,8 @@ thirdshift pickup base <branch>     # do that with <branch> as the Base branch, 
 thirdshift secure                   # audit the Base branch and record findings privately (see Security runs)
 thirdshift secure base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
-thirdshift scores [--json]          # list the sample by week
+thirdshift scores [<pull request>] [--json] # show Scores and calibration
+thirdshift scores <pull request> --mine    # enter your five Scores
 thirdshift email-test [<address>]   # send a test email through Resend (see Email)
 thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
 thirdshift evals list               # list private Eval suites and approved/proposed Eval tasks
@@ -759,7 +760,7 @@ model = "gemini-3.8-flash"
 effort = "medium"
 ```
 
-`otlp.endpoint` is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in `/v1/traces`) to receive each Session's ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session's stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. A Security run exports none of its sessions, including child Ticket runs.
+`otlp.endpoint` is optional and blank by default. Set the full OTLP/HTTP traces URL (usually ending in `/v1/traces`) to receive each Session's ended spans live as OTLP JSON. Delivery is best effort: sends run off the Session's stream reader, each request times out after 150 ms, and a Session waits at most 200 ms for pending sends on exit. A full queue drops spans; local Session traces are still kept. Security and Scoring runs export none of their sessions, including child Ticket runs. Sandbox launcher environment values are redacted from retained Session arguments.
 
 `thirdshift setup` writes this file for you, listing every setting at its default so the file itself shows what can be changed:
 
@@ -784,7 +785,7 @@ dir = "~/.thirdshift/logs"   # the root of the logs, each repository's in <owner
 waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting lines; default 5 minutes
 
 [otlp]
-endpoint = ""   # optional OTLP/HTTP traces URL, including /v1/traces; default blank (off); Security runs never export
+endpoint = ""   # optional OTLP/HTTP traces URL, including /v1/traces; default blank (off); Security and Scoring runs never export
 
 [inbox]
 days = 7             # days to keep Resolved and rows GitHub cannot speak for; default 7
@@ -1653,7 +1654,7 @@ preserves existing values; it does not ask Scoring questions:
 ```toml
 [scoring]
 owners = []                 # GitHub users or organizations; configure before score
-sample_size = 10            # maximum sample size
+sample_size = 10            # maximum weekly sample size (historical 20 are additional)
 harness = "claude"          # Grader's Harness
 model = ""                  # set an explicit Model before grading a sample
 fallback_harness = "codex"   # second Grader, when the first matches the Run's Model
@@ -1681,7 +1682,29 @@ read-only. It gives five independent pass/fail Scores with reasons: Correct,
 Scoped, Tested, Honest and Standards. Honest checks only the pull request's
 claims against its diff and CI. Scores are retained on each sampled pull request,
 with the Grader's Harness and Model; local work also links to its Run's Command
-record. Both `scores` formats include these Scores.
+record. Both `scores` formats include these Scores and each criterion's
+calibration: `calibrated`, `matches` and `compared` in JSON.
+
+The first Scoring run also draws 20 past pull requests across Harness and Model
+pairs, or all eligible work if fewer than 20 exist. They are marked `for_you`
+and graded too. They can predate the weekly window; overlaps with that week's
+draw are graded once. Later runs mark two from each ISO week's samples for you
+(or as many as available); reruns in the same week do not add another two.
+
+Use `thirdshift scores <pull request> --mine` with a sampled pull request URL,
+or a number that identifies only one sampled repository's pull request. It asks
+for pass or fail and a nonempty reason for Correct, Scoped, Tested, Honest and
+Standards. The model's Scores stay hidden during entry. All five of yours are
+saved together before the model's appear beside them; EOF or interruption
+leaves any previous Scores unchanged. Only one Scoring run or human scoring
+session can write at once. `thirdshift scores <pull request> [--json]` shows
+that pull request; omit it to list samples by week.
+
+Each criterion is calibrated when at least 18 of the last 20 distinct pull
+requests you and the model both scored agree on pass/fail. Fewer than 20 paired
+pull requests means uncalibrated. The rolling order is when you completed your
+Scores; reasons are retained but not compared. Every criterion stands on its
+own, so one that stays uncalibrated does not hold up the others.
 
 Set an explicit `scoring.model`: a blank default cannot establish that the
 Grader differs from the Run's Model. When the first Model matches the Built-with

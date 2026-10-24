@@ -391,6 +391,10 @@ impl Prepared {
         }
     }
 
+    pub(crate) fn command(&self, args: &[String]) -> Result<Command> {
+        self.launch().command(args)
+    }
+
     /// A later launch (including Resume) may fail even after the startup
     /// check succeeded. Retain bwrap's stderr outside the Harness protocol.
     pub(crate) fn startup_failure(&self, error: &anyhow::Error) -> Option<Unavailable> {

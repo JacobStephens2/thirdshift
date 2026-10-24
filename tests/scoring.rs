@@ -10,6 +10,9 @@ const LOGS: &str = "home/.thirdshift/logs/JacobStephens2/thirdshift/commands/sco
 #[path = "scoring/grading.rs"]
 mod grading;
 
+#[path = "scoring/calibration.rs"]
+mod calibration;
+
 #[test]
 fn packet_diff_preserves_trailing_whitespace_in_the_last_changed_line() {
     let scenario = scenario();
@@ -440,7 +443,9 @@ fn sample_spreads_across_harness_and_model_pairs_and_excludes_security_fixes() {
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let weeks = weeks(&scenario);
     let sample = weeks[0]["sample"].as_array().unwrap();
-    assert_eq!(sample.len(), 3, "{sample:?}");
+    // The first run also includes the historical calibration draw.
+    assert_eq!(sample.len(), 14, "{sample:?}");
+    assert!(sample.iter().all(|pr| pr["for_you"] == true));
     let pairs: std::collections::BTreeSet<_> = sample
         .iter()
         .map(|pr| {

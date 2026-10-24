@@ -98,9 +98,26 @@ impl GitHub {
                     .context("Scoring search has no issueCount")?
                     > 1000
                 {
-                    bail!(
-                        "Scoring search exceeds GitHub's 1000-result limit; window was not advanced"
-                    );
+                    // Historical calibration spans years. Partition before
+                    // paging so GitHub's search cap never truncates the draw.
+                    let seconds = (end - start).num_seconds();
+                    if seconds <= 1 {
+                        bail!(
+                            "Scoring search exceeds GitHub's 1000-result limit within one second; window was not advanced"
+                        );
+                    }
+                    let middle = start + chrono::TimeDelta::seconds(seconds / 2);
+                    prs.extend(self.scoring_pull_requests(
+                        std::slice::from_ref(owner),
+                        start,
+                        middle,
+                    )?);
+                    prs.extend(self.scoring_pull_requests(
+                        std::slice::from_ref(owner),
+                        middle,
+                        end,
+                    )?);
+                    break;
                 }
                 for value in found["nodes"]
                     .as_array()

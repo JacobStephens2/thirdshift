@@ -14,13 +14,23 @@ use crate::sandbox;
 use crate::session::recording::{Input, Recording};
 use crate::{logs, prompt};
 
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub(super) enum Criterion {
     Correct,
     Scoped,
     Tested,
     Honest,
     Standards,
+}
+
+impl Criterion {
+    pub const ALL: [Self; 5] = [
+        Self::Correct,
+        Self::Scoped,
+        Self::Tested,
+        Self::Honest,
+        Self::Standards,
+    ];
 }
 
 #[derive(Serialize, Deserialize)]
@@ -84,7 +94,7 @@ pub(super) fn run(
     let adapter = choice.harness.adapter();
     let invocation = adapter.session(&choice, None, &prompt);
     let mut command = match &sandbox {
-        Some(sandbox) => sandbox.launch().command(&invocation.args)?,
+        Some(sandbox) => sandbox.command(&invocation.args)?,
         None => {
             let mut command = Command::new(adapter.name());
             command.args(&invocation.args);

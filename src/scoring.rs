@@ -15,6 +15,7 @@ use crate::github::GitHub;
 use crate::issue::Repo;
 use crate::{interrupt, logs};
 
+mod calibration;
 mod grader;
 mod origins;
 mod sample;
@@ -43,6 +44,8 @@ struct Week {
     packets: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     bug_origins: Option<Vec<origins::Proposal>>,
+    #[serde(default)]
+    initial_calibration: bool,
 }
 
 fn directory() -> Result<PathBuf> {
@@ -98,14 +101,43 @@ pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
     }
     let candidates = GitHub::new().scoring_pull_requests(&config.scoring.owners, start, end)?;
     let seed = OsRng.next_u64();
+    let mut sample = sample::draw(candidates, config.scoring.sample_size.get(), seed);
+    let initial_calibration = previous.is_empty();
+    if initial_calibration {
+        let history = GitHub::new().scoring_pull_requests(
+            &config.scoring.owners,
+            DateTime::UNIX_EPOCH,
+            end,
+        )?;
+        for mut pr in sample::draw(history, 20, seed) {
+            if let Some(existing) = sample.iter_mut().find(|existing| existing.url == pr.url) {
+                existing.for_you = true;
+            } else {
+                pr.for_you = true;
+                sample.push(pr);
+            }
+        }
+    } else {
+        let week = end.format("%G-W%V").to_string();
+        let marked = previous
+            .iter()
+            .filter(|saved| saved.week == week && !saved.initial_calibration)
+            .flat_map(|saved| &saved.sample)
+            .filter(|pr| pr.for_you)
+            .count();
+        for pr in sample.iter_mut().take(2usize.saturating_sub(marked)) {
+            pr.for_you = true;
+        }
+    }
     let mut week = Week {
         week: end.format("%G-W%V").to_string(),
         window_start: start,
         window_end: end,
         seed,
-        sample: sample::draw(candidates, config.scoring.sample_size.get(), seed),
+        sample,
         packets: None,
         bug_origins: None,
+        initial_calibration,
     };
     fs::DirBuilder::new()
         .recursive(true)
@@ -167,7 +199,12 @@ pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
 fn grade(config: &UserConfig, dir: &Path, week: &mut Week, ordinal: &mut usize) -> Result<bool> {
     // Older samples have no Scores yet. Find their retained file by its
     // immutable seed and window, including same-second checkpoint names.
-    let path = fs::read_dir(dir)?
+    let path = checkpoint(dir, week)?;
+    grade_at(config, dir, week, &path, ordinal)
+}
+
+fn checkpoint(dir: &Path, week: &Week) -> Result<PathBuf> {
+    fs::read_dir(dir)?
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path())
         .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
@@ -177,8 +214,7 @@ fn grade(config: &UserConfig, dir: &Path, week: &mut Week, ordinal: &mut usize) 
                 .and_then(|bytes| serde_json::from_slice::<Week>(&bytes).ok())
                 .is_some_and(|saved| saved.seed == week.seed && saved.window_end == week.window_end)
         })
-        .context("Scoring sample checkpoint disappeared")?;
-    grade_at(config, dir, week, &path, ordinal)
+        .context("Scoring sample checkpoint disappeared")
 }
 
 fn grade_at(
@@ -221,10 +257,72 @@ fn grade_at(
     Ok(true)
 }
 
-pub fn show(json: bool) -> Result<String> {
-    let weeks = read(&directory()?)?;
+pub fn show(pull_request: Option<&str>, mine: bool, json: bool) -> Result<String> {
+    let dir = directory()?;
+    let _lock = if mine {
+        interrupt::install()?;
+        Some(lock()?.context("another Scoring run or human scoring session is running")?)
+    } else {
+        None
+    };
+    let mut weeks = read(&dir)?;
+    if let Some(target) = pull_request {
+        let matches: Vec<_> = weeks
+            .iter()
+            .flat_map(|week| &week.sample)
+            .filter(|pr| {
+                pr.url.trim_end_matches('/') == target.trim_end_matches('/')
+                    || target.parse::<u64>().ok() == Some(pr.number)
+            })
+            .map(|pr| pr.url.clone())
+            .collect();
+        let urls: std::collections::BTreeSet<_> = matches.iter().collect();
+        if urls.len() != 1 {
+            bail!("pull request is unknown or ambiguous in the Scoring samples: {target}");
+        }
+        let url = matches[0].clone();
+        if mine {
+            let scores = calibration::enter()?;
+            for week in &mut weeks {
+                if let Some(pr) = week.sample.iter_mut().find(|pr| pr.url == url) {
+                    pr.mine = Some(scores);
+                    config::replace(
+                        &checkpoint(&dir, week)?,
+                        &serde_json::to_string_pretty(week)?,
+                    )?;
+                    break;
+                }
+            }
+        }
+        // Compute calibration over the full history before filtering the view.
+        let calibration = calibration::measure(&weeks);
+        for week in &mut weeks {
+            week.sample.retain(|pr| pr.url == url);
+        }
+        weeks.retain(|week| !week.sample.is_empty());
+        return display(&weeks, &calibration, json);
+    }
+    display(&weeks, &calibration::measure(&weeks), json)
+}
+
+fn display(weeks: &[Week], calibration: &calibration::Calibration, json: bool) -> Result<String> {
     if json {
-        return Ok(serde_json::to_string_pretty(&weeks)?);
+        let mut view = serde_json::to_value(weeks)?;
+        for week in view.as_array_mut().unwrap() {
+            for pr in week["sample"].as_array_mut().unwrap() {
+                if let Some(scores) = pr
+                    .get_mut("assessment")
+                    .and_then(|assessment| assessment.get_mut("scores"))
+                    .and_then(|scores| scores.as_array_mut())
+                {
+                    for score in scores {
+                        let criterion = serde_json::from_value(score["criterion"].clone())?;
+                        score["calibration"] = serde_json::to_value(&calibration[&criterion])?;
+                    }
+                }
+            }
+        }
+        return Ok(serde_json::to_string_pretty(&view)?);
     }
     let mut text = String::new();
     for week in weeks {
@@ -232,19 +330,40 @@ pub fn show(json: bool) -> Result<String> {
             "{}  {} → {}  seed {}\n",
             week.week, week.window_start, week.window_end, week.seed
         ));
-        for pr in week.sample {
+        for pr in &week.sample {
             text.push_str(&format!("  {}  {} · {}\n", pr.url, pr.harness, pr.model));
-            if let Some(assessment) = pr.assessment {
+            if pr.for_you {
+                text.push_str("    For you to score\n");
+            }
+            if let Some(mine) = &pr.mine {
+                for score in &mine.scores {
+                    text.push_str(&format!(
+                        "    Yours {:?}: {} — {}\n",
+                        score.criterion,
+                        if score.passed { "pass" } else { "fail" },
+                        score.reason
+                    ));
+                }
+            }
+            if let Some(assessment) = &pr.assessment {
                 text.push_str(&format!(
                     "    Grader: {} · {}\n",
                     assessment.grader.harness, assessment.grader.model
                 ));
-                for score in assessment.scores {
+                for score in &assessment.scores {
+                    let state = &calibration[&score.criterion];
                     text.push_str(&format!(
-                        "    {:?}: {} — {}\n",
+                        "    {:?}: {} — {} [{}: {}/{}]\n",
                         score.criterion,
                         if score.passed { "pass" } else { "fail" },
-                        score.reason
+                        score.reason,
+                        if state.calibrated {
+                            "calibrated"
+                        } else {
+                            "uncalibrated"
+                        },
+                        state.matches,
+                        state.compared
                     ));
                 }
             } else {

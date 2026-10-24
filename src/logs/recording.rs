@@ -463,10 +463,10 @@ impl<O: Outside> Record<O> {
         Some(super::trace::Context::from_record(owner, active))
     }
 
-    /// Child Runs carry the owning CommandKind, so a Security run's entire
-    /// Session tree stays local even while it dispatches public fixes.
+    /// Child Runs carry the owning CommandKind, so private Security and
+    /// Scoring Session trees stay local, including public Security fixes.
     pub(super) fn otlp_endpoint(&self) -> Option<String> {
-        if self.command == CommandKind::Secure {
+        if matches!(self.command, CommandKind::Secure | CommandKind::Scoring) {
             None
         } else {
             self.otlp_endpoint.clone()
