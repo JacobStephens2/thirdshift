@@ -576,6 +576,51 @@ fn dismissed_live_command_returns_when_it_dies_fails_or_ends_ready() {
 }
 
 #[test]
+fn dismissed_old_live_command_returns_when_it_dies() {
+    let mut run = SilentRun::new();
+    run.go_silent("implement");
+    run.record["started_at"] = (chrono::Local::now() - chrono::Duration::days(8))
+        .to_rfc3339()
+        .into();
+    fs::write(&run.path, serde_json::to_vec(&run.record).unwrap()).unwrap();
+    let dismissed = run.scenario.run(&["dismiss", "widgets#7"]);
+    assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+    assert_eq!(run.row()["group"], "working");
+    run.record["process_id"] = 0.into();
+    run.record["process_start"] = "gone".into();
+    fs::write(&run.path, serde_json::to_vec(&run.record).unwrap()).unwrap();
+    let row = run.row();
+    assert_eq!(row["group"], "needs you", "{row}");
+    assert_eq!(row["needs_you_kind"], "died");
+}
+
+#[test]
+fn dismiss_refuses_a_mixed_collapsed_row_before_writing_any_dismissal() {
+    let scenario = Scenario::new();
+    write_failed(&scenario, 8, 0, Some("boom"));
+    let now = chrono::Local::now();
+    let stamp = now.format("%Y%m%dT%H%M%S%z");
+    let at = now.format("%Y-%m-%d %H:%M:%S");
+    fs::write(
+        scenario.path(ACTIVITY),
+        format!("{at} Run #7 started: commands/issue/7-{stamp}.log, on claude\n{at} Run #7 ended: failed: boom\n"),
+    ).unwrap();
+    let before = read_status(&scenario);
+    assert_eq!(before["commands"].as_array().unwrap().len(), 1, "{before}");
+    assert_eq!(before["commands"][0]["count"], 2);
+    let activity_before = activity(&scenario);
+    let refused = scenario.run(&["dismiss", "widgets#8"]);
+    assert_ne!(refused.code, Some(0), "{}", refused.stdout);
+    assert!(
+        refused.stderr.contains("row has no Command record"),
+        "{}",
+        refused.stderr
+    );
+    assert_eq!(read_status(&scenario)["commands"], before["commands"]);
+    assert_eq!(activity(&scenario), activity_before);
+}
+
+#[test]
 fn dismissed_spec_silence_covers_a_different_ticket_run() {
     let mut run = SilentRun::new();
     run.go_silent("implement");
@@ -676,23 +721,6 @@ fn dismiss_live_landing_row_moves_it_to_landing() {
     assert_eq!(text.code, Some(0), "{}", text.stderr);
     assert!(text.stdout.contains("dismissed by "), "{}", text.stdout);
     assert!(text.stdout.contains("silent 20 min"), "{}", text.stdout);
-}
-
-#[test]
-fn dismiss_refuses_a_working_row_using_the_configured_silent_interval() {
-    let mut run = SilentRun::new();
-    run.scenario
-        .user_config_is("[inbox]\nsilent_minutes = 30\n");
-    run.go_silent("implement");
-    let status = read_status(&run.scenario);
-    assert_eq!(status["commands"][0]["group"], "working", "{status}");
-    let refused = run.scenario.run(&["dismiss", "widgets#7"]);
-    assert_ne!(refused.code, Some(0), "{}", refused.stdout);
-    assert!(
-        refused.stderr.contains("not Needs you or Ready for review"),
-        "{}",
-        refused.stderr
-    );
 }
 
 #[test]

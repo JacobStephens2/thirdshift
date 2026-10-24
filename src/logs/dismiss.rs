@@ -173,11 +173,14 @@ fn row_for(snapshot: &Snapshot, input: &str, days: i64, undo: bool) -> Result<Di
             format!("cannot dismiss {input}: row is not in Needs you or Ready for review")
         })?;
     for item in std::iter::once(&found).chain(found.collapsed.iter()) {
-        if let Observation::Record(command) = item.command
-            && let Some(selector) = item.command.selector()
-        {
-            target.members.push((command.record_path.clone(), selector));
-        }
+        let Observation::Record(command) = item.command else {
+            bail!("cannot dismiss {input}: row has no Command record");
+        };
+        let selector = item
+            .command
+            .selector()
+            .with_context(|| format!("cannot dismiss {input}: row has no Command record"))?;
+        target.members.push((command.record_path.clone(), selector));
     }
     // Taking a dismissal back works wherever the row now is, so only a
     // dismissal names a kind.

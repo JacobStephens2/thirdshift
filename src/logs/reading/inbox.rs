@@ -315,6 +315,16 @@ pub(super) fn list(
         // Command on the same issue starts here, or it outlives the period.
         let held = ended
             .or_else(|| time(Some(facts.started_at)))
+            // A recent dismissal proves this row was still in the Inbox.
+            // In particular, a long-running Command that dies has no end
+            // timestamp: its old start must not hide its new Died kind.
+            .into_iter()
+            .chain(
+                recorded_dismissal
+                    .as_ref()
+                    .and_then(|row| time(Some(&row.at))),
+            )
+            .max()
             .is_some_and(|time| cutoff.is_none_or(|cutoff| time >= cutoff))
             && !starts
                 .iter()
