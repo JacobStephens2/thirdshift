@@ -87,6 +87,7 @@ The Console can run as a persistent service behind HTTPS and sign-in. See [serve
 - [Configuration](docs/guide.md#user-config), [Harness, Model and Effort](docs/guide.md#harness-model-and-effort), and [email notifications](docs/guide.md#email).
 - [Machine status](docs/guide.md#machine-status), [showing Commands and reading logs](docs/guide.md#show-and-read-one-command), and [stopping a Command](docs/guide.md#stopping-a-command).
 - [Console installation](docs/guide.md#console-installation) and [Console Themes and browser tests](console/README.md).
+- [Host resources](docs/guide.md#host-resources): `thirdshift resources --json` and the Console's Resources page show RAM, CPU load and configurable limits that delay new sessions.
 - [Building and testing](docs/guide.md#building-from-source) and [releasing](docs/guide.md#releasing).
 - [Exact prompts](prompts/README.md) and [Factory skills](skills/), also [readable on the site](https://thirdshift.app/prompts/).
 - [Domain vocabulary](GLOSSARY.md) and [architectural decisions](docs/adr/).

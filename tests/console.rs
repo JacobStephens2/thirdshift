@@ -1,6 +1,9 @@
 //! The Console's public seam: the binary, fixture records and HTTP.
 mod support;
 
+#[path = "console/resources.rs"]
+mod resources;
+
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
