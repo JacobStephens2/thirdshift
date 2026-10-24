@@ -19,10 +19,10 @@ use crate::{interrupt, progress, prompt};
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Score {
-    label: String,
+pub(crate) struct Score {
+    pub label: String,
     pub passed: bool,
-    reason: String,
+    pub reason: String,
     pub wrong_finding: bool,
     pub borderline: bool,
 }

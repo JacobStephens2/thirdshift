@@ -4,6 +4,7 @@ mod accounts;
 mod auth;
 pub(crate) mod conversation;
 mod cronjobs;
+mod experiments;
 mod filters;
 pub use account_commands::{password, print_log, sign_out};
 mod install;
@@ -63,6 +64,9 @@ struct PageRoute {
 }
 
 enum View {
+    Experiments,
+    Experiment,
+    ExperimentSession,
     CronJobs,
     Inbox,
     Inspect,
@@ -90,6 +94,24 @@ enum View {
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/experiments/{id}/sessions/{session}",
+        cli: &["thirdshift experiments id --session session"],
+        method: Method::GET,
+        view: View::ExperimentSession,
+    },
+    PageRoute {
+        path: "/experiments",
+        cli: &["thirdshift experiments --json"],
+        method: Method::GET,
+        view: View::Experiments,
+    },
+    PageRoute {
+        path: "/experiments/{id}",
+        cli: &["thirdshift experiments id --json"],
+        method: Method::GET,
+        view: View::Experiment,
+    },
     PageRoute {
         path: "/cronjobs",
         cli: &["thirdshift cronjobs --json"],
@@ -347,6 +369,9 @@ fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Route
         let cli = page.cli[0];
         let path = page.path;
         let handler = match (&page.view, page.method.clone()) {
+            (View::Experiments, Method::GET) => get(experiments::index),
+            (View::Experiment, Method::GET) => get(experiments::detail),
+            (View::ExperimentSession, Method::GET) => get(experiments::session),
             (View::CronJobs, Method::GET) => get(cronjobs::show),
             (View::Inbox, Method::GET) => get(move |query| inbox(cli, path, query)),
             (View::Inspect, Method::GET) => get(inspect),

@@ -28,6 +28,9 @@ mod waterfall;
 #[path = "console/cronjobs.rs"]
 mod cronjobs;
 
+#[path = "console/experiments.rs"]
+mod experiments;
+
 struct Console {
     child: Child,
     address: String,

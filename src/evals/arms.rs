@@ -29,14 +29,14 @@ impl Requested {
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub(super) struct FixedHarness {
+pub(crate) struct FixedHarness {
     pub name: String,
     pub path: PathBuf,
     pub version: String,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
-pub(super) struct Arm {
+pub(crate) struct Arm {
     pub commit: String,
     pub binary: PathBuf,
     pub harness: FixedHarness,
@@ -45,8 +45,8 @@ pub(super) struct Arm {
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct Prepared {
     format: u32,
-    pub(super) baseline: Arm,
-    pub(super) candidate: Arm,
+    pub baseline: Arm,
+    pub candidate: Arm,
 }
 
 pub(super) fn prepare(repository: &Path, arms: [Requested; 2], record: &Path) -> Result<Prepared> {

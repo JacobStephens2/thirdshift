@@ -1025,6 +1025,18 @@ fn experiment_records_both_arms_the_bar_logs_stages_and_each_trial() {
     assert_eq!(result.stdout.lines().count(), 1);
     let experiment: Value = serde_json::from_str(&result.stdout).unwrap();
     assert_eq!(experiment["state"], "completed");
+    assert_eq!(experiment["baseline_ref"], "main (merge base)");
+    assert_eq!(experiment["candidate_ref"], "candidate");
+    assert_eq!(experiment["title"], "Candidate");
+    assert!(experiment["ended_at"].as_str().is_some());
+    assert!(
+        experiment["resume_command"]
+            .as_str()
+            .unwrap()
+            .contains("baseline-model")
+    );
+    assert!(experiment["running_trials"].as_array().unwrap().is_empty());
+    assert!(!experiment["sessions"].as_array().unwrap().is_empty());
     assert_eq!(experiment["baseline"]["commit"], fixture.baseline);
     assert_eq!(experiment["candidate"]["commit"], fixture.candidate);
     assert_eq!(experiment["suites"], json!(["spec-review"]));

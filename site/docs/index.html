@@ -393,6 +393,7 @@ thirdshift evals prepare-arms &lt;repository&gt; &lt;baseline-commit&gt; &lt;bas
 thirdshift experiment &lt;candidate&gt; [--baseline &lt;ref&gt;] [--suite &lt;name&gt;] [--json]  # run or resume an Experiment
 thirdshift experiment --release &lt;commit&gt; [--json]  # use the last release tag and touched suites
 thirdshift experiments [&lt;id&gt;] [--json]  # list Experiments or show one
+thirdshift experiments &lt;id&gt; --session &lt;session-id&gt;  # read a Trial&#39;s retained session from its inventory
 thirdshift recheck &lt;id&gt; &lt;trial&gt; &lt;pass|fail&gt; --reason &lt;text&gt; [--wrong-finding &lt;true|false&gt;] [--json]
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift &lt;version&gt;
@@ -542,6 +543,18 @@ Totals include all attempts and Resume sessions; Grader usage is not charged
 to either Arm. The text view shows usage beside each Arm&#39;s minutes.
 Both views show Void counts and causes per Arm, and report repeated
 Trial-only memory-cap stops as a finding against that Arm.</p>
+<p>The Console&#39;s <strong>Experiments</strong> link opens <code>/experiments</code>, grouped into Running,
+Needs you and Done, newest first within each. Open an Experiment for its live
+Trial grid, per-suite Verdict intervals, Arm comparison and folded Bar. Select
+a Trial or Eval task to open its Peek, including Grader reasons, rechecks,
+Void causes and links to retained Session logs or Session traces. Both pages
+pair with <code>experiments --json</code>; its view includes task names, active Trial start
+times and the <code>sessions</code> inventory. Read one with
+<code>thirdshift experiments &lt;id&gt; --session &lt;session-id&gt;</code>. Pending rechecks offer a
+copyable CLI command and a filter for their Eval tasks; the Console records no
+recheck itself. The page polls every two seconds, including after completion
+so rechecks recorded in the CLI appear. Older records show unknown refs,
+versions or end times where those facts were not retained.</p>
 <p>Each invocation that does work keeps a Command record, Command log and Activity
 log lines under <code>&lt;logs.dir&gt;/JacobStephens2/thirdshift/commands/experiment/</code>
 (the Activity log is at the repository level). The record names both Arms and
