@@ -187,6 +187,48 @@ test("Inbox folds, loads only its own resources and fits a 390 px phone", async 
   assert.equal(await page.evaluate(() => document.fonts.check('14px "IBM Plex Sans"') && document.fonts.check('12px "IBM Plex Mono"')), true);
 });
 
+test("finish information is visible without JavaScript on a narrow phone", async t => {
+  const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 320, height: 844 } });
+  await page.goto(origin);
+  const age = page.locator('[data-group="needs you"] .command > .row-head > .age').first();
+  assert.equal(await age.isVisible(), true);
+  assert.match(await age.innerText(), /^Ended \w+ \d+, \d{4} at \d\d:\d\d:\d\d UTC · \d+ (sec|min|hr \d+ min) ago$/);
+  assert.ok(Number.isFinite(Date.parse(await age.locator('time').getAttribute('datetime'))));
+  const box = await age.boundingBox();
+  assert.ok(box.x >= 0 && box.x + box.width <= 320, JSON.stringify(box));
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  assert.equal(await page.locator('.command .peek-link').first().isVisible(), true);
+});
+
+test("existing refresh advances finish age while keeping its recorded instant", async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/71-fixture.command.json');
+  const end = new Date(Date.now() - 55000).toISOString();
+  const fixture = JSON.parse(await readFile(join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json'), 'utf8'));
+  fixture.issue = { number: 71, url: 'https://github.com/acme/widgets/issues/71', title: 'Finish refresh fixture' };
+  fixture.started_at = new Date(Date.parse(end) - 140 * 60000).toISOString();
+  fixture.ended_at = end;
+  fixture.cause = 'finish refresh fixture';
+  await writeFile(path, JSON.stringify(fixture));
+  t.after(() => rm(path, { force: true }));
+  const page = await pageFor(t);
+  await page.goto(origin);
+  const row = page.locator('.command').filter({ has: page.locator('a[href="https://github.com/acme/widgets/issues/71"]') });
+  const time = row.locator('time');
+  assert.equal(await time.getAttribute('datetime'), end);
+  assert.match(await row.locator('.age').textContent(), /\d+ sec ago$/);
+  const absolute = await time.textContent();
+  // Cross the server's minute boundary, then wake the ordinary filesystem refresh.
+  await page.waitForTimeout(Math.max(0, Date.parse(end) + 61000 - Date.now()));
+  await appendFile(join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.log'), 'Refresh finish age\n');
+  await page.waitForFunction(() => [...document.querySelectorAll('.command')].some(row =>
+    row.querySelector('a[href="https://github.com/acme/widgets/issues/71"]') && row.querySelector('.age')?.textContent.includes('1 min ago')));
+  assert.equal(await time.getAttribute('datetime'), end);
+  assert.equal(await time.textContent(), absolute);
+  await page.reload();
+  assert.match(await row.locator('.age').textContent(), /1 min ago$/);
+  assert.equal(await time.getAttribute('datetime'), end);
+});
+
 test("all section headings fit above the fold on a 14 inch laptop with a busy Needs you", async t => {
   const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
   await page.goto(origin);

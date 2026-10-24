@@ -58,7 +58,7 @@ pub struct UserConfig {
     /// Claim stop a Pickup run from taking another, by default 3.
     pub pickup_limit: NonZeroUsize,
     /// `pickup.wait_minutes`: how long after its latest shaping event an
-    /// issue becomes a Ready issue, by default 30 minutes. Zero disables
+    /// issue becomes a Ready issue, by default 5 minutes. Zero disables
     /// the settling window.
     pub pickup_wait: TimeDelta,
     /// `pickup.order`: which end of the issue numbers a Pickup run takes
@@ -136,7 +136,7 @@ impl UserConfig {
             email: EmailSettings::default(),
             spec_parallel: NonZeroUsize::new(3).unwrap(),
             pickup_limit: NonZeroUsize::new(3).unwrap(),
-            pickup_wait: TimeDelta::minutes(30),
+            pickup_wait: TimeDelta::minutes(5),
             pickup_order: PickupOrder::LowestFirst,
             harness: harness::Settings::default(),
             security_harness: None,
@@ -934,7 +934,7 @@ max_load_per_cpu_percent = 0  # delay new sessions above this one-minute load pe
 
 [pickup]
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
-wait_minutes = 30   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 30
+wait_minutes = 5   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 5
 order = "lowest-first"   # which Ready issue a Pickup run takes, lowest-first or highest-first; default lowest-first
 
 [harness]

@@ -1,6 +1,6 @@
 //! Owned Inbox presentation for the Console, from the same observations as status.
 use anyhow::Result;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, Utc};
 use std::path::Path;
 
 use super::{age, stage_text, ticket_text};
@@ -37,7 +37,7 @@ pub(crate) struct Row {
     pub title: String,
     pub state: String,
     pub now_line: String,
-    pub age: String,
+    pub timing: Timing,
     pub count: usize,
     pub cause: String,
     pub harness: String,
@@ -46,6 +46,41 @@ pub(crate) struct Row {
     pub children: Vec<Row>,
     pub findings: Vec<crate::security::RecordedFinding>,
     pub sessions: Vec<std::path::PathBuf>,
+}
+
+pub(crate) struct Timing {
+    pub finish: Option<Finish>,
+    pub age: String,
+}
+
+pub(crate) struct Finish {
+    pub datetime: String,
+    pub label: String,
+}
+
+impl Timing {
+    fn new(live: bool, start: &str, end: Option<&str>, now: DateTime<Local>) -> Self {
+        if live {
+            return Self {
+                finish: None,
+                age: elapsed(start, now),
+            };
+        }
+        let finish = end.and_then(|end| {
+            DateTime::parse_from_rfc3339(end).ok().map(|time| Finish {
+                datetime: end.into(),
+                label: time
+                    .with_timezone(&Utc)
+                    .format("%b %-d, %Y at %H:%M:%S UTC")
+                    .to_string(),
+            })
+        });
+        let age = finish.as_ref().map_or_else(
+            || "End time unknown".into(),
+            |finish| format!("{} ago", elapsed(&finish.datetime, now)),
+        );
+        Self { finish, age }
+    }
 }
 
 impl Row {
@@ -179,10 +214,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                     .outcome
                     .clone()
                     .unwrap_or_else(|| "unknown outcome".into()),
-                age: elapsed(
-                    command.ended_at.as_deref().unwrap_or(&command.started_at),
-                    now,
-                ),
+                timing: Timing::new(false, &command.started_at, command.ended_at.as_deref(), now),
                 count: 1,
                 cause: String::new(),
                 harness: String::new(),
@@ -334,7 +366,15 @@ fn row(
         title,
         state: command.state.into(),
         now_line: stage_text(command),
-        age: elapsed(facts.ended_at.as_deref().unwrap_or(&facts.started_at), now),
+        timing: Timing::new(
+            live,
+            &facts.started_at,
+            facts
+                .ended_at
+                .as_deref()
+                .filter(|_| !facts.end_time_estimated),
+            now,
+        ),
         count: 1,
         cause: facts.cause.clone().unwrap_or_default(),
         harness: format!(

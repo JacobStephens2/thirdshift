@@ -2579,7 +2579,7 @@ fn a_ready_issue_skips_the_architect_run_before_any_review() {
 fn an_issue_still_settling_skips_the_architect_run_but_not_pickup() {
     let scenario = scenario();
     ready_issue(&scenario, 7, "Fix the login page", &[]);
-    scenario.issue_timeline(7, &[(TimelineEvent::Labelled("ready-for-agent"), 9)]);
+    scenario.issue_timeline(7, &[(TimelineEvent::Labelled("ready-for-agent"), 4)]);
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
     let github = scenario.gh_state();
 
@@ -2613,7 +2613,7 @@ fn an_issue_still_settling_skips_the_architect_run_but_not_pickup() {
     assert!(
         pickup
             .stderr
-            .contains("#7 not settled: labelled ready-for-agent less than 30 minutes ago"),
+            .contains("#7 not settled: labelled ready-for-agent less than 5 minutes ago"),
         "{}",
         pickup.stderr
     );
@@ -2633,7 +2633,7 @@ fn the_lowest_numbered_ready_or_settling_issue_goes_first() {
         ready_issue(&scenario, 2, "Claimed work", &[IN_PROGRESS]);
         ready_issue(&scenario, 3, "Earlier work", &[]);
         ready_issue(&scenario, 5, "Later work", &[]);
-        scenario.issue_timeline(settling, &[(TimelineEvent::Labelled("ready-for-agent"), 9)]);
+        scenario.issue_timeline(settling, &[(TimelineEvent::Labelled("ready-for-agent"), 4)]);
 
         let result = scenario.run(&["architect"]);
 
@@ -2664,7 +2664,7 @@ fn a_settling_spec_goes_first_only_with_a_startable_ticket() {
         if !startable {
             scenario.issue_labelled(9, &["needs-info"]);
         }
-        scenario.issue_timeline(7, &[(TimelineEvent::SubIssueAdded, 9)]);
+        scenario.issue_timeline(7, &[(TimelineEvent::SubIssueAdded, 4)]);
         scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
 
         let result = scenario.run(&["architect", "--plan-only"]);
@@ -2791,7 +2791,7 @@ fn an_issue_with_any_other_ready_exclusion_does_not_skip_the_architect_run_even_
             let scenario = scenario();
             ready_issue(&scenario, 7, "Fix the login page", &[]);
             if settling {
-                scenario.issue_timeline(7, &[(TimelineEvent::Labelled("ready-for-agent"), 9)]);
+                scenario.issue_timeline(7, &[(TimelineEvent::Labelled("ready-for-agent"), 4)]);
             }
             not_ready(&scenario);
             scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
