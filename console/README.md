@@ -203,19 +203,26 @@ or starts a Command.
 Lanes shows each Command and its child Runs on a shared time axis, over the last
 3.5, 12 or 24 hours. The window is kept in `hours=`; bars clip to that window,
 while their text retains the whole stage's time. Older Commands are on History.
-Stages keeps live Runs first across repositories, then finished Runs newest first.
+Stages defaults to **All runs**, one grid across repositories. **By repository**
+shows one grid per repository; the browser remembers an explicit view choice.
+Each Spec run stays with its exact Ticket runs, including repeated attempts on
+the same issue. Groups are newest-started first by their owning run, and Ticket
+runs are newest-started first within each Spec group. Live state and finish
+times do not change that order. Dispatch ancestry stays visible.
 Rows follow the Command record's stage order: implement through cleanup, then
 the stages of other Command kinds. Unrecognised stage names follow all known
 stages in alphabetical order.
-Tables continue when the repository changes or three columns are filled, so
-each stage's Usual range belongs to that table's repository. On phones each
-stage stacks its labelled cells. Historical Runs without stage metadata show
+More runs extend the grid to the right on desktop and phones, with stage names
+fixed at the left. Each cell's Usual range belongs to that run's repository.
+Live updates keep the visible run, selection and focus; **Newest runs** returns
+the relevant grid to its left edge. Historical Runs without stage metadata show
 an unknown time, distinct from a stage that was not reached. Choose
 a column's Run link to open its exact peek. Repeated stages retain every visit;
 missing end timestamps say “time unknown” rather than inventing a duration.
 Both pages use the observations from `status --all --json`. The Rust parity
 test checks their stage times and Usual ranges against the CLI; the Playwright
-time tests check scale in all windows, child selection, live ordering and 390 px.
+time tests check scale in all windows, grouping, both views, preferences, live
+insertions, keyboard access, Themes and 390 px.
 
 Waterfall chooses one retained Command with live, died and ended chips, keeping
 its exact selection in `command=`. A span tree replaces the old Run sections:
