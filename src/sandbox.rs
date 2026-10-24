@@ -1,4 +1,4 @@
-//! A Trial session's sandbox: bwrap, its own processes and network, a fresh
+//! Trial and Grader sandboxes: bwrap, their own processes and network, a fresh
 //! home and logins.
 //!
 //! A Trial's session runs in bwrap with process and network namespaces of its
@@ -22,6 +22,11 @@
 //! settings and hooks a Run's session reads, those read-only. Harness flags
 //! stay as ADR 0013 has them: the sandbox wraps the session, it does not
 //! change its arguments.
+//!
+//! A Model Grader uses the same session sandbox with only its packet workspace
+//! bound. Code Graders run offline with report copies and the prepared
+//! repository at neutral paths; neither Grader binds raw Trial logs or the
+//! Experiment's storage.
 
 use std::ffi::OsString;
 use std::fs;
@@ -131,7 +136,7 @@ pub(crate) struct Prepared {
 /// before its session starts.
 ///
 /// When `THIRDSHIFT_TRIAL_NO_SANDBOX` is set and not empty, there is no
-/// sandbox: the Trial's sessions run as they did before it. The Experiment
+/// sandbox: Trials and Graders use the pass-through launcher. The Experiment
 /// suite sets it so its fake Harnesses stay observable at fixed paths, and
 /// it is the emergency escape when bwrap breaks on a machine.
 pub(crate) fn for_trial(
@@ -139,7 +144,26 @@ pub(crate) fn for_trial(
     repository: &Path,
     output_dir: &Path,
 ) -> Result<Option<Prepared>> {
-    if std::env::var_os("THIRDSHIFT_TRIAL_NO_SANDBOX").is_some_and(|flag| !flag.is_empty()) {
+    if disabled() {
+        return Ok(None);
+    }
+    for_session(
+        choice,
+        &resolve_binary(choice.harness.name())?,
+        repository,
+        output_dir,
+    )
+}
+
+/// A session sandbox with an explicit executable: a Trial uses its Arm's
+/// binary; a Model Grader uses its pinned binary and packet workspace.
+pub(crate) fn for_session(
+    choice: &crate::harness::Choice,
+    binary: &Path,
+    workspace: &Path,
+    output_dir: &Path,
+) -> Result<Option<Prepared>> {
+    if disabled() {
         return Ok(None);
     }
     let home = config::home().map_err(|error| {
@@ -153,15 +177,122 @@ pub(crate) fn for_trial(
     prepare(&Request {
         harness: choice.harness,
         model: choice.model.as_deref(),
-        repository,
+        repository: workspace,
         skills_dir: &crate::skills::written_out()?,
-        harness_binary: &resolve_binary(choice.harness.name())?,
+        harness_binary: binary,
         home: &home,
         fresh_home: &output_dir.join("home"),
         secrets,
         adapter_env: choice.harness.adapter().environment().to_vec(),
     })
     .map(Some)
+}
+
+fn disabled() -> bool {
+    std::env::var_os("THIRDSHIFT_TRIAL_NO_SANDBOX").is_some_and(|flag| !flag.is_empty())
+}
+
+/// Code Graders need no login or provider. Bind only their report packet and
+/// prepared repository, at neutral paths, and leave their network offline.
+pub(crate) fn code_grader(repository: &Path, packet: &Path, args: &[String]) -> Result<Command> {
+    let mut command = if disabled() {
+        let mut command = Command::new(&args[0]);
+        command.args(&args[1..]);
+        command
+    } else {
+        if find_bwrap().is_none() {
+            return Err(anyhow::Error::new(Unavailable {
+                diagnostic: "bwrap is not on PATH".into(),
+            }));
+        }
+        let mut binds = Binds::default();
+        binds.read_write(repository, Path::new("/sandbox/repository"));
+        binds.read_write(packet, Path::new("/sandbox/packet"));
+        // Spec-review repositories have a local origin whose absolute host
+        // path identifies the Arm. Keep Git usable without exposing that path.
+        if repository.join(".git/eval-origin.git").is_dir() {
+            let config = packet.join("repository.gitconfig");
+            fs::copy(repository.join(".git/config"), &config)?;
+            crate::git::Git::new(repository).run(&[
+                "config",
+                "--file",
+                config.to_str().context("invalid Grader config path")?,
+                "remote.origin.url",
+                "/sandbox/repository/.git/eval-origin.git",
+            ])?;
+            binds.read_only(&config, Path::new("/sandbox/repository/.git/config"));
+        }
+        let mut environment = Environment::default();
+        let roots = toolchains(&config::home()?);
+        for root in &roots {
+            binds.read_only(root, root);
+            let bin = root.join("bin");
+            if bin.is_dir() {
+                environment.prepend_path(&bin);
+            }
+        }
+        for bin in tool_bin_dirs(&roots) {
+            environment.prepend_path(&bin);
+        }
+        environment.set_str("HOME", "/sandbox/home");
+        let mut argv = base_argv();
+        binds.argv(&mut argv);
+        argv.extend(
+            ["--tmpfs", "/sandbox/home", "--chdir", "/sandbox/repository"].map(OsString::from),
+        );
+        let program = Path::new(&args[0]);
+        let program = program
+            .strip_prefix(repository)
+            .map(|relative| Path::new("/sandbox/repository").join(relative))
+            .unwrap_or_else(|_| program.to_owned());
+        // The shell distinguishes a bad check command from a bwrap startup
+        // error: exec failure here is an ordinary failed mechanical check.
+        let launch = Launch {
+            argv,
+            env: environment.finish(&[]),
+            program,
+            prefix: [SHELL, "-c", "exec \"$0\" \"$@\""]
+                .map(OsString::from)
+                .to_vec(),
+        };
+        let mut command = launch.command(&args[1..]);
+        command.env_clear();
+        command.envs(launch.env);
+        command
+    };
+    let packet_path = if disabled() {
+        packet
+    } else {
+        Path::new("/sandbox/packet")
+    };
+    for (name, file) in [
+        ("THIRDSHIFT_TRIAL_STANDARDS_REPORT", "standards.md"),
+        ("THIRDSHIFT_TRIAL_SPEC_REPORT", "spec.md"),
+    ] {
+        command.env(
+            name,
+            if packet.join(file).is_file() {
+                packet_path.join(file).into_os_string()
+            } else {
+                OsString::new()
+            },
+        );
+    }
+    command
+        .env("THIRDSHIFT_TRIAL_LOG", "")
+        .current_dir(repository);
+    Ok(command)
+}
+
+/// bwrap could not enter its sandbox. The check itself runs through a shell,
+/// so a missing check executable does not produce this launcher diagnostic.
+pub(crate) fn check_started(output: &std::process::Output) -> Result<()> {
+    if !output.status.success() && String::from_utf8_lossy(&output.stderr).starts_with("bwrap:") {
+        return Err(anyhow::Error::new(Unavailable {
+            diagnostic: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }));
+    }
+    Ok(())
 }
 
 impl Prepared {
@@ -194,7 +325,7 @@ impl Launch {
     /// relay: `prefix` starts the relay, then runs the program as `$0` with
     /// `args` as `$@`, so the relay dies with the session.
     pub fn command(&self, args: &[String]) -> Command {
-        let mut command = Command::new("bwrap");
+        let mut command = Command::new(find_bwrap().unwrap_or_else(|| PathBuf::from("bwrap")));
         command.args(&self.argv);
         command.arg("--");
         command.args(&self.prefix);
@@ -263,11 +394,11 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
         request.home.is_absolute(),
         "sandbox failed to start: home path must be absolute"
     );
-    if find_bwrap().is_none() {
-        return Err(anyhow::Error::new(Unavailable {
+    let bwrap = find_bwrap().ok_or_else(|| {
+        anyhow::Error::new(Unavailable {
             diagnostic: "bwrap is not on PATH".into(),
-        }));
-    }
+        })
+    })?;
     let binary = request.harness_binary.canonicalize().with_context(|| {
         format!(
             "sandbox failed to start: could not resolve {}",
@@ -335,6 +466,34 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
     let mut argv = base_argv();
     binds.argv(&mut argv);
     let env = environment.finish(&request.adapter_env);
+    // Test the complete mount/namespace setup before a Harness owns the
+    // process. Otherwise bwrap's stderr can look like an agent failure to
+    // Harnesses whose session protocol does not include launcher errors.
+    let probe = crate::process::output_until(
+        Command::new(bwrap)
+            .args(&argv)
+            .args(["--", "/bin/true"])
+            .current_dir(request.repository)
+            .envs(env.iter().map(|(name, value)| (name, value))),
+        None,
+        crate::process::Control {
+            name: "sandbox startup check",
+            interruption: crate::process::Interruption::Ordinary,
+            stop: &|child| crate::process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
+        },
+        std::time::Instant::now() + Duration::from_secs(5),
+        &|| Ok(()),
+    )
+    .map_err(|error| {
+        anyhow::Error::new(Unavailable {
+            diagnostic: format!("{error:#}"),
+        })
+    })?;
+    if !probe.status.success() {
+        return Err(anyhow::Error::new(Unavailable {
+            diagnostic: String::from_utf8_lossy(&probe.stderr).into_owned(),
+        }));
+    }
     let prefix = vec![SHELL.into(), "-c".into(), relay_script(&socat).into()];
     Ok(Prepared {
         argv,

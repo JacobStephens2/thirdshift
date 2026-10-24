@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 use support::Scenario;
 
-/// Trials run without their sandbox across the Experiment suite, so its fake
+/// Trials and Graders use the pass-through launcher across this suite, so fake
 /// Harnesses stay observable at fixed scenario paths.
 const NO_SANDBOX: [(&str, &str); 1] = [("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")];
 
@@ -16,6 +16,9 @@ mod model_graders;
 
 #[path = "experiments/rechecks.rs"]
 mod rechecks;
+
+#[path = "experiments/sandbox.rs"]
+mod sandbox;
 
 #[test]
 fn experiment_trace_contains_trials_and_graders_and_reports_arm_usage() {

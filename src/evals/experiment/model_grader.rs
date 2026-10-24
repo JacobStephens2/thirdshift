@@ -227,7 +227,7 @@ fn packet(task: &Task, results: &[(std::path::PathBuf, TrialResult)]) -> Result<
     })
 }
 
-fn blind(text: &str) -> String {
+pub(super) fn blind(text: &str) -> String {
     enum Table {
         Identities,
         KeyValue,
@@ -313,12 +313,21 @@ fn grade(grader: &Grader, directory: &Path, packet: &Packet, timeout: u64) -> Re
     fs::write(workspace.join("prompt.md"), &prompt)?;
     let choice = grader.choice();
     let adapter = choice.harness.adapter();
-    let invocation = adapter.session(&choice, None, &prompt);
+    let invocation = adapter.trial_session(&choice, None, &prompt);
+    let sandbox =
+        crate::sandbox::for_session(&choice, &grader.harness.path, &workspace, &workspace)?;
+    let mut command = match &sandbox {
+        Some(prepared) => prepared.launch().command(&invocation.args),
+        None => {
+            let mut command = Command::new(&grader.harness.path);
+            command.args(&invocation.args);
+            command
+        }
+    };
     let ended = Recording::for_trial().run(
         "model Grader",
         &choice,
-        Command::new(&grader.harness.path)
-            .args(invocation.args)
+        command
             .current_dir(&workspace)
             .stderr(fs::File::create(workspace.join("stderr"))?)
             .env("THIRDSHIFT_GRADER_PACKET", &input)

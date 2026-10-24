@@ -1,6 +1,51 @@
 use super::*;
 
 #[test]
+fn a_sandboxed_model_grader_sees_only_its_packet() {
+    if !std::process::Command::new("bwrap")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        println!("SKIPPED (sandboxed Grader): bwrap is not on PATH");
+        return;
+    }
+    let fixture = Fixture::new();
+    // Finish Trials through the pass-through launcher, leaving grading pending.
+    fs::write(fixture.scenario.path("claude-script.sh.grader"), "exit 1\n").unwrap();
+    assert_eq!(fixture.run(&[]).code, Some(1));
+    let experiment = fixture.experiment();
+    let directory = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}",
+        experiment["id"].as_str().unwrap()
+    ));
+    let grader: Value =
+        serde_json::from_slice(&fs::read(directory.join("grader.json")).unwrap()).unwrap();
+    let binary = PathBuf::from(grader["harness"]["path"].as_str().unwrap());
+    fs::write(&binary, format!(r##"#!/bin/sh
+set -eu
+test ! -r '{directory}/experiment.json'
+test ! -e '{directory}/trials'
+test ! -e '{directory}/results'
+test ! -e '{host}'
+python3 - <<'PY'
+import json, os
+packet = json.load(open(os.environ['THIRDSHIFT_GRADER_PACKET']))
+assert len(packet['trials']) == 2
+json.dump({{'scores': [dict(label=t['label'], passed=True, reason='Isolated packet.', wrong_finding=False, borderline=False) for t in packet['trials']]}}, open(os.environ['THIRDSHIFT_GRADER_SCORES'], 'w'))
+PY
+echo '{{"type":"result","subtype":"success","result":"graded"}}'
+"##, directory = directory.display(), host = fixture.scenario.launch_dir().display())).unwrap();
+    let resumed = fixture.scenario.run(&["experiment", "candidate", "--json"]);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    let completed = fixture.experiment();
+    assert_eq!(completed["state"], "completed");
+    for result in completed["results"].as_array().unwrap() {
+        assert_eq!(result["score"]["model"]["reason"], "Isolated packet.");
+    }
+}
+
+#[test]
 fn model_grader_output_stays_in_private_artifacts() {
     let fixture = Fixture::new();
     let script = fixture.scenario.path("claude-script.sh.grader");

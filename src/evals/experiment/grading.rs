@@ -1,8 +1,8 @@
 //! Combined Scores and paired suite Verdicts, kept with private Trial data.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
@@ -71,19 +71,20 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
         },
     ];
     if output.outcome != Outcome::Void {
-        for command in &task.manifest.checks {
-            let mut child = Command::new(&command[0]);
-            child.args(&command[1..]).current_dir(repository);
-            for (name, path) in [
-                (
-                    "THIRDSHIFT_TRIAL_STANDARDS_REPORT",
-                    &output.reports.standards,
-                ),
-                ("THIRDSHIFT_TRIAL_SPEC_REPORT", &output.reports.spec),
-                ("THIRDSHIFT_TRIAL_LOG", &output.log),
-            ] {
-                child.env(name, path.as_deref().unwrap_or(Path::new("")));
+        let packet = tempfile::Builder::new().prefix("grader-").tempdir()?;
+        for (source, name) in [
+            (&output.reports.standards, "standards.md"),
+            (&output.reports.spec, "spec.md"),
+        ] {
+            if let Some(source) = source {
+                fs::write(
+                    packet.path().join(name),
+                    super::model_grader::blind(&fs::read_to_string(source)?),
+                )?;
             }
+        }
+        for command in &task.manifest.checks {
+            let mut child = crate::sandbox::code_grader(repository, packet.path(), command)?;
             let result = process::output_until(
                 &mut child,
                 None,
@@ -96,6 +97,9 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
                 &|| Ok(()),
             );
             crate::interrupt::check()?;
+            if let Ok(output) = &result {
+                crate::sandbox::check_started(output)?;
+            }
             let (passed, reason) = match result {
                 Ok(result) => (
                     result.status.success(),
