@@ -203,7 +203,10 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
 pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
     let now = Local::now();
     let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
-    let items = snapshot.inbox(false, config.inbox_days);
+    // The Console shows the same groups as `status` by reading the same
+    // kept answer. Only `status` refreshes it from GitHub.
+    let kept = crate::logs::github::load(&config.logs_dir);
+    let items = snapshot.inbox(false, config.inbox_days, &kept);
     let listed: std::collections::BTreeSet<_> = items
         .iter()
         .filter_map(|item| item.command.selector())
