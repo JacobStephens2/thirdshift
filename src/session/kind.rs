@@ -7,6 +7,7 @@ use crate::logs::Stage;
 /// What a session is run as.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
+    ScoringGrader(usize),
     /// A Run's implement session, `implement`.
     Implementation,
     /// A Spec run's Spec review, `spec-review`.
@@ -32,6 +33,7 @@ impl Kind {
     /// The kind's token, in its Session log's name and progress lines.
     pub fn token(self) -> String {
         match self {
+            Self::ScoringGrader(n) => format!("scoring-grader-{n}"),
             Self::Implementation => "implement".to_string(),
             Self::SpecReview => "spec-review".to_string(),
             Self::Repair(n) => format!("repair-{n}"),
@@ -64,6 +66,7 @@ impl Kind {
             .into_iter()
             .find(|kind| kind.token() == token)
             .or_else(|| numbered("repair-").map(Kind::Repair))
+            .or_else(|| numbered("scoring-grader-").map(Kind::ScoringGrader))
             .or_else(|| numbered("security-reproduction-").map(Kind::SecurityReproduction))
     }
 }
@@ -113,6 +116,7 @@ impl Logged {
     /// `Resume`; any other Resume keeps its kind's stage.
     pub fn stage(self) -> Stage {
         match (self.kind, self.resume) {
+            (Kind::ScoringGrader(_), _) => Stage::Grading,
             (
                 Kind::Implementation
                 | Kind::SpecReview

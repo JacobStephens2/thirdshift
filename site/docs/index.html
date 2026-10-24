@@ -1112,9 +1112,9 @@ preserves existing values; it does not ask Scoring questions:</p>
 owners = []                 # GitHub users or organizations; configure before score
 sample_size = 10            # maximum sample size
 harness = &quot;claude&quot;          # Grader&#39;s Harness
-model = &quot;&quot;                  # blank uses that Harness&#39;s default
+model = &quot;&quot;                  # set an explicit Model before grading a sample
 fallback_harness = &quot;codex&quot;   # second Grader, when the first matches the Run&#39;s Model
-fallback_model = &quot;&quot;         # blank uses the second Harness&#39;s default
+fallback_model = &quot;&quot;         # set an explicit independent Model for the second pair
 </code></pre>
 <p>The sample is drawn randomly across the Harness and Model pairs in the Built-with
 lines. Each saved window records its seed and sampled pull requests, including
@@ -1130,7 +1130,25 @@ The repository contains the merge commit&#39;s files with Git metadata and
 attribution lines removed, so
 neither commit messages nor later history reach the Grader. Unavailable
 historical issue text fails the Command rather than substituting a later
-revision. Grader sessions and criterion Scores are separate work.</p>
+revision.</p>
+<p>A model Grader scores each packet in the Experiment sandbox, with the repository
+read-only. It gives five independent pass/fail Scores with reasons: Correct,
+Scoped, Tested, Honest and Standards. Honest checks only the pull request&#39;s
+claims against its diff and CI. Scores are retained on each sampled pull request,
+with the Grader&#39;s Harness and Model; local work also links to its Run&#39;s Command
+record. Both <code>scores</code> formats include these Scores.</p>
+<p>Set an explicit <code>scoring.model</code>: a blank default cannot establish that the
+Grader differs from the Run&#39;s Model. When the first Model matches the Built-with
+line (ignoring case), the second Harness/Model pair is used; if it also matches
+or is blank, grading fails without starting that Grader.</p>
+<p>A Claude plan-limit warning or rejection, or a Codex quota window at 85%, stops
+grading immediately. Completed Scores are checkpointed individually. The next
+<code>score</code> command scores the retained remainder before drawing a new window;
+completed pull requests are never graded again. Other Harnesses have no verified
+warning protocol yet. Grader sessions use bwrap and socat on Linux; if isolation
+cannot start, grading fails and the sample remains pending. As for Experiments,
+<code>THIRDSHIFT_TRIAL_NO_SANDBOX=1</code> selects the pass-through launcher for fake Harness
+tests or an explicit emergency override.</p>
 <p>The Command record and Command log live under
 <code>&lt;logs.dir&gt;/JacobStephens2/thirdshift/commands/scoring/</code>, with start and end lines
 in that repository&#39;s Activity log. The Command appears in the Inbox, can be

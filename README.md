@@ -43,7 +43,7 @@ Use `thirdshift help` for the command reference, or read [Run behavior](docs/gui
 | Architecture improvements | [Architect run](docs/guide.md#architect-runs): reviews, publishes a plan and builds it |
 | An issue marked ready | [Pickup run](docs/guide.md#pickup-runs): takes the lowest-numbered Ready issue |
 | A security audit | [Security run](docs/guide.md#security-runs): records findings privately; can fix one reproduced finding |
-| Merged factory work | [Scoring run](docs/guide.md#scoring-runs): `thirdshift score` samples it; `thirdshift scores --json` lists samples by week |
+| Merged factory work | [Scoring run](docs/guide.md#scoring-runs): `thirdshift score` samples and grades it; `thirdshift scores --json` lists samples and five criterion Scores by week |
 
 The operating system schedules Architect, Pickup and Security runs. See [scheduling](docs/guide.md#on-a-schedule), [Weeding](docs/guide.md#weeding) and [Fencing](docs/guide.md#fencing).
 

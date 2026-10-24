@@ -2,11 +2,12 @@
 
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 
@@ -19,6 +20,21 @@ pub(crate) use tree::stop;
 mod faults;
 #[cfg(test)]
 mod tests;
+
+/// The first executable file on PATH; callers decide whether to canonicalize
+/// it and how a missing program affects their command.
+pub(crate) fn find_executable(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(name))
+        .find(|path| is_executable(path))
+}
+
+pub(crate) fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
 
 /// Ordinary work stops for a recorded interrupt; completion work finishes
 /// independently without clearing the Command's recorded request.
@@ -70,10 +86,63 @@ pub(crate) fn output(
     input: Option<&[u8]>,
     control: Control<'_>,
 ) -> Result<Output> {
+    captured(command, input, control, None, &|| Ok(()))
+}
+
+/// A Trial deadline includes pipe draining and uses the same whole-tree cleanup.
+pub(crate) fn output_until(
+    command: &mut Command,
+    input: Option<&[u8]>,
+    control: Control<'_>,
+    deadline: Instant,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<Output> {
+    captured(command, input, control, Some(deadline), check)
+}
+
+#[derive(Debug)]
+pub(crate) struct TimedOut;
+
+impl std::fmt::Display for TimedOut {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Trial timed out")
+    }
+}
+
+impl std::error::Error for TimedOut {}
+
+/// No child existed: callers can distinguish launcher failure from a child
+/// that started and then failed its own work.
+#[derive(Debug)]
+pub(crate) struct NotStarted {
+    name: String,
+}
+
+impl std::fmt::Display for NotStarted {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "could not run {}", self.name)
+    }
+}
+
+impl std::error::Error for NotStarted {}
+
+fn captured(
+    command: &mut Command,
+    input: Option<&[u8]>,
+    control: Control<'_>,
+    deadline: Option<Instant>,
+    check: &dyn Fn() -> Result<()>,
+) -> Result<Output> {
     let cli = control.name.to_owned();
-    let (execution, _) = execute(command, input, control, true, move |pipe| {
-        read(pipe).with_context(|| format!("could not read {cli}'s stdout"))
-    });
+    let (execution, _) = execute(
+        command,
+        input,
+        control,
+        true,
+        deadline,
+        check,
+        move |pipe| read(pipe).with_context(|| format!("could not read {cli}'s stdout")),
+    );
     let (status, stdout, stderr) = execution?;
     Ok(Output {
         status,
@@ -89,7 +158,7 @@ pub(crate) struct Streamed<T> {
     pub state: T,
 }
 
-/// Consume stdout concurrently with prompt I/O, inheriting stderr. Preserve
+/// Consume stdout concurrently with prompt I/O and an optional deadline. Preserve
 /// state after any normal consumer return, even when execution fails. Return
 /// only after completion or whole-tree cleanup and every worker is joined.
 /// A consumer panic or any startup failure returns no state. Recorded ordinary
@@ -98,17 +167,36 @@ pub(crate) fn streaming<T: Send + 'static>(
     command: &mut Command,
     input: Option<&[u8]>,
     control: Control<'_>,
+    state: T,
+    consume: impl FnOnce(ChildStdout, &mut T) -> Result<()> + Send + 'static,
+) -> Result<Streamed<T>> {
+    streaming_until(command, input, control, None, state, consume)
+}
+
+pub(crate) fn streaming_until<T: Send + 'static>(
+    command: &mut Command,
+    input: Option<&[u8]>,
+    control: Control<'_>,
+    deadline: Option<Instant>,
     mut state: T,
     consume: impl FnOnce(ChildStdout, &mut T) -> Result<()> + Send + 'static,
 ) -> Result<Streamed<T>> {
     // One send fits without waiting for the caller, which must first finish
     // supervising and joining all workers, including on transport failure.
     let (completed, recovered) = mpsc::sync_channel(1);
-    let (execution, started) = execute(command, input, control, false, move |pipe| {
-        let result = consume(pipe, &mut state);
-        let _ = completed.send(state);
-        result
-    });
+    let (execution, started) = execute(
+        command,
+        input,
+        control,
+        false,
+        deadline,
+        &|| Ok(()),
+        move |pipe| {
+            let result = consume(pipe, &mut state);
+            let _ = completed.send(state);
+            result
+        },
+    );
     let execution = execution.map(|(status, (), _)| status);
     control.interruption.check()?;
     if !started {
@@ -126,11 +214,13 @@ fn read(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn execute<T: Send + 'static>(
+fn execute<'a, T: Send + 'static>(
     command: &mut Command,
     input: Option<&[u8]>,
-    control: Control<'_>,
+    control: Control<'a>,
     capture_stderr: bool,
+    deadline: Option<Instant>,
+    check: &'a dyn Fn() -> Result<()>,
     consume: impl FnOnce(ChildStdout) -> Result<T> + Send + 'static,
 ) -> (Result<(ExitStatus, T, Vec<u8>)>, bool) {
     let Control {
@@ -143,28 +233,32 @@ fn execute<T: Send + 'static>(
         if interruption.requested() {
             bail!("interrupted");
         }
+        check()?;
         let cli = name.to_owned();
         let (wake, awakened) = mpsc::channel();
         #[cfg(test)]
         let fault = faults::Fault::from(command);
-        let child = command
+        command
             .process_group(0)
             .stdin(if input.is_some() {
                 Stdio::piped()
             } else {
                 Stdio::null()
             })
-            .stdout(Stdio::piped())
-            .stderr(if capture_stderr {
-                Stdio::piped()
-            } else {
-                Stdio::inherit()
-            })
+            .stdout(Stdio::piped());
+        // Streaming callers can retain private stderr in a file. Otherwise a
+        // new Command's default already inherits it, as ordinary sessions do.
+        if capture_stderr {
+            command.stderr(Stdio::piped());
+        }
+        let child = command
             .spawn()
-            .with_context(|| format!("could not run {cli}"))?;
+            .with_context(|| NotStarted { name: cli.clone() })?;
         // Install ownership immediately: every fallible step after spawn is
         // covered, including pipe extraction and starting workers.
         let mut owned = Execution {
+            check,
+            deadline,
             control,
             child,
             awakened,
@@ -265,6 +359,8 @@ fn execute<T: Send + 'static>(
 }
 
 struct Execution<'a, T> {
+    check: &'a dyn Fn() -> Result<()>,
+    deadline: Option<Instant>,
     control: Control<'a>,
     child: Child,
     awakened: mpsc::Receiver<()>,
@@ -280,6 +376,13 @@ impl<T> Execution<'_, T> {
         loop {
             if self.control.interruption.requested() {
                 bail!("interrupted");
+            }
+            (self.check)()?;
+            if self
+                .deadline
+                .is_some_and(|deadline| Instant::now() >= deadline)
+            {
+                return Err(TimedOut.into());
             }
             if status.is_none() {
                 status = self
@@ -308,6 +411,7 @@ impl<T> Execution<'_, T> {
                 if self.control.interruption.requested() {
                     bail!("interrupted");
                 }
+                (self.check)()?;
                 return Ok(status);
             }
             // Worker completion (including unwind) wakes us immediately.

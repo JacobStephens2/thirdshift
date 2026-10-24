@@ -23,6 +23,7 @@ use crate::progress::{bash, shorten};
 /// Codex exits: the completed interpretation records that evidence.
 #[derive(Default)]
 pub struct CodexProgress {
+    limits: super::limits::Reader,
     events: super::events::Events,
     /// The worktree the session runs in, which Codex's stream doesn't name.
     cwd: String,
@@ -219,11 +220,22 @@ impl CodexProgress {
 }
 
 impl Decoder for CodexProgress {
+    fn set_home(&mut self, home: &Path) {
+        self.limits.set_home(home);
+    }
+
+    fn limit_records(&mut self) -> Vec<String> {
+        self.limits.records(self.session_id.as_deref(), &self.cwd)
+    }
+
     fn condense(&mut self, raw: &str) -> StreamUpdate {
         let Ok(event) = serde_json::from_str::<Value>(raw) else {
             return StreamUpdate::default();
         };
         let mut evidence = Vec::new();
+        if crate::harness::interpretation::limits::codex(&event) {
+            evidence.push(Evidence::PlanLimit);
+        }
         if event["type"] == "thread.started" {
             evidence.push(Evidence::RequestedModelFallback);
         }

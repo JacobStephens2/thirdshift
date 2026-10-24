@@ -138,6 +138,7 @@ pub enum StageName {
     SecurityReproduction,
     SecurityFixPublishing,
     Sampling,
+    Grading,
     /// A Pickup run or Security run waiting on the Run it dispatched.
     DispatchedRun,
     /// A Pickup run or Security run waiting on the Spec run it dispatched.
@@ -162,6 +163,7 @@ impl StageName {
             Self::SecurityReproduction => "Security reproduction",
             Self::SecurityFixPublishing => "Security fix publishing",
             Self::Sampling => "sampling",
+            Self::Grading => "grading",
             Self::DispatchedRun => "dispatched Run",
             Self::DispatchedSpecRun => "dispatched Spec run",
         }
@@ -206,6 +208,7 @@ impl StageName {
             Self::SecurityReproduction,
             Self::SecurityFixPublishing,
             Self::Sampling,
+            Self::Grading,
             Self::DispatchedRun,
             Self::DispatchedSpecRun,
         ]

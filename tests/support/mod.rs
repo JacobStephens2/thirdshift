@@ -880,6 +880,7 @@ test -f {root}/{COPY_REPLACED}
             // the fake gh; at 100ms the grace period holds about three reads,
             // enough for the absent state.
             .env("THIRDSHIFT_CI_GRACE_MS", "300")
+            .env("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")
             .env("THIRDSHIFT_POLL_MS", "100");
         command
     }

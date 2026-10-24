@@ -18,6 +18,10 @@ pub(crate) struct PullRequest {
     pub harness_version: Option<String>,
     pub model: String,
     pub effort: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) assessment: Option<super::grader::Assessment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_record: Option<std::path::PathBuf>,
 }
 
 impl PullRequest {
@@ -38,6 +42,8 @@ impl PullRequest {
             harness_version: built.version,
             model: built.model,
             effort: built.effort,
+            assessment: None,
+            command_record: None,
         })
     }
 }
