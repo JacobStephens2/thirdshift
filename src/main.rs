@@ -93,6 +93,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
        thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
+       thirdshift dismiss <command> [--undo] [--json]  Dismiss an Inbox row, or take it back
        thirdshift logs [--command <id>] [--json]      List this machine's logs
        thirdshift logs --file <id> [--follow]         Read a log
        thirdshift logs <command> [--session <kind>] [--follow]  Read a log; --export <dir> writes its whole Trace
@@ -197,6 +198,16 @@ fn main() -> ExitCode {
             json,
         }) => {
             return match logs::stop::stop(&command, requeue, json) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::Dismiss {
+            command,
+            undo,
+            json,
+        }) => {
+            return match logs::dismiss::dismiss(&command, undo, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
