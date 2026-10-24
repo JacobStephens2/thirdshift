@@ -17,6 +17,7 @@ mod peek;
 mod resources;
 mod restart;
 mod stop;
+mod subscription;
 mod time;
 mod watching;
 mod waterfall;

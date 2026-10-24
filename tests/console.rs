@@ -1162,6 +1162,67 @@ fn log_stream_starts_at_the_byte_offset_and_sends_only_appended_html() {
 }
 
 #[test]
+fn a_log_buffered_beyond_two_batches_streams_every_byte_without_another_change() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 81, Some("merged"), 0);
+    // More than three 256 KiB batch budgets, all written before the reader opens.
+    let log: String = (0..40_000)
+        .map(|line| format!("buffered line {line:06}\n"))
+        .collect();
+    assert!(log.len() > 3 * 256 * 1024);
+    fs::write(
+        home.path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue/81-fixture.log"),
+        &log,
+    )
+    .unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let link = console.log_link("81-fixture.log");
+    let events = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap()
+        .get(format!("{}{link}/stream/0", console.address))
+        .send()
+        .unwrap()
+        .text()
+        .expect("the stream ends after its final batch without another change");
+    let batches: Vec<Value> = events
+        .split("\n\n")
+        .filter_map(|event| event.lines().find_map(|line| line.strip_prefix("data: ")))
+        .map(|data| serde_json::from_str(data).unwrap())
+        .collect();
+    assert!(batches.len() > 3, "{} batches", batches.len());
+    let offsets: Vec<u64> = batches
+        .iter()
+        .map(|batch| batch["offset"].as_u64().unwrap())
+        .collect();
+    assert!(
+        offsets.windows(2).all(|pair| pair[0] < pair[1]),
+        "{offsets:?}"
+    );
+    assert_eq!(*offsets.last().unwrap(), log.len() as u64);
+    let done: Vec<bool> = batches
+        .iter()
+        .map(|batch| batch["done"].as_bool().unwrap())
+        .collect();
+    assert_eq!(done.iter().filter(|done| **done).count(), 1);
+    assert!(done.last().unwrap());
+    let html: String = batches
+        .iter()
+        .map(|batch| batch["html"].as_str().unwrap())
+        .collect();
+    let mut from = 0;
+    for line in 0..40_000 {
+        let marker = format!("buffered line {line:06}");
+        from += html[from..]
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{marker} missing or out of order"));
+    }
+}
+
+#[test]
 fn claude_and_codex_conversations_keep_tools_thinking_and_unknown_events() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

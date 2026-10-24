@@ -441,58 +441,68 @@ fn http_slowdown_survives_restarts_and_allowed_accounts_still_need_a_password() 
 
 #[cfg(target_os = "linux")]
 #[test]
-fn an_open_log_stream_closes_when_cli_sign_out_revokes_its_session() {
-    let home = configured();
-    assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
-    let folder = home
-        .path()
-        .join(".thirdshift/logs/acme/widgets/commands/issue");
-    let mut live = record(home.path(), 7, None, 0);
-    let path = folder.join("7-fixture.log");
-    fs::write(&path, "first line\n").unwrap();
-    live["process_id"] = json!(std::process::id());
-    let stat = fs::read_to_string("/proc/self/stat").unwrap();
-    let ticks = stat
-        .rsplit_once(") ")
-        .unwrap()
-        .1
-        .split_whitespace()
-        .nth(19)
-        .unwrap();
-    let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap();
-    live["process_start"] = json!(format!("{}:{ticks}", boot.trim()));
-    write_record(home.path(), 7, &live);
-    let console = Console::start_mode(
-        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
-        home.path(),
-        false,
-    );
-    let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
-    let inventory = get(&console, "/logs", &session).text().unwrap();
-    let link = inventory
-        .split("href=\"")
-        .skip(1)
-        .filter_map(|part| part.split_once('"'))
-        .find(|(url, _)| url.starts_with("/logs/"))
-        .unwrap()
-        .0;
-    let mut response = get(&console, &format!("{link}/stream/0"), &session);
-    assert_eq!(response.status(), 200);
-    let mut buffer = [0; 4096];
-    let first = response.read(&mut buffer).unwrap();
-    assert!(String::from_utf8_lossy(&buffer[..first]).contains("first line"));
-    assert!(
-        String::from_utf8_lossy(&buffer[..first]).contains("\"done\":false"),
-        "fixture must be a live stream"
-    );
-    assert!(cli(home.path(), &["console", "sign-out"]).status.success());
-    let mut rest = String::new();
-    response.read_to_string(&mut rest).unwrap();
-    assert!(!rest.contains("first line"));
-    assert_eq!(
-        get(&console, &format!("{link}/stream/0"), &session).status(),
-        303
-    );
+fn an_open_log_stream_closes_when_its_session_is_revoked() {
+    for revoke in ["sign-out", "password", "allowlist"] {
+        let home = configured();
+        assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+        let folder = home
+            .path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue");
+        let mut live = record(home.path(), 7, None, 0);
+        let path = folder.join("7-fixture.log");
+        fs::write(&path, "first line\n").unwrap();
+        live["process_id"] = json!(std::process::id());
+        let stat = fs::read_to_string("/proc/self/stat").unwrap();
+        let ticks = stat
+            .rsplit_once(") ")
+            .unwrap()
+            .1
+            .split_whitespace()
+            .nth(19)
+            .unwrap();
+        let boot = fs::read_to_string("/proc/sys/kernel/random/boot_id").unwrap();
+        live["process_start"] = json!(format!("{}:{ticks}", boot.trim()));
+        write_record(home.path(), 7, &live);
+        let console = Console::start_mode(
+            Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+            home.path(),
+            false,
+        );
+        let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
+        let inventory = get(&console, "/logs", &session).text().unwrap();
+        let link = inventory
+            .split("href=\"")
+            .skip(1)
+            .filter_map(|part| part.split_once('"'))
+            .find(|(url, _)| url.starts_with("/logs/"))
+            .unwrap()
+            .0;
+        let mut response = get(&console, &format!("{link}/stream/0"), &session);
+        assert_eq!(response.status(), 200);
+        let mut buffer = [0; 4096];
+        let first = response.read(&mut buffer).unwrap();
+        assert!(String::from_utf8_lossy(&buffer[..first]).contains("first line"));
+        assert!(
+            String::from_utf8_lossy(&buffer[..first]).contains("\"done\":false"),
+            "fixture must be a live stream"
+        );
+        match revoke {
+            "sign-out" => assert!(cli(home.path(), &["console", "sign-out"]).status.success()),
+            "password" => {
+                assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+            }
+            "allowlist" => allow(home.path(), false),
+            _ => unreachable!(),
+        }
+        let mut rest = String::new();
+        response.read_to_string(&mut rest).unwrap();
+        assert!(!rest.contains("first line"), "{revoke}");
+        assert_eq!(
+            get(&console, &format!("{link}/stream/0"), &session).status(),
+            303,
+            "{revoke}"
+        );
+    }
 }
 
 #[test]

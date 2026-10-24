@@ -23,6 +23,13 @@ impl Drop for Following {
     }
 }
 
+#[cfg(test)]
+impl Following {
+    pub(super) fn idle() -> Self {
+        Self(tokio::spawn(std::future::pending()))
+    }
+}
+
 pub(super) fn follow(notifier: Notifier, mut changes: Receiver) -> Following {
     Following(tokio::spawn(async move {
         let mut initial = true;

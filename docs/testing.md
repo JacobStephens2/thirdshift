@@ -59,8 +59,8 @@ For the Linux Console session-expiry regression, first build the binary, then ru
 `python3 tests/console/session-expiry.py --binary target/debug/thirdshift --settle-seconds 65`.
 It needs Python 3 and a C compiler. Its child-only clock shim advances the Console's
 wall clock by 30 days while leaving the host clock and monotonic timers unchanged.
-After one recovery interval, an open Inbox stream must close and receive no new
-Command notices. The script cleans up its private Console and compiled shim.
+After one recovery interval, open Inbox and log streams must close and receive no
+new Command notices or log lines. The script cleans up its private Console and compiled shim.
 
 ## Setup PTY child lifetime
 
