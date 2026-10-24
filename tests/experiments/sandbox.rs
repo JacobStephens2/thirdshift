@@ -2,6 +2,14 @@ use super::*;
 
 #[test]
 fn a_check_diagnostic_cannot_claim_sandbox_failure() {
+    if !std::process::Command::new("bwrap")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        println!("SKIPPED (Grader startup status): bwrap is not on PATH");
+        return;
+    }
     let fixture = fixture_with_passthrough_trials();
     set_check(
         &fixture,
