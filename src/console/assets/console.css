@@ -58,6 +58,7 @@ select { max-width: 100%; }
 body.peek-open { max-width: 1500px; display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); column-gap: 24px; }
 body.peek-open > header, body.peek-open > nav, body.peek-open > footer { grid-column: 1 / -1; }
 body.peek-open > main { grid-column: 1; }
+body.wide { max-width: none; }
 #peek { grid-column: 2; position: sticky; top: 20px; align-self: start; max-height: calc(100dvh - 40px); overflow: auto; margin-top: 16px; padding: 16px; border: 1px solid var(--rule); background: var(--panel); color: var(--text); }
 [hidden] { display: none !important; }
 dl { margin: 12px 0; overflow-wrap: anywhere; }

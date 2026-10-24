@@ -220,6 +220,22 @@ test('Stages groups runs, scrolls in both views and remembers the view at phone 
   assert.equal(await page.locator('#peek').isVisible(), false);
 });
 
+test('Stages fills a wide window, with and without the Peek open', async t => {
+  const context = await browser.newContext({ viewport: { width: 1920, height: 1000 } });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  await page.goto(`${origin}/?page=stages`);
+  // The body's 28 px padding is the only margin left on either side.
+  const right = await page.evaluate(() => document.documentElement.clientWidth - 28);
+  const scroll = await page.locator('.stage-scroll').boundingBox();
+  assert.ok(scroll.x <= 29 && scroll.x + scroll.width >= right - 1, JSON.stringify({ right, scroll }));
+  await page.locator('thead .peek-link').first().click();
+  await page.locator('#peek-content h2').waitFor();
+  const main = await page.locator('main').boundingBox();
+  const peek = await page.locator('#peek').boundingBox();
+  assert.ok(main.x <= 29 && peek.x + peek.width >= right - 1, JSON.stringify({ right, main, peek }));
+});
+
 test('Stages live insertions preserve the visible Ticket, link focus and selected view', async () => {
   for (const width of [390, 1280]) for (const view of ['all', 'repository']) for (const position of ['left', 'older']) {
     const context = await browser.newContext({ viewport: { width, height: 844 } });
