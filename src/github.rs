@@ -480,15 +480,26 @@ impl GitHub {
         let mut shaped = Vec::new();
         let mut history = ClaimHistory::NeverClaimed;
         let mut claim_generation = 0;
-        for event in &label_events {
-            let applied = match event["__typename"].as_str() {
-                Some("LabeledEvent") => true,
-                Some("UnlabeledEvent") => false,
-                other => bail!(CommandFailure::InvalidResponse(format!(
-                    "gh api graphql output has an unknown label event {other:?}"
-                ))),
-            };
-            let name = event["label"]["name"].as_str();
+        let mut label_events = label_events
+            .iter()
+            .map(|event| {
+                let applied = match event["__typename"].as_str() {
+                    Some("LabeledEvent") => true,
+                    Some("UnlabeledEvent") => false,
+                    other => bail!(CommandFailure::InvalidResponse(format!(
+                        "gh api graphql output has an unknown label event {other:?}"
+                    ))),
+                };
+                Ok((at(event)?, event["label"]["name"].as_str(), applied))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // GitHub can list one label swap in either order within a second.
+        // Replay Claims before ready labels at each timestamp, preserving the
+        // order between Claim applications and removals so a run can still
+        // release its own Claim. An active Claim cannot become a hand-back.
+        label_events
+            .sort_by_key(|(at, name, _)| (*at, name.is_some_and(|name| label.is_named(name))));
+        for (at, name, applied) in label_events {
             if applied && name.is_some_and(|name| crate::claim::IN_PROGRESS.is_named(name)) {
                 claim_generation += 1;
             }
@@ -496,7 +507,7 @@ impl GitHub {
             if applied && name.is_some_and(|name| label.is_named(name)) {
                 shaped.push(Shaped {
                     by: Shaping::Labelled,
-                    at: at(event)?,
+                    at,
                 });
             }
         }
@@ -1329,8 +1340,8 @@ pub struct Candidate {
     pub open_blockers: Vec<u64>,
     /// The latest of the changes that shape it, if its timeline has one.
     pub last_shaped: Option<Shaped>,
-    /// Complete label history records the last Claim ending, followed by a
-    /// ready-label application, with neither withdrawn or superseded.
+    /// Complete label history records the last Claim ending, with a ready-label
+    /// application at that timestamp or later, neither withdrawn nor superseded.
     pub handed_back: bool,
     /// Number of Claim applications in complete timeline order. Detects a
     /// Claim made since selection, even if it ended in the same second.
@@ -1347,9 +1358,8 @@ impl Candidate {
     }
 }
 
-/// The last Claim and whether the Day shift subsequently handed it back.
-/// Timeline order, rather than timestamp comparisons, also distinguishes
-/// consecutive GitHub label operations made within the same second.
+/// The last Claim and whether the Day shift handed it back. Claim events at a
+/// timestamp are folded before ready labels, retaining order within each label.
 enum ClaimHistory {
     NeverClaimed,
     Claimed,

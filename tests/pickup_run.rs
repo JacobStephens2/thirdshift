@@ -2410,6 +2410,28 @@ fn a_handed_back_branch_is_continued_without_losing_interrupted_work() {
 }
 
 #[test]
+fn a_same_second_hand_back_across_history_pages_continues_the_branch() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.origin_has_branch("issue-7", "main", &["Interrupted work"]);
+    let mut events = vec![(TimelineEvent::Labelled(IN_PROGRESS), 90)];
+    events.extend((0..98).map(|_| (TimelineEvent::Labelled("bug"), 65)));
+    // The ready label ends one page; the Claim removal starts the next.
+    events.extend([
+        (TimelineEvent::Labelled(READY_FOR_AGENT), 60),
+        (TimelineEvent::Unlabelled(IN_PROGRESS), 60),
+    ]);
+    scenario.issue_timeline(7, &events);
+    scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(scenario.claude_calls()[0]["branch"], "issue-7");
+    assert!(scenario.first_prompt().contains("You are continuing work"));
+}
+
+#[test]
 fn a_handed_back_open_pr_is_continued_using_its_base() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7, &[]);
@@ -2530,7 +2552,13 @@ fn started_work_requires_a_hand_back_after_the_last_claim_ended() {
         let scenario = Scenario::new();
         ready_issue(&scenario, 7, &[]);
         scenario.origin_has_branch("issue-7", "main", &["Human or interrupted work"]);
-        let events: Vec<_> = history.into_iter().map(|event| (event, 60)).collect();
+        // These histories require a ready label strictly before the Claim
+        // ends; a same-second swap is now a valid hand-back.
+        let events: Vec<_> = history
+            .into_iter()
+            .enumerate()
+            .map(|(index, event)| (event, 90 - index as i64))
+            .collect();
         scenario.issue_timeline(7, &events);
 
         let result = scenario.run(&["pickup"]);

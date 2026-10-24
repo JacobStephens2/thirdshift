@@ -72,6 +72,95 @@ fn issue() -> IssueUrl {
     IssueUrl::parse("https://github.com/acme/widgets/issues/7").unwrap()
 }
 
+fn candidate_with_history(fixture: &Fixture, events: &[Value]) -> Candidate {
+    let response = serde_json::json!({"data": {"repository": {"issue": {
+        "parent": null,
+        "subIssues": {"nodes": []},
+        "blockedBy": {"nodes": []},
+        "linked": {"nodes": []},
+        "labelled": {"nodes": events, "pageInfo": {"hasNextPage": false}}
+    }}}});
+    fixture.script(&format!("cat <<'RESPONSE'\n{response}\nRESPONSE"));
+    GitHub::new()
+        .candidate(&issue(), crate::labels::READY_FOR_AGENT)
+        .unwrap()
+}
+
+fn label_event(kind: &str, label: &str, at: &str) -> Value {
+    serde_json::json!({"__typename": kind, "label": {"name": label}, "createdAt": at})
+}
+
+#[test]
+fn a_same_second_hand_back_counts_in_either_timeline_order() {
+    with_recorded_signal(
+        "github::execution_tests::a_same_second_hand_back_counts_in_either_timeline_order",
+        |_| {
+            let fixture = Fixture::new("");
+            let claim = label_event("LabeledEvent", "in-progress", "2026-10-24T15:00:00Z");
+            let ready = label_event("LabeledEvent", "ready-for-agent", "2026-10-24T15:42:42Z");
+            let release = label_event("UnlabeledEvent", "in-progress", "2026-10-24T15:42:42Z");
+            for swap in [[ready.clone(), release.clone()], [release, ready]] {
+                let read = candidate_with_history(
+                    &fixture,
+                    &[claim.clone(), swap[0].clone(), swap[1].clone()],
+                );
+                assert!(read.handed_back, "{swap:?}");
+                assert!(!read.claimed);
+                assert_eq!(read.claim_generation, 1);
+            }
+        },
+    );
+}
+
+#[test]
+fn a_ready_label_strictly_before_claim_removal_is_not_a_hand_back() {
+    with_recorded_signal(
+        "github::execution_tests::a_ready_label_strictly_before_claim_removal_is_not_a_hand_back",
+        |_| {
+            let fixture = Fixture::new("");
+            let read = candidate_with_history(
+                &fixture,
+                &[
+                    label_event("LabeledEvent", "in-progress", "2026-10-24T15:00:00Z"),
+                    label_event("LabeledEvent", "ready-for-agent", "2026-10-24T15:42:41Z"),
+                    label_event("UnlabeledEvent", "in-progress", "2026-10-24T15:42:42Z"),
+                ],
+            );
+            assert!(!read.handed_back);
+            assert!(!read.claimed);
+            assert_eq!(read.claim_generation, 1);
+        },
+    );
+}
+
+#[test]
+fn a_same_second_claim_prevents_hand_back_in_every_timeline_order() {
+    with_recorded_signal(
+        "github::execution_tests::a_same_second_claim_prevents_hand_back_in_every_timeline_order",
+        |_| {
+            let fixture = Fixture::new("");
+            let earlier = label_event("LabeledEvent", "in-progress", "2026-10-24T15:00:00Z");
+            let claim = label_event("LabeledEvent", "IN-PROGRESS", "2026-10-24T15:42:42Z");
+            let ready = label_event("LabeledEvent", "Ready-For-Agent", "2026-10-24T15:42:42Z");
+            let release = label_event("UnlabeledEvent", "in-progress", "2026-10-24T15:42:42Z");
+            for events in [
+                vec![claim.clone(), ready.clone()],
+                vec![ready.clone(), claim.clone()],
+                vec![ready.clone(), release.clone(), claim.clone()],
+                vec![release.clone(), claim.clone(), ready.clone()],
+                vec![release, ready, claim],
+            ] {
+                let mut history = vec![earlier.clone()];
+                history.extend(events);
+                let read = candidate_with_history(&fixture, &history);
+                assert!(read.claimed, "{history:?}");
+                assert!(!read.handed_back, "{history:?}");
+                assert_eq!(read.claim_generation, 2);
+            }
+        },
+    );
+}
+
 #[test]
 fn labelled_issue_reads_include_every_page_and_exclude_pull_requests() {
     with_recorded_signal(
