@@ -264,14 +264,7 @@ fn activity_write(config: &UserConfig, repository: &str, line: &str) -> Result<(
 }
 
 pub fn dismiss(input: &str, undo: bool, json: bool) -> Result<()> {
-    let user = std::process::Command::new("id")
-        .arg("-un")
-        .output()
-        .context("could not identify the Unix user asking for dismissal")?;
-    if !user.status.success() {
-        bail!("could not identify the Unix user asking for dismissal");
-    }
-    let who = String::from_utf8(user.stdout)?.trim().to_owned();
+    let who = super::unix_user("dismissal")?;
     let change = request(
         input,
         Request {

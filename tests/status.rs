@@ -1725,6 +1725,101 @@ fn status_keeps_children_under_their_own_security_dispatch() {
 
 const GITHUB_CACHE: &str = "home/.thirdshift/logs/github-inbox.json";
 
+#[test]
+fn review_open_pr_row_exposes_when_github_observed_it() {
+    fn has_time(value: &Value) -> bool {
+        match value {
+            Value::String(text) => chrono::DateTime::parse_from_rfc3339(text).is_ok(),
+            Value::Array(values) => values.iter().any(has_time),
+            Value::Object(values) => values.values().any(has_time),
+            _ => false,
+        }
+    }
+    let scenario = Scenario::new();
+    ready_record_with_pr(&scenario, 7, &hours_ago(240), Some(7));
+    github_pr_is(&scenario, 7, "OPEN", None, None);
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let row = &status["commands"][0];
+    assert_eq!(row["group"], "ready for review", "{status}");
+    assert_eq!(row["github_state"], "open", "{row}");
+    assert!(
+        row.as_object()
+            .unwrap()
+            .iter()
+            .any(|(key, value)| { key.starts_with("github") && has_time(value) }),
+        "each row must expose when GitHub observed its facts: {row}"
+    );
+}
+
+#[test]
+fn review_github_settlement_does_not_restart_dismissal_retention() {
+    let scenario = Scenario::new();
+    failed_record(&scenario, 7, &hours_ago(240));
+    github_issue_is(&scenario, 7, "OPEN", None);
+    let first = scenario.run(&["status", "--json"]);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    let dismissed = scenario.run(&["dismiss", "widgets#7"]);
+    assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+    let sidecar = scenario.path(LOGS).join("7-fixture.command.dismiss.json");
+    let set_dismissal_age = |hours| {
+        let mut file: Value = serde_json::from_slice(&fs::read(&sidecar).unwrap()).unwrap();
+        file["rows"][0]["at"] = hours_ago(hours).into();
+        fs::write(&sidecar, serde_json::to_vec(&file).unwrap()).unwrap();
+    };
+    set_dismissal_age(144);
+    github_issue_is(&scenario, 7, "CLOSED", Some(&hours_ago(1)));
+    age_cache_file(&scenario, 360);
+    let settled = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(settled.code, Some(0), "{}", settled.stderr);
+    let settled: Value = serde_json::from_str(&settled.stdout).unwrap();
+    assert_eq!(settled["commands"][0]["group"], "resolved", "{settled}");
+    // Advance the dismissal fixture past seven days; the GitHub closure
+    // was learned while the dismissal was still retained.
+    set_dismissal_age(192);
+    let expired = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(expired.code, Some(0), "{}", expired.stderr);
+    let expired: Value = serde_json::from_str(&expired.stdout).unwrap();
+    assert_eq!(expired["commands"][0]["group"], "history", "{expired}");
+    assert!(expired["commands"][0]["dismissal"].is_object(), "{expired}");
+}
+
+#[test]
+fn review_later_start_after_end_is_found_despite_an_earlier_overlap() {
+    let scenario = Scenario::new();
+    let old_start = hours_ago(288);
+    let old_end = hours_ago(240);
+    let overlap = hours_ago(264);
+    let taken = hours_ago(12);
+    for (number, start, end, outcome) in [
+        (7, old_start.as_str(), old_end.as_str(), "failed"),
+        (8, overlap.as_str(), overlap.as_str(), "merged"),
+        (9, taken.as_str(), taken.as_str(), "merged"),
+    ] {
+        write_record(&scenario, number, start, Some(end));
+        change_record(&scenario, number, |record| {
+            record["issue"] = serde_json::json!({
+                "number": 7, "url": scenario.issue_url(7), "title": "Fixture"
+            });
+            record["outcome"] = outcome.into();
+        });
+    }
+    github_issue_is(&scenario, 7, "OPEN", None);
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let row = status["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["started_at"] == old_start)
+        .unwrap();
+    assert_eq!(row["group"], "resolved", "{status}");
+    assert_eq!(row["left_reason"], "taken up by a later Command", "{row}");
+    assert_eq!(row["left_at"], taken, "{row}");
+}
+
 fn github_pr_url(number: u64) -> String {
     format!("https://github.com/acme/widgets/pull/{number}")
 }
@@ -1857,6 +1952,13 @@ fn finding_leaves_only_after_its_last_private_record_is_triaged() {
     assert_eq!(output.code, Some(0), "{}", output.stderr);
     let status: Value = serde_json::from_str(&output.stdout).unwrap();
     assert_eq!(status["commands"][0]["group"], "needs you", "{status}");
+    let finding_answer = &status["commands"][0]["github"]["findings"];
+    assert_eq!(finding_answer["waits"][first], true);
+    assert_eq!(finding_answer["waits"][second], false);
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(finding_answer["answered_at"].as_str().unwrap())
+            .is_ok()
+    );
     gh["advisories"][0]["state"] = "closed".into();
     scenario.write_gh_state(&gh);
     age_cache_file(&scenario, 360);
@@ -2174,6 +2276,12 @@ fn closed_issue_takes_a_failed_row_into_resolved_from_its_close_time() {
     assert_eq!(row["left_from"], "needs you", "{row}");
     assert_eq!(row["left_reason"], "issue closed", "{row}");
     assert_eq!(row["left_at"], closed, "{row}");
+    let issue_answer = &row["github"]["subjects"][scenario.issue_url(7)];
+    assert_eq!(issue_answer["facts"]["closed"], true);
+    assert_eq!(issue_answer["facts"]["closed_at"], closed);
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(issue_answer["answered_at"].as_str().unwrap()).is_ok()
+    );
     let text = scenario.run(&["status"]);
     assert!(
         text.stdout
@@ -2847,6 +2955,10 @@ fn a_history_row_does_not_block_a_current_row_sharing_its_pull_request() {
     github_pr_is(&scenario, 7, "OPEN", None, None);
     let output = scenario.run(&["status", "--json"]);
     assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let first: Value = serde_json::from_str(&output.stdout).unwrap();
+    let url = github_pr_url(7);
+    let observed = first["commands"][0]["github"]["subjects"][&url]["answered_at"].clone();
+    assert!(chrono::DateTime::parse_from_rfc3339(observed.as_str().unwrap()).is_ok());
     fs::rename(
         scenario.path(LOGS).join("7-fixture.command.json"),
         scenario.path(LOGS).join("7-old.command.json"),
@@ -2877,6 +2989,8 @@ fn a_history_row_does_not_block_a_current_row_sharing_its_pull_request() {
         let history = rows.iter().find(|row| row["ended_at"] == old_end).unwrap();
         assert_eq!(history["group"], "history", "{status}");
         assert_eq!(history["github_state"], "open", "{history}");
+        assert_eq!(history["github"]["subjects"][&url]["answered_at"], observed);
+        assert_ne!(current["github"]["subjects"][&url]["answered_at"], observed);
     }
     assert_eq!(graphql_calls(&scenario).len(), 2);
 }

@@ -44,6 +44,21 @@ pub(crate) use command_record::{TicketRecord, TicketState};
 use effects::OnMachine;
 use recording::Record;
 
+/// The Unix actor recorded for a CLI action, shared by Stop and Dismissal.
+fn unix_user(action: &str) -> anyhow::Result<String> {
+    use anyhow::Context;
+
+    let failure = format!("could not identify the Unix user asking for {action}");
+    let user = std::process::Command::new("id")
+        .arg("-un")
+        .output()
+        .with_context(|| failure.clone())?;
+    if !user.status.success() {
+        anyhow::bail!(failure);
+    }
+    Ok(String::from_utf8(user.stdout)?.trim().to_owned())
+}
+
 /// Human-facing names for stable stored kinds and dispatch stages (ADR 0022).
 pub(crate) fn display_name(stored: &str) -> &str {
     match stored {

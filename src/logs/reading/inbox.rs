@@ -9,7 +9,7 @@ use serde::Serialize;
 use super::{Command, Entry, Health, Observation};
 use crate::github::{PrState, PullRequestState};
 use crate::logs::dismiss::{self, DismissalView, READY_KIND};
-use crate::logs::github::{FindingSubject, Kept, Subject};
+use crate::logs::github::{FindingSubject, Kept, RowAnswer, Subject};
 use crate::logs::stop;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -103,15 +103,9 @@ pub(in crate::logs) struct InboxItem<'a> {
     pub count: usize,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub collapsed: Vec<InboxItem<'a>>,
-    /// Which waiting group the row left, when it did so through the
-    /// later-Command exit. `None` for rows that never waited or that aged out.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub left_from: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub left_reason: Option<String>,
-    /// The later Command's start, RFC 3339: when the row stopped waiting.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub left_at: Option<String>,
+    /// A waiting group's departure, absent for rows that never waited or aged out.
+    #[serde(flatten)]
+    departure: Option<Departure>,
     /// What GitHub last showed for the row's pull request: `open`,
     /// `merged` or `closed`. `None` where GitHub speaks for no row: one
     /// with no pull request, one not read yet, or one GitHub can't resolve.
@@ -121,10 +115,36 @@ pub(in crate::logs) struct InboxItem<'a> {
     /// closed row: when the row stopped waiting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub github_at: Option<String>,
+    /// The row's own or dispatched issue/PR facts, finding waits and the
+    /// time each was read. History retains its own observation times.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub github: Option<RowAnswer>,
     /// Who dismissed the row, when, from where and all kinds covered.
     /// `None` while the row waits or was never dismissed for its kind.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dismissal: Option<DismissalView>,
+}
+
+#[derive(Serialize)]
+struct Departure {
+    left_from: String,
+    left_reason: String,
+    left_at: String,
+}
+
+impl Departure {
+    fn line(&self) -> String {
+        let Self {
+            left_from,
+            left_reason,
+            left_at,
+        } = self;
+        if left_reason == TAKEN_UP_REASON {
+            format!("left {left_from}: {left_reason} started at {left_at}")
+        } else {
+            format!("left {left_from}: {left_reason} at {left_at}")
+        }
+    }
 }
 
 impl InboxItem<'_> {
@@ -136,13 +156,7 @@ impl InboxItem<'_> {
     /// `status` text and the Console row. `None` while it still waits or
     /// never waited.
     pub(in crate::logs) fn left_line(&self) -> Option<String> {
-        match (&self.left_from, &self.left_reason, &self.left_at) {
-            (Some(from), Some(reason), Some(at)) if reason == TAKEN_UP_REASON => {
-                Some(format!("left {from}: {reason} started at {at}"))
-            }
-            (Some(from), Some(reason), Some(at)) => Some(format!("left {from}: {reason} at {at}")),
-            _ => None,
-        }
+        self.departure.as_ref().map(Departure::line)
     }
 
     pub(in crate::logs) fn github_urls(&self) -> Vec<&str> {
@@ -267,7 +281,7 @@ pub(super) fn next_change(
             // A row taken up by a later Command stays in Resolved until
             // inbox.days after that Command started, so its new boundary
             // wakes open pages too.
-            let taken_up = superseded_at(starts, &starts_by_issue)
+            let taken_up = superseded_at(starts, &starts_by_issue, ended)
                 .and_then(|at| at.checked_add_signed(chrono::Duration::days(days)));
             // GitHub departures stay in Resolved for inbox.days from settlement.
             let github_moved = github_left(&observation, github, ended)
@@ -428,12 +442,7 @@ pub(super) fn list<'a>(
         // row that ages out keeps going straight to History.
         let waited = problem.is_some() || facts.ready;
         let taken_up = if waited {
-            superseded_at(starts, &starts_by_issue).filter(|taken| {
-                // The exit only ends a wait that had already started: the
-                // later Command must have started at or after this row
-                // ended. A row superseded while still live never waited.
-                ended.is_none_or(|end| *taken >= end)
-            })
+            superseded_at(starts, &starts_by_issue, ended)
         } else {
             None
         };
@@ -494,6 +503,14 @@ pub(super) fn list<'a>(
         // The later-Command exit wins where both apply. Reopening brings back only a row
         // still in Done or Resolved: History rows are not read again.
         let github_moved = github_moved.filter(|_| from.is_some());
+        // A dismissal already dealt with the row. Later GitHub facts or
+        // Commands may change its context, but cannot restart its retention.
+        let resolved_at = if dismissed {
+            dismissed_at
+        } else {
+            left.or_else(|| github_moved.as_ref().map(|(_, at)| *at))
+                .or(ended)
+        };
         let group = if needs_you_kind.is_some() {
             Group::NeedsYou
         } else if facts.ready && held && github_moved.is_none() && !dismissed {
@@ -504,16 +521,8 @@ pub(super) fn list<'a>(
             Group::Working
         } else if ended.is_some_and(|time| time >= now - chrono::Duration::days(1)) {
             Group::Done
-        } else if (github_moved.is_none()
-            && ended.is_some_and(|time| cutoff.is_none_or(|cutoff| time >= cutoff)))
-            || left.is_some_and(|taken| {
-                cutoff.is_none_or(|cutoff| taken.with_timezone(&Local) >= cutoff)
-            })
-            || github_moved.as_ref().is_some_and(|(_, at)| {
-                cutoff.is_none_or(|cutoff| at.with_timezone(&Local) >= cutoff)
-            })
-            || dismissed_at
-                .is_some_and(|at| cutoff.is_none_or(|cutoff| at.with_timezone(&Local) >= cutoff))
+        } else if resolved_at
+            .is_some_and(|at| cutoff.is_none_or(|cutoff| at.with_timezone(&Local) >= cutoff))
         {
             Group::Resolved
         } else {
@@ -534,13 +543,16 @@ pub(super) fn list<'a>(
                 stopping,
                 count: 1,
                 collapsed: Vec::new(),
-                left_from: departure
-                    .as_ref()
-                    .map(|_| from.expect("departed rows waited").to_string()),
-                left_reason: departure.as_ref().map(|(reason, _)| reason.clone()),
-                left_at: departure.as_ref().map(|(_, at)| at.to_rfc3339()),
+                departure: departure.map(|(reason, at)| Departure {
+                    left_from: from.expect("departed rows waited").to_string(),
+                    left_reason: reason,
+                    left_at: at.to_rfc3339(),
+                }),
                 github_state: state.map(|state| state.state.to_string()),
                 github_at: state.and_then(event_time).map(str::to_string),
+                github: command
+                    .selector()
+                    .and_then(|row| github.row_answer(&row, github_urls(command))),
                 dismissal,
             });
         }
@@ -808,17 +820,22 @@ fn all_starts(
     all
 }
 
-/// The earliest start on any of this row's issues after its own start:
-/// when a later Command took it up. `None` when no later Command started.
+/// The earliest later start after this row began waiting. An overlapping
+/// Command cannot take up its ended work or hide a subsequent start that can.
 fn superseded_at(
     starts: &BTreeMap<(String, u64), DateTime<FixedOffset>>,
     all: &BTreeMap<(String, u64), Vec<DateTime<FixedOffset>>>,
+    ended: Option<DateTime<FixedOffset>>,
 ) -> Option<DateTime<FixedOffset>> {
     starts
         .iter()
         .filter_map(|(issue, start)| {
-            all.get(issue)
-                .and_then(|times| times.iter().find(|time| **time > *start).copied())
+            all.get(issue).and_then(|times| {
+                times
+                    .iter()
+                    .find(|time| **time > *start && ended.is_none_or(|end| **time >= end))
+                    .copied()
+            })
         })
         .min()
 }

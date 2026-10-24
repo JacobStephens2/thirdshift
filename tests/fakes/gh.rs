@@ -2039,7 +2039,7 @@ fn graphql(state: &Json, args: &[&str]) {
     if (query.contains("pullRequest(number:") || query.contains("issue(number:"))
         && query.contains("rateLimit")
     {
-        pull_requests(state, &query);
+        inbox_states(state, &query);
         return;
     }
     let asks_for = |fields: &[&str]| fields.iter().all(|field| query.contains(field));
@@ -2105,7 +2105,7 @@ fn graphql(state: &Json, args: &[&str]) {
 /// repository(owner: "owner", name: "repo") { issue/pullRequest(number: n) { ... }
 /// }` entry per subject, answered alias by alias with the query's own
 /// `rateLimit`.
-fn pull_requests(state: &Json, query: &str) {
+fn inbox_states(state: &Json, query: &str) {
     let mut data: Vec<(String, Json)> = Vec::new();
     let mut errors = Vec::new();
     let mut rest = query;
@@ -2139,7 +2139,7 @@ fn pull_requests(state: &Json, query: &str) {
                 format!("{owner}/{name}").eq_ignore_ascii_case(state.at("repo").str())
             })
         });
-        let pull = same_repo
+        let item = same_repo
             .then(|| {
                 if field == "issue" {
                     return state.at("issues").get(number).map(|issue_state| {
@@ -2175,17 +2175,17 @@ fn pull_requests(state: &Json, query: &str) {
                     })
             })
             .flatten();
-        if pull.is_none() {
+        if item.is_none() {
             errors.push(object([
                 ("type", string("NOT_FOUND")),
                 ("path", Json::Array(vec![string(&alias), string(field)])),
                 (
                     "message",
-                    string(format!("Could not resolve pull request {number}.")),
+                    string(format!("Could not resolve {field} {number}.")),
                 ),
             ]));
         }
-        data.push((alias, object([(field, pull.unwrap_or(Null))])));
+        data.push((alias, object([(field, item.unwrap_or(Null))])));
     }
     if data.is_empty() {
         die("fake gh: batched pull request query names no repository", 2);

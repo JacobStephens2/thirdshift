@@ -67,15 +67,8 @@ fn require_live(record: &CommandRecord) -> Result<()> {
 }
 
 pub fn stop(input: &str, requeue: bool, json: bool) -> Result<()> {
-    let user = std::process::Command::new("id")
-        .arg("-un")
-        .output()
-        .context("could not identify the Unix user asking for Stop")?;
-    if !user.status.success() {
-        bail!("could not identify the Unix user asking for Stop");
-    }
     let request = Request {
-        who: String::from_utf8(user.stdout)?.trim().to_owned(),
+        who: super::unix_user("Stop")?,
         requeue,
         from_console: false,
     };

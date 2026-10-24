@@ -54,6 +54,10 @@ struct File {
     history: BTreeMap<String, Option<InboxState>>,
     #[serde(default)]
     findings: BTreeMap<String, Findings>,
+    /// Observation times are separate from facts: an unchanged read must
+    /// refresh these without waking every open Inbox.
+    #[serde(default)]
+    answered_at: BTreeMap<String, String>,
     #[serde(default)]
     failure: Option<String>,
     #[serde(default)]
@@ -73,13 +77,69 @@ pub struct Kept {
     states: BTreeMap<String, Option<InboxState>>,
     history: BTreeMap<String, Option<InboxState>>,
     findings: BTreeMap<String, Findings>,
+    answered_at: BTreeMap<String, String>,
     pub age: Option<Duration>,
     last_answered: Option<DateTime<Utc>>,
     pub failure: Option<String>,
     quotas: Option<Quotas>,
 }
 
+/// The exact kept facts for a row, including dispatched work and private
+/// finding waits, without exposing any private write-up.
+#[derive(Serialize)]
+pub(super) struct RowAnswer {
+    subjects: BTreeMap<String, SubjectAnswer>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    findings: Option<FindingAnswer>,
+}
+
+#[derive(Serialize)]
+struct SubjectAnswer {
+    facts: Option<InboxState>,
+    answered_at: Option<String>,
+}
+
+#[derive(Serialize)]
+struct FindingAnswer {
+    #[serde(flatten)]
+    facts: Findings,
+    answered_at: Option<String>,
+}
+
 impl Kept {
+    pub(super) fn row_answer(&self, row: &str, urls: Vec<&str>) -> Option<RowAnswer> {
+        let subjects: BTreeMap<_, _> = urls
+            .into_iter()
+            .filter_map(|url| {
+                let key = self.subject_key(row, url);
+                let facts = self.history.get(&key).or_else(|| self.states.get(url))?;
+                Some((
+                    url.to_owned(),
+                    SubjectAnswer {
+                        facts: facts.clone(),
+                        answered_at: self.answered_at.get(&key).cloned(),
+                    },
+                ))
+            })
+            .collect();
+        let findings = self.findings.get(row).map(|facts| FindingAnswer {
+            facts: facts.clone(),
+            answered_at: self.answered_at.get(row).cloned(),
+        });
+        (!subjects.is_empty() || findings.is_some()).then_some(RowAnswer { subjects, findings })
+    }
+
+    fn subject_key(&self, row: &str, url: &str) -> String {
+        let key = format!("{row}::{url}");
+        if self.history.contains_key(&key) {
+            key
+        } else if self.history.contains_key(row) {
+            row.to_owned()
+        } else {
+            url.to_owned()
+        }
+    }
+
     pub(super) fn findings(&self, row: &str) -> Option<&Findings> {
         self.findings.get(row)
     }
@@ -117,8 +177,7 @@ impl Kept {
 
     fn state(&self, row: &str, url: &str) -> Option<&InboxState> {
         self.history
-            .get(&format!("{row}::{url}"))
-            .or_else(|| self.history.get(row))
+            .get(&self.subject_key(row, url))
             .or_else(|| self.states.get(url))
             .and_then(Option::as_ref)
     }
@@ -149,9 +208,11 @@ impl Kept {
     /// issue or pull request. The selector distinguishes continuations and dispatches.
     pub fn freeze(&mut self, row: String, url: &str) {
         if let Some(state) = self.states.get(url) {
-            self.history
-                .entry(format!("{row}::{url}"))
-                .or_insert_with(|| state.clone());
+            let key = format!("{row}::{url}");
+            if let Some(at) = self.answered_at.get(url).cloned() {
+                self.answered_at.entry(key.clone()).or_insert(at);
+            }
+            self.history.entry(key).or_insert_with(|| state.clone());
         }
     }
 }
@@ -202,6 +263,7 @@ pub fn load(logs_dir: &Path) -> Kept {
                 states: file.subjects,
                 history: file.history,
                 findings: file.findings,
+                answered_at: file.answered_at,
                 age: modified.and_then(|at| at.elapsed().ok()),
                 last_answered: modified.map(DateTime::from),
                 failure: file.failure,
@@ -292,6 +354,7 @@ pub(super) fn refresh(
         let urls: Vec<_> = chunk.iter().map(|subject| subject.url.clone()).collect();
         match github.inbox_states(&urls) {
             Ok((states, quota)) => {
+                let answered_at = Utc::now().to_rfc3339();
                 for subject in chunk {
                     let url = &subject.url;
                     let mut state = states.get(url).cloned();
@@ -311,6 +374,7 @@ pub(super) fn refresh(
                         .or_else(|| Some(Utc::now().to_rfc3339()));
                     }
                     kept.states.insert(url.clone(), state);
+                    kept.answered_at.insert(url.clone(), answered_at.clone());
                 }
                 kept.quotas
                     .as_mut()
@@ -364,6 +428,8 @@ pub(super) fn refresh(
                             .and_then(|previous| previous.triaged_at.clone())
                             .or_else(|| Some(Utc::now().to_rfc3339()));
                     }
+                    kept.answered_at
+                        .insert(subject.row.clone(), Utc::now().to_rfc3339());
                     kept.findings.insert(subject.row, facts);
                 }
                 answered = true;
@@ -407,6 +473,7 @@ fn save(logs_dir: &Path, kept: &Kept, answered: bool) -> Result<()> {
         subjects: kept.states.clone(),
         history: kept.history.clone(),
         findings: kept.findings.clone(),
+        answered_at: kept.answered_at.clone(),
         failure: kept.failure.clone(),
         quotas: kept.quotas.clone(),
         warning: kept.warning(),
