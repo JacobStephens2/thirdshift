@@ -1538,7 +1538,10 @@ cargo test
 Before pushing anything, the release script runs `thirdshift experiment
 --release <commit>` using this checkout's runner and private Eval suites.
 It evaluates the content commit beneath the version-only bump, so reruns use
-the same Experiment even before a bump branch exists. A pass carries on;
+the same Experiment even before a bump branch exists. It pins that commit in a
+local Git ref before starting, so a merge to `main` during interruption does
+not change the Candidate on restart. The pin is removed after the branch push,
+when the pushed bump retains the selection. A pass carries on;
 a fail or inconclusive Verdict shows each suite's accuracy and wrong-finding
 intervals and asks `release anyway? [y/N]`, including without `--review`.
 Only `y` or `yes` continues; EOF or any other answer stops. Pending borderline

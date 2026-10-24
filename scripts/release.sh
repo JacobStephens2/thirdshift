@@ -43,6 +43,8 @@
 # its merge base, or it is refused before merging or tagging.
 # A pushed branch is checked against the same release Experiment before its
 # PR is opened. A release already tagged only resumes the release workflow.
+# Before the branch exists, a local Git ref pins the content commit so a
+# restart keeps the same Candidate even if main advances during interruption.
 #
 # Prints a progress line on stderr for each step, with the release workflow
 # run's URL once it waits for that run, and the GitHub Release's URL last.
@@ -91,6 +93,7 @@ main() {
 			commit_bump
 			write_summary "nothing was pushed"
 			git push --quiet origin "$head:refs/heads/$branch"
+			git update-ref -d "refs/thirdshift/release-candidates/$version"
 		else
 			progress "resuming: $branch is on origin at ${head:0:7} with no PR"
 			validate_bump_pr
@@ -209,11 +212,18 @@ finish_if_tagged() {
 }
 
 # commit_bump
-# Refuses a release that can't be cut, then commits the version bump on main
-# in a temporary worktree and sets head to it.
+# Selects and saves main's checked content commit, or reuses that selection
+# after interruption, then commits the bump in a worktree and sets head to it.
 commit_bump() {
-	local base
-	base=$(check_can_release "$version" "$tag")
+	local base candidate_ref=refs/thirdshift/release-candidates/$version
+	if is_plain_version "$version" && base=$(git rev-parse --quiet --verify "$candidate_ref^{commit}"); then
+		progress "resuming release Experiment from saved content commit ${base:0:7}"
+	else
+		base=$(check_can_release "$version" "$tag")
+		# Keep the selection even if the Experiment is interrupted before a
+		# branch exists. The empty old value refuses a competing selection.
+		git update-ref "$candidate_ref" "$base" ''
+	fi
 	# The content commit is stable across interruptions before the push;
 	# the version-only bump made below adds no Eval suite dependencies.
 	wait_for_experiment "$base"

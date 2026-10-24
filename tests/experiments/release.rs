@@ -42,11 +42,11 @@ fn release_without_a_touched_suite_needs_no_experiment() {
     let result: Value = serde_json::from_str(&run.stdout).unwrap();
     assert_eq!(result["release_skip"], "no_suites");
     assert!(fixture.trial_calls().is_empty());
-    assert!(
-        !fixture
-            .scenario
-            .path("home/.thirdshift/evals/experiments")
-            .exists()
+    let listed = fixture.scenario.run(&["experiments", "--json"]);
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    assert_eq!(
+        serde_json::from_str::<Value>(&listed.stdout).unwrap(),
+        json!([])
     );
 }
 

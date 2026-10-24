@@ -169,3 +169,40 @@ fn skipped_experiments_carry_on_with_a_note() {
         assert!(release.origin_tag("v0.2.0").is_some());
     }
 }
+
+#[test]
+fn interrupted_release_before_push_keeps_its_experiment_when_main_moves() {
+    let release = Release::new();
+    let candidate = release.origin(&["rev-parse", "main"]);
+    let before = release.origin_refs();
+
+    // Stand in for an Experiment interrupted before any release branch exists.
+    cargo_reports(&release, &[json!(1)]);
+    let interrupted = release.run_script("0.2.0");
+    assert!(!interrupted.status.success(), "{}", stderr(&interrupted));
+    assert_eq!(release.origin_refs(), before);
+    assert!(!release.origin_branch("release-0.2.0"));
+
+    release.merge_pr(
+        "arrived-during-pause",
+        "Merge during release interruption",
+        "",
+    );
+    release.main_ci("completed", "success");
+    assert_ne!(release.origin(&["rev-parse", "main"]), candidate);
+
+    // Stop again at the Experiment call so later release steps cannot interfere.
+    cargo_reports(&release, &[json!(1)]);
+    let resumed = release.run_script("0.2.0");
+    assert!(!resumed.status.success(), "{}", stderr(&resumed));
+    let checked = calls(&release);
+    assert_eq!(checked.len(), 2);
+    assert_eq!(
+        checked[0]["args"],
+        json!(["experiment", "--release", candidate, "--json"])
+    );
+    assert_eq!(
+        checked[1]["args"], checked[0]["args"],
+        "resuming the same release must resume its original Experiment"
+    );
+}

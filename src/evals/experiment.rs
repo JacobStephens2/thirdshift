@@ -136,19 +136,20 @@ pub fn run(options: Options) -> Result<()> {
     let repository = std::env::current_dir()?;
     let git = Git::new(&repository);
     let candidate = resolve(&git, &options.candidate)?;
-    let baseline = match &options.baseline {
-        None if options.release => resolve(
-            &git,
-            &git.run(&[
-                "--no-replace-objects",
-                "describe",
-                "--tags",
-                "--abbrev=0",
-                "--match",
-                "v[0-9]*",
-                &candidate,
-            ])?,
-        )?,
+    let baseline_reference = if options.release {
+        Some(git.run(&[
+            "--no-replace-objects",
+            "describe",
+            "--tags",
+            "--abbrev=0",
+            "--match",
+            "v[0-9]*",
+            &candidate,
+        ])?)
+    } else {
+        options.baseline.clone()
+    };
+    let baseline = match &baseline_reference {
         Some(reference) => resolve(&git, reference)?,
         None => git.run(&["--no-replace-objects", "merge-base", "main", &candidate])?,
     };
@@ -183,14 +184,7 @@ pub fn run(options: Options) -> Result<()> {
         "no Eval suites selected; use --suite for a defaults-only Experiment"
     );
     if options.release && !release::supports_trials(&repository, &root, &baseline)? {
-        let tag = git.run(&[
-            "describe",
-            "--tags",
-            "--abbrev=0",
-            "--match",
-            "v[0-9]*",
-            &candidate,
-        ])?;
+        let tag = baseline_reference.as_deref().expect("release Baseline tag");
         return release::skip(
             "baseline_without_trial",
             &format!("last release {tag} has no Trial flag; carrying on without an Experiment"),
