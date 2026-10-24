@@ -143,11 +143,39 @@ fn copy_repository(source: &Path, destination: &Path) -> Result<()> {
             copy_repository(&entry.path(), &target)?;
         } else if kind.is_symlink() {
             std::os::unix::fs::symlink(fs::read_link(entry.path())?, &target)?;
-        } else {
+        } else if kind.is_file() {
             fs::copy(entry.path(), target)?;
         }
+        // Skip sockets, FIFOs, devices and other special files: Trial
+        // sessions leave them behind, and no check can use them once the
+        // Trial's servers are gone. Copying them would fail the whole
+        // Experiment over one Trial's ordinary leftovers.
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Trial sessions leave sockets and FIFOs behind (dev servers, shell
+    /// fixtures). Copying one into the Grader snapshot must not fail the
+    /// whole Experiment over files no check can use once the Trial is gone.
+    #[test]
+    fn grader_snapshot_skips_special_files() {
+        let root = tempfile::TempDir::new().unwrap();
+        let source = root.path().join("repository");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("main.rs"), "ok\n").unwrap();
+        let _socket = std::os::unix::net::UnixListener::bind(source.join("server.sock")).unwrap();
+        let destination = root.path().join("snapshot");
+        copy_repository(&source, &destination).unwrap();
+        assert_eq!(
+            fs::read_to_string(destination.join("main.rs")).unwrap(),
+            "ok\n"
+        );
+        assert!(!destination.join("server.sock").exists());
+    }
 }
 
 #[derive(Serialize, Deserialize)]
