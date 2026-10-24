@@ -681,12 +681,13 @@ fn github_left(
     if observation.facts().state == "live" {
         return None;
     }
+    let settled_work = github_work_left(observation, github, ended);
     let finding_row = observation.problem() == Some(NeedsYouKind::Finding)
         || (observation.problem() == Some(NeedsYouKind::Failed)
             && matches!(observation, Observation::Record(command) if command.record.security_findings_waiting
-                && observation.selector().and_then(|row| dismiss::covering(&command.record_path, &row))
+                && (settled_work.is_some() || observation.selector().and_then(|row| dismiss::covering(&command.record_path, &row))
                     .is_some_and(|row| row.covers(NeedsYouKind::Failed.title())
-                        && !row.covers(NeedsYouKind::Finding.title()))));
+                        && !row.covers(NeedsYouKind::Finding.title())))));
     if finding_row
         && let Some(at) = observation
             .selector()
@@ -695,6 +696,16 @@ fn github_left(
     {
         return Some(("findings triaged".to_string(), at));
     }
+    settled_work
+}
+
+/// Settlement of the Command's own or dispatched work, independently of
+/// any other findings that its Security audit left waiting.
+fn github_work_left(
+    observation: &Observation<'_>,
+    github: &Kept,
+    ended: Option<DateTime<FixedOffset>>,
+) -> Option<(String, DateTime<FixedOffset>)> {
     if observation.problem().is_some() {
         let row = observation.selector()?;
         let departures = github_records(*observation)

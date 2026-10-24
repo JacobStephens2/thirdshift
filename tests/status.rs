@@ -2082,6 +2082,49 @@ fn review_graphql_failure_survives_successful_finding_list() {
 }
 
 #[test]
+fn finding_exposed_by_a_settled_failed_fix_leaves_from_its_own_triage_time() {
+    let scenario = Scenario::new();
+    failed_record(&scenario, 8, &hours_ago(240));
+    scenario.waiting_security_finding();
+    let dispatched: Value = serde_json::from_slice(
+        &fs::read(scenario.path(LOGS).join("8-fixture.command.json")).unwrap(),
+    )
+    .unwrap();
+    change_record(&scenario, 8, |record| {
+        record["kind"] = "Security run".into();
+        record["issue"] = Value::Null;
+        record["security_findings_waiting"] = true.into();
+        record["dispatched"] = vec![dispatched].into();
+    });
+    github_issue_is(&scenario, 8, "CLOSED", Some(&hours_ago(216)));
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let row = status["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "Security run")
+        .unwrap();
+    assert_eq!(row["needs_you_kind"], "finding", "{status}");
+    let mut gh = scenario.gh_state();
+    gh["advisories"][0]["state"] = "closed".into();
+    scenario.write_gh_state(&gh);
+    age_cache_file(&scenario, 360);
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let row = status["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "Security run")
+        .unwrap();
+    assert_eq!(row["left_reason"], "findings triaged", "{status}");
+    assert_eq!(row["group"], "resolved", "{status}");
+}
+
+#[test]
 fn closed_issue_takes_a_failed_row_into_resolved_from_its_close_time() {
     let scenario = Scenario::new();
     let closed = hours_ago(1);
