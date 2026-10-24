@@ -67,6 +67,7 @@ enum View {
     Experiments,
     Experiment,
     ExperimentSession,
+    ApproveEvalTask,
     CronJobs,
     Inbox,
     Inspect,
@@ -94,6 +95,12 @@ enum View {
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/experiments/proposals/{suite}/{task}/approve",
+        cli: &["thirdshift evals approve suite task --json"],
+        method: Method::POST,
+        view: View::ApproveEvalTask,
+    },
     PageRoute {
         path: "/experiments/{id}/sessions/{session}",
         cli: &["thirdshift experiments id --session session"],
@@ -372,6 +379,7 @@ fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Route
             (View::Experiments, Method::GET) => get(experiments::index),
             (View::Experiment, Method::GET) => get(experiments::detail),
             (View::ExperimentSession, Method::GET) => get(experiments::session),
+            (View::ApproveEvalTask, Method::POST) => post(experiments::approve),
             (View::CronJobs, Method::GET) => get(cronjobs::show),
             (View::Inbox, Method::GET) => get(move |query| inbox(cli, path, query)),
             (View::Inspect, Method::GET) => get(inspect),

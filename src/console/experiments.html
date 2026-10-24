@@ -3,6 +3,19 @@
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ title }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><link rel="stylesheet" href="/assets/experiments.css"><script src="/assets/vendor/idiomorph-0.7.4.min.js" defer></script><script src="/assets/console.js" type="module"></script><script src="/assets/experiments.js" type="module"></script></head>
 <body>{% include "console/header.html" %}{% include "console/nav.html" %}
 {# html is produced only by the escaping Experiment renderer. #}
-<main id="experiments">{{ html|safe }}</main>
+<main id="experiments">{{ html|safe }}
+{% if !proposals.is_empty() %}
+<section id="experiment-proposals" aria-labelledby="proposals-title">
+<h2 id="proposals-title">Proposed Eval tasks</h2>
+<p>Approval adds an Eval task to its suite for future Experiments. It starts no work and leaves existing Experiments' fixed inputs intact.</p>
+<ul>{% for proposal in proposals %}
+<li><form method="post" action="/experiments/proposals/{{ proposal.suite }}/{{ proposal.task }}/approve">
+<input type="hidden" name="csrf" value="{{ csrf }}">
+<span>{{ proposal.suite }} / {{ proposal.task }}</span>
+<button type="submit" aria-label="Approve {{ proposal.suite }} / {{ proposal.task }}">Approve</button>
+</form></li>
+{% endfor %}</ul>
+</section>
+{% endif %}</main>
 <p id="experiment-live-status" role="status"></p>
 {% include "console/chrome.html" %}</body></html>

@@ -59,16 +59,16 @@ impl Manifest {
 
 #[derive(Serialize)]
 pub(super) struct Suite {
-    name: String,
+    pub(super) name: String,
     trials_per_arm: NonZeroUsize,
     dependencies: Dependencies,
-    tasks: Vec<Entry>,
+    pub(super) tasks: Vec<Entry>,
 }
 
 #[derive(Serialize)]
-struct Entry {
-    name: String,
-    state: State,
+pub(super) struct Entry {
+    pub(super) name: String,
+    pub(super) state: State,
     session: Session,
 }
 

@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
+pub(crate) mod approval;
 mod arms;
 pub(crate) mod experiment;
 mod format;
@@ -14,6 +15,10 @@ mod suite;
 pub enum Action {
     List,
     ImportReplays,
+    Approve {
+        suite: String,
+        task: String,
+    },
     Touched(Vec<String>),
     Prepare {
         suite: String,
@@ -33,6 +38,17 @@ pub enum Action {
 
 pub fn parse(args: &[String]) -> Result<Action> {
     match args {
+        [action, suite, task] if action == "approve" => {
+            format::name(suite)?;
+            format::name(task)?;
+            Ok(Action::Approve {
+                suite: suite.clone(),
+                task: task.clone(),
+            })
+        }
+        [action, suite, task, flag] if action == "approve" && flag == "--json" => {
+            parse(&[action.clone(), suite.clone(), task.clone()])
+        }
         [action] if action == "list" => Ok(Action::List),
         [action] if action == "import-replays" => Ok(Action::ImportReplays),
         [action, paths @ ..] if action == "touched" => {
@@ -74,7 +90,7 @@ pub fn parse(args: &[String]) -> Result<Action> {
             record: record.into(),
         }),
         _ => bail!(
-            "usage: thirdshift evals list | import-replays | touched [<path>...] | prepare <suite> <task> <destination> | verify <repository> <base> | prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>"
+            "usage: thirdshift evals list | approve <suite> <task> [--json] | import-replays | touched [<path>...] | prepare <suite> <task> <destination> | verify <repository> <base> | prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>"
         ),
     }
 }
@@ -82,6 +98,9 @@ pub fn parse(args: &[String]) -> Result<Action> {
 pub fn execute(action: Action) -> Result<String> {
     let root = crate::config::home()?.join(".thirdshift/evals/suites");
     match action {
+        Action::Approve { suite, task } => Ok(serde_json::to_string_pretty(&approval::approve(
+            &suite, &task,
+        )?)?),
         Action::List => Ok(serde_json::to_string_pretty(&suite::list(&root)?)?),
         Action::ImportReplays => Ok(serde_json::to_string(&import::replays(
             &crate::config::home()?,

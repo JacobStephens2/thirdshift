@@ -385,6 +385,7 @@ thirdshift secure base &lt;branch&gt;     # do that with &lt;branch&gt; as the B
 thirdshift email-test [&lt;address&gt;]   # send a test email through Resend (see Email)
 thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
 thirdshift evals list               # list private Eval suites and approved/proposed Eval tasks
+thirdshift evals approve &lt;suite&gt; &lt;task&gt; [--json]  # approve a proposed Eval task in its suite
 thirdshift evals import-replays     # import #429&#39;s private manifests and grading files once
 thirdshift evals touched &lt;path&gt;...  # select suites from their declared source dependencies
 thirdshift evals prepare &lt;suite&gt; &lt;task&gt; &lt;destination&gt;  # prepare a throwaway repository at its base
@@ -405,7 +406,12 @@ thirdshift help                     # print a compact command and option referen
 <p>Eval suites live privately under <code>~/.thirdshift/evals/suites/&lt;suite&gt;/</code>. Their
 manifests declare Factory skill, Session prompt and Harness, Model and Effort
 default dependencies, plus Trials per Arm. <code>evals touched</code> selects suites from
-those declarations. <code>evals list</code> includes proposed Eval tasks, while <code>evals prepare</code> refuses them until approved. Preparation keeps only base history, applies
+those declarations. <code>evals list</code> includes proposed Eval tasks, while <code>evals prepare</code> refuses them until approved. <code>evals approve &lt;suite&gt; &lt;task&gt; [--json]</code>
+approves one in its suite without changing its inputs or starting work. The
+Console offers the same action under Proposed Eval tasks on the Experiments
+list and, for its suites, on an Experiment page. Approval affects future
+Experiments; existing Experiments keep their fixed Eval tasks when resumed.
+Preparation keeps only base history, applies
 the change under review without its commit objects, and gives Spec-review Eval
 tasks a local bare origin. These commands write JSON and start no agent sessions.
 <code>evals prepare-arms</code> prepares both Arms before Trials: it caches release builds

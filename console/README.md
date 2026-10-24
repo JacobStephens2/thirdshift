@@ -211,6 +211,11 @@ These pages poll every two seconds independently of Command-record events, and
 retain folds, filters and the open Peek. Rechecks stay in the CLI; Copy command
 copies the current Trial's command. `node --test console/tests/experiments.test.cjs`
 checks live updates and interaction at 390 px after a build.
+The Experiments list also shows proposed Eval tasks; each Experiment page shows
+proposals for its suites. Approve one there or with
+`thirdshift evals approve <suite> <task> [--json]`. Both change only the manifest's
+state and start no work. Approval affects future Experiments; an existing
+Experiment keeps its fixed Eval tasks on resume.
 The fractional Run/stage boundaries also run in the Rust integration tests.
 The retained Session-trace regression is
 `python3 console/reproductions/waterfall-trace-axis.py`; it checks that completed

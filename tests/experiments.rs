@@ -24,6 +24,51 @@ mod release;
 mod sandbox;
 
 #[test]
+fn unapproved_proposals_never_run_and_approval_only_changes_future_experiments() {
+    let fixture = Fixture::new();
+    let tasks = fixture
+        .scenario
+        .path("home/.thirdshift/evals/suites/spec-review/tasks");
+    let proposed = tasks.join("proposal");
+    fs::create_dir(&proposed).unwrap();
+    fs::copy(tasks.join("fixture/spec.md"), proposed.join("spec.md")).unwrap();
+    let manifest = fs::read_to_string(tasks.join("fixture/task.toml")).unwrap();
+    fs::write(
+        proposed.join("task.toml"),
+        manifest.replace("state = \"approved\"", "state = \"proposed\""),
+    )
+    .unwrap();
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    assert_eq!(
+        experiment["tasks"],
+        json!([{"suite":"spec-review", "name":"fixture"}])
+    );
+    assert_eq!(experiment["results"].as_array().unwrap().len(), 2);
+    assert_eq!(fixture.trial_calls().len(), 2);
+    let approved = fixture
+        .scenario
+        .run(&["evals", "approve", "spec-review", "proposal", "--json"]);
+    assert_eq!(approved.code, Some(0), "{}", approved.stderr);
+    let resumed = fixture.run(&[]);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    assert_eq!(fixture.experiment()["tasks"], experiment["tasks"]);
+    assert_eq!(fixture.trial_calls().len(), 2);
+    let future = fixture.run(&["--candidate-model", "future-model"]);
+    assert_eq!(future.code, Some(0), "{}", future.stderr);
+    let future: Value = serde_json::from_str(future.stdout.lines().last().unwrap()).unwrap();
+    assert_eq!(
+        future["tasks"],
+        json!([
+            {"suite":"spec-review", "name":"fixture"},
+            {"suite":"spec-review", "name":"proposal"}
+        ])
+    );
+    assert_eq!(future["results"].as_array().unwrap().len(), 4);
+}
+
+#[test]
 fn experiment_trace_contains_trials_and_graders_and_reports_arm_usage() {
     let fixture = Fixture::new();
     // A trace-capable older Arm ignores the new inheritance environment.
