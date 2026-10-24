@@ -113,6 +113,34 @@ runs the Trial's sessions without the sandbox: the Experiment suite sets it so
 its fake Harnesses stay observable, and it is the emergency escape when bwrap
 breaks on a machine.
 
+## Memory
+
+Each Trial and each Grader runs in a scope of its own, from
+`systemd-run --user --scope`, with `MemoryHigh`, `MemoryMax` and
+`MemorySwapMax` from the User config's `[trial]` section (defaults `1G`,
+`2G` and `1G`, chosen above #1009's observed Harness resident sizes). The scope's
+own process raises its `oom_score_adj` to the maximum, so a system-wide kill
+takes the Trial or Grader before the factory; that covers old Arm builds
+through inheritance, and the Trial raises its own too, which covers direct
+runs. The scope sets [`OOMPolicy=kill`](https://www.freedesktop.org/software/systemd/man/255/systemd.scope.html),
+so a tool killed by OOM takes down its whole Trial or Grader, even when its
+parent catches the tool's failure. A Trial its cap kills dies alone and is
+void with `memory_cap`. The launcher watches the scope's
+`memory.events` while the Trial runs, and reads the user journal's `oom-kill`
+result for the scope after a suspicious exit, which survives the scope
+itself. Either is the outer launcher's evidence; without it the Trial stays
+failed. Each attempt keeps its scope's unit name beside it, for
+`journalctl --user -u` after. Each code check runs in its own Grader scope,
+under the Trial timeout and caps. A cap-killed Grader stops the Experiment
+with a diagnostic; raise the cap and rerun to retry. `THIRDSHIFT_TRIAL_MEMORY_HIGH`,
+`THIRDSHIFT_TRIAL_MEMORY_MAX` and `THIRDSHIFT_TRIAL_MEMORY_SWAP_MAX`, when set
+and not empty, override the User config's caps: the Experiment suite uses them
+for a small test cap. Scopes need the calling user's manager: run
+`loginctl enable-linger <user>` once, so they work while logged out. Without
+a reachable manager the Experiment stops before dispatch and names the linger
+step. Logged-out launchers discover the user's runtime directory when their
+environment omits it.
+
 ## Result
 
 Once a valid request starts, stdout is exactly one JSON line; progress is on
@@ -133,10 +161,10 @@ The result version is independently identified by `version: 1`.
   `memory_cap` must come from the outer launcher's evidence of the Trial-only
   cap, rather than an agent's own out-of-memory error, which is a failure.
   A signal alone cannot establish an external cause: an unexplained SIGKILL
-  stays failed. `host_killed` also requires the outer launcher's evidence.
-  Isolation and the actual cap launcher follow in #1014;
-  version-1 results can already report their distinct causes.
-  The Experiment's Bar decides which Void causes to retry or exclude.
+  stays failed, and systemd-run reports its scope's signal death as exit code
+  137 rather than as a signal. `host_killed` also requires the outer
+  launcher's evidence. Version-1 results can already report their distinct
+  causes. The Experiment's Bar decides which Void causes to retry or exclude.
   A live Claude plan-limit warning or rejection, or a Codex quota report at
   85% in either window, stops the session and makes the Trial void with
   `usage_limit`. Ordinary Runs keep running. Codex's retained token-count

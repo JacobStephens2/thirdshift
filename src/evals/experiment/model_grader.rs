@@ -4,7 +4,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
@@ -114,6 +113,8 @@ struct Trial {
 pub(super) fn run(experiment: &store::Stored) -> Result<()> {
     let grader: Grader =
         serde_json::from_slice(&fs::read(experiment.directory.join("grader.json"))?)?;
+    // Machine caps are read live, not fixed with the Bar.
+    let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
     for task in &experiment.tasks {
         interrupt::check()?;
         let key = Sha256::new()
@@ -148,6 +149,7 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
                 &directory,
                 &packet,
                 experiment.description.bar.timeout_seconds,
+                &caps,
             )?;
             let mut labels = BTreeSet::new();
             for score in &response.scores {
@@ -301,7 +303,13 @@ fn blind(text: &str) -> String {
     blinded
 }
 
-fn grade(grader: &Grader, directory: &Path, packet: &Packet, timeout: u64) -> Result<Response> {
+fn grade(
+    grader: &Grader,
+    directory: &Path,
+    packet: &Packet,
+    timeout: u64,
+    caps: &crate::scope::Caps,
+) -> Result<Response> {
     let workspace = tempfile::Builder::new()
         .prefix("session-")
         .tempdir_in(directory)?
@@ -314,15 +322,23 @@ fn grade(grader: &Grader, directory: &Path, packet: &Packet, timeout: u64) -> Re
     let choice = grader.choice();
     let adapter = choice.harness.adapter();
     let invocation = adapter.session(&choice, None, &prompt);
+    // Each Grader runs in a scope of its own, with the Trial caps, and raises
+    // its own `oom_score_adj`. A Grader the cap kills dies alone; its failure
+    // below names the cap from the scope's `memory.events` evidence.
+    let mut launched =
+        crate::scope::grader_command(&grader.harness.path, &invocation.args, &workspace, caps)?;
+    launched
+        .command
+        .stderr(fs::File::create(workspace.join("stderr"))?)
+        .env("THIRDSHIFT_GRADER_PACKET", &input)
+        .env("THIRDSHIFT_GRADER_SCORES", &scores);
+    let scope = launched.scope;
+    // The unit name stays in the workspace for `journalctl --user -u` after.
+    fs::write(workspace.join("scope"), scope.unit())?;
     let ended = Recording::for_trial().run(
         "model Grader",
         &choice,
-        Command::new(&grader.harness.path)
-            .args(invocation.args)
-            .current_dir(&workspace)
-            .stderr(fs::File::create(workspace.join("stderr"))?)
-            .env("THIRDSHIFT_GRADER_PACKET", &input)
-            .env("THIRDSHIFT_GRADER_SCORES", &scores),
+        &mut launched.command,
         Input {
             prompt: &prompt,
             stdin: invocation.stdin.as_deref(),
@@ -334,7 +350,15 @@ fn grade(grader: &Grader, directory: &Path, packet: &Packet, timeout: u64) -> Re
     );
     interrupt::check()?;
     let ended = ended.map_err(|_| {
-        anyhow::anyhow!("model Grader session failed; see private Grader artifacts")
+        if scope.oom_killed() {
+            anyhow::anyhow!(
+                "model Grader hit its memory cap ({}); see private Grader artifacts, \
+                 and raise the trial.memory_max User config to retry",
+                crate::scope::OOM_KILL_CAUSE
+            )
+        } else {
+            anyhow::anyhow!("model Grader session failed; see private Grader artifacts")
+        }
     })?;
     ensure!(
         ended.killed.is_empty(),

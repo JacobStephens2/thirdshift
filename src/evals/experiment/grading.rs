@@ -2,10 +2,9 @@
 
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::workers::{Arm, TrialResult};
@@ -71,9 +70,14 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
         },
     ];
     if output.outcome != Outcome::Void {
+        let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
         for command in &task.manifest.checks {
-            let mut child = Command::new(&command[0]);
-            child.args(&command[1..]).current_dir(repository);
+            let mut launched = crate::scope::grader_command(
+                Path::new(&command[0]),
+                &command[1..],
+                repository,
+                &caps,
+            )?;
             for (name, path) in [
                 (
                     "THIRDSHIFT_TRIAL_STANDARDS_REPORT",
@@ -82,10 +86,12 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
                 ("THIRDSHIFT_TRIAL_SPEC_REPORT", &output.reports.spec),
                 ("THIRDSHIFT_TRIAL_LOG", &output.log),
             ] {
-                child.env(name, path.as_deref().unwrap_or(Path::new("")));
+                launched
+                    .command
+                    .env(name, path.as_deref().unwrap_or(Path::new("")));
             }
             let result = process::output_until(
-                &mut child,
+                &mut launched.command,
                 None,
                 Control {
                     name: "code Grader",
@@ -93,9 +99,17 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
                     stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
                 },
                 Instant::now() + Duration::from_secs(bar.timeout_seconds),
-                &|| Ok(()),
+                &|| {
+                    launched.scope.sample();
+                    Ok(())
+                },
             );
             crate::interrupt::check()?;
+            if !result.as_ref().is_ok_and(|result| result.status.success())
+                && launched.scope.oom_killed()
+            {
+                bail!("code Grader hit its memory cap; raise trial.memory_max to retry");
+            }
             let (passed, reason) = match result {
                 Ok(result) => (
                     result.status.success(),

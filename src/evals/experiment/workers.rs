@@ -7,7 +7,6 @@ use std::fs;
 use std::os::unix::fs::symlink;
 use std::os::unix::process::ExitStatusExt;
 use std::path::Path;
-use std::process::Command;
 use std::sync::{
     Mutex,
     atomic::{AtomicBool, Ordering},
@@ -266,7 +265,24 @@ fn run_trial(
         ));
         let started = Instant::now();
         let mut trace = super::trace::Attempt::start(&attempt, &trial.key(), context)?;
-        let mut command = trial_command(experiment, arm, trial.arm, &request, signal)?;
+        // Machine caps are read live per attempt, not fixed with the Bar: an
+        // operator edit between attempts applies to the next one.
+        let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
+        let launched = trial_command(
+            &Attempt {
+                experiment,
+                arm,
+                name: trial.arm,
+                request: &request,
+                signal,
+                trial: &trial.key(),
+                attempt: result.attempts.len(),
+            },
+            &caps,
+        )?;
+        // The unit name stays in the attempt for `journalctl --user -u` after.
+        fs::write(attempt.join("scope"), launched.scope.unit())?;
+        let mut command = launched.command;
         trace.inherit(&mut command)?;
         let output = process::output_until(
             &mut command,
@@ -277,30 +293,57 @@ fn run_trial(
                 stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
             },
             Instant::now() + Duration::from_secs(bar.timeout_seconds),
-            &|| monitor.borrow_mut().check(signal),
+            &|| {
+                monitor.borrow_mut().check(signal)?;
+                launched.scope.sample();
+                Ok(())
+            },
         );
         interrupt::check()?;
+        // A kernel kill in the Trial's scope is the outer launcher's evidence
+        // the cap killed Trial work. The live watch catches slow kills; the
+        // journal's `oom-kill` result covers fast ones, whose scope is already
+        // gone. Only failed Trials consult it: explicit Void causes stay as
+        // the Trial diagnosed them, so limit pauses keep pausing, and an
+        // agent's own out-of-memory error leaves no kernel kill behind.
+        let cap_killed = || launched.scope.oom_killed();
         let mut protocol = match output {
             Ok(output) => {
                 fs::write(attempt.join("stdout"), &output.stdout)?;
                 fs::write(attempt.join("stderr"), &output.stderr)?;
-                if output.status.signal() == Some(libc::SIGKILL) {
+                // systemd-run reports its scope's signal death as an exit
+                // code, so a scoped SIGKILL arrives as 137, not as a signal.
+                let sigkilled = output.status.signal() == Some(libc::SIGKILL)
+                    || output.status.code() == Some(128 + libc::SIGKILL);
+                if sigkilled {
                     Output::failed(
                         started.elapsed().as_millis(),
                         "Trial process killed (SIGKILL); external cause unknown",
                     )
-                } else {
-                    if !output.status.success() {
+                } else if !output.status.success() {
+                    if cap_killed() {
+                        void_memory_cap(started.elapsed().as_millis())
+                    } else {
                         bail!(
                             "Arm Trial protocol failed ({}): {}",
                             output.status,
                             String::from_utf8_lossy(&output.stderr)
                         );
                     }
-                    let protocol: Output =
-                        serde_json::from_slice(&output.stdout).context("invalid Trial result")?;
-                    ensure!(protocol.version == 1, "unsupported Trial result");
-                    protocol
+                } else {
+                    match serde_json::from_slice::<Output>(&output.stdout) {
+                        Ok(protocol) => {
+                            ensure!(protocol.version == 1, "unsupported Trial result");
+                            protocol
+                        }
+                        Err(error) => {
+                            if cap_killed() {
+                                void_memory_cap(started.elapsed().as_millis())
+                            } else {
+                                return Err(error).context("invalid Trial result");
+                            }
+                        }
+                    }
                 }
             }
             Err(error) if error.is::<process::TimedOut>() => {
@@ -311,6 +354,11 @@ fn run_trial(
                 .cut_short(started.elapsed().as_millis()),
             Err(error) => return Err(error),
         };
+        if protocol.outcome == Outcome::Failed && cap_killed() {
+            protocol.outcome = Outcome::Void;
+            protocol.void_cause = Some(VoidCause::MemoryCap);
+            protocol.cause = Some(crate::scope::OOM_KILL_CAUSE.into());
+        }
         let after = integrity::snapshot(&prepared_repo.repository);
         interrupt::check()?;
         // Keep known failures and external Void causes, including limit
@@ -394,22 +442,53 @@ fn prepare_branches(repository: &Path, task: &Task) -> Result<()> {
     Ok(())
 }
 
-fn trial_command(
-    experiment: &store::Stored,
-    arm: &arms::Arm,
+/// A Trial its scope's cap killed: void with `memory_cap`, from the scope's
+/// `memory.events` or journal evidence. Only the outer launcher makes these,
+/// never the Trial itself.
+fn void_memory_cap(total_ms: u128) -> Output {
+    let mut output = Output::failed(total_ms, crate::scope::OOM_KILL_CAUSE);
+    output.outcome = Outcome::Void;
+    output.void_cause = Some(VoidCause::MemoryCap);
+    output
+}
+
+/// What one Trial attempt launches: the Arm, its request, and its attempt.
+struct Attempt<'a> {
+    experiment: &'a store::Stored,
+    arm: &'a arms::Arm,
     name: Arm,
-    request: &Path,
-    signal: &Path,
-) -> Result<Command> {
-    let directory = experiment.directory.join("harnesses").join(name.name());
+    request: &'a Path,
+    signal: &'a Path,
+    trial: &'a str,
+    attempt: usize,
+}
+
+fn trial_command(attempt: &Attempt<'_>, caps: &crate::scope::Caps) -> Result<crate::scope::Launch> {
+    let directory = attempt
+        .experiment
+        .directory
+        .join("harnesses")
+        .join(attempt.name.name());
     let path = std::env::join_paths(std::iter::once(directory).chain(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     )))?;
-    let mut command = Command::new(&arm.binary);
-    command
-        .arg("--trial")
-        .arg(request)
-        .env(limits::SIGNAL_ENV, signal)
+    let path = path
+        .into_string()
+        .map_err(|_| anyhow::anyhow!("PATH is not valid Unicode"))?;
+    let request = attempt
+        .request
+        .to_str()
+        .context("Trial request path is not valid Unicode")?;
+    let mut launched = crate::scope::trial_command(
+        &attempt.arm.binary,
+        &["--trial", request],
+        attempt.trial,
+        attempt.attempt,
+        caps,
+    )?;
+    launched
+        .command
+        .env(limits::SIGNAL_ENV, attempt.signal)
         .env("PATH", path);
-    Ok(command)
+    Ok(launched)
 }

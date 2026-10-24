@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
-use support::{RunResult, Scenario, leaves_running};
+use support::{RunResult, Scenario, leaves_running, scope_available};
 
 /// Where a sandboxed Trial's fake Harness scripts and records live: inside the
 /// prepared repository, the one path the sandbox keeps.
@@ -816,4 +816,133 @@ fn a_trial_without_its_sandbox_runs_its_session_directly() {
     let output: Value = serde_json::from_str(&result.stdout).unwrap();
     assert_eq!(output["outcome"], "succeeded", "{output}");
     assert_eq!(output["session_id"], "fake-session-1");
+}
+
+/// Whether a process can read its own `oom_score_adj` here (Linux).
+fn oom_score_readable() -> bool {
+    std::fs::read_to_string("/proc/self/oom_score_adj").is_ok()
+}
+
+#[test]
+fn trials_raise_their_own_oom_score_adj() {
+    if !oom_score_readable() {
+        println!("SKIPPED (trials raise their own oom_score_adj): no /proc/self/oom_score_adj");
+        return;
+    }
+    let scenario = Scenario::new();
+    let request = request(&scenario);
+    scenario.agent_does(&format!(
+        "{}\ncat /proc/self/oom_score_adj >> \"$FAKE_CLAUDE_RECORD.adj\"\n",
+        write_reports()
+    ));
+
+    let result = run_trial(&scenario, &request, &[]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(output["outcome"], "succeeded", "{output}");
+    // The fake Harness inherits the Trial's raised score through the sandbox.
+    let redirected = scenario
+        .launch_dir()
+        .join(TRIAL_FAKES)
+        .join("claude-calls.json.adj");
+    let path = if redirected.exists() {
+        redirected
+    } else {
+        scenario.path("claude-calls.json.adj")
+    };
+    assert_eq!(
+        fs::read_to_string(&path).unwrap().trim(),
+        "1000",
+        "the Trial's session kept its raised oom_score_adj"
+    );
+}
+
+#[test]
+fn oom_exec_raises_its_score_and_becomes_its_program() {
+    if !oom_score_readable() {
+        println!("SKIPPED (oom_exec raises its score): no /proc/self/oom_score_adj");
+        return;
+    }
+    let scenario = Scenario::new();
+    let result = scenario.run(&["--oom-exec", "sh", "-c", "cat /proc/self/oom_score_adj"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout.trim(), "1000");
+    let echoed = scenario.run(&["--oom-exec", "echo", "hello-scope"]);
+    assert_eq!(echoed.code, Some(0), "{}", echoed.stderr);
+    assert_eq!(echoed.stdout, "hello-scope\n");
+    let missing = scenario.run(&["--oom-exec", "/nonexistent-program"]);
+    assert_eq!(missing.code, Some(1), "{}", missing.stderr);
+    assert!(
+        missing
+            .stderr
+            .contains("could not run /nonexistent-program"),
+        "{}",
+        missing.stderr
+    );
+    let usage = scenario.run(&["--oom-exec"]);
+    assert_eq!(usage.code, Some(2), "{}", usage.stderr);
+}
+
+#[test]
+fn a_scoped_hog_leaves_journal_oom_evidence() {
+    if !scope_available() {
+        println!("SKIPPED (a scoped hog leaves journal oom evidence): no systemd user manager");
+        return;
+    }
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        println!("SKIPPED (a scoped hog leaves journal oom evidence): no python3");
+        return;
+    }
+    let scenario = Scenario::new();
+    let hog = scenario.path("hog.py");
+    fs::write(&hog, "a=[bytearray(1000000) for _ in range(2000)]\n").unwrap();
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    let unit = format!("thirdshift-test-{}-{nanos}.scope", std::process::id());
+    let binary = env!("CARGO_BIN_EXE_thirdshift");
+    let status = std::process::Command::new("systemd-run")
+        .args([
+            "--user",
+            "--scope",
+            "-p",
+            "MemoryHigh=50M",
+            "-p",
+            "MemoryMax=50M",
+            "-p",
+            "MemorySwapMax=0",
+            &format!("--unit={unit}"),
+            "--",
+            binary,
+            "--oom-exec",
+            "python3",
+        ])
+        .arg(&hog)
+        .status()
+        .unwrap();
+    assert!(!status.success(), "the hog must die under its cap");
+    // The manager's `oom-kill` result survives the scope itself: it is the
+    // outer launcher's evidence for a `memory_cap` Void.
+    let mut found = false;
+    for _ in 0..6 {
+        let journal = std::process::Command::new("journalctl")
+            .args(["--user", "-u", &unit, "--no-pager", "-o", "cat"])
+            .output()
+            .unwrap();
+        if String::from_utf8_lossy(&journal.stdout)
+            .lines()
+            .any(|line| line.contains("Failed with result 'oom-kill'"))
+        {
+            found = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    assert!(found, "the scope's journal must record its oom-kill");
 }
