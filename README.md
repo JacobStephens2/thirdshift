@@ -53,7 +53,7 @@ Use `thirdshift help` for the command reference, or read [Ticket run behavior](d
 | Issues marked `ready-for-agent` | `thirdshift pickup` | A [Pickup run](docs/guide.md#pickup-runs) takes the lowest-numbered Ready issue. |
 | Architecture improvements | `thirdshift architect` | An [Architect run](docs/guide.md#architect-runs) reviews the codebase, publishes a plan and builds it, or files an idea for triage. |
 | A security audit | `thirdshift secure` | A [Security run](docs/guide.md#security-runs) records findings privately; fixing a reproduced finding is optional. |
-| Merged factory work | `thirdshift score` | A [Scoring run](docs/guide.md#scoring-runs) samples it; `thirdshift scores --json` lists samples by week. |
+| Merged factory work | `thirdshift score` | A [Scoring run](docs/guide.md#scoring-runs) samples and grades it, and proposes Bug origins; `thirdshift scores --json` lists samples, five criterion Scores and proposals by week. |
 
 Each Architect, Pickup or Security run makes one pass. Use cron or another operating system scheduler to repeat it. See [scheduling](docs/guide.md#on-a-schedule), [Architect runs every few minutes](docs/guide.md#architect-runs-every-few-minutes) and [Security runs on a schedule](docs/guide.md#security-runs-on-a-schedule-with-fixing-allowed).
 

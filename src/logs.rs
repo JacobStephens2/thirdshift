@@ -313,6 +313,11 @@ pub fn command_kind() -> CommandKind {
     record().command_kind()
 }
 
+/// Resolve a locally retained Run by its pull request, including child Runs.
+pub(crate) fn record_for_pull_request(root: &Path, url: &str) -> anyhow::Result<Option<PathBuf>> {
+    Ok(run_for_pull_request(root, url)?.map(|(path, _)| path))
+}
+
 /// Where this command and all its child Runs keep Session traces on `repo`.
 pub fn session_dir(repo: &Repo) -> PathBuf {
     let record = record();

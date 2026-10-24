@@ -138,6 +138,13 @@ fn prompts() -> Vec<Prompt> {
     };
     let with_sentinel = vec![
         Prompt {
+            id: "prompt-scoring-grader",
+            title: "Scoring Grader",
+            when: "A Scoring run asks an independent Model to score one blind packet on Correct, Scoped, Tested, Honest and Standards.",
+            sender: ScoringRun,
+            text: prompt::scoring_grader(),
+        },
+        Prompt {
             id: "prompt-bug-origin",
             title: "Bug-origin proposal",
             when: "In a Scoring run, inspects a closed bug's fix and history in the Eval sandbox, proposing a commit only when history establishes one.",
@@ -625,7 +632,7 @@ fn sent_by(sender: &Sender) -> String {
         ArchitectRun => "an Architect run, before any unit".to_string(),
         SecurityRun => "a Security run, before any unit".to_string(),
         Experiment => "an Experiment, after its Trials".to_string(),
-        ScoringRun => "a Scoring run, for each closed bug".to_string(),
+        ScoringRun => "a Scoring run".to_string(),
         Trial => "an Eval Trial, outside the Run's units".to_string(),
     }
 }

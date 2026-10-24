@@ -73,6 +73,25 @@ fn run_trial(scenario: &Scenario, request: &Path, extra: &[(&str, &str)]) -> Run
         .into_iter()
         .zip(paths.iter().map(String::as_str))
         .collect();
+    // The sandbox clears ambient variables. Put only the fake's recording
+    // paths in its own launcher, inside the bound repository.
+    let document: Value = serde_json::from_slice(&fs::read(request).unwrap()).unwrap();
+    if let Some(harness) = document["harness"].as_str() {
+        let executable = scenario.path(&format!("bin/{harness}"));
+        let fake = dir.join("bin").join(harness);
+        if executable.is_file() && !fake.exists() {
+            fs::create_dir_all(fake.parent().unwrap()).unwrap();
+            support::copy_executable(&executable, &fake);
+            fs::remove_file(&executable).unwrap();
+            let quote = |value: &str| format!("'{}'", value.replace('\'', "'\\''"));
+            let mut script = String::from("#!/bin/sh\n");
+            for (name, value) in &env {
+                script.push_str(&format!("export {name}={}\n", quote(value)));
+            }
+            script.push_str(&format!("exec {} \"$@\"\n", quote(fake.to_str().unwrap())));
+            support::write_executable(&executable, &script);
+        }
+    }
     env.extend_from_slice(extra);
     scenario.run_with_env(&args, &env)
 }

@@ -43,7 +43,13 @@ pub(crate) fn run(request: Request<'_>) -> Result<()> {
     let adapter = choice.harness.adapter();
     let invocation = adapter.trial_session(choice, None, prompt);
     let sandbox = crate::sandbox::for_session(choice, binary, workspace, artifacts)?;
-    let launch = sandbox.as_ref().map(|prepared| prepared.launch());
+    let launch = sandbox.as_ref().map(|prepared| {
+        let mut launch = prepared.launch();
+        for (name, path) in environment {
+            launch.set_env(name, path);
+        }
+        launch
+    });
     // The scope encloses the sandbox and all tools. Native quota records
     // live beside the sandbox's login, rather than in the host's home.
     let mut launched = match &launch {
@@ -73,6 +79,7 @@ pub(crate) fn run(request: Request<'_>) -> Result<()> {
             stdin: invocation.stdin.as_deref(),
             deadline: Some(Instant::now() + timeout),
             private: true,
+            ..Default::default()
         },
         &artifacts.join("stdout.jsonl"),
         interpretation,

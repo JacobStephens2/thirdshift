@@ -201,6 +201,7 @@ stage_names! {
     EvalTasks => "Eval tasks",
     Trials => "Trials",
     Sampling => "sampling",
+    Grading => "grading",
     /// A Pickup run or Security run waiting on the Run it dispatched.
     DispatchedRun => "dispatched Run",
     /// A Pickup run or Security run waiting on the Spec run it dispatched.

@@ -35,6 +35,8 @@ pub struct Input<'a> {
     pub prompt: &'a str,
     pub stdin: Option<&'a str>,
     pub deadline: Option<Instant>,
+    /// Scoring Graders share the Eval plan-limit policy while retaining Command ownership.
+    pub stop_at_limit: bool,
     /// Keep decoded progress and completion text out of factory Command logs.
     pub private: bool,
 }
@@ -155,7 +157,7 @@ impl Recording {
         let choice_owned = choice.clone();
         let recording = self.clone();
         let private = input.private;
-        let stop_at_limit = matches!(self.owner, Ok(None));
+        let stop_at_limit = input.stop_at_limit || matches!(self.owner, Ok(None));
         let executed = process::streaming(
             adapter,
             command,

@@ -1655,9 +1655,9 @@ preserves existing values; it does not ask Scoring questions:
 owners = []                 # GitHub users or organizations; configure before score
 sample_size = 10            # maximum sample size
 harness = "claude"          # Grader's Harness
-model = ""                  # blank uses that Harness's default
+model = ""                  # set an explicit Model before grading a sample
 fallback_harness = "codex"   # second Grader, when the first matches the Run's Model
-fallback_model = ""         # blank uses the second Harness's default
+fallback_model = ""         # set an explicit independent Model for the second pair
 ```
 
 The sample is drawn randomly across the Harness and Model pairs in the Built-with
@@ -1674,7 +1674,28 @@ The repository contains the merge commit's files with Git metadata and
 attribution lines removed, so
 neither commit messages nor later history reach the Grader. Unavailable
 historical issue text fails the Command rather than substituting a later
-revision. Grader sessions and criterion Scores are separate work.
+revision.
+
+A model Grader scores each packet in the Experiment sandbox, with the repository
+read-only. It gives five independent pass/fail Scores with reasons: Correct,
+Scoped, Tested, Honest and Standards. Honest checks only the pull request's
+claims against its diff and CI. Scores are retained on each sampled pull request,
+with the Grader's Harness and Model; local work also links to its Run's Command
+record. Both `scores` formats include these Scores.
+
+Set an explicit `scoring.model`: a blank default cannot establish that the
+Grader differs from the Run's Model. When the first Model matches the Built-with
+line (ignoring case), the second Harness/Model pair is used; if it also matches
+or is blank, grading fails without starting that Grader.
+
+A Claude plan-limit warning or rejection, or a Codex quota window at 85%, stops
+grading immediately. Completed Scores are checkpointed individually. The next
+`score` command scores the retained remainder before drawing a new window;
+completed pull requests are never graded again. Other Harnesses have no verified
+warning protocol yet. Grader sessions use bwrap and socat on Linux; if isolation
+cannot start, grading fails and the sample remains pending. As for Experiments,
+`THIRDSHIFT_TRIAL_NO_SANDBOX=1` selects the pass-through launcher for fake Harness
+tests or an explicit emergency override.
 
 Every closed `bug` issue also gets a proposed Bug origin, whoever fixed it,
 except issues labelled `security-fix`. The first run that writes proposals

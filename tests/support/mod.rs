@@ -896,6 +896,9 @@ test -f {root}/{COPY_REPLACED}
             // enough for the absent state.
             .env("THIRDSHIFT_CI_GRACE_MS", "300")
             .env("THIRDSHIFT_POLL_MS", "100");
+        if args.first() == Some(&"score") {
+            command.env("THIRDSHIFT_TRIAL_NO_SANDBOX", "1");
+        }
         command
     }
 
