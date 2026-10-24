@@ -880,7 +880,7 @@ fn inbox_puts_live_problems_first_and_points_to_silent_landing_without_duplicati
 #[test]
 fn inbox_distinguishes_triage_stops_and_waiting_findings_from_completed_work() {
     let scenario = Scenario::new();
-    github_has_waiting_finding(&scenario);
+    scenario.waiting_security_finding();
     scenario.issue_labelled(7, &["needs-triage"]);
     let time = chrono::Local::now().to_rfc3339();
     for number in 7..12 {
@@ -1802,15 +1802,6 @@ fn security_record(scenario: &Scenario, number: u32, urls: &[&str], failed: bool
     });
 }
 
-fn github_has_waiting_finding(scenario: &Scenario) {
-    let mut gh = scenario.gh_state();
-    gh["advisories"] = serde_json::json!([{
-        "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-waiting",
-        "state":"draft", "severity":null
-    }]);
-    scenario.write_gh_state(&gh);
-}
-
 #[test]
 fn finding_leaves_only_after_its_last_private_record_is_triaged() {
     let scenario = Scenario::new();
@@ -1893,6 +1884,16 @@ fn private_findings_and_dismissed_failures_follow_github_triage() {
             waits,
             "{status}"
         );
+        if !waits {
+            assert_eq!(
+                status["commands"][0]["left_reason"], "findings triaged",
+                "{status}"
+            );
+            assert!(
+                status["commands"][0]["left_at"].as_str().is_some(),
+                "{status}"
+            );
+        }
     }
 }
 
@@ -1948,7 +1949,7 @@ fn finding_answers_survive_failure_reopen_and_freeze_in_history() {
     let scenario = Scenario::new();
     let url = "https://github.com/acme/widgets/security/advisories/GHSA-waiting";
     security_record(&scenario, 7, &[url], false);
-    github_has_waiting_finding(&scenario);
+    scenario.waiting_security_finding();
     let read = || {
         let output = scenario.run(&["status", "--all", "--json"]);
         assert_eq!(output.code, Some(0), "{}", output.stderr);
@@ -2019,6 +2020,63 @@ fn finding_answers_survive_failure_reopen_and_freeze_in_history() {
             .filter(|row| row["needs_you_kind"] == "finding")
             .count(),
         1,
+        "{status}"
+    );
+}
+
+#[test]
+fn private_finding_discovery_rechecks_the_reserve_before_its_fallback_list() {
+    let scenario = Scenario::new();
+    security_record(
+        &scenario,
+        7,
+        &["https://github.com/acme/widgets/issues/21"],
+        false,
+    );
+    let mut gh = scenario.gh_state();
+    gh["private"] = true.into();
+    let reset = (chrono::Utc::now() + chrono::Duration::hours(1)).timestamp();
+    gh["rate_limits"] = serde_json::json!({
+        "graphql":{"remaining":4999,"reset":reset},
+        "core":{"remaining":500,"reset":reset}
+    });
+    gh["next_rate_limits"] = serde_json::json!({
+        "graphql":{"remaining":4999,"reset":reset},
+        "core":{"remaining":498,"reset":reset}
+    });
+    scenario.write_gh_state(&gh);
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    assert!(
+        !scenario.gh_calls().iter().any(|call| call
+            .iter()
+            .any(|arg| { arg.contains("/issues?state=all&labels=security-finding") })),
+        "a fallback list read below the reserve: {:?}",
+        scenario.gh_calls()
+    );
+}
+
+#[test]
+fn review_graphql_failure_survives_successful_finding_list() {
+    let scenario = Scenario::new();
+    ready_record_with_pr(&scenario, 9, &hours_ago(240), Some(9));
+    github_pr_is(&scenario, 9, "OPEN", None, None);
+    let url = "https://github.com/acme/widgets/security/advisories/GHSA-waiting";
+    security_record(&scenario, 7, &[url], false);
+    scenario.waiting_security_finding();
+    let good = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(good.code, Some(0), "{}", good.stderr);
+    age_cache_file(&scenario, 360);
+    scenario.gh_fails("api graphql");
+    let failed = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(failed.code, Some(0), "{}", failed.stderr);
+    let status: Value = serde_json::from_str(&failed.stdout).unwrap();
+    assert!(
+        status["github_failure"].as_str().is_some(),
+        "a successful finding list erased the GraphQL failure: {status}"
+    );
+    assert!(
+        status["github_answer_age_seconds"].as_u64().unwrap() >= 300,
         "{status}"
     );
 }
@@ -2304,7 +2362,7 @@ fn github_settlement_bounds_resolved_even_when_the_command_ended_more_recently()
 #[test]
 fn review_security_fix_settlement_preserves_other_waiting_findings() {
     let scenario = Scenario::new();
-    github_has_waiting_finding(&scenario);
+    scenario.waiting_security_finding();
     let ended = hours_ago(48);
     let settled = hours_ago(1);
     failed_record(&scenario, 8, &ended);
@@ -2389,7 +2447,7 @@ fn review_later_triage_stop_does_not_inherit_an_older_absence_time() {
 #[test]
 fn review_failed_security_fix_settlement_preserves_other_waiting_findings() {
     let scenario = Scenario::new();
-    github_has_waiting_finding(&scenario);
+    scenario.waiting_security_finding();
     let ended = hours_ago(48);
     let settled = hours_ago(1);
     failed_record(&scenario, 8, &ended);

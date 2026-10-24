@@ -464,12 +464,7 @@ fn dismissed_security_failure_returns_only_for_findings_still_waiting() {
         record["name"] = "security-20261023T120000-0400".into();
         record["security_findings_waiting"] = waiting.into();
         if waiting {
-            let mut gh = scenario.gh_state();
-            gh["advisories"] = json!([{
-                "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-waiting",
-                "state":"draft", "severity":null
-            }]);
-            scenario.write_gh_state(&gh);
+            scenario.waiting_security_finding();
         }
         write_record(&scenario, 7, &record);
         let path = record_path(&scenario, 7);

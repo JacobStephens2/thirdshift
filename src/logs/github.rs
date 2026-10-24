@@ -284,6 +284,7 @@ pub(super) fn refresh(
         }
     }
     let mut answered = false;
+    let mut read_failed = false;
     for chunk in subjects.chunks(100) {
         if kept.quotas.as_ref().and_then(Quotas::warning).is_some() {
             break;
@@ -315,13 +316,11 @@ pub(super) fn refresh(
                     .as_mut()
                     .expect("quotas read before rows")
                     .graphql = quota;
-                kept.age = Some(Duration::ZERO);
-                kept.last_answered = Some(Utc::now());
-                kept.failure = None;
                 answered = true;
             }
             Err(error) => {
                 kept.failure = Some(format!("{error:#}"));
+                read_failed = true;
                 break;
             }
         }
@@ -367,13 +366,14 @@ pub(super) fn refresh(
                     }
                     kept.findings.insert(subject.row, facts);
                 }
-                kept.age = Some(Duration::ZERO);
-                kept.last_answered = Some(Utc::now());
-                kept.failure = None;
                 answered = true;
             }
             Err(error) => {
                 kept.failure = Some(format!("{error:#}"));
+                read_failed = true;
+                if let Ok(quotas) = github.inbox_quotas() {
+                    kept.quotas = Some(quotas);
+                }
                 break;
             }
         }
@@ -383,11 +383,20 @@ pub(super) fn refresh(
             Ok(quotas) => kept.quotas = Some(quotas),
             Err(error) => {
                 kept.failure = Some(format!("{error:#}"));
+                read_failed = true;
                 break;
             }
         }
     }
-    save(&config.logs_dir, &kept, answered)?;
+    // A successful endpoint cannot erase another endpoint's failure or
+    // make its stale facts look freshly read.
+    let refreshed = answered && !read_failed;
+    if refreshed {
+        kept.age = Some(Duration::ZERO);
+        kept.last_answered = Some(Utc::now());
+        kept.failure = None;
+    }
+    save(&config.logs_dir, &kept, refreshed)?;
     Ok(kept)
 }
 

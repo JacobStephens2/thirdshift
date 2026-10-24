@@ -1,10 +1,11 @@
 //! Private Security finding records. Public repositories use draft advisories;
 //! private repositories whose advisory endpoint is unavailable use issues.
 
+use std::collections::BTreeMap;
+
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::collections::BTreeMap;
 
 use super::{GitHub, check_read};
 use crate::issue::IssueUrl;
@@ -629,7 +630,11 @@ impl GitHub {
     }
     /// Every state and every page. A 404 selects issues only when repository
     /// metadata confirms they will be private.
-    fn list_security_records(&self, repo: &str) -> Result<SecurityRecords> {
+    fn list_security_records(
+        &self,
+        repo: &str,
+        before_fallback_list: impl FnOnce() -> Result<()>,
+    ) -> Result<SecurityRecords> {
         match self.gh_api_items(
             &format!("repos/{repo}/security-advisories?per_page=100"),
             "",
@@ -642,6 +647,7 @@ impl GitHub {
                         "security advisories unavailable; refusing to record findings in public issues"
                     );
                 }
+                before_fallback_list()?;
                 let records = self.gh_api_items(
                     &format!("repos/{repo}/issues?state=all&labels=security-finding&per_page=100"),
                     "",
@@ -658,11 +664,17 @@ impl GitHub {
     }
 
     pub(crate) fn inbox_findings(&self, repo: &str) -> Result<BTreeMap<String, bool>> {
-        self.list_security_records(repo)?.inbox_waits()
+        self.list_security_records(repo, || {
+            if let Some(warning) = self.inbox_quotas()?.warning() {
+                bail!(warning);
+            }
+            Ok(())
+        })?
+        .inbox_waits()
     }
 
     pub fn security_records(&self, repo: &str) -> Result<SecurityRecords> {
-        let mut records = self.list_security_records(repo)?;
+        let mut records = self.list_security_records(repo, || Ok(()))?;
         let (_, field, _) = records.entries();
         for record in records.values_mut() {
             if let Some(link) = Description(record[field].as_str().unwrap_or_default()).fix_link() {

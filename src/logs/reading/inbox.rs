@@ -397,13 +397,7 @@ pub(super) fn list<'a>(
         let finding_facts = command.selector().and_then(|row| github.findings(&row));
         let findings_waiting = matches!(command, Observation::Record(command) if command.record.security_findings_waiting)
             && finding_facts.is_none_or(|facts| facts.waiting());
-        let github_settlement = if command.problem() == Some(NeedsYouKind::Finding) {
-            finding_facts
-                .and_then(|facts| time(facts.triaged_at.as_deref()))
-                .map(|at| ("findings triaged".to_string(), at))
-        } else {
-            github_left(&command, github, ended)
-        };
+        let github_settlement = github_left(&command, github, ended);
         // Settling failed work removes that wait, while another finding
         // from the same audit can still need the Day shift.
         let finding_wait = github_settlement.is_some() && findings_waiting;
@@ -686,6 +680,20 @@ fn github_left(
 ) -> Option<(String, DateTime<FixedOffset>)> {
     if observation.facts().state == "live" {
         return None;
+    }
+    let finding_row = observation.problem() == Some(NeedsYouKind::Finding)
+        || (observation.problem() == Some(NeedsYouKind::Failed)
+            && matches!(observation, Observation::Record(command) if command.record.security_findings_waiting
+                && observation.selector().and_then(|row| dismiss::covering(&command.record_path, &row))
+                    .is_some_and(|row| row.covers(NeedsYouKind::Failed.title())
+                        && !row.covers(NeedsYouKind::Finding.title()))));
+    if finding_row
+        && let Some(at) = observation
+            .selector()
+            .and_then(|row| github.findings(&row))
+            .and_then(|facts| time(facts.triaged_at.as_deref()))
+    {
+        return Some(("findings triaged".to_string(), at));
     }
     if observation.problem().is_some() {
         let row = observation.selector()?;

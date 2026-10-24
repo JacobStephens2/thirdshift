@@ -139,6 +139,8 @@
 //! `rate_limits` supplies the resources from `gh api rate_limit` (otherwise
 //! 4999 remaining, resetting in an hour). `inbox_rate_limit` overrides the
 //! batched GraphQL response's quota, e.g. when that query spends the reserve.
+//! `next_rate_limits` replaces `rate_limits` after each quota answer, modelling
+//! requests spending the REST reserve during private-storage discovery.
 //! `failing` with `failing_stderr` models unreachable, signed-out and
 //! rate-limited reads with gh's actual diagnostics and a nonzero exit.
 //! Issues answer `state`, `closedAt` from `issue_closed_at` and label nodes
@@ -1365,6 +1367,10 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
                 object([("core", resource("core")), ("graphql", resource("graphql")),])
             )])
         );
+        if let Some(next) = state.get("next_rate_limits").cloned() {
+            state.set("rate_limits", next);
+            save(state);
+        }
         return;
     }
     if let Some((repo, rest)) = repo_prefix(path) {
