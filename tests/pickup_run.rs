@@ -1750,6 +1750,44 @@ fn the_notification_of_a_failed_spec_run_has_each_tickets_outcome() {
 }
 
 #[test]
+fn a_spec_notification_promotes_exhausted_usage_and_keeps_other_failures() {
+    let scenario = ready_spec(
+        "echo 'API error 429: Subscription quota exhausted. Your usage window resets at 2026-10-24T03:28:16Z.' > \"$FAKE_MUSE_ERROR\"\nexit 1",
+    );
+    scenario.spec_has_tickets(7, &[(8, &[]), (9, &[]), (10, &[9]), (11, &[])]);
+    scenario.agent_does_for(
+        11,
+        "echo 'stream protocol error' > \"$FAKE_MUSE_ERROR\"\nexit 1",
+    );
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(
+        &scenario,
+        &resend,
+        &["pickup", "harness", "muse", "email", "me@example.com"],
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert!(subject.ends_with(": failed"), "{subject}");
+    let (summary, tickets) = text.split_once("\nTickets:\n").expect(&text);
+    assert!(
+        summary.contains("Usage limit:  Harness usage allowance exhausted in Tickets #9. Retry when usage is available.\n"),
+        "{text}"
+    );
+    for detail in [
+        "#8 landed with ",
+        "#9 failed: muse exited 1: API error 429: Subscription quota exhausted.",
+        "Your usage window resets at 2026-10-24T03:28:16Z.",
+        "#10 blocked by #9",
+        "#11 failed: muse exited 1: stream protocol error",
+    ] {
+        assert!(tickets.contains(detail), "{text}");
+    }
+    assert_saved_notification(&scenario, "pickup", &resend.requests()[0]);
+}
+
+#[test]
 fn a_pass_skipped_for_having_no_ready_issue_sends_no_notification() {
     let scenario = Scenario::new();
     scenario.user_config_is(EMAIL_ALWAYS);

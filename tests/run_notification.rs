@@ -654,6 +654,10 @@ EVENTS
         let cause = format!("{prefix}: {MESSAGE}");
         assert_contains(&result.stderr, &cause);
         assert_contains(text(&request), &format!("Cause:        {cause}"));
+        assert_contains(
+            text(&request),
+            "Usage limit:  Harness usage allowance exhausted. Retry when usage is available.",
+        );
         for output in [result.stderr.as_str(), text(&request)] {
             for fact in [
                 "api_error: usage_limit_reached",
@@ -669,6 +673,36 @@ EVENTS
         }
         assert_eq!(scenario.claude_calls().len(), 1, "unexpected Resume");
     }
+}
+
+#[test]
+fn a_muse_usage_failure_is_explained_in_the_saved_and_emailed_notification() {
+    const CAUSE: &str = "API error 429: Subscription quota exhausted. Your usage window resets at 2026-10-24T03:28:16Z. (rate_limit_error)";
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!("echo '{CAUSE}' > \"$FAKE_MUSE_ERROR\"\nexit 1\n"));
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run(
+        &scenario,
+        &resend,
+        &[
+            "harness",
+            "muse",
+            "email",
+            "me@example.com",
+            &scenario.issue_url(7),
+        ],
+        Some(KEY),
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let request = the_one_request(&resend);
+    assert_contains(text(&request), CAUSE);
+    assert_contains(
+        text(&request),
+        "Usage limit:  Harness usage allowance exhausted. Retry when usage is available.",
+    );
+    assert_saved_notification(&scenario, "issue", &request);
 }
 
 #[test]

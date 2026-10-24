@@ -53,15 +53,21 @@ before(async () => {
   security.name = 'security-fixture';
   security.issue = null;
   await writeFile(join(folder, '10-fixture.command.json'), JSON.stringify(security));
-  // A finished Run in an alphabetically earlier repository must not precede
-  // this repository's live Run, or reorder the finished columns by repository.
+  // Different repository ranges must stay attributed to their own columns.
   const otherFolder = join(home, '.thirdshift/logs/aaa/first/commands/issue');
   await mkdir(otherFolder, { recursive: true });
   const other = JSON.parse(await readFile(join(folder, '3-fixture.command.json'), 'utf8'));
   other.repository = 'aaa/first';
   other.issue.number = 8;
   other.issue.url = 'https://github.com/aaa/first/issues/8';
-  await writeFile(join(otherFolder, '8-fixture.command.json'), JSON.stringify(other));
+  for (const [number, minutes] of [[8, 150], [18, 210], [19, 220]]) {
+    other.issue.number = number;
+    other.started_at = time(minutes);
+    other.stages[0].began_at = time(minutes);
+    other.stages[1].began_at = time(minutes - 30);
+    other.ended_at = time(minutes - 70);
+    await writeFile(join(otherFolder, `${number}-fixture.command.json`), JSON.stringify(other));
+  }
   await writeFile(join(home, '.thirdshift/logs/acme/widgets/activity.log'),
     '2026-10-01 12:00:00 Run #9 started: commands/issue/9-20261001T120000+0000.log\n2026-10-01 12:20:00 Run #9 ended: merged\n');
   server = spawn(binary, ['console', '--no-sign-in'], { env: { ...process.env, HOME: home }, stdio: ['ignore', 'pipe', 'inherit'] });
@@ -87,7 +93,7 @@ test('Lanes scales every window, nests child Runs and fits 390 px without CSP vi
   for (const hours of [3.5, 12, 24]) {
     await page.goto(`${origin}/?page=lanes&hours=${hours}`);
     assert.equal(await page.locator('[name="hours"]').inputValue(), String(hours));
-    assert.equal(await page.locator('.lane').count(), 7);
+    assert.equal(await page.locator('.lane').count(), 9);
     assert.equal(await page.locator('.lane').filter({ hasText: 'acme/widgets#2' }).locator('.time-run').count(), 2);
     const complete = page.locator('.time-run').filter({ hasText: 'acme/widgets#3' });
     const track = await complete.locator('.timeline').boundingBox();
@@ -155,22 +161,51 @@ test('time headings distinguish a live Pickup run and its Run and name kinds onc
   }
 });
 
-test('Stages pins live Runs, matches CLI order and opens the selected child Run at 390 px', { skip: process.platform !== 'linux' }, async t => {
-  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+test('Stages groups runs, scrolls in both views and remembers the view at phone and desktop widths', { skip: process.platform !== 'linux' }, async t => {
+  const context = await browser.newContext();
   t.after(() => context.close());
   const page = await context.newPage();
   await page.goto(`${origin}/?page=stages`);
   const status = JSON.parse(execFileSync(binary, ['status', '--all', '--json'], { env: { ...process.env, HOME: home } }));
   const flatten = command => [command, ...(command.dispatched ?? []).flatMap(flatten), ...(command.children ?? []).flatMap(flatten)];
   const runs = status.commands.flatMap(flatten);
-  runs.sort((a, b) => (a.state !== 'live') - (b.state !== 'live') || Date.parse(b.ended_at ?? b.started_at) - Date.parse(a.ended_at ?? a.started_at));
-  assert.deepEqual(await page.locator('thead .peek-link').allTextContents(), runs.map(run => {
+  const subjects = runs.map(run => {
     const kind = run.kind === 'Run' ? 'Ticket run' : run.kind;
     return run.issue ? `${kind} · ${run.repository}#${run.issue.number}` : `${kind} on ${run.repository}`;
-  }));
-  assert.equal(await page.locator('thead .command').first().getAttribute('data-command'), runs[0].record_path ?? `${join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json')}::pickup-fixture`);
-  assert.match(await page.locator('.stage-grid').first().textContent(), /Running ·/);
-  assert.match(await page.locator('.stage-grid').first().textContent(), /Usual range: 10–10 min/);
+  });
+  assert.equal(await page.getByLabel('View', { exact: true }).inputValue(), 'all');
+  const allHeadings = await page.locator('thead .peek-link').allTextContents();
+  const implementCells = page.locator('tbody tr').filter({ has: page.getByRole('rowheader', { name: 'implement', exact: true }) }).locator('td');
+  assert.match(await implementCells.nth(allHeadings.indexOf('Ticket run · aaa/first#8')).textContent(), /Usual range: 30–30 min/);
+  assert.match(await implementCells.nth(allHeadings.indexOf('Ticket run · acme/widgets#3')).textContent(), /Usual range: 10–10 min/);
+  for (const width of [390, 1280]) {
+    await page.setViewportSize({ width, height: 844 });
+    for (const mode of ['all', 'repository']) {
+      await page.getByLabel('View', { exact: true }).selectOption(mode);
+      await page.waitForFunction(count => document.querySelectorAll('.stage-grid').length === count, mode === 'all' ? 1 : 2);
+      assert.deepEqual((await page.locator('thead .peek-link').allTextContents()).sort(), [...subjects].sort());
+      const grid = page.locator('.stage-section').filter({ has: page.locator('thead .peek-link', { hasText: 'acme/widgets#6' }) });
+      const headings = await grid.locator('thead .peek-link').allTextContents();
+      assert.equal(headings[headings.indexOf('Spec run · acme/widgets#2') + 1], 'Ticket run · acme/widgets#6');
+      assert.ok(headings.indexOf('Ticket run · acme/widgets#5') < headings.indexOf('Pickup run · acme/widgets#1'));
+      assert.match(await grid.locator('.run-context').filter({ hasText: 'Ticket of' }).textContent(), /Spec run · acme\/widgets#2/);
+      const scroll = grid.locator('.stage-scroll');
+      const label = grid.locator('tbody th').first();
+      const left = (await label.boundingBox()).x;
+      await scroll.evaluate(node => { node.scrollLeft = node.scrollWidth; });
+      assert.ok(await scroll.evaluate(node => node.scrollLeft > 0));
+      assert.ok(Math.abs((await label.boundingBox()).x - left) < 1);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      await grid.getByRole('button', { name: 'Newest runs' }).click();
+      assert.equal(await scroll.evaluate(node => node.scrollLeft), 0);
+    }
+  }
+  await page.reload();
+  await page.waitForFunction(() => document.querySelectorAll('.stage-grid').length === 2);
+  assert.equal(await page.getByLabel('View', { exact: true }).inputValue(), 'repository');
+  const widgets = page.locator('.stage-grid').filter({ has: page.locator('thead .peek-link', { hasText: 'acme/widgets#6' }) });
+  assert.match(await widgets.textContent(), /Running ·/);
+  assert.match(await widgets.textContent(), /Usual range: 10–10 min/);
   const historical = page.locator('.stage-grid').filter({ has: page.locator('thead .peek-link', { hasText: 'acme/widgets#9' }) });
   const headers = await historical.locator('thead .peek-link').allTextContents();
   const historicalCell = historical.locator('tbody tr').first().locator('td').nth(headers.indexOf('Ticket run · acme/widgets#9'));
@@ -183,4 +218,125 @@ test('Stages pins live Runs, matches CLI order and opens the selected child Run 
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   await page.keyboard.press('Escape');
   assert.equal(await page.locator('#peek').isVisible(), false);
+});
+
+test('Stages live insertions preserve the visible Ticket, link focus and selected view', async () => {
+  for (const width of [390, 1280]) for (const view of ['all', 'repository']) for (const position of ['left', 'older']) {
+    const context = await browser.newContext({ viewport: { width, height: 844 } });
+    const page = await context.newPage();
+    const folder = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+    const added = [join(folder, '20-fixture.command.json'), join(folder, '21-fixture.command.json')];
+    try {
+      await page.goto(`${origin}/?page=stages`);
+      await page.getByLabel('View', { exact: true }).selectOption(view);
+      await page.waitForFunction(count => document.querySelectorAll('.stage-grid').length === count, view === 'all' ? 1 : 2);
+      const ticket = page.locator('thead .command').filter({ has: page.getByRole('link', { name: `Ticket run · acme/widgets#${position === 'left' ? 5 : 6}`, exact: true }) });
+      const link = ticket.locator('.peek-link');
+      await link.focus();
+      await ticket.evaluate((node, position) => {
+        const scroll = node.closest('.stage-scroll');
+        if (position === 'left') scroll.scrollLeft = 0;
+        else scroll.scrollLeft += node.getBoundingClientRect().left - scroll.getBoundingClientRect().left - 155;
+      }, position);
+      const left = (await ticket.boundingBox()).x;
+      const selector = await ticket.getAttribute('data-command');
+      for (const [index, path] of added.entries()) {
+        const fixture = JSON.parse(await readFile(join(folder, '6-fixture.command.json'), 'utf8'));
+        fixture.issue.number = 20 + index;
+        fixture.issue.title = `Live insertion ${index}`;
+        fixture.started_at = new Date().toISOString();
+        if (index === 0) delete fixture.parent_record;
+        await writeFile(path, JSON.stringify(fixture));
+        await page.locator('thead .command', { hasText: fixture.issue.title }).waitFor();
+        assert.ok(Math.abs((await ticket.boundingBox()).x - left) < 1, `${width} ${view} ${position}: insertion ${index} moved the Ticket`);
+        assert.equal(await page.evaluate(() => document.activeElement?.className), 'peek-link');
+        assert.equal(await page.locator('.command[aria-current="true"]').getAttribute('data-command'), selector);
+        assert.equal(await page.getByLabel('View', { exact: true }).inputValue(), view);
+      }
+      const section = ticket.locator('xpath=ancestor::section');
+      await section.getByRole('button', { name: 'Newest runs' }).focus();
+      await page.keyboard.press('Space');
+      assert.equal(await section.locator('.stage-scroll').evaluate(node => node.scrollLeft), 0);
+    } finally {
+      await context.close();
+      await Promise.all(added.map(path => rm(path, { force: true })));
+    }
+  }
+});
+
+test('Stages handles invalid or unavailable preferences and preserves selector focus on a live update', async () => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/3-fixture.command.json');
+  const before = await readFile(path, 'utf8');
+  for (const storage of ['invalid', 'unavailable', 'unwritable']) {
+    const context = await browser.newContext();
+    await context.addInitScript(storage => {
+      if (storage === 'invalid') localStorage.setItem('thirdshift:console:stages-view', 'unexpected');
+      if (storage === 'unavailable') Object.defineProperty(window, 'localStorage', { get() { throw new Error('Storage denied'); } });
+      if (storage === 'unwritable') Storage.prototype.setItem = () => { throw new Error('Storage full'); };
+    }, storage);
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', error => errors.push(error.message));
+    try {
+      await page.goto(`${origin}/?page=stages`);
+      const selector = page.getByLabel('View', { exact: true });
+      assert.equal(await selector.inputValue(), 'all');
+      await selector.focus();
+      await page.keyboard.press('ArrowDown');
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.querySelectorAll('.stage-grid').length === 2);
+      const fixture = JSON.parse(before);
+      fixture.issue.title = `Focus during ${storage} preference storage`;
+      await writeFile(path, JSON.stringify(fixture));
+      await page.locator('thead .command', { hasText: fixture.issue.title }).waitFor();
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'stages-view');
+      assert.equal(await selector.inputValue(), 'repository');
+      assert.deepEqual(errors, []);
+    } finally {
+      await context.close();
+      await writeFile(path, before);
+    }
+  }
+});
+
+test('Stages orders starts within the same second by their recorded time', async t => {
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  const folder = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const paths = [3, 4].map(number => join(folder, `${number}-fixture.command.json`));
+  const before = await Promise.all(paths.map(path => readFile(path, 'utf8')));
+  try {
+    const second = Math.floor(Date.now() / 1000) * 1000;
+    for (const [index, path] of paths.entries()) {
+      const fixture = JSON.parse(before[index]);
+      fixture.started_at = new Date(second + [100, 900][index]).toISOString();
+      await writeFile(path, JSON.stringify(fixture));
+    }
+    const page = await context.newPage();
+    await page.goto(`${origin}/?page=stages`);
+    const headings = await page.locator('thead .peek-link').allTextContents();
+    assert.ok(headings.indexOf('Ticket run · acme/widgets#4') < headings.indexOf('Ticket run · acme/widgets#3'));
+  } finally {
+    await Promise.all(paths.map((path, index) => writeFile(path, before[index])));
+  }
+});
+
+test('Stages keeps its scrolling table and keyboard access in every Theme', async t => {
+  const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  await page.goto(`${origin}/?page=stages`);
+  for (const theme of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) for (const mode of ['light', 'dark']) {
+    await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, `${theme}-${mode}`);
+    const scroll = page.locator('.stage-scroll');
+    await scroll.focus();
+    await scroll.evaluate(node => { node.scrollLeft = 0; });
+    const label = page.locator('tbody th').first();
+    const left = (await label.boundingBox()).x;
+    await page.locator('thead .command').last().focus();
+    assert.ok(await scroll.evaluate(node => node.scrollLeft > 0), `${theme}-${mode}`);
+    assert.ok(Math.abs((await label.boundingBox()).x - left) < 1);
+    assert.equal(await label.evaluate(node => getComputedStyle(node).display), 'table-cell');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  }
 });
