@@ -186,6 +186,26 @@ fn experiments_exposes_queued_running_and_retained_session_evidence() {
         String::from_utf8_lossy(&cli.stderr)
     );
     assert!(String::from_utf8_lossy(&cli.stdout).contains("Trial evidence"));
+    let session_json = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+            .env("HOME", home.path())
+            .args(["experiments", &id, "--session", session, "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let evidence = session_json();
+    assert_eq!(evidence["id"], session);
+    assert_eq!(evidence["trace"], false);
+    assert_eq!(
+        evidence["contents"],
+        fs::read_to_string(attempt.join("session/stdout.jsonl")).unwrap()
+    );
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get(&format!("/experiments/{id}")).text().unwrap();
     assert!(html.contains("v1.0"));
@@ -220,6 +240,14 @@ fn experiments_exposes_queued_running_and_retained_session_evidence() {
     let html = response.text().unwrap();
     assert!(html.contains("Session trace"));
     assert!(html.contains("Trial evidence"));
+    let evidence = session_json();
+    assert_eq!(evidence["trace"], true);
+    assert!(
+        evidence["contents"]
+            .as_str()
+            .unwrap()
+            .contains("Trial evidence")
+    );
 
     #[cfg(unix)]
     {

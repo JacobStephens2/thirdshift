@@ -103,7 +103,7 @@ const PAGES: &[PageRoute] = &[
     },
     PageRoute {
         path: "/experiments/{id}/sessions/{session}",
-        cli: &["thirdshift experiments id --session session"],
+        cli: &["thirdshift experiments id --session session --json"],
         method: Method::GET,
         view: View::ExperimentSession,
     },

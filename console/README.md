@@ -206,7 +206,8 @@ intervals, pending rechecks, Arm comparison and folded Bar. A Trial or Eval task
 opens the Peek; each retained attempt links to its Session log or Session trace.
 Both pages use the same view as `thirdshift experiments [<id>] --json`, including
 the saved refs/title, end time, resume command, active Trials and session IDs.
-`thirdshift experiments <id> --session <session-id>` reads a listed session.
+`thirdshift experiments <id> --session <session-id> [--json]` reads a listed
+session; JSON returns its `id`, `trace` flag and `contents`.
 These pages poll every two seconds independently of Command-record events, and
 retain folds, filters and the open Peek. Rechecks stay in the CLI; Copy command
 copies the current Trial's command. `node --test console/tests/experiments.test.cjs`

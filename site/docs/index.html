@@ -394,7 +394,7 @@ thirdshift evals prepare-arms &lt;repository&gt; &lt;baseline-commit&gt; &lt;bas
 thirdshift experiment &lt;candidate&gt; [--baseline &lt;ref&gt;] [--suite &lt;name&gt;] [--json]  # run or resume an Experiment
 thirdshift experiment --release &lt;commit&gt; [--json]  # use the last release tag and touched suites
 thirdshift experiments [&lt;id&gt;] [--json]  # list Experiments or show one
-thirdshift experiments &lt;id&gt; --session &lt;session-id&gt;  # read a Trial&#39;s retained session from its inventory
+thirdshift experiments &lt;id&gt; --session &lt;session-id&gt; [--json]  # read a Trial&#39;s retained session from its inventory
 thirdshift recheck &lt;id&gt; &lt;trial&gt; &lt;pass|fail&gt; --reason &lt;text&gt; [--wrong-finding &lt;true|false&gt;] [--json]
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift &lt;version&gt;
