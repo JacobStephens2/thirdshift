@@ -486,6 +486,8 @@ that Model grades; otherwise the User config's default choice grades. The
 Grader choice and executable are fixed before Trials start. Graders currently
 run without a sandbox too, until #1014.
 
+Each Trial and each model Grader runs in a scope of its own, with the `[trial]` caps, and raises its own `oom_score_adj` to the maximum, so a system-wide kill takes it before the factory. A Trial its cap kills dies alone and is void with `memory_cap`, from the scope's `memory.events` or journal evidence. An agent's own out-of-memory error stays failed. Code checks run the Eval task's own commands directly, under the Trial timeout but no memory cap.
+
 Each Trial retains the model's pass/fail, reason, wrong-finding flag and
 borderline mark beside its mechanical checks. A mechanical failure still fails
 the Trial. Wrong-finding flags enter the paired Verdict; the Verdict also shows
@@ -732,6 +734,8 @@ With `email.always = true`, every Run sends a [Run notification](#run-notificati
 `spec.parallel` sets how many Tickets a [Spec run](#spec-runs) runs at once, by default 3. It must be a whole number from 1 up; `parallel <n>` on the command line wins over it for one Spec run.
 
 `pickup.limit` sets the [Claim limit](#the-claim-limit): how many open issues labelled `in-progress` stop a [Pickup run](#pickup-runs) from taking another, by default 3. It must be a whole number from 1 up. There is no command-line flag for it.
+
+`trial.memory_high`, `trial.memory_max` and `trial.memory_swap_max` cap each Trial and each model Grader in its own scope, from `systemd-run --user --scope`. Past `memory_high` the scope throttles. Past `memory_max` its processes are killed and the Trial is void. `memory_swap_max` bounds its swap. They default to `1G`, `2G` and `1G`, measured from the largest Harness resident sizes with headroom for two workers beside the factory's builds on an 8 GiB host. Each must be a byte count systemd accepts, such as `512M`, `2G` or `infinity`. There is no command-line flag for them. Scopes need your user manager: run `loginctl enable-linger <user>` once, so they work while you are logged out. Without a reachable manager Trials and Graders run directly, still with their raised `oom_score_adj`, and a warning names the linger step.
 
 `logs.dir` sets the root of the [logs](#logs), with each repository's in its `<owner>/<repo>/` folder, created if missing. It must be an absolute path, `~` or a path starting with `~/`, where `~` stands for `$HOME`. A relative path stops the Run before any work, since the directory a Run is launched from is no base for a setting that holds for every Run.
 

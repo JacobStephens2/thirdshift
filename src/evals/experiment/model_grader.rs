@@ -4,7 +4,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, ensure};
@@ -314,15 +313,26 @@ fn grade(grader: &Grader, directory: &Path, packet: &Packet, timeout: u64) -> Re
     let choice = grader.choice();
     let adapter = choice.harness.adapter();
     let invocation = adapter.session(&choice, None, &prompt);
+    // Each Grader runs in a scope of its own, with the Trial caps, and raises
+    // its own `oom_score_adj`. A Grader the cap kills dies alone; its failure
+    // below names the cap from the wrapper's `memory.events` evidence.
+    let caps = crate::scope::Caps::from_config_or_env(&crate::config::UserConfig::load()?)?;
+    let mut launched =
+        crate::scope::grader_command(&grader.harness.path, &invocation.args, &workspace, &caps)?;
+    launched
+        .command
+        .stderr(fs::File::create(workspace.join("stderr"))?)
+        .env("THIRDSHIFT_GRADER_PACKET", &input)
+        .env("THIRDSHIFT_GRADER_SCORES", &scores);
+    let scope = launched.scope;
+    // The unit name stays in the workspace for `journalctl --user -u` after.
+    if let Some(scope) = &scope {
+        fs::write(workspace.join("scope"), &scope.unit)?;
+    }
     let ended = Recording::for_trial().run(
         "model Grader",
         &choice,
-        Command::new(&grader.harness.path)
-            .args(invocation.args)
-            .current_dir(&workspace)
-            .stderr(fs::File::create(workspace.join("stderr"))?)
-            .env("THIRDSHIFT_GRADER_PACKET", &input)
-            .env("THIRDSHIFT_GRADER_SCORES", &scores),
+        &mut launched.command,
         Input {
             prompt: &prompt,
             stdin: invocation.stdin.as_deref(),
@@ -334,7 +344,18 @@ fn grade(grader: &Grader, directory: &Path, packet: &Packet, timeout: u64) -> Re
     );
     interrupt::check()?;
     let ended = ended.map_err(|_| {
-        anyhow::anyhow!("model Grader session failed; see private Grader artifacts")
+        if scope
+            .as_ref()
+            .is_some_and(|scope| scope.journal_oom_killed())
+        {
+            anyhow::anyhow!(
+                "model Grader hit its memory cap ({}); see private Grader artifacts, \
+                 and raise the trial.memory_max User config to retry",
+                crate::scope::oom_cause()
+            )
+        } else {
+            anyhow::anyhow!("model Grader session failed; see private Grader artifacts")
+        }
     })?;
     ensure!(
         ended.killed.is_empty(),

@@ -40,6 +40,7 @@ mod resend_key;
 mod run;
 mod run_ending;
 mod sandbox;
+mod scope;
 mod security;
 mod session;
 mod setup;
@@ -264,6 +265,11 @@ fn main() -> ExitCode {
         }
         Ok(Command::ReleaseSummary) => return release_summary(),
         Ok(Command::Trial(request)) => return printed(trial::run(&request)),
+        Ok(Command::OomExec { program, args }) => match scope::oom_exec(&program, &args) {
+            // Unreachable on success: `exec` replaces this process.
+            Ok(()) => return ExitCode::SUCCESS,
+            Err(error) => return failure(&error),
+        },
         Ok(Command::EmailTest(to)) => {
             return outcome(
                 UserConfig::load().and_then(|config| email::send_test(to, &config.email)),

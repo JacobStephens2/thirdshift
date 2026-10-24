@@ -11,6 +11,19 @@ use support::Scenario;
 /// Harnesses stay observable at fixed scenario paths.
 const NO_SANDBOX: [(&str, &str); 1] = [("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")];
 
+/// Whether Trial scopes can run here: systemd-run plus a reachable user
+/// manager, which logged-out launchers need lingering for.
+fn scope_available() -> bool {
+    std::process::Command::new("systemd-run")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+        && std::process::Command::new("systemctl")
+            .args(["--user", "show", "-p", "SystemState", "--value"])
+            .output()
+            .is_ok_and(|output| output.status.success())
+}
+
 #[path = "experiments/model_graders.rs"]
 mod model_graders;
 
@@ -478,6 +491,11 @@ python3 - <<'PY'
 import json, os
 packet = json.load(open(os.environ['THIRDSHIFT_GRADER_PACKET']))
 json.dump({'scores': [dict(label=trial['label'], passed=True, reason='Written criteria met.', wrong_finding=False, borderline=False) for trial in packet['trials']]}, open(os.environ['THIRDSHIFT_GRADER_SCORES'], 'w'))
+try:
+    adj = open('/proc/self/oom_score_adj').read().strip()
+except OSError:
+    adj = 'unknown'
+open(os.environ['THIRDSHIFT_GRADER_SCORES'] + '.adj', 'w').write(adj + '\n')
 PY
 "#).unwrap();
         for name in ["claude", "codex"] {
@@ -1595,6 +1613,146 @@ fn trial_only_memory_caps_are_counted_per_arm_and_repeated_caps_are_findings() {
             shown.stdout
         );
     }
+}
+
+#[test]
+fn a_trial_over_its_cap_dies_alone_and_is_void_while_others_carry_on() {
+    if !scope_available() {
+        println!("SKIPPED (a Trial over its cap dies alone): no systemd user manager");
+        return;
+    }
+    if std::process::Command::new("python3")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        println!("SKIPPED (a Trial over its cap dies alone): no python3");
+        return;
+    }
+    // The scenario environment is isolated, so forward the user bus: without
+    // it the user manager is unreachable and Trials fall back to direct.
+    let (Ok(bus), Ok(runtime)) = (
+        std::env::var("DBUS_SESSION_BUS_ADDRESS"),
+        std::env::var("XDG_RUNTIME_DIR"),
+    ) else {
+        println!("SKIPPED (a Trial over its cap dies alone): no user bus in test env");
+        return;
+    };
+    let fixture = Fixture::new();
+    // The Candidate Arm eats 2 GiB under a small test cap, so its Trial dies
+    // alone; the Baseline Arm runs the default fake Harness and carries on.
+    fs::write(
+        fixture.scenario.path(&format!(
+            "home/.thirdshift/evals/builds/{}/thirdshift",
+            fixture.candidate
+        )),
+        "#!/bin/sh\nexec python3 -c 'a=[bytearray(1000000) for _ in range(2000)]'\n",
+    )
+    .unwrap();
+    let run = fixture.scenario.run_with_env(
+        &["experiment", "candidate", "--json"],
+        &[
+            ("THIRDSHIFT_TRIAL_NO_SANDBOX", "1"),
+            ("THIRDSHIFT_TRIAL_MEMORY_HIGH", "300M"),
+            ("THIRDSHIFT_TRIAL_MEMORY_MAX", "300M"),
+            ("THIRDSHIFT_TRIAL_MEMORY_SWAP_MAX", "0"),
+            ("DBUS_SESSION_BUS_ADDRESS", bus.as_str()),
+            ("XDG_RUNTIME_DIR", runtime.as_str()),
+        ],
+    );
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment: Value = serde_json::from_str(&run.stdout).unwrap();
+    let results = experiment["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2, "{experiment}");
+    let baseline = results
+        .iter()
+        .find(|result| result["arm"] == "baseline")
+        .unwrap();
+    let candidate = results
+        .iter()
+        .find(|result| result["arm"] == "candidate")
+        .unwrap();
+    assert_eq!(baseline["outcome"], "succeeded", "{baseline}");
+    assert_eq!(candidate["outcome"], "void", "{candidate}");
+    // The default Bar retries Void Trials twice: three cap kills.
+    let attempts = candidate["attempts"].as_array().unwrap();
+    assert_eq!(attempts.len(), 3, "{candidate}");
+    for attempt in attempts {
+        assert_eq!(attempt["void_cause"], "memory_cap", "{attempt}");
+        assert!(
+            attempt["cause"].as_str().unwrap().contains("memory.events"),
+            "{attempt}"
+        );
+    }
+    assert_eq!(experiment["voids"]["candidate"]["causes"]["memory_cap"], 3);
+    let findings = experiment["findings"].as_array().unwrap();
+    assert!(
+        findings.iter().any(|finding| finding
+            .as_str()
+            .unwrap()
+            .contains("Candidate Arm repeatedly hit its memory cap")),
+        "{findings:?}"
+    );
+    // Both Trials and the model Grader ran in scopes of their own: each
+    // attempt and Grader workspace kept its scope's unit name. One Baseline
+    // attempt, three Candidate attempts, one Grader workspace.
+    let directory = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}",
+        experiment["id"].as_str().unwrap()
+    ));
+    let scopes_in = |area: &str| {
+        let mut scopes = Vec::new();
+        for holder in fs::read_dir(directory.join(area))
+            .unwrap()
+            .map(Result::unwrap)
+        {
+            if !holder.path().is_dir() {
+                continue;
+            }
+            for run in fs::read_dir(holder.path()).unwrap().map(Result::unwrap) {
+                if !run.path().is_dir() {
+                    continue;
+                }
+                let scope = run.path().join("scope");
+                if scope.is_file() {
+                    scopes.push(scope);
+                }
+            }
+        }
+        scopes
+    };
+    let trials = scopes_in("trials");
+    let graders = scopes_in("graders");
+    assert_eq!(trials.len(), 4, "{trials:?}");
+    assert_eq!(graders.len(), 1, "{graders:?}");
+    for scope in trials.into_iter().chain(graders) {
+        assert!(
+            fs::read_to_string(&scope).unwrap().ends_with(".scope"),
+            "{scope:?}"
+        );
+    }
+    // The Grader raised its own `oom_score_adj` too, inherited from its scope.
+    let mut adjs = Vec::new();
+    for holder in fs::read_dir(directory.join("graders"))
+        .unwrap()
+        .map(Result::unwrap)
+    {
+        for run in fs::read_dir(holder.path()).unwrap().map(Result::unwrap) {
+            if !run.path().is_dir() {
+                continue;
+            }
+            for file in fs::read_dir(run.path()).unwrap().map(Result::unwrap) {
+                if file
+                    .path()
+                    .extension()
+                    .is_some_and(|extension| extension == "adj")
+                {
+                    adjs.push(fs::read_to_string(file.path()).unwrap());
+                }
+            }
+        }
+    }
+    assert_eq!(adjs, ["1000\n"]);
 }
 
 #[test]

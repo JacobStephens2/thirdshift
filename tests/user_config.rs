@@ -142,6 +142,28 @@ fn a_spec_parallel_that_is_not_a_whole_number_from_1_up_stops_the_run() {
 }
 
 #[test]
+fn a_trial_memory_cap_systemd_cannot_use_stops_the_run() {
+    for config in [
+        "[trial]\nmemory_high = \"much\"\n",
+        "[trial]\nmemory_max = \"2XB\"\n",
+        "[trial]\nmemory_swap_max = \"\"\n",
+    ] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(config);
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "{config}: {}", result.stderr);
+        scenario.assert_rejected_before_any_work(&result, &path.display().to_string());
+        assert!(
+            result.stderr.contains("must be a byte count"),
+            "stderr: {}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
 fn a_value_of_the_wrong_type_stops_the_run_naming_the_key() {
     for config in ["merge = true\n", "[merge]\nalways = \"yes\"\n"] {
         let scenario = Scenario::new();
