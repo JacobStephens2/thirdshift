@@ -439,10 +439,21 @@ fn http_slowdown_survives_restarts_and_allowed_accounts_still_need_a_password() 
     assert_eq!(sign_in(&console, EMAIL, PASSWORD).status(), 429);
 }
 
+const REVOCATIONS: [&str; 3] = ["sign-out", "password", "allowlist"];
+
+fn revoke_session(home: &Path, how: &str) {
+    match how {
+        "sign-out" => assert!(cli(home, &["console", "sign-out"]).status.success()),
+        "password" => assert!(password(home, None, PASSWORD, PASSWORD).0.success()),
+        "allowlist" => allow(home, false),
+        _ => unreachable!(),
+    }
+}
+
 #[cfg(target_os = "linux")]
 #[test]
 fn an_open_log_stream_closes_when_its_session_is_revoked() {
-    for revoke in ["sign-out", "password", "allowlist"] {
+    for revoke in REVOCATIONS {
         let home = configured();
         assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
         let folder = home
@@ -486,14 +497,7 @@ fn an_open_log_stream_closes_when_its_session_is_revoked() {
             String::from_utf8_lossy(&buffer[..first]).contains("\"done\":false"),
             "fixture must be a live stream"
         );
-        match revoke {
-            "sign-out" => assert!(cli(home.path(), &["console", "sign-out"]).status.success()),
-            "password" => {
-                assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
-            }
-            "allowlist" => allow(home.path(), false),
-            _ => unreachable!(),
-        }
+        revoke_session(home.path(), revoke);
         let mut rest = String::new();
         response.read_to_string(&mut rest).unwrap();
         assert!(!rest.contains("first line"), "{revoke}");
@@ -507,7 +511,7 @@ fn an_open_log_stream_closes_when_its_session_is_revoked() {
 
 #[test]
 fn an_open_inbox_stream_closes_when_its_session_is_revoked() {
-    for revoke in ["sign-out", "password", "allowlist"] {
+    for revoke in REVOCATIONS {
         let home = configured();
         assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
         let console = Console::start_mode(
@@ -530,14 +534,7 @@ fn an_open_inbox_stream_closes_when_its_session_is_revoked() {
             first.push_str(&line);
         }
         assert!(first.contains("event: commands"));
-        match revoke {
-            "sign-out" => assert!(cli(home.path(), &["console", "sign-out"]).status.success()),
-            "password" => {
-                assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
-            }
-            "allowlist" => allow(home.path(), false),
-            _ => unreachable!(),
-        }
+        revoke_session(home.path(), revoke);
         let mut rest = String::new();
         stream.read_to_string(&mut rest).unwrap();
         assert_eq!(get(&console, "/events", &session).status(), 303, "{revoke}");

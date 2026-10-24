@@ -1162,7 +1162,7 @@ fn log_stream_starts_at_the_byte_offset_and_sends_only_appended_html() {
 }
 
 #[test]
-fn a_log_buffered_beyond_two_batches_streams_every_byte_without_another_change() {
+fn a_log_buffered_across_several_batches_streams_every_byte_without_another_change() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
     record(home.path(), 81, Some("merged"), 0);

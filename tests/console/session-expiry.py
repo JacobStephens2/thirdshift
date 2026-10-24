@@ -79,7 +79,9 @@ with tempfile.TemporaryDirectory(prefix="thirdshift-session-expiry-") as tempora
             return response
 
         inventory = get("/logs").read().decode()
-        link = re.search(r'href="(/logs/[^"]+)">[^<]*7-fixture\.log</a>', inventory).group(1)
+        listed = re.search(r'href="(/logs/[^"]+)">[^<]*7-fixture\.log</a>', inventory)
+        assert listed, "The live log is missing from the Logs inventory"
+        link = listed.group(1)
         streams = {"inbox": (get("/events"), b"event: commands"),
                    "log": (get(link + "/stream/0"), b"event: lines")}
         notices = {name: [] for name in streams}

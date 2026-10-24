@@ -212,6 +212,15 @@ fn closure_permits_no_further_work_and_releases_the_lease() {
                 assert!(!waiting.await.unwrap());
             }
             assert!(fixture.lease.upgrade().is_none());
+
+            // Closure during a successful check, where only the recheck stops work.
+            let mut fixture = subscribe(|changes, _| {
+                changes.close();
+                Ok(true)
+            });
+            assert!(!fixture.subscription.ready(mode).await.unwrap());
+            assert_eq!(fixture.checks(), 1);
+            assert!(fixture.lease.upgrade().is_none());
         }
     });
 }

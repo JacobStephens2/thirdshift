@@ -20,8 +20,8 @@ pub(super) enum Readiness {
 pub(super) struct Subscription {
     changes: Receiver,
     check: Check,
-    authorized: Option<u64>,
-    granted: Option<u64>,
+    authorized_accounts: Option<u64>,
+    granted_commands: Option<u64>,
     // Released on termination; None means no further work turn.
     lease: Option<Arc<Following>>,
 }
@@ -36,8 +36,8 @@ impl Subscription {
         Self {
             changes,
             check,
-            authorized: None,
-            granted: None,
+            authorized_accounts: None,
+            granted_commands: None,
             lease: Some(lease),
         }
     }
@@ -62,18 +62,18 @@ impl Subscription {
             }
             // Copy out: a watch borrow must not be held across an await.
             let current = *self.changes.borrow_and_update();
-            if self.authorized != Some(current.accounts) {
+            if self.authorized_accounts != Some(current.accounts) {
                 let check = self.check.clone();
                 if !tokio::task::spawn_blocking(move || check.allowed()).await?? {
                     return Ok(false);
                 }
                 // Recheck closure and any revision that arrived meanwhile.
-                self.authorized = Some(current.accounts);
+                self.authorized_accounts = Some(current.accounts);
                 continue;
             }
-            if mode == Readiness::Drain || self.granted != Some(current.commands) {
+            if mode == Readiness::Drain || self.granted_commands != Some(current.commands) {
                 // A change during the caller's work stays unseen until it waits.
-                self.granted = Some(current.commands);
+                self.granted_commands = Some(current.commands);
                 return Ok(true);
             }
             if self.changes.changed().await.is_err() {
