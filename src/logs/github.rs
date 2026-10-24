@@ -14,7 +14,7 @@ use anyhow::Result;
 use chrono::{DateTime, FixedOffset, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
-use super::reading::{Group, Snapshot};
+use super::reading::Snapshot;
 use crate::config::UserConfig;
 use crate::github::{GitHub, InboxState, IssueState, PullRequestState, Quotas};
 
@@ -297,11 +297,9 @@ pub(super) fn refresh(
 ) -> Result<Kept> {
     let mut kept = load(&config.logs_dir);
     if snapshot
-        .github_subjects(config.inbox_days, &kept)
+        .evaluate_inbox(config.inbox_days, &kept)
+        .refresh_work()
         .is_empty()
-        && snapshot
-            .finding_subjects(config.inbox_days, &kept)
-            .is_empty()
     {
         return Ok(kept);
     }
@@ -314,22 +312,18 @@ pub(super) fn refresh(
         Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
     }
     kept = load(&config.logs_dir);
+    // A pre-lock evaluation is advisory only. Plan from the answer reloaded
+    // under the lock; freezes and subjects share these retained row decisions.
+    let evaluation = snapshot.evaluate_inbox(config.inbox_days, &kept);
+    let work = evaluation.refresh_work();
     // From History on, a row keeps what GitHub last showed and is not read
     // again: only rows with a kept answer are frozen, so the first read
     // still looks up a row that local rules alone would call History.
-    for item in snapshot.inbox(true, config.inbox_days, &kept) {
-        for item in std::iter::once(&item).chain(&item.collapsed) {
-            if item.group == Group::History
-                && let Some(row) = item.command.selector()
-            {
-                for url in item.github_urls() {
-                    kept.freeze(row.clone(), url);
-                }
-            }
-        }
+    for target in &work.freezes {
+        kept.freeze(target.row.clone(), &target.url);
     }
-    let subjects = snapshot.github_subjects(config.inbox_days, &kept);
-    let findings = snapshot.finding_subjects(config.inbox_days, &kept);
+    let subjects = &work.subjects;
+    let findings = &work.findings;
     if kept.age.is_some_and(|age| age < fresh_for)
         || (subjects.is_empty() && findings.is_empty())
         || kept.quotas.as_ref().and_then(Quotas::warning).is_some()
@@ -410,7 +404,8 @@ pub(super) fn refresh(
                     } else {
                         subject
                             .urls
-                            .into_iter()
+                            .iter()
+                            .cloned()
                             .map(|url| {
                                 let waiting = waits.get(&url).copied().unwrap_or(false);
                                 (url, waiting)
@@ -430,7 +425,7 @@ pub(super) fn refresh(
                     }
                     kept.answered_at
                         .insert(subject.row.clone(), Utc::now().to_rfc3339());
-                    kept.findings.insert(subject.row, facts);
+                    kept.findings.insert(subject.row.clone(), facts);
                 }
                 answered = true;
             }

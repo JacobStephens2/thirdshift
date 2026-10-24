@@ -24,7 +24,10 @@ pub(crate) fn watching(config: &UserConfig) -> Result<Watching> {
     let mut watching = Watching::default();
     let kept = crate::logs::github::load(&config.logs_dir);
     watching.deadline = kept.next_warning_change();
-    if let Some(at) = snapshot.next_inbox_change(config.inbox_days, &kept) {
+    if let Some(at) = snapshot
+        .evaluate_inbox(config.inbox_days, &kept)
+        .next_change()
+    {
         deadline(at, now, &mut watching);
     }
     for entry in snapshot.entries() {
