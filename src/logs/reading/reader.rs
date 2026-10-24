@@ -1,10 +1,11 @@
-//! Captured writer lifetime and byte draining, independent of presentation.
+//! Captured writer lifetime, inventory eligibility and byte draining,
+//! independent of presentation.
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 
-use super::{Command, cache};
+use super::{Command, cache, catalog};
 use crate::logs::command_record::CommandRecord;
 
 #[derive(Clone, Debug)]
@@ -40,6 +41,8 @@ pub(crate) struct Reader {
     path: PathBuf,
     writer: Option<Writer>,
     session: Option<SessionOwner>,
+    /// The lexical root of the inventory that selected this file, if any.
+    inventory: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy)]
@@ -65,6 +68,15 @@ impl Reader {
                 name: command.record.name.clone(),
                 started_at: command.record.started_at.clone(),
             }),
+            inventory: None,
+        }
+    }
+
+    /// Require each read to find the file still listed beneath `root`.
+    pub(super) fn within(self, root: &Path) -> Self {
+        Self {
+            inventory: Some(root.to_owned()),
+            ..self
         }
     }
 
@@ -106,8 +118,12 @@ impl Reader {
         Ok(true)
     }
 
-    /// Observe completion before draining; a bounded batch is done only at EOF.
+    /// Check eligibility, then observe completion before draining; a bounded
+    /// batch is done only at EOF.
     pub(crate) fn read(&self, offset: u64, framing: Framing, budget: usize) -> Result<Batch> {
+        if let Some(root) = &self.inventory {
+            ensure!(catalog::still_listed(root, &self.path), catalog::UNLISTED);
+        }
         let complete = !self.live()?;
         let mut file = BufReader::new(
             std::fs::File::open(&self.path)
