@@ -32,8 +32,8 @@ It is also published at https://staging.thirdshift.app/. The bottom bar is the p
 
 These came out of building the data, before any design was chosen:
 
-- **Nine code-review Eval tasks can't pass the standing Bar.** With no difference at all, the wrong-findings interval is about −14 to +14 points, wider than the −10-point margin, so every code-review suite ends inconclusive. It needs about fifteen Eval tasks.
-- **A pass waits on a recheck of nearly every Candidate Trial.** With thirty Spec-review Eval tasks and no wrong findings, one wrong finding moves the interval to about −13 to +4. So each Candidate Trial is decisive under `rechecks.rs`'s flip rule: 26 Trials wait in `waiting`, and all 30 were rechecked in `pass`.
+- **The code-review suite can't pass the standing Bar** (#1252). The fixture's nine code-review Eval tasks give an interval of about −14 to +14 points with no difference at all, wider than the −10-point margin; the host's ten approved tasks give about −13 to +13. So every code-review suite ends inconclusive. It needs at least fourteen Eval tasks, and about twenty to leave room for a real difference.
+- **A pass waits on a recheck of nearly every Candidate Trial** (#1253). With thirty Spec-review Eval tasks and no wrong findings, one wrong finding moves the interval to about −13 to +4. So each Candidate Trial is decisive under `rechecks.rs`'s flip rule: 26 Trials wait in `waiting`, and all 30 were rechecked in `pass`.
 - **Rechecks stay in the CLI** (ADR 0016 lists no recheck action), and each command carries two 64-character IDs.
 - **`thirdshift experiments --json` lacks what the pages need to name and order Experiments:** the refs given (it keeps only commits), a title, the end time, running Trials (it lists finished ones), the command line that resumes, and which flip makes a Score decisive. It also sorts by ID rather than by time.
 - **Until the model Graders run, a Trial shows only its code checks,** so live, an Experiment has no differences or interval to draw.
