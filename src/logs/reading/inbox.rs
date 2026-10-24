@@ -141,10 +141,7 @@ impl InboxItem<'_> {
     /// The row's own pull request, judged by GitHub: a dispatched Ticket
     /// run's own, not its Pass's. `None` for rows with no record.
     pub(in crate::logs) fn pull_request(&self) -> Option<&str> {
-        match self.command {
-            Observation::Record(command) => command.record.pull_request.as_deref(),
-            Observation::History(_) => None,
-        }
+        record_pull_request(&self.command)
     }
 
     /// The row's state word in the Console and `status`: its Needs you kind,
@@ -372,14 +369,14 @@ pub(super) fn list<'a>(
         // pull request merged or closed. The later-Command exit wins where
         // both apply, and a reopened pull request brings back only a row
         // still in Done or Resolved: History rows are not read again.
-        let moved = left
+        let github_moved = left
             .is_none()
             .then(|| github_left(&command, github, ended))
             .flatten()
             .filter(|_| from.is_some());
         let group = if needs_you_kind.is_some() {
             Group::NeedsYou
-        } else if facts.ready && held && moved.is_none() {
+        } else if facts.ready && held && github_moved.is_none() {
             Group::ReadyForReview
         } else if landing {
             Group::Landing
@@ -391,7 +388,7 @@ pub(super) fn list<'a>(
             || left.is_some_and(|taken| {
                 cutoff.is_none_or(|cutoff| taken.with_timezone(&Local) >= cutoff)
             })
-            || moved.as_ref().is_some_and(|(_, at)| {
+            || github_moved.as_ref().is_some_and(|(_, at)| {
                 cutoff.is_none_or(|cutoff| at.with_timezone(&Local) >= cutoff)
             })
         {
@@ -413,20 +410,17 @@ pub(super) fn list<'a>(
                 collapsed: Vec::new(),
                 left_from: left
                     .map(|_| from.expect("left rows waited").to_string())
-                    .or(moved
+                    .or(github_moved
                         .as_ref()
                         .map(|_| from.expect("moved rows waited").to_string())),
                 left_reason: left
                     .map(|_| TAKEN_UP_REASON.to_string())
-                    .or(moved.as_ref().map(|(reason, _)| reason.clone())),
+                    .or(github_moved.as_ref().map(|(reason, _)| reason.clone())),
                 left_at: left
                     .map(|taken| taken.to_rfc3339())
-                    .or(moved.as_ref().map(|(_, at)| at.to_rfc3339())),
+                    .or(github_moved.as_ref().map(|(_, at)| at.to_rfc3339())),
                 github_state: state.map(|state| state.state.to_string()),
-                github_at: state.and_then(|state| {
-                    let at = state.merged_at.as_deref().or(state.closed_at.as_deref());
-                    at.map(str::to_string)
-                }),
+                github_at: state.and_then(event_time).map(str::to_string),
             });
         }
     }
@@ -457,20 +451,26 @@ pub(super) fn list<'a>(
     collapsed
 }
 
-/// What GitHub last showed for the row's own pull request, if anything: a
-/// dispatched Ticket run's own, not its Pass's.
+/// The row's own pull request URL, if its observation has a record with
+/// one: a dispatched Ticket run's own, not its Pass's.
+fn record_pull_request<'a>(observation: &'a Observation<'a>) -> Option<&'a str> {
+    match observation {
+        Observation::Record(command) => command.record.pull_request.as_deref(),
+        Observation::History(_) => None,
+    }
+}
+
+/// What GitHub last showed for the row's own pull request, if anything.
 fn github_state<'a>(
     observation: &Observation<'a>,
     github: &'a BTreeMap<String, Option<PullRequestState>>,
 ) -> Option<&'a PullRequestState> {
-    match observation {
-        Observation::Record(command) => command
-            .record
-            .pull_request
-            .as_deref()
-            .and_then(|url| github.get(url).and_then(Option::as_ref)),
-        Observation::History(_) => None,
-    }
+    record_pull_request(observation).and_then(|url| github.get(url).and_then(Option::as_ref))
+}
+
+/// The pull request's merge or close time, as GitHub wrote it.
+fn event_time(state: &PullRequestState) -> Option<&str> {
+    state.merged_at.as_deref().or(state.closed_at.as_deref())
 }
 
 /// When the row stopped waiting through GitHub: its pull request's merge
@@ -488,10 +488,7 @@ fn github_left(
     }
     let state = github_state(observation, github)?;
     let (reason, at) = match state.state {
-        PrState::Merged => (
-            MERGED_REASON.to_string(),
-            state.merged_at.as_deref().or(state.closed_at.as_deref()),
-        ),
+        PrState::Merged => (MERGED_REASON.to_string(), event_time(state)),
         PrState::Closed => (CLOSED_REASON.to_string(), state.closed_at.as_deref()),
         PrState::Open => return None,
     };

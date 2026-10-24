@@ -1746,13 +1746,16 @@ fn merged_pull_request_takes_its_ready_row_into_resolved_saying_so() {
     assert_eq!(row["left_at"], merged.as_str(), "{row}");
     assert_eq!(row["github_state"], "merged", "{row}");
     assert_eq!(row["github_at"], merged.as_str(), "{row}");
-    let age = status["github_answer_age_seconds"].as_u64().expect("{status}");
+    let age = status["github_answer_age_seconds"]
+        .as_u64()
+        .expect("{status}");
     assert!(age <= 60, "{status}");
     let text = scenario.run(&["status"]);
     assert_eq!(text.code, Some(0), "{}", text.stderr);
     assert!(
-        text.stdout
-            .contains(&format!("left ready for review: pull request merged at {merged}")),
+        text.stdout.contains(&format!(
+            "left ready for review: pull request merged at {merged}"
+        )),
         "{}",
         text.stdout
     );
@@ -1838,7 +1841,10 @@ fn rows_github_cannot_speak_for_still_age_out() {
             )
         })
         .collect();
-    assert_eq!(groups, [(7, "history".to_string()), (8, "history".to_string())]);
+    assert_eq!(
+        groups,
+        [(7, "history".to_string()), (8, "history".to_string())]
+    );
 }
 
 #[test]
@@ -1936,7 +1942,10 @@ fn dispatched_ticket_run_is_judged_by_its_own_pull_request() {
             )
         })
         .collect();
-    assert!(rows.contains(&("Pickup run".to_string(), "resolved".to_string())), "{status}");
+    assert!(
+        rows.contains(&("Pickup run".to_string(), "resolved".to_string())),
+        "{status}"
+    );
     let dispatched = status["commands"]
         .as_array()
         .unwrap()
@@ -1944,7 +1953,10 @@ fn dispatched_ticket_run_is_judged_by_its_own_pull_request() {
         .find(|row| row["kind"] == "Run")
         .expect("{status}");
     assert_eq!(dispatched["group"], "resolved", "{dispatched}");
-    assert_eq!(dispatched["left_reason"], "pull request merged", "{dispatched}");
+    assert_eq!(
+        dispatched["left_reason"], "pull request merged",
+        "{dispatched}"
+    );
     assert_eq!(dispatched["github_state"], "merged", "{dispatched}");
 }
 
@@ -1959,6 +1971,63 @@ fn status_json_gives_null_answer_age_with_nothing_to_read() {
     assert_eq!(status["github_answer_age_seconds"], Value::Null, "{status}");
     assert!(graphql_calls(&scenario).is_empty());
     assert!(!scenario.path(GITHUB_CACHE).exists());
+}
+
+#[test]
+fn reopened_pull_request_brings_back_a_done_row() {
+    let scenario = Scenario::new();
+    let ended = hours_ago(12);
+    let merged = hours_ago(6);
+    ready_record_with_pr(&scenario, 7, &ended, Some(7));
+    github_pr_is(&scenario, 7, "MERGED", Some(&merged), None);
+    let output = scenario.run(&["status", "--json"]);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(status["commands"][0]["group"], "done", "{status}");
+    github_pr_is(&scenario, 7, "OPEN", None, None);
+    fs::remove_file(scenario.path(GITHUB_CACHE)).unwrap();
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(
+        status["commands"][0]["group"], "ready for review",
+        "{status}"
+    );
+}
+
+#[test]
+fn failed_github_read_keeps_the_last_answer() {
+    let scenario = Scenario::new();
+    let ended = (chrono::Local::now() - chrono::Duration::days(10)).to_rfc3339();
+    ready_record_with_pr(&scenario, 7, &ended, Some(7));
+    github_pr_is(&scenario, 7, "OPEN", None, None);
+    // GitHub unreachable and nothing kept yet: the row not read yet goes
+    // by age.
+    scenario.gh_fails("api graphql");
+    let output = scenario.run(&["status", "--all", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(status["commands"][0]["group"], "history", "{status}");
+    assert!(!scenario.path(GITHUB_CACHE).exists());
+    // A good read keeps its answer; a later failed read keeps the last one,
+    // even for a pull request GitHub has since merged.
+    let mut gh = scenario.gh_state();
+    gh["failing"] = serde_json::json!([]);
+    scenario.write_gh_state(&gh);
+    let output = scenario.run(&["status", "--json"]);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(
+        status["commands"][0]["group"], "ready for review",
+        "{status}"
+    );
+    let merged = hours_ago(1);
+    github_pr_is(&scenario, 7, "MERGED", Some(&merged), None);
+    scenario.gh_fails("api graphql");
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let row = &status["commands"][0];
+    assert_eq!(row["group"], "ready for review", "{status}");
+    assert_eq!(row["github_state"], "open", "{row}");
 }
 
 #[test]
