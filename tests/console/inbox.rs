@@ -255,3 +255,59 @@ fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status()
         );
     }
 }
+
+#[test]
+fn taken_up_rows_say_why_they_left_on_the_console_row() {
+    use super::write_record;
+
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 40, Some("failed"), 10);
+    record(home.path(), 41, Some("merged"), 0);
+    // The later Command took up issue 40, so the ten-day-old failure stays
+    // in Resolved instead of going straight to History.
+    let path = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue/41-fixture.command.json");
+    let mut later: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    later["issue"] = serde_json::json!({
+        "number": 40,
+        "url": "https://github.com/acme/widgets/issues/40",
+        "title": "Widgets",
+    });
+    write_record(home.path(), 41, &later);
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let html = console.get("/").text().unwrap();
+    let resolved = html
+        .split("data-group=\"resolved\"")
+        .nth(1)
+        .unwrap()
+        .split("</details>")
+        .next()
+        .unwrap();
+    assert!(resolved.contains(">acme/widgets#40<"), "{resolved}");
+    let row = resolved
+        .split("<li class=\"command\"")
+        .find(|row| row.contains(">acme/widgets#40<"))
+        .expect(resolved);
+    assert!(
+        row.contains("<p class=\"left\">left needs you: taken up by a later Command started at"),
+        "{row}"
+    );
+    // The Console and status agree on the row's group and its reason.
+    let status = Command::new(binary)
+        .args(["status", "--json"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(status.status.success());
+    let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+    let item = status["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["issue"]["number"] == 40 && item["group"] == "resolved")
+        .unwrap();
+    assert_eq!(item["left_reason"], "taken up by a later Command", "{item}");
+}

@@ -40,6 +40,9 @@ pub(crate) struct Row {
     pub age: String,
     pub count: usize,
     pub cause: String,
+    /// Why and when the row left Needs you or Ready for review, empty
+    /// while it still waits or never waited.
+    pub left: String,
     pub harness: String,
     pub pull_request: String,
     pub tickets: Vec<String>,
@@ -185,6 +188,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 ),
                 count: 1,
                 cause: String::new(),
+                left: String::new(),
                 harness: String::new(),
                 pull_request: String::new(),
                 tickets: Vec::new(),
@@ -221,6 +225,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     row.state = item.state_word().into();
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
+                    row.left = item.left_line().unwrap_or_default();
                     Ok(row)
                 })
                 .collect::<Result<_>>()?;
@@ -337,6 +342,7 @@ fn row(
         age: elapsed(facts.ended_at.as_deref().unwrap_or(&facts.started_at), now),
         count: 1,
         cause: facts.cause.clone().unwrap_or_default(),
+        left: String::new(),
         harness: format!(
             "{} · {} · {}",
             facts.harness,
