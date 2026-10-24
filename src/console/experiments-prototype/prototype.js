@@ -571,7 +571,11 @@
       h += `<li class="vd-row vd-even"><button type="button" class="vd-label" data-same="${s.name}" aria-expanded="${open}">${plural(even.length, 'Eval task')} with no difference</button>${plot(`<span class="vd-dot vd-stack" style="left:${xpos(0, AX)}%"><span>${even.length}</span></span>`)}<span class="vd-val">0</span></li>`;
       if (open) h += even.map(row).join('');
     }
-    if (waiting.length) h += `<li class="vd-row vd-note"><span class="vd-label x-dim">${plural(waiting.length, 'Eval task')} not finished or not graded yet</span></li>`;
+    // Until the model Graders score a task it has no difference to plot, so its row shows its Trials so far.
+    if (waiting.length) {
+      if (!scored.length) h += `<li class="vd-row vd-note"><span class="vd-label x-dim">Each Eval task gets its point once the model Graders score it, after the last Trial. Trials so far, Baseline then Candidate:</span></li>`;
+      h += waiting.map(i => `<li class="vd-row vd-wait"><button type="button" class="vd-label" data-peek-task="${esc(s.name)}|${esc(i.task)}" data-focus="dw-${esc(i.key)}">${esc(i.task)}</button><span class="vd-progress">${i.b.map(x => glyph(mark(e, x))).join('')}<span class="vd-gap"></span>${i.c.map(x => glyph(mark(e, x))).join('')}</span><span class="vd-val x-dim">${i.b.concat(i.c).filter(isResult).length}/${2 * i.n}</span></li>`).join('');
+    }
     if (dropped.length) h += `<li class="vd-row vd-note"><span class="vd-label x-dim">Dropped as void: ${dropped.map(i => esc(i.task)).join(', ')}</span></li>`;
     if (v) {
       const a = v[metric];

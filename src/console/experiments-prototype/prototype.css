@@ -209,6 +209,9 @@ body.proto-embed #proto-main { padding-bottom: 8px; }
 span.vd-label { color: var(--text); cursor: default; }
 .vd-note span.vd-label, .vd-summary .vd-label { white-space: normal; font-family: var(--font-body); }
 .vd-even .vd-label { font-family: var(--font-body); }
+.vd-note > .vd-label { grid-column: 1 / -1; }
+.vd-progress { display: flex; align-items: center; gap: 3px; padding: 2px 0; }
+.vd-gap { width: 12px; }
 .vd-plot { position: relative; height: 24px; }
 .vd-margin { position: absolute; top: 0; bottom: 0; border-left: 1px dashed var(--look); }
 .vd-zero { position: absolute; top: 0; bottom: 0; border-left: 1px solid var(--dim); }
@@ -248,7 +251,7 @@ span.vd-label { color: var(--text); cursor: default; }
   .vd-axisrow, .vd-row { grid-template-columns: minmax(0, 1fr) auto; }
   .vd-row > .vd-label { grid-row: 1; grid-column: 1; }
   .vd-row > .vd-val { grid-row: 1; grid-column: 2; }
-  .vd-row > .vd-plot { grid-row: 2; grid-column: 1 / -1; }
+  .vd-row > :is(.vd-plot, .vd-progress) { grid-row: 2; grid-column: 1 / -1; }
   .vd-axisrow > span:not(.vd-axis) { display: none; }
   .vd-axisrow > .vd-axis { grid-column: 1 / -1; }
   .vd-trials { grid-template-columns: 1fr; }
