@@ -183,7 +183,12 @@ fn exported<'a>(spans: &'a [Value], id: &Value) -> &'a Value {
 
 #[test]
 fn waterfall_shows_a_selected_child_subtree_while_export_keeps_the_whole_owner() {
-    let mut states = vec![(Some("merged"), "merged"), (None, "died")];
+    // Vary only the selected Ticket, so its root status is distinguishable
+    // from the merged owner's.
+    let mut states = vec![
+        (Some("ready for review"), "ready for review"),
+        (None, "died"),
+    ];
     #[cfg(unix)]
     states.push((None, "running"));
     for (outcome, status) in states {
@@ -192,11 +197,7 @@ fn waterfall_shows_a_selected_child_subtree_while_export_keeps_the_whole_owner()
         #[cfg(unix)]
         let work =
             super::watching::FixtureProcess(Command::new("sleep").arg("60").spawn().unwrap());
-        let mut parent = record(home.path(), 7, outcome, 0);
-        #[cfg(unix)]
-        if status == "running" {
-            parent = super::watching::live_record(home.path(), 7, work.0.id());
-        }
+        let mut parent = record(home.path(), 7, Some("merged"), 0);
         parent["stages"] = json!([{ "name": "Tickets", "began_at": parent["started_at"] }]);
         write_record(home.path(), 7, &parent);
         let dir = home
@@ -209,6 +210,15 @@ fn waterfall_shows_a_selected_child_subtree_while_export_keeps_the_whole_owner()
             child["issue"]["number"] = json!(number);
             child["parent_record"] = json!(dir.join("7-fixture.command.json"));
             child["stages"] = json!([{"name": "implement", "began_at": parent["started_at"]}]);
+            if number == 99 {
+                child["outcome"] = json!(outcome);
+                child["ended_at"] = outcome.map_or(Value::Null, |_| parent["ended_at"].clone());
+                #[cfg(unix)]
+                if status == "running" {
+                    child["process_id"] = json!(work.0.id());
+                    child["process_start"] = json!(super::watching::start(work.0.id()));
+                }
+            }
             fs::write(
                 dir.join(format!("7-fixture.issue-{number}.child.json")),
                 serde_json::to_vec(&child).unwrap(),
@@ -234,6 +244,7 @@ fn waterfall_shows_a_selected_child_subtree_while_export_keeps_the_whole_owner()
         assert_eq!(selected[0]["id"], whole[0]["id"], "{status}");
         assert!(selected[0]["name"].as_str().unwrap().contains("#99"));
         assert_eq!(selected[0]["status"], status);
+        assert_eq!(whole[0]["status"], "merged");
         assert_eq!(selected[1]["id"], run(whole, "#99").unwrap()["id"]);
         assert_eq!(selected[1]["parent_id"], selected[0]["id"]);
         assert!(run(selected, "#98").is_none() && run(selected, "#7").is_none());
@@ -319,4 +330,49 @@ fn waterfall_attaches_a_reused_session_to_its_first_stage_while_export_keeps_its
         fs::read_to_string(dir.join("logs.jsonl")).unwrap(),
         format!("{log}\n")
     );
+}
+
+#[test]
+fn export_reports_existing_files_before_session_inventory_errors() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let dir = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    fs::create_dir_all(&dir).unwrap();
+    let time = chrono::Local::now().to_rfc3339();
+    let record = json!({
+        "version": 1, "kind": "Spec run", "repository": "acme/widgets",
+        "name": "orphan", "issue": null,
+        "hostname": "fixture", "process_id": 0, "process_start": "gone",
+        "harness": "codex", "model": null, "effort": null,
+        "started_at": time, "ended_at": time,
+        "stages": [{"name": "implement", "began_at": time, "session_log": null}],
+        "session_log": null, "outcome": "merged", "cause": null,
+        "issue_branch": null, "pull_request": null
+    });
+    let log = dir.join("20261019T110000-0400~spec.command.json");
+    fs::write(&log, serde_json::to_vec(&record).unwrap()).unwrap();
+    let run = |out: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+            .args([
+                "logs",
+                log.to_str().unwrap(),
+                "--export",
+                out.to_str().unwrap(),
+            ])
+            .env("HOME", home.path())
+            .output()
+            .unwrap()
+    };
+    let existing = home.path().join("out");
+    fs::create_dir_all(&existing).unwrap();
+    fs::write(existing.join("spans.jsonl"), "").unwrap();
+    let output = run(&existing);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("export files already exist"), "{stderr}");
+    // The old order created the directory before reading the inventory.
+    let fresh = home.path().join("out2");
+    assert!(!run(&fresh).status.success());
+    assert!(fresh.is_dir());
 }

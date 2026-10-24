@@ -2,7 +2,7 @@
 use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context as _, Result, ensure};
 use chrono::{DateTime, Local};
@@ -23,9 +23,6 @@ pub fn export(input: &str, directory: &Path) -> Result<()> {
     let command = selection
         .owner
         .context("export requires a Command record")?;
-    // Whole export starts at the owner, so a Ticket keeps its siblings.
-    let nodes = ancestry::of(command, command)?;
-    let context = nodes[0].context.clone();
     fs::create_dir_all(directory)?;
     let spans_path = directory.join("spans.jsonl");
     let logs_path = directory.join("logs.jsonl");
@@ -37,13 +34,22 @@ pub fn export(input: &str, directory: &Path) -> Result<()> {
     let mut spans = tempfile::NamedTempFile::new_in(directory)?;
     let mut logs = tempfile::NamedTempFile::new_in(directory)?;
 
+    // Whole export starts at the owner, so a Ticket keeps its siblings.
+    let nodes = ancestry::of(command, command)?;
+    let context = nodes[0].context.clone();
     let mut validation = Validation::default();
     let mut recorded = Vec::new();
-    // Attachments select Session files; their requests keep recorded parents.
-    let mut sessions = BTreeSet::new();
     for node in &nodes {
-        recorded.extend(record_span(node, &mut sessions)?);
+        recorded.extend(record_span(node)?);
     }
+    // Attachments select Session files; their requests keep recorded parents.
+    let sessions: BTreeSet<_> = nodes
+        .iter()
+        .filter_map(|node| match &node.fact {
+            Fact::Session(attachment) => Some(&attachment.original),
+            _ => None,
+        })
+        .collect();
     for span in &recorded {
         validation.span(span, &context)?;
     }
@@ -120,8 +126,8 @@ pub fn export(input: &str, directory: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Project a record node with OTLP times, collecting a Session's identity.
-fn record_span(node: &Node, sessions: &mut BTreeSet<PathBuf>) -> Result<Option<Span>> {
+/// Project a record node with OTLP times; Sessions export their own spans.
+fn record_span(node: &Node) -> Result<Option<Span>> {
     let command = node.command;
     let (name, start, end, attributes) = match &node.fact {
         Fact::Command => (
@@ -145,10 +151,7 @@ fn record_span(node: &Node, sessions: &mut BTreeSet<PathBuf>) -> Result<Option<S
                 .unwrap_or_default(),
             Vec::new(),
         ),
-        Fact::Session(attachment) => {
-            sessions.insert(attachment.original.clone());
-            return Ok(None);
-        }
+        Fact::Session(_) => return Ok(None),
     };
     Ok(Some(Span {
         trace_id: Some(node.context.trace),
