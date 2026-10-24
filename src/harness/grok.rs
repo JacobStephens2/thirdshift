@@ -65,6 +65,17 @@ impl Adapter for Grok {
         args.extend(["-p".to_string(), self.skill_loading().prompt(prompt)]);
         Invocation { args, stdin: None }
     }
+    /// A Trial runs behind the allowlisting proxy, so its web search stays
+    /// off, as a release summary's does.
+    fn trial_session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation {
+        let mut invocation = self.code_review_session(choice, resume, prompt);
+        // Before `-p` and its prompt, which always come last.
+        let at = invocation.args.len() - 2;
+        invocation
+            .args
+            .splice(at..at, ["--disable-web-search".to_string()]);
+        invocation
+    }
     fn check(&self, choice: &mut Choice) -> Result<()> {
         crate::progress::step("checking the Model and Effort against grok models");
         let settled = Catalog::read()?.settle(choice.model.as_deref(), choice.effort.as_deref())?;
@@ -189,6 +200,29 @@ mod tests {
                 ("GROK_DISABLE_AUTOUPDATER", "1"),
                 ("GROK_FOLDER_TRUST", "0")
             ]
+        );
+    }
+
+    #[test]
+    fn trials_disable_web_search() {
+        let choice = Choice {
+            harness: Harness::Grok,
+            model: None,
+            effort: None,
+            chosen_by: ChosenBy::Command,
+        };
+        let trial = Grok.trial_session(&choice, None, "review");
+        // Before `-p` and its prompt, which always come last.
+        assert_eq!(
+            &trial.args[trial.args.len() - 3..],
+            ["--disable-web-search", "-p", "review"]
+        );
+        assert!(
+            !Grok
+                .session(&choice, None, "review")
+                .args
+                .iter()
+                .any(|arg| arg == "--disable-web-search")
         );
     }
 }

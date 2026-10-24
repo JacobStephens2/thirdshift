@@ -51,7 +51,7 @@ fn usage_attributes(
     }
 }
 
-pub(super) fn event_attributes(event: &Event, input_excludes_cache: bool) -> Vec<KeyValue> {
+pub(crate) fn event_attributes(event: &Event, input_excludes_cache: bool) -> Vec<KeyValue> {
     use Event::*;
     let mut attrs = Vec::new();
     let json = serde_json::to_value(event).unwrap();

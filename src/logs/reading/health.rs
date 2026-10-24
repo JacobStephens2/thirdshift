@@ -1,7 +1,6 @@
 //! Health is an observation of live work, never a persisted Command fact.
 
 use std::collections::BTreeMap;
-use std::path::Path;
 use std::time::Duration;
 
 use chrono::{DateTime, Local};
@@ -148,10 +147,9 @@ pub(super) fn observe(
     command: &mut Command,
     now: &DateTime<Local>,
     silent: Duration,
-    outer_log: Option<&Path>,
     ranges: &UsualRanges,
 ) {
-    let log = outer_log.unwrap_or(&command.command_log);
+    let mut next_change = None;
     command.usual_ranges = command
         .record
         .stages
@@ -167,36 +165,33 @@ pub(super) fn observe(
         if let Some(stage) = &command.stage
             && !StageName::is_dispatch(&stage.name)
         {
-            if let Some(range) = ranges.get(&command.record.repository, &stage.name)
-                && stage.age_seconds as f64 > range.upper_seconds
-            {
-                command.health = Some(Health::Slow {
-                    step: if stage.age_seconds as f64 >= range.upper_seconds * 2.0 {
-                        2
-                    } else {
-                        1
-                    },
-                    usual_range: range,
-                    multiple: (stage.age_seconds as f64 / range.upper_seconds.max(1.0)).floor()
-                        as u64,
-                });
+            if let Some(range) = ranges.get(&command.record.repository, &stage.name) {
+                // The first Slow step starts strictly above the upper range;
+                // the second starts at twice that range, on sampled seconds.
+                for threshold in [
+                    range.upper_seconds.floor() as u64 + 1,
+                    (range.upper_seconds * 2.0).ceil() as u64,
+                ] {
+                    schedule_transition(&mut next_change, now, threshold, stage.age_seconds as u64);
+                }
+                if stage.age_seconds as f64 > range.upper_seconds {
+                    command.health = Some(Health::Slow {
+                        step: if stage.age_seconds as f64 >= range.upper_seconds * 2.0 {
+                            2
+                        } else {
+                            1
+                        },
+                        usual_range: range,
+                        multiple: (stage.age_seconds as f64 / range.upper_seconds.max(1.0)).floor()
+                            as u64,
+                    });
+                }
             }
             // A newly entered stage cannot already be Silent. Missing logs use
             // its start time, rather than inventing activity at read time.
-            let mut quiet = stage.age_seconds as u64;
-            let session = command
-                .record
-                .session_log
-                .as_deref()
-                .map(crate::logs::session::path);
-            for path in std::iter::once(log).chain(session.as_deref()) {
-                if let Ok(modified) = std::fs::metadata(path).and_then(|file| file.modified()) {
-                    quiet = quiet.min(
-                        now.signed_duration_since(DateTime::<Local>::from(modified))
-                            .num_seconds()
-                            .max(0) as u64,
-                    );
-                }
+            let quiet = command.quiet_age();
+            for threshold in [silent.as_secs(), silent.as_secs().saturating_mul(3)] {
+                schedule_transition(&mut next_change, now, threshold, quiet);
             }
             if quiet >= silent.as_secs() {
                 command.health = Some(Health::Silent {
@@ -211,7 +206,30 @@ pub(super) fn observe(
             }
         }
     }
+    command.next_health_change = next_change;
     for child in command.children.iter_mut().chain(&mut command.dispatched) {
-        observe(child, now, silent, Some(log), ranges);
+        observe(child, now, silent, ranges);
     }
+}
+
+fn schedule_transition(
+    change: &mut Option<DateTime<Local>>,
+    now: &DateTime<Local>,
+    threshold: u64,
+    elapsed: u64,
+) {
+    let Some(remaining) = threshold
+        .checked_sub(elapsed)
+        .filter(|seconds| *seconds != 0)
+    else {
+        return;
+    };
+    let Some(at) = i64::try_from(remaining)
+        .ok()
+        .and_then(chrono::Duration::try_seconds)
+        .and_then(|delay| now.checked_add_signed(delay))
+    else {
+        return;
+    };
+    *change = Some(change.map_or(at, |old| old.min(at)));
 }

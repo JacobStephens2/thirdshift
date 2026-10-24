@@ -161,7 +161,8 @@ fn merge_into_develop(scenario: &Scenario, then: &str) {
     ));
 }
 
-const CLOSING_COMMENT: &str = "Closed by #1, merged into develop by a thirdshift Merge run.";
+const CLOSING_COMMENT: &str =
+    "Closed by #1, merged into develop by a thirdshift Ticket run with Self-merge.";
 
 /// Assert that `base`'s tip on origin is a merge commit of the head commit
 /// thirdshift asked `gh pr merge` to match, and return that head.
@@ -406,7 +407,7 @@ fn an_issue_close_failure_links_the_issue_and_keeps_the_manual_close_command() {
             "could not close issue #7 (https://github.com/acme/widgets/issues/7), \
              so if it is still open, close it by hand: \
              gh issue close 7 --repo acme/widgets --comment \
-             'Closed by #1, merged into develop by a thirdshift Merge run.'"
+             'Closed by #1, merged into develop by a thirdshift Ticket run with Self-merge.'"
         ),
         "stderr: {}",
         result.stderr
@@ -1061,7 +1062,7 @@ fn a_review_repair_whose_background_work_was_killed_gets_a_resume() {
     let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
     assert!(
         logs.iter()
-            .any(|log| log.ends_with("-repair-1-resume.jsonl")),
+            .any(|log| log.ends_with("-repair-1-resume.logs.jsonl")),
         "logs: {logs:?}"
     );
 }
@@ -1091,7 +1092,7 @@ fn an_untrusted_edit_while_the_run_is_under_way_starts_no_repair() {
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert!(
         result.stderr.contains(
-            "#7 body edited since the Run started by an account that is not a Trusted account; starting no further session"
+            "#7 body edited since the Ticket run started by an account that is not a Trusted account; starting no further session"
         ),
         "stderr: {}",
         result.stderr

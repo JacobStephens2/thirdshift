@@ -58,7 +58,7 @@ pub struct Delivery<'a> {
     /// The one Base fix the Delivery may start, or wait on, when its only red
     /// checks are Inherited failures.
     pub base_fix: &'a mut BaseFix,
-    /// Where its Session logs go.
+    /// Where its Session traces go.
     pub logs: &'a Logs,
     /// When the Run began: an untrusted edit to `issue` made since then
     /// starts no further session.
@@ -299,7 +299,7 @@ impl Route<'_> {
             );
         }
         let comment = format!(
-            "Closed by #{}, merged into {} by a thirdshift Merge run.",
+            "Closed by #{}, merged into {} by a thirdshift Ticket run with Self-merge.",
             pr.number, self.base
         );
         if let Err(error) = retry_if_interrupted(outside, |outside| {
@@ -351,8 +351,8 @@ fn retry_if_interrupted<O: Outside>(
 /// head whose CI was watched. Problems along the way are reported, not
 /// raised, so the error is what the Run fails with. Worktree owns preservation
 /// and retains work that may not have reached origin. `log` is the most recent
-/// Session log, if a session created one, which the Failed run reports unless
-/// the error is a Security hold with its review's own Session log: a hold is
+/// Session trace, if a session created one, which the Failed run reports unless
+/// the error is a Security hold with its review's own Session trace: a hold is
 /// raised only after the Repair loop, whose sessions may have run since.
 /// `stopped_at` is the stage its recovery lines report; `worktree`, where work
 /// preserved only locally is.
@@ -383,7 +383,7 @@ fn fail(
             Ok(Preserved::NoChanges) => Preservation::None,
             Err(problem) => {
                 outside.step(format!(
-                    "could not push the failed run's work, so it may exist only locally: {problem:#}"
+                    "could not push the failed ticket run's work, so it may exist only locally: {problem:#}"
                 ));
                 Preservation::Local
             }
@@ -427,7 +427,7 @@ trait Outside {
     fn catch_up(&mut self) -> Result<()>;
     /// Run a session of `kind` given `prompt`.
     fn session(&mut self, kind: Kind, prompt: &str) -> Result<()>;
-    /// Run the Security review given `prompt`, with its Session log, its
+    /// Run the Security review given `prompt`, with its Session trace, its
     /// Resume's if it got one, if it started a session.
     fn security_review(&mut self, prompt: &str) -> (Result<Review>, Option<PathBuf>);
     fn record_security_review(&mut self, review: &SecurityOutcome) -> Result<()>;
@@ -507,7 +507,7 @@ impl std::fmt::Display for UntrustedEdit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "#{} {} edited since the Run started by an account that is not a Trusted account; starting no further session",
+            "#{} {} edited since the Ticket run started by an account that is not a Trusted account; starting no further session",
             self.number, self.text
         )
     }
@@ -1069,9 +1069,12 @@ mod tests {
         let mut outside = Scripted::default();
         assert!(deliver(&mut outside, Goal::Merged, false).is_ok());
         assert!(outside.calls.contains(&Call::Delete));
-        assert!(outside.calls.contains(&Call::Close(
-            "Closed by #12, merged into main by a thirdshift Merge run.".to_string()
-        )));
+        assert!(
+            outside.calls.contains(&Call::Close(
+                "Closed by #12, merged into main by a thirdshift Ticket run with Self-merge."
+                    .to_string()
+            ))
+        );
     }
 
     #[test]
@@ -1287,7 +1290,7 @@ mod tests {
     #[test]
     fn a_failure_after_a_repair_reports_the_most_recent_session_log() {
         // A failing Repair session, or a cause no session gave, as with
-        // Repairs exhausted, is reported with the most recent Session log,
+        // Repairs exhausted, is reported with the most recent Session trace,
         // whether or not a Security review ran before it.
         for reviews_security in [false, true] {
             let mut outside = Scripted {

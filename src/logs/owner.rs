@@ -46,7 +46,7 @@ impl Owner {
     }
 
     pub fn session_path(&self, dir: &Path, subject: &str, kind: &str) -> PathBuf {
-        dir.join(format!("{subject}-{}-{kind}.jsonl", self.identity()))
+        dir.join(format!("{subject}-{}-{kind}.logs.jsonl", self.identity()))
     }
 
     pub fn models_match(&self, path: &Path) -> bool {
@@ -143,6 +143,7 @@ pub(super) fn allocate<F: Files>(
         Work::ArchitectRun(_) => (CommandKind::Architect, String::new()),
         Work::SecurityRun(_) => (CommandKind::Secure, String::new()),
         Work::ScoringRun(_) => (CommandKind::Scoring, String::new()),
+        Work::Experiment(_) => (CommandKind::Experiment, String::new()),
     };
     let folder = root.join("commands").join(kind.folder());
     let allocated = tempfile::Builder::new()
@@ -284,18 +285,12 @@ pub(super) fn decode(path: &Path) -> Option<Decoded<'_>> {
     })
 }
 
-/// During dual recording the original Session log is the inventory entry.
+/// Only the log-records file represents a Session trace in the inventory.
 pub(super) fn inventory_session(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return false;
     };
-    if name.ends_with(".spans.jsonl") {
-        return false;
-    }
-    if let Some(stem) = name.strip_suffix(".logs.jsonl") {
-        return !path.with_file_name(format!("{stem}.jsonl")).exists();
-    }
-    true
+    name.ends_with(".log") || name.ends_with(".logs.jsonl")
 }
 
 /// Preserve current legacy suffix stripping, including non-stamped fixture
@@ -308,24 +303,54 @@ pub(super) fn record_log(path: &Path) -> PathBuf {
     path.with_file_name(format!("{}.log", name.split('.').next().unwrap_or(&name)))
 }
 
-/// Explicit Model evidence can link a transitional tokenless Session to its
-/// owned Command. Timestamp equality alone cannot establish that link.
-pub(super) fn evidenced_log(session: &Path) -> Option<PathBuf> {
+/// The Model-evidence sidecar that may name a Session's Command log.
+pub(super) fn evidence_file(session: &Path) -> PathBuf {
+    super::session::original(session).with_extension("models.json")
+}
+
+/// The Command log named by a Model-evidence sidecar's bytes, if any.
+pub(super) fn evidenced_log(sidecar: &[u8]) -> Option<PathBuf> {
     #[derive(Deserialize)]
     struct Evidence {
         command_log: Option<PathBuf>,
     }
-    let bytes = fs::read(super::session::original(session).with_extension("models.json")).ok()?;
-    serde_json::from_slice::<Evidence>(&bytes).ok()?.command_log
+    serde_json::from_slice::<Evidence>(sidecar)
+        .ok()?
+        .command_log
 }
 
-pub(super) fn session_matches(session: &Path, log: &Path) -> bool {
-    if let Some(evidence) = evidenced_log(session) {
-        return evidence == log;
+/// The Command a Session belongs to. Explicit Model evidence can link a
+/// transitional tokenless Session to its owned Command and takes priority over
+/// the filename; timestamp equality alone cannot establish that link.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(super) enum SessionOwner {
+    Evidenced(PathBuf),
+    Named {
+        stamp: String,
+        token: Option<String>,
+    },
+}
+
+impl SessionOwner {
+    fn named(identity: Identity<'_>) -> Self {
+        Self::Named {
+            stamp: identity.stamp.into(),
+            token: identity.token.map(str::to_owned),
+        }
     }
-    match (decode(session), decode(log)) {
-        (Some(session), Some(command)) => session.identity == command.identity,
-        _ => false,
+
+    pub fn of(session: &Decoded<'_>, evidence: Option<PathBuf>) -> Self {
+        evidence.map_or_else(|| Self::named(session.identity), Self::Evidenced)
+    }
+
+    /// Every owner whose Sessions belong to `log`, keyed lexically.
+    pub fn of_log(log: &Path) -> impl Iterator<Item = Self> {
+        let named = decode(log).map(|command| Self::named(command.identity));
+        std::iter::once(Self::Evidenced(log.to_owned())).chain(named)
+    }
+
+    pub fn owns(&self, log: &Path) -> bool {
+        Self::of_log(log).any(|owner| owner == *self)
     }
 }
 

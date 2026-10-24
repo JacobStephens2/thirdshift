@@ -1,4 +1,4 @@
-//! Every kind of session thirdshift runs: its Session-log token, the Command
+//! Every kind of session thirdshift runs: its Session-trace token, the Command
 //! record stage it enters, and which `thirdshift logs --session` words
 //! select it.
 
@@ -9,6 +9,8 @@ use crate::logs::Stage;
 pub enum Kind {
     /// A Run's implement session, `implement`.
     Implementation,
+    /// An Eval's review-only Code review, `code-review`.
+    CodeReview,
     /// A Spec run's Spec review, `spec-review`.
     SpecReview,
     /// The numbered Repair, `repair-<n>`.
@@ -26,13 +28,17 @@ pub enum Kind {
     SecurityReproduction(usize),
     /// `security-fix-publishing`.
     SecurityFixPublishing,
+    /// The recheck of a fixed finding's proof-of-concept test against the
+    /// merged Base branch, `security-close-check`.
+    SecurityCloseCheck,
 }
 
 impl Kind {
-    /// The kind's token, in its Session log's name and progress lines.
+    /// The kind's token, in its Session trace's name and progress lines.
     pub fn token(self) -> String {
         match self {
             Self::Implementation => "implement".to_string(),
+            Self::CodeReview => "code-review".to_string(),
             Self::SpecReview => "spec-review".to_string(),
             Self::Repair(n) => format!("repair-{n}"),
             Self::SecurityReview => "security-review".to_string(),
@@ -41,20 +47,23 @@ impl Kind {
             Self::SecurityAudit => "security-audit".to_string(),
             Self::SecurityReproduction(n) => format!("security-reproduction-{n}"),
             Self::SecurityFixPublishing => "security-fix-publishing".to_string(),
+            Self::SecurityCloseCheck => "security-close-check".to_string(),
         }
     }
 
     /// The kind `token` names, if any. A numbered kind's number is read as
     /// `--session repair` has always read a Repair's.
     fn read(token: &str) -> Option<Self> {
-        const UNNUMBERED: [Kind; 7] = [
+        const UNNUMBERED: [Kind; 9] = [
             Kind::Implementation,
+            Kind::CodeReview,
             Kind::SpecReview,
             Kind::SecurityReview,
             Kind::SecurityReviewFallback,
             Kind::ArchitectureReview,
             Kind::SecurityAudit,
             Kind::SecurityFixPublishing,
+            Kind::SecurityCloseCheck,
         ];
         let numbered = |prefix: &str| {
             let n = token.strip_prefix(prefix)?.parse::<u32>().ok()?;
@@ -68,7 +77,7 @@ impl Kind {
     }
 }
 
-/// A session as its Session log names it: of `kind`, and its Resume if
+/// A session as its Session trace names it: of `kind`, and its Resume if
 /// `resume`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Logged {
@@ -90,7 +99,7 @@ impl Logged {
         Logged { kind, resume: true }
     }
 
-    /// The Session-log token: the kind's, with `-resume` for its Resume.
+    /// The Session-trace token: the kind's, with `-resume` for its Resume.
     pub fn token(self) -> String {
         let token = self.kind.token();
         if self.resume {
@@ -100,7 +109,7 @@ impl Logged {
         }
     }
 
-    /// The session a Session log's `token` names, if thirdshift can read it.
+    /// The session a Session trace's `token` names, if thirdshift can read it.
     pub fn read(token: &str) -> Option<Self> {
         match token.strip_suffix("-resume") {
             Some(kind) => Kind::read(kind).map(Self::resume_of),
@@ -109,12 +118,13 @@ impl Logged {
     }
 
     /// The Command record stage the session enters. A Resume of the
-    /// implement session, Spec review, a Repair or Security review enters
+    /// implement session, Code review, Spec review, a Repair or Security review enters
     /// `Resume`; any other Resume keeps its kind's stage.
     pub fn stage(self) -> Stage {
         match (self.kind, self.resume) {
             (
                 Kind::Implementation
+                | Kind::CodeReview
                 | Kind::SpecReview
                 | Kind::Repair(_)
                 | Kind::SecurityReview
@@ -122,6 +132,7 @@ impl Logged {
                 true,
             ) => Stage::Resume,
             (Kind::Implementation, false) => Stage::Implement,
+            (Kind::CodeReview, false) => Stage::CodeReview,
             (Kind::SpecReview, false) => Stage::SpecReview,
             (Kind::Repair(_), false) => Stage::Repair,
             (Kind::SecurityReview | Kind::SecurityReviewFallback, false) => Stage::SecurityReview,
@@ -129,11 +140,12 @@ impl Logged {
             (Kind::SecurityAudit, _) => Stage::SecurityAudit,
             (Kind::SecurityReproduction(_), _) => Stage::SecurityReproduction,
             (Kind::SecurityFixPublishing, _) => Stage::SecurityFixPublishing,
+            (Kind::SecurityCloseCheck, _) => Stage::SecurityCloseCheck,
         }
     }
 }
 
-/// Whether `thirdshift logs --session <word>` selects the Session log whose
+/// Whether `thirdshift logs --session <word>` selects the Session trace whose
 /// token is `token`: one whose token is `word`, or `word` with `-resume`,
 /// or, for `repair`, any numbered Repair or its Resume. A token no kind
 /// reads, as older thirdshift versions may have written, is still selected
@@ -158,8 +170,9 @@ mod tests {
     use super::*;
 
     /// Every kind, the numbered ones with a number of their own.
-    const KINDS: [(Kind, &str); 8] = [
+    const KINDS: [(Kind, &str); 10] = [
         (Kind::Implementation, "implement"),
+        (Kind::CodeReview, "code-review"),
         (Kind::SpecReview, "spec-review"),
         (Kind::Repair(3), "repair-3"),
         (Kind::SecurityReview, "security-review"),
@@ -167,6 +180,7 @@ mod tests {
         (Kind::SecurityAudit, "security-audit"),
         (Kind::SecurityReproduction(12), "security-reproduction-12"),
         (Kind::SecurityFixPublishing, "security-fix-publishing"),
+        (Kind::SecurityCloseCheck, "security-close-check"),
     ];
 
     #[test]
@@ -202,6 +216,7 @@ mod tests {
     fn each_session_enters_its_command_record_stage() {
         let stages = [
             (Kind::Implementation, "implement", "Resume"),
+            (Kind::CodeReview, "Code review", "Resume"),
             (Kind::SpecReview, "Spec review", "Resume"),
             (Kind::Repair(1), "Repair", "Resume"),
             (Kind::SecurityReview, "Security review", "Resume"),
@@ -220,6 +235,11 @@ mod tests {
                 Kind::SecurityFixPublishing,
                 "Security fix publishing",
                 "Security fix publishing",
+            ),
+            (
+                Kind::SecurityCloseCheck,
+                "Security close check",
+                "Security close check",
             ),
         ];
         for (kind, stage, resume_stage) in stages {

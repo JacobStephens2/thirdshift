@@ -1,4 +1,4 @@
-//! Shared naming, Session inventory and captured selection ownership.
+//! Shared naming, Session membership and captured selection ownership.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -8,7 +8,6 @@ use serde::Serialize;
 
 use super::{Command, Entry};
 use crate::issue::IssueUrl;
-use crate::logs::effects::Outside;
 use crate::logs::owner;
 
 enum Name {
@@ -41,7 +40,7 @@ impl Name {
                 });
             }
         }
-        if ["architect-", "pickup-", "secure-", "scoring-"]
+        if ["architect-", "pickup-", "secure-", "scoring-", "experiment-"]
             .iter()
             .any(|prefix| name.starts_with(prefix))
         {
@@ -158,15 +157,11 @@ impl<'a> Observation<'a> {
     }
 
     pub(in crate::logs) fn sessions(self) -> Result<Vec<PathBuf>> {
-        let (mut paths, issue, kind) = match self {
+        let (mut paths, issue, kind, inventory) = match self {
             Self::Record(command) => {
                 let mut paths = Vec::new();
                 for path in command.record.session_references() {
-                    let path = if path.exists() {
-                        path.clone()
-                    } else {
-                        crate::logs::session::path(path)
-                    };
+                    let path = crate::logs::session::path(path);
                     if !paths.contains(&path) {
                         paths.push(path);
                     }
@@ -175,12 +170,14 @@ impl<'a> Observation<'a> {
                     paths,
                     command.record.issue.as_ref(),
                     command.record.kind.as_str(),
+                    &command.inventory,
                 )
             }
             Self::History(command) => (
                 command.session_logs.clone(),
                 command.issue.as_ref(),
                 command.kind.as_str(),
+                &command.inventory,
             ),
         };
         // A stage can cover several sessions (for example Architecture review
@@ -191,32 +188,14 @@ impl<'a> Observation<'a> {
             let prefix = issue
                 .map(|issue| issue.number.to_string())
                 .or_else(|| pass_prefix(kind).map(String::from))
-                .context("cannot name Session logs for this Command kind")?;
-            for entry in super::entries(log.parent().context("Command log has no directory")?)? {
-                let path = entry.path();
-                if entry.file_type()?.is_file()
-                    && owner::inventory_session(&path)
-                    && owner::decode(&path).is_some_and(|decoded| {
-                        decoded.session_kind.is_some() && decoded.subject == prefix
-                    })
-                    && owner::session_matches(&path, log)
-                    && !paths.contains(&path)
-                {
+                .context("cannot name Session traces for this Command kind")?;
+            for path in inventory.sessions_of(log, &prefix)? {
+                if !paths.contains(&path) {
                     paths.push(path);
                 }
             }
         }
-        let mut dated = paths
-            .into_iter()
-            .map(|path| {
-                let modified = std::fs::metadata(&path)
-                    .and_then(|metadata| metadata.modified())
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                (modified, path)
-            })
-            .collect::<Vec<_>>();
-        dated.sort();
-        Ok(dated.into_iter().map(|(_, path)| path).collect())
+        Ok(inventory.ordered(paths))
     }
 
     pub(in crate::logs) fn session(self, kind: &str) -> Result<PathBuf> {
@@ -233,7 +212,7 @@ impl<'a> Observation<'a> {
                 };
                 crate::session::kind::selects(kind, session)
             })
-            .with_context(|| format!("no {kind} Session log for this Command"))
+            .with_context(|| format!("no {kind} Session trace for this Command"))
     }
 }
 
@@ -243,6 +222,7 @@ pub(in crate::logs) fn pass_prefix(kind: &str) -> Option<&'static str> {
         "Pickup run" => Some("pickup"),
         "Security run" => Some("secure"),
         "Scoring run" => Some("scoring"),
+        "Experiment" => Some("experiment"),
         _ => None,
     }
 }
@@ -260,8 +240,8 @@ impl Selection<'_> {
     pub(in crate::logs) fn stop_target(self, input: &str) -> Result<PathBuf> {
         if let Some(owner) = self.child_owner {
             bail!(
-                "cannot stop {input}: child Run; stop {} {} instead",
-                owner.record.kind,
+                "cannot stop {input}: child Ticket run; stop {} {} instead",
+                crate::logs::display_name(&owner.record.kind),
                 owner.record.name
             );
         }
@@ -289,14 +269,12 @@ impl Selection<'_> {
 
     /// Outcomes precede final output. Recheck the captured process, not state.
     pub(in crate::logs) fn process_exited(self) -> bool {
-        self.owner.is_none_or(|command| {
-            let record = &command.record;
-            record.process_start.is_empty()
-                || crate::logs::effects::OnMachine
-                    .process_start(record.process_id)
-                    .as_deref()
-                    != Some(&record.process_start)
-        })
+        self.owner
+            .is_none_or(|command| !super::Writer::capture(&command.record).live())
+    }
+
+    pub(in crate::logs) fn reader(self, path: PathBuf) -> super::Reader {
+        super::Reader::captured(path, self.owner, false)
     }
 }
 
@@ -400,8 +378,8 @@ pub(in crate::logs) enum Detailed<'a> {
     History(Box<super::history::Command>),
 }
 
-/// The detailed view adds a complete Session inventory and a live event to
-/// each Run while retaining the status reader's version 1 field names.
+/// The detailed view adds each Run's complete Session list and a live event,
+/// retaining the status reader's version 1 field names.
 #[derive(Serialize)]
 pub(in crate::logs) struct Details<'a> {
     #[serde(flatten)]

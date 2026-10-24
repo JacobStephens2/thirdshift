@@ -15,7 +15,7 @@ mod linux {
     use super::support::{Scenario, TerminalStep, WAIT_BOUND};
     use tempfile::TempDir;
 
-    const PROMPT: &str = "Harness for every Run's sessions";
+    const PROMPT: &str = "Harness for every Ticket run's sessions";
     const BOUND: Duration = Duration::from_secs(5);
 
     struct Fixture {
@@ -228,12 +228,13 @@ mod linux {
                 TerminalStep::line("", "claude"),
                 TerminalStep::line("Model for claude", ""),
                 TerminalStep::line("Effort for claude", ""),
-                TerminalStep::line("Merge run?", ""),
-                TerminalStep::line("Every Run may start a Base fix", ""),
+                TerminalStep::line("Self-merges?", ""),
+                TerminalStep::line("Every Ticket run may start a Base fix", ""),
                 TerminalStep::line("fast-forward", ""),
                 TerminalStep::line("Security runs may fix", ""),
-                TerminalStep::line("Runs review their change", ""),
+                TerminalStep::line("Ticket runs review their change", ""),
                 TerminalStep::line("Run notifications, an email", "n"),
+                TerminalStep::line("Claude setup token", ""),
                 TerminalStep::line("Run the Console?", "n"),
             ]);
         }

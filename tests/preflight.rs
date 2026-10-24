@@ -123,16 +123,23 @@ fn the_origin_match_accepts_https_and_ssh_with_or_without_git_in_any_case() {
 }
 
 #[test]
-fn an_issue_in_another_owners_or_repos_repository_is_an_origin_mismatch() {
-    for url in [
-        "https://github.com/other/widgets/issues/7",
-        "https://github.com/acme/gadgets/issues/7",
+fn an_issue_in_another_owners_or_repos_repository_is_an_origin_mismatch_naming_where_to_start() {
+    for (url, repo) in [
+        ("https://github.com/other/widgets/issues/7", "other/widgets"),
+        ("https://github.com/acme/gadgets/issues/7", "acme/gadgets"),
     ] {
         let scenario = Scenario::new();
 
         let result = scenario.run(&[url]);
 
-        scenario.assert_rejected_before_any_work(&result, "origin mismatch");
+        scenario.assert_rejected_before_any_work(
+            &result,
+            &format!(
+                "origin mismatch: {url} is not in the repository at origin {}; \
+                 start it from a clone of {repo}",
+                scenario.github_url()
+            ),
+        );
     }
 }
 

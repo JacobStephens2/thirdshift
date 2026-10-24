@@ -5,12 +5,13 @@ use super::*;
 const HOME: &str = "/home/me";
 const PATH: &str = "/home/me/.thirdshift/config.toml";
 const NO_NOTIFICATIONS: &[(&str, &str)] = &[
-    ("Merge run?", ""),
-    ("Every Run may start a Base fix", ""),
+    ("Self-merges?", ""),
+    ("Every Ticket run may start a Base fix", ""),
     ("fast-forwards", ""),
     ("Security runs may fix", ""),
-    ("Runs review", ""),
+    ("Ticket runs review", ""),
     ("Run notifications", "n"),
+    ("Claude setup token", ""),
 ];
 
 fn setup(outside: &mut Scripted) {
@@ -60,6 +61,7 @@ fn console_allowlist_defaults_to_the_notification_address_just_chosen() {
         ("Send Run notifications to", "new@example.com"),
         ("Send them from", ""),
         ("Resend API key", ""),
+        ("Claude setup token", ""),
         ("Run the Console?", "y"),
         ("Console's whole address", "thirdshift.example.com"),
         ("Allowed emails", ""),
@@ -205,6 +207,7 @@ fn eof_during_console_questions_saves_no_config_credentials_or_test_email() {
         ("Send them from", ""),
         ("Resend API key", "re_secret"),
         ("Send a test email", "y"),
+        ("Claude setup token", ""),
         ("Run the Console?", "y"),
         ("whole address", "https://good.example.com"),
     ]);

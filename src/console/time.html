@@ -9,7 +9,7 @@
   <script src="/assets/vendor/idiomorph-0.7.4.min.js" defer></script>
   <script src="/assets/console.js" type="module"></script>
 </head>
-<body>
+<body{% if title == "Stages" %} class="full-width"{% endif %}>
   {% include "console/header.html" %}
   {% include "console/nav.html" %}
   <main data-time-page>
@@ -27,25 +27,34 @@
       {% for run in lane %}
       <article class="command time-run" data-live="{{ run.state == "live" }}" data-command="{{ run.selector }}" data-peek="{{ run.peek_url }}" data-log="{{ run.log_url }}">
         <h3><a class="peek-link" href="{{ run.peek_url }}">{{ run.subject }}</a> · {{ run.state }}</h3><p>{{ run.title }}</p>
+        {% match run.issue_url %}{% when Some with (url) %}<p><a href="{{ url }}">{{ run.issue_label }}</a></p>{% when None %}{% endmatch %}
         <svg class="timeline" width="100%" height="28" aria-hidden="true">
-          {% for stage in run.stages %}<svg x="{{ stage.left }}%" width="{{ stage.width }}%" height="28"><rect width="100%" height="28"/><text x="4" y="19">{{ stage.name }}</text></svg>{% endfor %}
+          {% for stage in run.stages %}<svg x="{{ stage.left }}%" width="{{ stage.width }}%" height="28"><rect width="100%" height="28"/><text x="4" y="19">{{ crate::logs::display_name(stage.name) }}</text></svg>{% endfor %}
         </svg>
         {% if run.stages.is_empty() %}<p>No stage times retained.</p>{% endif %}
-        <ol class="stage-times">{% for stage in run.stages %}<li {% if stage.running %}class="running-stage"{% endif %} data-seconds="{{ stage.seconds }}">{{ stage.name }}: {{ stage.text }}</li>{% endfor %}</ol>
+        <ol class="stage-times">{% for stage in run.stages %}<li {% if stage.running %}class="running-stage"{% endif %} data-seconds="{{ stage.seconds }}">{{ crate::logs::display_name(stage.name) }}: {{ stage.text }}</li>{% endfor %}</ol>
       </article>
       {% endfor %}
     </section>
     {% endfor %}
     {% else %}
-    <p>Live Runs first, then finished Runs newest first. Tables continue in that order, with each repository's Usual range. Repeated stages list every visit.</p>
-    {% if views.grids.is_empty() %}<p class="empty">No Runs yet.</p>{% endif %}
+    <label for="stages-view">View</label> <select id="stages-view"><option value="all" {% if !by_repository %}selected{% endif %}>All runs</option><option value="repository" {% if by_repository %}selected{% endif %}>By repository</option></select>
+    <p>Spec runs stay with their Ticket runs. Groups and Tickets are newest-started first. Scroll right for older runs; stage names stay at the left. Each cell shows its repository's Usual range. Repeated stages list every visit.</p>
+    {% if views.grids.is_empty() %}<p class="empty">No Ticket runs yet.</p>{% endif %}
     {% for grid in views.grids %}
+    <section class="stage-section" data-grid="{{ grid.repository }}">
+    <h3>{{ grid.repository }}</h3><button type="button" data-newest-runs>Newest runs<span class="cell-run"> · {{ grid.repository }}</span></button>
+    <div class="stage-scroll" tabindex="0" role="region" aria-label="{{ grid.repository }} stages, scroll right for older runs">
     <table class="stage-grid">
-      <caption>{{ grid.repository }}</caption>
-      <thead><tr><th scope="col">Stage<br>Usual range</th>{% for run in grid.runs %}<th scope="col" class="command" data-live="{{ run.state == "live" }}" data-command="{{ run.selector }}" data-peek="{{ run.peek_url }}" data-log="{{ run.log_url }}"><a class="peek-link" href="{{ run.peek_url }}">{{ run.subject }}</a><br>{{ run.state }}<br>{{ run.title }}</th>{% endfor %}</tr></thead>
-      <tbody>{% for row in grid.rows %}<tr><th scope="row">{{ row.name }}<br><span class="usual">Usual range: {{ row.usual }}</span></th>{% for cell in row.cells %}<td {% if cell.running %}class="running-stage"{% endif %}><span class="cell-run">{{ grid.runs[loop.index0].subject }}: </span>{{ cell.text }}</td>{% endfor %}</tr>{% endfor %}</tbody>
+      <caption>{{ grid.repository }} · stage times</caption>
+      <thead>
+      <tr><th scope="col">Run groups</th>{% for group in grid.groups %}<th scope="colgroup" colspan="{{ group.runs.len() }}" data-run-group="{{ group.identity }}">{{ group.subject }}<br>Started {{ group.started }}</th>{% endfor %}</tr>
+      <tr><th scope="col">Stage</th>{% for run in grid.runs %}<th scope="col" class="command {% if run.group_start %}group-start{% endif %}" tabindex="0" data-live="{{ run.state == "live" }}" data-command="{{ run.selector }}" data-peek="{{ run.peek_url }}" data-log="{{ run.log_url }}"><a class="peek-link" href="{{ run.peek_url }}">{{ run.subject }}</a><br>{{ run.state }}<br>{{ run.title }}{% if !run.context.is_empty() %}<p class="run-context">{{ run.context }}</p>{% endif %}{% match run.issue_url %}{% when Some with (url) %}<br><a href="{{ url }}">{{ run.issue_label }}</a>{% when None %}{% endmatch %}</th>{% endfor %}</tr></thead>
+      <tbody>{% for row in grid.rows %}<tr><th scope="row">{{ crate::logs::display_name(row.name) }}<br></th>{% for cell in row.cells %}<td class="{% if cell.running %}running-stage {% endif %}{% if cell.group_start %}group-start{% endif %}"><span class="cell-run">{{ grid.runs[loop.index0].subject }}: </span>{{ cell.text }}<br><span class="usual">Usual range: {{ cell.usual }}</span></td>{% endfor %}</tr>{% endfor %}</tbody>
     </table>
+    </div>
     {% if grid.rows.is_empty() %}<p>No stage times retained.</p>{% endif %}
+    </section>
     {% endfor %}
     {% endif %}
   </main>

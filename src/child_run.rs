@@ -71,7 +71,7 @@ pub struct Given {
     /// The start stamp of the command that started it, which its Session
     /// logs take.
     pub stamp: String,
-    /// The owning command, whose folder its Session logs inherit.
+    /// The owning command, whose folder its Session traces inherit.
     pub command: logs::CommandKind,
     /// What it is asked about a Base fix.
     pub base_fix: BaseFixAsk,
@@ -350,7 +350,7 @@ impl Reader {
                 || self.review_default.is_given()
             {
                 bail!(
-                    "only a child Run is given {STAMP}, {ALLOW_BASE_FIX}, {OFFER_BASE_FIX}, \
+                    "only a child Ticket run is given {STAMP}, {ALLOW_BASE_FIX}, {OFFER_BASE_FIX}, \
                      {SESSIONS_HARNESS}, {SESSIONS_MODEL}, {SESSIONS_EFFORT}, \
                      {SECURITY_REVIEW_HARNESS}, {SECURITY_REVIEW_MODEL}, \
                      {SECURITY_REVIEW_EFFORT}, {SECURITY_REVIEW_DEFAULT}, \
@@ -403,7 +403,7 @@ pub enum Ended {
         pr_url: Option<String>,
         base_fix: Option<String>,
     },
-    /// Why, and its session log, as it reported them.
+    /// Why, and its session trace, as it reported them.
     Failed {
         cause: String,
         log: Option<String>,
@@ -433,7 +433,7 @@ pub struct Handle {
 }
 
 /// Start a Run of `kind` on `issue` in a child `thirdshift`, from the same
-/// Launch directory, given this command's start stamp for its Session logs,
+/// Launch directory, given this command's start stamp for its Session traces,
 /// asked `base_fix` about a Base fix, and handed `asks`.
 pub fn start(
     issue: &IssueUrl,
@@ -504,7 +504,7 @@ fn start_using(
                 Err(_) => String::new(),
             };
             format!(
-                "could not start the Run for #{} from {}{leads_to}",
+                "could not start the Ticket run for #{} from {}{leads_to}",
                 issue.number,
                 executable.display()
             )
@@ -564,7 +564,7 @@ impl Handle {
             .child
             .stdout
             .take()
-            .with_context(|| format!("no stdout from the Run for #{number}"))?;
+            .with_context(|| format!("no stdout from the Ticket run for #{number}"))?;
         #[cfg(test)]
         self.inject_fault(Fault::StdoutStart)?;
         #[cfg(test)]
@@ -572,18 +572,18 @@ impl Handle {
             .fault
             .take_if(|fault| matches!(fault, Fault::StdoutRead | Fault::StdoutPanic));
         self.stdout = Some(Worker::start(
-            format!("stdout reader of the Run for #{number}"),
+            format!("stdout reader of the Ticket run for #{number}"),
             move || {
                 #[cfg(test)]
                 if let Some(fault) = fault {
                     fault
                         .fire()
-                        .with_context(|| format!("could not read the Run for #{number}"))?;
+                        .with_context(|| format!("could not read the Ticket run for #{number}"))?;
                 }
                 let mut text = String::new();
                 stdout
                     .read_to_string(&mut text)
-                    .with_context(|| format!("could not read the Run for #{number}"))?;
+                    .with_context(|| format!("could not read the Ticket run for #{number}"))?;
                 Ok(text)
             },
         )?);
@@ -593,7 +593,7 @@ impl Handle {
             .child
             .stderr
             .take()
-            .with_context(|| format!("no stderr from the Run for #{number}"))?;
+            .with_context(|| format!("no stderr from the Ticket run for #{number}"))?;
         #[cfg(test)]
         self.inject_fault(Fault::StderrStart)?;
         #[cfg(test)]
@@ -601,20 +601,20 @@ impl Handle {
             .fault
             .take_if(|fault| matches!(fault, Fault::StderrRead | Fault::StderrPanic));
         self.stderr = Some(Worker::start(
-            format!("relay of the Run for #{number}"),
+            format!("relay of the Ticket run for #{number}"),
             move || {
                 #[cfg(test)]
                 if let Some(fault) = fault {
                     fault
                         .fire()
-                        .with_context(|| format!("could not read the Run for #{number}"))?;
+                        .with_context(|| format!("could not read the Ticket run for #{number}"))?;
                 }
                 let mut reader = run_ending::Reader::default();
                 let mut stderr = BufReader::new(stderr);
                 let mut bytes = Vec::new();
                 while stderr
                     .read_until(b'\n', &mut bytes)
-                    .with_context(|| format!("could not read the Run for #{number}"))?
+                    .with_context(|| format!("could not read the Ticket run for #{number}"))?
                     != 0
                 {
                     if bytes.last() == Some(&b'\n') {
@@ -663,9 +663,10 @@ impl Handle {
         if !self.reaped {
             #[cfg(test)]
             if let Err(error) = self.inject_fault(Fault::Wait) {
-                self.fail(
-                    error.context(format!("could not wait for the Run for #{}", self.number)),
-                );
+                self.fail(error.context(format!(
+                    "could not wait for the Ticket run for #{}",
+                    self.number
+                )));
                 return false;
             }
             match self.child.try_wait() {
@@ -678,10 +679,10 @@ impl Handle {
                     // ECHILD means ownership of the PID has already ended.
                     // Never signal a PID after the OS says it isn't our child.
                     self.reaped = error.raw_os_error() == Some(libc::ECHILD);
-                    self.fail(
-                        anyhow!(error)
-                            .context(format!("could not wait for the Run for #{}", self.number)),
-                    );
+                    self.fail(anyhow!(error).context(format!(
+                        "could not wait for the Ticket run for #{}",
+                        self.number
+                    )));
                 }
             }
         }
@@ -709,11 +710,9 @@ impl Handle {
     #[cfg(test)]
     fn inject_fault(&mut self, at: Fault) -> Result<()> {
         if self.fault == Some(at) {
-            self.fault
-                .take()
-                .unwrap()
-                .fire()
-                .with_context(|| format!("could not prepare the Run for #{}", self.number))?;
+            self.fault.take().unwrap().fire().with_context(|| {
+                format!("could not prepare the Ticket run for #{}", self.number)
+            })?;
         }
         Ok(())
     }
@@ -758,7 +757,9 @@ impl Handle {
             },
             Err(_) if interrupt::requested() => Ended::Interrupted { local_work },
             Err(failure) => Ended::Failed {
-                cause: failure.cause.unwrap_or_else(|| format!("the Run {status}")),
+                cause: failure
+                    .cause
+                    .unwrap_or_else(|| format!("the Ticket run {status}")),
                 log: failure.log,
                 local_work,
             },
@@ -942,7 +943,7 @@ mod tests {
 
     /// What a Run given a hidden argument only a child Run is given, without
     /// a kind, is rejected with.
-    const ONLY_A_CHILD_RUN: &str = "only a child Run is given --stamp, --allow-base-fix, \
+    const ONLY_A_CHILD_RUN: &str = "only a child Ticket run is given --stamp, --allow-base-fix, \
         --offer-base-fix, --sessions-harness, --sessions-model, --sessions-effort, \
         --security-review-harness, --security-review-model, --security-review-effort, \
         --security-review-default, --security-review-default-model, --security-review-default-effort or \
@@ -1065,7 +1066,7 @@ mod tests {
         let cause = cause_of_not_starting_from(Path::new("/no/such/thirdshift"));
 
         assert!(
-            cause.starts_with("could not start the Run for #248 from /no/such/thirdshift: "),
+            cause.starts_with("could not start the Ticket run for #248 from /no/such/thirdshift: "),
             "{cause}"
         );
     }
@@ -1080,7 +1081,7 @@ mod tests {
 
         assert!(
             cause.starts_with(&format!(
-                "could not start the Run for #248 from {} (/no/such/thirdshift (deleted)): ",
+                "could not start the Ticket run for #248 from {} (/no/such/thirdshift (deleted)): ",
                 link.display()
             )),
             "{cause}"

@@ -15,6 +15,7 @@ use toml::{Table, Value};
 use toml_edit::{DocumentMut, Item};
 
 use crate::harness::{self, Harness, ModelAndEffort};
+use crate::ready::PickupOrder;
 
 pub mod console;
 pub mod scoring;
@@ -26,6 +27,7 @@ pub use console::{ConsoleAccess, ConsoleSettings};
 pub struct UserConfig {
     pub scoring: scoring::Settings,
     pub console: ConsoleSettings,
+    pub resources: crate::resources::Limits,
     /// `merge.always`: every Run is a Merge run unless told `no-merge`.
     pub merge_always: bool,
     /// `base.fix`: every Run may start a Base fix unless told `no-base-fix`.
@@ -44,7 +46,7 @@ pub struct UserConfig {
     pub waiting_line_interval: Duration,
     /// `inbox.silent_minutes`: how long both logs may be quiet, default ten minutes.
     pub silent_interval: Duration,
-    /// `inbox.days`: retention of ended problems and Resolved, default seven days.
+    /// `inbox.days`: retention of Resolved and rows GitHub cannot speak for, default seven days.
     pub inbox_days: i64,
     /// `activity.quiet_skips`: a skipped Pass prints
     /// nothing, its Activity log line its only trace.
@@ -58,9 +60,12 @@ pub struct UserConfig {
     /// Claim stop a Pickup run from taking another, by default 3.
     pub pickup_limit: NonZeroUsize,
     /// `pickup.wait_minutes`: how long after its latest shaping event an
-    /// issue becomes a Ready issue, by default 30 minutes. Zero disables
+    /// issue becomes a Ready issue, by default 5 minutes. Zero disables
     /// the settling window.
     pub pickup_wait: TimeDelta,
+    /// `pickup.order`: which end of the issue numbers a Pickup run takes
+    /// its Ready issue from, by default the lowest-numbered one.
+    pub pickup_order: PickupOrder,
     /// The `[harness]` section: the Harness every Command runs its sessions
     /// on, and a Model and Effort for each Harness.
     pub harness: harness::Settings,
@@ -70,7 +75,12 @@ pub struct UserConfig {
     pub security_harness: Option<Harness>,
     /// `security.fix`: off by default; None leaves the decision unmade.
     pub security_fix: Option<bool>,
+    /// `security.close`: off by default; None leaves the decision unmade.
+    /// It takes effect only when fixing is also allowed.
+    pub security_close: Option<bool>,
     pub security_review: bool,
+    /// The `[trial]` memory caps for each Trial and Grader scope.
+    pub trial_caps: crate::scope::Caps,
 }
 
 /// The `[email]` section: where email goes and who it comes from. The Resend
@@ -81,6 +91,10 @@ pub struct EmailSettings {
     /// `email.always`: every Run, and every Architect run, sends a Run
     /// notification unless told `no-email`.
     pub always: bool,
+    /// `email.unless_merged`: every Run, and every Architect run, sends a
+    /// Run notification as if told `email-unless-merged`, with or without
+    /// `email.always`, unless told `email` or `no-email`.
+    pub unless_merged: bool,
     /// `email.to`: the address email goes to when the command names none.
     pub to: Option<String>,
     /// `email.from`: the sender, in place of Resend's shared test sender.
@@ -113,6 +127,7 @@ impl UserConfig {
     fn defaults(home: &Path) -> Self {
         UserConfig {
             scoring: scoring::Settings::default(),
+            resources: crate::resources::Limits::default(),
             console: ConsoleSettings::default(),
             merge_always: false,
             base_fix: false,
@@ -126,11 +141,14 @@ impl UserConfig {
             email: EmailSettings::default(),
             spec_parallel: NonZeroUsize::new(3).unwrap(),
             pickup_limit: NonZeroUsize::new(3).unwrap(),
-            pickup_wait: TimeDelta::minutes(30),
+            pickup_wait: TimeDelta::minutes(5),
+            pickup_order: PickupOrder::LowestFirst,
             harness: harness::Settings::default(),
             security_harness: None,
             security_fix: None,
+            security_close: None,
             security_review: false,
+            trial_caps: crate::scope::Caps::default(),
         }
     }
 
@@ -154,6 +172,13 @@ impl UserConfig {
                     .scoring
                     .validate()
                     .with_context(|| format!("invalid [scoring] in {file}"))?;
+                continue;
+            }
+            if section == "resources" {
+                config.resources = value
+                    .clone()
+                    .try_into()
+                    .with_context(|| format!("invalid [resources] in {file}"))?;
                 continue;
             }
             if section == "console" {
@@ -181,6 +206,7 @@ impl UserConfig {
                     | "pickup"
                     | "harness"
                     | "security"
+                    | "trial"
             );
             let settings = match value {
                 Value::Table(settings) if known => settings,
@@ -233,6 +259,12 @@ impl UserConfig {
                     }
                     ("email", "always", Value::Boolean(always)) => config.email.always = *always,
                     ("email", "always", _) => bail!("email.always must be true or false in {file}"),
+                    ("email", "unless_merged", Value::Boolean(unless_merged)) => {
+                        config.email.unless_merged = *unless_merged
+                    }
+                    ("email", "unless_merged", _) => {
+                        bail!("email.unless_merged must be true or false in {file}")
+                    }
                     ("email", "to", Value::String(to)) => config.email.to = Some(to.clone()),
                     ("email", "from", Value::String(from)) => {
                         config.email.from = Some(from.clone())
@@ -258,6 +290,19 @@ impl UserConfig {
                                 )
                             })?;
                     }
+                    ("pickup", "order", Value::String(order)) => {
+                        config.pickup_order =
+                            PickupOrder::parse(order.trim()).with_context(|| {
+                                format!(
+                                    "pickup.order must be {} or {}, not {order:?}, in {file}",
+                                    PickupOrder::LowestFirst,
+                                    PickupOrder::HighestFirst,
+                                )
+                            })?;
+                    }
+                    ("pickup", "order", _) => {
+                        bail!("pickup.order must be a quoted order in {file}")
+                    }
                     ("security", "review", Value::Boolean(review)) => {
                         config.security_review = *review
                     }
@@ -266,6 +311,12 @@ impl UserConfig {
                     }
                     ("security", "fix", Value::Boolean(fix)) => config.security_fix = Some(*fix),
                     ("security", "fix", _) => bail!("security.fix must be true or false in {file}"),
+                    ("security", "close", Value::Boolean(close)) => {
+                        config.security_close = Some(*close)
+                    }
+                    ("security", "close", _) => {
+                        bail!("security.close must be true or false in {file}")
+                    }
                     ("security", "harness", Value::String(name)) => {
                         let name = name.trim();
                         if !name.is_empty() {
@@ -288,6 +339,24 @@ impl UserConfig {
                     },
                     ("harness", "default", _) => {
                         bail!("harness.default must be a quoted name in {file}")
+                    }
+                    ("trial", "memory_high", Value::String(high)) => {
+                        crate::scope::check_memory_value("trial.memory_high", high)
+                            .with_context(|| format!("invalid [trial] in {file}"))?;
+                        config.trial_caps.high = high.clone();
+                    }
+                    ("trial", "memory_max", Value::String(max)) => {
+                        crate::scope::check_memory_value("trial.memory_max", max)
+                            .with_context(|| format!("invalid [trial] in {file}"))?;
+                        config.trial_caps.max = max.clone();
+                    }
+                    ("trial", "memory_swap_max", Value::String(swap_max)) => {
+                        crate::scope::check_memory_value("trial.memory_swap_max", swap_max)
+                            .with_context(|| format!("invalid [trial] in {file}"))?;
+                        config.trial_caps.swap_max = swap_max.clone();
+                    }
+                    ("trial", "memory_high" | "memory_max" | "memory_swap_max", _) => {
+                        bail!("{section}.{key} must be a quoted byte count in {file}")
                     }
                     ("harness", name, value) if Harness::named(name).is_some() => {
                         let Value::Table(settings) = value else {
@@ -321,6 +390,7 @@ pub struct UserConfigChanges {
     pub base_fix: bool,
     pub launch_pull: bool,
     pub security_fix: bool,
+    pub security_close: bool,
     pub security_review: bool,
     /// None disables Run notifications while retaining their addresses.
     pub notifications: Option<NotificationAddresses>,
@@ -384,6 +454,7 @@ impl UserConfigDocument {
             set(&mut document, "base", "fix", changes.base_fix);
             set(&mut document, "launch", "pull", changes.launch_pull);
             set(&mut document, "security", "fix", changes.security_fix);
+            set(&mut document, "security", "close", changes.security_close);
             set(&mut document, "security", "review", changes.security_review);
             set(
                 &mut document,
@@ -391,6 +462,9 @@ impl UserConfigDocument {
                 "always",
                 changes.notifications.is_some(),
             );
+            if changes.notifications.is_none() {
+                set(&mut document, "email", "unless_merged", false);
+            }
             if let Some(notifications) = &changes.notifications {
                 set(&mut document, "email", "from", notifications.from.as_str());
                 set_email_to(&mut document, &notifications.to);
@@ -851,16 +925,17 @@ fn is_commented_out_email_to(line: &str) -> bool {
 /// each with what it does and that default. `email.to` has no default, so it
 /// is the one key written commented out.
 pub const DEFAULTS: &str = r#"[merge]
-always = false   # every Run is a Merge run, without the merge word; default false
+always = false   # every Ticket run Self-merges, without the merge word; default false
 
 [base]
-fix = false      # every Run may start a Base fix, without the base-fix word; default false
+fix = false      # every Ticket run may start a Base fix, without the base-fix word; default false
 
 [launch]
-pull = false     # every Run first fast-forwards your checkout of the Base branch; default false
+pull = false     # every Ticket run first fast-forwards your checkout of the Base branch; default false
 
 [email]
-always = false                  # every Run sends a Run notification, without the email word; default false
+always = false                  # every Ticket run sends a Run notification, without the email word; default false
+unless_merged = false           # every Ticket run sends a Run notification unless it merged, without the email-unless-merged word; default false
 # to = "you@example.com"        # where email goes when the command names no address; no default
 from = "onboarding@resend.dev"  # the sender; default onboarding@resend.dev, which only delivers to your Resend account's address
 
@@ -872,8 +947,8 @@ waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting li
 endpoint = ""   # optional OTLP/HTTP traces URL, including /v1/traces; default blank (off); Security runs never export
 
 [inbox]
-days = 7             # days to keep ended problems and Resolved; default 7
-silent_minutes = 10   # minutes without growth in either log before a Run is Silent; default 10
+days = 7             # days to keep Resolved and rows GitHub cannot speak for; default 7
+silent_minutes = 10   # minutes without growth in either log before a Ticket run is Silent; default 10
 
 [console]
 address = ""        # HTTPS address for console install, e.g. https://console.example.com; default blank
@@ -889,12 +964,17 @@ quiet_skips = false   # a skipped Pass prints nothing, leaving only its Activity
 [spec]
 parallel = 3   # how many Tickets a Spec run runs at once; default 3
 
+[resources]
+min_available_memory_mb = 0   # delay new sessions below this available RAM in MB; 0 disables; default 0
+max_load_per_cpu_percent = 0  # delay new sessions above this one-minute load per logical CPU (%); 0 disables; default 0
+
 [pickup]
 limit = 3   # how many open issues labelled in-progress stop a Pickup run taking another; default 3
-wait_minutes = 30   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 30
+wait_minutes = 5   # minutes since the latest shaping event before an issue is Ready; 0 disables waiting; default 5
+order = "lowest-first"   # which Ready issue a Pickup run takes, lowest-first or highest-first; default lowest-first
 
 [harness]
-default = "claude"   # the Harness every Run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
+default = "claude"   # the Harness every Ticket run's sessions run on, claude, codex, agy, grok, muse or opencode; default claude
 
 [harness.claude]
 model = ""    # the Model Claude Code's sessions run on; default blank, for Claude Code's own
@@ -922,7 +1002,8 @@ effort = ""   # the Model's variant, passed as #effort; default blank, for OpenC
 
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
-review = false   # Runs review their change for Security findings; default false
+close = false   # Security runs may close a finding their fix merged, when fixing is allowed; default false
+review = false   # Ticket runs review their change for Security findings; default false
 harness = ""   # the Harness for Security runs, unless the command names one, and for every Security review; default blank; blank or missing leaves Security runs on harness.default, or Claude Code if that is missing, and Security reviews on their Command's Harness
 
 [scoring]
@@ -932,6 +1013,11 @@ harness = "claude"   # the Grader's Harness; default claude
 model = ""   # the Grader's Model; default blank, for the Harness's own
 fallback_harness = "codex"   # the second Grader's Harness when the first matches the Run's Model; default codex
 fallback_model = ""   # the second Grader's Model; default blank, for the second Harness's own
+
+[trial]
+memory_high = "1G"   # throttle each Trial and Grader scope past this; default 1G
+memory_max = "2G"   # kill each Trial and Grader scope past this, voiding the Trial; default 2G
+memory_swap_max = "1G"   # swap each Trial and Grader scope may use; default 1G
 "#;
 
 /// The line `DEFAULTS` holds for `email.to`, which has no default.
@@ -1026,6 +1112,26 @@ mod tests {
     }
 
     #[test]
+    fn resource_limits_are_opt_in_and_accept_machine_thresholds() {
+        let defaults = parse("").unwrap();
+        assert_eq!(defaults.resources.min_available_memory_mb, 0);
+        assert_eq!(defaults.resources.max_load_per_cpu_percent, 0);
+        let config =
+            parse("[resources]\nmin_available_memory_mb = 2048\nmax_load_per_cpu_percent = 100\n")
+                .unwrap();
+        assert_eq!(config.resources.min_available_memory_mb, 2048);
+        assert_eq!(config.resources.max_load_per_cpu_percent, 100);
+        for text in [
+            "[resources]\nmin_available_memory_mb = -1\n",
+            "[resources]\nmin_available_memory_mb = 1.5\n",
+            "[resources]\nmax_load_per_cpu_percent = -1\n",
+            "[resources]\nunknown = 3\n",
+        ] {
+            assert!(parse(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
     fn the_defaults_setup_writes_are_what_a_run_does_with_no_user_config() {
         let mut config = parse(DEFAULTS).unwrap();
         assert_eq!(
@@ -1037,6 +1143,8 @@ mod tests {
         config.harness.default = None;
         assert_eq!(config.security_fix, Some(false));
         config.security_fix = None;
+        assert_eq!(config.security_close, Some(false));
+        config.security_close = None;
         assert_eq!(config, UserConfig::defaults(Path::new("/home/me")));
     }
 
@@ -1063,6 +1171,7 @@ mod tests {
                 "base.fix",
                 "launch.pull",
                 "email.always",
+                "email.unless_merged",
                 "email.to",
                 "email.from",
                 "logs.dir",
@@ -1078,8 +1187,11 @@ mod tests {
                 "console.hidden_sections",
                 "activity.quiet_skips",
                 "spec.parallel",
+                "resources.min_available_memory_mb",
+                "resources.max_load_per_cpu_percent",
                 "pickup.limit",
                 "pickup.wait_minutes",
+                "pickup.order",
                 "harness.default",
                 "harness.claude.model",
                 "harness.claude.effort",
@@ -1094,6 +1206,7 @@ mod tests {
                 "harness.opencode.model",
                 "harness.opencode.effort",
                 "security.fix",
+                "security.close",
                 "security.review",
                 "security.harness",
                 "scoring.owners",
@@ -1102,6 +1215,9 @@ mod tests {
                 "scoring.model",
                 "scoring.fallback_harness",
                 "scoring.fallback_model",
+                "trial.memory_high",
+                "trial.memory_max",
+                "trial.memory_swap_max",
             ]
         );
         let commented_out: Vec<&str> = DEFAULTS
@@ -1233,6 +1349,24 @@ mod tests {
     }
 
     #[test]
+    fn security_close_is_read_and_must_be_a_bool() {
+        assert_eq!(
+            parse("[security]\nclose = true\n").unwrap().security_close,
+            Some(true)
+        );
+        assert_eq!(
+            parse("[security]\nclose = false\n").unwrap().security_close,
+            Some(false)
+        );
+        assert_eq!(parse("").unwrap().security_close, None);
+        let error = parse("[security]\nclose = \"yes\"\n").unwrap_err();
+        assert!(
+            format!("{error:#}").contains("security.close must be true or false"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
     fn launch_pull_is_read() {
         assert!(parse("[launch]\npull = true\n").unwrap().launch_pull);
         assert!(!parse("[launch]\npull = false\n").unwrap().launch_pull);
@@ -1258,6 +1392,62 @@ mod tests {
     }
 
     #[test]
+    fn trial_memory_caps_are_read_and_default_from_measurement() {
+        let config = parse(
+            "[trial]\nmemory_high = \"512M\"\nmemory_max = \"1G\"\nmemory_swap_max = \"256M\"\n",
+        )
+        .unwrap();
+        assert_eq!(config.trial_caps.high, "512M");
+        assert_eq!(config.trial_caps.max, "1G");
+        assert_eq!(config.trial_caps.swap_max, "256M");
+        for text in ["", "[trial]\n"] {
+            let config = parse(text).unwrap();
+            assert_eq!(config.trial_caps.high, crate::scope::DEFAULT_MEMORY_HIGH);
+            assert_eq!(config.trial_caps.max, crate::scope::DEFAULT_MEMORY_MAX);
+            assert_eq!(
+                config.trial_caps.swap_max,
+                crate::scope::DEFAULT_MEMORY_SWAP_MAX
+            );
+        }
+    }
+
+    #[test]
+    fn pickup_order_is_read_and_defaults_to_lowest_first() {
+        use crate::ready::PickupOrder;
+
+        let config = parse("[pickup]\norder = \"highest-first\"\n").unwrap();
+        assert_eq!(config.pickup_order, PickupOrder::HighestFirst);
+        let config = parse("[pickup]\norder = \"lowest-first\"\n").unwrap();
+        assert_eq!(config.pickup_order, PickupOrder::LowestFirst);
+        for text in ["", "[pickup]\n"] {
+            assert_eq!(
+                parse(text).unwrap().pickup_order,
+                PickupOrder::LowestFirst,
+                "{text:?}"
+            );
+        }
+        for value in ["\"lowest\"", "\"highest\"", "\"\"", "true", "3"] {
+            let error = parse(&format!("[pickup]\norder = {value}\n")).unwrap_err();
+            assert!(
+                error.to_string().contains("pickup.order must be"),
+                "{error:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn trial_memory_caps_refuse_what_systemd_cannot_use() {
+        for text in [
+            "[trial]\nmemory_high = \"much\"\n",
+            "[trial]\nmemory_max = 512\n",
+            "[trial]\nmemory_swap_max = \"\"\n",
+            "[trial]\nparallel = 2\n",
+        ] {
+            assert!(parse(text).is_err(), "{text:?} must be refused");
+        }
+    }
+
+    #[test]
     fn email_settings_are_read() {
         let config = parse("[email]\nto = \"me@example.com\"\nfrom = \"ts@acme.dev\"\n").unwrap();
         assert_eq!(config.email.to.as_deref(), Some("me@example.com"));
@@ -1265,6 +1455,18 @@ mod tests {
         assert_eq!(parse("[email]\n").unwrap().email, EmailSettings::default());
         assert!(parse("[email]\nalways = true\n").unwrap().email.always);
         assert!(!parse("[email]\nalways = false\n").unwrap().email.always);
+        assert!(
+            parse("[email]\nunless_merged = true\n")
+                .unwrap()
+                .email
+                .unless_merged
+        );
+        assert!(
+            !parse("[email]\nalways = true\n")
+                .unwrap()
+                .email
+                .unless_merged
+        );
     }
 
     #[test]
@@ -1376,6 +1578,10 @@ mod tests {
                 "email.always must be true or false",
             ),
             (
+                "[email]\nunless_merged = 1\n",
+                "email.unless_merged must be true or false",
+            ),
+            (
                 "[email]\nto = 1\n",
                 "email.to must be a quoted email address",
             ),
@@ -1473,6 +1679,7 @@ mod tests {
             base_fix: true,
             launch_pull: true,
             security_fix: false,
+            security_close: false,
             security_review: false,
             notifications: Some(NotificationAddresses {
                 to: "me@example.com".to_string(),
@@ -1520,6 +1727,10 @@ mod tests {
         if before.security_fix.is_none() {
             assert_eq!(after.security_fix, Some(false));
             after.security_fix = None;
+        }
+        if before.security_close.is_none() {
+            assert_eq!(after.security_close, Some(false));
+            after.security_close = None;
         }
         assert_eq!(after, before, "{completed}");
         let again = document(&completed).render(None);
@@ -1629,6 +1840,7 @@ mod tests {
             base_fix: false,
             launch_pull: false,
             security_fix: false,
+            security_close: false,
             security_review: false,
             notifications: Some(NotificationAddresses {
                 to: to.to_string(),
@@ -1724,6 +1936,7 @@ mod tests {
             base_fix: false,
             launch_pull: false,
             security_fix: false,
+            security_close: false,
             security_review: false,
             notifications: None,
             harness: Some((
@@ -1770,6 +1983,7 @@ mod tests {
                 base_fix: true,
                 launch_pull: true,
                 security_fix: false,
+                security_close: false,
                 security_review: false,
                 notifications: Some(NotificationAddresses {
                     to: "o\"brien@example.com".to_string(),
@@ -1857,6 +2071,7 @@ mod tests {
             base_fix: false,
             launch_pull: true,
             security_fix: false,
+            security_close: false,
             security_review: false,
             notifications: None,
             harness: None,

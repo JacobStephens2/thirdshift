@@ -53,6 +53,15 @@ wall time and whether compilation was included in the PR's evidence. Timings
 depend on host load and build cache; compare them with CI execution time rather
 than CI queue delay.
 
+## Console session expiry
+
+For the Linux Console session-expiry regression, first build the binary, then run
+`python3 tests/console/session-expiry.py --binary target/debug/thirdshift --settle-seconds 65`.
+It needs Python 3 and a C compiler. Its child-only clock shim advances the Console's
+wall clock by 30 days while leaving the host clock and monotonic timers unchanged.
+After one recovery interval, open Inbox and log streams must close and receive no
+new Command notices or log lines. The script cleans up its private Console and compiled shim.
+
 ## Setup PTY child lifetime
 
 `Scenario::run_terminal` kills and reaps its immediate child when it returns or

@@ -128,6 +128,7 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<()> {
         effort: chosen.effort.clone(),
         chosen_by: super::ChosenBy::UserConfig,
     };
+    crate::resources::wait()?;
     crate::progress::step("checking OpenCode's Model and Effort with a standalone test call");
     let invocation = OpenCode.session(&choice, None, "Reply with OK.");
     let output = super::process::output(
@@ -193,5 +194,21 @@ mod tests {
             [("OPENCODE_DISABLE_AUTOUPDATE", "1")]
         );
         assert!(ended.killed.is_empty());
+    }
+
+    /// A Trial keeps the code review session unchanged: its web search and
+    /// web fetch stay off through the sandbox's config, which denies both.
+    #[test]
+    fn trials_keep_the_code_review_session_unchanged() {
+        let choice = Choice {
+            harness: Harness::OpenCode,
+            model: None,
+            effort: None,
+            chosen_by: super::super::ChosenBy::Command,
+        };
+        assert_eq!(
+            OpenCode.trial_session(&choice, None, "review").args,
+            OpenCode.code_review_session(&choice, None, "review").args
+        );
     }
 }

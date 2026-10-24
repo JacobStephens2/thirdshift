@@ -1,6 +1,6 @@
 [package]
 name = "thirdshift"
-version = "0.14.3"
+version = "0.15.0"
 edition = "2024"
 description = "Turn a GitHub issue into a ready-for-review pull request, unattended"
 license = "MIT"
@@ -26,20 +26,24 @@ chrono = { version = "0.4.45", default-features = false, features = ["clock", "s
 futures-util = { version = "0.3.34", default-features = false, features = ["std"] }
 include_dir = "0.7.4"
 libc = "0.2.189"
+notify = "8.2.0"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls", "blocking", "json", "form"] }
 rand_core = { version = "0.6.4", features = ["getrandom"] }
+rand = "=0.10.3"
+rand_distr = "=0.6.0"
+rand_pcg = "=0.10.2"
 serde = { version = "1.0.229", features = ["derive"] }
 # OTLP must preserve f64 values and parse decimal integers without an f64 hop.
 serde_json = { version = "1.0.151", features = ["float_roundtrip", "arbitrary_precision"] }
 serde_urlencoded = "0.7.1"
 sha2 = "0.10.9"
 subtle = "2.6.1"
+sysinfo = { version = "0.38.4", default-features = false, features = ["system"] }
 signal-hook = "0.4.4"
 tempfile = "3.27.0"
 toml = "1.1.6"
 toml_edit = "0.25.15"
 tokio = { version = "1.53.1", features = ["rt", "net", "time", "sync"] }
-tokio-stream = { version = "0.1.18", features = ["sync"] }
 
 [dev-dependencies]
 opentelemetry-proto = { version = "0.33.0", default-features = false, features = ["gen-tonic-messages", "logs", "trace", "with-serde"] }

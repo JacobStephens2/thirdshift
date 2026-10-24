@@ -669,7 +669,8 @@ mod tests {
                 Work::PickupRun(_)
                 | Work::ArchitectRun(_)
                 | Work::SecurityRun(_)
-                | Work::ScoringRun(_) => {
+                | Work::ScoringRun(_)
+                | Work::Experiment(_) => {
                     panic!("not a Run's work")
                 }
             };
