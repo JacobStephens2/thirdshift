@@ -17,7 +17,7 @@ use crate::command::{Ending, Skip};
 use crate::failed_run::{FailedRun, PolicyRefusal};
 use crate::logs;
 use crate::progress::{self, ChildLine};
-use crate::run::Ended;
+use crate::run::{Ended, Goal};
 
 /// What starts the line naming a Failed run's session trace.
 const SESSION_LOG: &str = "session trace: ";
@@ -380,6 +380,15 @@ impl<'a> Account<'a> {
             }),
             ..account
         }
+    }
+
+    /// Whether it merged with nothing left for the Day shift: no Security
+    /// finding its fix left open, and none waiting for triage. A Run
+    /// notification asked for only unless the command merged goes unsent.
+    pub fn merged_with_nothing_waiting(&self) -> bool {
+        self.outcome == Goal::Merged.outcome()
+            && !self.security_findings_waiting
+            && !matches!(self.security_close, Some(SecurityClose::LeftOpen { .. }))
     }
 
     /// Whether the command succeeded, and so exits 0.

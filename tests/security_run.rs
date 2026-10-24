@@ -1642,6 +1642,54 @@ fn a_failing_close_check_leaves_the_advisory_open_with_a_note_and_tells_the_day_
 }
 
 #[test]
+fn email_unless_merged_still_emails_a_merged_fix_that_left_its_finding_open() {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
+    scenario.agent_does_for(8, implement_fix());
+    scenario.agent_does_in_session(3, &close_check_script("fails: the bound still overflows"));
+    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+    let result = scenario.run_with_env(
+        &[
+            "secure",
+            "security-fix",
+            "security-close",
+            "merge",
+            "email-unless-merged",
+            "day@example.com",
+        ],
+        &resend_env(&resend),
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+    let (subject, body) = the_one_notification(&resend);
+    assert_eq!(subject, "[thirdshift] acme/widgets Security run: merged");
+    assert!(body.contains("open"), "{body}");
+}
+
+#[test]
+fn email_unless_merged_emails_nothing_for_a_merged_fix_that_closed_its_finding() {
+    let scenario = with_reproduced_findings(&["high"]);
+    scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
+    scenario.agent_does_for(8, implement_fix());
+    scenario.agent_does_in_session(3, &close_check_script("passes"));
+    let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
+    let result = scenario.run_with_env(
+        &[
+            "secure",
+            "security-fix",
+            "security-close",
+            "merge",
+            "email-unless-merged",
+            "day@example.com",
+        ],
+        &resend_env(&resend),
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["advisories"][0]["state"], "closed");
+    assert!(resend.requests().is_empty(), "{:?}", resend.requests());
+}
+
+#[test]
 fn closing_follows_the_setting_unless_the_command_overrides_it() {
     for (config, words, merged, closed) in [
         (
