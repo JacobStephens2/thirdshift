@@ -183,6 +183,9 @@ pub fn run(options: Options) -> Result<()> {
         !suites.is_empty(),
         "no Eval suites selected; use --suite for a defaults-only Experiment"
     );
+    // The release Baseline probe can build an Arm too. Check every selected
+    // approved task before reaching it, and reuse those inputs for a new Experiment.
+    let selected_tasks = tasks(&suites_root, &suites)?;
     if options.release && !release::supports_trials(&repository, &root, &baseline)? {
         let tag = baseline_reference.as_deref().expect("release Baseline tag");
         return release::skip(
@@ -218,9 +221,8 @@ pub fn run(options: Options) -> Result<()> {
         bar,
         prepared: None,
     };
-    let selected = description.suites.clone();
     let mut experiment = store::Stored::open(&root.join("experiments"), description, || {
-        tasks(&suites_root, &selected)
+        Ok(selected_tasks)
     })?;
     if experiment.state == State::Completed {
         println!("{}", experiment.render(options.json)?);
@@ -329,6 +331,7 @@ fn resolve(git: &Git, reference: &str) -> Result<String> {
 
 fn tasks(root: &Path, suites: &[String]) -> Result<Vec<Task>> {
     let mut tasks = Vec::new();
+    let mut missing = Vec::new();
     for name in suites {
         let suite = root.join(name);
         for (task_name, directory) in super::suite::directories(&suite.join("tasks"))? {
@@ -336,10 +339,10 @@ fn tasks(root: &Path, suites: &[String]) -> Result<Vec<Task>> {
             if manifest.state == format::State::Proposed {
                 continue;
             }
-            let inputs = manifest
-                .trial
-                .as_ref()
-                .context("Eval task needs a [trial] table; see docs/eval-tasks.md")?;
+            let Some(inputs) = manifest.trial.as_ref() else {
+                missing.push(format!("{name}/{task_name}"));
+                continue;
+            };
             crate::issue::IssueUrl::parse(&inputs.issue_url)?;
             ensure!(
                 !inputs.base.is_empty() && !inputs.branch.is_empty() && !inputs.pr_url.is_empty(),
@@ -353,6 +356,11 @@ fn tasks(root: &Path, suites: &[String]) -> Result<Vec<Task>> {
             });
         }
     }
+    ensure!(
+        missing.is_empty(),
+        "Eval tasks need a [trial] table: {}; see docs/eval-tasks.md",
+        missing.join(", ")
+    );
     ensure!(
         !tasks.is_empty(),
         "selected suites have no approved Eval tasks"

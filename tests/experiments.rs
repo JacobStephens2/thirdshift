@@ -23,6 +23,66 @@ mod release;
 #[path = "experiments/sandbox.rs"]
 mod sandbox;
 
+fn assert_missing_trial_inputs_refused_before_builds(release: bool) {
+    for session in ["code-review", "spec-review"] {
+        let fixture = Fixture::with_session(session, 1);
+        let tasks = fixture
+            .scenario
+            .path(&format!("home/.thirdshift/evals/suites/{session}/tasks"));
+        let mut manifest = fs::read_to_string(tasks.join("fixture/task.toml"))
+            .unwrap()
+            .parse::<toml_edit::DocumentMut>()
+            .unwrap();
+        manifest.remove("trial");
+        for name in ["fixture", "second", "proposal"] {
+            let directory = tasks.join(name);
+            fs::create_dir_all(&directory).unwrap();
+            manifest["state"] = toml_edit::value(if name == "proposal" {
+                "proposed"
+            } else {
+                "approved"
+            });
+            fs::write(directory.join("task.toml"), manifest.to_string()).unwrap();
+        }
+        fs::remove_dir_all(fixture.scenario.path("home/.thirdshift/evals/builds")).unwrap();
+        let built = fixture.scenario.path("arm-build-started");
+        let cargo = fixture.scenario.path("bin/cargo");
+        fs::write(
+            &cargo,
+            format!("#!/bin/sh\ntouch '{}'\nexit 99\n", built.display()),
+        )
+        .unwrap();
+        fs::set_permissions(cargo, fs::Permissions::from_mode(0o755)).unwrap();
+        fixture
+            .scenario
+            .launch_git(&["tag", "v0.1.0", &fixture.baseline]);
+
+        let run = fixture.run(if release { &["--release"] } else { &[] });
+
+        assert_eq!(run.code, Some(1), "{}", run.stderr);
+        assert!(
+            !built.exists(),
+            "Arm built before Trial inputs were checked: {}",
+            run.stderr
+        );
+        for name in ["fixture", "second"] {
+            assert!(
+                run.stderr.contains(&format!("{session}/{name}")),
+                "{}",
+                run.stderr
+            );
+        }
+        assert!(run.stderr.contains("[trial]"), "{}", run.stderr);
+        assert!(!run.stderr.contains("proposal"), "{}", run.stderr);
+        assert!(fixture.trial_calls().is_empty());
+    }
+}
+
+#[test]
+fn experiments_name_all_approved_tasks_missing_trial_inputs_before_building() {
+    assert_missing_trial_inputs_refused_before_builds(false);
+}
+
 #[test]
 fn experiment_trace_contains_trials_and_graders_and_reports_arm_usage() {
     let fixture = Fixture::new();

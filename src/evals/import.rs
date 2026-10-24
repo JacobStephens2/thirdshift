@@ -63,6 +63,10 @@ struct PullRequest {
 struct Spec {
     repo: String,
     spec_issue: u64,
+    spec_issue_url: String,
+    spec_pr_url: String,
+    base_branch: String,
+    spec_branch: String,
     merge_base: String,
     pre_review_head: String,
 }
@@ -170,7 +174,12 @@ pub(super) fn replays(home: &Path) -> Result<Imported> {
                 criteria,
                 checks: Vec::new(),
                 inputs: inputs(),
-                trial: None,
+                trial: Some(crate::trial::Inputs {
+                    issue_url: spec.spec_issue_url,
+                    pr_url: spec.spec_pr_url,
+                    base: spec.base_branch,
+                    branch: spec.spec_branch,
+                }),
             },
             &context(&dated, &spec.repo, spec.spec_issue)?,
         )?;
@@ -215,11 +224,11 @@ pub(super) fn replays(home: &Path) -> Result<Imported> {
     Ok(result)
 }
 
-/// Older imports predate Code review execution. Add only its missing table,
+/// Older imports predate Trial inputs. Add only the missing table,
 /// preserving local criteria, formatting and any caller-supplied Trial inputs.
 fn complete_trial_inputs(target: &Path, staged: &Path) -> Result<()> {
     let existing = Task::load(target)?;
-    if existing.session != Session::CodeReview || existing.trial.is_some() {
+    if existing.trial.is_some() {
         return Ok(());
     }
     let Some(inputs) = Task::load(staged)?.trial else {
@@ -233,7 +242,7 @@ fn complete_trial_inputs(target: &Path, staged: &Path) -> Result<()> {
     fs::write(temporary.path(), contents)?;
     temporary
         .persist(path)
-        .context("could not complete Code review Trial inputs")?;
+        .context("could not complete Trial inputs")?;
     Ok(())
 }
 
