@@ -24,8 +24,20 @@ fn every_sampled_pull_request_gets_five_scores_and_keeps_attribution() {
     for pr in retained[0]["sample"].as_array().unwrap() {
         let assessment = &pr["assessment"];
         assert_eq!(assessment["grader"]["harness"], "claude");
+        let mut scores = assessment["scores"].clone();
+        for score in scores.as_array_mut().unwrap() {
+            let calibration = score
+                .as_object_mut()
+                .unwrap()
+                .remove("calibration")
+                .unwrap();
+            assert_eq!(
+                calibration,
+                serde_json::json!({"calibrated": false, "matches": 0, "compared": 0})
+            );
+        }
         assert_eq!(
-            assessment["scores"],
+            scores,
             serde_json::from_str::<Value>(RESPONSE).unwrap()["scores"]
         );
         assert_eq!(pr["effort"], "high");

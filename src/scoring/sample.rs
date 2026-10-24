@@ -22,6 +22,10 @@ pub(crate) struct PullRequest {
     pub(super) assessment: Option<super::grader::Assessment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_record: Option<std::path::PathBuf>,
+    #[serde(default)]
+    pub for_you: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) mine: Option<super::calibration::HumanScores>,
 }
 
 impl PullRequest {
@@ -44,6 +48,8 @@ impl PullRequest {
             effort: built.effort,
             assessment: None,
             command_record: None,
+            for_you: false,
+            mine: None,
         })
     }
 }

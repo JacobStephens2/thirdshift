@@ -384,7 +384,8 @@ thirdshift pickup base &lt;branch&gt;     # do that with &lt;branch&gt; as the B
 thirdshift secure                   # audit the Base branch and record findings privately (see Security runs)
 thirdshift secure base &lt;branch&gt;     # do that with &lt;branch&gt; as the Base branch, from a clone on any branch
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
-thirdshift scores [--json]          # list the sample by week
+thirdshift scores [&lt;pull request&gt;] [--json] # show Scores and calibration
+thirdshift scores &lt;pull request&gt; --mine    # enter your five Scores
 thirdshift email-test [&lt;address&gt;]   # send a test email through Resend (see Email)
 thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
 thirdshift update                   # update to the latest release (see Updating)
@@ -1110,7 +1111,7 @@ are inclusive at the start and exclusive at the end, so work is sampled once.</p
 preserves existing values; it does not ask Scoring questions:</p>
 <pre><code class="language-toml">[scoring]
 owners = []                 # GitHub users or organizations; configure before score
-sample_size = 10            # maximum sample size
+sample_size = 10            # maximum weekly sample size (historical 20 are additional)
 harness = &quot;claude&quot;          # Grader&#39;s Harness
 model = &quot;&quot;                  # set an explicit Model before grading a sample
 fallback_harness = &quot;codex&quot;   # second Grader, when the first matches the Run&#39;s Model
@@ -1136,7 +1137,26 @@ read-only. It gives five independent pass/fail Scores with reasons: Correct,
 Scoped, Tested, Honest and Standards. Honest checks only the pull request&#39;s
 claims against its diff and CI. Scores are retained on each sampled pull request,
 with the Grader&#39;s Harness and Model; local work also links to its Run&#39;s Command
-record. Both <code>scores</code> formats include these Scores.</p>
+record. Both <code>scores</code> formats include these Scores and each criterion&#39;s
+calibration: <code>calibrated</code>, <code>matches</code> and <code>compared</code> in JSON.</p>
+<p>The first Scoring run also draws 20 past pull requests across Harness and Model
+pairs, or all eligible work if fewer than 20 exist. They are marked <code>for_you</code>
+and graded too. They can predate the weekly window; overlaps with that week&#39;s
+draw are graded once. Later runs mark two from each ISO week&#39;s samples for you
+(or as many as available); reruns in the same week do not add another two.</p>
+<p>Use <code>thirdshift scores &lt;pull request&gt; --mine</code> with a sampled pull request URL,
+or a number that identifies only one sampled repository&#39;s pull request. It asks
+for pass or fail and a nonempty reason for Correct, Scoped, Tested, Honest and
+Standards. The model&#39;s Scores stay hidden during entry. All five of yours are
+saved together before the model&#39;s appear beside them; EOF or interruption
+leaves any previous Scores unchanged. Only one Scoring run or human scoring
+session can write at once. <code>thirdshift scores &lt;pull request&gt; [--json]</code> shows
+that pull request; omit it to list samples by week.</p>
+<p>Each criterion is calibrated when at least 18 of the last 20 distinct pull
+requests you and the model both scored agree on pass/fail. Fewer than 20 paired
+pull requests means uncalibrated. The rolling order is when you completed your
+Scores; reasons are retained but not compared. Every criterion stands on its
+own, so one that stays uncalibrated does not hold up the others.</p>
 <p>Set an explicit <code>scoring.model</code>: a blank default cannot establish that the
 Grader differs from the Run&#39;s Model. When the first Model matches the Built-with
 line (ignoring case), the second Harness/Model pair is used; if it also matches
