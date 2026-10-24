@@ -523,6 +523,26 @@ Harness, Model or Effort comparison with the same build in both Arms.
 Before building either Arm, an Experiment names every selected approved Eval
 task missing a `[trial]` table. This check also precedes the release Baseline probe.
 
+For an **A/A Experiment**, use one commit and the same flags in both Arms.
+This measures how often the Arms disagree when nothing differs, so you can
+assess ordinary Trial variation before weighing a change. For example:
+
+```sh
+thirdshift experiment HEAD --baseline HEAD \
+  --suite code-review --suite spec-review \
+  --baseline-harness claude --candidate-harness claude \
+  --baseline-model opus --candidate-model opus \
+  --baseline-effort high --candidate-effort high
+```
+
+Choose matching Harness, Model and Effort values available on your machine.
+Select the suites explicitly with `--suite`: identical commits touch no paths
+from which to select them automatically. Both Arms follow the ordinary build
+and Trial path (the commit's cached build may be reused), with separate Trials,
+Graders and a Verdict under the fixed Bar. Identical Arms do not guarantee
+identical Scores or a pass; the Verdict may be pass, fail or inconclusive.
+The ordinary resume rules below still apply.
+
 `thirdshift experiment --release <commit>` uses the last reachable `v<version>`
 tag as its Baseline and selects suites touched since that tag. `--baseline`
 and `--suite` do not apply in this mode. When no suite is touched, or the last
