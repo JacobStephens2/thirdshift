@@ -217,8 +217,9 @@ times do not change that order. Dispatch ancestry stays visible.
 Rows follow the Command record's stage order: implement through cleanup, then
 the stages of other Command kinds. Unrecognised stage names follow all known
 stages in alphabetical order.
-More runs extend the grid to the right on desktop and phones, with stage names
-fixed at the left. Each cell's Usual range belongs to that run's repository.
+Stages fills the window's width, beside the peek when one is open. More runs
+extend the grid to the right on desktop and phones, with stage names fixed at
+the left. Each cell's Usual range belongs to that run's repository.
 Live updates keep the visible run, selection and focus; **Newest runs** returns
 the relevant grid to its left edge. Historical Runs without stage metadata show
 an unknown time, distinct from a stage that was not reached. Choose
@@ -227,7 +228,7 @@ missing end timestamps say “time unknown” rather than inventing a duration.
 Both pages use the observations from `status --all --json`. The Rust parity
 test checks their stage times and Usual ranges against the CLI; the Playwright
 time tests check scale in all windows, grouping, both views, preferences, live
-insertions, keyboard access, Themes and 390 px.
+insertions, keyboard access, Themes, 390 px and Stages at 1920 px.
 
 Waterfall chooses one retained Command with live, died and ended chips, keeping
 its exact selection in `command=`. A span tree replaces the old Run sections:
