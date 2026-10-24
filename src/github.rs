@@ -1513,7 +1513,7 @@ impl PullRequest {
 
 /// What GitHub last showed for one pull request: its state and its merge
 /// or close time, each as GitHub wrote them.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PullRequestState {
     pub state: PrState,
     pub merged_at: Option<String>,
