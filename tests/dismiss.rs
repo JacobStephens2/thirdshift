@@ -104,13 +104,29 @@ fn undo_visible_row_leaves_hidden_history_dismissal_alone() {
     assert_eq!(status["commands"][0]["group"], "resolved", "{status}");
     assert_eq!(status["commands"][0]["count"], 1, "{status}");
 
-    let hidden = record_path(&scenario, 8).with_extension("dismiss.json");
-    let retained = fs::read(&hidden).unwrap();
+    let history_dismissal = || {
+        let output = scenario.run(&["status", "--all", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        let hidden = status["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|row| {
+                std::iter::once(row).chain(row["collapsed"].as_array().into_iter().flatten())
+            })
+            .find(|row| row["issue"]["number"] == 8)
+            .unwrap();
+        assert_eq!(hidden["group"], "history", "{status}");
+        hidden["dismissal"].clone()
+    };
+    let retained = history_dismissal();
+    assert!(retained.is_object());
     let undone = scenario.run(&["dismiss", "widgets#7", "--undo"]);
     assert_eq!(undone.code, Some(0), "{}", undone.stderr);
     assert_eq!(
-        fs::read(&hidden).ok(),
-        Some(retained),
+        history_dismissal(),
+        retained,
         "Undo of the visible row must preserve a hidden History row's Dismissal"
     );
 }
