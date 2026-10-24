@@ -1,9 +1,7 @@
 //! Usage comes from retained Session spans, never from requested Models or
 //! prices. Model totals supersede calls; session cost supersedes model costs.
 use std::collections::BTreeMap;
-use std::fs::File;
-use std::io::BufReader;
-use std::path::Path;
+use std::io::BufRead;
 
 use anyhow::Result;
 use serde::Serialize;
@@ -33,25 +31,13 @@ struct Measurement {
 }
 
 impl Arms {
-    pub fn read(directory: &Path) -> Result<Self> {
-        let mut arms = Self::default();
-        for attempt in super::trace::attempts(directory)? {
-            let key = attempt
-                .parent()
-                .unwrap()
-                .file_name()
-                .unwrap()
-                .to_string_lossy();
-            let arm = match workers::Arm::from_trial_key(&key) {
-                Some(workers::Arm::Baseline) => &mut arms.baseline,
-                Some(workers::Arm::Candidate) => &mut arms.candidate,
-                _ => continue,
-            };
-            for session in super::trace::sessions(&attempt)? {
-                arm.include(Arm::session(&session.with_extension("spans.jsonl"))?);
-            }
-        }
-        Ok(arms)
+    pub(super) fn include(&mut self, arm: workers::Arm, spans: impl BufRead) -> Result<()> {
+        let arm = match arm {
+            workers::Arm::Baseline => &mut self.baseline,
+            workers::Arm::Candidate => &mut self.candidate,
+        };
+        arm.include(Arm::session(spans)?);
+        Ok(())
     }
 
     pub fn baseline(&self) -> String {
@@ -75,10 +61,10 @@ impl Arm {
         }
         total
     }
-    fn session(path: &Path) -> Result<Self> {
+    fn session(reader: impl BufRead) -> Result<Self> {
         let mut spans = BTreeMap::new();
         let mut excludes_cache = false;
-        for request in Reader::<_, Spans>::new(BufReader::new(File::open(path)?)) {
+        for request in Reader::<_, Spans>::new(reader) {
             for resource in request?.resource_spans {
                 if let Some(resource) = resource.resource {
                     excludes_cache |= matches!(
