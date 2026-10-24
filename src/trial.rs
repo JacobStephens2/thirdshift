@@ -136,6 +136,34 @@ impl Output {
             },
         }
     }
+
+    /// A Trial that never started its session: its sandbox could not start
+    /// or its Harness had no login. The cause decides between void and
+    /// failed, as it does for a session that ends the same way.
+    fn void_before_session(total_ms: u128, error: &anyhow::Error) -> Self {
+        let void_cause = void_cause(error);
+        Self {
+            version: 1,
+            outcome: if void_cause.is_some() {
+                Outcome::Void
+            } else {
+                Outcome::Failed
+            },
+            timings: Timings {
+                total_ms,
+                session_ms: 0,
+            },
+            void_cause,
+            cause: Some(format!("{error:#}")),
+            session_id: None,
+            log: None,
+            model_evidence: None,
+            reports: Reports {
+                standards: None,
+                spec: None,
+            },
+        }
+    }
 }
 
 /// Invalid requests are CLI failures. An accepted Trial returns exactly one
@@ -189,12 +217,23 @@ pub fn run(path: &Path) -> Result<String> {
         ),
     };
     interrupt::install()?;
+    let sandbox = match crate::sandbox::for_trial(&choice, &repository, &output_dir) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            let output = Output::void_before_session(started.elapsed().as_millis(), &error);
+            return serde_json::to_string(&output).context("could not serialize Trial result");
+        }
+    };
     let logs = Logs::of_trial(&output_dir);
     let session_started = Instant::now();
-    let (ended, log) = Sessions::within(&logs, &repository, &choice, |sessions| {
+    let run = |sessions: &Sessions| {
         skills::exclude(&Git::new(&repository), &format!("/{}", prompt::ISSUE_FILE))?;
         sessions.run_to_end(Purpose::CodeReview, kind, &prompt)
-    });
+    };
+    let (ended, log) = match &sandbox {
+        Some(prepared) => Sessions::within_sandboxed(&logs, &repository, &choice, prepared, run),
+        None => Sessions::within(&logs, &repository, &choice, run),
+    };
     skills::remove_written();
     let session_ms = session_started.elapsed().as_millis();
     let artifact = |extension| {
@@ -262,6 +301,12 @@ fn void_cause(error: &anyhow::Error) -> Option<VoidCause> {
     }
     if error.is::<crate::session::limits::Reached>() {
         return Some(VoidCause::UsageLimit);
+    }
+    if error.is::<crate::sandbox::Unavailable>() {
+        return Some(VoidCause::SandboxUnavailable);
+    }
+    if error.is::<crate::sandbox::NoLogin>() {
+        return Some(VoidCause::SessionUnavailable);
     }
     let Some(failure) = error.downcast_ref::<SessionFailure>() else {
         return error
