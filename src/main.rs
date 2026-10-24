@@ -41,9 +41,9 @@ mod resend_key;
 mod resources;
 mod run;
 mod run_ending;
-mod scoring;
 mod sandbox;
 mod scope;
+mod scoring;
 mod security;
 mod session;
 mod setup;
@@ -88,7 +88,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift pickup base <branch>                Use <branch> as the Base branch
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
-       thirdshift score                               Sample merged factory pull requests
+       thirdshift score                               Sample merged factory work and propose Bug origins
        thirdshift scores [--json]                      List the sample by week
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config

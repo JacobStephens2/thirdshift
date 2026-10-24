@@ -15,6 +15,7 @@ use crate::github::GitHub;
 use crate::issue::Repo;
 use crate::{interrupt, logs};
 
+mod origins;
 mod sample;
 pub(crate) use sample::PullRequest;
 pub(crate) mod packet;
@@ -39,6 +40,8 @@ struct Week {
     sample: Vec<PullRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     packets: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bug_origins: Option<Vec<origins::Proposal>>,
 }
 
 fn directory() -> Result<PathBuf> {
@@ -95,6 +98,7 @@ pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
         seed,
         sample: sample::draw(candidates, config.scoring.sample_size.get(), seed),
         packets: None,
+        bug_origins: None,
     };
     fs::DirBuilder::new()
         .recursive(true)
@@ -108,6 +112,17 @@ pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
         packet::write(&GitHub::new(), pr, &packets.path().join(index.to_string()))
             .with_context(|| format!("can't build Scoring packet for {}", pr.url))?;
     }
+    let origin_start = previous
+        .iter()
+        .rev()
+        .find(|week| week.bug_origins.is_some())
+        .map(|week| week.window_end);
+    week.bug_origins = Some(origins::propose(
+        config,
+        origin_start,
+        end,
+        &packets.path().join("origins"),
+    )?);
     week.packets = Some(
         packets
             .path()

@@ -1676,13 +1676,37 @@ neither commit messages nor later history reach the Grader. Unavailable
 historical issue text fails the Command rather than substituting a later
 revision. Grader sessions and criterion Scores are separate work.
 
+Every closed `bug` issue also gets a proposed Bug origin, whoever fixed it,
+except issues labelled `security-fix`. The first run that writes proposals
+looks through all closed bugs, including those older than the sample window;
+later runs use the previous proposal window's end. Existing saved samples
+without proposals do not skip this backfill.
+
+A short session on the configured Scoring Harness and Model uses the Eval
+sandbox and memory caps to inspect the fix and only its earlier Git history.
+It names an introducing commit only when that history establishes one;
+otherwise it records no commit and explains why. A closure without a linked
+fix records no commit. GitHub's commit-to-PR associations map a named commit
+to its merged pull requests, then to a local Run's Command record when present
+or the PR's Built-with line. Human work can have no Run. Multiple historical
+PR associations are retained without choosing between them.
+
+The saved window's `bug_origins` list contains these proposals and their
+evidence; `thirdshift scores --json` includes it. Session artifacts stay in
+the window's private `packets/origins/` directory. Proposals count for nothing
+until the Day shift settles them (#1029). A plan-limit warning stops Scoring
+before another proposal starts and advances no window; retry `thirdshift score`
+to analyze that window again. A session or search failure also advances no window.
+
 The Command record and Command log live under
 `<logs.dir>/JacobStephens2/thirdshift/commands/scoring/`, with start and end lines
 in that repository's Activity log. The Command appears in the Inbox, can be
 Stopped with `thirdshift stop <command>`, and a failure lands in Needs you.
 Another Scoring run on the machine is skipped without recording a Command.
-A failed or interrupted search advances no window. Searches exceeding GitHub's
-1,000-result limit fail visibly rather than saving an incomplete window.
+A failed or interrupted search advances no window. Pull-request searches
+exceeding GitHub's 1,000-result limit fail visibly rather than saving an incomplete
+window. Closed-bug searches split their time ranges to cover larger backfills;
+more than 1,000 closures in one second fail visibly without advancing the window.
 
 Your operating system can schedule it weekly, for example:
 

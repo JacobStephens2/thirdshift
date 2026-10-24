@@ -40,9 +40,15 @@ impl Name {
                 });
             }
         }
-        if ["architect-", "pickup-", "secure-", "scoring-", "experiment-"]
-            .iter()
-            .any(|prefix| name.starts_with(prefix))
+        if [
+            "architect-",
+            "pickup-",
+            "secure-",
+            "scoring-",
+            "experiment-",
+        ]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
         {
             return Ok(Self::Pass(name.into()));
         }

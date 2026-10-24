@@ -1541,6 +1541,12 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
             return;
         }
         Endpoint::Pulls => {
+            if jq == Some(".[]") {
+                for pr in listed(state, "origin_prs", sha) {
+                    println!("{pr}");
+                }
+                return;
+            }
             if jq != Some(COMMIT_PR_LINES) {
                 unsupported_jq(jq);
             }

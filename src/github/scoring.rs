@@ -8,6 +8,7 @@ use crate::issue::IssueUrl;
 use crate::scoring::PullRequest;
 use crate::security::fixing::SECURITY_FIX;
 
+pub(crate) mod origins;
 mod packet;
 
 #[derive(Deserialize)]

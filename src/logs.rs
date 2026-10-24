@@ -22,6 +22,7 @@ mod process_identity;
 mod reading;
 pub(crate) use reading::Framing;
 pub(crate) use reading::catalog;
+pub(crate) use reading::run_for_pull_request;
 mod recording;
 pub(crate) mod session;
 pub(crate) mod spans;
@@ -376,9 +377,10 @@ impl<'a> Work<'a> {
         match self {
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => issue.repo(),
             Work::PickupRun(listed) => listed.issue.repo(),
-            Work::ArchitectRun(repo) | Work::SecurityRun(repo) | Work::ScoringRun(repo) | Work::Experiment(repo) => {
-                repo.clone()
-            }
+            Work::ArchitectRun(repo)
+            | Work::SecurityRun(repo)
+            | Work::ScoringRun(repo)
+            | Work::Experiment(repo) => repo.clone(),
         }
     }
 
@@ -400,7 +402,10 @@ impl<'a> Work<'a> {
         match self {
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => Some(issue),
             Work::PickupRun(listed) => Some(&listed.issue),
-            Work::ArchitectRun(_) | Work::SecurityRun(_) | Work::ScoringRun(_) | Work::Experiment(_) => None,
+            Work::ArchitectRun(_)
+            | Work::SecurityRun(_)
+            | Work::ScoringRun(_)
+            | Work::Experiment(_) => None,
         }
     }
 

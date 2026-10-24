@@ -134,6 +134,29 @@ impl Snapshot {
     }
 }
 
+/// Match a PR to the exact retained Run, including child and dispatched Runs.
+pub(crate) fn run_for_pull_request(root: &Path, url: &str) -> Result<Option<(PathBuf, String)>> {
+    let snapshot = Snapshot::load(root, Local::now())?;
+    fn find<'a>(command: &'a Command, url: &str, found: &mut Vec<&'a Command>) {
+        if command.record.pull_request.as_deref() == Some(url) {
+            found.push(command);
+        }
+        for child in command.children.iter().chain(&command.dispatched) {
+            find(child, url, found);
+        }
+    }
+    let mut found = Vec::new();
+    for entry in snapshot.entries() {
+        if let Entry::Record(command) = entry {
+            find(command, url, &mut found);
+        }
+    }
+    Ok(found
+        .into_iter()
+        .max_by_key(|command| &command.record.started_at)
+        .map(|command| (command.record_path.clone(), command.record.name.clone())))
+}
+
 /// Reload only the captured Command's folder, after Stop cleanup has finished.
 pub(super) fn retained_work(path: &Path, now: DateTime<Local>) -> Result<RetainedWork> {
     let inventory = Arc::new(Inventory::on_demand());
