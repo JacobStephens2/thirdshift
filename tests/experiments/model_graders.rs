@@ -21,6 +21,15 @@ fn a_sandboxed_model_grader_sees_only_its_packet() {
     ));
     let grader: Value =
         serde_json::from_slice(&fs::read(directory.join("grader.json")).unwrap()).unwrap();
+    let scope_marker = fixture.scenario.path("model-grader-scope-started");
+    fs::write(
+        fixture.scenario.path("bin/systemd-run"),
+        format!(
+            "#!/bin/sh\ntouch {:?}\nwhile [ \"$#\" -gt 0 ] && [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"\n",
+            scope_marker
+        ),
+    )
+    .unwrap();
     let binary = PathBuf::from(grader["harness"]["path"].as_str().unwrap());
     fs::write(&binary, format!(r##"#!/bin/sh
 set -eu
@@ -32,6 +41,7 @@ python3 - <<'PY'
 import json, os
 packet = json.load(open(os.environ['THIRDSHIFT_GRADER_PACKET']))
 assert len(packet['trials']) == 2
+assert open('/proc/self/oom_score_adj').read().strip() == '1000'
 json.dump({{'scores': [dict(label=t['label'], passed=True, reason='Isolated packet.', wrong_finding=False, borderline=False) for t in packet['trials']]}}, open(os.environ['THIRDSHIFT_GRADER_SCORES'], 'w'))
 PY
 echo '{{"type":"result","subtype":"success","result":"graded"}}'
@@ -40,6 +50,10 @@ echo '{{"type":"result","subtype":"success","result":"graded"}}'
     assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
     let completed = fixture.experiment();
     assert_eq!(completed["state"], "completed");
+    assert!(
+        scope_marker.is_file(),
+        "Model Grader bypassed its selected scope launcher"
+    );
     for result in completed["results"].as_array().unwrap() {
         assert_eq!(result["score"]["model"]["reason"], "Isolated packet.");
     }

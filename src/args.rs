@@ -91,6 +91,13 @@ pub enum Command {
     ReleaseSummary,
     /// Internal versioned session protocol for Evals.
     Trial(std::path::PathBuf),
+    /// Internal scope wrapper for Evals: raise this scope's own `oom_score_adj`,
+    /// then become `program`, keeping the raised score, the scope and every
+    /// stdio descriptor.
+    OomExec {
+        program: String,
+        args: Vec<String>,
+    },
     /// `email-test`, with the address it was given, if any.
     EmailTest(Option<String>),
     Architect(ArchitectArgs),
@@ -288,6 +295,15 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 bail!("usage: thirdshift --trial <request.json>");
             };
             return Ok(Command::Trial(request.into()));
+        }
+        Some("--oom-exec") => {
+            let [_, program, rest @ ..] = args else {
+                bail!("usage: thirdshift --oom-exec <program> [args...]");
+            };
+            return Ok(Command::OomExec {
+                program: program.clone(),
+                args: rest.to_vec(),
+            });
         }
         Some("help" | "--help" | "-h") => return Ok(Command::Help),
         Some("version" | "--version" | "-V") => return Ok(Command::Version),

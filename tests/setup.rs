@@ -234,7 +234,8 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[harness.grok]",
             "[harness.muse]",
             "[harness.opencode]",
-            "[security]"
+            "[security]",
+            "[trial]"
         ],
         "{text}"
     );
@@ -264,6 +265,9 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(config["pickup"]["wait_minutes"].as_integer(), Some(30));
     assert_eq!(config["security"]["fix"].as_bool(), Some(false));
     assert_eq!(config["security"]["harness"].as_str(), Some(""));
+    assert_eq!(config["trial"]["memory_high"].as_str(), Some("1G"));
+    assert_eq!(config["trial"]["memory_max"].as_str(), Some("2G"));
+    assert_eq!(config["trial"]["memory_swap_max"].as_str(), Some("1G"));
     assert_eq!(config["harness"]["default"].as_str(), Some("claude"));
     for harness in ["claude", "codex", "agy", "grok", "muse", "opencode"] {
         for key in ["model", "effort"] {
@@ -333,6 +337,7 @@ effort = 'high' # my Effort
             "[harness.muse]",
             "[harness.opencode]",
             "[security]",
+            "[trial]",
         ],
         "{text}"
     );

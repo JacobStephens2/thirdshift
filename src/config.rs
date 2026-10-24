@@ -69,6 +69,8 @@ pub struct UserConfig {
     /// `security.fix`: off by default; None leaves the decision unmade.
     pub security_fix: Option<bool>,
     pub security_review: bool,
+    /// The `[trial]` memory caps for each Trial and Grader scope.
+    pub trial_caps: crate::scope::Caps,
 }
 
 /// The `[email]` section: where email goes and who it comes from. The Resend
@@ -128,6 +130,7 @@ impl UserConfig {
             security_harness: None,
             security_fix: None,
             security_review: false,
+            trial_caps: crate::scope::Caps::default(),
         }
     }
 
@@ -167,6 +170,7 @@ impl UserConfig {
                     | "pickup"
                     | "harness"
                     | "security"
+                    | "trial"
             );
             let settings = match value {
                 Value::Table(settings) if known => settings,
@@ -274,6 +278,24 @@ impl UserConfig {
                     },
                     ("harness", "default", _) => {
                         bail!("harness.default must be a quoted name in {file}")
+                    }
+                    ("trial", "memory_high", Value::String(high)) => {
+                        crate::scope::check_memory_value("trial.memory_high", high)
+                            .with_context(|| format!("invalid [trial] in {file}"))?;
+                        config.trial_caps.high = high.clone();
+                    }
+                    ("trial", "memory_max", Value::String(max)) => {
+                        crate::scope::check_memory_value("trial.memory_max", max)
+                            .with_context(|| format!("invalid [trial] in {file}"))?;
+                        config.trial_caps.max = max.clone();
+                    }
+                    ("trial", "memory_swap_max", Value::String(swap_max)) => {
+                        crate::scope::check_memory_value("trial.memory_swap_max", swap_max)
+                            .with_context(|| format!("invalid [trial] in {file}"))?;
+                        config.trial_caps.swap_max = swap_max.clone();
+                    }
+                    ("trial", "memory_high" | "memory_max" | "memory_swap_max", _) => {
+                        bail!("{section}.{key} must be a quoted byte count in {file}")
                     }
                     ("harness", name, value) if Harness::named(name).is_some() => {
                         let Value::Table(settings) = value else {
@@ -910,6 +932,11 @@ effort = ""   # the Model's variant, passed as #effort; default blank, for OpenC
 fix = false   # Security runs may fix reproduced findings; default false
 review = false   # Runs review their change for Security findings; default false
 harness = ""   # the Harness for Security runs, unless the command names one, and for every Security review; default blank; blank or missing leaves Security runs on harness.default, or Claude Code if that is missing, and Security reviews on their Command's Harness
+
+[trial]
+memory_high = "1G"   # throttle each Trial and Grader scope past this; default 1G
+memory_max = "2G"   # kill each Trial and Grader scope past this, voiding the Trial; default 2G
+memory_swap_max = "1G"   # swap each Trial and Grader scope may use; default 1G
 "#;
 
 /// The line `DEFAULTS` holds for `email.to`, which has no default.
@@ -1074,6 +1101,9 @@ mod tests {
                 "security.fix",
                 "security.review",
                 "security.harness",
+                "trial.memory_high",
+                "trial.memory_max",
+                "trial.memory_swap_max",
             ]
         );
         let commented_out: Vec<&str> = DEFAULTS
@@ -1226,6 +1256,38 @@ mod tests {
         assert_eq!(config.pickup_limit.get(), 1);
         for text in ["", "[pickup]\n"] {
             assert_eq!(parse(text).unwrap().pickup_limit.get(), 3, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn trial_memory_caps_are_read_and_default_from_measurement() {
+        let config = parse(
+            "[trial]\nmemory_high = \"512M\"\nmemory_max = \"1G\"\nmemory_swap_max = \"256M\"\n",
+        )
+        .unwrap();
+        assert_eq!(config.trial_caps.high, "512M");
+        assert_eq!(config.trial_caps.max, "1G");
+        assert_eq!(config.trial_caps.swap_max, "256M");
+        for text in ["", "[trial]\n"] {
+            let config = parse(text).unwrap();
+            assert_eq!(config.trial_caps.high, crate::scope::DEFAULT_MEMORY_HIGH);
+            assert_eq!(config.trial_caps.max, crate::scope::DEFAULT_MEMORY_MAX);
+            assert_eq!(
+                config.trial_caps.swap_max,
+                crate::scope::DEFAULT_MEMORY_SWAP_MAX
+            );
+        }
+    }
+
+    #[test]
+    fn trial_memory_caps_refuse_what_systemd_cannot_use() {
+        for text in [
+            "[trial]\nmemory_high = \"much\"\n",
+            "[trial]\nmemory_max = 512\n",
+            "[trial]\nmemory_swap_max = \"\"\n",
+            "[trial]\nparallel = 2\n",
+        ] {
+            assert!(parse(text).is_err(), "{text:?} must be refused");
         }
     }
 

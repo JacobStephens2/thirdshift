@@ -290,6 +290,7 @@ mod tests {
             security_harness: None,
             security_fix: None,
             security_review: false,
+            trial_caps: crate::scope::Caps::default(),
         }
     }
 

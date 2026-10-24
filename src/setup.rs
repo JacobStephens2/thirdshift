@@ -1259,6 +1259,11 @@ effort = \"\"
 [harness.opencode]
 model = \"\"
 effort = \"\"
+
+[trial]
+memory_high = \"1G\"
+memory_max = \"2G\"
+memory_swap_max = \"1G\"
 ";
         let mut outside = Scripted {
             user_config: Some(mine.to_string()),

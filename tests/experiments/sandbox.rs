@@ -134,6 +134,7 @@ fn code_graders_see_reports_and_repository_but_no_trial_logs_or_arm_paths() {
     let fixture = fixture_with_passthrough_trials();
     let check = format!(
         "set -eu; test ! -e '{host}'; test -z \"$THIRDSHIFT_TRIAL_LOG\"; \
+         test \"$(cat /proc/self/oom_score_adj)\" = 1000; \
          test \"$PWD\" = /sandbox/repository; \
          test \"$(git remote get-url origin)\" = /sandbox/repository/.git/eval-origin.git; \
          if grep -Eq -- '--(baseline|candidate)--' /sandbox/packet/repository/.git/config; then exit 42; fi; \
@@ -154,5 +155,79 @@ fn code_graders_see_reports_and_repository_but_no_trial_logs_or_arm_paths() {
             .last()
             .unwrap();
         assert_eq!(check["passed"], true, "{check}");
+    }
+}
+
+#[test]
+fn sandboxed_code_graders_keep_their_memory_caps_and_startup_evidence() {
+    if !scope_available()
+        || !std::process::Command::new("bwrap")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+    {
+        println!("SKIPPED (sandboxed Grader memory cap): no systemd user manager or bwrap");
+        return;
+    }
+    let (Ok(bus), Ok(runtime)) = (
+        std::env::var("DBUS_SESSION_BUS_ADDRESS"),
+        std::env::var("XDG_RUNTIME_DIR"),
+    ) else {
+        println!("SKIPPED (sandboxed Grader memory cap): no user bus in test env");
+        return;
+    };
+    for over_cap in [false, true] {
+        let fixture = fixture_with_passthrough_trials();
+        if over_cap {
+            set_check(
+                &fixture,
+                &[
+                    "python3",
+                    "-c",
+                    "a=[bytearray(1000000) for _ in range(2000)]",
+                ],
+            );
+        } else {
+            set_check(
+                &fixture,
+                &[
+                    "sh",
+                    "-c",
+                    "test \"$(cat /proc/self/oom_score_adj)\" = 1000 && \
+                     test -z \"${DBUS_SESSION_BUS_ADDRESS+x}\" && \
+                     test -z \"${XDG_RUNTIME_DIR+x}\" && \
+                     grep -q caught \"$THIRDSHIFT_TRIAL_SPEC_REPORT\"",
+                ],
+            );
+        }
+        let run = fixture.scenario.run_with_env(
+            &["experiment", "candidate", "--json"],
+            &[
+                ("THIRDSHIFT_TRIAL_MEMORY_HIGH", "300M"),
+                ("THIRDSHIFT_TRIAL_MEMORY_MAX", "300M"),
+                ("THIRDSHIFT_TRIAL_MEMORY_SWAP_MAX", "0"),
+                ("DBUS_SESSION_BUS_ADDRESS", bus.as_str()),
+                ("XDG_RUNTIME_DIR", runtime.as_str()),
+            ],
+        );
+        if over_cap {
+            assert_eq!(run.code, Some(1), "{}", run.stderr);
+            assert!(
+                run.stderr.contains("code Grader hit its memory cap"),
+                "{}",
+                run.stderr
+            );
+        } else {
+            // The fixture's Model Grader cannot record through its sandbox;
+            // Code Scores were already saved, proving bwrap's startup status
+            // survived the real systemd scope and its OOM-score wrapper.
+            let experiment = fixture.experiment();
+            let results = experiment["results"].as_array().unwrap();
+            assert_eq!(results.len(), 2, "{}", run.stderr);
+            for result in results {
+                assert_eq!(result["outcome"], "succeeded", "{result}");
+                assert_eq!(result["score"]["checks"][2]["passed"], true, "{result}");
+            }
+        }
     }
 }

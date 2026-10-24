@@ -198,14 +198,45 @@ fn disabled() -> bool {
 
 /// Code Graders need no login or provider. Bind only their report packet and
 /// prepared repository, at neutral paths, and leave their network offline.
-pub(crate) fn code_grader(repository: &Path, packet: &Path, args: &[String]) -> Result<CodeGrader> {
+/// Production Graders supply their caps; standalone sandbox tests omit them.
+pub(crate) fn code_grader(
+    repository: &Path,
+    packet: &Path,
+    args: &[String],
+    caps: Option<&crate::scope::Caps>,
+) -> Result<CodeGrader> {
+    let packet_path = if disabled() {
+        packet
+    } else {
+        Path::new("/sandbox/packet")
+    };
+    let mut packet_env = vec![(OsString::from("THIRDSHIFT_TRIAL_LOG"), OsString::new())];
+    for (name, file) in [
+        ("THIRDSHIFT_TRIAL_STANDARDS_REPORT", "standards.md"),
+        ("THIRDSHIFT_TRIAL_SPEC_REPORT", "spec.md"),
+    ] {
+        packet_env.push((
+            name.into(),
+            if packet.join(file).is_file() {
+                packet_path.join(file).into_os_string()
+            } else {
+                OsString::new()
+            },
+        ));
+    }
     // An unlinked status file stays outside the packet and the sandbox. Only
     // bwrap writes it; the check's stdout and stderr cannot claim startup.
     let status = (!disabled()).then(tempfile::tempfile).transpose()?;
-    let mut command = if disabled() {
-        let mut command = Command::new(&args[0]);
-        command.args(&args[1..]);
-        command
+    let (mut command, scope) = if disabled() {
+        if let Some(caps) = caps {
+            let launched =
+                crate::scope::grader_command(Path::new(&args[0]), &args[1..], repository, caps)?;
+            (launched.command, Some(launched.scope))
+        } else {
+            let mut command = Command::new(&args[0]);
+            command.args(&args[1..]);
+            (command, None)
+        }
     } else {
         if find_bwrap().is_none() {
             return Err(anyhow::Error::new(Unavailable {
@@ -240,7 +271,14 @@ pub(crate) fn code_grader(repository: &Path, packet: &Path, args: &[String]) -> 
         let mut environment = Environment::default();
         toolchains_into(&config::home()?, &mut binds, &mut environment);
         environment.set_str("HOME", "/sandbox/home");
+        let environment = environment.finish(&[]);
         let mut argv = base_argv();
+        // Clear only the sandbox's environment. The outer memory scope
+        // still needs its host environment to reach the systemd user bus.
+        argv.push("--clearenv".into());
+        for (name, value) in environment.iter().chain(&packet_env) {
+            argv.extend([OsString::from("--setenv"), name.clone(), value.clone()]);
+        }
         binds.argv(&mut argv);
         let status_fd = status
             .as_ref()
@@ -262,14 +300,19 @@ pub(crate) fn code_grader(repository: &Path, packet: &Path, args: &[String]) -> 
         // error: exec failure here is an ordinary failed mechanical check.
         let launch = Launch {
             argv,
-            env: environment.finish(&[]),
+            env: Vec::new(),
             program,
             prefix: [SHELL, "-c", "exec \"$0\" \"$@\""]
                 .map(OsString::from)
                 .to_vec(),
             stderr: None,
         };
-        let mut command = launch.command(&args[1..])?;
+        let (mut command, scope) = if let Some(caps) = caps {
+            let launched = launch.scoped_command(&args[1..], repository, caps)?;
+            (launched.command, Some(launched.scope))
+        } else {
+            (launch.command(&args[1..])?, None)
+        };
         // SAFETY: fcntl is async-signal-safe. The status file remains owned
         // by CodeGrader until its child has ended; no allocation occurs here.
         unsafe {
@@ -280,43 +323,29 @@ pub(crate) fn code_grader(repository: &Path, packet: &Path, args: &[String]) -> 
                 Ok(())
             });
         }
-        command.env_clear();
-        command.envs(launch.env);
-        command
+        (command, scope)
     };
-    let packet_path = if disabled() {
-        packet
-    } else {
-        Path::new("/sandbox/packet")
-    };
-    for (name, file) in [
-        ("THIRDSHIFT_TRIAL_STANDARDS_REPORT", "standards.md"),
-        ("THIRDSHIFT_TRIAL_SPEC_REPORT", "spec.md"),
-    ] {
-        command.env(
-            name,
-            if packet.join(file).is_file() {
-                packet_path.join(file).into_os_string()
-            } else {
-                OsString::new()
-            },
-        );
+    if disabled() {
+        command.envs(packet_env);
     }
-    command
-        .env("THIRDSHIFT_TRIAL_LOG", "")
-        .current_dir(repository);
-    Ok(CodeGrader { command, status })
+    command.current_dir(repository);
+    Ok(CodeGrader {
+        command,
+        status,
+        scope,
+    })
 }
 
 /// A Code Grader's command and launcher-owned startup evidence travel together.
 pub(crate) struct CodeGrader {
     command: Command,
     status: Option<fs::File>,
+    scope: Option<crate::scope::Scope>,
 }
 
 impl CodeGrader {
-    pub(crate) fn command(&mut self) -> &mut Command {
-        &mut self.command
+    pub(crate) fn command_and_scope(&mut self) -> (&mut Command, Option<&crate::scope::Scope>) {
+        (&mut self.command, self.scope.as_ref())
     }
 
     /// Only the launcher's status decides whether a check started. A check
@@ -398,6 +427,24 @@ impl Launch {
     /// `args` as `$@`, so the relay dies with the session.
     pub fn command(&self, args: &[String]) -> Result<Command> {
         let mut command = Command::new(find_bwrap().unwrap_or_else(|| PathBuf::from("bwrap")));
+        self.configure_command(&mut command, args)?;
+        Ok(command)
+    }
+
+    /// A Grader's scope must enclose bwrap and all processes it starts.
+    pub(crate) fn scoped_command(
+        &self,
+        args: &[String],
+        directory: &Path,
+        caps: &crate::scope::Caps,
+    ) -> Result<crate::scope::Launch> {
+        let program = find_bwrap().unwrap_or_else(|| PathBuf::from("bwrap"));
+        let mut launched = crate::scope::grader_command(&program, &[], directory, caps)?;
+        self.configure_command(&mut launched.command, args)?;
+        Ok(launched)
+    }
+
+    fn configure_command(&self, command: &mut Command, args: &[String]) -> Result<()> {
         command.args(&self.argv);
         command.arg("--");
         command.args(&self.prefix);
@@ -407,7 +454,7 @@ impl Launch {
         if let Some(stderr) = &self.stderr {
             command.stderr(fs::File::create(stderr)?);
         }
-        Ok(command)
+        Ok(())
     }
 }
 
@@ -1247,6 +1294,7 @@ mod tests {
             &snapshot,
             &packet,
             &["sh".into(), "-c".into(), "true".into()],
+            None,
         )
         .unwrap();
         assert_eq!(

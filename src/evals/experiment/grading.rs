@@ -5,7 +5,7 @@ use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 
 use super::workers::{Arm, TrialResult};
@@ -71,6 +71,7 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
         },
     ];
     if output.outcome != Outcome::Void && !task.manifest.checks.is_empty() {
+        let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
         let packet = tempfile::Builder::new().prefix("grader-").tempdir()?;
         // Bind sources remain visible in /proc/self/mountinfo. A neutral
         // destination alone cannot hide the original Trial's Arm pathname.
@@ -88,9 +89,11 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
             }
         }
         for command in &task.manifest.checks {
-            let mut child = crate::sandbox::code_grader(&snapshot, packet.path(), command)?;
+            let mut child =
+                crate::sandbox::code_grader(&snapshot, packet.path(), command, Some(&caps))?;
+            let (launched, scope) = child.command_and_scope();
             let result = process::output_until(
-                child.command(),
+                launched,
                 None,
                 Control {
                     name: "code Grader",
@@ -98,9 +101,19 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
                     stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
                 },
                 Instant::now() + Duration::from_secs(bar.timeout_seconds),
-                &|| Ok(()),
+                &|| {
+                    if let Some(scope) = scope {
+                        scope.sample();
+                    }
+                    Ok(())
+                },
             );
             crate::interrupt::check()?;
+            if !result.as_ref().is_ok_and(|result| result.status.success())
+                && scope.is_some_and(crate::scope::Scope::oom_killed)
+            {
+                bail!("code Grader hit its memory cap; raise trial.memory_max to retry");
+            }
             child.check_started(&result)?;
             let (passed, reason) = match result {
                 Ok(result) => (
