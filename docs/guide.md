@@ -395,6 +395,7 @@ thirdshift secure base <branch>     # do that with <branch> as the Base branch, 
 thirdshift email-test [<address>]   # send a test email through Resend (see Email)
 thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
 thirdshift evals list               # list private Eval suites and approved/proposed Eval tasks
+thirdshift evals approve <suite> <task> [--json]  # approve a proposed Eval task in its suite
 thirdshift evals import-replays     # import #429's private manifests and grading files once
 thirdshift evals touched <path>...  # select suites from their declared source dependencies
 thirdshift evals prepare <suite> <task> <destination>  # prepare a throwaway repository at its base
@@ -403,7 +404,7 @@ thirdshift evals prepare-arms <repository> <baseline-commit> <baseline-harness> 
 thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json]  # run or resume an Experiment
 thirdshift experiment --release <commit> [--json]  # use the last release tag and touched suites
 thirdshift experiments [<id>] [--json]  # list Experiments or show one
-thirdshift experiments <id> --session <session-id>  # read a Trial's retained session from its inventory
+thirdshift experiments <id> --session <session-id> [--json]  # read a Trial's retained session from its inventory
 thirdshift recheck <id> <trial> <pass|fail> --reason <text> [--wrong-finding <true|false>] [--json]
 thirdshift update                   # update to the latest release (see Updating)
 thirdshift version                  # print thirdshift <version>
@@ -418,7 +419,12 @@ Eval suites live privately under `~/.thirdshift/evals/suites/<suite>/`. Their
 manifests declare Factory skill, Session prompt and Harness, Model and Effort
 default dependencies, plus Trials per Arm. `evals touched` selects suites from
 those declarations. `evals list` includes proposed Eval tasks, while `evals
-prepare` refuses them until approved. Preparation keeps only base history, applies
+prepare` refuses them until approved. `evals approve <suite> <task> [--json]`
+approves one in its suite without changing its inputs or starting work. The
+Console offers the same action under Proposed Eval tasks on the Experiments
+list and, for its suites, on an Experiment page. Approval affects future
+Experiments; existing Experiments keep their fixed Eval tasks when resumed.
+Preparation keeps only base history, applies
 the change under review without its commit objects, and gives Spec-review Eval
 tasks a local bare origin. These commands write JSON and start no agent sessions.
 `evals prepare-arms` prepares both Arms before Trials: it caches release builds

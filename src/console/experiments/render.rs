@@ -488,12 +488,7 @@ fn grid(view: &View) -> String {
         let n = view.description.bar.trials_per_task[suite];
         html.push_str(&format!("<h3>{}</h3><div role=\"table\" aria-label=\"{} Trials\" class=\"trial-grid\" data-trials=\"{n}\"><div role=\"row\" class=\"trial-row\"><span role=\"columnheader\">Eval task</span><span role=\"columnheader\">Baseline</span><span role=\"columnheader\">Candidate</span><span role=\"columnheader\">Diff.</span></div>", esc(suite), esc(suite)));
         for task in view.tasks.iter().filter(|task| &task.suite == suite) {
-            let cells: Vec<_> = [Arm::Baseline, Arm::Candidate]
-                .into_iter()
-                .flat_map(|arm| {
-                    (0..n).map(move |index| Cell::new(view, suite, &task.name, arm, index))
-                })
-                .collect();
+            let cells: Vec<_> = Cell::for_task(view, suite, &task.name).collect();
             let dropped = cells.iter().any(|cell| {
                 cell.terminal && cell.result.is_some_and(|r| r.outcome == Outcome::Void)
             });
@@ -593,6 +588,13 @@ impl Mark {
 }
 
 impl<'a> Cell<'a> {
+    fn for_task(view: &'a View, suite: &'a str, task: &'a str) -> impl Iterator<Item = Self> {
+        let n = view.description.bar.trials_per_task[suite];
+        [Arm::Baseline, Arm::Candidate]
+            .into_iter()
+            .flat_map(move |arm| (0..n).map(move |index| Self::new(view, suite, task, arm, index)))
+    }
+
     fn new(view: &'a View, suite: &'a str, task: &'a str, arm: Arm, index: usize) -> Self {
         let key = trial_key(suite, task, arm, index);
         let result = view.results.iter().find(|r| r.key() == key);
@@ -934,15 +936,7 @@ fn arms(view: &View) -> String {
             .tasks
             .iter()
             .filter(|task| &task.suite == suite)
-            .filter(|task| {
-                let cells: Vec<_> = [Arm::Baseline, Arm::Candidate]
-                    .into_iter()
-                    .flat_map(|arm| {
-                        (0..n).map(move |index| Cell::new(view, suite, &task.name, arm, index))
-                    })
-                    .collect();
-                cells.iter().all(Cell::graded)
-            })
+            .filter(|task| Cell::for_task(view, suite, &task.name).all(|cell| cell.graded()))
             .collect();
         let stats = |arm| {
             let cells: Vec<_> = retained

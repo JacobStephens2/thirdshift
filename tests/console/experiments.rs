@@ -16,6 +16,76 @@ fn fixture(home: &Path, id: &str, created: &str) -> std::path::PathBuf {
     directory
 }
 
+fn proposal(home: &Path, suite: &str, task: &str) {
+    let directory = home.join(".thirdshift/evals/suites").join(suite);
+    fs::create_dir_all(directory.join("tasks").join(task)).unwrap();
+    fs::write(directory.join("suite.toml"), "format = 1\ntrials_per_arm = 1\n[dependencies]\nfactory_skills = []\nsession_prompts = []\nharness_defaults = []\nmodel_defaults = []\neffort_defaults = []\n").unwrap();
+    fs::write(directory.join("tasks").join(task).join("task.toml"), format!(
+        "format = 1\nstate = \"proposed\"\nsession = \"code-review\"\nrepository = \"private\"\nbase = {:?}\nchange = {:?}\ncriteria = \"Invented success criteria\"\n[inputs]\n",
+        "a".repeat(40), "b".repeat(40)
+    )).unwrap();
+}
+
+#[test]
+fn console_approval_pairs_with_cli_and_requires_csrf() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "d".repeat(64);
+    fixture(home.path(), &id, "2026-10-24T10:00:00Z");
+    proposal(home.path(), "code-review", "from-console");
+    proposal(home.path(), "code-review", "from-cli");
+    proposal(home.path(), "other-suite", "unrelated");
+    let cli = |args: &[&str]| {
+        let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+            .env("HOME", home.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/experiments").text().unwrap();
+    assert!(html.contains("Proposed Eval tasks"));
+    assert!(html.contains("from-console"));
+    assert!(html.contains("unrelated"));
+    let html = console.get(&format!("/experiments/{id}")).text().unwrap();
+    assert!(html.contains("from-console"));
+    assert!(!html.contains("unrelated"));
+    let client = reqwest::blocking::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .unwrap();
+    let url = format!(
+        "{}/experiments/proposals/code-review/from-console/approve",
+        console.address
+    );
+    assert_eq!(client.post(&url).send().unwrap().status(), 403);
+    assert_eq!(cli(&["evals", "list"])[0]["tasks"][1]["state"], "proposed");
+    let csrf = html
+        .split("name=\"csrf\" value=\"")
+        .nth(1)
+        .unwrap()
+        .split('"')
+        .next()
+        .unwrap();
+    let response = client.post(&url).form(&[("csrf", csrf)]).send().unwrap();
+    assert_eq!(response.status(), 303);
+    cli(&["evals", "approve", "code-review", "from-cli", "--json"]);
+    let listed = cli(&["evals", "list"]);
+    for task in listed[0]["tasks"].as_array().unwrap() {
+        assert_eq!(task["state"], "approved");
+    }
+    let html = console.get(&format!("/experiments/{id}")).text().unwrap();
+    assert!(!html.contains("from-console"));
+    assert!(!html.contains("from-cli"));
+    assert_eq!(cli(&["experiments", &id, "--json"])["tasks"], json!([]));
+}
+
 #[test]
 fn experiments_pairs_list_and_detail_with_cli_and_orders_by_start_time() {
     let home = tempfile::tempdir().unwrap();
@@ -116,6 +186,26 @@ fn experiments_exposes_queued_running_and_retained_session_evidence() {
         String::from_utf8_lossy(&cli.stderr)
     );
     assert!(String::from_utf8_lossy(&cli.stdout).contains("Trial evidence"));
+    let session_json = || {
+        let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+            .env("HOME", home.path())
+            .args(["experiments", &id, "--session", session, "--json"])
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()
+    };
+    let evidence = session_json();
+    assert_eq!(evidence["id"], session);
+    assert_eq!(evidence["trace"], false);
+    assert_eq!(
+        evidence["contents"],
+        fs::read_to_string(attempt.join("session/stdout.jsonl")).unwrap()
+    );
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get(&format!("/experiments/{id}")).text().unwrap();
     assert!(html.contains("v1.0"));
@@ -150,6 +240,14 @@ fn experiments_exposes_queued_running_and_retained_session_evidence() {
     let html = response.text().unwrap();
     assert!(html.contains("Session trace"));
     assert!(html.contains("Trial evidence"));
+    let evidence = session_json();
+    assert_eq!(evidence["trace"], true);
+    assert!(
+        evidence["contents"]
+            .as_str()
+            .unwrap()
+            .contains("Trial evidence")
+    );
 
     #[cfg(unix)]
     {

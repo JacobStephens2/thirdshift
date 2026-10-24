@@ -464,6 +464,58 @@ fn prepares_only_base_history_with_reviewed_changes_and_inputs() {
 }
 
 #[test]
+fn approval_makes_a_proposed_task_eligible_without_changing_its_inputs() {
+    let fixture = Fixture::new();
+    let directory = fixture.task("code-review", "proposed");
+    let path = directory.join("task.toml");
+    let before = fs::read_to_string(&path).unwrap();
+    let before = format!("# Keep this proposal's context.\n{before}");
+    fs::write(&path, &before).unwrap();
+    let approved = success(fixture.evals(&["approve", "reviews", "example", "--json"]));
+    assert_eq!(
+        approved,
+        serde_json::json!({"suite":"reviews", "task":"example", "state":"approved"})
+    );
+    let listed = success(fixture.evals(&["list"]));
+    assert_eq!(listed[0]["tasks"][0]["state"], "approved");
+    assert_eq!(
+        fs::read_to_string(&path).unwrap(),
+        before.replacen("state = \"proposed\"", "state = \"approved\"", 1)
+    );
+    assert_eq!(
+        success(fixture.evals(&["approve", "reviews", "example"])),
+        approved
+    );
+    success(fixture.prepare());
+}
+
+#[test]
+fn approval_refuses_missing_invalid_or_unconfined_manifests_without_changing_a_proposal() {
+    let fixture = Fixture::new();
+    let directory = fixture.task("code-review", "proposed");
+    let path = directory.join("task.toml");
+    let original = fs::read_to_string(&path).unwrap();
+    for args in [
+        vec!["approve", "missing", "example"],
+        vec!["approve", "reviews", "missing"],
+        vec!["approve", "../reviews", "example"],
+        vec!["approve", "reviews", "../example"],
+    ] {
+        assert!(!fixture.evals(&args).status.success(), "{args:?}");
+        assert_eq!(fs::read_to_string(&path).unwrap(), original);
+    }
+    let invalid = original.replace("format = 1", "format = 999");
+    fs::write(&path, &invalid).unwrap();
+    assert!(
+        !fixture
+            .evals(&["approve", "reviews", "example"])
+            .status
+            .success()
+    );
+    assert_eq!(fs::read_to_string(path).unwrap(), invalid);
+}
+
+#[test]
 fn proposals_are_listed_but_cannot_be_prepared() {
     let fixture = Fixture::new();
     fixture.task("code-review", "proposed");
