@@ -25,7 +25,8 @@ function finish(value) {
       accuracy: assessment('pass', -0.07, 0.21), wrong_findings: assessment('inconclusive', -0.16, 0.04)
     }
   } };
-  value.pending_rechecks = ['alpha', 'beta'].flatMap(task => [0, 1, 2].map(trial => ({ id: key(task, 'candidate', trial), suite: 'code-review', task, arm: 'candidate', trial, borderline: task === 'alpha' && trial < 2, decisive: true, decisive_flips: ['wrong_finding'] })));
+  // Current-format presentation data keeps the curated Verdict above intact.
+  value.pending_rechecks = ['alpha', 'beta'].flatMap(task => [0, 1, 2].map(trial => ({ id: key(task, 'candidate', trial), suite: 'code-review', task, arm: 'candidate', trial, borderline: task === 'alpha' && trial < 2, decisive: true, decisive_flips: ['wrong_finding'], decisive_verdicts: { wrong_finding: task === 'alpha' ? 'pass' : 'fail' } })));
   return value;
 }
 function result(task, arm, trial) {
