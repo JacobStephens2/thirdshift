@@ -1,4 +1,3 @@
-//! Backported model-session sandbox from #1014 (origin/main ee7fe11).
 //! Trial and Grader sandboxes: bwrap, their own processes and network, a fresh
 //! home and logins.
 //!
@@ -32,6 +31,9 @@
 
 use std::ffi::OsString;
 use std::fs;
+use std::io::{Read, Seek};
+use std::os::fd::AsRawFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -40,6 +42,7 @@ use anyhow::{Context, Result, bail, ensure};
 
 use crate::harness::Harness;
 use crate::proxy;
+use crate::resend_key::Credentials;
 use crate::{config, interrupt};
 
 /// The environment variable carrying an OpenCode Trial's provider key.
@@ -93,6 +96,15 @@ pub(crate) struct Secrets {
     pub opencode_api_key: Option<String>,
 }
 
+impl From<&Credentials> for Secrets {
+    fn from(credentials: &Credentials) -> Self {
+        Secrets {
+            claude_setup_token: credentials.claude_setup_token(),
+            opencode_api_key: credentials.opencode_api_key(),
+        }
+    }
+}
+
 /// What a sandbox is prepared from. Paths are absolute; `home` is the
 /// production home the logins come from, `fresh_home` the host directory the
 /// launcher prepares as the session's home.
@@ -121,6 +133,33 @@ pub(crate) struct Prepared {
     _proxy: proxy::Guard,
 }
 
+/// Prepare a Trial's sandbox: the Harness's fixed binary, the Factory skills
+/// folder, the production home, a fresh home under its output directory, and
+/// the Trial secrets the Credentials hold, if they hold any. A broken
+/// Credentials file leaves the secrets empty rather than blocking a Trial
+/// whose Harness needs none; an OpenCode Trial without its key still fails
+/// before its session starts.
+///
+/// When `THIRDSHIFT_TRIAL_NO_SANDBOX` is set and not empty, there is no
+/// sandbox: Trials and Graders use the pass-through launcher. The Experiment
+/// suite sets it so its fake Harnesses stay observable at fixed paths, and
+/// it is the emergency escape when bwrap breaks on a machine.
+pub(crate) fn for_trial(
+    choice: &crate::harness::Choice,
+    repository: &Path,
+    output_dir: &Path,
+) -> Result<Option<Prepared>> {
+    if disabled() {
+        return Ok(None);
+    }
+    for_session(
+        choice,
+        &resolve_binary(choice.harness.name())?,
+        repository,
+        output_dir,
+    )
+}
+
 /// A session sandbox with an explicit executable: a Trial uses its Arm's
 /// binary; a Model Grader uses its pinned binary and packet workspace.
 pub(crate) fn for_session(
@@ -137,22 +176,9 @@ pub(crate) fn for_session(
             diagnostic: format!("HOME is not set: {error:#}"),
         })
     })?;
-    let credentials: toml::Table = fs::read_to_string(home.join(".thirdshift/credentials.toml"))
-        .ok()
-        .and_then(|text| text.parse().ok())
+    let secrets = Credentials::read()
+        .map(|credentials| Secrets::from(&credentials))
         .unwrap_or_default();
-    let secret = |section: &str, key: &str| {
-        credentials
-            .get(section)
-            .and_then(|section| section.get(key))
-            .and_then(toml::Value::as_str)
-            .filter(|value| !value.is_empty())
-            .map(str::to_owned)
-    };
-    let secrets = Secrets {
-        claude_setup_token: secret("claude", "setup_token"),
-        opencode_api_key: secret("opencode", "api_key"),
-    };
     prepare(&Request {
         harness: choice.harness,
         model: choice.model.as_deref(),
@@ -171,7 +197,204 @@ pub(crate) fn disabled() -> bool {
     std::env::var_os("THIRDSHIFT_TRIAL_NO_SANDBOX").is_some_and(|flag| !flag.is_empty())
 }
 
+/// Code Graders need no login or provider. Bind only their report packet and
+/// prepared repository, at neutral paths, and leave their network offline.
+/// Production Graders supply their caps; standalone sandbox tests omit them.
+pub(crate) fn code_grader(
+    repository: &Path,
+    packet: &Path,
+    args: &[String],
+    caps: Option<&crate::scope::Caps>,
+) -> Result<CodeGrader> {
+    let packet_path = if disabled() {
+        packet
+    } else {
+        Path::new("/sandbox/packet")
+    };
+    let mut packet_env = vec![(OsString::from("THIRDSHIFT_TRIAL_LOG"), OsString::new())];
+    for (name, file) in [
+        ("THIRDSHIFT_TRIAL_STANDARDS_REPORT", "standards.md"),
+        ("THIRDSHIFT_TRIAL_SPEC_REPORT", "spec.md"),
+    ] {
+        packet_env.push((
+            name.into(),
+            if packet.join(file).is_file() {
+                packet_path.join(file).into_os_string()
+            } else {
+                OsString::new()
+            },
+        ));
+    }
+    // An unlinked status file stays outside the packet and the sandbox. Only
+    // bwrap writes it; the check's stdout and stderr cannot claim startup.
+    let status = (!disabled()).then(tempfile::tempfile).transpose()?;
+    let (mut command, scope) = if disabled() {
+        if let Some(caps) = caps {
+            let launched =
+                crate::scope::grader_command(Path::new(&args[0]), &args[1..], repository, caps)?;
+            (launched.command, Some(launched.scope))
+        } else {
+            let mut command = Command::new(&args[0]);
+            command.args(&args[1..]);
+            (command, None)
+        }
+    } else {
+        if find_bwrap().is_none() {
+            return Err(anyhow::Error::new(Unavailable {
+                diagnostic: "bwrap is not on PATH".into(),
+            }));
+        }
+        let mut binds = Binds::default();
+        binds.read_write(repository, Path::new("/sandbox/repository"));
+        binds.read_write(packet, Path::new("/sandbox/packet"));
+        // Spec-review repositories have a local origin whose absolute host
+        // path identifies the Arm. Keep Git usable without exposing that path.
+        // The snapshot holds Trial-controlled contents: a symlinked `.git`
+        // or config would redirect this host-side rewrite outside it, so
+        // only touch a real directory holding a real (or missing) config.
+        let git_dir = repository.join(".git");
+        let git_config = git_dir.join("config");
+        let confined = fs::symlink_metadata(&git_dir).is_ok_and(|kind| kind.is_dir())
+            && match fs::symlink_metadata(&git_config) {
+                Ok(kind) => kind.is_file(),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+                Err(_) => false,
+            };
+        if confined && git_dir.join("eval-origin.git").is_dir() {
+            crate::git::Git::new(repository).run(&[
+                "config",
+                "--file",
+                git_config.to_str().context("invalid Grader config path")?,
+                "remote.origin.url",
+                "/sandbox/repository/.git/eval-origin.git",
+            ])?;
+        }
+        let mut environment = Environment::default();
+        toolchains_into(&config::home()?, &mut binds, &mut environment);
+        environment.set_str("HOME", "/sandbox/home");
+        let environment = environment.finish(&[]);
+        let mut argv = base_argv();
+        // Clear only the sandbox's environment. The outer memory scope
+        // still needs its host environment to reach the systemd user bus.
+        argv.push("--clearenv".into());
+        for (name, value) in environment.iter().chain(&packet_env) {
+            argv.extend([OsString::from("--setenv"), name.clone(), value.clone()]);
+        }
+        binds.argv(&mut argv);
+        let status_fd = status
+            .as_ref()
+            .expect("sandbox has a status file")
+            .as_raw_fd();
+        argv.extend([
+            OsString::from("--json-status-fd"),
+            status_fd.to_string().into(),
+        ]);
+        argv.extend(
+            ["--tmpfs", "/sandbox/home", "--chdir", "/sandbox/repository"].map(OsString::from),
+        );
+        let program = Path::new(&args[0]);
+        let program = program
+            .strip_prefix(repository)
+            .map(|relative| Path::new("/sandbox/repository").join(relative))
+            .unwrap_or_else(|_| program.to_owned());
+        // The shell distinguishes a bad check command from a bwrap startup
+        // error: exec failure here is an ordinary failed mechanical check.
+        let launch = Launch {
+            argv,
+            env: Vec::new(),
+            program,
+            prefix: [SHELL, "-c", "exec \"$0\" \"$@\""]
+                .map(OsString::from)
+                .to_vec(),
+            stderr: None,
+        };
+        let (mut command, scope) = if let Some(caps) = caps {
+            let launched = launch.scoped_command(&args[1..], repository, caps)?;
+            (launched.command, Some(launched.scope))
+        } else {
+            (launch.command(&args[1..])?, None)
+        };
+        // SAFETY: fcntl is async-signal-safe. The status file remains owned
+        // by CodeGrader until its child has ended; no allocation occurs here.
+        unsafe {
+            command.pre_exec(move || {
+                if libc::fcntl(status_fd, libc::F_SETFD, 0) == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        (command, scope)
+    };
+    if disabled() {
+        command.envs(packet_env);
+    }
+    command.current_dir(repository);
+    Ok(CodeGrader {
+        command,
+        status,
+        scope,
+    })
+}
+
+/// A Code Grader's command and launcher-owned startup evidence travel together.
+pub(crate) struct CodeGrader {
+    command: Command,
+    status: Option<fs::File>,
+    scope: Option<crate::scope::Scope>,
+}
+
+impl CodeGrader {
+    pub(crate) fn command_and_scope(&mut self) -> (&mut Command, Option<&crate::scope::Scope>) {
+        (&mut self.command, self.scope.as_ref())
+    }
+
+    /// Only the launcher's status decides whether a check started. A check
+    /// can fail normally even when its own diagnostic mentions bwrap.
+    pub(crate) fn check_started(&self, result: &Result<std::process::Output>) -> Result<()> {
+        let Some(status) = &self.status else {
+            return Ok(());
+        };
+        let diagnostic = match result {
+            Err(error) if error.is::<crate::process::NotStarted>() => format!("{error:#}"),
+            Ok(output) => {
+                let mut status = status.try_clone()?;
+                status.rewind()?;
+                let mut records = String::new();
+                status.read_to_string(&mut records)?;
+                let started = records.lines().any(|line| {
+                    serde_json::from_str::<serde_json::Value>(line)
+                        .ok()
+                        .is_some_and(|record| record["child-pid"].as_u64().is_some())
+                });
+                if started {
+                    return Ok(());
+                }
+                String::from_utf8_lossy(&output.stderr).into_owned()
+            }
+            _ => return Ok(()),
+        };
+        Err(anyhow::Error::new(Unavailable { diagnostic }))
+    }
+}
+
 impl Prepared {
+    /// What a session runner holds to launch inside the sandbox. The guards
+    /// stay with the `Prepared` they came from, which outlives the sessions.
+    pub(crate) fn launch(&self) -> Launch {
+        Launch {
+            argv: self.argv.clone(),
+            env: self.env.clone(),
+            program: self.program.clone(),
+            prefix: self.prefix.clone(),
+            stderr: Some(self.stderr.clone()),
+        }
+    }
+
+    pub(crate) fn command(&self, args: &[String]) -> Result<Command> {
+        self.launch().command(args)
+    }
+
     /// A later launch (including Resume) may fail even after the startup
     /// check succeeded. Retain bwrap's stderr outside the Harness protocol.
     pub(crate) fn startup_failure(&self, error: &anyhow::Error) -> Option<Unavailable> {
@@ -190,7 +413,27 @@ impl Prepared {
     }
 }
 
-impl Prepared {
+/// How one session is launched inside a prepared sandbox.
+#[derive(Clone)]
+pub(crate) struct Launch {
+    pub argv: Vec<OsString>,
+    pub env: Vec<(OsString, OsString)>,
+    pub program: PathBuf,
+    prefix: Vec<OsString>,
+    stderr: Option<PathBuf>,
+}
+
+impl Launch {
+    /// Publish a caller-supplied session path after clearing the ambient environment.
+    pub(crate) fn set_env(&mut self, name: &str, value: &Path) {
+        self.argv.extend([
+            OsString::from("--setenv"),
+            name.into(),
+            value.as_os_str().to_owned(),
+        ]);
+        self.env.push((name.into(), value.as_os_str().to_owned()));
+    }
+
     /// The bwrap command running the Harness's `args` inside the sandbox.
     /// The caller sets the working directory, which must be the bound
     /// repository. `argv` clears the environment and sets only the sandbox's
@@ -200,14 +443,34 @@ impl Prepared {
     /// the session.
     pub fn command(&self, args: &[String]) -> Result<Command> {
         let mut command = Command::new(find_bwrap().unwrap_or_else(|| PathBuf::from("bwrap")));
+        self.configure_command(&mut command, args)?;
+        Ok(command)
+    }
+
+    /// A Grader's scope must enclose bwrap and all processes it starts.
+    pub(crate) fn scoped_command(
+        &self,
+        args: &[String],
+        directory: &Path,
+        caps: &crate::scope::Caps,
+    ) -> Result<crate::scope::Launch> {
+        let program = find_bwrap().unwrap_or_else(|| PathBuf::from("bwrap"));
+        let mut launched = crate::scope::grader_command(&program, &[], directory, caps)?;
+        self.configure_command(&mut launched.command, args)?;
+        Ok(launched)
+    }
+
+    fn configure_command(&self, command: &mut Command, args: &[String]) -> Result<()> {
         command.args(&self.argv);
         command.arg("--");
         command.args(&self.prefix);
         command.arg(&self.program);
         command.args(args);
         command.envs(self.env.iter().map(|(name, value)| (name, value)));
-        command.stderr(fs::File::create(&self.stderr)?);
-        Ok(command)
+        if let Some(stderr) = &self.stderr {
+            command.stderr(fs::File::create(stderr)?);
+        }
+        Ok(())
     }
 }
 
@@ -241,7 +504,7 @@ const SOCKET_DEST: &str = "/sandbox/proxy.sock";
 /// Harness as `$0` with its arguments as `$@`.
 const SHELL: &str = "/bin/sh";
 
-/// Prepare a Trial sandbox as `request` says: wipe and bind the homes, bind
+/// Prepare a Trial sandbox as `request` says: copy logins into a fresh home, bind
 /// the repository, skills, Harness, toolchains and proxy socket, start the
 /// proxy, and set the session's environment. Fails before any session starts
 /// when bwrap or socat is missing, the proxy cannot start, the Grok Trials
@@ -344,6 +607,7 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
             stop: &|child| crate::process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
         },
         std::time::Instant::now() + Duration::from_secs(5),
+        &|| Ok(()),
     )
     .map_err(|error| {
         anyhow::Error::new(Unavailable {
@@ -965,5 +1229,892 @@ fn harness_into(
             binds.read_only(binary, &dest_dir);
             dest_dir
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// The sandbox tests run where bwrap works; anywhere else they report
+    /// themselves skipped rather than passing silently.
+    fn bwrap_or_skip(reason: &str) -> bool {
+        if find_bwrap().is_none() {
+            println!("SKIPPED ({reason}): bwrap is not on PATH");
+            return false;
+        }
+        true
+    }
+
+    struct Layout {
+        _root: tempfile::TempDir,
+        home: PathBuf,
+        repo: PathBuf,
+        skills: PathBuf,
+        fresh: PathBuf,
+        harness: PathBuf,
+    }
+
+    impl Layout {
+        fn new() -> Self {
+            let root = tempfile::TempDir::new().unwrap();
+            let home = root.path().join("home");
+            let repo = root.path().join("repo");
+            let skills = root.path().join("skills");
+            let fresh = root.path().join("fresh/home");
+            for dir in [&home, &repo, &skills] {
+                fs::create_dir_all(dir).unwrap();
+            }
+            fs::write(repo.join("marker.txt"), "repository\n").unwrap();
+            let harness = root.path().join("bin/fakeh");
+            fs::create_dir_all(harness.parent().unwrap()).unwrap();
+            fs::write(&harness, "#!/bin/sh\nexec sh -c \"$SANDBOX_TEST_SCRIPT\"\n").unwrap();
+            fs::set_permissions(&harness, fs::Permissions::from_mode(0o755)).unwrap();
+            Layout {
+                _root: root,
+                home,
+                repo,
+                skills,
+                fresh,
+                harness,
+            }
+        }
+
+        fn request<'a>(
+            &'a self,
+            harness: Harness,
+            script: &'a str,
+            secrets: Secrets,
+            model: Option<&'a str>,
+            adapter_env: &'a [(&'a str, &'a str)],
+        ) -> Request<'a> {
+            Request {
+                harness,
+                model,
+                repository: &self.repo,
+                skills_dir: &self.skills,
+                harness_binary: &self.harness,
+                home: &self.home,
+                fresh_home: &self.fresh,
+                secrets,
+                adapter_env: [("SANDBOX_TEST_SCRIPT", script)]
+                    .into_iter()
+                    .chain(adapter_env.iter().copied())
+                    .collect(),
+            }
+        }
+    }
+
+    /// A Trial-controlled `.git` symlink must not redirect the Grader's
+    /// origin-URL rewrite to a git config outside its snapshot.
+    #[test]
+    fn code_grader_git_rewrite_stays_inside_its_snapshot() {
+        if !bwrap_or_skip("Grader git confinement") {
+            return;
+        }
+        let root = tempfile::TempDir::new().unwrap();
+        // An outside directory shaped like a prepared repository's `.git`.
+        let outside = root.path().join("outside.git");
+        fs::create_dir_all(outside.join("eval-origin.git")).unwrap();
+        let config = outside.join("config");
+        fs::write(&config, "[remote \"origin\"]\n\turl = /experiments/real\n").unwrap();
+        // The snapshot's `.git` is a symlink planted in Trial-controlled content.
+        let snapshot = root.path().join("snapshot");
+        fs::create_dir_all(&snapshot).unwrap();
+        std::os::unix::fs::symlink(&outside, snapshot.join(".git")).unwrap();
+        let packet = root.path().join("packet");
+        fs::create_dir_all(&packet).unwrap();
+        code_grader(
+            &snapshot,
+            &packet,
+            &["sh".into(), "-c".into(), "true".into()],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(&config).unwrap(),
+            "[remote \"origin\"]\n\turl = /experiments/real\n",
+            "grader rewrote a git config outside its snapshot",
+        );
+    }
+
+    /// Run the sandbox's Harness with `script` as its body, in the bound
+    /// repository, and return what the script printed.
+    fn run_script(prepared: &Prepared, repository: &Path) -> std::process::Output {
+        prepared
+            .launch()
+            .command(&[])
+            .unwrap()
+            .current_dir(repository)
+            .output()
+            .expect("sandboxed session did not run")
+    }
+
+    #[test]
+    fn a_trial_keeps_production_user_rules() {
+        if !bwrap_or_skip("production user rules") {
+            return;
+        }
+        for harness in [
+            Harness::Claude,
+            Harness::Grok,
+            Harness::Muse,
+            Harness::OpenCode,
+        ] {
+            let layout = Layout::new();
+            let mut paths = if harness == Harness::OpenCode {
+                vec![".config/opencode/AGENTS.md"]
+            } else {
+                vec![
+                    ".claude/CLAUDE.md",
+                    ".claude/rules/fixture.md",
+                    ".claude/hooks/fixture.sh",
+                ]
+            };
+            if harness == Harness::Grok {
+                paths.push(".grok/rules/fixture.md");
+                let login = trials_home(&layout.home);
+                fs::create_dir_all(&login).unwrap();
+                fs::write(login.join("auth.json"), "{}").unwrap();
+            }
+            for path in &paths {
+                let source = layout.home.join(path);
+                fs::create_dir_all(source.parent().unwrap()).unwrap();
+                fs::write(source, "production-rule\n").unwrap();
+            }
+            let script = paths
+                .iter()
+                .map(|path| format!("cat \"$HOME/{path}\""))
+                .collect::<Vec<_>>()
+                .join(" && ");
+            let secrets = Secrets {
+                opencode_api_key: Some("fixture-key".into()),
+                ..Secrets::default()
+            };
+            let model = (harness == Harness::OpenCode).then_some("anthropic/claude");
+            let request = layout.request(harness, &script, secrets, model, &[]);
+            let prepared = prepare(&request).unwrap();
+            let output = run_script(&prepared, &layout.repo);
+            assert!(
+                output.status.success(),
+                "the {harness:?} Trial lost production rules: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "production-rule\n".repeat(paths.len())
+            );
+        }
+    }
+
+    #[test]
+    fn a_sandboxed_process_sees_neither_an_unbound_path_nor_host_processes() {
+        if !bwrap_or_skip("isolation") {
+            return;
+        }
+        let layout = Layout::new();
+        let outside = layout.home.join("elsewhere");
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(outside.join("secret.txt"), "host only\n").unwrap();
+        let script = format!(
+            "test ! -e {} || exit 11; test -f marker.txt || exit 12; \
+             test \"$(ls /proc | grep -E '^[0-9]+$' | wc -l)\" -lt 20 || exit 13; \
+             echo isolated",
+            outside.display()
+        );
+        let request = layout.request(Harness::Codex, &script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "isolation script failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "isolated");
+    }
+
+    /// Whether the internet is reachable from here: without it, the tests
+    /// that dial out report themselves skipped rather than failing on the
+    /// dial. Opening a TCP connection sends no request.
+    fn internet_or_skip(reason: &str) -> bool {
+        use std::net::ToSocketAddrs;
+        let reachable = ("api.anthropic.com", 443)
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut resolved| resolved.next())
+            .is_some_and(|resolved| {
+                std::net::TcpStream::connect_timeout(
+                    &std::net::SocketAddr::new(resolved.ip(), 443),
+                    Duration::from_secs(8),
+                )
+                .is_ok()
+            });
+        if !reachable {
+            println!("SKIPPED ({reason}): no route to the internet");
+        }
+        reachable
+    }
+
+    /// This machine's non-loopback address, if it has one: connecting a UDP
+    /// socket chooses the address without sending anything.
+    fn local_ip() -> Option<std::net::IpAddr> {
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+        socket.connect("8.8.8.8:80").ok()?;
+        socket
+            .local_addr()
+            .ok()
+            .map(|address| address.ip())
+            .filter(|address| !address.is_loopback())
+    }
+
+    /// A raw CONNECT through the sandbox's relay: prints the proxy's status
+    /// line for `target`.
+    fn connect_script(target: &str) -> String {
+        format!(
+            "printf 'CONNECT {target} HTTP/1.1\\r\\nHost: {target}\\r\\n\\r\\n' \
+             | socat - TCP:127.0.0.1:{RELAY_PORT} | head -n 1"
+        )
+    }
+
+    #[test]
+    fn a_sandboxed_process_reaches_an_allowed_host_through_the_proxy() {
+        if !bwrap_or_skip("proxy allow") || !internet_or_skip("proxy allow") {
+            return;
+        }
+        let layout = Layout::new();
+        let script = format!(
+            "test \"$HTTPS_PROXY\" = \"http://127.0.0.1:{RELAY_PORT}\" || exit 41; \
+             curl -sS -o /dev/null --max-time 20 https://api.anthropic.com"
+        );
+        let request = layout.request(Harness::Claude, &script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "allowed host unreachable through the proxy: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn a_disallowed_host_is_refused_through_the_proxy() {
+        if !bwrap_or_skip("proxy refuse") {
+            return;
+        }
+        let layout = Layout::new();
+        let script = connect_script("github.com:443");
+        let request = layout.request(Harness::Claude, &script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "HTTP/1.1 403 Forbidden"
+        );
+    }
+
+    /// `localhost` is refused before it resolves here: it is not on the
+    /// Harness's allowlist, so the proxy never resolves it. The resolution
+    /// guard itself is covered in `proxy.rs`, where `localhost` is allowed
+    /// and refused for resolving to loopback.
+    #[test]
+    fn a_name_that_resolves_to_loopback_is_refused_through_the_proxy() {
+        if !bwrap_or_skip("proxy loopback") {
+            return;
+        }
+        let layout = Layout::new();
+        let script = connect_script("localhost:443");
+        let request = layout.request(Harness::Claude, &script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "HTTP/1.1 403 Forbidden"
+        );
+    }
+
+    #[test]
+    fn this_machine_is_unreachable_through_the_proxy() {
+        if !bwrap_or_skip("proxy host address") {
+            return;
+        }
+        let Some(address) = local_ip() else {
+            println!("SKIPPED (proxy host address): no non-loopback address");
+            return;
+        };
+        let layout = Layout::new();
+        let script = connect_script(&format!("{address}:443"));
+        let request = layout.request(Harness::Claude, &script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "HTTP/1.1 403 Forbidden"
+        );
+    }
+
+    #[test]
+    fn without_the_proxy_a_sandboxed_process_has_no_route() {
+        if !bwrap_or_skip("no route") {
+            return;
+        }
+        let layout = Layout::new();
+        let script = "if env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy \
+            curl -sS -o /dev/null --max-time 15 https://api.anthropic.com 2>/dev/null; \
+            then exit 51; fi";
+        let request = layout.request(Harness::Claude, script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "reached the internet without the proxy: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(output.stdout.is_empty());
+    }
+
+    #[test]
+    fn everything_a_sandboxed_session_starts_ends_with_it() {
+        if !bwrap_or_skip("orphans") {
+            return;
+        }
+        let layout = Layout::new();
+        let script =
+            "sleep 60 & echo $! > orphan.pid; kill -0 $(cat orphan.pid); exit 0".to_string();
+        let request = layout.request(Harness::Codex, &script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(output.status.success());
+        let pid: i32 = fs::read_to_string(layout.repo.join("orphan.pid"))
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        // SAFETY: kill with signal 0 sends nothing; it only reports an error.
+        let alive = unsafe { libc::kill(pid, 0) == 0 };
+        assert!(!alive, "orphaned sleep {pid} outlived its sandbox");
+        fs::remove_file(layout.repo.join("orphan.pid")).unwrap();
+    }
+
+    #[test]
+    fn a_codex_login_refresh_stays_in_the_fresh_home() {
+        if !bwrap_or_skip("codex refresh") {
+            return;
+        }
+        let layout = Layout::new();
+        let auth = layout.home.join(".codex/auth.json");
+        fs::create_dir_all(auth.parent().unwrap()).unwrap();
+        fs::write(&auth, "{\"refresh\": \"original\"}\n").unwrap();
+        let script = "echo '{\"refresh\": \"renewed\"}' > \"$HOME/.codex/auth.json\"; cat \"$HOME/.codex/auth.json\"";
+        let request = layout.request(Harness::Codex, script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            fs::read_to_string(&auth).unwrap(),
+            "{\"refresh\": \"original\"}\n"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "{\"refresh\": \"renewed\"}\n"
+        );
+    }
+
+    #[test]
+    fn a_grok_login_renewed_by_rename_stays_in_the_fresh_home() {
+        if !bwrap_or_skip("grok rename") {
+            return;
+        }
+        let layout = Layout::new();
+        let production = layout.home.join(".grok/auth.json");
+        fs::create_dir_all(production.parent().unwrap()).unwrap();
+        fs::write(&production, "production login\n").unwrap();
+        let trials = trials_home(&layout.home);
+        fs::create_dir_all(trials.join("sessions/stale")).unwrap();
+        fs::write(trials.join("auth.json"), "trials login v1\n").unwrap();
+        fs::write(trials.join("auth.json.lock"), "lock\n").unwrap();
+        let script = "echo 'trials login v2' > \"$HOME/.grok/fresh.json\" && \
+            mv \"$HOME/.grok/fresh.json\" \"$HOME/.grok/auth.json\" && \
+            cat \"$HOME/.grok/auth.json\"";
+        let request = layout.request(Harness::Grok, script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "trials login v2"
+        );
+        assert_eq!(
+            fs::read_to_string(trials.join("auth.json")).unwrap(),
+            "trials login v1\n"
+        );
+        assert_eq!(
+            fs::read_to_string(&production).unwrap(),
+            "production login\n"
+        );
+        let mut kept: Vec<_> = fs::read_dir(&trials)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        kept.sort();
+        assert_eq!(kept, ["auth.json", "auth.json.lock", "sessions"]);
+    }
+
+    #[test]
+    fn a_grok_trial_without_a_login_fails_before_its_session_starts() {
+        if !bwrap_or_skip("grok login") {
+            return;
+        }
+        let layout = Layout::new();
+        let request = layout.request(Harness::Grok, "exit 99", Secrets::default(), None, &[]);
+
+        let error = format!("{:#}", prepare(&request).err().unwrap());
+
+        assert!(error.contains("not logged in"), "{error}");
+        assert!(error.contains("grok login"), "{error}");
+        assert!(prepare(&request).is_err());
+    }
+
+    #[test]
+    fn two_grok_trials_never_run_at_once() {
+        if !bwrap_or_skip("grok lock") {
+            return;
+        }
+        let home = tempfile::TempDir::new().unwrap();
+        let repo = home.path().join("repo");
+        let skills = home.path().join("skills");
+        fs::create_dir_all(&repo).unwrap();
+        fs::create_dir_all(&skills).unwrap();
+        fs::create_dir_all(trials_home(home.path())).unwrap();
+        fs::write(trials_home(home.path()).join("auth.json"), "login\n").unwrap();
+        let harness = home.path().join("fakeh");
+        fs::write(&harness, "#!/bin/sh\nexit 0\n").unwrap();
+        fs::set_permissions(&harness, fs::Permissions::from_mode(0o755)).unwrap();
+        let first = home.path().join("first/home");
+        let second = home.path().join("second/home");
+        let held = prepare(&Request {
+            harness: Harness::Grok,
+            model: None,
+            repository: &repo,
+            skills_dir: &skills,
+            harness_binary: &harness,
+            home: home.path(),
+            fresh_home: &first,
+            secrets: Secrets::default(),
+            adapter_env: Vec::new(),
+        })
+        .unwrap();
+
+        let contested = std::thread::scope(|scope| {
+            let waiting = scope.spawn(|| {
+                prepare(&Request {
+                    harness: Harness::Grok,
+                    model: None,
+                    repository: &repo,
+                    skills_dir: &skills,
+                    harness_binary: &harness,
+                    home: home.path(),
+                    fresh_home: &second,
+                    secrets: Secrets::default(),
+                    adapter_env: Vec::new(),
+                })
+            });
+            std::thread::sleep(Duration::from_millis(300));
+            let blocked = !waiting.is_finished();
+            drop(held);
+            let unblocked = waiting.join().unwrap().is_ok();
+            (blocked, unblocked)
+        });
+
+        assert_eq!(contested, (true, true), "the second Grok Trial must wait");
+        assert!(!home.path().join(".thirdshift/trials/grok.lock").exists());
+    }
+
+    #[test]
+    fn an_opencode_trial_gets_its_key_only_from_the_credentials() {
+        if !bwrap_or_skip("opencode key") {
+            return;
+        }
+        let layout = Layout::new();
+        fs::create_dir_all(layout.home.join(".local/share/opencode")).unwrap();
+        fs::write(
+            layout.home.join(".local/share/opencode/opencode.db"),
+            "production credentials\n",
+        )
+        .unwrap();
+        let secrets = Secrets {
+            claude_setup_token: None,
+            opencode_api_key: Some("opencode-provider-key".into()),
+        };
+        let script = "test -n \"$THIRDSHIFT_OPENCODE_API_KEY\" || exit 21; \
+            test ! -e \"$HOME/.local/share/opencode/opencode.db\" || exit 22; \
+            echo \"$OPENCODE_CONFIG_CONTENT\"";
+        let request = layout.request(
+            Harness::OpenCode,
+            script,
+            secrets,
+            Some("anthropic/claude"),
+            &[],
+        );
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let config: serde_json::Value = serde_json::from_slice(output.stdout.trim_ascii()).unwrap();
+        assert_eq!(
+            config["provider"]["anthropic"]["apiKey"],
+            format!("{{env:{OPENCODE_API_KEY_ENV}}}")
+        );
+        assert_eq!(config["permission"]["webfetch"], "deny");
+        assert_eq!(config["permission"]["websearch"], "deny");
+    }
+
+    #[test]
+    fn an_opencode_trial_naming_an_unknown_provider_fails_before_its_session_starts() {
+        if !bwrap_or_skip("opencode provider") {
+            return;
+        }
+        let layout = Layout::new();
+        let secrets = Secrets {
+            claude_setup_token: None,
+            opencode_api_key: Some("opencode-provider-key".into()),
+        };
+        let request = layout.request(
+            Harness::OpenCode,
+            "exit 99",
+            secrets,
+            Some("acme/model"),
+            &[],
+        );
+
+        let error = format!("{:#}", prepare(&request).err().unwrap());
+
+        assert!(error.contains("login failed"), "{error}");
+        assert!(error.contains("unknown provider acme"), "{error}");
+    }
+
+    #[test]
+    fn an_opencode_trial_without_a_key_fails_before_its_session_starts() {
+        if !bwrap_or_skip("opencode key") {
+            return;
+        }
+        let layout = Layout::new();
+        let request = layout.request(
+            Harness::OpenCode,
+            "exit 99",
+            Secrets::default(),
+            Some("acme/model"),
+            &[],
+        );
+
+        let error = format!("{:#}", prepare(&request).err().unwrap());
+
+        assert!(error.contains("login failed"), "{error}");
+        assert!(error.contains("opencode.api_key"), "{error}");
+    }
+
+    #[test]
+    fn the_trial_config_names_the_model_provider_for_its_apikey() {
+        for (model, provider) in [
+            (Some("acme/model"), Some("acme")),
+            (Some("acme/model#high"), Some("acme")),
+            (None, None),
+            (Some("model-without-provider"), None),
+            (Some("/model"), None),
+        ] {
+            match (provider_config(model), provider) {
+                (Ok(config), Some(provider)) => {
+                    let config: serde_json::Value = serde_json::from_str(&config).unwrap();
+                    assert_eq!(
+                        config["provider"][provider]["apiKey"],
+                        format!("{{env:{OPENCODE_API_KEY_ENV}}}")
+                    );
+                }
+                (Err(_), None) => (),
+                (result, provider) => panic!("{model:?} -> {result:?}, want {provider:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_claude_trial_gets_its_setup_token_through_its_environment() {
+        if !bwrap_or_skip("claude token") {
+            return;
+        }
+        let layout = Layout::new();
+        let secrets = Secrets {
+            claude_setup_token: Some("trial-token".into()),
+            opencode_api_key: None,
+        };
+        let request = layout.request(
+            Harness::Claude,
+            "echo \"token=${CLAUDE_CODE_OAUTH_TOKEN-unset}\"",
+            secrets,
+            None,
+            &[],
+        );
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(output.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "token=trial-token"
+        );
+    }
+
+    #[test]
+    fn the_fresh_home_holds_user_files_read_only() {
+        if !bwrap_or_skip("user files") {
+            return;
+        }
+        let layout = Layout::new();
+        fs::create_dir_all(layout.home.join(".codex")).unwrap();
+        fs::write(layout.home.join(".codex/config.toml"), "user config\n").unwrap();
+        let script = "cat \"$HOME/.codex/config.toml\"; \
+            echo changed > \"$HOME/.codex/config.toml\" 2>/dev/null && exit 31 || exit 0";
+        let request = layout.request(Harness::Codex, script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "user config"
+        );
+    }
+
+    #[test]
+    fn a_grok_binary_hidden_by_the_trials_home_is_bound_outside_it() {
+        if !bwrap_or_skip("grok binary") {
+            return;
+        }
+        let layout = Layout::new();
+        let hidden = layout.home.join(".grok/downloads/grok-1/fakeh");
+        fs::create_dir_all(hidden.parent().unwrap()).unwrap();
+        fs::write(
+            &hidden,
+            "#!/bin/sh\necho \"argv0=$0\"\nexec sh -c \"$SANDBOX_TEST_SCRIPT\"\n",
+        )
+        .unwrap();
+        fs::set_permissions(&hidden, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::create_dir_all(trials_home(&layout.home)).unwrap();
+        fs::write(trials_home(&layout.home).join("auth.json"), "login\n").unwrap();
+        let script = "echo \"argv0=$0\"; echo \"path=$PATH\"; ls \"$HOME/.grok\"";
+        let mut request = layout.request(Harness::Grok, script, Secrets::default(), None, &[]);
+        request.harness_binary = &hidden;
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+        assert!(
+            stdout.contains("argv0=/sandbox/harness/grok/fakeh"),
+            "{stdout}"
+        );
+        assert!(stdout.contains("/sandbox/harness/grok"), "{stdout}");
+        assert!(!stdout.contains("downloads"), "{stdout}");
+    }
+
+    #[test]
+    fn a_bound_toolchain_is_reachable_on_the_session_path() {
+        if !bwrap_or_skip("toolchain PATH") {
+            return;
+        }
+        let layout = Layout::new();
+        let bin = layout.home.join(".cargo/bin");
+        fs::create_dir_all(&bin).unwrap();
+        let tool = bin.join("fake-tool");
+        fs::write(&tool, "#!/bin/sh\necho toolchain-tool\n").unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        let request = layout.request(Harness::Codex, "fake-tool", Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "bound toolchain not on PATH: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "toolchain-tool"
+        );
+    }
+
+    #[test]
+    fn a_muse_login_under_an_overridden_config_home_is_found_in_place() {
+        if !bwrap_or_skip("muse XDG_CONFIG_HOME") {
+            return;
+        }
+        let layout = Layout::new();
+        let config_home = layout.home.join("xdg-config");
+        fs::create_dir_all(config_home.join("muse")).unwrap();
+        fs::write(config_home.join("muse/auth.json"), "{\"login\": \"xdg\"}\n").unwrap();
+        // NOTE: mutates process env; run serially with other env-touching tests.
+        let saved = std::env::var_os("XDG_CONFIG_HOME");
+        unsafe { std::env::set_var("XDG_CONFIG_HOME", &config_home) };
+        let prepared = prepare(&layout.request(
+            Harness::Muse,
+            "cat \"$XDG_CONFIG_HOME/muse/auth.json\"",
+            Secrets::default(),
+            None,
+            &[],
+        ));
+        match saved {
+            Some(value) => unsafe { std::env::set_var("XDG_CONFIG_HOME", value) },
+            None => unsafe { std::env::remove_var("XDG_CONFIG_HOME") },
+        }
+        let prepared = prepared.unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "muse login missed under overridden XDG_CONFIG_HOME: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "{\"login\": \"xdg\"}"
+        );
+    }
+
+    #[test]
+    fn tool_bin_dirs_names_only_bound_roots() {
+        let root = tempfile::TempDir::new().unwrap();
+        let toolchain = root.path().join("toolchain");
+        let deep = toolchain.join("toolchains/stable/bin");
+        fs::create_dir_all(&deep).unwrap();
+        let tool = deep.join("cargo");
+        fs::write(&tool, "#!/bin/sh\n").unwrap();
+        fs::set_permissions(&tool, fs::Permissions::from_mode(0o755)).unwrap();
+        let path_dirs = vec![deep.clone(), PathBuf::from("/usr/bin")];
+
+        assert_eq!(
+            tool_bin_dirs_on(&path_dirs, std::slice::from_ref(&toolchain)),
+            vec![deep]
+        );
+        assert!(tool_bin_dirs_on(&path_dirs, &[root.path().join("elsewhere")]).is_empty());
+        assert!(tool_bin_dirs_on(&[], &[toolchain]).is_empty());
+    }
+
+    #[test]
+    fn a_signal_through_bwrap_ends_the_session_and_its_orphans() {
+        if !bwrap_or_skip("signals") {
+            return;
+        }
+        let layout = Layout::new();
+        let script = "sleep 60 & echo $! > signal.pid; wait";
+        let request = layout.request(Harness::Codex, script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+        let mut child = prepared
+            .launch()
+            .command(&[])
+            .unwrap()
+            .current_dir(&layout.repo)
+            .spawn()
+            .expect("sandboxed session did not start");
+        let mut pid = None;
+        for _ in 0..100 {
+            if let Ok(text) = fs::read_to_string(layout.repo.join("signal.pid"))
+                && let Ok(found) = text.trim().parse::<i32>()
+            {
+                pid = Some(found);
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let pid = pid.expect("sandboxed session never started its orphan");
+        // SAFETY: SIGINT asks the sandbox to end its session, as an
+        // interrupted Trial's Harness stop does.
+        let terminated = unsafe { libc::kill(child.id() as i32, libc::SIGINT) == 0 };
+        assert!(terminated);
+        let status = child.wait().expect("sandboxed session did not end");
+        assert!(!status.success());
+        // SAFETY: kill with signal 0 sends nothing; it only reports an error.
+        let alive = unsafe { libc::kill(pid, 0) == 0 };
+        assert!(!alive, "orphaned sleep {pid} outlived its sandbox");
+        fs::remove_file(layout.repo.join("signal.pid")).unwrap();
+    }
+
+    #[test]
+    fn a_grok_home_copies_only_the_login_and_its_lock() {
+        let layout = Layout::new();
+        let home = trials_home(&layout.home);
+        fs::create_dir_all(home.join("sessions/stale")).unwrap();
+        fs::write(home.join("auth.json"), "login\n").unwrap();
+        fs::write(home.join("auth.json.lock"), "lock\n").unwrap();
+        fs::write(home.join("stray.txt"), "stray\n").unwrap();
+
+        let request = layout.request(Harness::Grok, "", Secrets::default(), None, &[]);
+        let _guard = grok_into(&request).unwrap();
+
+        let mut kept: Vec<_> = fs::read_dir(layout.fresh.join(GROK_HOME_NAME))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
+        kept.sort();
+        assert_eq!(kept, ["auth.json", "auth.json.lock"]);
+        assert!(home.join("sessions/stale").is_dir());
+        assert!(home.join("stray.txt").is_file());
     }
 }

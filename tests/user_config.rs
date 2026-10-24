@@ -142,6 +142,46 @@ fn a_spec_parallel_that_is_not_a_whole_number_from_1_up_stops_the_run() {
 }
 
 #[test]
+fn trial_memory_caps_reject_multiple_suffixes_before_work() {
+    for value in ["2GG", "512KK", "1MK"] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(&format!("[trial]\nmemory_max = \"{value}\"\n"));
+
+        let result = scenario.run(&["status", "--json"]);
+
+        assert_eq!(result.code, Some(1), "{value}: {}", result.stderr);
+        scenario.assert_rejected_before_any_work(&result, &path.display().to_string());
+        assert!(
+            result.stderr.contains("must be a byte count"),
+            "{value}: {}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
+fn a_trial_memory_cap_systemd_cannot_use_stops_the_run() {
+    for config in [
+        "[trial]\nmemory_high = \"much\"\n",
+        "[trial]\nmemory_max = \"2XB\"\n",
+        "[trial]\nmemory_swap_max = \"\"\n",
+    ] {
+        let scenario = Scenario::new();
+        let path = scenario.user_config_is(config);
+
+        let result = scenario.run(&[&scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "{config}: {}", result.stderr);
+        scenario.assert_rejected_before_any_work(&result, &path.display().to_string());
+        assert!(
+            result.stderr.contains("must be a byte count"),
+            "stderr: {}",
+            result.stderr
+        );
+    }
+}
+
+#[test]
 fn a_value_of_the_wrong_type_stops_the_run_naming_the_key() {
     for config in ["merge = true\n", "[merge]\nalways = \"yes\"\n"] {
         let scenario = Scenario::new();
@@ -184,7 +224,7 @@ fn help_and_version_succeed_with_a_broken_config() {
 const AGENT_EXITS_3: &str = "exit 3\n";
 
 /// Assert the Run failed after logging its one session in `commands/issue/` under
-/// `acme/widgets/` under `dir`, a directory under the scenario, and that the "session log:" line
+/// `acme/widgets/` under `dir`, a directory under the scenario, and that the "session trace:" line
 /// names that log.
 fn assert_logged_in(scenario: &Scenario, result: &RunResult, dir: &str) {
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
@@ -195,7 +235,7 @@ fn assert_logged_in(scenario: &Scenario, result: &RunResult, dir: &str) {
     assert!(
         result
             .stderr
-            .contains(&format!("session log: {}", log.display())),
+            .contains(&format!("session trace: {}", log.display())),
         "stderr: {}",
         result.stderr
     );

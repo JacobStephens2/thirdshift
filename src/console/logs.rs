@@ -1,6 +1,5 @@
 //! Log pages and their independent append-only HTML stream.
 use std::convert::Infallible;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
 
 use anyhow::{Result, ensure};
 use askama::Template;
@@ -14,7 +13,9 @@ use axum::{Extension, Json};
 use serde::Serialize;
 
 use super::conversation;
+use super::subscription::{Readiness, Subscription};
 use crate::config::UserConfig;
+use crate::logs::Framing;
 use crate::logs::catalog::{self, Log};
 
 #[derive(Template)]
@@ -32,6 +33,7 @@ struct ReaderPage {
     log: Log,
     html: String,
     offset: u64,
+    live: bool,
 }
 
 pub(super) async fn index() -> Response {
@@ -66,7 +68,7 @@ pub(super) async fn reader(Path(id): Path<String>) -> Response {
         else {
             return Ok(None);
         };
-        let lines = read_lines(&log, 0, usize::MAX)?;
+        let lines = log.reader.read(0, Framing::Lines, usize::MAX)?;
         let html = conversation::render(&String::from_utf8_lossy(&lines.bytes), log.kind);
         Ok(Some(
             ReaderPage {
@@ -74,6 +76,7 @@ pub(super) async fn reader(Path(id): Path<String>) -> Response {
                 log,
                 html,
                 offset: lines.offset,
+                live: !lines.done,
             }
             .render()?,
         ))
@@ -94,11 +97,8 @@ struct Batch {
     done: bool,
 }
 
-fn appended(config: &UserConfig, id: &str, offset: u64) -> Result<Batch> {
-    // Observe completion before the final drain, so final unterminated output
-    // is included even if the Command ended between polls.
-    let log = catalog::find(config, id)?;
-    let lines = read_lines(&log, offset, 256 * 1024)?;
+fn appended(log: &Log, offset: u64) -> Result<Batch> {
+    let lines = log.reader.read(offset, Framing::Lines, 256 * 1024)?;
     Ok(Batch {
         html: conversation::render(&String::from_utf8_lossy(&lines.bytes), log.kind),
         offset: lines.offset,
@@ -106,41 +106,10 @@ fn appended(config: &UserConfig, id: &str, offset: u64) -> Result<Batch> {
     })
 }
 
-struct Lines {
-    bytes: Vec<u8>,
-    offset: u64,
-    done: bool,
-}
-
-fn read_lines(log: &Log, offset: u64, budget: usize) -> Result<Lines> {
-    let mut file = BufReader::new(std::fs::File::open(&log.path)?);
-    let length = file.get_ref().metadata()?.len();
-    ensure!(offset <= length, "log was truncated; reopen the reader");
-    file.seek(SeekFrom::Start(offset))?;
-    let mut bytes = Vec::new();
-    let mut next = offset;
-    while next < length && bytes.len() < budget {
-        let mut line = Vec::new();
-        if file.read_until(b'\n', &mut line)? == 0 {
-            break;
-        }
-        if log.live && !line.ends_with(b"\n") {
-            break;
-        }
-        next += line.len() as u64;
-        bytes.extend(line);
-    }
-    let done = !log.live && next >= file.get_ref().metadata()?.len();
-    Ok(Lines {
-        bytes,
-        offset: next,
-        done,
-    })
-}
-
 pub(super) async fn stream(
     Path((id, offset)): Path<(String, u64)>,
-    Extension(executable): Extension<super::restart::Executable>,
+    Extension(changes): Extension<super::changes::Receiver>,
+    Extension(notifier): Extension<super::changes::Notifier>,
     Extension(viewer): Extension<super::auth::Viewer>,
     headers: HeaderMap,
 ) -> Response {
@@ -151,7 +120,7 @@ pub(super) async fn stream(
         .is_some_and(|value| value == "application/json")
     {
         return match tokio::task::spawn_blocking(move || {
-            appended(&UserConfig::load()?, &id, offset)
+            appended(&catalog::find(&UserConfig::load()?, &id)?, offset)
         })
         .await
         {
@@ -169,69 +138,64 @@ pub(super) async fn stream(
         let config = UserConfig::load()?;
         let log = catalog::find(&config, &id)?;
         ensure!(
-            offset <= std::fs::metadata(log.path)?.len(),
+            offset <= std::fs::metadata(&log.path)?.len(),
             "invalid log offset"
         );
-        Ok((
-            std::sync::Arc::new(config),
-            id,
-            offset,
-            false,
-            executable,
-            viewer,
-        ))
+        Ok(log)
     })
     .await;
     let state = match checked {
-        Ok(Ok(state)) => state,
+        Ok(Ok(log)) => LogStream {
+            log: std::sync::Arc::new(log),
+            offset,
+            done: false,
+            subscription: Subscription::new(changes, viewer, &notifier),
+        },
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
-    let events = futures_util::stream::unfold(
-        state,
-        |(config, id, mut offset, done, executable, viewer)| async move {
-            if done {
-                return None;
-            }
-            loop {
-                let root = config.clone();
-                let selected = id.clone();
-                let watched = executable.clone();
-                let signed_in = viewer.clone();
-                let result = tokio::task::spawn_blocking(move || {
-                    if watched.changed() || !signed_in.still_allowed()? {
-                        return Ok(None);
-                    }
-                    appended(&root, &selected, offset).map(Some)
-                })
-                .await;
-                match result {
-                    Ok(Ok(None)) => return None,
-                    Ok(Ok(Some(batch))) if batch.offset != offset || batch.done => {
-                        offset = batch.offset;
-                        let done = batch.done;
-                        let event = Event::default()
-                            .event("lines")
-                            .id(offset.to_string())
-                            .data(serde_json::to_string(&batch).expect("serializable log batch"));
-                        return Some((
-                            Ok::<_, Infallible>(event),
-                            (config, id, offset, done, executable, viewer),
-                        ));
-                    }
-                    Ok(Ok(Some(_))) => {
-                        tokio::time::sleep(std::time::Duration::from_millis(250)).await
-                    }
-                    error => {
-                        eprintln!("thirdshift Console: log stream: {error:?}");
-                        let event = Event::default()
-                            .event("log-error")
-                            .data("Can't read log; reopen the reader. Check the Console's stderr.");
-                        return Some((Ok(event), (config, id, offset, true, executable, viewer)));
+    let events = futures_util::stream::unfold(state, |mut state| async move {
+        if state.done {
+            return None;
+        }
+        // Buffered output drains without another notification; only an
+        // empty unfinished read sleeps until the next change.
+        let mut mode = Readiness::Drain;
+        loop {
+            let result = match state.subscription.ready(mode).await {
+                Ok(true) => {
+                    let selected = state.log.clone();
+                    let offset = state.offset;
+                    // The captured reader rejects a file that leaves the inventory.
+                    match tokio::task::spawn_blocking(move || appended(&selected, offset)).await {
+                        Ok(read) => read,
+                        Err(error) => Err(error.into()),
                     }
                 }
+                Ok(false) => return None,
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok(batch) if batch.offset != state.offset || batch.done => {
+                    state.offset = batch.offset;
+                    state.done = batch.done;
+                    let event = Event::default()
+                        .event("lines")
+                        .id(state.offset.to_string())
+                        .data(serde_json::to_string(&batch).expect("serializable log batch"));
+                    return Some((Ok::<_, Infallible>(event), state));
+                }
+                Ok(_) => mode = Readiness::Wait,
+                Err(error) => {
+                    eprintln!("thirdshift Console: log stream: {error:?}");
+                    let event = Event::default()
+                        .event("log-error")
+                        .data("Can't read log; reopen the reader. Check the Console's stderr.");
+                    state.done = true;
+                    return Some((Ok(event), state));
+                }
             }
-        },
-    );
+        }
+    });
     let mut response = Sse::new(events)
         .keep_alive(KeepAlive::default())
         .into_response();
@@ -242,4 +206,11 @@ pub(super) async fn stream(
         .headers_mut()
         .insert("cache-control", "no-store".parse().unwrap());
     response
+}
+
+struct LogStream {
+    log: std::sync::Arc<Log>,
+    offset: u64,
+    done: bool,
+    subscription: Subscription,
 }

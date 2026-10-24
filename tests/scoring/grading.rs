@@ -75,6 +75,70 @@ pub(super) fn grader(scenario: &Scenario) {
 }
 
 #[test]
+fn bug_origins_survive_a_grader_limit_stop_and_scores_resume_without_repeating_analysis() {
+    let scenario = scenario();
+    let harness = scenario.path("bin/claude");
+    let source = harness.canonicalize().unwrap();
+    std::fs::remove_file(&harness).unwrap();
+    support::copy_executable(&source, &harness);
+    for (name, script) in [
+        ("systemctl", "echo running"),
+        (
+            "systemd-run",
+            "while [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"",
+        ),
+        ("journalctl", "exit 0"),
+    ] {
+        support::write_executable(
+            &scenario.path(&format!("bin/{name}")),
+            &format!("#!/bin/sh\n{script}\n"),
+        );
+    }
+    let fix = scenario
+        .origin_git(&["rev-parse", "main"])
+        .trim()
+        .to_owned();
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "codex", "gpt", false)]);
+    state["scoring_bugs"] = serde_json::json!([{
+        "number": 8,
+        "url": "https://github.com/acme/widgets/issues/8",
+        "title": "Wrong answer",
+        "body": "The answer should be 42.",
+        "closedAt": (Utc::now() - chrono::TimeDelta::days(1)).to_rfc3339(),
+        "repository": {"nameWithOwner": "acme/widgets"},
+        "labels": {"nodes": [{"name": "bug"}], "pageInfo": {"hasNextPage": false}},
+        "timelineItems": {"nodes": [{"closer": {"oid": fix}}]}
+    }]);
+    scenario.write_gh_state(&state);
+    scenario.agent_does(&format!(
+        "if [ -f input.json ]; then\nprintf '%s' '{{\"commit\":null,\"reason\":\"History does not establish an introducing commit.\"}}' > proposal.json\nelse\ncat > scores.json <<'SCORES'\n{RESPONSE}\nSCORES\nfi\n"
+    ));
+    scenario.agent_does_in_session(2, "printf '%s\\n' '{\"type\":\"rate_limit_event\",\"rate_limit_info\":{\"status\":\"allowed_warning\"}}'\nsleep 30\n");
+
+    let stopped = scenario.run(&["score"]);
+    assert_eq!(stopped.code, Some(0), "{}", stopped.stderr);
+    assert!(stopped.stderr.contains("plan-limit warning"));
+    let pending = weeks(&scenario).remove(0);
+    assert_eq!(pending["bug_origins"][0]["state"], "proposed");
+    assert!(pending["sample"][0]["assessment"].is_null());
+    assert_eq!(scenario.claude_calls().len(), 2);
+
+    let resumed = scenario.run(&["score"]);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    let saved = weeks(&scenario);
+    assert_eq!(saved[0]["bug_origins"], pending["bug_origins"]);
+    assert_eq!(
+        saved[0]["sample"][0]["assessment"]["scores"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    assert_eq!(scenario.claude_calls().len(), 3);
+}
+
+#[test]
 fn every_sampled_pull_request_gets_five_scores_and_keeps_attribution() {
     let scenario = scenario();
     grader(&scenario);

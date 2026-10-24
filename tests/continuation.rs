@@ -103,7 +103,7 @@ fn assert_nothing_created(scenario: &Scenario, local_branch: &str) {
         scenario
             .log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl")
             .is_empty(),
-        "a session log was created"
+        "a session trace was created"
     );
     assert_ne!(scenario.launch_git(&["branch", "--list", local_branch]), "");
 }
@@ -218,7 +218,10 @@ fn a_failed_runs_branch_is_continued_from_its_failure_commit() {
     scenario.origin_has_branch(
         "issue-7",
         "main",
-        &["Earlier work", "thirdshift: failed run (claude exited 1)"],
+        &[
+            "Earlier work",
+            "thirdshift: failed ticket run (claude exited 1)",
+        ],
     );
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
 
@@ -229,7 +232,7 @@ fn a_failed_runs_branch_is_continued_from_its_failure_commit() {
         scenario.origin_log("issue-7"),
         Some(vec![
             "Continue the work".to_string(),
-            "thirdshift: failed run (claude exited 1)".to_string(),
+            "thirdshift: failed ticket run (claude exited 1)".to_string(),
             "Earlier work".to_string(),
             "Initial commit".to_string(),
         ])

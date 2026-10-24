@@ -1,4 +1,5 @@
 """Exercise the generator CLI against a stand-in for the external dist tool."""
+import importlib.util
 import os
 from pathlib import Path
 import subprocess
@@ -19,7 +20,16 @@ class GenerateRelease(unittest.TestCase):
             )
             workflow = root / ".github/workflows/release.yml"
             (root / "dist-workspace.toml").write_text('[dist]\ncargo-dist-version = "0.33.0"\nallow-dirty = ["ci"]\n')
-            upstream = "name: Release\non:\n  pull_request:\n  push:\n    tags: ['v*']\n\njobs:\n  plan:\n    runs-on: ubuntu-24.04\n"
+            upstream = (
+                "name: Release\non:\n  pull_request:\n  push:\n    tags: ['v*']\n"
+                "\njobs:\n  plan:\n    runs-on: ubuntu-24.04\n"
+                "  build-local-artifacts:\n    runs-on: ubuntu-24.04\n"
+                "  build-global-artifacts:\n    runs-on: ubuntu-24.04\n"
+                "  custom-release-smoke:\n    uses: ./.github/workflows/release-smoke.yml\n"
+                "    with:\n      plan: val\n    secrets: inherit\n"
+                "  custom-publish-crates:\n    uses: ./.github/workflows/publish-crates.yml\n"
+                "    with:\n      plan: val\n    secrets: inherit\n"
+            )
             workflow.write_text("stale workflow\n")
             dist = root / "dist"
             dist.write_text(
@@ -49,7 +59,25 @@ class GenerateRelease(unittest.TestCase):
             self.assertIn("    paths:\n", expected)
             self.assertIn("      - 'src/**'", expected)
             self.assertIn("  push:\n    tags: ['v*']", expected)
-            self.assertIn("jobs:\n  plan:\n    runs-on: ubuntu-24.04", expected)
+            self.assertIn(
+                "  plan:\n    permissions:\n      \"actions\": \"write\"\n"
+                "      \"contents\": \"read\"\n    runs-on: ubuntu-24.04",
+                expected,
+            )
+            self.assertIn(
+                "  build-local-artifacts:\n    permissions:\n"
+                "      \"actions\": \"write\"\n      \"contents\": \"read\"\n",
+                expected,
+            )
+            self.assertIn(
+                "  build-global-artifacts:\n    permissions:\n"
+                "      \"actions\": \"write\"\n      \"contents\": \"read\"\n",
+                expected,
+            )
+            smoke_start = expected.index("  custom-release-smoke:\n")
+            publish_start = expected.index("  custom-publish-crates:\n")
+            self.assertNotIn("secrets: inherit", expected[smoke_start:publish_start])
+            self.assertIn("secrets: inherit", expected[publish_start:])
             config_before = (root / "dist-workspace.toml").read_bytes()
             checked = run("--check")
             self.assertEqual(checked.returncode, 0, checked.stderr)
@@ -61,6 +89,30 @@ class GenerateRelease(unittest.TestCase):
             self.assertNotEqual(failed.returncode, 0)
             self.assertEqual(workflow.read_text(), expected)
             self.assertEqual((root / "dist-workspace.toml").read_bytes(), config_before)
+
+
+class HardenReleaseWorkflow(unittest.TestCase):
+    def load(self):
+        spec = importlib.util.spec_from_file_location(
+            "generate_release", GENERATOR
+        )
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module.harden_release_workflow
+
+    def test_missing_build_job_fails_loudly(self):
+        harden = self.load()
+        with self.assertRaises(RuntimeError):
+            harden("jobs:\n  plan:\n    runs-on: ubuntu-24.04\n")
+
+    def test_renamed_build_job_gets_no_silent_pass(self):
+        harden = self.load()
+        upstream = (
+            "jobs:\n  plan:\n    runs-on: ubuntu-24.04\n"
+            "  build-local-artifacts-RENAMED:\n    runs-on: ubuntu-24.04\n"
+        )
+        with self.assertRaises(RuntimeError):
+            harden(upstream)
 
 
 if __name__ == "__main__":

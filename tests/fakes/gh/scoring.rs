@@ -4,6 +4,10 @@
 use super::*;
 
 pub(super) fn packet(state: &Json, query: &str, variables: &BTreeMap<String, String>) -> bool {
+    if query.contains("ClosedBugs") {
+        closed_bugs(state, variables);
+        return true;
+    }
     let n = variables.get("number").map(String::as_str).unwrap_or("");
     let (field, node) = if query.contains("ScoringPacket") {
         let pr = state
@@ -114,4 +118,69 @@ pub(super) fn packet(state: &Json, query: &str, variables: &BTreeMap<String, Str
         object([("data", object([("repository", object([(field, node)]))]))])
     );
     true
+}
+
+fn closed_bugs(state: &Json, variables: &BTreeMap<String, String>) {
+    let search = &variables["search"];
+    let owner = search
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("user:"))
+        .unwrap();
+    let range = search
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("closed:"))
+        .unwrap();
+    let (start, end) = range
+        .split_once("..")
+        .unwrap_or(("", range.trim_start_matches(['<', '='])));
+    let nodes: Vec<_> = state
+        .get("scoring_bugs")
+        .map(Json::items)
+        .unwrap_or_default()
+        .iter()
+        .filter(|bug| {
+            // Fixtures use UTC. GitHub search bounds have second precision;
+            // production must enforce exact subsecond window boundaries.
+            let at = &bug.at("closedAt").str()[..19];
+            bug.at("repository")
+                .at("nameWithOwner")
+                .str()
+                .split('/')
+                .next()
+                .unwrap()
+                .eq_ignore_ascii_case(owner)
+                && (start.is_empty() || at >= &start[..19])
+                && if range.starts_with('<') && !range.starts_with("<=") {
+                    at < &end[..19]
+                } else {
+                    at <= &end[..19]
+                }
+        })
+        .cloned()
+        .collect();
+    let start: usize = variables
+        .get("after")
+        .and_then(|cursor| cursor.parse().ok())
+        .unwrap_or(0);
+    let end = (start + 50).min(nodes.len());
+    println!(
+        "{}",
+        object([(
+            "data",
+            object([(
+                "search",
+                object([
+                    ("issueCount", number(nodes.len())),
+                    ("nodes", Array(nodes[start..end].to_vec())),
+                    (
+                        "pageInfo",
+                        object([
+                            ("hasNextPage", Bool(end < nodes.len())),
+                            ("endCursor", string(end.to_string()))
+                        ])
+                    ),
+                ])
+            )])
+        )])
+    );
 }

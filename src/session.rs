@@ -26,6 +26,7 @@ use crate::skills;
 
 pub mod kind;
 pub(crate) mod limits;
+pub(crate) mod private;
 pub mod recording;
 mod review_reports;
 pub(crate) mod trace;
@@ -50,7 +51,7 @@ pub enum Purpose {
     SecurityReview,
 }
 
-/// Where Session logs go: beside the owning Command log in
+/// Where Session traces go: beside the owning Command log in
 /// `commands/<command>/` under the repository's logs, under the User config's `logs.dir` or
 /// `~/.thirdshift/logs`, each named for what is run and stamped with the
 /// command's start stamp, which its Command log shares. Only once the logs
@@ -64,6 +65,15 @@ pub struct Logs {
 }
 
 impl Logs {
+    /// An isolated Trial's artifacts, with no Command owner or factory logs.
+    pub fn of_trial(dir: &Path) -> Self {
+        Logs {
+            name: "trial".to_string(),
+            dir: dir.to_path_buf(),
+            recording: recording::Recording::for_trial().into(),
+        }
+    }
+
     /// The logs of the Run on `issue`.
     pub fn of_run(issue: &IssueUrl) -> Self {
         Logs {
@@ -92,7 +102,7 @@ impl Logs {
     }
 
     /// Where a session's stream is logged:
-    /// `<root>/commands/<command>/<name>-<stamp>~<token>-<kind>.jsonl`.
+    /// `<root>/commands/<command>/<name>-<stamp>~<token>-<kind>.logs.jsonl`.
     pub fn path(&self, session: Logged) -> Result<PathBuf> {
         self.recording()
             .session_path(&self.dir, &self.name, &session.token())
@@ -117,7 +127,7 @@ pub struct Sessions<'a> {
     outside: RefCell<Box<dyn Outside>>,
     /// What must still hold before each session starts, a Resume included:
     /// a session it fails is not started, and the step fails with it.
-    before_each: &'a dyn Fn() -> Result<()>,
+    before_each: Box<dyn Fn() -> Result<()> + 'a>,
     /// The session started last, a Resume included, and its log.
     last_log: RefCell<Option<(Logged, PathBuf)>>,
     /// How each session ended whose last ending, its Resume's if it got one,
@@ -142,6 +152,41 @@ impl<'a> Sessions<'a> {
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
         Self::checked_within(logs, worktree, harness, None, None, &|| Ok(()), steps)
+    }
+
+    /// [`Sessions::within`], with every session run in `sandbox`: the
+    /// Trial's bwrap sandbox, prepared before its output directory's home.
+    /// The Factory skills are linked as usual; the sandbox binds them in.
+    pub fn within_sandboxed<T>(
+        logs: &'a Logs,
+        worktree: &'a Path,
+        harness: &'a Choice,
+        sandbox: &crate::sandbox::Prepared,
+        steps: impl FnOnce(&Self) -> Result<T>,
+    ) -> (Result<T>, Option<PathBuf>) {
+        let adapter = harness.harness.adapter();
+        if let Err(error) = skills::link_into(worktree, adapter)
+            .and_then(|()| adapter.link_instruction_fallback(worktree))
+        {
+            return (Err(error), None);
+        }
+        let on_machine = OnMachine {
+            worktree: worktree.to_path_buf(),
+            harness: harness.clone(),
+            adapter,
+            security_review: None,
+            security_review_default: None,
+            recording: logs.recording().clone(),
+            sandbox: Some(sandbox.launch()),
+        };
+        let (taken, log) = Sessions::taking(
+            logs,
+            worktree,
+            Box::new(on_machine),
+            crate::resources::wait,
+            steps,
+        );
+        (taken, log.filter(|log| log.exists()))
     }
 
     /// [`Sessions::within`], checking `before_each` before each session
@@ -176,9 +221,18 @@ impl<'a> Sessions<'a> {
             security_review,
             security_review_default: security_review_default.cloned(),
             recording: logs.recording().clone(),
+            sandbox: None,
         };
-        let (taken, log) =
-            Sessions::taking(logs, worktree, Box::new(on_machine), before_each, steps);
+        let (taken, log) = Sessions::taking(
+            logs,
+            worktree,
+            Box::new(on_machine),
+            move || {
+                crate::resources::wait()?;
+                before_each()
+            },
+            steps,
+        );
         (taken, log.filter(|log| log.exists()))
     }
 
@@ -189,14 +243,14 @@ impl<'a> Sessions<'a> {
         logs: &'a Logs,
         worktree: &'a Path,
         outside: Box<dyn Outside>,
-        before_each: &'a dyn Fn() -> Result<()>,
+        before_each: impl Fn() -> Result<()> + 'a,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
         let sessions = Sessions {
             logs,
             worktree,
             outside: RefCell::new(outside),
-            before_each,
+            before_each: Box::new(before_each),
             last_log: RefCell::default(),
             endings_with_killed_work: RefCell::default(),
         };
@@ -240,6 +294,13 @@ impl<'a> Sessions<'a> {
         kind: Kind,
         prompt: &str,
     ) -> Result<Option<String>> {
+        self.run_to_end(purpose, kind, prompt)
+            .map(|ended| ended.final_message)
+    }
+
+    /// The same session and Resume policy, retaining the Harness session ID
+    /// for a Trial's result as well as its final message.
+    pub fn run_to_end(&self, purpose: Purpose, kind: Kind, prompt: &str) -> Result<Ended> {
         // Progress lines name the session by its kind's token.
         let label = kind.token();
         let reports = if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
@@ -280,13 +341,22 @@ impl<'a> Sessions<'a> {
             self.step(format!(
                 "{label}: background work was killed as the session ended; resuming it once"
             ));
-            ended = self.start(
-                purpose,
-                Logged::resume_of(kind),
-                Some(session_id),
-                &resume_prompt,
-                reports.as_ref(),
-            )?;
+            ended = self
+                .start(
+                    purpose,
+                    Logged::resume_of(kind),
+                    Some(session_id),
+                    &resume_prompt,
+                    reports.as_ref(),
+                )
+                .map_err(|mut error| {
+                    // Work was observed before this Resume, even if its first
+                    // turn fails.
+                    if let Some(failure) = error.downcast_mut::<SessionFailure>() {
+                        failure.before_first_turn = false;
+                    }
+                    error
+                })?;
             ended_last = "Resume";
         }
         if !ended.killed.is_empty() {
@@ -306,7 +376,7 @@ impl<'a> Sessions<'a> {
                 .borrow_mut()
                 .push(format!("{label} session {ending}"));
         }
-        Ok(ended.final_message)
+        Ok(ended)
     }
 
     /// Run `session`, logged under its own path, which becomes the last log,
@@ -395,6 +465,7 @@ struct OnMachine {
     security_review: Option<(Choice, &'static dyn Adapter)>,
     security_review_default: Option<Choice>,
     recording: recording::Recording,
+    sandbox: Option<crate::sandbox::Launch>,
 }
 
 impl Outside for OnMachine {
@@ -449,8 +520,13 @@ impl Outside for OnMachine {
             }
             _ => (&self.harness, self.adapter),
         };
-        let interpretation = adapter.interpretation(&self.worktree, prompt);
-        let (invocation, interpretation) = match purpose {
+        let mut interpretation = adapter.interpretation(&self.worktree, prompt);
+        if let Some(launch) = &self.sandbox
+            && let Some((_, home)) = launch.env.iter().find(|(name, _)| name == "HOME")
+        {
+            interpretation.set_home(Path::new(home));
+        }
+        let (mut invocation, interpretation) = match purpose {
             Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview => (
                 adapter.security_session(
                     harness,
@@ -466,8 +542,23 @@ impl Outside for OnMachine {
                 interpretation,
             ),
         };
-        let mut command = Command::new(adapter.name());
-        command.args(&invocation.args).current_dir(&self.worktree);
+        // A sandboxed session is always a Trial's: it runs with the Harness's
+        // web search switched off, behind the sandbox's allowlisting proxy.
+        if self.sandbox.is_some() && matches!(purpose, Purpose::CodeReview) {
+            invocation = adapter.trial_session(harness, resume, prompt);
+        }
+        let mut command = match &self.sandbox {
+            Some(launch) => {
+                let mut command = launch.command(&invocation.args)?;
+                command.current_dir(&self.worktree);
+                command
+            }
+            None => {
+                let mut command = Command::new(adapter.name());
+                command.args(&invocation.args).current_dir(&self.worktree);
+                command
+            }
+        };
         // Keep the empty config alive until the process and descendants
         // finish. A fresh one on each launch also fences the Resume.
         let github_config = if matches!(purpose, Purpose::SecurityPublishing) {
@@ -542,7 +633,7 @@ mod tests {
             std::os::unix::fs::symlink(outside.path(), &dir).unwrap();
             let logs = Logs {
                 name: "670".into(),
-                dir: worktree.path().join("session-logs"),
+                dir: worktree.path().join("session-traces"),
                 recording: OnceCell::new(),
             };
             let choice = Choice {
@@ -676,7 +767,7 @@ mod tests {
             );
             for axis in ["standards", "spec"] {
                 assert_eq!(
-                    fs::read_to_string(log.with_extension(axis)).unwrap(),
+                    fs::read_to_string(logs::session::original(&log).with_extension(axis)).unwrap(),
                     format!("{marker} {axis}")
                 );
             }
@@ -705,7 +796,7 @@ mod tests {
             &logs,
             Path::new("/unused"),
             Box::new(scripted),
-            &|| Ok(()),
+            || Ok(()),
             steps,
         );
         let calls = calls.take();

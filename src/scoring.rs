@@ -17,6 +17,7 @@ use crate::{interrupt, logs};
 
 mod calibration;
 mod grader;
+mod origins;
 mod sample;
 pub(crate) use sample::PullRequest;
 pub(crate) mod packet;
@@ -41,6 +42,8 @@ struct Week {
     sample: Vec<PullRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     packets: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    bug_origins: Option<Vec<origins::Proposal>>,
     #[serde(default)]
     initial_calibration: bool,
 }
@@ -133,6 +136,7 @@ pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
         seed,
         sample,
         packets: None,
+        bug_origins: None,
         initial_calibration,
     };
     fs::DirBuilder::new()
@@ -147,6 +151,17 @@ pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
         packet::write(&GitHub::new(), pr, &packets.path().join(index.to_string()))
             .with_context(|| format!("can't build Scoring packet for {}", pr.url))?;
     }
+    let origin_start = previous
+        .iter()
+        .rev()
+        .find(|week| week.bug_origins.is_some())
+        .map(|week| week.window_end);
+    week.bug_origins = Some(origins::propose(
+        config,
+        origin_start,
+        end,
+        &packets.path().join("origins"),
+    )?);
     for pr in &mut week.sample {
         pr.command_record = logs::record_for_pull_request(&config.logs_dir, &pr.url)?;
     }

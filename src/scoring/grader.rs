@@ -128,6 +128,8 @@ pub(super) fn run(
             prompt: &prompt,
             stdin: invocation.stdin.as_deref(),
             stop_at_limit: true,
+            private: true,
+            ..Default::default()
         },
         &log,
         interpretation,
@@ -148,8 +150,11 @@ pub(super) fn run(
         fs::symlink_metadata(&scores).is_ok_and(|meta| meta.is_file()),
         "Grader left no regular scores.json file"
     );
-    let response: Response =
-        serde_json::from_slice(&fs::read(scores)?).context("invalid Grader Scores")?;
+    let response: Response = serde_json::from_slice(&crate::session::private::read_session_file(
+        &scores,
+        crate::session::private::SESSION_OUTPUT_MAX,
+    )?)
+    .context("invalid Grader Scores")?;
     let criteria: BTreeSet<_> = response
         .scores
         .iter()

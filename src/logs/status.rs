@@ -3,9 +3,10 @@
 mod inbox;
 pub mod inspect;
 pub(crate) mod time;
-pub(crate) mod waterfall;
+mod watching;
 pub(crate) use inbox::{Archive, ArchivePage, archive};
 pub(crate) use inbox::{Inbox, Row, inbox};
+pub(crate) use watching::{Process, watching};
 
 use anyhow::Result;
 use chrono::Local;
@@ -20,11 +21,18 @@ use crate::issue::IssueUrl;
 struct Status<'a> {
     version: u32,
     hostname: String,
+    active_runs: usize,
     commands: Vec<InboxItem<'a>>,
     idle_passes: &'a [IdlePass],
+    /// How old the Inbox's kept GitHub answer is, in seconds. `None` where
+    /// no answer is kept: with no ready pull requests to read, or before
+    /// the first read.
+    github_answer_age_seconds: Option<u64>,
+    github_last_answered_at: Option<String>,
+    github_failure: Option<&'a str>,
 }
 
-fn print_command(command: &Command, indent: &str) {
+fn print_command(command: &Command, state_word: &str, indent: &str) {
     let facts = &command.record;
     let stage = stage_text(command);
     let mut subject = match &facts.issue {
@@ -41,18 +49,18 @@ fn print_command(command: &Command, indent: &str) {
     }
     println!(
         "{indent}{} {subject} · {} · {} · {} · {} · {stage}",
-        facts.kind,
-        command.state,
+        super::display_name(&facts.kind),
+        state_word,
         facts.harness,
         facts.model.as_deref().unwrap_or("default Model"),
         facts.effort.as_deref().unwrap_or("default Effort")
     );
     print_tickets(facts, &format!("{indent}  "));
     for dispatched in &command.dispatched {
-        print_command(dispatched, &format!("{indent}  "));
+        print_command(dispatched, dispatched.state, &format!("{indent}  "));
     }
     for child in &command.children {
-        print_command(child, &format!("{indent}  "));
+        print_command(child, child.state, &format!("{indent}  "));
     }
 }
 
@@ -65,7 +73,7 @@ pub(super) fn print_history(command: &super::reading::HistoricalCommand) {
     println!(
         "{}{issue} {} · {} → {} · {}",
         command.repository,
-        command.kind,
+        super::display_name(&command.kind),
         command.started_at,
         command.ended_at.as_deref().unwrap_or("unknown end"),
         command.outcome.as_deref().unwrap_or("unknown outcome")
@@ -83,16 +91,27 @@ pub fn show(json: bool, all: bool) -> Result<()> {
     }
     let snapshot =
         Snapshot::load_with_silence(&config.logs_dir, Local::now(), config.silent_interval)?;
+    let kept = super::github::refresh(&snapshot, &config, super::github::FRESH_FOR)?;
     let status = Status {
         version: 1,
         hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-        commands: snapshot.inbox(all, config.inbox_days),
+        active_runs: snapshot.active_runs(),
+        commands: snapshot
+            .evaluate_inbox(config.inbox_days, &kept)
+            .into_rows(all),
         idle_passes: &snapshot.idle_passes,
+        github_answer_age_seconds: kept.age.map(|age| age.as_secs()),
+        github_last_answered_at: kept.last_answered_at(),
+        github_failure: kept.failure.as_deref(),
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
         println!("{}", status.hostname);
+        println!("{}", active_runs_text(status.active_runs));
+        if let Some(warning) = kept.warning() {
+            println!("Warning: {warning}");
+        }
         for group in Group::ORDER {
             let items: Vec<_> = status
                 .commands
@@ -112,8 +131,14 @@ pub fn show(json: bool, all: bool) -> Result<()> {
             println!("{}:", group.title());
             for item in items {
                 match item.command {
-                    Observation::Record(command) => print_command(command, ""),
+                    Observation::Record(command) => print_command(command, item.state_word(), ""),
                     Observation::History(command) => print_history(command),
+                }
+                if let Some(line) = item.left_line() {
+                    println!("  {line}");
+                }
+                if let Some(dismissal) = &item.dismissal {
+                    println!("  {}", dismissal.line());
                 }
                 if item.count > 1 {
                     let cause = item.cause().unwrap_or_default();
@@ -141,6 +166,11 @@ pub fn show(json: bool, all: bool) -> Result<()> {
     Ok(())
 }
 
+/// The Inbox's total of outer Command trees with live work, in every group.
+pub(crate) fn active_runs_text(count: usize) -> String {
+    format!("{count} active run{}", if count == 1 { "" } else { "s" })
+}
+
 pub(super) fn stage_text(command: &Command) -> String {
     if let Some(outcome) = &command.record.outcome {
         return outcome.clone();
@@ -155,9 +185,13 @@ pub(super) fn stage_text(command: &Command) -> String {
         },
         |stage| {
             if command.state == "died" {
-                format!("died at {}", stage.name)
+                format!("died at {}", super::display_name(&stage.name))
             } else {
-                format!("{} · {}", stage.name, age(stage.age_seconds))
+                format!(
+                    "{} · {}",
+                    super::display_name(&stage.name),
+                    age(stage.age_seconds)
+                )
             }
         },
     );

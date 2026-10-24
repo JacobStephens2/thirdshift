@@ -1,4 +1,4 @@
-//! Render normalized Session-trace events, with legacy Claude/Codex support,
+//! Render normalized Session-trace events, including raw Claude/Codex events,
 //! as one escaped conversation with each `https://` URL a link.
 use super::filters::{escaped, linked};
 use crate::harness::interpretation::event::Event;
@@ -19,12 +19,21 @@ pub(crate) fn render(lines: &str, kind: Kind) -> String {
     if matches!(kind, Kind::Command) {
         return format!("<pre class=\"command-output\">{}</pre>", linked(lines));
     }
+    render_parts(crate::logs::session::records(lines).flat_map(record_parts))
+}
+
+/// Experiments can run older Arms that still retain raw Session logs.
+pub(super) fn render_trial_log(lines: &str) -> String {
+    render_parts(lines.lines().flat_map(parts))
+}
+
+fn render_parts(parts: impl IntoIterator<Item = Part>) -> String {
     let mut html = String::new();
     let mut tools_open = false;
     let mut conversation = Vec::new();
     let mut edits = HashMap::new();
     let mut messages = HashMap::new();
-    for part in crate::logs::session::records(lines).flat_map(record_parts) {
+    for part in parts {
         let snapshots = match &part {
             Part::Message(_, _, Some(id)) => Some((&mut messages, id)),
             Part::CodexEdit(id, _) => Some((&mut edits, id)),
@@ -85,7 +94,7 @@ pub(crate) fn render(lines: &str, kind: Kind) -> String {
 }
 
 fn record_parts(record: LogRecord) -> Vec<Part> {
-    let Some(AnyValue::String(raw)) = record.body else {
+    let Some(raw) = crate::logs::session::raw_event(record.body) else {
         return Vec::new();
     };
     // Backfilled Sessions retain the presentation of their original events.
@@ -177,7 +186,7 @@ fn record_parts(record: LogRecord) -> Vec<Part> {
         }
     }
     if output.is_empty() {
-        // Thinking and other raw-only content still use the legacy renderer.
+        // Thinking and other raw-only content uses the Harness-event renderer.
         parts(&raw)
     } else {
         // Messages normalization has no thinking/unknown-block facts. Retain

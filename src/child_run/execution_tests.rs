@@ -45,7 +45,7 @@ fn distinct_children_deliver_out_of_order_with_their_own_endings_and_accounts() 
         "open(ROOT + '/ready', 'w').close()\nwhile not os.path.exists(ROOT + '/finish'): time.sleep(.01)\nos.write(1, b'{PR}\\n')\nos.write(2, b'thirdshift: Base fix: https://github.com/acme/widgets/issues/8 merged\\n')"
     ));
     let second = Fixture::new(
-        "os.write(2, b'thirdshift: checks failed\\nthirdshift: session log: /logs/22.jsonl\\n')\nraise SystemExit(7)",
+        "os.write(2, b'thirdshift: checks failed\\nthirdshift: session trace: /logs/22.jsonl\\n')\nraise SystemExit(7)",
     );
     let mut runs = Runs::default();
     first.start_in(&mut runs, 21).unwrap();
@@ -283,7 +283,7 @@ fn stdout_pipe_pressure_completes_with_the_last_line_as_the_pr() {
 #[test]
 fn malformed_diagnostics_preserve_later_failure_cause_and_final_session_log() {
     let fixture = Fixture::new(
-        "os.write(2, b'bad \\xff\\nthirdshift: inherited failure\\r\\nthirdshift: #9: descendant failure\\nthirdshift: session log: /logs/248.jsonl')\nraise SystemExit(7)",
+        "os.write(2, b'bad \\xff\\nthirdshift: inherited failure\\r\\nthirdshift: #9: descendant failure\\nthirdshift: session trace: /logs/248.jsonl')\nraise SystemExit(7)",
     );
     let ended = fixture.start().unwrap().wait().unwrap();
     assert!(matches!(ended, Ended::Failed { cause, log: Some(log), .. }
@@ -363,7 +363,10 @@ fn launch_failure_leaves_existing_children_running_and_owned_for_cleanup() {
     original.await_file("ready");
 
     let cause = format!("{:#}", missing.start_in(&mut runs, 22).unwrap_err());
-    assert!(cause.contains("could not start the Run for #22"), "{cause}");
+    assert!(
+        cause.contains("could not start the Ticket run for #22"),
+        "{cause}"
+    );
     assert!(!missing.0.path().join("pid").exists());
     assert!(!original.0.path().join("terms").exists());
 
@@ -481,7 +484,7 @@ fn invalid_stdout_stops_a_live_child_and_preserves_the_numbered_transport_cause(
     let error = fixture.start().unwrap().wait().unwrap_err();
     let cause = format!("{error:#}");
     assert!(
-        cause.starts_with("could not read the Run for #248: "),
+        cause.starts_with("could not read the Ticket run for #248: "),
         "{cause}"
     );
     assert!(cause.contains("valid UTF-8"), "{cause}");
@@ -649,7 +652,7 @@ fn a_transport_failure_stays_pending_while_the_child_saves_work() {
     let cause = format!("{:#}", handle.wait().unwrap_err());
     assert_eq!(
         cause,
-        "could not read the Run for #248: injected StderrRead"
+        "could not read the Ticket run for #248: injected StderrRead"
     );
     assert_eq!(fixture.read("terms"), "TERM\n");
     assert!(fixture.0.path().join("saved").exists());

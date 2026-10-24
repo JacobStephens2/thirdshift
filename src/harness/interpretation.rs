@@ -113,6 +113,7 @@ pub(super) struct Facts {
 pub(super) trait Decoder: Send {
     fn condense(&mut self, raw: &str) -> StreamUpdate;
     fn complete(self: Box<Self>) -> Facts;
+    /// Optional live quota records absent from the Harness's stdout.
     fn limit_records(&mut self) -> Vec<String> {
         Vec::new()
     }
@@ -152,6 +153,7 @@ pub(super) enum ModelScope {
 /// Owned implementations follow Interpretation into the transcript reader.
 pub(super) trait Retained: Send {
     fn reconcile(self: Box<Self>, facts: &mut Facts) -> Result<()>;
+    fn set_home(&mut self, _home: &Path) {}
 }
 
 enum Failure {
@@ -161,6 +163,7 @@ enum Failure {
         diagnostic: Option<String>,
         refusal: Option<SafeguardRefusal>,
         before_first_turn: bool,
+        session_id: Option<String>,
     },
 }
 
@@ -172,6 +175,8 @@ pub struct SessionFailure {
     pub diagnostic: Option<String>,
     /// No completed turn, tokens, assistant work or tool calls were observed.
     pub before_first_turn: bool,
+    /// Retained on failure too, so a Trial can identify the session it ran.
+    pub session_id: Option<String>,
     status: ExitStatus,
 }
 
@@ -207,12 +212,14 @@ impl Failure {
                 diagnostic,
                 refusal,
                 before_first_turn,
+                session_id,
             } => {
                 let error = anyhow::Error::new(SessionFailure {
                     harness: cli,
                     diagnostic,
                     status,
                     before_first_turn,
+                    session_id,
                 });
                 match refusal {
                     Some(refusal) => error.context(refusal),
@@ -242,6 +249,15 @@ impl Interpretation {
         self
     }
 
+    /// Native evidence belongs to the launched session's home, which a Trial
+    /// sandbox can replace without changing the observing process's home.
+    pub(crate) fn set_home(&mut self, home: &Path) {
+        self.decoder.set_home(home);
+        if let Some(retained) = &mut self.retained {
+            retained.set_home(home);
+        }
+    }
+
     /// Historical replay must not launch a Harness to export today's state.
     /// Callers can still opt into a local retained reader (Codex patch files).
     pub(crate) fn without_retained(mut self) -> Self {
@@ -261,16 +277,22 @@ impl Interpretation {
         self.models.names().to_vec()
     }
 
+    /// Live quota evidence is sticky and independent of ordinary Run outcomes.
     pub fn plan_limit_reached(&self) -> bool {
         self.plan_limit_reached
     }
 
+    /// Supplied raw records go through the same decoding and trace recording
+    /// as stdout. Only callers opting into the Eval stop policy poll these.
     pub fn limit_records(&mut self) -> Vec<String> {
         self.decoder.limit_records()
     }
 
-    pub fn set_home(&mut self, home: &Path) {
-        self.decoder.set_home(home);
+    /// The stream decoder's ID alone, without retained-record recovery or
+    /// completion policy. Saved streams can supply this metadata even when
+    /// interruption deliberately suppressed recovery during supervision.
+    pub fn into_session_id(self) -> Option<String> {
+        self.decoder.complete().ended.session_id
     }
 
     /// Unknown or malformed lines produce no progress, never an error.
@@ -368,6 +390,7 @@ impl Interpretation {
                         refusal,
                         before_first_turn: !self.work_started
                             && !facts.report.events.iter().any(work_started),
+                        session_id: facts.ended.session_id,
                     })
                 } else {
                     Ok(facts.ended)
