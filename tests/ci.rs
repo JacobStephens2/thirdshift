@@ -60,6 +60,23 @@ gh fake run "{{\"databaseId\":901,\"workflow_id\":10,\"created_at\":\"2026-10-19
     )
 }
 
+/// Bash that records the workflow runs `runs` on `commit`, each the latest
+/// run of its own workflow, so checks of those runs count as belonging to
+/// the commit. Record exactly the runs the commit's checks name: a recorded
+/// run with no checks there would add a pending stand-in check.
+fn scoped_runs_on(commit: &str, runs: &[u64]) -> String {
+    runs.iter()
+        .enumerate()
+        .map(|(n, run)| {
+            format!(
+                "gh fake run \"{{\\\"databaseId\\\":{run},\\\"workflow_id\\\":{run},\
+                 \\\"created_at\\\":\\\"2026-10-19T12:{n:02}:00Z\\\",\
+                 \\\"headSha\\\":\\\"$(git rev-parse {commit})\\\"}}\"\n"
+            )
+        })
+        .collect()
+}
+
 #[test]
 fn superseded_runs_on_the_same_head_wait_for_the_latest_run_without_a_repair() {
     for old_conclusion in ["cancelled", "failure"] {
@@ -347,7 +364,7 @@ fn an_abandoned_job_is_re_run_with_no_repair_and_green_is_success() {
     // As GitHub ends a job whose runner was lost: failed, with a step still
     // in progress and none failed.
     scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}{}",
+        "{AGENT_OPENS_PR}{}{}",
         checks_on_head(
             r#"[{"name": "smoke / wsl", "conclusion": "failure",
                  "url": "https://github.com/acme/widgets/actions/runs/900/job/1",
@@ -355,7 +372,8 @@ fn an_abandoned_job_is_re_run_with_no_repair_and_green_is_success() {
                            {"status": "in_progress", "conclusion": null},
                            {"status": "queued", "conclusion": null}],
                  "rerun": {"conclusion": "success", "stale_polls": 1}}]"#
-        )
+        ),
+        scoped_runs_on("HEAD", &[900])
     ));
 
     let result = scenario.run(&[&scenario.issue_url(7)]);
@@ -391,13 +409,14 @@ fn a_ci_fix_repair_that_makes_no_commit_gets_one_check_re_run_and_green_is_succe
     let scenario = Scenario::new();
     // Two failed checks of one workflow run, and a third of another.
     scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}{}",
+        "{AGENT_OPENS_PR}{}{}",
         checks_on_head(&format!(
             "[{}, {}, {}]",
             actions_failure("test", 900, 1, RERUN_PASSES),
             actions_failure("lint", 900, 2, RERUN_PASSES),
             actions_failure("docs", 901, 3, RERUN_PASSES)
-        ))
+        )),
+        scoped_runs_on("HEAD", &[900, 901])
     ));
     // The Repair finds the failure flaky and commits nothing.
     scenario.agent_does_in_session(2, "true\n");
@@ -453,9 +472,10 @@ fn a_refused_self_merge_keeps_the_consumed_check_rerun_for_the_delivery() {
         .replace("rev-parse HEAD", "rev-parse origin/issue-7")
         .replace('\'', "'\\''");
     scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}{}gh fake on-merge 1 '{red_again}'\n\
+        "{AGENT_OPENS_PR}{}{}gh fake on-merge 1 '{red_again}'\n\
          gh fake refuse-merges 1 'merge refused'\n",
-        checks_on_head(&failed)
+        checks_on_head(&failed),
+        scoped_runs_on("HEAD", &[900])
     ));
     scenario.agent_does_in_session(2, "true\n");
 
@@ -508,8 +528,9 @@ fn a_repair_that_already_re_ran_ci_to_green_delivers_or_self_merges_the_unchange
                 RERUN_PASSES
             };
             scenario.agent_does(&format!(
-                "{AGENT_OPENS_PR}{}",
-                checks_on_head(&format!("[{}]", actions_failure("test", 900, 1, rerun)))
+                "{AGENT_OPENS_PR}{}{}",
+                checks_on_head(&format!("[{}]", actions_failure("test", 900, 1, rerun))),
+                scoped_runs_on("HEAD", &[900])
             ));
             scenario.agent_does_in_session(2, "gh run rerun 900 --failed --repo acme/widgets\n");
             let issue = scenario.issue_url(7);
@@ -589,7 +610,7 @@ fn a_repair_that_already_re_ran_ci_to_green_delivers_or_self_merges_the_unchange
 fn a_refused_request_still_waits_for_an_earlier_accepted_workflows_new_attempt() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}{}",
+        "{AGENT_OPENS_PR}{}{}",
         checks_on_head(&format!(
             "[{}, {}]",
             actions_failure(
@@ -599,7 +620,8 @@ fn a_refused_request_still_waits_for_an_earlier_accepted_workflows_new_attempt()
                 r#"{"conclusion": "success", "stale_polls": 3, "pending_polls": 2}"#
             ),
             actions_failure("lint", 901, 2, RERUN_PASSES)
-        ))
+        )),
+        scoped_runs_on("HEAD", &[900, 901])
     ));
     scenario.agent_does_in_session(2, "gh run rerun 901 --failed --repo acme/widgets\n");
 
@@ -632,11 +654,12 @@ fn a_check_re_run_cannot_deliver_or_merge_without_readable_nonempty_checks() {
         for empty in [true, false] {
             let scenario = Scenario::new();
             scenario.agent_does(&format!(
-                "{AGENT_OPENS_PR}{}gh fake fails 'run rerun'\n",
+                "{AGENT_OPENS_PR}{}{}gh fake fails 'run rerun'\n",
                 checks_on_head(&format!(
                     "[{}]",
                     actions_failure("test", 900, 1, RERUN_PASSES)
-                ))
+                )),
+                scoped_runs_on("HEAD", &[900])
             ));
             let repair = if empty {
                 checks_on_head("[]")
@@ -682,11 +705,12 @@ fn a_check_re_run_cannot_deliver_or_merge_without_readable_nonempty_checks() {
 fn a_refused_request_pending_then_red_is_a_declined_ci_fix_without_another_repair() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}{}",
+        "{AGENT_OPENS_PR}{}{}",
         checks_on_head(&format!(
             "[{}]",
             actions_failure("test", 900, 1, RERUN_PASSES)
-        ))
+        )),
+        scoped_runs_on("HEAD", &[900])
     ));
     scenario.agent_does_in_session(
         2,
@@ -748,11 +772,12 @@ fn a_failed_commit_status_cant_be_re_run_so_nothing_is() {
 fn a_check_re_run_github_refuses_is_a_declined_ci_fix_that_shows_the_refusal() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}{}gh fake fails 'run rerun'\n",
+        "{AGENT_OPENS_PR}{}{}gh fake fails 'run rerun'\n",
         checks_on_head(&format!(
             "[{}]",
             actions_failure("test", 900, 1, RERUN_PASSES)
-        ))
+        )),
+        scoped_runs_on("HEAD", &[900])
     ));
     scenario.agent_does_in_session(2, "true\n");
 
@@ -780,12 +805,13 @@ fn a_check_re_run_leaves_inherited_failures_alone() {
     let scenario = Scenario::new();
     let inherited = actions_failure("lint", 800, 1, RERUN_PASSES);
     scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}{}{}",
+        "{AGENT_OPENS_PR}{}{}{}",
         checks_on_head(&format!(
             "[{}, {inherited}]",
             actions_failure("test", 900, 2, RERUN_PASSES)
         )),
-        checks_on_base(&format!("[{inherited}]"))
+        checks_on_base(&format!("[{inherited}]")),
+        scoped_runs_on("HEAD", &[900, 800])
     ));
     scenario.agent_does_in_session(2, "true\n");
 
@@ -826,12 +852,13 @@ fn an_inherited_failure_re_run_along_with_the_branchs_own_is_waited_for_too() {
         r#"{"conclusion": "success", "stale_polls": 3}"#,
     );
     scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}{}{}",
+        "{AGENT_OPENS_PR}{}{}{}",
         checks_on_head(&format!(
             "[{}, {inherited}]",
             actions_failure("test", 900, 2, RERUN_PASSES)
         )),
-        checks_on_base(r#"[{"name": "lint", "conclusion": "failure"}]"#)
+        checks_on_base(r#"[{"name": "lint", "conclusion": "failure"}]"#),
+        scoped_runs_on("HEAD", &[900])
     ));
     scenario.agent_does_in_session(2, "true\n");
 
@@ -858,7 +885,7 @@ fn the_attempt_before_a_check_re_run_is_never_taken_for_its_result() {
     // GitHub goes on listing the failed attempt for a few reads after the
     // re-run is asked for, then the new attempt, running, then passed.
     scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}{}",
+        "{AGENT_OPENS_PR}{}{}",
         checks_on_head(&format!(
             "[{}]",
             actions_failure(
@@ -867,7 +894,8 @@ fn the_attempt_before_a_check_re_run_is_never_taken_for_its_result() {
                 1,
                 r#"{"conclusion": "success", "stale_polls": 3, "pending_polls": 2}"#
             )
-        ))
+        )),
+        scoped_runs_on("HEAD", &[900])
     ));
     scenario.agent_does_in_session(2, "true\n");
 
@@ -900,7 +928,7 @@ fn the_attempt_before_a_check_re_run_is_never_taken_for_its_result() {
 fn a_check_re_run_that_never_appears_is_a_declined_ci_fix() {
     let scenario = Scenario::new();
     scenario.agent_does(&format!(
-        "{AGENT_OPENS_PR}{}",
+        "{AGENT_OPENS_PR}{}{}",
         checks_on_head(&format!(
             "[{}]",
             actions_failure(
@@ -909,7 +937,8 @@ fn a_check_re_run_that_never_appears_is_a_declined_ci_fix() {
                 1,
                 r#"{"conclusion": "success", "stale_polls": 1000}"#
             )
-        ))
+        )),
+        scoped_runs_on("HEAD", &[900])
     ));
     scenario.agent_does_in_session(2, "true\n");
 

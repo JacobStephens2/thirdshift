@@ -439,11 +439,11 @@ impl InboxPage {
     }
 
     fn idle(&self) -> bool {
-        !self
-            .inbox
-            .sections
-            .iter()
-            .any(|section| section.rows.iter().any(|row| row.live))
+        self.inbox.active_runs == 0
+    }
+
+    fn active_runs(&self) -> String {
+        status::active_runs_text(self.inbox.active_runs)
     }
 
     fn ready_for_review(&self) -> usize {

@@ -146,6 +146,13 @@ and keeps the recorded instant. The information is rendered by the server and
 remains visible without JavaScript. Missing or invalid finish times say “End
 time unknown”; file modification times are not presented as recorded finishes.
 
+Above its sections, the Inbox shows how many runs are active, such as
+`2 active runs`, the same `active_runs` total as `thirdshift status --json`.
+Each Command with live work anywhere in it counts once, whatever its group or
+whether that section is folded or hidden: a Spec run's Tickets, and the Spec run
+or Ticket run a Pass dispatched, are part of that one. The live update refreshes
+it as Commands start and end.
+
 When no Commands are live on this machine, the Inbox explains that above its
 sections. It points to ended problems in Needs you and pull requests in Ready
 for review, and shows the last recorded skipped Pass reasons from Activity logs.

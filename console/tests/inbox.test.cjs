@@ -887,3 +887,61 @@ test('Logs rows open the shared reader and page keys work from the reader', asyn
   await page.keyboard.press('o');
   await page.waitForURL('**/?page=logs');
 });
+
+test('the active-run total follows live trees, stays visible and fits every Theme on a phone', { skip: process.platform !== 'linux' }, async t => {
+  // The live fixtures borrow the Console's own process identity, as above.
+  const stat = await readFile(`/proc/${server.pid}/stat`, 'utf8');
+  const start = `${(await readFile('/proc/sys/kernel/random/boot_id', 'utf8')).trim()}:${stat.slice(stat.lastIndexOf(')') + 2).split(' ')[19]}`;
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const config = join(home, '.thirdshift/config.toml');
+  const base = JSON.parse(await readFile(join(dir, '1-fixture.command.json'), 'utf8'));
+  const now = new Date().toISOString();
+  const live = { kind: 'Run', process_id: server.pid, process_start: start, ended_at: null, outcome: null, cause: null, tickets: [], stages: [{ name: 'implement', began_at: now, session_log: null }] };
+  const issue = number => ({ ...base.issue, number, url: `https://github.com/acme/widgets/issues/${number}` });
+  const spec = join(dir, '221-fixture.command.json');
+  const tickets = [222, 223].map(number => join(dir, `221-fixture.command.issue-${number}.child.json`));
+  const separate = join(dir, '224-fixture.command.json');
+  const write = (path, number, change = {}) => writeFile(path, JSON.stringify({ ...base, ...live, issue: issue(number), ...change }));
+  const ended = { outcome: 'merged', ended_at: now };
+  try {
+    const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
+    await page.goto(origin);
+    const total = page.locator('#inbox > .active-runs');
+    assert.equal(await total.locator('strong').textContent(), '0 active runs');
+    await write(spec, 221, { kind: 'Spec run' });
+    for (const [index, path] of tickets.entries()) await write(path, 222 + index, { parent_record: spec });
+    await page.waitForFunction(() => document.querySelector('#inbox > .active-runs strong').textContent === '1 active run');
+    assert.equal(await page.getByRole('region', { name: 'No running Commands' }).count(), 0);
+    await write(separate, 224);
+    await page.waitForFunction(() => document.querySelector('#inbox > .active-runs strong').textContent === '2 active runs');
+    // Opening and folding the section holding live work leaves the total alone.
+    for (const open of [1, 0]) {
+      await page.locator('[data-group="working"] > summary').click();
+      assert.equal(await page.locator('[data-group="working"][open]').count(), open);
+      assert.equal(await total.locator('strong').textContent(), '2 active runs');
+    }
+    // A Spec's Ticket ending while the Spec continues keeps its one run.
+    await write(tickets[0], 222, { parent_record: spec, ...ended });
+    await page.waitForTimeout(1500);
+    assert.equal(await total.locator('strong').textContent(), '2 active runs');
+    // Hidden sections and every built-in Theme keep the total readable on a phone.
+    await writeFile(config, '[console]\nport = 0\nhidden_sections = ["needs-you", "ready-for-review", "landing", "working", "done", "resolved"]\n');
+    await page.waitForFunction(() => document.querySelectorAll('#inbox > details:not([hidden])').length === 0);
+    for (const family of ['focus', 'plain', 'press', 'signal', 'garden', 'factory']) {
+      for (const mode of ['light', 'dark']) {
+        await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, `${family}-${mode}`);
+        assert.equal(await total.isVisible(), true, `${family}-${mode}`);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${family}-${mode}`);
+      }
+    }
+    await write(separate, 224, ended);
+    await page.waitForFunction(() => document.querySelector('#inbox > .active-runs strong').textContent === '1 active run');
+    await write(tickets[1], 223, { parent_record: spec, ...ended });
+    await write(spec, 221, { kind: 'Spec run', ...ended });
+    await page.waitForFunction(() => document.querySelector('#inbox > .active-runs strong').textContent === '0 active runs');
+    await page.getByRole('region', { name: 'No running Commands' }).waitFor();
+  } finally {
+    await Promise.all([spec, separate, ...tickets].map(path => rm(path, { force: true })));
+    await writeFile(config, '[console]\nport = 0\n');
+  }
+});

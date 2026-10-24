@@ -412,3 +412,120 @@ fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status()
         );
     }
 }
+
+#[cfg(unix)]
+#[test]
+fn the_inbox_and_status_count_each_active_outer_command_once_whatever_its_group() {
+    use super::watching::{FixtureProcess, live_record};
+    use super::write_record;
+    use serde_json::json;
+
+    let home = tempfile::tempdir().unwrap();
+    fs::create_dir_all(home.path().join(".thirdshift")).unwrap();
+    fs::write(
+        home.path().join(".thirdshift/config.toml"),
+        "[console]\nport = 0\nhidden_sections = [\"needs-you\", \"landing\", \"working\"]\n",
+    )
+    .unwrap();
+    let mut work = FixtureProcess(Command::new("sleep").arg("60").spawn().unwrap());
+    let pid = work.0.id();
+    let dir = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    // A Spec run with two parallel Tickets, one of them Silent: Needs you.
+    let spec = live_record(home.path(), 1, pid);
+    write_record(home.path(), 1, &spec);
+    let silent = (chrono::Local::now() - chrono::Duration::minutes(20)).to_rfc3339();
+    for (number, began) in [(11, spec["started_at"].clone()), (12, json!(silent))] {
+        let mut ticket = live_record(home.path(), number, pid);
+        ticket["kind"] = json!("Run");
+        ticket["tickets"] = json!([]);
+        ticket["stages"][0]["began_at"] = began;
+        ticket["parent_record"] = json!(dir.join("1-fixture.command.json"));
+        fs::write(
+            dir.join(format!("1-fixture.command.issue-{number}.child.json")),
+            serde_json::to_vec(&ticket).unwrap(),
+        )
+        .unwrap();
+        fs::remove_file(dir.join(format!("{number}-fixture.command.json"))).unwrap();
+    }
+    // An unrelated Landing Ticket run and a Stopping one.
+    for (number, stage) in [(2, "CI watch"), (3, "implement")] {
+        let mut run = live_record(home.path(), number, pid);
+        run["kind"] = json!("Run");
+        run["stages"][0]["name"] = json!(stage);
+        write_record(home.path(), number, &run);
+    }
+    fs::write(
+        dir.join("3-fixture.command.stop.json"),
+        r#"{"who":"jacob","requeue":false}"#,
+    )
+    .unwrap();
+    // Ended work, collapsed failures, ready review and a death add nothing.
+    for number in [4, 5] {
+        let mut failed = record(home.path(), number, Some("failed"), 0);
+        failed["cause"] = json!("the same cause");
+        write_record(home.path(), number, &failed);
+    }
+    record(home.path(), 6, Some("ready for review"), 0);
+    let mut died = record(home.path(), 7, None, 0);
+    died["process_id"] = json!(pid);
+    write_record(home.path(), 7, &died);
+
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let status = |args: &[&str]| {
+        let output = Command::new(binary)
+            .args(args)
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        String::from_utf8(output.stdout).unwrap()
+    };
+    let summary = |html: &str| -> String {
+        let after = html.split("class=\"active-runs\"").nth(1).expect(html);
+        assert!(
+            html.find("class=\"active-runs\"").unwrap() < html.find("id=\"group-1\"").unwrap(),
+            "{html}"
+        );
+        after.split("</p>").next().unwrap().to_owned()
+    };
+    let html = console.get("/").text().unwrap();
+    let json: Value = serde_json::from_str(&status(&["status", "--json"])).unwrap();
+    assert_eq!(json["active_runs"], 3, "{json}");
+    let groups: Vec<_> = json["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| {
+            (
+                item["issue"]["number"].as_u64().unwrap(),
+                item["group"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert!(groups.contains(&(1, "needs you")), "{groups:?}");
+    assert!(groups.contains(&(2, "landing")), "{groups:?}");
+    assert!(summary(&html).contains("3 active runs"), "{html}");
+    assert!(summary(&html).contains("Tickets"), "{html}");
+    assert!(!html.contains("No running Commands"), "{html}");
+    assert!(status(&["status"]).contains("3 active runs"));
+
+    for number in [2, 3] {
+        let mut ended = record(home.path(), number, Some("merged"), 0);
+        ended["kind"] = json!("Run");
+        write_record(home.path(), number, &ended);
+    }
+    let html = console.get("/").text().unwrap();
+    assert!(summary(&html).contains("1 active run<"), "{html}");
+    assert!(status(&["status"]).contains("1 active run\n"));
+
+    work.0.kill().unwrap();
+    work.0.wait().unwrap();
+    let html = console.get("/").text().unwrap();
+    assert!(summary(&html).contains("0 active runs"), "{html}");
+    assert!(html.contains("No running Commands"), "{html}");
+    let json: Value = serde_json::from_str(&status(&["status", "--json"])).unwrap();
+    assert_eq!(json["active_runs"], 0);
+}

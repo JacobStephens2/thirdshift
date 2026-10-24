@@ -1063,6 +1063,15 @@ fn checks_on_head(checks: &str) -> String {
     format!("gh fake checks \"$(git rev-parse HEAD)\" '{checks}'\n")
 }
 
+/// Bash that records workflow run 900 of its own workflow on the worktree's
+/// HEAD, so checks of that run count as belonging to the commit.
+fn scoped_run_on_head() -> String {
+    "gh fake run \"{\\\"databaseId\\\":900,\\\"workflow_id\\\":900,\
+     \\\"created_at\\\":\\\"2026-10-19T12:00:00Z\\\",\
+     \\\"headSha\\\":\\\"$(git rev-parse HEAD)\\\"}\"\n"
+        .to_string()
+}
+
 /// Bash that commits a fix, `fix-<n>.txt`, as a CI-fix Repair would.
 fn commits_fix(n: usize) -> String {
     format!("echo fix > fix-{n}.txt\ngit add fix-{n}.txt\ngit commit -q -m \"Fix CI {n}\"\n")
@@ -1143,10 +1152,14 @@ fn a_ci_fix_repair_on_the_spec_pr_that_makes_no_commit_gets_a_check_re_run() {
     scenario.agent_does_for_in_session(
         SPEC,
         1,
-        &checks_on_head(
-            r#"[{"name": "test", "conclusion": "failure",
-                 "url": "https://github.com/acme/widgets/actions/runs/900/job/1",
-                 "rerun": {"conclusion": "success"}}]"#,
+        &format!(
+            "{}{}",
+            checks_on_head(
+                r#"[{"name": "test", "conclusion": "failure",
+                     "url": "https://github.com/acme/widgets/actions/runs/900/job/1",
+                     "rerun": {"conclusion": "success"}}]"#,
+            ),
+            scoped_run_on_head()
         ),
     );
     scenario.agent_does_for_in_session(SPEC, 2, "true\n");
