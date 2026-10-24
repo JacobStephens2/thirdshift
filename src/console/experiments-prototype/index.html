@@ -1,0 +1,42 @@
+<!doctype html>
+<!-- PROTOTYPE (#1019), throwaway. Four layouts for an Experiment's page
+     (?variant=A–D) and three for the Experiments list (?list=1–3), on a copy of
+     the Console's chrome with its real console.css, over invented Experiments in
+     fixture.js. Not served by the Console; see README.md. -->
+<html lang="en" data-theme="focus-auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Experiments prototype · thirdshift</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/assets/console.css">
+  <link rel="stylesheet" href="prototype.css">
+  <script src="fixture.js"></script>
+  <script src="prototype.js" defer></script>
+</head>
+<body>
+  <header><p class="brand">thirdshift / Console</p><h1>thirdshift</h1></header>
+  <nav aria-label="Pages"><a href="#" data-proto-elsewhere>1 Inbox</a><a href="#" data-proto-elsewhere>2 Lanes</a><a href="#" data-proto-elsewhere>3 Stages</a><a href="#" data-proto-elsewhere>4 Waterfall</a><a href="#" data-proto-elsewhere>5 History</a><a href="#" data-proto-elsewhere>6 Logs</a><a href="#" data-proto-elsewhere>7 Security</a><a href="#" data-proto-elsewhere>8 Cron jobs</a><a href="#" data-proto-elsewhere>9 Resources</a><a href="?page=list" data-nav="list" aria-current="page">Experiments</a><a href="#" data-proto-elsewhere>Console log</a><a href="#" data-proto-elsewhere>Account</a></nav>
+  <main id="proto-main"></main>
+  <aside id="peek" hidden aria-label="Peek"><button type="button" data-close-peek>Close details (Esc)</button><div id="peek-content" aria-live="polite"></div></aside>
+  <footer><button type="button" data-proto-elsewhere>Keyboard help (?)</button> <button type="button" data-proto-elsewhere>Themes (Shift+T)</button> <button type="button" data-proto-elsewhere>Sections</button> <button type="button" data-proto-elsewhere>Pause motion</button></footer>
+  <div id="proto-bar" role="toolbar" aria-label="Prototype switcher (not part of the design)">
+    <span class="proto-tag" title="Invented data; not the Console">PROTOTYPE</span>
+    <span class="proto-sep"></span>
+    <button type="button" data-step="variant" data-dir="-1" aria-label="Previous Experiment page layout">←</button>
+    <span id="proto-variant"></span>
+    <button type="button" data-step="variant" data-dir="1" aria-label="Next Experiment page layout">→</button>
+    <span class="proto-sep"></span>
+    <button type="button" data-step="list" data-dir="-1" aria-label="Previous list layout">‹</button>
+    <span id="proto-list"></span>
+    <button type="button" data-step="list" data-dir="1" aria-label="Next list layout">›</button>
+    <span class="proto-sep"></span>
+    <label><span class="proto-hide">Experiment </span><select id="proto-x" aria-label="Experiment shown"></select></label>
+    <label><span class="proto-hide">Theme </span><select id="proto-theme" aria-label="Theme"></select></label>
+    <button type="button" id="proto-live" aria-pressed="true">Live: on</button>
+    <button type="button" id="proto-phone" aria-pressed="false">390 px</button>
+  </div>
+  <div id="proto-toast" role="status" hidden></div>
+</body>
+</html>
