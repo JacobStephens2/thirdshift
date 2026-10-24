@@ -2161,8 +2161,32 @@ fn review_failed_security_fix_settlement_preserves_other_waiting_findings() {
         record["security_findings_waiting"] = true.into();
         record["dispatched"] = vec![run].into();
     });
+    let record_path = scenario.path(LOGS).join("8-fixture.command.json");
+    let selector = record_path.to_str().unwrap();
+    // Dismissing the failed fix exposes the independent findings, whose
+    // dismissal then covers the same row even after GitHub settles the fix.
+    for kind in ["failed", "finding"] {
+        let output = scenario.run(&["status", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(status["commands"][0]["needs_you_kind"], kind, "{status}");
+        let dismissed = scenario.run(&["dismiss", selector]);
+        assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+    }
     github_issue_is(&scenario, 8, "CLOSED", Some(&settled));
     github_pr_is(&scenario, 8, "MERGED", Some(&settled), None);
+    age_cache_file(&scenario, 360);
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(status["commands"][0]["group"], "resolved", "{status}");
+    assert_eq!(
+        status["commands"][0]["dismissal"]["kinds"],
+        serde_json::json!(["Failed", "Finding"]),
+        "{status}"
+    );
+    let undone = scenario.run(&["dismiss", selector, "--undo"]);
+    assert_eq!(undone.code, Some(0), "{}", undone.stderr);
     let output = scenario.run(&["status", "--all", "--json"]);
     assert_eq!(output.code, Some(0), "{}", output.stderr);
     let status: Value = serde_json::from_str(&output.stdout).unwrap();

@@ -121,7 +121,7 @@ pub(in crate::logs) struct InboxItem<'a> {
     /// closed row: when the row stopped waiting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub github_at: Option<String>,
-    /// Who dismissed the row, when, from where and the kind covered.
+    /// Who dismissed the row, when, from where and all kinds covered.
     /// `None` while the row waits or was never dismissed for its kind.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dismissal: Option<DismissalView>,
@@ -357,40 +357,37 @@ pub(super) fn list<'a>(
     for (command, starts) in observations.into_iter().zip(&starts) {
         let facts = command.facts();
         let ended = time(facts.ended_at);
+        let recorded_dismissal = match command {
+            Observation::Record(record) => command
+                .selector()
+                .and_then(|selector| dismiss::covering(&record.record_path, &selector)),
+            Observation::History(_) => None,
+        };
+        let findings_waiting = matches!(command, Observation::Record(command) if command.record.security_findings_waiting);
         let github_settlement = github_left(&command, github, ended);
         // Settling failed work removes that wait, while another finding
         // from the same audit can still need the Day shift.
-        let finding_wait = github_settlement.is_some()
-            && matches!(command, Observation::Record(command) if command.record.security_findings_waiting);
-        let problem = if finding_wait {
+        let finding_wait = github_settlement.is_some() && findings_waiting;
+        let mut problem = if finding_wait {
             Some(NeedsYouKind::Finding)
         } else {
             command.problem()
         };
+        // Dismissing the failure does not dismiss the findings it hid.
+        if problem == Some(NeedsYouKind::Failed)
+            && findings_waiting
+            && recorded_dismissal
+                .as_ref()
+                .is_some_and(|row| row.covers(NeedsYouKind::Failed.title()))
+        {
+            problem = Some(NeedsYouKind::Finding);
+        }
         let live_problem = match command {
             Observation::Record(command) if facts.state == "live" => live_problem(command),
             _ => None,
         };
         let landing = matches!(command, Observation::Record(command) if is_landing(command));
         let stopping = matches!(command, Observation::Record(command) if facts.state == "live" && stop::requested(&command.record_path).is_some());
-        // A dismissal holds only for the kind it covered: a row that turns
-        // into a kind it wasn't when dismissed waits again. Its kind is
-        // independent of age or a later Command taking it up, so those
-        // exits do not erase the dismissal or shorten its retention.
-        let kind_now = live_problem
-            .or(problem)
-            .map(NeedsYouKind::title)
-            .or(if facts.ready { Some(READY_KIND) } else { None });
-        let selector = command.selector();
-        let dismissed_row = match command {
-            Observation::Record(record) => selector
-                .and_then(|selector| dismiss::covering(&record.record_path, &selector))
-                .filter(|row| Some(row.kind.as_str()) == kind_now),
-            Observation::History(_) => None,
-        };
-        let dismissed = dismissed_row.is_some();
-        let dismissed_at = dismissed_row.as_ref().and_then(|row| time(Some(&row.at)));
-        let dismissal = dismissed_row.as_ref().map(|row| row.view());
         // When this row stopped waiting through the later-Command exit:
         // the earliest later start on any of its issues. Only rows that
         // waited (ended problems and ready Commands) leave through it, so
@@ -421,11 +418,34 @@ pub(super) fn list<'a>(
                     && github_known(command, github)));
         let held = (ended
             .or_else(|| time(Some(facts.started_at)))
+            // A recent dismissal proves this row was still in the Inbox.
+            // In particular, a long-running Command that dies has no end
+            // timestamp: its old start must not hide its new Died kind.
+            .into_iter()
+            .chain(
+                recorded_dismissal
+                    .as_ref()
+                    .and_then(|row| time(Some(&row.at))),
+            )
+            .max()
             .is_some_and(|time| cutoff.is_none_or(|cutoff| time >= cutoff))
             && !starts
                 .iter()
                 .any(|(issue, start)| latest.get(issue).is_some_and(|latest| latest > start)))
             || github_holds;
+        // A dismissal holds for every kind it covered: a row that turns
+        // into a kind it wasn't when dismissed waits again. Its kind is
+        // independent of age or a later Command taking it up, so those
+        // exits do not erase the dismissal or shorten its retention.
+        let kind_now = live_problem
+            .or(problem)
+            .map(NeedsYouKind::title)
+            .or(if facts.ready { Some(READY_KIND) } else { None });
+        let dismissed_row =
+            recorded_dismissal.filter(|row| kind_now.is_none_or(|kind| row.covers(kind)));
+        let dismissed = dismissed_row.is_some();
+        let dismissed_at = dismissed_row.as_ref().and_then(|row| time(Some(&row.at)));
+        let dismissal = dismissed_row.as_ref().map(|row| row.view(kind_now));
         let needs_you_kind = live_problem
             .or_else(|| problem.filter(|_| held && github_moved.is_none()))
             .filter(|_| !dismissed);

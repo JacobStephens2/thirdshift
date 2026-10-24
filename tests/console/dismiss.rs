@@ -45,6 +45,62 @@ fn dismissing_a_silent_command_keeps_it_running_and_offers_stop_and_undo() {
 }
 
 #[test]
+fn console_dismiss_accumulates_kinds_when_a_silent_command_fails() {
+    use crate::watching::{FixtureProcess, live_record};
+
+    let home = configured();
+    let mut work = FixtureProcess(Command::new("sleep").arg("60").spawn().unwrap());
+    let mut fixture = live_record(home.path(), 7, work.0.id());
+    let began = (chrono::Local::now() - chrono::Duration::minutes(20)).to_rfc3339();
+    fixture["started_at"] = json!(began);
+    fixture["stages"][0]["began_at"] = json!(began);
+    write_record(home.path(), 7, &fixture);
+    assert!(password(home.path(), None, PASSWORD, PASSWORD).0.success());
+    let console = Console::start_mode(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        home.path(),
+        false,
+    );
+    let session = cookie(&sign_in(&console, EMAIL, PASSWORD));
+    let peek = "/peek?command=widgets%237";
+    for kinds in [json!(["Silent"]), json!(["Silent", "Failed"])] {
+        let details = get(&console, peek, &session).text().unwrap();
+        assert!(details.contains(">Dismiss</button>"), "{details}");
+        let token = csrf(&details);
+        assert_eq!(
+            client()
+                .post(format!("{}/dismiss", console.address))
+                .header("cookie", &session)
+                .form(&[("command", "widgets#7"), ("csrf", token.as_str())])
+                .send()
+                .unwrap()
+                .status(),
+            303
+        );
+        let details = get(&console, peek, &session).text().unwrap();
+        assert!(details.contains(">Undo</button>"), "{details}");
+        let status = cli(home.path(), &["status", "--json"]);
+        assert!(status.status.success(), "{status:?}");
+        let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+        let row = &status["commands"][0];
+        assert_eq!(row["dismissal"]["kinds"], kinds, "{status}");
+        assert_eq!(row["dismissal"]["who"], EMAIL, "{status}");
+        assert_eq!(row["dismissal"]["source"], "Console", "{status}");
+        if kinds == json!(["Silent"]) {
+            assert_eq!(row["group"], "working", "{status}");
+            assert!(work.0.try_wait().unwrap().is_none());
+            work.0.kill().unwrap();
+            work.0.wait().unwrap();
+            fixture["ended_at"] = json!(chrono::Local::now().to_rfc3339());
+            fixture["outcome"] = json!("failed");
+            write_record(home.path(), 7, &fixture);
+        } else {
+            assert_eq!(row["group"], "done", "{status}");
+        }
+    }
+}
+
+#[test]
 fn console_dismiss_and_undo_refuse_missing_sessions_bad_csrf_and_gets() {
     let home = configured();
     record(home.path(), 7, Some("failed"), 0);

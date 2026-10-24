@@ -19,7 +19,10 @@ pub(crate) const READY_KIND: &str = "Ready";
 #[derive(Clone, Deserialize, Serialize)]
 pub(crate) struct DismissedRow {
     pub selector: String,
+    /// Last kind dismissed; retained for single-kind files and readers.
     pub kind: String,
+    #[serde(default)]
+    pub kinds: Vec<String>,
     pub who: String,
     pub at: String,
     #[serde(default)]
@@ -27,28 +30,35 @@ pub(crate) struct DismissedRow {
 }
 
 impl DismissedRow {
+    pub(crate) fn covers(&self, kind: &str) -> bool {
+        self.kinds.iter().any(|covered| covered == kind)
+    }
+
     fn source(&self) -> &'static str {
         if self.from_console { "Console" } else { "CLI" }
     }
 
-    pub(crate) fn view(&self) -> DismissalView {
+    pub(crate) fn view(&self, current_kind: Option<&str>) -> DismissalView {
         DismissalView {
             who: self.who.clone(),
             dismissed_at: self.at.clone(),
             source: self.source(),
-            kind: self.kind.clone(),
+            kind: current_kind.unwrap_or(&self.kind).to_owned(),
+            kinds: self.kinds.clone(),
         }
     }
 }
 
 /// A row's dismissal as `status --json` reports it: who, when, from where
-/// and the kind it covers.
+/// and every kind it covers. `kind` is the current kind, or the last one
+/// dismissed while a live row has no problem.
 #[derive(Serialize)]
 pub(crate) struct DismissalView {
     pub who: String,
     pub dismissed_at: String,
     pub source: &'static str,
     pub kind: String,
+    pub kinds: Vec<String>,
 }
 
 impl DismissalView {
@@ -84,6 +94,13 @@ pub(crate) fn covering(record: &Path, selector: &str) -> Option<DismissedRow> {
         .rows
         .into_iter()
         .find(|row| row.selector == selector)
+        .map(|mut row| {
+            // Dismissals written before kinds accumulated covered one kind.
+            if !row.covers(&row.kind) {
+                row.kinds.push(row.kind.clone());
+            }
+            row
+        })
 }
 
 fn write(record: &Path, file: &DismissalFile) -> Result<()> {
@@ -164,11 +181,14 @@ fn row_for(
             format!("cannot dismiss {input}: row is not in Needs you or Ready for review")
         })?;
     for item in std::iter::once(&found).chain(found.collapsed.iter()) {
-        if let Observation::Record(command) = item.command
-            && let Some(selector) = item.command.selector()
-        {
-            target.members.push((command.record_path.clone(), selector));
-        }
+        let Observation::Record(command) = item.command else {
+            bail!("cannot dismiss {input}: row has no Command record");
+        };
+        let selector = item
+            .command
+            .selector()
+            .with_context(|| format!("cannot dismiss {input}: row has no Command record"))?;
+        target.members.push((command.record_path.clone(), selector));
     }
     // Taking a dismissal back works wherever the row now is, so only a
     // dismissal names a kind.
@@ -332,16 +352,26 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
             dismissal: None,
         });
     }
+    let mut dismissal = None;
     for (record, selector) in &target.members {
         let mut file = read(record);
+        let mut kinds = covering(record, selector)
+            .map(|row| row.kinds)
+            .unwrap_or_default();
+        if !kinds.contains(&target.kind) {
+            kinds.push(target.kind.clone());
+        }
         file.rows.retain(|row| row.selector != *selector);
-        file.rows.push(DismissedRow {
+        let row = DismissedRow {
             selector: selector.clone(),
             kind: target.kind.clone(),
+            kinds,
             who: who.clone(),
             at: at.clone(),
             from_console,
-        });
+        };
+        dismissal.get_or_insert_with(|| row.view(None));
+        file.rows.push(row);
         write(record, &file)?;
     }
     activity_write(
@@ -352,11 +382,6 @@ pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
     Ok(Change {
         name: target.name,
         group: target.group,
-        dismissal: Some(DismissalView {
-            who,
-            dismissed_at: at,
-            source,
-            kind: target.kind,
-        }),
+        dismissal,
     })
 }
