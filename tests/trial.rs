@@ -422,14 +422,21 @@ sleep 0.5
 touch '{}'
 "#, scenario.launch_dir().join("ignored-old-native-warning").display(), escaped.display()));
 
-    // The native session file lives beside the login: point CODEX_HOME at the
-    // Trial's fresh home, which the sandbox keeps on both sides of its bind.
+    // The native session file lives beside the login: sandboxed, point
+    // CODEX_HOME at the Trial's fresh home, which the sandbox keeps on both
+    // sides of its bind. Without bwrap the Trial runs unsandboxed and the
+    // fresh home is never made, so no override: the agent and its reader
+    // share the scenario home.
     let codex_home = scenario
         .path("trial-output/home/.codex")
         .to_str()
         .unwrap()
         .to_owned();
-    let result = run_trial(&scenario, &request, &[("CODEX_HOME", &codex_home)]);
+    let mut extra = Vec::new();
+    if bwrap_present() {
+        extra.push(("CODEX_HOME", codex_home.as_str()));
+    }
+    let result = run_trial(&scenario, &request, &extra);
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let output: Value = serde_json::from_str(&result.stdout).unwrap();
