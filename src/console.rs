@@ -14,6 +14,7 @@ mod look;
 pub use look::{export_theme, import_theme, sections, theme};
 mod changes;
 mod peek;
+mod resources;
 mod restart;
 mod stop;
 mod time;
@@ -66,6 +67,7 @@ struct PageRoute {
 
 enum View {
     CronJobs,
+    Resources,
     Inbox,
     Inspect,
     Spans,
@@ -93,6 +95,12 @@ enum View {
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/resources",
+        cli: &["thirdshift resources --json"],
+        method: Method::GET,
+        view: View::Resources,
+    },
     PageRoute {
         path: "/cronjobs",
         cli: &["thirdshift cronjobs --json"],
@@ -367,6 +375,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
         let path = page.path;
         let handler = match (&page.view, page.method.clone()) {
             (View::CronJobs, Method::GET) => get(cronjobs::show),
+            (View::Resources, Method::GET) => get(resources::show),
             (View::Inbox, Method::GET) => get(move |query| inbox(cli, path, query)),
             (View::Inspect, Method::GET) => get(inspect),
             (View::Spans, Method::GET) => get(waterfall::data),

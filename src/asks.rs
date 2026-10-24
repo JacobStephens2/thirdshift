@@ -296,6 +296,7 @@ mod tests {
     /// default.
     fn no_settings() -> UserConfig {
         UserConfig {
+            resources: crate::resources::Limits::default(),
             console: crate::config::ConsoleSettings::default(),
             merge_always: false,
             base_fix: false,

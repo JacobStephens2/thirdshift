@@ -128,6 +128,7 @@ pub fn test_call(choice: &Choice) -> Result<()> {
     let Some(model) = &choice.model else {
         return Ok(());
     };
+    crate::resources::wait()?;
     progress::step(format_args!(
         "checking the Model {model} with a test call to {cli}"
     ));

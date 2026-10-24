@@ -116,7 +116,7 @@ pub struct Sessions<'a> {
     outside: RefCell<Box<dyn Outside>>,
     /// What must still hold before each session starts, a Resume included:
     /// a session it fails is not started, and the step fails with it.
-    before_each: &'a dyn Fn() -> Result<()>,
+    before_each: Box<dyn Fn() -> Result<()> + 'a>,
     /// The session started last, a Resume included, and its log.
     last_log: RefCell<Option<(Logged, PathBuf)>>,
     /// How each session ended whose last ending, its Resume's if it got one,
@@ -176,8 +176,16 @@ impl<'a> Sessions<'a> {
             security_review_default: security_review_default.cloned(),
             recording: logs.recording().clone(),
         };
-        let (taken, log) =
-            Sessions::taking(logs, worktree, Box::new(on_machine), before_each, steps);
+        let (taken, log) = Sessions::taking(
+            logs,
+            worktree,
+            Box::new(on_machine),
+            move || {
+                crate::resources::wait()?;
+                before_each()
+            },
+            steps,
+        );
         (taken, log.filter(|log| log.exists()))
     }
 
@@ -188,14 +196,14 @@ impl<'a> Sessions<'a> {
         logs: &'a Logs,
         worktree: &'a Path,
         outside: Box<dyn Outside>,
-        before_each: &'a dyn Fn() -> Result<()>,
+        before_each: impl Fn() -> Result<()> + 'a,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
         let sessions = Sessions {
             logs,
             worktree,
             outside: RefCell::new(outside),
-            before_each,
+            before_each: Box::new(before_each),
             last_log: RefCell::default(),
             endings_with_killed_work: RefCell::default(),
         };
@@ -703,7 +711,7 @@ mod tests {
             &logs,
             Path::new("/unused"),
             Box::new(scripted),
-            &|| Ok(()),
+            || Ok(()),
             steps,
         );
         let calls = calls.take();
