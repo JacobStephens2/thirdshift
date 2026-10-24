@@ -1,5 +1,5 @@
-/* PROTOTYPE (#1019), throwaway. Four layouts for an Experiment's page
-   (?variant=A–D) and three for the Experiments list (?list=1–3), over the
+/* PROTOTYPE (#1019), throwaway. Five layouts for an Experiment's page
+   (?variant=A–E) and three for the Experiments list (?list=1–3), over the
    invented Experiments in fixture.js. Not served by the Console; see README.md. */
 (function () {
   'use strict';
@@ -10,6 +10,7 @@
     ['B', 'Report'],
     ['C', 'Trial grid'],
     ['D', 'Differences'],
+    ['E', 'Combined'],
   ];
   const LISTS = [
     ['1', 'Log list'],
@@ -498,8 +499,12 @@
     h += `<button type="button" data-peek-bar>The Bar</button>`;
     if (e.pending_rechecks.length) h += `<button type="button" data-pending-only aria-pressed="${state.pendingOnly}">${plural(e.pending_rechecks.length, 'recheck')}</button>`;
     h += `</div><p class="vc-head">${explain(e).head}${st.tone === 'working' || e.state === 'paused' ? ` ${explain(e).lines[0]}` : ''}</p>`;
-    h += findingsBlock(e);
-    h += `<p class="vc-legend" aria-label="Legend"><span>${glyph({ sym: '✓', tone: 'pass', label: 'Passed' })} passed</span><span>${glyph({ sym: '✗', tone: 'fail', label: 'Failed' })} failed</span><span>${glyph({ sym: '✓', tone: 'pass', label: 'Wrong finding', wrong: true })} wrong finding</span><span>${glyph({ sym: '✓', tone: 'pass', label: 'Borderline', borderline: true })} borderline</span><span>${glyph({ sym: '✓', tone: 'pass', label: 'Waiting on your recheck', pending: true })} recheck waiting</span><span>${glyph({ sym: '✓', tone: 'pass', label: 'You rechecked it', rechecked: true })} you rechecked</span><span>${glyph({ sym: '⊘', tone: 'void', label: 'Void' })} void</span>${e.state !== 'completed' ? `<span>${glyph({ sym: '–', tone: 'ungraded', label: 'Not graded yet' })} not graded</span><span>${glyph({ sym: '◌', tone: 'running', label: 'Running' })} running</span><span>${glyph({ sym: '·', tone: 'queued', label: 'Queued' })} queued</span>` : ''}</p>`;
+    h += findingsBlock(e) + gridC(e);
+    h += effBarsC(e);
+    return h;
+  }
+  function gridC(e) {
+    let h = `<p class="vc-legend" aria-label="Legend"><span>${glyph({ sym: '✓', tone: 'pass', label: 'Passed' })} passed</span><span>${glyph({ sym: '✗', tone: 'fail', label: 'Failed' })} failed</span><span>${glyph({ sym: '✓', tone: 'pass', label: 'Wrong finding', wrong: true })} wrong finding</span><span>${glyph({ sym: '✓', tone: 'pass', label: 'Borderline', borderline: true })} borderline</span><span>${glyph({ sym: '✓', tone: 'pass', label: 'Waiting on your recheck', pending: true })} recheck waiting</span><span>${glyph({ sym: '✓', tone: 'pass', label: 'You rechecked it', rechecked: true })} you rechecked</span><span>${glyph({ sym: '⊘', tone: 'void', label: 'Void' })} void</span>${e.state !== 'completed' ? `<span>${glyph({ sym: '–', tone: 'ungraded', label: 'Not graded yet' })} not graded</span><span>${glyph({ sym: '◌', tone: 'running', label: 'Running' })} running</span><span>${glyph({ sym: '·', tone: 'queued', label: 'Queued' })} queued</span>` : ''}</p>`;
     for (const s of suitesOf(e)) {
       const v = e.verdict && e.verdict.suites[s.name];
       h += `<section class="vc-suite"><h3>${esc(SUITE[s.name])} ${v ? small(v.verdict) : ''} <span class="x-dim">${s.tasks.length} Eval tasks × ${s.n} per Arm</span></h3>`;
@@ -514,7 +519,6 @@
       }
       h += '</div></section>';
     }
-    h += effBarsC(e);
     return h;
   }
   function effBarsC(e) {
@@ -606,6 +610,43 @@
     return `${h}</ol></section>`;
   }
 
+  // ======== E · Combined: B's lead and rechecks, D's suite intervals, A's Arms table, C's grid.
+  function variantE(e) {
+    const ex = explain(e);
+    let h = header(e) + `<section class="vb-lead">${tag(e)}<p class="vb-head">${ex.head}</p>`;
+    if (!e.verdict) h += ex.lines.map(l => `<p>${l}</p>`).join('');
+    h += '</section>';
+    if (e.verdict) h += intervalsE(e);
+    h += findingsBlock(e);
+    if (e.pending_rechecks.length) h += rechecksE(e);
+    // While Trials run, the grid is what changes, so it comes before the Arms.
+    const arms = `<h3 class="ve-h">What was compared</h3>${armsTableA(e)}`, trials = `<h3 class="ve-h">Trials</h3>${gridC(e)}`;
+    h += e.state === 'completed' ? arms + trials : trials + arms;
+    h += `<details class="va-bar"><summary>The Bar <span class="x-dim">· margin ${pts(e.bar.margin)} points, ${share(e.bar.credible_level)}, fixed ${esc(clock(e.created_at))}</span></summary>${barFacts(e)}</details>`;
+    return h;
+  }
+  function intervalsE(e) {
+    let h = '<section class="ve-verdict" aria-label="Verdict by suite">';
+    for (const [name, v] of Object.entries(e.verdict.suites)) {
+      h += `<h3>${esc(SUITE[name])} ${small(v.verdict)} <span class="x-dim">${v.retained_tasks} Eval tasks${v.dropped_tasks ? `, ${v.dropped_tasks} dropped` : ''}</span></h3>`;
+      for (const key of ['accuracy', 'wrong_findings']) h += `<p class="vb-figure"><span>${cap(METRIC[key])} ${small(v[key].verdict)}</span>${iv(e, v[key], `${SUITE[name]} ${METRIC[key]}`)}<span>${range(v[key])}</span></p>`;
+      h += `<p class="vb-figure vb-key"><span></span>${axisKey(e)}<span></span></p><p class="ve-why">${suiteWhy(e, name, v)}</p>`;
+    }
+    return `${h}</section><p class="x-dim ve-legend">Points of pass share, Candidate minus Baseline, at ${share(e.bar.credible_level)}. The dashed line is the ${pts(e.bar.margin)}-point margin. For wrong findings, plus means fewer in the Candidate.</p>`;
+  }
+  function rechecksE(e) {
+    const all = e.pending_rechecks, open = state.open.has('rechecks'), FIRST = 5;
+    const shown = open ? all : all.slice(0, FIRST);
+    let h = `<section class="ve-rechecks x-callout" data-tone="look"><p><strong>Waiting on you: ${plural(all.length, 'recheck')}</strong> (${all.filter(p => p.borderline).length} borderline, ${all.filter(p => p.decisive).length} decisive). The Verdict is final once you have rechecked ${all.length === 1 ? 'it' : 'them all'}. Read the Trial, then record yours from the CLI; it is kept beside the Grader's Score. <button type="button" class="x-linkish" data-pending-only aria-pressed="${state.pendingOnly}">${state.pendingOnly ? 'Show every Eval task below' : 'Show only their Eval tasks below'}</button></p><ol>`;
+    for (const p of shown) {
+      const x = at(e, p.suite, p.task, p.arm, p.trial);
+      h += `<li><button type="button" class="x-linkish" data-peek-trial="${esc(keyOf(x))}">${glyph(mark(e, x))} ${esc(p.task)} · ${ARM[p.arm]} Trial ${p.trial + 1}</button><span class="x-dim">${esc(cap(why(x, p)))}</span><button type="button" data-copy="${esc(recheckCli(e, p, x))}">Copy command</button></li>`;
+    }
+    h += '</ol>';
+    if (all.length > FIRST) h += `<p><button type="button" class="x-linkish" data-toggle="rechecks" aria-expanded="${open}">${open ? 'Show fewer' : `Show all ${all.length}`}</button></p>`;
+    return `${h}</section>`;
+  }
+
   // ======== Experiments list layouts.
   const experimentHref = e => esc(url({ page: 'experiment', x: e.proto.key }));
   const listHead = () => '<div class="page-title"><h2>Experiments</h2><code>thirdshift experiments --json</code></div>'
@@ -689,7 +730,7 @@
     return h;
   }
 
-  const RENDER = { A: variantA, B: variantB, C: variantC, D: variantD };
+  const RENDER = { A: variantA, B: variantB, C: variantC, D: variantD, E: variantE };
   const LIST_RENDER = { 1: list1, 2: list2, 3: list3 };
 
   // ---- Rendering, the Peek and the switcher.

@@ -10,6 +10,7 @@ The pages don't exist yet, and the Console renders on the server, so this is a s
 | B | Report: one column of sentences and facts, like the Console's Command details; nothing hidden |
 | C | Trial grid: every Trial a cell, Eval tasks in rows and Arms in columns; a cell opens its details in the Peek |
 | D | Differences: each Eval task's difference on the interval's axis, as a forest plot, with the suite's interval as its last row |
+| E | Combined, after reviewing A–D: B's opening lines, D's interval per suite with its reason, the rechecks with a Copy button each (first five, then all), A's Arms table with efficiency, C's grid with the Peek, then the Bar folded |
 
 | Key | Experiments list (`?list=`) |
 | --- | --- |

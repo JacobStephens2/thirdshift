@@ -191,7 +191,7 @@ body.proto-embed #proto-main { padding-bottom: 8px; }
 .vc-bardetails { margin: 12px 0; }
 @media (max-width: 640px) {
   .vc-grid { --cw: max(calc(var(--n) * 30px), 4.4rem); }
-  .vc-row { gap: 0 6px; grid-template-columns: minmax(0, 1fr) var(--cw) var(--cw) 2.8em; }
+  .vc-row { gap: 0 6px; grid-template-columns: minmax(0, 1fr) var(--cw) var(--cw) 3.8em; }
   .vc-effrow { grid-template-columns: 1fr; gap: 2px; }
   .vc-strip { position: static; }
 }
@@ -258,6 +258,17 @@ span.vd-label { color: var(--text); cursor: default; }
 
 /* The Experiments list. */
 .l1 > li { margin: 16px 0; }
+/* E · Combined: reuses B's lead and figures, A's Arms table and C's grid. */
+.ve-h { margin: 22px 0 6px; font-size: 15px !important; }
+.ve-verdict { max-width: 760px; margin: 4px 0; }
+.ve-verdict h3 { margin: 14px 0 4px; font-size: 15px !important; }
+.ve-why { max-width: 75ch; margin: 4px 0 10px; font-size: 13px; }
+.ve-legend { max-width: 75ch; font-size: 12px; }
+.ve-rechecks ol { margin: 6px 0; padding: 0; list-style: none; }
+.ve-rechecks li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; padding: 5px 0; border-top: 1px solid var(--rule); font-size: 13px; }
+.ve-rechecks li > .x-dim { flex: 1 1 16em; }
+.ve-rechecks li > [data-copy] { margin-left: auto; padding: 2px 8px; font-size: 12px; }
+
 .l1-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 10px; margin: 0; font-size: 15px; }
 .l1 dl { margin: 4px 0 0; }
 .l1 dt { text-transform: none; }
