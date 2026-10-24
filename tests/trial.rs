@@ -804,14 +804,25 @@ fn a_sandboxed_trial_hides_unbound_paths_and_keeps_its_working_directory() {
     assert!(!scenario.path("home/.thirdshift/logs").exists());
 }
 
+/// Supply the relay dependency so these fixtures reach the bwrap failure
+/// even on hosts without socat. The failing launcher never runs the relay.
+fn failing_bwrap(scenario: &Scenario, script: &str) {
+    use std::os::unix::fs::PermissionsExt;
+    for (name, script) in [("bwrap", script), ("socat", "#!/bin/sh\nexit 99\n")] {
+        let path = scenario.path(&format!("bin/{name}"));
+        fs::write(&path, script).unwrap();
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+}
+
 #[test]
 fn a_bwrap_startup_failure_makes_a_trial_void() {
-    use std::os::unix::fs::PermissionsExt;
     let scenario = Scenario::new();
     let request = request(&scenario);
-    let bwrap = scenario.path("bin/bwrap");
-    fs::write(&bwrap, "#!/bin/sh\necho 'bwrap: Creating new namespace failed: Operation not permitted' >&2\nexit 1\n").unwrap();
-    fs::set_permissions(bwrap, fs::Permissions::from_mode(0o755)).unwrap();
+    failing_bwrap(
+        &scenario,
+        "#!/bin/sh\necho 'bwrap: Creating new namespace failed: Operation not permitted' >&2\nexit 1\n",
+    );
     let result = scenario.run(&["--trial", request.to_str().unwrap()]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let output: Value = serde_json::from_str(&result.stdout).unwrap();
@@ -828,12 +839,12 @@ fn a_bwrap_startup_failure_makes_a_trial_void() {
 
 #[test]
 fn a_bwrap_failure_after_its_startup_check_still_makes_a_trial_void() {
-    use std::os::unix::fs::PermissionsExt;
     let scenario = Scenario::new();
     let request = request(&scenario);
-    let bwrap = scenario.path("bin/bwrap");
-    fs::write(&bwrap, "#!/bin/sh\ncase \"$*\" in *'/bin/true') exit 0;; esac\necho 'bwrap: Creating new namespace failed after probe' >&2\nexit 1\n").unwrap();
-    fs::set_permissions(bwrap, fs::Permissions::from_mode(0o755)).unwrap();
+    failing_bwrap(
+        &scenario,
+        "#!/bin/sh\ncase \"$*\" in *'/bin/true') exit 0;; esac\necho 'bwrap: Creating new namespace failed after probe' >&2\nexit 1\n",
+    );
     let result = scenario.run(&["--trial", request.to_str().unwrap()]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let output: Value = serde_json::from_str(&result.stdout).unwrap();
