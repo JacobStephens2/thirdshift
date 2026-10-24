@@ -152,7 +152,7 @@ thirdshift --no-merge https://github.com/acme/widgets/issues/7</code></pre>
 thirdshift show https://github.com/acme/widgets/issues/7
 thirdshift logs https://github.com/acme/widgets/issues/7 --follow</code></pre>
       <p>CLI log following and the Console keep reading through the captured writer's exit, including final output written after a Command's outcome is recorded. An exact Session trace finishes when its writer exits or its owning record moves to a later Session.</p>
-      <p>The <strong>Console</strong> shows this machine's Commands, opening on its <strong>Inbox</strong>. Beside the CLI, you can watch their stages and logs there. For this machine on localhost, start it with:</p>
+      <p>The <strong>Console</strong> shows this machine's Commands, opening on its <strong>Inbox</strong>. Beside the CLI, you can watch their stages and logs there. Stages keeps each Spec run with its Ticket runs, newest-started groups first: scroll right for older runs, or switch from All runs to By repository for one grid per repository. For this machine on localhost, start it with:</p>
       <p>When no Commands are running, the Inbox shows the last recorded skipped Pass reasons, points to work waiting for you, and links to Cron jobs to help diagnose launch failures. If no reason was recorded, it says so.</p>
       <p>Ended rows show the recorded finish date and time in UTC and an explicit age, such as <strong>Ended Oct 23, 2026 at 23:03:17 UTC · 52 min ago</strong>. The age means time since finish, not run duration. Nested Ticket runs and History show each Command's own finish; an unavailable finish says <strong>End time unknown</strong>.</p>
       <pre class="guide-command"><code>thirdshift console --no-sign-in</code></pre>

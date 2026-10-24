@@ -1,6 +1,7 @@
 import { activity, loadLook, motionAllowed } from './look.js';
 import { watchCommands } from './changes.js';
 import { initSpanTree } from './spans.js';
+import { initStages } from './stages.js';
 let spanTree;
 
 // Browser preferences are conveniences; malformed or unavailable storage hides nothing.
@@ -101,22 +102,26 @@ function morph(html) {
 }
 
 const timePage = document.querySelector('main[data-time-page]');
+const stages = initStages(timePage, refresh);
 function morphTimePage(html) {
   const next = new DOMParser().parseFromString(html, 'text/html');
   const replacement = next.querySelector('main[data-time-page]');
   if (!replacement) throw new Error('Missing time page');
+  if (stages && !stages.accepts(replacement)) return;
   const selection = selected?.dataset.command;
   const focused = timePage.contains(document.activeElement);
   const position = [scrollX, scrollY];
   const hours = timePage.querySelector('[name="hours"]')?.value;
+  const reading = stages?.capture();
   Idiomorph.morph(timePage, replacement);
   // A push refreshes the rows while the person may still be editing this form.
   if (hours !== undefined) timePage.querySelector('[name="hours"]').value = hours;
   if (selection) {
     const row = [...timePage.querySelectorAll('.command')].find(row => row.dataset.command === selection);
     select(row, { scroll: false });
-    if (focused) row?.focus({ preventScroll: true });
+    if (focused && !stages) row?.focus({ preventScroll: true });
   }
+  if (reading) stages.restore(reading);
   window.scrollTo(...position);
   activity();
   loadLook();
@@ -136,7 +141,7 @@ async function refresh() {
       activity();
       loadLook();
     } else {
-      const response = await fetch(timePage ? location.href : '/', { cache: "no-store" });
+      const response = await fetch(stages?.url() ?? (timePage ? location.href : '/'), { cache: "no-store" });
       if (!response.ok) throw new Error("Inbox unavailable");
       const html = await response.text();
       if (timePage) morphTimePage(html);
