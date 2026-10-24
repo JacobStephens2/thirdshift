@@ -1068,6 +1068,15 @@ test -f {root}/{COPY_REPLACED}
         serde_json::from_str(&fs::read_to_string(self.path("gh-state.json")).unwrap()).unwrap()
     }
 
+    pub fn waiting_security_finding(&self) {
+        let mut gh = self.gh_state();
+        gh["advisories"] = json!([{
+            "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-waiting",
+            "state":"draft", "severity":null
+        }]);
+        self.write_gh_state(&gh);
+    }
+
     pub fn write_gh_state(&self, state: &Value) {
         fs::write(
             self.path("gh-state.json"),
@@ -1171,6 +1180,10 @@ test -f {root}/{COPY_REPLACED}
 
     /// The argv of every `gh` call, in order.
     pub fn gh_calls(&self) -> Vec<Vec<String>> {
+        // The fake records calls while holding its state lock. Background
+        // Console reads can otherwise expose the truncate/write interval.
+        let lock = fs::File::create(self.path("gh-state.json.lock")).unwrap();
+        lock.lock().unwrap();
         match fs::read_to_string(self.path("gh-calls.json")) {
             Ok(text) => serde_json::from_str(&text).unwrap(),
             Err(_) => Vec::new(),

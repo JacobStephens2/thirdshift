@@ -72,6 +72,11 @@ pub enum Command {
         requeue: bool,
         json: bool,
     },
+    Dismiss {
+        command: String,
+        undo: bool,
+        json: bool,
+    },
     Logs {
         command: String,
         session: Option<String>,
@@ -416,6 +421,28 @@ pub fn parse(args: &[String]) -> Result<Command> {
             return Ok(Command::Stop {
                 command: command.clone(),
                 requeue,
+                json,
+            });
+        }
+        Some("dismiss") => {
+            let usage = "usage: thirdshift dismiss <command> [--undo] [--json]";
+            let Some((command, options)) = args[1..].split_first() else {
+                bail!(usage)
+            };
+            if command.starts_with('-') {
+                bail!(usage);
+            }
+            let (mut undo, mut json) = (false, false);
+            for option in options {
+                match option.as_str() {
+                    "--undo" if !undo => undo = true,
+                    "--json" if !json => json = true,
+                    _ => bail!(usage),
+                }
+            }
+            return Ok(Command::Dismiss {
+                command: command.clone(),
+                undo,
                 json,
             });
         }

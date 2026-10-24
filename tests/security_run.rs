@@ -1055,7 +1055,24 @@ fn an_audit_then_fix_notification_marks_the_fixed_finding_apart_from_those_waiti
         "{text}"
     );
     assert!(!text.contains("Security findings:"), "{text}");
-    // The findings the fix left waiting still need the Day shift.
+    // The Command's notification retains its completion-time account, while
+    // the Inbox now sees both graded advisories as triaged on GitHub.
+    let status = scenario.run(&["status", "--json"]);
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    let audit = status["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["kind"] == "Security run")
+        .unwrap();
+    assert_eq!(audit["left_reason"], "findings triaged", "{status}");
+    // Removing the other record's severity makes it wait again, independently
+    // of the fix's pull request and its completion-time notification.
+    let mut gh = scenario.gh_state();
+    gh["advisories"][1]["severity"] = Value::Null;
+    scenario.write_gh_state(&gh);
+    fs::remove_file(scenario.path("home/.thirdshift/logs/github-inbox.json")).unwrap();
     let status = scenario.run(&["status", "--json"]);
     assert_eq!(status.code, Some(0), "{}", status.stderr);
     let status: Value = serde_json::from_str(&status.stdout).unwrap();

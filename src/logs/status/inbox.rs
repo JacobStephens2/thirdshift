@@ -14,6 +14,7 @@ pub(crate) struct Inbox {
     pub sections: Vec<Section>,
     pub idle_passes: Vec<String>,
     pub warning: Option<&'static str>,
+    pub github_warning: Option<String>,
 }
 
 pub(crate) struct Section {
@@ -42,6 +43,9 @@ pub(crate) struct Row {
     pub timing: Timing,
     pub count: usize,
     pub cause: String,
+    /// Why and when the row left Needs you or Ready for review, empty
+    /// while it still waits or never waited.
+    pub left: String,
     pub harness: String,
     pub pull_request: String,
     pub tickets: Vec<String>,
@@ -219,6 +223,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 timing: Timing::new(false, &command.started_at, command.ended_at.as_deref(), now),
                 count: 1,
                 cause: String::new(),
+                left: String::new(),
                 harness: String::new(),
                 pull_request: String::new(),
                 tickets: Vec::new(),
@@ -233,7 +238,11 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
 pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
     let now = Local::now();
     let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
-    let items = snapshot.inbox(false, config.inbox_days);
+    // The Console shows the same groups as `status` by reading the same
+    // kept answer. The Console's background reader refreshes it independently
+    // of requests; status reads GitHub only when that answer is too old.
+    let kept = crate::logs::github::load(&config.logs_dir);
+    let items = snapshot.inbox(false, config.inbox_days, &kept);
     let listed: std::collections::BTreeSet<_> = items
         .iter()
         .filter_map(|item| item.command.selector())
@@ -255,6 +264,14 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     row.state = item.state_word().into();
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
+                    row.left = item
+                        .dismissal
+                        .as_ref()
+                        .map(|dismissal| dismissal.line())
+                        .into_iter()
+                        .chain(item.left_line())
+                        .collect::<Vec<_>>()
+                        .join("; ");
                     Ok(row)
                 })
                 .collect::<Result<_>>()?;
@@ -298,6 +315,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
     Ok(Inbox {
         active_runs: snapshot.active_runs(),
         sections,
+        github_warning: kept.warning(),
         idle_passes: snapshot.idle_passes.iter().map(|pass| format!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason)).collect(),
         warning: (config.effective_waiting_line_interval() != config.waiting_line_interval).then_some(
             "logs.waiting_line_minutes must be less than inbox.silent_minutes; using half the silent time for waiting lines"),
@@ -380,6 +398,7 @@ fn row(
         ),
         count: 1,
         cause: facts.cause.clone().unwrap_or_default(),
+        left: String::new(),
         harness: format!(
             "{} · {} · {}",
             facts.harness,

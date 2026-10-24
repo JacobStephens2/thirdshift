@@ -14,6 +14,9 @@ mod password_codes;
 #[path = "stop.rs"]
 mod stop;
 
+#[path = "dismiss.rs"]
+mod dismiss;
+
 fn configured() -> tempfile::TempDir {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

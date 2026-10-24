@@ -47,7 +47,12 @@ fn direct_run_selection_captures_its_owner_and_reloads_retained_work() {
         &record(7),
     );
     let snapshot = Snapshot::load(dir.path(), now()).unwrap();
-    assert_eq!(snapshot.inbox(true, 7).len(), 1);
+    assert_eq!(
+        snapshot
+            .inbox(true, 7, &crate::logs::github::Kept::default())
+            .len(),
+        1
+    );
     let selected = snapshot.resolve("WIDGETS#7").unwrap();
     assert_eq!(selected.owner.unwrap().record_path, path);
     assert!(selected.child_owner.is_none());
@@ -249,8 +254,17 @@ fn historical_selection_keeps_unknown_facts_and_has_no_process_or_stop_authority
     let session = folder.join("7-20261019T110000-0400~history-implement.logs.jsonl");
     fs::write(&session, serde_json::json!({"resourceLogs":[{"scopeLogs":[{"logRecords":[{"body":{"stringValue":"not interpreted as a live event"}}]}]}]}).to_string()).unwrap();
     let snapshot = Snapshot::load(dir.path(), now()).unwrap();
-    assert!(snapshot.inbox(false, 7).is_empty());
-    assert_eq!(snapshot.inbox(true, 7).len(), 1);
+    assert!(
+        snapshot
+            .inbox(false, 7, &crate::logs::github::Kept::default())
+            .is_empty()
+    );
+    assert_eq!(
+        snapshot
+            .inbox(true, 7, &crate::logs::github::Kept::default())
+            .len(),
+        1
+    );
     let selected = snapshot.resolve("widgets#7").unwrap();
     assert!(selected.owner.is_none());
     assert!(selected.child_owner.is_none());
@@ -294,6 +308,40 @@ fn outcome_ends_display_but_not_the_captured_process_for_following() {
     assert!(!selected.process_exited());
     let refreshed = Snapshot::load(dir.path(), now()).unwrap();
     assert!(refreshed.resolve("widgets#7").unwrap().process_exited());
+}
+
+#[test]
+fn review_finding_retention_deadline_includes_triage() {
+    let dir = tempfile::tempdir().unwrap();
+    let mut audit = record(7);
+    audit["kind"] = "Security run".into();
+    audit["name"] = "".into();
+    audit["issue"] = Value::Null;
+    audit["issue_branch"] = Value::Null;
+    audit["started_at"] = "2026-09-18T11:00:00-04:00".into();
+    audit["ended_at"] = "2026-09-19T12:00:00-04:00".into();
+    audit["outcome"] = "findings recorded".into();
+    audit["security_findings_waiting"] = true.into();
+    let path = write(dir.path(), "7-fixture.command.json", &audit);
+    let mut cache = json!({"version": 2, "findings": {}});
+    cache["findings"][path.to_str().unwrap()] = json!({
+        "waits": {"https://github.com/acme/widgets/security/advisories/GHSA-waiting": false},
+        "triaged_at": "2026-10-13T12:00:00-04:00"
+    });
+    fs::write(
+        dir.path().join("github-inbox.json"),
+        serde_json::to_vec(&cache).unwrap(),
+    )
+    .unwrap();
+    let kept = crate::logs::github::load(dir.path());
+    let snapshot = Snapshot::load(dir.path(), now()).unwrap();
+    assert!(snapshot.inbox(true, 7, &kept)[0].group == Group::Resolved);
+    let expected = now() + chrono::Duration::days(1) + chrono::Duration::nanoseconds(1);
+    assert_eq!(
+        snapshot.next_inbox_change(7, &kept),
+        Some(expected),
+        "the open Inbox needs the triage+retention deadline to enter History"
+    );
 }
 
 fn ended(mut record: Value, outcome: &str) -> Value {
@@ -368,7 +416,13 @@ fn a_pass_counts_once(kind: &str) {
     }
     let snapshot = Snapshot::load(dir.path(), now()).unwrap();
     // The ready dispatched run has its own Inbox row but no separate tree.
-    assert_eq!(snapshot.inbox(false, 7).len(), 2, "{kind}");
+    assert_eq!(
+        snapshot
+            .inbox(false, 7, &crate::logs::github::Kept::default())
+            .len(),
+        2,
+        "{kind}"
+    );
     assert_eq!(snapshot.active_runs(), 1, "{kind}");
 }
 

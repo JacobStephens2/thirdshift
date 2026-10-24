@@ -5,6 +5,7 @@ mod auth;
 pub(crate) mod conversation;
 mod cronjobs;
 mod filters;
+mod github;
 pub use account_commands::{password, print_log, sign_out};
 mod install;
 pub use install::{install, install_to};
@@ -13,6 +14,7 @@ mod logs;
 mod look;
 pub use look::{export_theme, import_theme, sections, theme};
 mod changes;
+mod dismiss;
 mod peek;
 mod resources;
 mod restart;
@@ -90,12 +92,32 @@ enum View {
     Sections,
     StopPage,
     Stop,
+    Dismiss,
+    UndoDismissal,
     SetPasswordPage,
     SendCode,
     SetPassword,
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/dismiss",
+        cli: &[
+            "thirdshift dismiss widgets#7",
+            "thirdshift dismiss widgets#7 --json",
+        ],
+        method: Method::POST,
+        view: View::Dismiss,
+    },
+    PageRoute {
+        path: "/dismiss/undo",
+        cli: &[
+            "thirdshift dismiss widgets#7 --undo",
+            "thirdshift dismiss widgets#7 --undo --json",
+        ],
+        method: Method::POST,
+        view: View::UndoDismissal,
+    },
     PageRoute {
         path: "/resources",
         cli: &["thirdshift resources --json"],
@@ -325,6 +347,7 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             .context("can't listen for the Console on localhost")?;
         let watched = executable.clone();
         let (changes, notifier, observer) = changes::observe(&config, &executable)?;
+        let github = github::follow();
         let mut control = changes.clone();
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
@@ -357,8 +380,11 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             }
             // Dropping the sole sender closes every SSE response before
             // graceful shutdown waits for the connections to finish.
+            crate::interrupt::request();
             observer.abort();
             let _ = observer.await;
+            github.abort();
+            let _ = github.await;
         })
         .await
         .context("Console server failed")?;
@@ -398,6 +424,8 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::Sections, Method::POST) => post(look::set_sections),
             (View::StopPage, Method::GET) => get(stop::show),
             (View::Stop, Method::POST) => post(stop::submit),
+            (View::Dismiss, Method::POST) => post(dismiss::submit),
+            (View::UndoDismissal, Method::POST) => post(dismiss::undo),
             (View::SetPasswordPage, Method::GET) => get(auth::set_password_page),
             (View::SendCode, Method::POST) => post(auth::code),
             (View::SetPassword, Method::POST) => post(auth::set_password),
@@ -545,12 +573,15 @@ async fn render_page(
     .await?
 }
 
-async fn inspect(RawQuery(query): RawQuery) -> Response {
+async fn inspect(
+    axum::Extension(viewer): axum::Extension<auth::Viewer>,
+    RawQuery(query): RawQuery,
+) -> Response {
     let command = query_value(&query, "command");
     match tokio::task::spawn_blocking(move || -> Result<String> {
         let config = UserConfig::load()?;
         let details = crate::logs::stop::inspect(&config, &command)?;
-        Ok(peek::Peek::new(command, details).render()?)
+        Ok(peek::Peek::new(command, details, viewer.csrf).render()?)
     })
     .await
     {

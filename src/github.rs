@@ -1,13 +1,14 @@
 //! Asking GitHub, through `gh`, about issues, pull requests and the signed-in
 //! user.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt;
 use std::process::{Command, Output};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::issue::{IssueUrl, Repo};
@@ -15,7 +16,9 @@ use crate::labels::{Label, Labels};
 use crate::process::{self, Control, Interruption};
 
 mod check_read;
+mod quota;
 pub(crate) use check_read::is_transient as check_read_is_transient;
+pub(crate) use quota::{Quota, Quotas};
 
 mod advisories;
 mod session_issue;
@@ -686,6 +689,85 @@ impl GitHub {
             .filter(|pr| pr["isCrossRepository"] != Value::Bool(true))
             .map(PullRequest::from_json)
             .collect()
+    }
+
+    /// What GitHub last showed for one batch of up to a hundred issues and pull requests.
+    /// The Inbox checks the returned quota before asking for another batch. Each
+    /// alias asks for state and settlement times (plus issue triage labels),
+    /// and for the query's own `rateLimit`. A subject GitHub can't
+    /// resolve answers null and stays out of the map, without failing the
+    /// rest of the read. Only reads; nothing here writes to GitHub.
+    pub(crate) fn inbox_states(
+        &self,
+        urls: &[String],
+    ) -> Result<(BTreeMap<String, InboxState>, Quota)> {
+        let mut states = BTreeMap::new();
+        let mut query = String::from("query {");
+        let mut aliases = Vec::new();
+        for (index, url) in urls.iter().enumerate() {
+            let subject = split_pull_request_url(url)
+                .map(|(owner, repo, number)| (owner, repo, number, InboxSubject::PullRequest))
+                .or_else(|| {
+                    IssueUrl::parse(url)
+                        .ok()
+                        .map(|issue| (issue.owner, issue.repo, issue.number, InboxSubject::Issue))
+                });
+            let Some((owner, repo, number, subject)) = subject else {
+                continue;
+            };
+            let alias = format!("pr{index}");
+            let (field, fields) = subject.selection();
+            query.push_str(&format!(" {alias}: repository(owner: \"{owner}\", name: \"{repo}\") {{ {field}(number: {number}) {{ {fields} }} }}"));
+            aliases.push((alias, url.clone(), subject));
+        }
+        query.push_str(" rateLimit { limit cost remaining resetAt } }");
+        let query = format!("query={query}");
+        // gh exits unsuccessfully for scoped GraphQL errors even when
+        // stdout contains healthy siblings. Only those partial answers
+        // are usable; a transport or query-wide failure remains a failed
+        // read so the Inbox keeps its previous answer.
+        let json = self.retry_read("gh api graphql", || {
+            let output = self.output(&["api", "graphql", "-f", &query])?;
+            let json = serde_json::from_slice::<Value>(&output.stdout);
+            let partial = json.as_ref().is_ok_and(|json| {
+                json["data"].is_object()
+                    && json["errors"].as_array().is_some_and(|errors| {
+                        !errors.is_empty()
+                            && errors.iter().all(|error| {
+                                error["path"][0].as_str().is_some_and(|path| {
+                                    aliases.iter().any(|(alias, _, _)| alias == path)
+                                })
+                            })
+                    })
+            });
+            if !output.status.success() && !partial {
+                bail!(check_read::ReadFailure {
+                    command: "gh api graphql".into(),
+                    stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                    private_status: None,
+                });
+            }
+            json.context(CommandFailure::InvalidJson {
+                command: "gh api graphql".into(),
+            })
+        })?;
+        let data = &json["data"];
+        let quota = Quota::graphql(&data["rateLimit"])?;
+        for (alias, url, subject) in aliases {
+            if json["errors"]
+                .as_array()
+                .is_some_and(|errors| errors.iter().any(|error| error["path"][0] == alias))
+            {
+                continue;
+            }
+            let (field, _) = subject.selection();
+            let pull = &data[alias.as_str()][field];
+            if pull.is_null() {
+                continue;
+            }
+            states.insert(url.clone(), subject.read(&url, pull)?);
+        }
+        Ok((states, quota))
     }
 
     /// Open a draft pull request from `head` into `base`, and return its URL.
@@ -1371,7 +1453,7 @@ pub struct PrSnapshot {
     pub from_fork: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PrState {
     Open,
     Closed,
@@ -1433,6 +1515,117 @@ impl PullRequest {
                     "gh output has no isDraft".into(),
                 ))?,
         })
+    }
+}
+
+/// The two subjects the Inbox reads, owning their GraphQL selection and decoding.
+#[derive(Clone, Copy)]
+enum InboxSubject {
+    Issue,
+    PullRequest,
+}
+
+impl InboxSubject {
+    fn selection(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Issue => (
+                "issue",
+                "state closedAt labels(first: 100) { nodes { name } }",
+            ),
+            Self::PullRequest => ("pullRequest", "url state mergedAt closedAt"),
+        }
+    }
+
+    fn read(self, url: &str, json: &Value) -> Result<InboxState> {
+        match self {
+            Self::Issue => IssueState::from_json(url, json).map(InboxState::Issue),
+            Self::PullRequest => {
+                PullRequestState::from_json(url, json).map(InboxState::PullRequest)
+            }
+        }
+    }
+}
+
+/// The Inbox's facts for either kind of GitHub subject. Untagged to keep
+/// reading the pull-request-only cache written before issue reads existed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum InboxState {
+    Issue(IssueState),
+    PullRequest(PullRequestState),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct IssueState {
+    pub closed: bool,
+    pub closed_at: Option<String>,
+    pub needs_triage: bool,
+    /// The first kept answer showing needs-triage absent, reset if it returns.
+    pub triaged_at: Option<String>,
+}
+
+impl IssueState {
+    fn from_json(url: &str, json: &Value) -> Result<Self> {
+        let closed = match json["state"].as_str() {
+            Some("OPEN") => false,
+            Some("CLOSED") => true,
+            other => bail!(CommandFailure::InvalidResponse(format!(
+                "gh output has an unknown issue state {other:?} for {url}"
+            ))),
+        };
+        Ok(Self {
+            closed,
+            closed_at: json["closedAt"].as_str().map(String::from),
+            needs_triage: json["labels"]["nodes"].as_array().is_some_and(|labels| {
+                labels.iter().any(|label| {
+                    label["name"]
+                        .as_str()
+                        .is_some_and(|name| crate::labels::NEEDS_TRIAGE.is_named(name))
+                })
+            }),
+            triaged_at: None,
+        })
+    }
+}
+
+/// What GitHub last showed for one pull request: its state and its merge
+/// or close time, each as GitHub wrote them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct PullRequestState {
+    pub state: PrState,
+    pub merged_at: Option<String>,
+    pub closed_at: Option<String>,
+}
+
+impl PullRequestState {
+    fn from_json(url: &str, json: &Value) -> Result<Self> {
+        let state = match json["state"].as_str() {
+            Some("OPEN") => PrState::Open,
+            Some("CLOSED") => PrState::Closed,
+            Some("MERGED") => PrState::Merged,
+            other => bail!(CommandFailure::InvalidResponse(format!(
+                "gh output has an unknown PR state {other:?} for {url}"
+            ))),
+        };
+        let at = |name: &str| json[name].as_str().map(String::from);
+        Ok(PullRequestState {
+            state,
+            merged_at: at("mergedAt"),
+            closed_at: at("closedAt"),
+        })
+    }
+}
+
+/// The owner, repository and pull request number of a
+/// `https://github.com/<owner>/<repo>/pull/<number>` URL, if it parses.
+fn split_pull_request_url(url: &str) -> Option<(String, String, u64)> {
+    let path = url.strip_prefix("https://github.com/")?;
+    match path.split('/').collect::<Vec<_>>().as_slice() {
+        [owner, repo, "pull", number] if !owner.is_empty() && !repo.is_empty() => number
+            .parse()
+            .ok()
+            .map(|number| (owner.to_string(), repo.to_string(), number)),
+        _ => None,
     }
 }
 

@@ -7,6 +7,7 @@
 //!  "private"?: true,
 //!  "advisory_error"?: "<stderr>",
 //!  "issues": {"<number>": "OPEN" | "CLOSED"},
+//!  "issue_closed_at"?: {"<number>": "<ISO 8601 time>"},
 //!  "titles"?: {"<number>": "<title>"},
 //!  "created"?: {"<number>": "<ISO 8601 time>"},
 //!  "bodies"?: {"<number>": "<body>"},
@@ -35,6 +36,8 @@
 //!  "after_merge"?: "<script>",
 //!  "failing"?: ["<command> <subcommand>", ...],
 //!  "failing_stderr"?: "<stderr for failing commands>",
+//!  "rate_limits"?: {"core": {"remaining", "reset"}, "graphql": {"remaining", "reset"}},
+//!  "inbox_rate_limit"?: {"remaining", "resetAt"},
 //!  "fail_next"?: {"call": "<command prefix>", "times": <count>, "error": "<stderr>"},
 //!  "advisory_create_fails_after"?: <number of records>,
 //!  "user_email"?: "<address>" | null,
@@ -125,6 +128,23 @@
 //! the `$after` cursor: a plain body is by the repository owner, as `OWNER`,
 //! and an object names its `by` account, null for a deleted one, and its
 //! `association`. Any other query exits 2.
+//!
+//! `gh api graphql` also answers the Inbox's batched issue and pull request query: one
+//! `alias: repository(owner, name)` entry per subject, each with that
+//! PR's `url`, `state` (`OPEN`, `CLOSED` or `MERGED`) and its `mergedAt` and
+//! `closedAt` times when the state names them, else null, plus the query's
+//! own `rateLimit`. An alias for a pull request the state does not know, or
+//! for another repository, answers a null `pullRequest` and a scoped GraphQL
+//! error. Like `gh`, the fake prints the partial data and exits 1.
+//! `rate_limits` supplies the resources from `gh api rate_limit` (otherwise
+//! 4999 remaining, resetting in an hour). `inbox_rate_limit` overrides the
+//! batched GraphQL response's quota, e.g. when that query spends the reserve.
+//! `next_rate_limits` replaces `rate_limits` after each quota answer, modelling
+//! requests spending the REST reserve during private-storage discovery.
+//! `failing` with `failing_stderr` models unreachable, signed-out and
+//! rate-limited reads with gh's actual diagnostics and a nonzero exit.
+//! Issues answer `state`, `closedAt` from `issue_closed_at` and label nodes
+//! from `labels`, with the same null/scoped error for an unknown issue.
 //!
 //! `gh api --method PATCH repos/<repo>/pulls/<number> -f body=<body>` sets the
 //! PR's body. `gh pr view`, `gh pr ready` and `gh pr merge` name the PR by
@@ -1326,6 +1346,33 @@ fn membership_response(state: &Json, key: &str, login: &str) {
 
 fn api(state: &mut Json, positional: &[String], flags: &Flags) {
     let path = &positional[0];
+    if path == "rate_limit" {
+        let reset = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+            + 3600;
+        let defaults = object([("remaining", number(4999)), ("reset", number(reset))]);
+        let resource = |name| {
+            state
+                .get("rate_limits")
+                .and_then(|limits| limits.get(name))
+                .cloned()
+                .unwrap_or_else(|| defaults.clone())
+        };
+        println!(
+            "{}",
+            object([(
+                "resources",
+                object([("core", resource("core")), ("graphql", resource("graphql")),])
+            )])
+        );
+        if let Some(next) = state.get("next_rate_limits").cloned() {
+            state.set("rate_limits", next);
+            save(state);
+        }
+        return;
+    }
     if let Some((repo, rest)) = repo_prefix(path) {
         if let Some(n) = rest
             .strip_prefix("issues/")
@@ -1979,9 +2026,22 @@ fn record_run(state: &mut Json, mut run: Json) {
 
 /// The Tickets query or the candidate query, told apart by the candidate
 /// query's `timelineItems`: `-f query=...` plus `-f`/`-F` variables.
+///
+/// The Inbox's batched subject query, identified by its numbered issue/PR
+/// lookups with a `rateLimit`: one `alias: repository(owner, name)` per subject,
+/// with state, settlement times and issue labels when known, else null.
+/// An alias for another repository answers null, and every answer carries the
+/// query's own `rateLimit`. An unresolved item adds a scoped GraphQL error
+/// and exits 1, keeping the other aliases' data on stdout as `gh` does.
 fn graphql(state: &Json, args: &[&str]) {
     let mut variables = api_fields(args);
     let query = variables.remove("query").unwrap_or_default();
+    if (query.contains("pullRequest(number:") || query.contains("issue(number:"))
+        && query.contains("rateLimit")
+    {
+        inbox_states(state, &query);
+        return;
+    }
     let asks_for = |fields: &[&str]| fields.iter().all(|field| query.contains(field));
     let is_candidate = asks_for(&["parent", "subIssues", "blockedBy", "timelineItems"]);
     let is_comments = asks_for(&["comments(", "authorAssociation"]);
@@ -2039,6 +2099,128 @@ fn graphql(state: &Json, args: &[&str]) {
     };
     let answer = object([("data", object([("repository", object([("issue", issue)]))]))]);
     println!("{answer}");
+}
+
+/// The Inbox's batched query: one `alias:
+/// repository(owner: "owner", name: "repo") { issue/pullRequest(number: n) { ... }
+/// }` entry per subject, answered alias by alias with the query's own
+/// `rateLimit`.
+fn inbox_states(state: &Json, query: &str) {
+    let mut data: Vec<(String, Json)> = Vec::new();
+    let mut errors = Vec::new();
+    let mut rest = query;
+    while let Some(at) = rest.find(": repository(") {
+        let alias = rest[..at]
+            .rsplit(|char: char| !(char.is_alphanumeric() || char == '_'))
+            .next()
+            .unwrap_or_default()
+            .to_owned();
+        rest = &rest[at + ": repository(".len()..];
+        let owner = quoted_after(rest, "owner:");
+        let name = quoted_after(rest, "name:");
+        let subject = rest.split(": repository(").next().unwrap_or(rest);
+        let field = if subject.contains("pullRequest(number:") {
+            "pullRequest"
+        } else {
+            "issue"
+        };
+        let lookup = format!("{field}(number:");
+        let number = subject
+            .find(&lookup)
+            .and_then(|at| {
+                subject[at + lookup.len()..]
+                    .trim_start()
+                    .split(|char: char| !char.is_ascii_digit())
+                    .next()
+            })
+            .unwrap_or_default();
+        let same_repo = owner.is_some_and(|owner| {
+            name.is_some_and(|name| {
+                format!("{owner}/{name}").eq_ignore_ascii_case(state.at("repo").str())
+            })
+        });
+        let item = same_repo
+            .then(|| {
+                if field == "issue" {
+                    return state.at("issues").get(number).map(|issue_state| {
+                        let labels = listed(state, "labels", number)
+                            .into_iter()
+                            .map(|label| object([("name", label)]))
+                            .collect();
+                        object([
+                            ("state", issue_state.clone()),
+                            (
+                                "closedAt",
+                                state
+                                    .get("issue_closed_at")
+                                    .and_then(|times| times.get(number))
+                                    .cloned()
+                                    .unwrap_or(Null),
+                            ),
+                            ("labels", object([("nodes", Array(labels))])),
+                        ])
+                    });
+                }
+                prs(state)
+                    .iter()
+                    .find(|pr| pr.at("number").python() == number)
+                    .map(|pr| {
+                        let at = |field: &str| pr.get(field).cloned().unwrap_or(Null);
+                        object([
+                            ("url", pr.at("url").clone()),
+                            ("state", pr.at("state").clone()),
+                            ("mergedAt", at("mergedAt")),
+                            ("closedAt", at("closedAt")),
+                        ])
+                    })
+            })
+            .flatten();
+        if item.is_none() {
+            errors.push(object([
+                ("type", string("NOT_FOUND")),
+                ("path", Json::Array(vec![string(&alias), string(field)])),
+                (
+                    "message",
+                    string(format!("Could not resolve {field} {number}.")),
+                ),
+            ]));
+        }
+        data.push((alias, object([(field, item.unwrap_or(Null))])));
+    }
+    if data.is_empty() {
+        die("fake gh: batched pull request query names no repository", 2);
+    }
+    data.push((
+        "rateLimit".to_owned(),
+        state.get("inbox_rate_limit").cloned().unwrap_or_else(|| {
+            object([
+                ("limit", number(5000)),
+                ("cost", number(1)),
+                ("remaining", number(4999)),
+                ("resetAt", string(now())),
+            ])
+        }),
+    ));
+    let mut answer = Json::Object(vec![("data".to_owned(), Json::Object(data))]);
+    let failed = !errors.is_empty();
+    if failed {
+        answer.set("errors", Json::Array(errors));
+    }
+    println!("{answer}");
+    if failed {
+        die(
+            "gh: Could not resolve a pull request in the batched query.",
+            1,
+        );
+    }
+}
+
+/// The `"value"` after `key` in a GraphQL query, if any.
+fn quoted_after<'a>(query: &'a str, key: &str) -> Option<&'a str> {
+    query
+        .find(key)
+        .and_then(|at| query[at + key.len()..].trim_start().strip_prefix('"'))
+        .and_then(|rest| rest.split('"').next())
 }
 
 /// The list `map` holds for issue `key`, empty if it holds none.
