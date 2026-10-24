@@ -1,0 +1,7 @@
+# Pass and fail use separate levels
+
+At our Eval suite sizes, one 95% credible level makes even identical Arms hard to pass. Lowering that single level would also make noise more likely to fail an Experiment; widening the margin would let a larger regression pass. Following [the Bar decisions, Q2.3 and Q3.4](../grill-with-docs/1252-1253-bar-and-rechecks.md), the **Bar** instead fixes a **pass level** and a **fail level** before the first Trial.
+
+Fail when the upper bound at the fail level is below zero. Otherwise pass when the lower bound at the pass level is above the margin and its upper bound reaches zero. Everything else is inconclusive. Both intervals use the same paired Dirichlet draws, and the prediction of additional Eval tasks uses this same decision. The margin, prior, seed and draw count stay unchanged.
+
+Both levels default to 95% until the A/A measurement sets the pass level. This keeps today's release decisions while allowing a future pass level to be calibrated without weakening the evidence for a fail. The method is `paired-dirichlet-v2`; saved Experiments using `paired-dirichlet-v1` retain their single-level Bar, intervals and stored Verdict when read. Their settings are never silently replaced with the new defaults.

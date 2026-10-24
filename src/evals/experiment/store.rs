@@ -203,6 +203,13 @@ impl Stored {
                     .causes
                     .clone_from(&stored.description.bar.void_rules.causes);
             }
+            if let crate::verdict::Levels::Legacy { credible_level } = stored.description.bar.levels
+                && description.bar.levels.pass() == credible_level
+                && description.bar.levels.fail() == credible_level
+            {
+                // Equivalent CLI settings resume the original method and JSON.
+                description.bar.levels = stored.description.bar.levels;
+            }
             if stored.description.bar != description.bar {
                 ensure!(!started, "Bar cannot change after the first Trial");
                 stored.description.bar = description.bar;
@@ -261,6 +268,15 @@ impl Stored {
     }
 
     fn upgrade_verdict(&mut self) -> Result<()> {
+        if matches!(
+            self.description.bar.levels,
+            crate::verdict::Levels::Legacy { .. }
+        ) && self.verdict.is_some()
+        {
+            // A saved single-level Verdict is evidence, not an invitation to
+            // recalculate it under a newer runner's recheck policy.
+            return Ok(());
+        }
         if self.state == State::Completed
             && self
                 .verdict

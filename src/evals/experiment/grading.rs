@@ -194,7 +194,7 @@ mod tests {
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Verdict {
     pub verdict: Conclusion,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provisional_verdict: Option<Decision>,
     pub suites: BTreeMap<String, verdict::Verdict>,
     #[serde(default)]
@@ -253,7 +253,7 @@ fn evaluate(
     for (suite, &trials) in &bar.trials_per_task {
         let statistics = verdict::Bar {
             margin: bar.margin,
-            credible_level: bar.credible_level,
+            levels: bar.levels,
             prior: bar.prior,
             seed: bar.seed,
             draws: bar.draws,

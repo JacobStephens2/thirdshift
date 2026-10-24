@@ -23,6 +23,139 @@ mod release;
 #[path = "experiments/sandbox.rs"]
 mod sandbox;
 
+#[test]
+fn saved_single_level_experiments_keep_their_bar_and_verdict_when_read_and_resumed() {
+    let fixture = Fixture::new();
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let id = fixture.experiment()["id"].as_str().unwrap().to_owned();
+    let path = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{id}/experiment.json"
+    ));
+    let mut legacy: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    let old_bar = |bar: &mut Value| {
+        let bar = bar.as_object_mut().unwrap();
+        let level = bar.remove("pass_level").unwrap();
+        bar.remove("fail_level");
+        bar.insert("credible_level".into(), level);
+    };
+    old_bar(&mut legacy["bar"]);
+    for suite in legacy["verdict"]["suites"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        old_bar(&mut suite["bar"]);
+        suite["method"] = json!(
+            "paired-dirichlet-v1; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles"
+        );
+        suite["thirdshift_version"] = json!("legacy-version");
+        for metric in ["accuracy", "wrong_findings"] {
+            let metric = suite[metric].as_object_mut().unwrap();
+            let interval = metric.remove("pass_interval").unwrap();
+            metric.remove("fail_interval");
+            metric.insert("interval".into(), interval);
+        }
+    }
+    // A retained decision is authoritative, even if a fresh calculation differs.
+    legacy["verdict"]["verdict"] = json!("fail");
+    for has_provisional in [false, true] {
+        if has_provisional {
+            legacy["verdict"]["provisional_verdict"] = json!("fail");
+        } else {
+            legacy["verdict"]
+                .as_object_mut()
+                .unwrap()
+                .remove("provisional_verdict");
+        }
+        fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let before = fs::read(&path).unwrap();
+        let shown = fixture.experiment();
+        assert_eq!(shown["bar"], legacy["bar"]);
+        assert_eq!(shown["verdict"], legacy["verdict"]);
+        assert_eq!(fs::read(&path).unwrap(), before);
+        let trials = fixture.trial_calls().len();
+        let resumed = fixture.run(&[]);
+        assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+        let resumed: Value = serde_json::from_str(&resumed.stdout).unwrap();
+        assert_eq!(resumed["bar"], legacy["bar"]);
+        assert_eq!(resumed["verdict"], legacy["verdict"]);
+        assert_eq!(fixture.trial_calls().len(), trials);
+    }
+}
+
+#[test]
+fn experiment_fixes_both_levels_before_trials_and_refuses_changes() {
+    let fixture = Fixture::new();
+    let args = ["--pass-level", "0.8", "--fail-level", "0.99"];
+    let run = fixture.run(&args);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let saved = fixture.experiment();
+    assert_eq!(saved["bar"]["pass_level"], 0.8);
+    assert_eq!(saved["bar"]["fail_level"], 0.99);
+    assert!(saved["bar"].get("credible_level").is_none());
+    let suite = &saved["verdict"]["suites"]["spec-review"];
+    assert_eq!(suite["bar"]["pass_level"], 0.8);
+    assert_eq!(suite["bar"]["fail_level"], 0.99);
+    assert!(
+        suite["method"]
+            .as_str()
+            .unwrap()
+            .starts_with("paired-dirichlet-v2;")
+    );
+    for metric in ["accuracy", "wrong_findings"] {
+        assert!(suite[metric]["pass_interval"]["lower"].is_number());
+        assert!(suite[metric]["fail_interval"]["upper"].is_number());
+        assert!(suite[metric].get("interval").is_none());
+    }
+    let trials = fixture.trial_calls().len();
+    for changed in [
+        ["--pass-level", "0.9", "--fail-level", "0.99"],
+        ["--pass-level", "0.8", "--fail-level", "0.95"],
+    ] {
+        let run = fixture.run(&changed);
+        assert_eq!(run.code, Some(1), "{}", run.stderr);
+        assert!(
+            run.stderr
+                .contains("Bar cannot change after the first Trial"),
+            "{}",
+            run.stderr
+        );
+        assert_eq!(fixture.experiment()["bar"], saved["bar"]);
+    }
+    let resumed = fixture.run(&args);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    assert_eq!(fixture.experiment(), saved);
+    assert_eq!(fixture.trial_calls().len(), trials);
+}
+
+#[test]
+fn experiment_rejects_invalid_levels_and_the_removed_credible_level_flag() {
+    let fixture = Fixture::new();
+    for flag in ["--pass-level", "--fail-level"] {
+        for invalid in ["0", "1", "-0.1", "NaN", "inf"] {
+            let run = fixture.run(&[flag, invalid]);
+            assert_eq!(run.code, Some(2), "{flag} {invalid}: {}", run.stderr);
+            assert!(
+                run.stderr
+                    .contains("level must be strictly between zero and one"),
+                "{}",
+                run.stderr
+            );
+        }
+    }
+    let removed = fixture.run(&["--credible-level", "0.95"]);
+    assert_eq!(removed.code, Some(2));
+    assert!(
+        removed
+            .stderr
+            .contains("unknown Experiment flag: --credible-level"),
+        "{}",
+        removed.stderr
+    );
+    assert!(fixture.trial_calls().is_empty());
+}
+
 fn assert_missing_trial_inputs_refused_before_builds(release: bool) {
     for session in ["code-review", "spec-review"] {
         let fixture = Fixture::with_session(session, 1);
@@ -967,7 +1100,7 @@ esac
         assert_eq!(experiment["verdict"]["provisional_verdict"], decision);
         assert_eq!(experiment["verdict"]["verdict"], "waiting_on_rechecks");
         assert!(
-            experiment["verdict"]["suites"]["spec-review"]["accuracy"]["interval"]["lower"]
+            experiment["verdict"]["suites"]["spec-review"]["accuracy"]["pass_interval"]["lower"]
                 .is_number()
         );
         for result in experiment["results"].as_array().unwrap() {
@@ -1086,7 +1219,8 @@ fn experiment_records_both_arms_the_bar_logs_stages_and_each_trial() {
     assert_eq!(experiment["candidate"]["commit"], fixture.candidate);
     assert_eq!(experiment["suites"], json!(["spec-review"]));
     assert_eq!(experiment["bar"]["margin"], -0.1);
-    assert_eq!(experiment["bar"]["credible_level"], 0.95);
+    assert_eq!(experiment["bar"]["pass_level"], 0.95);
+    assert_eq!(experiment["bar"]["fail_level"], 0.95);
     assert_eq!(experiment["bar"]["trials_per_task"]["spec-review"], 1);
     assert_eq!(experiment["results"].as_array().unwrap().len(), 2);
     for result in experiment["results"].as_array().unwrap() {

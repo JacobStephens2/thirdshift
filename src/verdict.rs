@@ -13,16 +13,23 @@ use rand_distr::{Distribution, Gamma};
 use rand_pcg::Pcg64;
 use serde::{Deserialize, Serialize};
 
+mod levels;
 mod prediction;
 
+pub(crate) use levels::decimal;
+pub use levels::{Intervals, Levels};
+
 const METHOD: &str =
+    "paired-dirichlet-v2; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles";
+const LEGACY_METHOD: &str =
     "paired-dirichlet-v1; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles";
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Bar {
     /// Signed lower bound on Candidate minus Baseline (a ten-point tolerance).
     pub margin: f64,
-    pub credible_level: f64,
+    #[serde(flatten)]
+    pub levels: Levels,
     /// Total pseudo Eval tasks, spread evenly across all possible differences.
     pub prior: f64,
     pub seed: u64,
@@ -53,7 +60,7 @@ impl Default for Bar {
     fn default() -> Self {
         Self {
             margin: -0.10,
-            credible_level: 0.95,
+            levels: Levels::default(),
             prior: 1.0,
             seed: 0,
             draws: 20_000,
@@ -79,7 +86,9 @@ pub struct TaskScores {
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Interval {
+    #[serde(deserialize_with = "decimal")]
     pub lower: f64,
+    #[serde(deserialize_with = "decimal")]
     pub upper: f64,
 }
 
@@ -116,7 +125,8 @@ pub struct Assessment {
     /// Counts ordered from -1 to +1 in steps of 1 / Trials per Eval task.
     /// For wrong findings, positive means fewer wrong findings in the Candidate.
     pub difference_counts: Vec<usize>,
-    pub interval: Interval,
+    #[serde(flatten)]
+    pub intervals: Intervals,
     pub verdict: Decision,
     pub more_tasks: Option<MoreTasks>,
 }
@@ -176,7 +186,11 @@ fn evaluate(scores: &[TaskScores], bar: &Bar, predictions: bool) -> Result<Verdi
     Ok(Verdict {
         bar: bar.clone(),
         thirdshift_version: env!("CARGO_PKG_VERSION").to_owned(),
-        method: METHOD.to_owned(),
+        method: match bar.levels {
+            Levels::Separate { .. } => METHOD,
+            Levels::Legacy { .. } => LEGACY_METHOD,
+        }
+        .to_owned(),
         accuracy,
         wrong_findings,
         verdict,
@@ -199,10 +213,7 @@ fn validate(scores: &[TaskScores], bar: &Bar) -> Result<()> {
         bar.margin.is_finite() && (-1.0..=1.0).contains(&bar.margin),
         "margin must be finite and within [-1, 1]"
     );
-    ensure!(
-        bar.credible_level.is_finite() && bar.credible_level > 0.0 && bar.credible_level < 1.0,
-        "credible level must be strictly between zero and one"
-    );
+    bar.levels.validate()?;
     let prior_per_value = bar.prior / (2 * bar.trials_per_task + 1) as f64;
     ensure!(
         bar.prior.is_finite() && prior_per_value > 0.0,
@@ -237,26 +248,16 @@ fn assess(counts: &[usize], bar: &Bar, seed: u64, predictions: bool) -> Result<A
         draws.iter().all(|d| d.is_finite()),
         "posterior draws are outside floating-point range"
     );
-    let interval = interval(&mut draws, bar.credible_level);
-    let verdict = decide(interval, bar.margin);
+    let intervals = Intervals::from_draws(&mut draws, bar.levels);
+    let verdict = intervals.decide(bar.margin);
     Ok(Assessment {
         difference_counts: counts.to_vec(),
-        interval,
+        intervals,
         verdict,
         more_tasks: (predictions && verdict == Decision::Inconclusive)
             .then(|| prediction::more_tasks(&posterior, bar, &mut rng))
             .transpose()?,
     })
-}
-
-fn decide(interval: Interval, margin: f64) -> Decision {
-    if interval.upper < 0.0 {
-        Decision::Fail
-    } else if interval.lower > margin && interval.upper >= 0.0 {
-        Decision::Pass
-    } else {
-        Decision::Inconclusive
-    }
 }
 
 struct Posterior {

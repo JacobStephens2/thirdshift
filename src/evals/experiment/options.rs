@@ -115,7 +115,14 @@ pub fn parse(args: &[String]) -> Result<Options> {
         };
     }
     number!("--margin", bar.margin);
-    number!("--credible-level", bar.credible_level);
+    let mut pass_level = bar.levels.pass();
+    let mut fail_level = bar.levels.fail();
+    number!("--pass-level", pass_level);
+    number!("--fail-level", fail_level);
+    bar.levels = crate::verdict::Levels::Separate {
+        pass_level,
+        fail_level,
+    };
     number!("--prior", bar.prior);
     number!("--seed", bar.seed);
     number!("--draws", bar.draws);
@@ -138,10 +145,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
         bar.margin.is_finite() && (-1.0..=1.0).contains(&bar.margin),
         "margin must be within [-1, 1]"
     );
-    ensure!(
-        bar.credible_level.is_finite() && bar.credible_level > 0.0 && bar.credible_level < 1.0,
-        "credible level must be between zero and one"
-    );
+    bar.levels.validate()?;
     ensure!(
         bar.prior.is_finite() && bar.prior > 0.0 && bar.draws >= 2 && bar.timeout_seconds > 0,
         "prior and timeout must be positive; at least two draws are required"

@@ -27,6 +27,7 @@ use crate::git::Git;
 use crate::harness::{Choice, ChosenBy, Harness};
 use crate::issue::Repo;
 use crate::trial::VoidCause;
+use crate::verdict::{Levels, decimal};
 use crate::{interrupt, logs, progress};
 
 pub(crate) use evidence::{RunningTrial, SessionLog};
@@ -41,8 +42,8 @@ pub(crate) use workers::{Arm, TrialResult, trial_key};
 pub(crate) struct Bar {
     #[serde(deserialize_with = "decimal")]
     pub margin: f64,
-    #[serde(deserialize_with = "decimal")]
-    pub credible_level: f64,
+    #[serde(flatten)]
+    pub levels: Levels,
     #[serde(deserialize_with = "decimal")]
     pub prior: f64,
     pub seed: u64,
@@ -50,17 +51,6 @@ pub(crate) struct Bar {
     pub trials_per_task: BTreeMap<String, usize>,
     pub timeout_seconds: u64,
     pub void_rules: VoidRules,
-}
-
-// serde's flattened-record buffer sees arbitrary-precision JSON decimals as
-// Number maps. Value preserves that representation before conversion to f64.
-fn decimal<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> std::result::Result<f64, D::Error> {
-    let value = serde_json::Value::deserialize(deserializer)?;
-    value
-        .as_f64()
-        .ok_or_else(|| serde::de::Error::custom("expected a decimal"))
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -74,7 +64,7 @@ impl Default for Bar {
         let statistics = crate::verdict::Bar::default();
         Self {
             margin: statistics.margin,
-            credible_level: statistics.credible_level,
+            levels: statistics.levels,
             prior: statistics.prior,
             seed: statistics.seed,
             draws: statistics.draws,
