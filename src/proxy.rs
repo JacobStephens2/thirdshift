@@ -10,7 +10,7 @@
 //! does not allow never resolves: the allowlist is checked before DNS.
 
 use std::io::{BufRead, BufReader, Write};
-use std::net::{IpAddr, TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::os::unix::net::UnixListener;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -111,30 +111,55 @@ pub(crate) fn address_refusal(resolved: &[IpAddr], local: &[IpAddr]) -> Option<&
     if resolved.is_empty() {
         return Some("the name did not resolve");
     }
-    if resolved
-        .iter()
-        .any(|address| address.is_loopback() || address.is_unspecified())
-    {
+    // The kernel also dials IPv4 through mapped IPv6 addresses. Apply the
+    // same policy to both spellings, including the host's own addresses.
+    if resolved.iter().any(|address| {
+        let address = address.to_canonical();
+        address.is_loopback() || address.is_unspecified()
+    }) {
         return Some("the name resolves to loopback");
     }
-    if resolved.iter().any(|address| local.contains(address)) {
+    if resolved.iter().any(|address| {
+        local
+            .iter()
+            .any(|local| address.to_canonical() == local.to_canonical())
+    }) {
         return Some("the name resolves to this machine");
     }
     None
 }
 
-/// Resolve `host` the way the proxy's dial will: `getaddrinfo`, which reads
-/// `/etc/hosts` before DNS.
-fn resolve(host: &str, port: u16) -> Vec<IpAddr> {
-    let mut addresses = Vec::new();
-    if let Ok(resolved) = (host, port).to_socket_addrs() {
-        for socket in resolved {
-            if !addresses.contains(&socket.ip()) {
-                addresses.push(socket.ip());
+/// The host network's I/O, separate from the proxy's allowlist and address
+/// policy so transport tests can use a local provider without relaxing it.
+trait Network: Send + Sync {
+    fn local_addresses(&self) -> Vec<IpAddr>;
+    fn resolve(&self, host: &str, port: u16) -> Vec<IpAddr>;
+    fn connect(&self, address: SocketAddr) -> std::io::Result<TcpStream>;
+}
+
+struct SystemNetwork;
+
+impl Network for SystemNetwork {
+    fn local_addresses(&self) -> Vec<IpAddr> {
+        local_addresses()
+    }
+
+    /// `getaddrinfo` reads `/etc/hosts` before DNS.
+    fn resolve(&self, host: &str, port: u16) -> Vec<IpAddr> {
+        let mut addresses = Vec::new();
+        if let Ok(resolved) = (host, port).to_socket_addrs() {
+            for socket in resolved {
+                if !addresses.contains(&socket.ip()) {
+                    addresses.push(socket.ip());
+                }
             }
         }
+        addresses
     }
-    addresses
+
+    fn connect(&self, address: SocketAddr) -> std::io::Result<TcpStream> {
+        TcpStream::connect_timeout(&address, Duration::from_secs(10))
+    }
 }
 
 /// The proxy outside one Trial's sandbox: `allowed` is that Trial Harness's
@@ -167,6 +192,10 @@ impl Drop for Guard {
 
 /// Serve the allowlisting proxy for one Trial's sandbox.
 pub(crate) fn start(allowed: &[String]) -> Result<Guard> {
+    start_with(allowed, SystemNetwork)
+}
+
+fn start_with(allowed: &[String], network: impl Network + 'static) -> Result<Guard> {
     let dir = tempfile::Builder::new()
         .prefix("thirdshift-proxy-")
         .tempdir_in("/tmp")
@@ -183,7 +212,8 @@ pub(crate) fn start(allowed: &[String]) -> Result<Guard> {
         .context("sandbox failed to start: could not listen without blocking")?;
     let shared = Arc::new(Shared {
         allowed: allowed.to_vec(),
-        local: local_addresses(),
+        local: network.local_addresses(),
+        network: Box::new(network),
     });
     let shutdown = Arc::new(AtomicBool::new(false));
     let thread = std::thread::Builder::new()
@@ -205,6 +235,7 @@ pub(crate) fn start(allowed: &[String]) -> Result<Guard> {
 struct Shared {
     allowed: Vec<String>,
     local: Vec<IpAddr>,
+    network: Box<dyn Network>,
 }
 
 /// Accept connections until `shutdown` is set.
@@ -245,7 +276,7 @@ fn serve_one(mut stream: std::os::unix::net::UnixStream, shared: &Shared) {
     }
     let tunnel = match &decision {
         Decision::Refuse { .. } => None,
-        Decision::Tunnel(request) => dial(request),
+        Decision::Tunnel(request) => dial(request, shared.network.as_ref()),
     };
     let (status, body) = match (&decision, &tunnel) {
         (Decision::Tunnel(_), Some(_)) => ("200 Connection Established".to_string(), None),
@@ -289,16 +320,14 @@ struct Request {
 
 /// Dial the request's resolved addresses in order, holding each at most ten
 /// seconds.
-fn dial(request: &Request) -> Option<TcpStream> {
+fn dial(request: &Request, network: &dyn Network) -> Option<TcpStream> {
     request
         .addresses
         .iter()
         .filter_map(|address| {
-            TcpStream::connect_timeout(
-                &std::net::SocketAddr::new(*address, request.port),
-                Duration::from_secs(10),
-            )
-            .ok()
+            network
+                .connect(SocketAddr::new(*address, request.port))
+                .ok()
         })
         .next()
 }
@@ -360,7 +389,7 @@ fn decide(head: &str, shared: &Shared) -> Decision {
     if !allowed_name(&host, &shared.allowed) {
         return refuse("403 Forbidden", format!("{} is not allowlisted", message()));
     }
-    let resolved = resolve(&host, port);
+    let resolved = shared.network.resolve(&host, port);
     if let Some(reason) = address_refusal(&resolved, &shared.local) {
         return refuse("403 Forbidden", format!("{}: {reason}", message()));
     }
@@ -390,8 +419,14 @@ fn split_authority(target: &str) -> Option<(String, u16)> {
     Some((host, port.parse().ok()?))
 }
 
-/// Copy bytes both ways until either direction ends.
+/// Copy bytes both ways, forwarding each EOF so the peer can finish its
+/// response and both forwarding threads can end.
 fn relay(client: std::os::unix::net::UnixStream, server: TcpStream) {
+    // The ten-second timeout only bounds the CONNECT header. Model calls
+    // and local work between requests can leave a tunnel idle for longer.
+    if client.set_read_timeout(None).is_err() {
+        return;
+    }
     let mut client_reader = match client.try_clone() {
         Ok(reader) => reader,
         Err(_) => return,
@@ -405,8 +440,10 @@ fn relay(client: std::os::unix::net::UnixStream, server: TcpStream) {
     std::thread::scope(|scope| {
         scope.spawn(move || {
             let _ = std::io::copy(&mut client_reader, &mut server_writer);
+            let _ = server_writer.shutdown(std::net::Shutdown::Write);
         });
         let _ = std::io::copy(&mut server_reader, &mut client_writer);
+        let _ = client_writer.shutdown(std::net::Shutdown::Write);
     });
 }
 
@@ -448,8 +485,29 @@ fn local_addresses() -> Vec<IpAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
     use std::os::unix::net::UnixStream;
     use std::path::Path;
+
+    /// Only the external network I/O is substituted: the proxy still
+    /// resolves, checks its real policy, dials and forwards over sockets.
+    struct LocalProvider(SocketAddr);
+
+    impl Network for LocalProvider {
+        fn local_addresses(&self) -> Vec<IpAddr> {
+            vec!["192.0.2.10".parse().unwrap()]
+        }
+
+        fn resolve(&self, host: &str, port: u16) -> Vec<IpAddr> {
+            assert_eq!((host, port), ("api.anthropic.com", 443));
+            vec!["203.0.113.10".parse().unwrap()]
+        }
+
+        fn connect(&self, address: SocketAddr) -> std::io::Result<TcpStream> {
+            assert_eq!(address, "203.0.113.10:443".parse().unwrap());
+            TcpStream::connect(self.0)
+        }
+    }
 
     #[test]
     fn the_allowlist_matches_names_only() {
@@ -489,6 +547,89 @@ mod tests {
             assert!(address_refusal(&refused, &local).is_some(), "{refused:?}");
         }
         assert!(address_refusal(&[], &local).is_some());
+    }
+
+    #[test]
+    fn mapped_loopback_and_host_addresses_are_refused() {
+        let local = vec!["192.0.2.10".parse().unwrap()];
+        for host in ["::ffff:127.0.0.1", "::ffff:0.0.0.0", "::ffff:192.0.2.10"] {
+            let address = host.parse().unwrap();
+            assert!(
+                address_refusal(&[address], &local).is_some(),
+                "proxy permits {host}"
+            );
+        }
+        assert_eq!(
+            address_refusal(&["::ffff:203.0.113.10".parse().unwrap()], &local),
+            None
+        );
+        assert!(
+            address_refusal(
+                &["192.0.2.10".parse().unwrap()],
+                &["::ffff:192.0.2.10".parse().unwrap()]
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn connect_tunnels_remain_writable_after_waiting_for_a_model_response() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut provider, _) = listener.accept().unwrap();
+        provider
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let (mut client, mut proxy) = UnixStream::pair().unwrap();
+        client
+            .write_all(b"CONNECT api.anthropic.com:443 HTTP/1.1\r\n\r\n")
+            .unwrap();
+        assert!(read_head(&mut proxy).is_some());
+        let forwarding = std::thread::spawn(move || relay(proxy, upstream));
+        client.write_all(b"first request").unwrap();
+        let mut first = [0; 13];
+        provider.read_exact(&mut first).unwrap();
+        assert_eq!(&first, b"first request");
+        std::thread::sleep(Duration::from_secs(11));
+        client.write_all(b"next request").unwrap();
+        let mut next = [0; 12];
+        let result = provider.read_exact(&mut next);
+        drop(provider);
+        drop(client);
+        forwarding.join().unwrap();
+        result.expect("CONNECT tunnel stopped forwarding after 10 idle seconds");
+        assert_eq!(&next, b"next request");
+    }
+
+    #[test]
+    fn connect_tunnels_forward_half_closes_and_the_final_response() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let upstream = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut provider, _) = listener.accept().unwrap();
+        provider
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let (mut client, proxy) = UnixStream::pair().unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let forwarding = std::thread::spawn(move || relay(proxy, upstream));
+
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+        let provider_eof = provider.read(&mut [0]);
+        provider.write_all(b"final response").unwrap();
+        provider.shutdown(std::net::Shutdown::Write).unwrap();
+        let mut response = [0; 14];
+        let response_result = client.read_exact(&mut response);
+        let client_eof = client.read(&mut [0]);
+        drop(provider);
+        drop(client);
+        forwarding.join().unwrap();
+
+        assert!(matches!(provider_eof, Ok(0)), "{provider_eof:?}");
+        response_result.unwrap();
+        assert_eq!(&response, b"final response");
+        assert!(matches!(client_eof, Ok(0)), "{client_eof:?}");
     }
 
     #[test]
@@ -609,22 +750,38 @@ mod tests {
 
     #[test]
     fn an_allowed_host_is_reached_through_the_proxy() {
-        // Needs the internet: without it, this reports itself skipped
-        // rather than failing on the dial.
-        if TcpStream::connect_timeout(
-            &std::net::SocketAddr::new("93.184.216.34".parse().unwrap(), 443),
-            Duration::from_secs(8),
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let guard = start_with(
+            &["api.anthropic.com".to_string()],
+            LocalProvider(listener.local_addr().unwrap()),
         )
-        .is_err()
-        {
-            println!("SKIPPED (proxy dial): no route to the internet");
-            return;
-        }
-        let guard = start(&["api.anthropic.com".to_string()]).unwrap();
-        let status = connect_status(
-            &guard.socket_path(),
-            "CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com:443\r\n\r\n",
-        );
-        assert_eq!(status, "HTTP/1.1 200 Connection Established");
+        .unwrap();
+        let mut client = UnixStream::connect(guard.socket_path()).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        client
+            .write_all(b"CONNECT api.anthropic.com:443 HTTP/1.1\r\n\r\n")
+            .unwrap();
+        let mut client = BufReader::new(client);
+        let mut status = String::new();
+        client.read_line(&mut status).unwrap();
+        assert_eq!(status, "HTTP/1.1 200 Connection Established\r\n");
+        let mut blank = String::new();
+        client.read_line(&mut blank).unwrap();
+        assert_eq!(blank, "\r\n");
+
+        let (mut provider, _) = listener.accept().unwrap();
+        provider
+            .set_read_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        client.get_mut().write_all(b"request").unwrap();
+        let mut request = [0; 7];
+        provider.read_exact(&mut request).unwrap();
+        assert_eq!(&request, b"request");
+        provider.write_all(b"response").unwrap();
+        let mut response = [0; 8];
+        client.read_exact(&mut response).unwrap();
+        assert_eq!(&response, b"response");
     }
 }

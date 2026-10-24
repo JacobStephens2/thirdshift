@@ -61,13 +61,6 @@ impl Adapter for Agy {
         }
         Invocation { args, stdin: None }
     }
-    /// No web-search switch exists to add: neither the flags nor the
-    /// settings know one, and its grounding tool runs at Google, past any
-    /// proxy. A Trial keeps the code review session unchanged; the proxy
-    /// still reaches only its provider hosts.
-    fn trial_session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation {
-        self.code_review_session(choice, resume, prompt)
-    }
     fn check(&self, choice: &mut Choice) -> Result<()> {
         if choice.model.is_none() && choice.effort.is_none() {
             return Ok(());
@@ -161,8 +154,9 @@ mod tests {
     use super::*;
     use crate::harness::ChosenBy;
 
-    /// A Trial keeps the code review session unchanged: agy has no
-    /// web-search switch to add.
+    /// A Trial uses the Adapter's default: agy has no web-search switch,
+    /// and its grounding tool runs at Google, past any proxy. Whether agy
+    /// Trials should run without such a switch remains open in #1215.
     #[test]
     fn trials_keep_the_code_review_session_unchanged() {
         let chosen = Choice {
