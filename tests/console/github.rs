@@ -340,6 +340,23 @@ fn failure_warning_wakes_open_inbox_and_recovers() {
     gh["failing"] = json!(["api graphql"]);
     gh["failing_stderr"] = json!("HTTP 401: Bad credentials <signed out>");
     scenario.write_gh_state(&gh);
+    // A successful read may still be in flight and would overwrite an aged
+    // answer. Wait for the Console to retain the failure before moving time.
+    wait_until(|| {
+        let output = scenario.run(&["status", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        status["github_failure"]
+            .as_str()
+            .is_some_and(|failure| failure.contains("HTTP 401: Bad credentials <signed out>"))
+    });
+    assert!(
+        !console
+            .get("/")
+            .text()
+            .unwrap()
+            .contains("latest read failed")
+    );
     age_answer(&home, 299);
     loop {
         assert!(sse_event(&mut stream).contains("event: commands"));
