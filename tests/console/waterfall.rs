@@ -148,3 +148,59 @@ fn waterfall_uses_session_trace_spans_instead_of_command_log_guesses() {
         .unwrap();
     assert_eq!(second["duration_ms"], 0.5);
 }
+
+#[test]
+fn waterfall_replay_keeps_unknown_clocks_backwards_intervals_and_the_last_failure() {
+    let home = tempfile::tempdir().unwrap();
+    let dir = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    let session = dir.join("7-20261001T120000+0000-implement.logs.jsonl");
+    let value = retained_command(home.path(), &session);
+    let record = |time: u64, events: Value| {
+        json!({"resourceLogs":[{"scopeLogs":[{"logRecords":[{
+            "timeUnixNano": time.to_string(),
+            "attributes":[{"key":"thirdshift.events","value":{"stringValue":events.to_string()}}]
+        }]}]}]})
+        .to_string()
+            + "\n"
+    };
+    let started = |id: &str| json!({"type":"tool_call_started","id":id,"parent_id":null,"tool":"Bash","input":{}});
+    let ended = |id: &str, outcome: &str| json!({"type":"tool_call_ended","id":id,"parent_id":null,"tool":"Bash","input":{},"result":"","outcome":outcome,"amended":false});
+    fs::write(
+        &session,
+        [
+            record(0, json!([started("unknown")])),
+            record(1790856020000000000, json!([started("backwards")])),
+            record(
+                1790856019000000000,
+                json!([ended("backwards", "succeeded")]),
+            ),
+            record(1790856021000000000, json!([ended("retried", "failed")])),
+            record(1790856022000000000, json!([ended("retried", "succeeded")])),
+        ]
+        .concat(),
+    )
+    .unwrap();
+    let console = start_console(home.path(), &value);
+    let tree = span_tree(&console, "widgets%237");
+    let tool = |id: &str| {
+        tool_spans(&tree)
+            .into_iter()
+            .find(|span| span["attributes"]["thirdshift.id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let unknown = tool("unknown");
+    assert!(unknown["start"].is_null(), "{unknown}");
+    assert_eq!(unknown["status"], "unknown");
+    let backwards = tool("backwards");
+    assert_eq!(backwards["start"], 1790856020000.0);
+    assert_eq!(backwards["end"], 1790856019000.0);
+    assert!(backwards["duration_ms"].is_null(), "{backwards}");
+    let retried = tool("retried");
+    assert_eq!(retried["start"], 1790856021000.0);
+    assert_eq!(retried["end"], 1790856021000.0);
+    assert_eq!(retried["status"], "ok");
+    assert_eq!(retried["error"], "Failed", "{retried}");
+}

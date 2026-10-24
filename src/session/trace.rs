@@ -15,7 +15,10 @@ use crate::otlp_jsonl::*;
 
 mod attributes;
 use attributes::attribute;
-pub(crate) use attributes::{Call, event_attributes};
+pub(crate) use attributes::event_attributes;
+mod calls;
+use calls::Call;
+pub(crate) use calls::{Calls, Retained};
 mod export;
 use export::Export;
 
@@ -31,11 +34,9 @@ pub(crate) struct Trace {
     metadata_logged: bool,
     context: Context,
     session: Span,
-    open: BTreeMap<String, Span>,
-    ended: BTreeMap<String, Span>,
+    calls: Calls,
     spans_path: PathBuf,
     seen: Vec<Event>,
-    locations: BTreeMap<String, (String, SpanId)>,
     model_usage: BTreeMap<String, Value>,
     model_scopes: BTreeMap<Option<String>, SpanId>,
     input_excludes_cache: bool,
@@ -58,6 +59,10 @@ impl Trace {
             b"session",
             log.as_os_str().as_encoded_bytes(),
         ]);
+        let input_excludes_cache = matches!(
+            choice.harness,
+            crate::harness::Harness::Claude | crate::harness::Harness::Grok
+        );
         let mut attrs = vec![
             attribute("service.name", "thirdshift"),
             attribute("service.version", env!("CARGO_PKG_VERSION")),
@@ -113,17 +118,12 @@ impl Trace {
                 },
                 ..Default::default()
             },
-            open: BTreeMap::new(),
-            ended: BTreeMap::new(),
+            calls: Calls::new(session_id, input_excludes_cache, []),
             spans_path: log.with_extension("spans.jsonl"),
             seen: Vec::new(),
-            locations: BTreeMap::new(),
             model_usage: BTreeMap::new(),
             model_scopes: BTreeMap::new(),
-            input_excludes_cache: matches!(
-                choice.harness,
-                crate::harness::Harness::Claude | crate::harness::Harness::Grok
-            ),
+            input_excludes_cache,
         })
     }
 
@@ -234,13 +234,8 @@ impl Trace {
     pub(crate) fn finish_at(&mut self, error: Option<&str>, ended: u64) -> io::Result<()> {
         self.record_version(&Value::Null);
         let ended = ended.max(self.session.end_time_unix_nano);
-        for (key, mut span) in std::mem::take(&mut self.open) {
-            span.end_time_unix_nano = ended.max(span.start_time_unix_nano);
-            span.status = Some(Status {
-                code: 2,
-                message: error.unwrap_or("call did not end").into(),
-            });
-            self.ended.insert(key, span.clone());
+        for call in self.calls.close(ended) {
+            let span = self.span(&call, error);
             self.write_span(span)?;
         }
         let mut session = self.session.clone();
@@ -251,17 +246,21 @@ impl Trace {
             code: if error.is_some() { 2 } else { 1 },
             message: error.unwrap_or("").into(),
         });
-        self.ended.insert("session".into(), session.clone());
-        self.write_span(session)?;
+        self.write_span(session.clone())?;
         // Calls are flushed when they end. Retained facts and late permission
         // metadata refine the same span. Atomically retain one final version
         // per ID, preserving the already-flushed file if rewriting fails.
         let mut file = tempfile::NamedTempFile::new_in(self.spans_path.parent().unwrap())?;
-        let mut spans: Vec<_> = self.ended.values().collect();
+        let mut spans: Vec<_> = self
+            .calls
+            .calls()
+            .map(|call| self.span(call, error))
+            .chain([session])
+            .collect();
         spans.sort_by_key(|span| span.end_time_unix_nano);
         let mut writer = Writer::new(file.as_file_mut());
         for span in spans {
-            writer.write(&self.request(span.clone()))?;
+            writer.write(&self.request(span))?;
         }
         file.persist(&self.spans_path)
             .map_err(|error| error.error)?;
@@ -270,7 +269,7 @@ impl Trace {
 
     fn apply(&mut self, event: &Event, time: u64) -> io::Result<Option<SpanId>> {
         use Event::*;
-        let Some(fact) = Call::of(event) else {
+        let Some(applied) = self.calls.apply(event, Some(time)) else {
             if let Usage {
                 scope: crate::harness::interpretation::event::UsageScope::Model,
                 model,
@@ -299,7 +298,7 @@ impl Trace {
                 _ => (None, None),
             };
             return Ok(call
-                .and_then(|id| self.locations.get(id).map(|(_, span)| *span))
+                .and_then(|id| self.calls.locate(id))
                 .or_else(|| {
                     if matches!(event, Message { .. }) {
                         self.model_scopes.get(&parent.map(str::to_owned)).copied()
@@ -307,64 +306,56 @@ impl Trace {
                         None
                     }
                 })
-                .or_else(|| parent.and_then(|id| self.locations.get(id).map(|(_, span)| *span))));
+                .or_else(|| parent.and_then(|id| self.calls.locate(id))));
         };
-        let (kind, call, parent, completion) = (fact.kind, fact.id, fact.parent, fact.completion);
-        let key = if kind == SpanKind::Agent && completion.is_some() {
-            self.locations.get(call).map(|(key, _)| key.clone())
-        } else {
-            None
+        let call = applied.call;
+        if call.kind == SpanKind::Model {
+            self.model_scopes.insert(call.parent_id.clone(), call.span);
         }
-        .unwrap_or_else(|| fact.key());
-        let span_id = id(&[&self.session.span_id.unwrap().0, key.as_bytes()]);
-        if kind == SpanKind::Model {
-            self.model_scopes.insert(parent.map(str::to_owned), span_id);
-        }
-        let parent_span = parent
-            .and_then(|parent| self.locations.get(parent).map(|(_, span)| *span))
-            .or(self.session.span_id);
-        self.locations
-            .insert(call.to_owned(), (key.clone(), span_id));
-        let mut attrs = event_attributes(event, self.input_excludes_cache);
-        if let Some(span) = self.ended.get_mut(&key) {
-            for attr in attrs {
-                set(&mut span.attributes, attr);
-            }
-            if let Some(outcome) = completion {
-                span.status = Some(status(outcome));
-            }
-            return Ok(Some(span_id));
-        }
-        for attr in &self.session.attributes {
-            if attr.key == "gen_ai.request.model" {
-                attrs.push(attr.clone());
-            }
-        }
-        let span = self.open.entry(key.clone()).or_insert_with(|| Span {
-            trace_id: Some(self.context.trace),
-            span_id: Some(span_id),
-            parent_span_id: parent_span,
-            name: match event {
-                ToolCallStarted { tool, .. } | ToolCallEnded { tool, .. } => {
-                    format!("execute_tool {tool}")
-                }
-                _ => format!("{kind} {call}"),
-            },
-            kind: if kind == SpanKind::Model { 3 } else { 1 },
-            start_time_unix_nano: time,
-            ..Default::default()
-        });
-        for attr in attrs {
-            set(&mut span.attributes, attr);
-        }
-        if let Some(outcome) = completion {
-            let mut span = self.open.remove(&key).unwrap();
-            span.end_time_unix_nano = time.max(span.start_time_unix_nano);
-            span.status = Some(status(outcome));
-            self.ended.insert(key, span.clone());
+        // Later completions refine the call in the final rewrite only.
+        if applied.first_completion {
+            let span = self.span(&call, None);
             self.write_span(span)?;
         }
-        Ok(Some(span_id))
+        Ok(Some(call.span))
+    }
+
+    /// Project one call to its OTLP span. A call closed at Session finish has
+    /// no outcome and takes the Session's error, if any.
+    fn span(&self, call: &Call, closure: Option<&str>) -> Span {
+        let mut attributes = call.attributes.clone();
+        for attr in &self.session.attributes {
+            if attr.key == "gen_ai.request.model" {
+                set(&mut attributes, attr.clone());
+            }
+        }
+        let start = call.started.unwrap_or_default();
+        Span {
+            trace_id: Some(self.context.trace),
+            span_id: Some(call.span),
+            parent_span_id: Some(call.parent_span),
+            name: match attributes
+                .iter()
+                .find(|attr| attr.key == "gen_ai.tool.name")
+                .and_then(|attr| attr.value.as_ref())
+            {
+                Some(AnyValue::String(tool)) if call.kind == SpanKind::Tool => {
+                    format!("execute_tool {tool}")
+                }
+                _ => format!("{} {}", call.kind, call.id),
+            },
+            kind: if call.kind == SpanKind::Model { 3 } else { 1 },
+            start_time_unix_nano: start,
+            end_time_unix_nano: call.ended.map_or(0, |ended| ended.max(start)),
+            status: call.completed.then(|| {
+                call.outcome.map(status).unwrap_or_else(|| Status {
+                    code: 2,
+                    message: closure.unwrap_or("call did not end").into(),
+                })
+            }),
+            attributes,
+            ..Default::default()
+        }
     }
 
     fn record_version(&mut self, envelope: &Value) {
@@ -450,3 +441,6 @@ pub(crate) fn event_time(event: &Value) -> Option<u64> {
     }
     None
 }
+
+#[cfg(test)]
+mod tests;
