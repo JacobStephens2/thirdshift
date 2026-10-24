@@ -339,6 +339,17 @@ fn rerun_through(
         ));
         return Ok(None);
     }
+    let off_commit = failed
+        .own
+        .iter()
+        .filter(|check| scoped_workflow_run(check).is_none());
+    let off_commit = check_names(off_commit);
+    if !off_commit.is_empty() {
+        outside.step(format!(
+            "the failed checks on {short} can't be re-run: no workflow run on {short} for: {off_commit}"
+        ));
+        return Ok(None);
+    }
     outside.step(format!(
         "re-running the failed checks on {short}: {}",
         check_names(&failed.own)
@@ -358,14 +369,25 @@ fn rerun_abandoned_through(
     base_commit: Option<&str>,
     failed: &FailedChecks,
 ) -> Result<Option<Ci>> {
+    let short = short(sha);
+    let off_commit = failed
+        .own
+        .iter()
+        .filter(|check| scoped_workflow_run(check).is_none());
+    let off_commit = check_names(off_commit);
+    if !off_commit.is_empty() {
+        outside.step(format!(
+            "the failed checks on {short} can't be re-run: no workflow run on {short} for: {off_commit}"
+        ));
+        return Ok(None);
+    }
     let (lost, them) = match failed.own.len() {
         1 => ("its runner", "it"),
         _ => ("their runners", "them"),
     };
     outside.step(format!(
-        "{} lost {lost} on {}; re-running {them}",
+        "{} lost {lost} on {short}; re-running {them}",
         check_names(&failed.own),
-        short(sha)
     ));
     let rerun_checks = request_reruns(outside, sha, failed)?;
     if !rerun_checks.all_requested {
@@ -383,7 +405,7 @@ fn request_reruns<'a>(
     sha: &str,
     failed: &'a FailedChecks,
 ) -> Result<RerunChecks<'a>> {
-    let mut workflow_runs: Vec<u64> = jobs_of(&failed.own).map(|job| job.workflow_run).collect();
+    let mut workflow_runs: Vec<u64> = failed.own.iter().filter_map(scoped_workflow_run).collect();
     workflow_runs.sort_unstable();
     workflow_runs.dedup();
     let before = read_checks(outside, sha)?;
@@ -408,7 +430,8 @@ fn request_reruns<'a>(
     Ok(RerunChecks {
         checks: failed.own.iter().chain(&failed.inherited).collect(),
         previous_attempt,
-        all_requested: requested.len() == workflow_runs.len(),
+        all_requested: requested.len() == workflow_runs.len()
+            && failed.own.iter().all(|check| scoped_workflow_run(check).is_some()),
         requested,
     })
 }
@@ -451,9 +474,7 @@ struct RerunChecks<'a> {
 
 impl RerunChecks<'_> {
     fn is_requested(&self, check: &Check) -> bool {
-        check
-            .job
-            .is_some_and(|job| self.requested.contains(&job.workflow_run))
+        scoped_workflow_run(check).is_some_and(|run| self.requested.contains(&run))
     }
 
     fn new_attempts_listed(&self, checks: &[Check]) -> bool {
@@ -485,7 +506,7 @@ impl RerunChecks<'_> {
             check.name == expected.name
                 && (!self.is_requested(expected)
                     || check.job.is_some_and(|job| {
-                        Some(job.workflow_run) == expected.job.map(|job| job.workflow_run)
+                        scoped_workflow_run(check) == scoped_workflow_run(expected)
                             && !self.previous_attempt.contains(&job.check_run)
                     }))
         })
@@ -643,6 +664,17 @@ pub fn check_names<'a>(checks: impl IntoIterator<Item = &'a Check>) -> String {
 /// The GitHub Actions jobs among `checks`.
 fn jobs_of(checks: &[Check]) -> impl Iterator<Item = ActionsJob> + '_ {
     checks.iter().filter_map(|check| check.job)
+}
+
+/// The workflow run a re-run of `check` may target: the run the check run
+/// belongs to on the watched commit, as the commit's workflow-run listing
+/// reports it. The job's run id comes from the check run's details URL,
+/// which can name any run in the repository, so a run the listing does not
+/// confirm for this commit is never re-run.
+fn scoped_workflow_run(check: &Check) -> Option<u64> {
+    let job = check.job?;
+    let run = check.workflow_run?;
+    (run.id == job.workflow_run).then_some(run.id)
 }
 
 /// `checks` as a list, a line each: its name, and its URL if it has one.
@@ -1369,13 +1401,18 @@ mod tests {
     }
 
     /// `check` as the GitHub Actions job whose check run is `check_run`, of
-    /// the workflow run `workflow_run`.
+    /// the workflow run `workflow_run`, as the watched commit's workflow-run
+    /// listing reports it.
     fn job(check: Check, check_run: u64, workflow_run: u64) -> Check {
         Check {
             job: Some(ActionsJob {
                 check_run,
                 workflow_run,
                 abandoned: false,
+            }),
+            workflow_run: Some(WorkflowRun {
+                id: workflow_run,
+                workflow_id: workflow_run,
             }),
             ..check
         }
@@ -2114,6 +2151,82 @@ mod tests {
                 "re-running the failed checks on abcdef0: test, build, lint",
                 "CI passed on abcdef0",
             ]
+        );
+    }
+
+    #[test]
+    fn a_check_rerun_never_reruns_a_workflow_run_off_the_watched_commit() {
+        let mut without_listing = job(red("test"), 11, 999);
+        without_listing.workflow_run = None;
+        let mut mismatched = job(red("test"), 11, 999);
+        mismatched.workflow_run = Some(WorkflowRun {
+            id: 900,
+            workflow_id: 10,
+        });
+        for spoofed in [without_listing, mismatched] {
+            let mut github =
+                InMemory::new().listing(HEAD, vec![vec![spoofed.clone()]]);
+            let failed = FailedChecks {
+                own: vec![spoofed],
+                inherited: Vec::new(),
+                on_base: Vec::new(),
+            };
+
+            let ci = rerun_through(&mut github, HEAD, Some(BASE), &failed).unwrap();
+
+            assert!(ci.is_none());
+            assert!(
+                github.reruns.is_empty(),
+                "unexpected re-runs: {:?}",
+                github.reruns
+            );
+        }
+    }
+
+    #[test]
+    fn an_abandoned_job_rerun_never_reruns_a_workflow_run_off_the_watched_commit() {
+        let mut spoofed = job(red("wsl"), 1, 999);
+        spoofed.workflow_run = None;
+        let mut github = InMemory::new().listing(HEAD, vec![vec![spoofed.clone()]]);
+        let failed = FailedChecks {
+            own: vec![spoofed],
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+
+        let ci = rerun_abandoned_through(&mut github, HEAD, None, &failed).unwrap();
+
+        assert!(ci.is_none());
+        assert!(
+            github.reruns.is_empty(),
+            "unexpected re-runs: {:?}",
+            github.reruns
+        );
+    }
+
+    #[test]
+    fn an_abandoned_job_rerun_off_the_watched_commit_says_so_before_declining() {
+        let mut spoofed = job(red("wsl"), 1, 999);
+        spoofed.workflow_run = None;
+        let mut github = InMemory::new().listing(HEAD, vec![vec![spoofed.clone()]]);
+        let failed = FailedChecks {
+            own: vec![spoofed],
+            inherited: Vec::new(),
+            on_base: Vec::new(),
+        };
+
+        let ci = rerun_abandoned_through(&mut github, HEAD, None, &failed).unwrap();
+
+        assert!(ci.is_none());
+        assert!(
+            github.reruns.is_empty(),
+            "unexpected re-runs: {:?}",
+            github.reruns
+        );
+        assert!(
+            github.steps.iter().any(|line| line.contains("no workflow run")),
+            "expected an off-commit decline line, got: {:?}",
+            github.steps
         );
     }
 
