@@ -95,6 +95,21 @@ impl std::fmt::Display for TimedOut {
 
 impl std::error::Error for TimedOut {}
 
+/// No child existed: callers can distinguish launcher failure from a child
+/// that started and then failed its own work.
+#[derive(Debug)]
+pub(crate) struct NotStarted {
+    name: String,
+}
+
+impl std::fmt::Display for NotStarted {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "could not run {}", self.name)
+    }
+}
+
+impl std::error::Error for NotStarted {}
+
 fn captured(
     command: &mut Command,
     input: Option<&[u8]>,
@@ -212,7 +227,7 @@ fn execute<'a, T: Send + 'static>(
         }
         let child = command
             .spawn()
-            .with_context(|| format!("could not run {cli}"))?;
+            .with_context(|| NotStarted { name: cli.clone() })?;
         // Install ownership immediately: every fallible step after spawn is
         // covered, including pipe extraction and starting workers.
         let mut owned = Execution {

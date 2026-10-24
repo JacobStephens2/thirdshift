@@ -455,8 +455,8 @@ The Experiment watches each Trial with the current detectors, including when
 an Arm&#39;s build predates warning detection.</p>
 <p>Two workers take alternating Baseline and Candidate Trials, each in a fresh
 prepared repository. Trial artifacts and one result per finished Trial live
-privately in <code>~/.thirdshift/evals/experiments/&lt;id&gt;/</code>. Trials currently run
-without a sandbox; #1014 adds isolation. Code Graders then score each Trial:
+privately in <code>~/.thirdshift/evals/experiments/&lt;id&gt;/</code>. Trials run in a bwrap
+sandbox with a fresh home and provider-only network. Code Graders then score each Trial:
 a changed repository makes it void, a review with no reports fails, and the
 Eval task&#39;s mechanical checks must pass. Scores retain each check and its reason.
 Then a fresh model Grader scores one blind packet per Eval task against its
@@ -465,8 +465,13 @@ shuffled neutral labels and identifying Harness, Model, Effort and Arm lines
 removed. Graders see report text, never Trial paths or raw session streams.
 When an installed Harness has a configured Model different from both Arms,
 that Model grades; otherwise the User config&#39;s default choice grades. The
-Grader choice and executable are fixed before Trials start. Graders currently
-run without a sandbox too, until #1014.</p>
+Grader choice and executable are fixed before Trials start. Model Graders run
+in the same sandbox, seeing only their packet workspace. Code Graders run
+offline with their report packet and prepared repository. Neither can read
+Trial logs, Arm mappings or the Experiment&#39;s other files. An unavailable
+model Grader pauses grading without publishing Scores; resume reuses Trials.
+<code>THIRDSHIFT_TRIAL_NO_SANDBOX=1</code> selects the pass-through launcher for tests
+and emergency use, for both Trials and Graders.</p>
 <p>Each Trial and each Grader runs in a scope of its own, with the <code>[trial]</code> caps, and raises its own <code>oom_score_adj</code> to the maximum, so it gives way before the factory under system-wide memory pressure. A Trial its cap kills dies alone and is void with <code>memory_cap</code>, from the scope&#39;s <code>memory.events</code> or journal evidence. An agent&#39;s own out-of-memory error stays failed. Each code check has its own Grader scope and the Trial timeout. A Grader killed by its cap stops the Experiment with a diagnostic so you can raise the cap and retry.</p>
 <p>Each Trial retains the model&#39;s pass/fail, reason, wrong-finding flag and
 borderline mark beside its mechanical checks. A mechanical failure still fails

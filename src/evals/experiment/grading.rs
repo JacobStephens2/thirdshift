@@ -1,6 +1,7 @@
 //! Combined Scores and paired suite Verdicts, kept with private Trial data.
 
 use std::collections::BTreeMap;
+use std::fs;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -69,29 +70,30 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
             reason: "review must leave at least one report".into(),
         },
     ];
-    if output.outcome != Outcome::Void {
+    if output.outcome != Outcome::Void && !task.manifest.checks.is_empty() {
         let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
-        for command in &task.manifest.checks {
-            let mut launched = crate::scope::grader_command(
-                Path::new(&command[0]),
-                &command[1..],
-                repository,
-                &caps,
-            )?;
-            for (name, path) in [
-                (
-                    "THIRDSHIFT_TRIAL_STANDARDS_REPORT",
-                    &output.reports.standards,
-                ),
-                ("THIRDSHIFT_TRIAL_SPEC_REPORT", &output.reports.spec),
-                ("THIRDSHIFT_TRIAL_LOG", &output.log),
-            ] {
-                launched
-                    .command
-                    .env(name, path.as_deref().unwrap_or(Path::new("")));
+        let packet = tempfile::Builder::new().prefix("grader-").tempdir()?;
+        // Bind sources remain visible in /proc/self/mountinfo. A neutral
+        // destination alone cannot hide the original Trial's Arm pathname.
+        let snapshot = packet.path().join("repository");
+        copy_repository(repository, &snapshot)?;
+        for (source, name) in [
+            (&output.reports.standards, "standards.md"),
+            (&output.reports.spec, "spec.md"),
+        ] {
+            if let Some(source) = source {
+                fs::write(
+                    packet.path().join(name),
+                    super::model_grader::blind(&fs::read_to_string(source)?),
+                )?;
             }
+        }
+        for command in &task.manifest.checks {
+            let mut child =
+                crate::sandbox::code_grader(&snapshot, packet.path(), command, Some(&caps))?;
+            let (launched, scope) = child.command_and_scope();
             let result = process::output_until(
-                &mut launched.command,
+                launched,
                 None,
                 Control {
                     name: "code Grader",
@@ -100,16 +102,19 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
                 },
                 Instant::now() + Duration::from_secs(bar.timeout_seconds),
                 &|| {
-                    launched.scope.sample();
+                    if let Some(scope) = scope {
+                        scope.sample();
+                    }
                     Ok(())
                 },
             );
             crate::interrupt::check()?;
             if !result.as_ref().is_ok_and(|result| result.status.success())
-                && launched.scope.oom_killed()
+                && scope.is_some_and(crate::scope::Scope::oom_killed)
             {
                 bail!("code Grader hit its memory cap; raise trial.memory_max to retry");
             }
+            child.check_started(&result)?;
             let (passed, reason) = match result {
                 Ok(result) => (
                     result.status.success(),
@@ -139,6 +144,51 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
         checks,
         rechecks: Vec::new(),
     })
+}
+
+fn copy_repository(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir(destination)?;
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let target = destination.join(entry.file_name());
+        let kind = entry.file_type()?;
+        if kind.is_dir() {
+            copy_repository(&entry.path(), &target)?;
+        } else if kind.is_symlink() {
+            std::os::unix::fs::symlink(fs::read_link(entry.path())?, &target)?;
+        } else if kind.is_file() {
+            fs::copy(entry.path(), target)?;
+        }
+        // Skip sockets, FIFOs, devices and other special files: Trial
+        // sessions leave them behind, and no check can use them once the
+        // Trial's servers are gone. Copying them would fail the whole
+        // Experiment over one Trial's ordinary leftovers.
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Trial sessions leave sockets and FIFOs behind (dev servers, shell
+    /// fixtures). Copying one into the Grader snapshot must not fail the
+    /// whole Experiment over files no check can use once the Trial is gone.
+    #[test]
+    fn grader_snapshot_skips_special_files() {
+        let root = tempfile::TempDir::new().unwrap();
+        let source = root.path().join("repository");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("main.rs"), "ok\n").unwrap();
+        let _socket = std::os::unix::net::UnixListener::bind(source.join("server.sock")).unwrap();
+        let destination = root.path().join("snapshot");
+        copy_repository(&source, &destination).unwrap();
+        assert_eq!(
+            fs::read_to_string(destination.join("main.rs")).unwrap(),
+            "ok\n"
+        );
+        assert!(!destination.join("server.sock").exists());
+    }
 }
 
 #[derive(Serialize, Deserialize)]

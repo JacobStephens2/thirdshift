@@ -530,7 +530,7 @@ impl Outside for OnMachine {
         }
         let mut command = match &self.sandbox {
             Some(launch) => {
-                let mut command = launch.command(&invocation.args);
+                let mut command = launch.command(&invocation.args)?;
                 command.current_dir(&self.worktree);
                 command
             }

@@ -229,7 +229,7 @@ fn packet(task: &Task, results: &[(std::path::PathBuf, TrialResult)]) -> Result<
     })
 }
 
-fn blind(text: &str) -> String {
+pub(super) fn blind(text: &str) -> String {
     enum Table {
         Identities,
         KeyValue,
@@ -321,12 +321,19 @@ fn grade(
     fs::write(workspace.join("prompt.md"), &prompt)?;
     let choice = grader.choice();
     let adapter = choice.harness.adapter();
-    let invocation = adapter.session(&choice, None, &prompt);
-    // Each Grader runs in a scope of its own, with the Trial caps, and raises
-    // its own `oom_score_adj`. A Grader the cap kills dies alone; its failure
-    // below names the cap from the scope's `memory.events` evidence.
-    let mut launched =
-        crate::scope::grader_command(&grader.harness.path, &invocation.args, &workspace, caps)?;
+    let invocation = adapter.trial_session(&choice, None, &prompt);
+    let sandbox =
+        crate::sandbox::for_session(&choice, &grader.harness.path, &workspace, &workspace)?;
+    // The scope surrounds the sandbox, so the Harness and all its tools
+    // share the Grader's cap and inherit its raised OOM score.
+    let mut launched = match &sandbox {
+        Some(prepared) => prepared
+            .launch()
+            .scoped_command(&invocation.args, &workspace, caps)?,
+        None => {
+            crate::scope::grader_command(&grader.harness.path, &invocation.args, &workspace, caps)?
+        }
+    };
     launched
         .command
         .stderr(fs::File::create(workspace.join("stderr"))?)

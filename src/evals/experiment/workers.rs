@@ -370,15 +370,23 @@ fn run_trial(
             protocol.void_cause = Some(VoidCause::RepositoryChanged);
             protocol.cause = Some("Trial repository changed during its session".into());
         }
+        let score = trace.grade(|| {
+            match grading::score(trial.task, &prepared_repo.repository, &protocol, bar) {
+                Err(error) if error.is::<crate::sandbox::Unavailable>() => {
+                    protocol.outcome = Outcome::Void;
+                    protocol.void_cause = Some(VoidCause::SandboxUnavailable);
+                    protocol.cause = Some(format!("{error:#}"));
+                    grading::score(trial.task, &prepared_repo.repository, &protocol, bar)
+                }
+                score => score,
+            }
+        })?;
         store::write(&attempt.join("result.json"), &protocol)?;
         let outcome = protocol.outcome;
         let void_cause = protocol.void_cause;
         let paused = pauses(&protocol);
         result.outcome = outcome;
-        result.score = Some(
-            trace
-                .grade(|| grading::score(trial.task, &prepared_repo.repository, &protocol, bar))?,
-        );
+        result.score = Some(score);
         trace.outcome(outcome);
         let retry = outcome == Outcome::Void
             && void_cause.is_some_and(|cause| bar.void_rules.causes.contains(&cause));

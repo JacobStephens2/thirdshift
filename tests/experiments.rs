@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use serde_json::{Value, json};
 use support::{Scenario, scope_available};
 
-/// Trials run without their sandbox across the Experiment suite, so its fake
+/// Trials and Graders use the pass-through launcher across this suite, so fake
 /// Harnesses stay observable at fixed scenario paths.
 const NO_SANDBOX: [(&str, &str); 1] = [("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")];
 
@@ -16,6 +16,9 @@ mod model_graders;
 
 #[path = "experiments/rechecks.rs"]
 mod rechecks;
+
+#[path = "experiments/sandbox.rs"]
+mod sandbox;
 
 #[test]
 fn experiment_trace_contains_trials_and_graders_and_reports_arm_usage() {
@@ -800,15 +803,15 @@ fn mechanical_scores_determine_the_provisional_verdict_inbox_and_arm_minutes() {
             .scenario
             .path("home/.thirdshift/evals/suites/spec-review/tasks/fixture/task.toml");
         let manifest = fs::read_to_string(&task).unwrap();
-        fs::write(&task, manifest.replace("[inputs]", &format!(
-            "checks = [[\"sh\", \"-c\", 'grep -q {passing_arm} \"$THIRDSHIFT_TRIAL_SPEC_REPORT\"']]\n[inputs]"
-        ))).unwrap();
+        fs::write(&task, manifest.replace("[inputs]",
+            "checks = [[\"sh\", \"-c\", 'grep -q caught \"$THIRDSHIFT_TRIAL_SPEC_REPORT\"']]\n[inputs]"
+        )).unwrap();
         fixture.scenario.agent_does(&format!(
             r#"
 {reports}
 case "$PWD" in
-  *--candidate--*) printf 'candidate\n' > "$reports/spec.md" ;;
-  *) printf 'baseline\n' > "$reports/spec.md" ;;
+  *--{passing_arm}--*) printf 'caught\n' > "$reports/spec.md" ;;
+  *) printf 'missed\n' > "$reports/spec.md" ;;
 esac
 "#,
             reports = review_reports_prelude()
@@ -1265,13 +1268,21 @@ esac
 #[test]
 fn a_plan_limit_pause_spends_its_retry_budget_even_if_the_repository_changed() {
     let fixture = Fixture::new();
-    fixture.scenario.agent_does(
+    // A worker still preparing its repository has no attempt to exhaust.
+    // Both Trials must start before either warns for this zero-retry check.
+    let started = fixture.scenario.path("limited-trials-started");
+    fs::create_dir(&started).unwrap();
+    fixture.scenario.agent_does(&format!(
         r#"
+case "$PWD" in *--baseline--*) arm=baseline ;; *) arm=candidate ;; esac
+touch '{started}'/"$arm"
+while [ ! -f '{started}/baseline' ] || [ ! -f '{started}/candidate' ]; do sleep 0.01; done
 echo changed > changed-during-limited-trial.txt
-echo '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning"}}'
+echo '{{"type":"rate_limit_event","rate_limit_info":{{"status":"allowed_warning"}}}}'
 sleep 0.2
 "#,
-    );
+        started = started.display()
+    ));
     let paused = fixture.run(&["--void-retries", "0"]);
     assert_eq!(paused.code, Some(1), "{}", paused.stderr);
     assert_eq!(fixture.experiment()["state"], "paused");

@@ -109,7 +109,7 @@ to `{env:…}` naming the variable, so the Trial's Model names its provider as
 `sandbox_unavailable`; one whose Harness has no login (a missing Grok login or
 OpenCode key) fails before its session starts and is void with
 `session_unavailable`. `THIRDSHIFT_TRIAL_NO_SANDBOX`, when set and not empty,
-runs the Trial's sessions without the sandbox: the Experiment suite sets it so
+runs Trials and Graders without the sandbox: the Experiment suite sets it so
 its fake Harnesses stay observable, and it is the emergency escape when bwrap
 breaks on a machine.
 

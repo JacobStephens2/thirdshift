@@ -156,7 +156,7 @@ pub fn available() -> bool {
 
 /// Cron need not provide a login-session environment even with lingering on.
 /// Fill in only a missing runtime directory; explicit bus settings still win.
-fn manager_command(program: &str) -> Command {
+fn manager_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
     let mut command = Command::new(program);
     if cfg!(target_os = "linux")
         && std::env::var_os("XDG_RUNTIME_DIR").is_none_or(|value| value.is_empty())
@@ -344,7 +344,10 @@ fn control_group(unit: &str) -> Option<String> {
 /// `systemd-run --user --scope` with `unit` and the caps, before the `--`
 /// that starts the scope's command.
 fn scope_base(unit: &str, caps: &Caps) -> Command {
-    let mut command = manager_command("systemd-run");
+    // Resolve before a sandbox applies its own PATH to the command. That
+    // PATH belongs to the Harness, not to the outer scope launcher.
+    let program = find_systemd_run().unwrap_or_else(|| PathBuf::from("systemd-run"));
+    let mut command = manager_command(program);
     command.args([
         "--user",
         "--scope",
