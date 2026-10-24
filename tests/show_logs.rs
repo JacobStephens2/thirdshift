@@ -410,10 +410,10 @@ fn logs_follow_streams_appended_bytes_and_exits_when_the_command_ends() {
 
 #[test]
 fn logs_follow_drains_final_bytes_after_an_outcome_or_selected_child_ends() {
-    for selected in ["widgets#7", "widgets#21"] {
+    for selected in ["widgets#7", "widgets#21", "exact-file"] {
         let scenario = Scenario::new();
         scenario.agent_does(&format!(
-            "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{{\"command\":\"echo final bytes after durable outcome\"}}}}]}}}}'\n{OPENS_PR}",
+            "touch '{}'\nwhile ! test -f '{}' && test \"$SECONDS\" -lt 30; do sleep 0.02; done\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{{\"command\":\"echo final bytes after durable outcome\"}}}}]}}}}'\n{OPENS_PR}",
             scenario.path("started").display(),
             scenario.path("release").display()
         ));
@@ -442,7 +442,22 @@ fn logs_follow_drains_final_bytes_after_an_outcome_or_selected_child_ends() {
         let status: Value = serde_json::from_str(&status.stdout).unwrap();
         let ended_for_display = status["commands"][0]["state"] == "ended";
         let output = scenario.path("followed.txt");
-        let follower = scenario.read_to_file(&["logs", selected, "--follow"], &output);
+        let inventory = scenario.run(&["logs", "--json"]);
+        let inventory: Value = serde_json::from_str(&inventory.stdout).unwrap();
+        let file_id = inventory["logs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|log| log["kind"] == "Command log")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap();
+        let args = if selected == "exact-file" {
+            vec!["logs", "--file", file_id, "--follow"]
+        } else {
+            vec!["logs", selected, "--follow"]
+        };
+        let follower = scenario.read_to_file(&args, &output);
         let deadline = Instant::now() + Duration::from_secs(5);
         while fs::read_to_string(&output).unwrap().is_empty() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));

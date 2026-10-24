@@ -6,6 +6,7 @@ pub(crate) mod catalog;
 mod health;
 mod history;
 mod inbox;
+mod reader;
 mod selection;
 #[cfg(test)]
 mod tests;
@@ -24,6 +25,7 @@ use super::{Pass, activity};
 pub(super) use health::{Health, UsualRange};
 pub(super) use history::Command as HistoricalCommand;
 pub(super) use inbox::{Group, InboxItem};
+pub(crate) use reader::{Framing, Reader, Writer};
 pub(super) use selection::{Detailed, Observation};
 
 pub(super) struct Snapshot {
