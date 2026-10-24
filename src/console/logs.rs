@@ -13,6 +13,7 @@ use axum::{Extension, Json};
 use serde::Serialize;
 
 use super::conversation;
+use super::subscription::{Readiness, Subscription};
 use crate::config::UserConfig;
 use crate::logs::Framing;
 use crate::logs::catalog::{self, Log};
@@ -140,46 +141,41 @@ pub(super) async fn stream(
             offset <= std::fs::metadata(&log.path)?.len(),
             "invalid log offset"
         );
-        Ok(LogStream {
-            log: std::sync::Arc::new(log),
-            offset,
-            done: false,
-            viewer,
-            _following: notifier.follow(changes.clone()),
-            changes,
-            accounts_revision: None,
-        })
+        Ok(log)
     })
     .await;
     let state = match checked {
-        Ok(Ok(state)) => state,
+        Ok(Ok(log)) => LogStream {
+            log: std::sync::Arc::new(log),
+            offset,
+            done: false,
+            subscription: Subscription::new(changes, viewer, &notifier),
+        },
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     let events = futures_util::stream::unfold(state, |mut state| async move {
         if state.done {
             return None;
         }
+        // Buffered output drains without another notification; only an
+        // empty unfinished read sleeps until the next change.
+        let mut mode = Readiness::Drain;
         loop {
-            if state.changes.has_changed().is_err() {
-                return None;
-            }
-            let revision = state.changes.borrow_and_update().accounts;
-            let authorize = state.accounts_revision != Some(revision);
-            state.accounts_revision = Some(revision);
-            let selected = state.log.clone();
-            let signed_in = state.viewer.clone();
-            let offset = state.offset;
-            let result = tokio::task::spawn_blocking(move || {
-                if authorize && !signed_in.still_allowed()? {
-                    return Ok(None);
+            let result = match state.subscription.ready(mode).await {
+                Ok(true) => {
+                    let selected = state.log.clone();
+                    let offset = state.offset;
+                    // The captured reader rejects a file that leaves the inventory.
+                    match tokio::task::spawn_blocking(move || appended(&selected, offset)).await {
+                        Ok(read) => read,
+                        Err(error) => Err(error.into()),
+                    }
                 }
-                // The captured reader rejects a file that leaves the inventory.
-                appended(&selected, offset).map(Some)
-            })
-            .await;
+                Ok(false) => return None,
+                Err(error) => Err(error),
+            };
             match result {
-                Ok(Ok(None)) => return None,
-                Ok(Ok(Some(batch))) if batch.offset != state.offset || batch.done => {
+                Ok(batch) if batch.offset != state.offset || batch.done => {
                     state.offset = batch.offset;
                     state.done = batch.done;
                     let event = Event::default()
@@ -188,12 +184,8 @@ pub(super) async fn stream(
                         .data(serde_json::to_string(&batch).expect("serializable log batch"));
                     return Some((Ok::<_, Infallible>(event), state));
                 }
-                Ok(Ok(Some(_))) => {
-                    if state.changes.changed().await.is_err() {
-                        return None;
-                    }
-                }
-                error => {
+                Ok(_) => mode = Readiness::Wait,
+                Err(error) => {
                     eprintln!("thirdshift Console: log stream: {error:?}");
                     let event = Event::default()
                         .event("log-error")
@@ -220,8 +212,5 @@ struct LogStream {
     log: std::sync::Arc<Log>,
     offset: u64,
     done: bool,
-    viewer: super::auth::Viewer,
-    changes: super::changes::Receiver,
-    accounts_revision: Option<u64>,
-    _following: std::sync::Arc<super::watching::Following>,
+    subscription: Subscription,
 }
