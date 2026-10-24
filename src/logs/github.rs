@@ -296,10 +296,10 @@ pub(super) fn refresh(
     fresh_for: Duration,
 ) -> Result<Kept> {
     let mut kept = load(&config.logs_dir);
-    if snapshot
+    if !snapshot
         .evaluate_inbox(config.inbox_days, &kept)
         .refresh_work()
-        .is_empty()
+        .has_remote_reads()
     {
         return Ok(kept);
     }
@@ -325,7 +325,7 @@ pub(super) fn refresh(
     let subjects = &work.subjects;
     let findings = &work.findings;
     if kept.age.is_some_and(|age| age < fresh_for)
-        || (subjects.is_empty() && findings.is_empty())
+        || !work.has_remote_reads()
         || kept.quotas.as_ref().and_then(Quotas::warning).is_some()
     {
         return Ok(kept);

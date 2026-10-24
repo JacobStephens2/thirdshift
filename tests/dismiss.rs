@@ -78,6 +78,44 @@ fn activity(scenario: &Scenario) -> String {
 }
 
 #[test]
+fn undo_visible_row_leaves_hidden_history_dismissal_alone() {
+    let scenario = Scenario::new();
+    for (number, dismissal_days_ago) in [(7, 1), (8, 8)] {
+        write_failed(&scenario, number, 30, Some("same failure"));
+        let path = record_path(&scenario, number);
+        let at = (chrono::Local::now() - chrono::Duration::days(dismissal_days_ago)).to_rfc3339();
+        fs::write(
+            path.with_extension("dismiss.json"),
+            serde_json::to_vec(&json!({"rows": [{
+                "selector": format!("{}::acme/widgets#{number}", path.display()),
+                "kind": "Failed",
+                "who": "reviewer",
+                "at": at,
+                "from_console": false
+            }]}))
+            .unwrap(),
+        )
+        .unwrap();
+    }
+
+    let status = read_status(&scenario);
+    assert_eq!(status["commands"].as_array().unwrap().len(), 1, "{status}");
+    assert_eq!(status["commands"][0]["issue"]["number"], 7, "{status}");
+    assert_eq!(status["commands"][0]["group"], "resolved", "{status}");
+    assert_eq!(status["commands"][0]["count"], 1, "{status}");
+
+    let hidden = record_path(&scenario, 8).with_extension("dismiss.json");
+    let retained = fs::read(&hidden).unwrap();
+    let undone = scenario.run(&["dismiss", "widgets#7", "--undo"]);
+    assert_eq!(undone.code, Some(0), "{}", undone.stderr);
+    assert_eq!(
+        fs::read(&hidden).ok(),
+        Some(retained),
+        "Undo of the visible row must preserve a hidden History row's Dismissal"
+    );
+}
+
+#[test]
 fn dismiss_failed_row_moves_it_out_saying_who_and_leaves_the_command_alone() {
     let scenario = Scenario::new();
     write_failed(&scenario, 7, 0, None);

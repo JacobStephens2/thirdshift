@@ -181,15 +181,7 @@ fn row_for(
         .with_context(|| format!("cannot dismiss {input}: row has no Command record"))?;
     let found = snapshot
         .evaluate_inbox(days, github)
-        .into_rows(true)
-        .into_iter()
-        .find(|item| {
-            item.command.selector().as_deref() == Some(selector.as_str())
-                || item
-                    .collapsed
-                    .iter()
-                    .any(|child| child.command.selector().as_deref() == Some(selector.as_str()))
-        })
+        .into_target(&selector)
         .with_context(|| {
             format!("cannot dismiss {input}: row is not in Needs you or Ready for review")
         })?;

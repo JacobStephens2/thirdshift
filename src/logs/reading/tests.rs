@@ -471,6 +471,28 @@ fn inbox_evaluation_filters_history_before_collapse_but_plans_every_lookup() {
     assert_eq!(all[0].count, 2);
     assert!(all[0].collapsed[0].group == Group::History);
 
+    for (number, group) in [(7, Group::Resolved), (8, Group::History)] {
+        let selector = snapshot
+            .resolve(&format!("widgets#{number}"))
+            .unwrap()
+            .observation
+            .selector()
+            .unwrap();
+        let evaluation = snapshot.evaluate_inbox(7, &kept);
+        assert_eq!(evaluation.refresh_work().subjects.len(), 2);
+        assert_eq!(
+            evaluation.next_change(),
+            Some(boundary + chrono::Duration::nanoseconds(1))
+        );
+        let target = evaluation.into_target(&selector).unwrap();
+        assert!(target.group == group);
+        assert_eq!(
+            target.count, 1,
+            "History and visible Dismissal membership stay separate"
+        );
+        assert!(target.collapsed.is_empty());
+    }
+
     let at_cutoff = Snapshot::load(dir.path(), boundary).unwrap();
     let evaluation = at_cutoff.evaluate_inbox(7, &kept);
     assert_eq!(

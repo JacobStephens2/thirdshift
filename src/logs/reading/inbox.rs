@@ -341,8 +341,8 @@ pub(in crate::logs) struct Freeze {
 }
 
 impl RefreshWork {
-    pub(in crate::logs) fn is_empty(&self) -> bool {
-        self.subjects.is_empty() && self.findings.is_empty()
+    pub(in crate::logs) fn has_remote_reads(&self) -> bool {
+        !self.subjects.is_empty() || !self.findings.is_empty()
     }
 }
 
@@ -367,6 +367,26 @@ impl<'a> Evaluation<'a> {
 
     pub(in crate::logs) fn next_change(&self) -> Option<DateTime<Local>> {
         self.next_change
+    }
+
+    /// The collapsed row containing an exact selector, with the same visible
+    /// membership as the Inbox. An explicit History target remains undoable,
+    /// but cannot pull visible Commands into that History row's Dismissal.
+    pub(in crate::logs) fn into_target(mut self, selector: &str) -> Option<InboxItem<'a>> {
+        let history = self
+            .rows
+            .iter()
+            .find(|row| row.item.command.selector().as_deref() == Some(selector))?
+            .item
+            .group
+            == Group::History;
+        self.rows
+            .retain(|row| (row.item.group == Group::History) == history);
+        self.into_rows(true).into_iter().find(|item| {
+            std::iter::once(item)
+                .chain(&item.collapsed)
+                .any(|member| member.command.selector().as_deref() == Some(selector))
+        })
     }
 
     pub(in crate::logs) fn into_rows(self, all: bool) -> Vec<InboxItem<'a>> {
