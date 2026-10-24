@@ -24,6 +24,12 @@ struct Status<'a> {
     active_runs: usize,
     commands: Vec<InboxItem<'a>>,
     idle_passes: &'a [IdlePass],
+    /// How old the Inbox's kept GitHub answer is, in seconds. `None` where
+    /// no answer is kept: with no ready pull requests to read, or before
+    /// the first read.
+    github_answer_age_seconds: Option<u64>,
+    github_last_answered_at: Option<String>,
+    github_failure: Option<&'a str>,
 }
 
 fn print_command(command: &Command, state_word: &str, indent: &str) {
@@ -85,18 +91,25 @@ pub fn show(json: bool, all: bool) -> Result<()> {
     }
     let snapshot =
         Snapshot::load_with_silence(&config.logs_dir, Local::now(), config.silent_interval)?;
+    let kept = super::github::refresh(&snapshot, &config, super::github::FRESH_FOR)?;
     let status = Status {
         version: 1,
         hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
         active_runs: snapshot.active_runs(),
-        commands: snapshot.inbox(all, config.inbox_days),
+        commands: snapshot.inbox(all, config.inbox_days, &kept),
         idle_passes: &snapshot.idle_passes,
+        github_answer_age_seconds: kept.age.map(|age| age.as_secs()),
+        github_last_answered_at: kept.last_answered_at(),
+        github_failure: kept.failure.as_deref(),
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
         println!("{}", status.hostname);
         println!("{}", active_runs_text(status.active_runs));
+        if let Some(warning) = kept.warning() {
+            println!("Warning: {warning}");
+        }
         for group in Group::ORDER {
             let items: Vec<_> = status
                 .commands
@@ -118,6 +131,12 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                 match item.command {
                     Observation::Record(command) => print_command(command, item.state_word(), ""),
                     Observation::History(command) => print_history(command),
+                }
+                if let Some(line) = item.left_line() {
+                    println!("  {line}");
+                }
+                if let Some(dismissal) = &item.dismissal {
+                    println!("  {}", dismissal.line());
                 }
                 if item.count > 1 {
                     let cause = item.cause().unwrap_or_default();

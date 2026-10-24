@@ -305,6 +305,24 @@ content.addEventListener('click', async event => {
     status.textContent = 'Selected; copy it with your keyboard.';
   }
 });
+content.addEventListener('submit', async event => {
+  const form = event.target.closest('form[data-dismiss]');
+  if (!form) return;
+  event.preventDefault();
+  const button = form.querySelector('button');
+  button.disabled = true;
+  try {
+    const response = await fetch(form.action, {
+      method: 'POST', body: new URLSearchParams(new FormData(form))
+    });
+    if (!response.ok) throw new Error(await response.text());
+    await refresh();
+  } catch (error) {
+    form.querySelector('[role="status"]').textContent = `Could not save the dismissal: ${error.message}`;
+  } finally {
+    button.disabled = false;
+  }
+});
 document.querySelector('[data-close-peek]').addEventListener('click', closePeek);
 document.querySelector('[data-close-keys]').addEventListener('click', () => help.close());
 document.querySelector('[data-open-keys]').addEventListener('click', () => help.showModal());

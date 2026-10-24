@@ -44,7 +44,7 @@ pub struct UserConfig {
     pub waiting_line_interval: Duration,
     /// `inbox.silent_minutes`: how long both logs may be quiet, default ten minutes.
     pub silent_interval: Duration,
-    /// `inbox.days`: retention of ended problems, Ready for review and Resolved, default seven days.
+    /// `inbox.days`: retention of Resolved and rows GitHub cannot speak for, default seven days.
     pub inbox_days: i64,
     /// `activity.quiet_skips`: a skipped Pass prints
     /// nothing, its Activity log line its only trace.
@@ -911,7 +911,7 @@ waiting_line_minutes = 5   # repeat unchanged CI watch and Self-merge waiting li
 endpoint = ""   # optional OTLP/HTTP traces URL, including /v1/traces; default blank (off); Security runs never export
 
 [inbox]
-days = 7             # days to keep ended problems, Ready for review and Resolved; default 7
+days = 7             # days to keep Resolved and rows GitHub cannot speak for; default 7
 silent_minutes = 10   # minutes without growth in either log before a Ticket run is Silent; default 10
 
 [console]

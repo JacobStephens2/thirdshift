@@ -95,6 +95,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
        thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
+       thirdshift dismiss <command> [--undo] [--json]  Dismiss an Inbox row, or take it back
        thirdshift logs [--command <id>] [--json]      List this machine's logs
        thirdshift logs --file <id> [--follow]         Read a log
        thirdshift logs <command> [--session <kind>] [--follow]  Read a log; --export <dir> writes its whole Trace
@@ -119,8 +120,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   security-review / no-security-review  Enable / disable a Ticket run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings, or closing a finding its fix merged (security-close / no-security-close)
 
-Options also accept a -- prefix. Each option may be given once; opposite options
-cannot be combined. Command options override the User config's defaults.
+Options accept a -- prefix; each may be given once. Opposites conflict. Command options override User config defaults.
 
 Pass commands: architect, pickup, secure (no Issue URL).
   base <branch>                      Use an origin branch, whatever is checked out
@@ -199,6 +199,16 @@ fn main() -> ExitCode {
             json,
         }) => {
             return match logs::stop::stop(&command, requeue, json) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::Dismiss {
+            command,
+            undo,
+            json,
+        }) => {
+            return match logs::dismiss::dismiss(&command, undo, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };

@@ -94,6 +94,9 @@ impl Paths {
             }
         };
         for path in event.paths {
+            if crate::logs::github::bookkeeping(&path, &self.logs) {
+                continue;
+            }
             // Parent-directory mtimes change for unrelated children and our
             // own account/log writes. File events carry the actual change.
             if matches!(

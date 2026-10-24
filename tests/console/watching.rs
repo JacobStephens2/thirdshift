@@ -227,6 +227,68 @@ fn a_silent_transition_wakes_the_inbox_without_a_file_change() {
 }
 
 #[test]
+fn taken_up_boundary_moves_the_row_without_a_file_change() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    fs::write(
+        home.path().join(".thirdshift/config.toml"),
+        "[console]\nport = 0\n[inbox]\ndays = 1\n",
+    )
+    .unwrap();
+    let mut old = record(home.path(), 81, Some("failed"), 10);
+    old["issue"]["title"] = json!("Taken-up boundary fixture");
+    write_record(home.path(), 81, &old);
+    // The later Command started a day ago plus two seconds, so the
+    // ten-day-old failure stays in Resolved for two more seconds.
+    let start = (chrono::Local::now() - chrono::Duration::days(1) + chrono::Duration::seconds(2))
+        .to_rfc3339();
+    let mut later = record(home.path(), 82, Some("merged"), 0);
+    later["started_at"] = json!(start.clone());
+    later["ended_at"] = json!(start.clone());
+    later["issue"] = json!({
+        "number": 81,
+        "url": "https://github.com/acme/widgets/issues/81",
+        "title": "Taken-up boundary fixture",
+    });
+    write_record(home.path(), 82, &later);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let resolved = || {
+        console
+            .get("/")
+            .text()
+            .unwrap()
+            .split("data-group=\"resolved\"")
+            .nth(1)
+            .unwrap()
+            .split("</details>")
+            .next()
+            .unwrap()
+            .to_owned()
+    };
+    assert!(
+        resolved().contains("taken up by a later Command"),
+        "{}",
+        resolved()
+    );
+    let response = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(8))
+        .build()
+        .unwrap()
+        .get(format!("{}/events", console.address))
+        .send()
+        .unwrap();
+    let mut stream = BufReader::new(response);
+    let began = std::time::Instant::now();
+    loop {
+        assert!(sse_event(&mut stream).contains("event: commands"));
+        if !resolved().contains("taken up by a later Command") {
+            break;
+        }
+    }
+    assert!(began.elapsed() < Duration::from_secs(6));
+}
+
+#[test]
 fn elapsed_time_updates_inbox_groups_and_retention_without_a_file_change() {
     for (outcome, days, remains) in [
         ("merged", 7, true),
