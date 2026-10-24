@@ -387,6 +387,34 @@ impl SilentRun {
                 .unwrap();
         }
     }
+
+    fn usual_implement_times(&self) {
+        for number in 20..23 {
+            let ended = chrono::Local::now() - chrono::Duration::hours(2);
+            let began = ended - chrono::Duration::minutes(10);
+            let mut record = record_value(
+                &self.scenario,
+                number,
+                &began.to_rfc3339(),
+                Some(&ended.to_rfc3339()),
+            );
+            record["outcome"] = "merged".into();
+            record["stages"] = json!([{
+                "name": "implement", "began_at": began.to_rfc3339(), "session_log": null
+            }]);
+            write_record(&self.scenario, number, &record);
+        }
+    }
+
+    fn row(&self) -> Value {
+        read_status(&self.scenario)["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["issue"]["number"] == 7)
+            .unwrap()
+            .clone()
+    }
 }
 
 impl Drop for SilentRun {
@@ -394,6 +422,262 @@ impl Drop for SilentRun {
         fs::write(self.scenario.path("release"), "").unwrap();
         self.held.take().unwrap().finish();
     }
+}
+
+#[test]
+fn dismiss_returning_health_kind_accumulates_coverage_for_the_whole_row() {
+    for first in ["Slow", "Silent"] {
+        let mut run = SilentRun::new();
+        run.go_silent("implement");
+        run.usual_implement_times();
+        let second = if first == "Slow" { "Silent" } else { "Slow" };
+        for (kind, covered) in [(first, vec![first]), (second, vec![first, second])] {
+            run.quiet_logs_for(if kind == "Silent" { 20 } else { 0 });
+            let row = run.row();
+            assert_eq!(row["group"], "needs you", "{row}");
+            assert_eq!(row["needs_you_kind"], kind.to_lowercase());
+            let dismissed = run.scenario.run(&["dismiss", "widgets#7", "--json"]);
+            assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+            let row = run.row();
+            assert_eq!(row["group"], "working", "{row}");
+            assert_eq!(row["dismissal"]["kinds"], json!(covered), "{row}");
+        }
+        // Both kinds have now counted once, even after another transition.
+        run.quiet_logs_for(if first == "Silent" { 20 } else { 0 });
+        let row = run.row();
+        assert_eq!(row["group"], "working", "{row}");
+        assert_eq!(row["dismissal"]["kind"], first);
+        let undone = run.scenario.run(&["dismiss", "widgets#7", "--undo"]);
+        assert_eq!(undone.code, Some(0), "{}", undone.stderr);
+        assert_eq!(run.row()["group"], "needs you");
+    }
+}
+
+#[test]
+fn dismissed_security_failure_returns_only_for_findings_still_waiting() {
+    for waiting in [true, false] {
+        let scenario = Scenario::new();
+        let now = chrono::Local::now().to_rfc3339();
+        let mut record = record_value(&scenario, 7, &now, Some(&now));
+        record["kind"] = "Security run".into();
+        record["issue"] = Value::Null;
+        record["name"] = "security-20261023T120000-0400".into();
+        record["security_findings_waiting"] = waiting.into();
+        write_record(&scenario, 7, &record);
+        let path = record_path(&scenario, 7);
+        let name = path.to_str().unwrap();
+        assert_eq!(
+            read_status(&scenario)["commands"][0]["needs_you_kind"],
+            "failed"
+        );
+        let dismissed = scenario.run(&["dismiss", name]);
+        assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+        let status = read_status(&scenario);
+        let row = &status["commands"][0];
+        if waiting {
+            assert_eq!(row["group"], "needs you", "{row}");
+            assert_eq!(row["needs_you_kind"], "finding");
+            let dismissed = scenario.run(&["dismiss", name]);
+            assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+            let status = read_status(&scenario);
+            let row = &status["commands"][0];
+            assert_eq!(row["group"], "done", "{row}");
+            assert_eq!(row["dismissal"]["kinds"], json!(["Failed", "Finding"]));
+            // A finding ceasing to wait reveals the covered failure, not news.
+            record["security_findings_waiting"] = false.into();
+            write_record(&scenario, 7, &record);
+            let status = read_status(&scenario);
+            assert_eq!(status["commands"][0]["group"], "done", "{status}");
+            assert_eq!(status["commands"][0]["dismissal"]["kind"], "Failed");
+            let undone = scenario.run(&["dismiss", name, "--undo"]);
+            assert_eq!(undone.code, Some(0), "{}", undone.stderr);
+            assert_eq!(
+                read_status(&scenario)["commands"][0]["needs_you_kind"],
+                "failed"
+            );
+        } else {
+            assert_eq!(row["group"], "done", "{row}");
+            assert_eq!(row["dismissal"]["kinds"], json!(["Failed"]));
+        }
+    }
+}
+
+#[test]
+fn dismissed_silence_holds_while_logging_and_through_later_silences() {
+    let mut run = SilentRun::new();
+    run.go_silent("implement");
+    let dismissed = run.scenario.run(&["dismiss", "widgets#7"]);
+    assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+    // Growing the trace clears Silent, without forgetting the dismissal.
+    let session = run.record["session_log"].as_str().unwrap();
+    fs::write(
+        session,
+        support::session_trace::records("{\"type\":\"result\"}"),
+    )
+    .unwrap();
+    let row = run.row();
+    assert_eq!(row["health"]["state"], "ok", "{row}");
+    assert_eq!(row["group"], "working");
+    assert_eq!(row["dismissal"]["kinds"], json!(["Silent"]));
+    run.quiet_logs_for(20);
+    let row = run.row();
+    assert_eq!(row["health"]["state"], "silent");
+    assert_eq!(row["group"], "working");
+    assert_eq!(row["dismissal"]["kind"], "Silent");
+}
+
+#[test]
+fn dismissed_live_command_returns_when_it_dies_fails_or_ends_ready() {
+    for kind in ["Died", "Failed", "Ready"] {
+        let mut run = SilentRun::new();
+        run.go_silent("implement");
+        let dismissed = run.scenario.run(&["dismiss", "widgets#7"]);
+        assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+        if kind == "Died" {
+            run.record["process_id"] = 0.into();
+            run.record["process_start"] = "gone".into();
+        } else {
+            run.record["ended_at"] = chrono::Local::now().to_rfc3339().into();
+            run.record["outcome"] = if kind == "Ready" {
+                "ready for review"
+            } else {
+                "failed"
+            }
+            .into();
+            if kind == "Ready" {
+                run.record["pull_request"] = "https://github.com/acme/widgets/pull/7".into();
+            }
+        }
+        fs::write(&run.path, serde_json::to_vec(&run.record).unwrap()).unwrap();
+        let row = run.row();
+        assert_eq!(
+            row["group"],
+            if kind == "Ready" {
+                "ready for review"
+            } else {
+                "needs you"
+            },
+            "{row}"
+        );
+        assert!(row["dismissal"].is_null(), "{row}");
+        if kind != "Ready" {
+            assert_eq!(row["needs_you_kind"], kind.to_lowercase());
+        }
+        let dismissed = run.scenario.run(&["dismiss", "widgets#7"]);
+        assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+        let row = run.row();
+        assert_eq!(
+            row["group"],
+            if kind == "Died" { "resolved" } else { "done" },
+            "{row}"
+        );
+        assert_eq!(row["dismissal"]["kinds"], json!(["Silent", kind]));
+    }
+}
+
+#[test]
+fn dismissed_old_live_command_returns_when_it_dies() {
+    let mut run = SilentRun::new();
+    run.go_silent("implement");
+    run.record["started_at"] = (chrono::Local::now() - chrono::Duration::days(8))
+        .to_rfc3339()
+        .into();
+    fs::write(&run.path, serde_json::to_vec(&run.record).unwrap()).unwrap();
+    let dismissed = run.scenario.run(&["dismiss", "widgets#7"]);
+    assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+    assert_eq!(run.row()["group"], "working");
+    run.record["process_id"] = 0.into();
+    run.record["process_start"] = "gone".into();
+    fs::write(&run.path, serde_json::to_vec(&run.record).unwrap()).unwrap();
+    let row = run.row();
+    assert_eq!(row["group"], "needs you", "{row}");
+    assert_eq!(row["needs_you_kind"], "died");
+}
+
+#[test]
+fn dismiss_refuses_a_mixed_collapsed_row_before_writing_any_dismissal() {
+    let scenario = Scenario::new();
+    write_failed(&scenario, 8, 0, Some("boom"));
+    let now = chrono::Local::now();
+    let stamp = now.format("%Y%m%dT%H%M%S%z");
+    let at = now.format("%Y-%m-%d %H:%M:%S");
+    fs::write(
+        scenario.path(ACTIVITY),
+        format!("{at} Run #7 started: commands/issue/7-{stamp}.log, on claude\n{at} Run #7 ended: failed: boom\n"),
+    ).unwrap();
+    let before = read_status(&scenario);
+    assert_eq!(before["commands"].as_array().unwrap().len(), 1, "{before}");
+    assert_eq!(before["commands"][0]["count"], 2);
+    let activity_before = activity(&scenario);
+    let refused = scenario.run(&["dismiss", "widgets#8"]);
+    assert_ne!(refused.code, Some(0), "{}", refused.stdout);
+    assert!(
+        refused.stderr.contains("row has no Command record"),
+        "{}",
+        refused.stderr
+    );
+    assert_eq!(read_status(&scenario)["commands"], before["commands"]);
+    assert_eq!(activity(&scenario), activity_before);
+}
+
+#[test]
+fn dismissed_spec_silence_covers_a_different_ticket_run() {
+    let mut run = SilentRun::new();
+    run.go_silent("implement");
+    let mut child = run.record.clone();
+    child["parent_record"] = run.path.to_str().unwrap().into();
+    child["issue"]["number"] = 21.into();
+    child["issue"]["url"] = run.scenario.issue_url(21).into();
+    child["name"] = "acme/widgets#21".into();
+    let first = run.path.with_extension("issue-21.child.json");
+    fs::write(&first, serde_json::to_vec(&child).unwrap()).unwrap();
+    run.record["kind"] = "Spec run".into();
+    run.record["stages"] = json!([]);
+    fs::write(&run.path, serde_json::to_vec(&run.record).unwrap()).unwrap();
+    assert_eq!(run.row()["needs_you_kind"], "silent");
+    let dismissed = run.scenario.run(&["dismiss", "widgets#7"]);
+    assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+    // First Ticket finishes; a different Ticket now goes Silent in this row.
+    child["ended_at"] = chrono::Local::now().to_rfc3339().into();
+    child["outcome"] = "merged".into();
+    fs::write(&first, serde_json::to_vec(&child).unwrap()).unwrap();
+    child["issue"]["number"] = 22.into();
+    child["issue"]["url"] = run.scenario.issue_url(22).into();
+    child["name"] = "acme/widgets#22".into();
+    child["ended_at"] = Value::Null;
+    child["outcome"] = Value::Null;
+    fs::write(
+        run.path.with_extension("issue-22.child.json"),
+        serde_json::to_vec(&child).unwrap(),
+    )
+    .unwrap();
+    let row = run.row();
+    assert_eq!(row["children"][1]["health"]["state"], "silent", "{row}");
+    assert_eq!(row["group"], "working");
+    assert_eq!(row["dismissal"]["kinds"], json!(["Silent"]));
+    let text = run.scenario.run(&["status"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    assert!(text.stdout.contains("dismissed by "), "{}", text.stdout);
+    assert!(text.stdout.contains("silent 20 min"), "{}", text.stdout);
+}
+
+#[test]
+fn single_kind_dismissal_files_keep_their_kind_when_another_is_added() {
+    let mut run = SilentRun::new();
+    run.go_silent("implement");
+    let dismissed = run.scenario.run(&["dismiss", "widgets#7"]);
+    assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+    let path = run.path.with_extension("dismiss.json");
+    let mut file: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    file["rows"][0].as_object_mut().unwrap().remove("kinds");
+    fs::write(&path, serde_json::to_vec(&file).unwrap()).unwrap();
+    assert_eq!(run.row()["dismissal"]["kinds"], json!(["Silent"]));
+    run.usual_implement_times();
+    run.quiet_logs_for(0);
+    assert_eq!(run.row()["needs_you_kind"], "slow");
+    let dismissed = run.scenario.run(&["dismiss", "widgets#7"]);
+    assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+    assert_eq!(run.row()["dismissal"]["kinds"], json!(["Silent", "Slow"]));
 }
 
 #[test]
@@ -437,23 +721,6 @@ fn dismiss_live_landing_row_moves_it_to_landing() {
     assert_eq!(text.code, Some(0), "{}", text.stderr);
     assert!(text.stdout.contains("dismissed by "), "{}", text.stdout);
     assert!(text.stdout.contains("silent 20 min"), "{}", text.stdout);
-}
-
-#[test]
-fn dismiss_refuses_a_working_row_using_the_configured_silent_interval() {
-    let mut run = SilentRun::new();
-    run.scenario
-        .user_config_is("[inbox]\nsilent_minutes = 30\n");
-    run.go_silent("implement");
-    let status = read_status(&run.scenario);
-    assert_eq!(status["commands"][0]["group"], "working", "{status}");
-    let refused = run.scenario.run(&["dismiss", "widgets#7"]);
-    assert_ne!(refused.code, Some(0), "{}", refused.stdout);
-    assert!(
-        refused.stderr.contains("not Needs you or Ready for review"),
-        "{}",
-        refused.stderr
-    );
 }
 
 #[test]
