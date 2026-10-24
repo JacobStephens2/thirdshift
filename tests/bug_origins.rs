@@ -268,6 +268,44 @@ fn first_proposal_backfill_covers_more_than_githubs_search_limit() {
 }
 
 #[test]
+fn a_symlinked_proposal_cannot_import_a_host_file() {
+    let scenario = scenario();
+    let fix = scenario
+        .origin_git(&["rev-parse", "main"])
+        .trim()
+        .to_string();
+    let mut state = scenario.gh_state();
+    state["scoring_bugs"] = json!([bug(8, Some(&fix), 1)]);
+    scenario.write_gh_state(&state);
+    // Outside the session workspace. A symlink here is the session pointing
+    // the host's post-session read at a file the sandbox does not contain.
+    let outside = scenario.path("outside-proposal.json");
+    let reason = "contents of a host file outside the session workspace";
+    std::fs::write(
+        &outside,
+        format!(r#"{{"commit":null,"reason":"{reason}"}}"#),
+    )
+    .unwrap();
+    scenario.agent_does(&format!("ln -s {} proposal.json\n", shell_quote(&outside)));
+    let run = score(&scenario);
+    assert_eq!(
+        run.code,
+        Some(1),
+        "symlinked proposal was accepted:\n{}",
+        run.stderr
+    );
+    assert!(run.stderr.contains("not a regular file"), "{}", run.stderr);
+    assert!(
+        weeks(&scenario).is_empty(),
+        "a symlinked proposal advanced the window"
+    );
+}
+
+fn shell_quote(path: &std::path::Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
+#[test]
 fn a_named_commit_outside_captured_history_is_rejected_without_a_window() {
     let scenario = scenario();
     let fix = scenario

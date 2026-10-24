@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result, ensure};
+use anyhow::{Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -165,9 +165,15 @@ fn analyze(config: &UserConfig, bug: &ClosedBug, fix: &str, directory: &Path) ->
             error.context("Bug-origin session failed")
         }
     })?;
+    let proposal = workspace.join("proposal.json");
     let response: Response = serde_json::from_slice(
-        &fs::read(workspace.join("proposal.json"))
-            .context("Bug-origin session left no proposal")?,
+        &private::read_session_file(&proposal, private::SESSION_OUTPUT_MAX).map_err(|error| {
+            if private::is_missing_file(&error) {
+                anyhow::anyhow!("Bug-origin session left no proposal")
+            } else {
+                error
+            }
+        })?,
     )?;
     ensure!(
         !response.reason.trim().is_empty(),

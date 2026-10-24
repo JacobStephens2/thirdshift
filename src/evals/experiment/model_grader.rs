@@ -334,6 +334,14 @@ fn grade(
             ("THIRDSHIFT_GRADER_SCORES", &scores),
         ],
     })?;
-    serde_json::from_slice(&fs::read(scores).context("model Grader left no Scores")?)
+    let bytes =
+        private::read_session_file(&scores, private::SESSION_OUTPUT_MAX).map_err(|error| {
+            if private::is_missing_file(&error) {
+                anyhow::anyhow!("model Grader left no Scores")
+            } else {
+                error
+            }
+        })?;
+    serde_json::from_slice(&bytes)
         .map_err(|_| anyhow::anyhow!("invalid model Grader response; see private Grader artifacts"))
 }
