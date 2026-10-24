@@ -120,12 +120,12 @@ impl Snapshot {
         inbox::list(&self.commands, self.now, all, days, github)
     }
 
-    pub(super) fn ready_pull_requests(
+    pub(super) fn github_subjects(
         &self,
         days: i64,
         github: &super::github::Kept,
-    ) -> Vec<String> {
-        inbox::ready_pull_requests(&self.commands, self.now, days, github)
+    ) -> Vec<super::github::Subject> {
+        inbox::github_subjects(&self.commands, self.now, days, github)
     }
 
     pub(super) fn resolve(&self, input: &str) -> Result<selection::Selection<'_>> {

@@ -9,7 +9,7 @@ use serde::Serialize;
 use super::{Command, Entry, Health, Observation};
 use crate::github::{PrState, PullRequestState};
 use crate::logs::dismiss::{self, DismissalView, READY_KIND};
-use crate::logs::github::Kept;
+use crate::logs::github::{Kept, Subject};
 use crate::logs::stop;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -85,10 +85,11 @@ impl NeedsYouKind {
 /// Why a row left Needs you or Ready for review through the exit this
 /// machine knows: a later Command starting on the same issue.
 pub(in crate::logs) const TAKEN_UP_REASON: &str = "taken up by a later Command";
-/// Why a row left Ready for review through GitHub: its pull request merged.
+/// Why a waiting row left through GitHub: its pull request merged.
 pub(in crate::logs) const MERGED_REASON: &str = "pull request merged";
 /// Why a row left Ready for review through GitHub: its pull request closed.
 pub(in crate::logs) const CLOSED_REASON: &str = "pull request closed";
+pub(in crate::logs) const ISSUE_CLOSED_REASON: &str = "issue closed";
 
 #[derive(Serialize)]
 pub(in crate::logs) struct InboxItem<'a> {
@@ -144,10 +145,8 @@ impl InboxItem<'_> {
         }
     }
 
-    /// The row's own pull request, judged by GitHub: a dispatched Ticket
-    /// run's own, not its Pass's. `None` for rows with no record.
-    pub(in crate::logs) fn pull_request(&self) -> Option<&str> {
-        record_pull_request(&self.command)
+    pub(in crate::logs) fn github_urls(&self) -> Vec<&str> {
+        github_urls(self.command)
     }
 
     /// The row's state word in the Console and `status`: its Needs you kind,
@@ -177,6 +176,26 @@ struct Facts<'a> {
 }
 
 impl<'a> Observation<'a> {
+    fn problem(self) -> Option<NeedsYouKind> {
+        let facts = self.facts();
+        if facts.state == "died" {
+            Some(NeedsYouKind::Died)
+        } else if matches!(self, Observation::Record(command) if facts.state == "ended" && !facts.ready && stop::requested(&command.record_path).is_some_and(|request| !request.requeue))
+        {
+            Some(NeedsYouKind::Triage)
+        } else if facts
+            .outcome
+            .is_some_and(|outcome| outcome.contains("failed") || outcome == "review required")
+        {
+            Some(NeedsYouKind::Failed)
+        } else if matches!(self, Observation::Record(command) if command.record.security_findings_waiting)
+        {
+            Some(NeedsYouKind::Finding)
+        } else {
+            None
+        }
+    }
+
     fn facts(self) -> Facts<'a> {
         match self {
             Self::Record(command) => Facts {
@@ -250,8 +269,7 @@ pub(super) fn next_change(
             // wakes open pages too.
             let taken_up = superseded_at(starts, &starts_by_issue)
                 .and_then(|at| at.checked_add_signed(chrono::Duration::days(days)));
-            // A row GitHub moved out of Ready for review stays in Resolved
-            // until inbox.days after its pull request merged or closed.
+            // GitHub departures stay in Resolved for inbox.days from settlement.
             let github_moved = github_left(&observation, github, ended)
                 .and_then(|(_, at)| at.checked_add_signed(chrono::Duration::days(days)));
             // A dismissed row stays in Resolved until inbox.days after the
@@ -276,28 +294,41 @@ pub(super) fn next_change(
         .min()
 }
 
-/// Every ready row's own pull request, deduplicated: a dispatched Ticket
-/// run's own, not its Pass's. These are the pull requests the next GitHub
-/// read looks up: every row in Ready for review, and every row that left
-/// it, while still in view.
-pub(super) fn ready_pull_requests(
+/// Issues/pull requests for Needs you and pull requests for Ready for
+/// review, including departures still in view. History keeps its last facts;
+/// a row not yet read gets one lookup before local age alone can move it there.
+pub(super) fn github_subjects(
     entries: &[Entry],
     now: DateTime<Local>,
     days: i64,
     github: &Kept,
-) -> Vec<String> {
+) -> Vec<Subject> {
     let mut urls = BTreeMap::new();
     for item in list(entries, now, true, days, github) {
-        if item.command.facts().ready
-            && let Some(url) = item.pull_request()
-            && let Some(row) = item.command.selector()
-            && !github.is_frozen(&row)
-            && (item.group != Group::History || !github.has_answer(url))
-        {
-            urls.insert(url.to_owned(), ());
+        for item in std::iter::once(&item).chain(&item.collapsed) {
+            for url in item.github_urls() {
+                if let Some(row) = item.command.selector()
+                    && !github.is_frozen(&row, url)
+                    && (item.group != Group::History || !github.has_answer(url))
+                {
+                    let triage_since = (item.command.problem() == Some(NeedsYouKind::Triage)
+                        && github_records(item.command).iter().any(|record| {
+                            record.issue.as_ref().is_some_and(|issue| issue.url == url)
+                        }))
+                    .then(|| time(item.command.facts().ended_at))
+                    .flatten();
+                    urls.entry(url.to_owned())
+                        .and_modify(|since: &mut Option<DateTime<FixedOffset>>| {
+                            *since = (*since).max(triage_since)
+                        })
+                        .or_insert(triage_since);
+                }
+            }
         }
     }
-    urls.into_keys().collect()
+    urls.into_iter()
+        .map(|(url, triage_since)| Subject { url, triage_since })
+        .collect()
 }
 
 pub(super) fn list<'a>(
@@ -333,20 +364,14 @@ pub(super) fn list<'a>(
             Observation::History(_) => None,
         };
         let findings_waiting = matches!(command, Observation::Record(command) if command.record.security_findings_waiting);
-        let mut problem = if facts.state == "died" {
-            Some(NeedsYouKind::Died)
-        } else if matches!(command, Observation::Record(command) if facts.state == "ended" && !facts.ready && stop::requested(&command.record_path).is_some_and(|request| !request.requeue))
-        {
-            Some(NeedsYouKind::Triage)
-        } else if facts
-            .outcome
-            .is_some_and(|outcome| outcome.contains("failed") || outcome == "review required")
-        {
-            Some(NeedsYouKind::Failed)
-        } else if findings_waiting {
+        let github_settlement = github_left(&command, github, ended);
+        // Settling failed work removes that wait, while another finding
+        // from the same audit can still need the Day shift.
+        let finding_wait = github_settlement.is_some() && findings_waiting;
+        let mut problem = if finding_wait {
             Some(NeedsYouKind::Finding)
         } else {
-            None
+            command.problem()
         };
         // Dismissing the failure does not dismiss the findings it hid.
         if problem == Some(NeedsYouKind::Failed)
@@ -379,14 +404,18 @@ pub(super) fn list<'a>(
         } else {
             None
         };
-        // The Inbox holds an ended problem or ready Command until a later
-        // Command on the same issue starts here, or it outlives the period.
-        // A ready row whose pull request GitHub still shows as open stays,
-        // however old it is: age moves only rows GitHub can't speak for. A
-        // row a later Command already took up stays taken up.
-        let github_open = taken_up.is_none()
-            && facts.ready
-            && github_state(&command, github).is_some_and(|state| state.state == PrState::Open);
+        // Age moves only rows GitHub can't speak for. An ended problem
+        // with known facts stays until settlement; a ready row stays while
+        // its pull request is open. A later local Command still takes up either.
+        let github_moved = (taken_up.is_none() && !finding_wait)
+            .then_some(github_settlement)
+            .flatten();
+        let github_holds = taken_up.is_none()
+            && ((facts.ready
+                && github_state(&command, github)
+                    .is_some_and(|state| state.state == PrState::Open))
+                || (problem.is_some_and(|kind| kind != NeedsYouKind::Finding)
+                    && github_known(command, github)));
         let held = (ended
             .or_else(|| time(Some(facts.started_at)))
             // A recent dismissal proves this row was still in the Inbox.
@@ -403,7 +432,7 @@ pub(super) fn list<'a>(
             && !starts
                 .iter()
                 .any(|(issue, start)| latest.get(issue).is_some_and(|latest| latest > start)))
-            || github_open;
+            || github_holds;
         // A dismissal holds for every kind it covered: a row that turns
         // into a kind it wasn't when dismissed waits again. Its kind is
         // independent of age or a later Command taking it up, so those
@@ -418,7 +447,7 @@ pub(super) fn list<'a>(
         let dismissed_at = dismissed_row.as_ref().and_then(|row| time(Some(&row.at)));
         let dismissal = dismissed_row.as_ref().map(|row| row.view(kind_now));
         let needs_you_kind = live_problem
-            .or_else(|| problem.filter(|_| held))
+            .or_else(|| problem.filter(|_| held && github_moved.is_none()))
             .filter(|_| !dismissed);
         let from = if problem.is_some() {
             Some("needs you")
@@ -428,15 +457,9 @@ pub(super) fn list<'a>(
             None
         };
         let left = taken_up.filter(|_| from.is_some());
-        // When this row stopped waiting through GitHub: a ready row whose
-        // pull request merged or closed. The later-Command exit wins where
-        // both apply, and a reopened pull request brings back only a row
+        // The later-Command exit wins where both apply. Reopening brings back only a row
         // still in Done or Resolved: History rows are not read again.
-        let github_moved = left
-            .is_none()
-            .then(|| github_left(&command, github, ended))
-            .flatten()
-            .filter(|_| from.is_some());
+        let github_moved = github_moved.filter(|_| from.is_some());
         let group = if needs_you_kind.is_some() {
             Group::NeedsYou
         } else if facts.ready && held && github_moved.is_none() && !dismissed {
@@ -447,7 +470,8 @@ pub(super) fn list<'a>(
             Group::Working
         } else if ended.is_some_and(|time| time >= now - chrono::Duration::days(1)) {
             Group::Done
-        } else if ended.is_some_and(|time| cutoff.is_none_or(|cutoff| time >= cutoff))
+        } else if (github_moved.is_none()
+            && ended.is_some_and(|time| cutoff.is_none_or(|cutoff| time >= cutoff)))
             || left.is_some_and(|taken| {
                 cutoff.is_none_or(|cutoff| taken.with_timezone(&Local) >= cutoff)
             })
@@ -525,11 +549,78 @@ pub(super) fn list<'a>(
 
 /// The row's own pull request URL, if its observation has a record with
 /// one: a dispatched Ticket run's own, not its Pass's.
-fn record_pull_request<'a>(observation: &'a Observation<'a>) -> Option<&'a str> {
+fn record_pull_request<'a>(observation: &Observation<'a>) -> Option<&'a str> {
     match observation {
         Observation::Record(command) => command.record.pull_request.as_deref(),
         Observation::History(_) => None,
     }
+}
+
+fn github_urls(observation: Observation<'_>) -> Vec<&str> {
+    let mut urls = Vec::new();
+    let problem = observation.problem().is_some()
+        || matches!(observation, Observation::Record(command) if live_problem(command).is_some());
+    if observation.facts().ready || problem {
+        for record in github_records(observation) {
+            if let Some(url) = &record.pull_request {
+                urls.push(url.as_str());
+            }
+            if problem && let Some(issue) = &record.issue {
+                urls.push(issue.url.as_str());
+            }
+        }
+    }
+    urls
+}
+
+/// A failed Pass is answered by its failed dispatched work, not by a
+/// different fix that succeeded. Undispatched failures have no such subject.
+fn github_records(
+    observation: Observation<'_>,
+) -> Vec<&crate::logs::command_record::CommandRecord> {
+    // A successful fix speaks for that fix, not for other findings from
+    // its audit that still need the Day shift.
+    if observation.problem() == Some(NeedsYouKind::Finding) {
+        return Vec::new();
+    }
+    let Observation::Record(command) = observation else {
+        return Vec::new();
+    };
+    if observation.problem().is_some()
+        && matches!(
+            command.record.kind.as_str(),
+            "Architect run" | "Security run"
+        )
+        && !command.dispatched.is_empty()
+    {
+        let failed: Vec<_> = command
+            .dispatched
+            .iter()
+            .filter(|run| Observation::Record(run).problem().is_some())
+            .map(|run| &run.record)
+            .collect();
+        if !failed.is_empty() {
+            return failed;
+        }
+        return command.dispatched.iter().map(|run| &run.record).collect();
+    }
+    vec![&command.record]
+}
+
+fn github_known(observation: Observation<'_>, github: &Kept) -> bool {
+    let Some(row) = observation.selector() else {
+        return false;
+    };
+    github_records(observation).iter().any(|record| {
+        record
+            .issue
+            .as_ref()
+            .is_some_and(|issue| github.issue(&row, &issue.url).is_some())
+            || record
+                .pull_request
+                .as_ref()
+                .is_some_and(|url| github.pull_request(&row, url).is_some())
+    })
 }
 
 /// What GitHub last showed for the row's own pull request, if anything.
@@ -537,7 +628,7 @@ fn github_state<'a>(
     observation: &Observation<'a>,
     github: &'a Kept,
 ) -> Option<&'a PullRequestState> {
-    github.state(&observation.selector()?, record_pull_request(observation)?)
+    github.pull_request(&observation.selector()?, record_pull_request(observation)?)
 }
 
 /// The pull request's merge or close time, as GitHub wrote it.
@@ -545,16 +636,56 @@ fn event_time(state: &PullRequestState) -> Option<&str> {
     state.merged_at.as_deref().or(state.closed_at.as_deref())
 }
 
-/// When the row stopped waiting through GitHub: its pull request's merge
-/// or close time, with why it left. Only ready rows move this way; any
-/// other ready row's age no longer moves it, and a row with no pull
-/// request, no read yet, or an unresolvable pull request still ages out
-/// by the usual rule.
+/// When an ended row stopped waiting through GitHub, with why it left.
+/// A problem's issue closing or pull request merging settles it; Triage
+/// also leaves on label removal. Ready rows also leave on an unmerged close.
 fn github_left(
     observation: &Observation<'_>,
     github: &Kept,
     ended: Option<DateTime<FixedOffset>>,
 ) -> Option<(String, DateTime<FixedOffset>)> {
+    if observation.facts().state == "live" {
+        return None;
+    }
+    if observation.problem().is_some() {
+        let row = observation.selector()?;
+        let departures = github_records(*observation)
+            .into_iter()
+            .map(|record| {
+                let issue = record
+                    .issue
+                    .as_ref()
+                    .and_then(|issue| github.issue(&row, &issue.url));
+                let (reason, at) = if let Some(issue) = issue
+                    && issue.closed
+                {
+                    (ISSUE_CLOSED_REASON, issue.closed_at.as_deref())
+                } else if observation.problem() == Some(NeedsYouKind::Triage)
+                    && let Some(issue) = issue
+                    && !issue.needs_triage
+                {
+                    // Absence before this Stop says nothing about whether
+                    // its needs-triage label has since been removed.
+                    let at = time(issue.triaged_at.as_deref())?;
+                    if ended.is_some_and(|ended| at < ended) {
+                        return None;
+                    }
+                    ("needs-triage removed", issue.triaged_at.as_deref())
+                } else {
+                    let pull = github.pull_request(&row, record.pull_request.as_deref()?)?;
+                    if pull.state != PrState::Merged {
+                        return None;
+                    }
+                    (MERGED_REASON, event_time(pull))
+                };
+                time(at)
+                    .or(ended)
+                    .or_else(|| time(Some(observation.facts().started_at)))
+                    .map(|at| (reason.to_string(), at))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        return departures.into_iter().max_by_key(|(_, at)| *at);
+    }
     if !observation.facts().ready {
         return None;
     }

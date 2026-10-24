@@ -691,26 +691,34 @@ impl GitHub {
             .collect()
     }
 
-    /// What GitHub last showed for one batch of up to a hundred pull requests.
+    /// What GitHub last showed for one batch of up to a hundred issues and pull requests.
     /// The Inbox checks the returned quota before asking for another batch. Each
-    /// alias asks for its pull request's state and its merge or close time,
-    /// and for the query's own `rateLimit`. A pull request GitHub can't
+    /// alias asks for state and settlement times (plus issue triage labels),
+    /// and for the query's own `rateLimit`. A subject GitHub can't
     /// resolve answers null and stays out of the map, without failing the
     /// rest of the read. Only reads; nothing here writes to GitHub.
-    pub(crate) fn pull_request_states(
+    pub(crate) fn inbox_states(
         &self,
         urls: &[String],
-    ) -> Result<(BTreeMap<String, PullRequestState>, Quota)> {
+    ) -> Result<(BTreeMap<String, InboxState>, Quota)> {
         let mut states = BTreeMap::new();
         let mut query = String::from("query {");
         let mut aliases = Vec::new();
         for (index, url) in urls.iter().enumerate() {
-            let Some((owner, repo, number)) = split_pull_request_url(url) else {
+            let subject = split_pull_request_url(url)
+                .map(|(owner, repo, number)| (owner, repo, number, InboxSubject::PullRequest))
+                .or_else(|| {
+                    IssueUrl::parse(url)
+                        .ok()
+                        .map(|issue| (issue.owner, issue.repo, issue.number, InboxSubject::Issue))
+                });
+            let Some((owner, repo, number, subject)) = subject else {
                 continue;
             };
             let alias = format!("pr{index}");
-            query.push_str(&format!(" {alias}: repository(owner: \"{owner}\", name: \"{repo}\") {{ pullRequest(number: {number}) {{ url state mergedAt closedAt }} }}"));
-            aliases.push((alias, url.clone()));
+            let (field, fields) = subject.selection();
+            query.push_str(&format!(" {alias}: repository(owner: \"{owner}\", name: \"{repo}\") {{ {field}(number: {number}) {{ {fields} }} }}"));
+            aliases.push((alias, url.clone(), subject));
         }
         query.push_str(" rateLimit { limit cost remaining resetAt } }");
         let query = format!("query={query}");
@@ -727,7 +735,7 @@ impl GitHub {
                         !errors.is_empty()
                             && errors.iter().all(|error| {
                                 error["path"][0].as_str().is_some_and(|path| {
-                                    aliases.iter().any(|(alias, _)| alias == path)
+                                    aliases.iter().any(|(alias, _, _)| alias == path)
                                 })
                             })
                     })
@@ -745,18 +753,19 @@ impl GitHub {
         })?;
         let data = &json["data"];
         let quota = Quota::graphql(&data["rateLimit"])?;
-        for (alias, url) in aliases {
+        for (alias, url, subject) in aliases {
             if json["errors"]
                 .as_array()
                 .is_some_and(|errors| errors.iter().any(|error| error["path"][0] == alias))
             {
                 continue;
             }
-            let pull = &data[alias.as_str()]["pullRequest"];
+            let (field, _) = subject.selection();
+            let pull = &data[alias.as_str()][field];
             if pull.is_null() {
                 continue;
             }
-            states.insert(url.clone(), PullRequestState::from_json(&url, pull)?);
+            states.insert(url.clone(), subject.read(&url, pull)?);
         }
         Ok((states, quota))
     }
@@ -1505,6 +1514,76 @@ impl PullRequest {
                 .context(CommandFailure::InvalidResponse(
                     "gh output has no isDraft".into(),
                 ))?,
+        })
+    }
+}
+
+/// The two subjects the Inbox reads, owning their GraphQL selection and decoding.
+#[derive(Clone, Copy)]
+enum InboxSubject {
+    Issue,
+    PullRequest,
+}
+
+impl InboxSubject {
+    fn selection(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Issue => (
+                "issue",
+                "state closedAt labels(first: 100) { nodes { name } }",
+            ),
+            Self::PullRequest => ("pullRequest", "url state mergedAt closedAt"),
+        }
+    }
+
+    fn read(self, url: &str, json: &Value) -> Result<InboxState> {
+        match self {
+            Self::Issue => IssueState::from_json(url, json).map(InboxState::Issue),
+            Self::PullRequest => {
+                PullRequestState::from_json(url, json).map(InboxState::PullRequest)
+            }
+        }
+    }
+}
+
+/// The Inbox's facts for either kind of GitHub subject. Untagged to keep
+/// reading the pull-request-only cache written before issue reads existed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum InboxState {
+    Issue(IssueState),
+    PullRequest(PullRequestState),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct IssueState {
+    pub closed: bool,
+    pub closed_at: Option<String>,
+    pub needs_triage: bool,
+    /// The first kept answer showing needs-triage absent, reset if it returns.
+    pub triaged_at: Option<String>,
+}
+
+impl IssueState {
+    fn from_json(url: &str, json: &Value) -> Result<Self> {
+        let closed = match json["state"].as_str() {
+            Some("OPEN") => false,
+            Some("CLOSED") => true,
+            other => bail!(CommandFailure::InvalidResponse(format!(
+                "gh output has an unknown issue state {other:?} for {url}"
+            ))),
+        };
+        Ok(Self {
+            closed,
+            closed_at: json["closedAt"].as_str().map(String::from),
+            needs_triage: json["labels"]["nodes"].as_array().is_some_and(|labels| {
+                labels.iter().any(|label| {
+                    label["name"]
+                        .as_str()
+                        .is_some_and(|name| crate::labels::NEEDS_TRIAGE.is_named(name))
+                })
+            }),
+            triaged_at: None,
         })
     }
 }
