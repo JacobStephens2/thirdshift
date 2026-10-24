@@ -131,8 +131,8 @@
 //! PR's `url`, `state` (`OPEN`, `CLOSED` or `MERGED`) and its `mergedAt` and
 //! `closedAt` times when the state names them, else null, plus the query's
 //! own `rateLimit`. An alias for a pull request the state does not know, or
-//! for another repository, answers a null `pullRequest` without failing the
-//! rest of the read.
+//! for another repository, answers a null `pullRequest` and a scoped GraphQL
+//! error. Like `gh`, the fake prints the partial data and exits 1.
 //!
 //! `gh api --method PATCH repos/<repo>/pulls/<number> -f body=<body>` sets the
 //! PR's body. `gh pr view`, `gh pr ready` and `gh pr merge` name the PR by
@@ -1993,8 +1993,8 @@ fn record_run(state: &mut Json, mut run: Json) {
 /// pull request, each with the state's `state` and its `mergedAt`/`closedAt`
 /// times when the fake knows them, else a null `pullRequest` for that alias.
 /// An alias for another repository answers null, and every answer carries the
-/// query's own `rateLimit`. One item the fake can't resolve never fails the
-/// rest of the read.
+/// query's own `rateLimit`. An unresolved item adds a scoped GraphQL error
+/// and exits 1, keeping the other aliases' data on stdout as `gh` does.
 fn graphql(state: &Json, args: &[&str]) {
     let mut variables = api_fields(args);
     let query = variables.remove("query").unwrap_or_default();
@@ -2067,6 +2067,7 @@ fn graphql(state: &Json, args: &[&str]) {
 /// `rateLimit`.
 fn pull_requests(state: &Json, query: &str) {
     let mut data: Vec<(String, Json)> = Vec::new();
+    let mut errors = Vec::new();
     let mut rest = query;
     while let Some(at) = rest.find(": repository(") {
         let alias = rest[..at]
@@ -2107,6 +2108,19 @@ fn pull_requests(state: &Json, query: &str) {
                     ("closedAt", at("closedAt")),
                 ])
             });
+        if pull.is_none() {
+            errors.push(object([
+                ("type", string("NOT_FOUND")),
+                (
+                    "path",
+                    Json::Array(vec![string(&alias), string("pullRequest")]),
+                ),
+                (
+                    "message",
+                    string(format!("Could not resolve pull request {number}.")),
+                ),
+            ]));
+        }
         data.push((alias, object([("pullRequest", pull.unwrap_or(Null))])));
     }
     if data.is_empty() {
@@ -2121,8 +2135,18 @@ fn pull_requests(state: &Json, query: &str) {
             ("resetAt", string(now())),
         ]),
     ));
-    let answer = Json::Object(vec![("data".to_owned(), Json::Object(data))]);
+    let mut answer = Json::Object(vec![("data".to_owned(), Json::Object(data))]);
+    let failed = !errors.is_empty();
+    if failed {
+        answer.set("errors", Json::Array(errors));
+    }
     println!("{answer}");
+    if failed {
+        die(
+            "gh: Could not resolve a pull request in the batched query.",
+            1,
+        );
+    }
 }
 
 /// The `"value"` after `key` in a GraphQL query, if any.

@@ -206,7 +206,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
     // The Console shows the same groups as `status` by reading the same
     // kept answer. Only `status` refreshes it from GitHub.
     let kept = crate::logs::github::load(&config.logs_dir);
-    let items = snapshot.inbox(false, config.inbox_days, &kept.states);
+    let items = snapshot.inbox(false, config.inbox_days, &kept);
     let listed: std::collections::BTreeSet<_> = items
         .iter()
         .filter_map(|item| item.command.selector())

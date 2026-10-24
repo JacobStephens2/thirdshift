@@ -91,28 +91,25 @@ pub fn show(json: bool, all: bool) -> Result<()> {
     // Every ready row's pull request is looked up in one batched read,
     // except a row that has already reached History: from there on it
     // keeps what GitHub last showed and is not read again.
-    let urls = snapshot.ready_pull_requests();
-    let kept = super::github::load(&config.logs_dir);
-    let first = snapshot.inbox(true, config.inbox_days, &kept.states);
+    let mut kept = super::github::load(&config.logs_dir);
+    let first = snapshot.inbox(true, config.inbox_days, &kept);
     // From History on, a row keeps what GitHub last showed and is not read
     // again: only rows with a kept answer are frozen, so the first read
     // still looks up a row that local rules alone would call History.
-    let frozen: Vec<String> = first
-        .iter()
-        .filter(|item| item.group == Group::History)
-        .filter_map(|item| item.pull_request())
-        .filter(|url| kept.states.contains_key(*url))
-        .map(str::to_string)
-        .collect();
-    let urls: Vec<String> = urls
-        .into_iter()
-        .filter(|url| !frozen.contains(url))
-        .collect();
-    let kept = super::github::refresh(&config.logs_dir, &urls)?;
+    for item in first {
+        if item.group == Group::History
+            && let Some(url) = item.pull_request()
+            && let Some(row) = item.command.selector()
+        {
+            kept.freeze(row, url);
+        }
+    }
+    let urls = snapshot.ready_pull_requests(config.inbox_days, &kept);
+    let kept = super::github::refresh(&config.logs_dir, &urls, kept)?;
     let status = Status {
         version: 1,
         hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-        commands: snapshot.inbox(all, config.inbox_days, &kept.states),
+        commands: snapshot.inbox(all, config.inbox_days, &kept),
         idle_passes: &snapshot.idle_passes,
         github_answer_age_seconds: kept.age.map(|age| age.as_secs()),
     };

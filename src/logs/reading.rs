@@ -36,7 +36,7 @@ impl Snapshot {
     pub(super) fn next_inbox_change(
         &self,
         days: i64,
-        github: &BTreeMap<String, Option<crate::github::PullRequestState>>,
+        github: &super::github::Kept,
     ) -> Option<DateTime<Local>> {
         inbox::next_change(&self.commands, self.now, days, github)
     }
@@ -115,13 +115,17 @@ impl Snapshot {
         &self,
         all: bool,
         days: i64,
-        github: &BTreeMap<String, Option<crate::github::PullRequestState>>,
+        github: &super::github::Kept,
     ) -> Vec<InboxItem<'_>> {
         inbox::list(&self.commands, self.now, all, days, github)
     }
 
-    pub(super) fn ready_pull_requests(&self) -> Vec<String> {
-        inbox::ready_pull_requests(&self.commands)
+    pub(super) fn ready_pull_requests(
+        &self,
+        days: i64,
+        github: &super::github::Kept,
+    ) -> Vec<String> {
+        inbox::ready_pull_requests(&self.commands, self.now, days, github)
     }
 
     pub(super) fn resolve(&self, input: &str) -> Result<selection::Selection<'_>> {

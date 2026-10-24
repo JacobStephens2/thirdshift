@@ -44,7 +44,7 @@ fn direct_run_selection_captures_its_owner_and_reloads_retained_work() {
     let snapshot = Snapshot::load(dir.path(), now()).unwrap();
     assert_eq!(
         snapshot
-            .inbox(true, 7, &std::collections::BTreeMap::new())
+            .inbox(true, 7, &crate::logs::github::Kept::default())
             .len(),
         1
     );
@@ -251,12 +251,12 @@ fn historical_selection_keeps_unknown_facts_and_has_no_process_or_stop_authority
     let snapshot = Snapshot::load(dir.path(), now()).unwrap();
     assert!(
         snapshot
-            .inbox(false, 7, &std::collections::BTreeMap::new())
+            .inbox(false, 7, &crate::logs::github::Kept::default())
             .is_empty()
     );
     assert_eq!(
         snapshot
-            .inbox(true, 7, &std::collections::BTreeMap::new())
+            .inbox(true, 7, &crate::logs::github::Kept::default())
             .len(),
         1
     );

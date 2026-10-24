@@ -8,6 +8,7 @@ use serde::Serialize;
 
 use super::{Command, Entry, Health, Observation};
 use crate::github::{PrState, PullRequestState};
+use crate::logs::github::Kept;
 use crate::logs::stop;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -221,7 +222,7 @@ pub(super) fn next_change(
     entries: &[Entry],
     now: DateTime<Local>,
     days: i64,
-    github: &BTreeMap<String, Option<PullRequestState>>,
+    github: &Kept,
 ) -> Option<DateTime<Local>> {
     let observations: Vec<_> = observations(entries).collect();
     let starts: Vec<_> = observations.iter().copied().map(issue_starts).collect();
@@ -264,14 +265,21 @@ pub(super) fn next_change(
 /// run's own, not its Pass's. These are the pull requests the next GitHub
 /// read looks up: every row in Ready for review, and every row that left
 /// it, while still in view.
-pub(super) fn ready_pull_requests(entries: &[Entry]) -> Vec<String> {
+pub(super) fn ready_pull_requests(
+    entries: &[Entry],
+    now: DateTime<Local>,
+    days: i64,
+    github: &Kept,
+) -> Vec<String> {
     let mut urls = BTreeMap::new();
-    for observation in observations(entries) {
-        if observation.facts().ready
-            && let Observation::Record(command) = observation
-            && let Some(url) = &command.record.pull_request
+    for item in list(entries, now, true, days, github) {
+        if item.command.facts().ready
+            && let Some(url) = item.pull_request()
+            && let Some(row) = item.command.selector()
+            && !github.is_frozen(&row)
+            && (item.group != Group::History || !github.has_answer(url))
         {
-            urls.insert(url.clone(), ());
+            urls.insert(url.to_owned(), ());
         }
     }
     urls.into_keys().collect()
@@ -282,7 +290,7 @@ pub(super) fn list<'a>(
     now: DateTime<Local>,
     all: bool,
     days: i64,
-    github: &BTreeMap<String, Option<PullRequestState>>,
+    github: &Kept,
 ) -> Vec<InboxItem<'a>> {
     // An accepted duration can exceed chrono's calendar. In that case every
     // representable timestamp is inside the requested retention period.
@@ -399,6 +407,9 @@ pub(super) fn list<'a>(
         // A row GitHub finished weeks ago goes straight to History when
         // first read, instead of filling Resolved at once.
         let state = github_state(&command, github);
+        let departure = left
+            .map(|at| (TAKEN_UP_REASON.to_string(), at))
+            .or(github_moved);
         if all || group != Group::History {
             items.push(InboxItem {
                 command,
@@ -408,17 +419,11 @@ pub(super) fn list<'a>(
                 stopping,
                 count: 1,
                 collapsed: Vec::new(),
-                left_from: left
-                    .map(|_| from.expect("left rows waited").to_string())
-                    .or(github_moved
-                        .as_ref()
-                        .map(|_| from.expect("moved rows waited").to_string())),
-                left_reason: left
-                    .map(|_| TAKEN_UP_REASON.to_string())
-                    .or(github_moved.as_ref().map(|(reason, _)| reason.clone())),
-                left_at: left
-                    .map(|taken| taken.to_rfc3339())
-                    .or(github_moved.as_ref().map(|(_, at)| at.to_rfc3339())),
+                left_from: departure
+                    .as_ref()
+                    .map(|_| from.expect("departed rows waited").to_string()),
+                left_reason: departure.as_ref().map(|(reason, _)| reason.clone()),
+                left_at: departure.as_ref().map(|(_, at)| at.to_rfc3339()),
                 github_state: state.map(|state| state.state.to_string()),
                 github_at: state.and_then(event_time).map(str::to_string),
             });
@@ -463,9 +468,9 @@ fn record_pull_request<'a>(observation: &'a Observation<'a>) -> Option<&'a str> 
 /// What GitHub last showed for the row's own pull request, if anything.
 fn github_state<'a>(
     observation: &Observation<'a>,
-    github: &'a BTreeMap<String, Option<PullRequestState>>,
+    github: &'a Kept,
 ) -> Option<&'a PullRequestState> {
-    record_pull_request(observation).and_then(|url| github.get(url).and_then(Option::as_ref))
+    github.state(&observation.selector()?, record_pull_request(observation)?)
 }
 
 /// The pull request's merge or close time, as GitHub wrote it.
@@ -480,7 +485,7 @@ fn event_time(state: &PullRequestState) -> Option<&str> {
 /// by the usual rule.
 fn github_left(
     observation: &Observation<'_>,
-    github: &BTreeMap<String, Option<PullRequestState>>,
+    github: &Kept,
     ended: Option<DateTime<FixedOffset>>,
 ) -> Option<(String, DateTime<FixedOffset>)> {
     if !observation.facts().ready {

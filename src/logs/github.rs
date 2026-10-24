@@ -22,15 +22,44 @@ struct File {
     version: u32,
     #[serde(default)]
     pull_requests: BTreeMap<String, Option<PullRequestState>>,
+    #[serde(default)]
+    history: BTreeMap<String, Option<PullRequestState>>,
 }
 
 /// What the kept answer holds: every pull request read so far, and how old
 /// the answer is. `None` age means no answer is kept. A pull request GitHub
 /// can't resolve keeps `None`: what it last showed is nothing, and a row
 /// that has reached History on that is not read again.
+#[derive(Default)]
 pub struct Kept {
-    pub states: BTreeMap<String, Option<PullRequestState>>,
+    states: BTreeMap<String, Option<PullRequestState>>,
+    history: BTreeMap<String, Option<PullRequestState>>,
     pub age: Option<Duration>,
+}
+
+impl Kept {
+    pub fn state(&self, row: &str, url: &str) -> Option<&PullRequestState> {
+        self.history
+            .get(row)
+            .or_else(|| self.states.get(url))
+            .and_then(Option::as_ref)
+    }
+
+    pub fn has_answer(&self, url: &str) -> bool {
+        self.states.contains_key(url)
+    }
+
+    pub fn is_frozen(&self, row: &str) -> bool {
+        self.history.contains_key(row)
+    }
+
+    /// Preserve a History row's facts before another row refreshes the same
+    /// pull request. The row selector distinguishes continuations and dispatches.
+    pub fn freeze(&mut self, row: String, url: &str) {
+        if let Some(state) = self.states.get(url) {
+            self.history.entry(row).or_insert_with(|| state.clone());
+        }
+    }
 }
 
 /// The kept answer's file: one per machine, beside the logs rather than
@@ -48,20 +77,24 @@ pub fn load(logs_dir: &Path) -> Kept {
         .and_then(|metadata| metadata.modified())
         .ok()
         .and_then(|modified| modified.elapsed().ok());
-    let states = std::fs::read(&path)
+    let file = std::fs::read(&path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<File>(&bytes).ok())
-        .filter(|file| file.version == 1)
-        .map(|file| file.pull_requests)
-        .unwrap_or_default();
-    Kept { states, age }
+        .filter(|file| file.version == 1);
+    match file {
+        Some(file) => Kept {
+            states: file.pull_requests,
+            history: file.history,
+            age,
+        },
+        None => Kept::default(),
+    }
 }
 
 /// Read GitHub for `urls` unless the kept answer is still fresh, and keep
 /// the merged answer. A failed read keeps the last answer, however old.
 /// Only reads; nothing here writes to GitHub.
-pub fn refresh(logs_dir: &Path, urls: &[String]) -> Result<Kept> {
-    let mut kept = load(logs_dir);
+pub fn refresh(logs_dir: &Path, urls: &[String], mut kept: Kept) -> Result<Kept> {
     if kept.age.is_some_and(|age| age < FRESH_FOR) || urls.is_empty() {
         return Ok(kept);
     }
@@ -71,7 +104,7 @@ pub fn refresh(logs_dir: &Path, urls: &[String]) -> Result<Kept> {
                 kept.states.insert(url.clone(), states.get(url).cloned());
             }
             kept.age = Some(Duration::ZERO);
-            save(logs_dir, &kept.states)?;
+            save(logs_dir, &kept)?;
         }
         Err(_) => {
             // GitHub could not be read: the Inbox keeps the last answer.
@@ -80,11 +113,12 @@ pub fn refresh(logs_dir: &Path, urls: &[String]) -> Result<Kept> {
     Ok(kept)
 }
 
-fn save(logs_dir: &Path, states: &BTreeMap<String, Option<PullRequestState>>) -> Result<()> {
+fn save(logs_dir: &Path, kept: &Kept) -> Result<()> {
     let path = path(logs_dir);
     let file = File {
         version: 1,
-        pull_requests: states.clone(),
+        pull_requests: kept.states.clone(),
+        history: kept.history.clone(),
     };
     let bytes = serde_json::to_vec(&file)?;
     let tmp = path.with_extension("json.tmp");

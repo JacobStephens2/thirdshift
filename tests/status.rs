@@ -1783,6 +1783,30 @@ fn merged_pull_request_takes_its_ready_row_into_resolved_saying_so() {
 }
 
 #[test]
+fn an_unresolvable_pull_request_does_not_discard_the_other_aliases() {
+    let scenario = Scenario::new();
+    let ended = hours_ago(48);
+    let merged = hours_ago(1);
+    ready_record_with_pr(&scenario, 7, &ended, Some(7));
+    ready_record_with_pr(&scenario, 99, &ended, Some(99));
+    github_pr_is(&scenario, 7, "MERGED", Some(&merged), None);
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let rows = status["commands"].as_array().unwrap();
+    let merged = rows.iter().find(|row| row["issue"]["number"] == 7).unwrap();
+    assert_eq!(merged["group"], "resolved", "{status}");
+    assert_eq!(merged["github_state"], "merged", "{merged}");
+    let unresolved = rows
+        .iter()
+        .find(|row| row["issue"]["number"] == 99)
+        .unwrap();
+    assert_eq!(unresolved["group"], "ready for review", "{status}");
+    assert!(unresolved.get("github_state").is_none(), "{unresolved}");
+    assert_eq!(graphql_calls(&scenario).len(), 1);
+}
+
+#[test]
 fn open_pull_request_keeps_its_ready_row_however_old() {
     let scenario = Scenario::new();
     let ended = (chrono::Local::now() - chrono::Duration::days(10)).to_rfc3339();
@@ -1885,6 +1909,66 @@ fn merged_weeks_ago_goes_straight_to_history_and_is_not_reread() {
     // From History on the row is not read again.
     scenario.run(&["status", "--all", "--json"]);
     assert_eq!(graphql_calls(&scenario).len(), 1);
+}
+
+#[test]
+fn a_history_row_does_not_block_a_current_row_sharing_its_pull_request() {
+    let scenario = Scenario::new();
+    let old_end = (chrono::Local::now() - chrono::Duration::days(10)).to_rfc3339();
+    ready_record_with_pr(&scenario, 7, &old_end, Some(7));
+    github_pr_is(&scenario, 7, "OPEN", None, None);
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    fs::rename(
+        scenario.path(LOGS).join("7-fixture.command.json"),
+        scenario.path(LOGS).join("7-old.command.json"),
+    )
+    .unwrap();
+    let current_start = (chrono::Local::now() - chrono::Duration::days(8)).to_rfc3339();
+    let current_end = (chrono::Local::now() - chrono::Duration::days(6)).to_rfc3339();
+    ready_record_with_pr(&scenario, 7, &current_end, Some(7));
+    change_record(&scenario, 7, |record| {
+        record["started_at"] = current_start.into()
+    });
+    let merged = hours_ago(1);
+    github_pr_is(&scenario, 7, "MERGED", Some(&merged), None);
+    age_cache_file(&scenario, 360);
+    // The second invocation proves that History's own facts stay frozen
+    // after the current row's refreshed answer has been saved.
+    for _ in 0..2 {
+        let output = scenario.run(&["status", "--all", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        let rows = status["commands"].as_array().unwrap();
+        let current = rows
+            .iter()
+            .find(|row| row["ended_at"] == current_end)
+            .unwrap();
+        assert_eq!(current["group"], "resolved", "{status}");
+        assert_eq!(current["github_state"], "merged", "{current}");
+        let history = rows.iter().find(|row| row["ended_at"] == old_end).unwrap();
+        assert_eq!(history["group"], "history", "{status}");
+        assert_eq!(history["github_state"], "open", "{history}");
+    }
+    assert_eq!(graphql_calls(&scenario).len(), 2);
+}
+
+#[test]
+fn unusable_kept_answers_are_read_again_even_when_the_file_is_fresh() {
+    for contents in ["{", r#"{"version":2,"pull_requests":{}}"#] {
+        let scenario = Scenario::new();
+        let ended = hours_ago(48);
+        let merged = hours_ago(1);
+        ready_record_with_pr(&scenario, 7, &ended, Some(7));
+        github_pr_is(&scenario, 7, "MERGED", Some(&merged), None);
+        fs::write(scenario.path(GITHUB_CACHE), contents).unwrap();
+        let output = scenario.run(&["status", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(status["commands"][0]["group"], "resolved", "{status}");
+        assert_eq!(status["commands"][0]["github_state"], "merged", "{status}");
+        assert_eq!(graphql_calls(&scenario).len(), 1);
+    }
 }
 
 #[test]
@@ -2021,6 +2105,8 @@ fn failed_github_read_keeps_the_last_answer() {
     );
     let merged = hours_ago(1);
     github_pr_is(&scenario, 7, "MERGED", Some(&merged), None);
+    let reads_before_failure = graphql_calls(&scenario).len();
+    age_cache_file(&scenario, 360);
     scenario.gh_fails("api graphql");
     let output = scenario.run(&["status", "--json"]);
     assert_eq!(output.code, Some(0), "{}", output.stderr);
@@ -2028,6 +2114,8 @@ fn failed_github_read_keeps_the_last_answer() {
     let row = &status["commands"][0];
     assert_eq!(row["group"], "ready for review", "{status}");
     assert_eq!(row["github_state"], "open", "{row}");
+    assert!(graphql_calls(&scenario).len() > reads_before_failure);
+    assert!(status["github_answer_age_seconds"].as_u64().unwrap() >= 360);
 }
 
 #[test]
