@@ -241,6 +241,7 @@ fn read_records(folder: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
         // Records written before completion times existed were last
         // replaced when their outcome was recorded.
         if record.outcome.is_some() && record.ended_at.is_none() {
+            record.end_time_estimated = true;
             record.ended_at = entry
                 .metadata()?
                 .modified()

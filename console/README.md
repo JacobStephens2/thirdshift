@@ -138,6 +138,14 @@ and Ready tag colours, Landing keeps Working's live-activity marker, and a live
 row given a Stop shows Stopping with a drifting stripe until it ends. Pause
 motion and reduced motion hold the stripe still.
 
+Ended rows show their recorded finish date and time in UTC, followed by an
+explicit relative age, such as “Ended Oct 23, 2026 at 23:03:17 UTC · 52 min ago”.
+That age is time since finish, not run duration. Each nested Ticket run uses its
+own finish time, including in History. Refreshing recomputes the relative age
+and keeps the recorded instant. The information is rendered by the server and
+remains visible without JavaScript. Missing or invalid finish times say “End
+time unknown”; file modification times are not presented as recorded finishes.
+
 Above its sections, the Inbox shows how many runs are active, such as
 `2 active runs`, the same `active_runs` total as `thirdshift status --json`.
 Each Command with live work anywhere in it counts once, whatever its group or
