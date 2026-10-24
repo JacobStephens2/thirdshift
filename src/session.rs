@@ -507,7 +507,7 @@ impl Outside for OnMachine {
             _ => (&self.harness, self.adapter),
         };
         let interpretation = adapter.interpretation(&self.worktree, prompt);
-        let (invocation, interpretation) = match purpose {
+        let (mut invocation, interpretation) = match purpose {
             Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview => (
                 adapter.security_session(
                     harness,
@@ -523,6 +523,11 @@ impl Outside for OnMachine {
                 interpretation,
             ),
         };
+        // A sandboxed session is always a Trial's: it runs with the Harness's
+        // web search switched off, behind the sandbox's allowlisting proxy.
+        if self.sandbox.is_some() && matches!(purpose, Purpose::CodeReview) {
+            invocation = adapter.trial_session(harness, resume, prompt);
+        }
         let mut command = match &self.sandbox {
             Some(launch) => {
                 let mut command = launch.command(&invocation.args);
