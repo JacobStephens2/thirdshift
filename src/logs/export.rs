@@ -2,13 +2,14 @@
 use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, File};
 use std::io::{BufRead, BufReader, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context as _, Result, ensure};
 use chrono::{DateTime, Local};
 
-use super::reading::{Command, Observation, Snapshot};
+use super::reading::{Command, Snapshot};
 use super::trace::Context;
+use super::trace::ancestry::{self, Fact, Node};
 use crate::config::UserConfig;
 use crate::otlp_jsonl::{
     AnyValue, KeyValue, Logs, Reader, Request, Resource, ResourceSpans, Scope, ScopeSpans, Span,
@@ -22,7 +23,9 @@ pub fn export(input: &str, directory: &Path) -> Result<()> {
     let command = selection
         .owner
         .context("export requires a Command record")?;
-    let context = Context::of_session(&command.command_log);
+    // Whole export starts at the owner, so a Ticket keeps its siblings.
+    let nodes = ancestry::of(command, command)?;
+    let context = nodes[0].context.clone();
     fs::create_dir_all(directory)?;
     let spans_path = directory.join("spans.jsonl");
     let logs_path = directory.join("logs.jsonl");
@@ -34,27 +37,15 @@ pub fn export(input: &str, directory: &Path) -> Result<()> {
     let mut spans = tempfile::NamedTempFile::new_in(directory)?;
     let mut logs = tempfile::NamedTempFile::new_in(directory)?;
 
-    let mut ancestry = Ancestry::default();
-    let root = Span {
-        trace_id: Some(context.trace),
-        span_id: Some(context.command),
-        name: "Command".into(),
-        kind: 1,
-        start_time_unix_nano: timestamp(&command.record.started_at)?,
-        end_time_unix_nano: end_time(command)?,
-        ..Default::default()
-    };
-    let mut recorded = vec![root];
+    let mut validation = Validation::default();
+    let mut recorded = Vec::new();
+    // Attachments select Session files; their requests keep recorded parents.
     let mut sessions = BTreeSet::new();
-    record_spans(
-        command,
-        &context,
-        context.command,
-        &mut recorded,
-        &mut sessions,
-    )?;
+    for node in &nodes {
+        recorded.extend(record_span(node, &mut sessions)?);
+    }
     for span in &recorded {
-        ancestry.span(span, &context)?;
+        validation.span(span, &context)?;
     }
     Writer::new(&mut spans).write(&Spans {
         resource_spans: vec![ResourceSpans {
@@ -92,7 +83,7 @@ pub fn export(input: &str, directory: &Path) -> Result<()> {
                 .flat_map(|resource| &resource.scope_spans)
                 .flat_map(|scope| &scope.spans)
             {
-                ancestry.span(span, &context)?;
+                validation.span(span, &context)?;
             }
             Ok(())
         })?;
@@ -107,16 +98,16 @@ pub fn export(input: &str, directory: &Path) -> Result<()> {
                     log.trace_id == Some(context.trace),
                     "Session trace belongs to another Trace"
                 );
-                ancestry.references.extend(log.span_id);
+                validation.references.extend(log.span_id);
             }
             Ok(())
         })?;
     }
     ensure!(
-        ancestry
+        validation
             .references
             .iter()
-            .all(|id| ancestry.ids.contains(&id.0)),
+            .all(|id| validation.ids.contains(&id.0)),
         "incomplete Trace: a parent or log span is missing; wait for the Command to finish"
     );
     spans.persist_noclobber(&spans_path)?;
@@ -129,60 +120,47 @@ pub fn export(input: &str, directory: &Path) -> Result<()> {
     Ok(())
 }
 
-fn record_spans(
-    command: &Command,
-    outer: &Context,
-    parent: SpanId,
-    spans: &mut Vec<Span>,
-    sessions: &mut BTreeSet<std::path::PathBuf>,
-) -> Result<()> {
-    let context = outer.for_record(&command.record);
-    let run = Span {
-        trace_id: Some(context.trace),
-        span_id: Some(context.run),
-        parent_span_id: Some(parent),
-        name: format!("{} {}", command.record.kind, command.record.name),
-        kind: 1,
-        start_time_unix_nano: timestamp(&command.record.started_at)?,
-        end_time_unix_nano: end_time(command)?,
-        attributes: vec![attribute("thirdshift.kind", &command.record.kind)],
-        ..Default::default()
-    };
-    spans.push(run);
-    for time in command.record.stage_times(None) {
-        spans.push(Span {
-            trace_id: Some(context.trace),
-            span_id: Some(context.stage_id(time.stage)),
-            parent_span_id: Some(context.run),
-            name: time.stage.name.clone(),
-            kind: 1,
-            start_time_unix_nano: timestamp(&time.stage.began_at)?,
-            end_time_unix_nano: time
-                .ended
+/// Project a record node with OTLP times, collecting a Session's identity.
+fn record_span(node: &Node, sessions: &mut BTreeSet<PathBuf>) -> Result<Option<Span>> {
+    let command = node.command;
+    let (name, start, end, attributes) = match &node.fact {
+        Fact::Command => (
+            "Command".into(),
+            timestamp(&command.record.started_at)?,
+            end_time(command)?,
+            Vec::new(),
+        ),
+        Fact::Run => (
+            format!("{} {}", command.record.kind, command.record.name),
+            timestamp(&command.record.started_at)?,
+            end_time(command)?,
+            vec![attribute("thirdshift.kind", &command.record.kind)],
+        ),
+        Fact::Stage(time) => (
+            time.stage.name.clone(),
+            timestamp(&time.stage.began_at)?,
+            time.ended
                 .map(|time| timestamp(&time.to_rfc3339()))
                 .transpose()?
                 .unwrap_or_default(),
-            ..Default::default()
-        });
-    }
-    // A retained raw reference and the trace-only inventory can name the same
-    // Session. Normalize before deduplicating across the whole Command tree.
-    sessions.extend(
-        Observation::Record(command)
-            .sessions()?
-            .iter()
-            .map(|session| super::session::original(session)),
-    );
-    for child in command.dispatched.iter().chain(&command.children) {
-        record_spans(
-            child,
-            outer,
-            context.child_parent(&command.record, &child.record),
-            spans,
-            sessions,
-        )?;
-    }
-    Ok(())
+            Vec::new(),
+        ),
+        Fact::Session(attachment) => {
+            sessions.insert(attachment.original.clone());
+            return Ok(None);
+        }
+    };
+    Ok(Some(Span {
+        trace_id: Some(node.context.trace),
+        span_id: node.id(),
+        parent_span_id: node.parent,
+        name,
+        kind: 1,
+        start_time_unix_nano: start,
+        end_time_unix_nano: end,
+        attributes,
+        ..Default::default()
+    }))
 }
 
 fn end_time(command: &Command) -> Result<u64> {
@@ -210,12 +188,12 @@ fn attribute(key: &str, value: &str) -> KeyValue {
 }
 
 #[derive(Default)]
-struct Ancestry {
+struct Validation {
     ids: HashSet<[u8; 8]>,
     references: Vec<SpanId>,
 }
 
-impl Ancestry {
+impl Validation {
     fn span(&mut self, span: &Span, context: &Context) -> Result<()> {
         ensure!(
             span.trace_id == Some(context.trace),
