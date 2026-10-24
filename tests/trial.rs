@@ -573,6 +573,26 @@ fn only_external_failures_are_void_and_provider_server_errors_require_no_work() 
         ("JavaScript heap out of memory", 0, "failed", Value::Null),
         ("not logged in", 0, "void", json!("session_unavailable")),
         ("login expired", 1, "void", json!("session_unavailable")),
+        // A Harness that ignores the sandbox's proxy finds no route: DNS
+        // fails before any connection, and its Trial is void.
+        (
+            "getaddrinfo EAI_AGAIN api.anthropic.com",
+            0,
+            "void",
+            json!("session_unavailable"),
+        ),
+        (
+            "Temporary failure in name resolution",
+            0,
+            "void",
+            json!("session_unavailable"),
+        ),
+        (
+            "Could not resolve host: api.anthropic.com",
+            0,
+            "void",
+            json!("session_unavailable"),
+        ),
         (
             "provider server error",
             0,

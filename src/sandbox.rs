@@ -1,14 +1,22 @@
-//! A Trial session's sandbox: bwrap, its own processes, a fresh home and logins.
+//! A Trial session's sandbox: bwrap, its own processes and network, a fresh
+//! home and logins.
 //!
-//! A Trial's session runs in bwrap with a process namespace of its own, so it
-//! sees neither an unbound path nor the host's processes, and everything it
-//! starts ends with it. Only these are bound: the prepared repository, the
-//! Harness's binary (Codex's whole release folder, since Codex looks for
-//! `codex-code-mode-host` beside it), the Factory skills folder, a fresh home,
-//! and the toolchains the session needs, read-only. The session otherwise
-//! inherits the Trial's environment, with its home, path and logins set for
-//! the sandbox. The network stays the host's here; #1013 gives the sandbox
-//! its own.
+//! A Trial's session runs in bwrap with process and network namespaces of its
+//! own, so it sees neither an unbound path nor the host's processes, and
+//! everything it starts ends with it. Its network holds only its own
+//! loopback: a Harness that ignores the proxy finds no route, and its Trial
+//! is void. Only these are bound: the prepared repository, the Harness's
+//! binary (Codex's whole release folder, since Codex looks for
+//! `codex-code-mode-host` beside it), the Factory skills folder, a fresh
+//! home, the toolchains the session needs and socat, read-only, and the
+//! proxy's socket. The session otherwise inherits the Trial's environment,
+//! with its home, path, logins and proxy variables set for the sandbox.
+//!
+//! An allowlisting CONNECT proxy runs outside the sandbox, listening on a
+//! Unix socket bound into it. A socat relay inside turns the proxy port into
+//! that socket, and the Harness reaches its provider through `HTTPS_PROXY`.
+//! The proxy allows only that Harness's provider hosts, from #1009's lists,
+//! and refuses names that resolve to loopback or to the host's own addresses.
 //!
 //! The fresh home holds the login, and the user-level instructions, rules,
 //! settings and hooks a Run's session reads, those read-only. Harness flags
@@ -24,6 +32,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail, ensure};
 
 use crate::harness::Harness;
+use crate::proxy;
 use crate::resend_key::Credentials;
 use crate::{config, interrupt};
 
@@ -104,12 +113,14 @@ pub(crate) struct Request<'a> {
 
 /// A prepared sandbox: its bwrap arguments up to `--`, and the Harness's
 /// in-sandbox path. A held Grok Trial keeps its Trials-home lock until this
-/// is dropped.
+/// is dropped, and the proxy serves its socket until this is dropped.
 pub(crate) struct Prepared {
     argv: Vec<OsString>,
     env: Vec<(OsString, OsString)>,
     program: PathBuf,
+    prefix: Vec<OsString>,
     _grok: Option<GrokGuard>,
+    _proxy: proxy::Guard,
 }
 
 /// Prepare a Trial's sandbox: the Harness's fixed binary, the Factory skills
@@ -154,13 +165,14 @@ pub(crate) fn for_trial(
 }
 
 impl Prepared {
-    /// What a session runner holds to launch inside the sandbox. The guard
-    /// stays with the `Prepared` it came from, which outlives the sessions.
+    /// What a session runner holds to launch inside the sandbox. The guards
+    /// stay with the `Prepared` they came from, which outlives the sessions.
     pub(crate) fn launch(&self) -> Launch {
         Launch {
             argv: self.argv.clone(),
             env: self.env.clone(),
             program: self.program.clone(),
+            prefix: self.prefix.clone(),
         }
     }
 }
@@ -171,17 +183,21 @@ pub(crate) struct Launch {
     pub argv: Vec<OsString>,
     pub env: Vec<(OsString, OsString)>,
     pub program: PathBuf,
+    prefix: Vec<OsString>,
 }
 
 impl Launch {
     /// The bwrap command running the Harness's `args` inside the sandbox.
     /// The caller sets the working directory, which must be the bound
     /// repository. The session inherits the caller's environment, with the
-    /// sandbox's overrides applied over it.
+    /// sandbox's overrides applied over it. The Harness runs behind the
+    /// relay: `prefix` starts the relay, then runs the program as `$0` with
+    /// `args` as `$@`, so the relay dies with the session.
     pub fn command(&self, args: &[String]) -> Command {
         let mut command = Command::new("bwrap");
         command.args(&self.argv);
         command.arg("--");
+        command.args(&self.prefix);
         command.arg(&self.program);
         command.args(args);
         command.envs(self.env.iter().map(|(name, value)| (name, value)));
@@ -223,10 +239,21 @@ fn is_executable(path: &Path) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
+/// The proxy port inside the sandbox: the relay listens on loopback here,
+/// and the Harness reaches its provider through it.
+pub(crate) const RELAY_PORT: u16 = 3128;
+/// The proxy's socket inside the sandbox, bound from the proxy outside it.
+const SOCKET_DEST: &str = "/sandbox/proxy.sock";
+/// The shell starting every sandboxed session: the relay first, then the
+/// Harness as `$0` with its arguments as `$@`.
+const SHELL: &str = "/bin/sh";
+
 /// Prepare a Trial sandbox as `request` says: wipe and bind the homes, bind
-/// the repository, skills, Harness and toolchains, and set the session's
-/// environment. Fails before any session starts when bwrap is missing, the
-/// Grok Trials home has no login, or an OpenCode Trial has no provider key.
+/// the repository, skills, Harness, toolchains and proxy socket, start the
+/// proxy, and set the session's environment. Fails before any session starts
+/// when bwrap or socat is missing, the proxy cannot start, the Grok Trials
+/// home has no login, or an OpenCode Trial has no provider key or names an
+/// unknown provider.
 pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
     ensure!(
         request.repository.is_absolute(),
@@ -253,6 +280,12 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
             request.fresh_home.display()
         )
     })?;
+    if !Path::new(SHELL).exists() {
+        return Err(anyhow::Error::new(Unavailable {
+            diagnostic: format!("{SHELL} is missing"),
+        }));
+    }
+    let socat = resolve_binary("socat")?;
     let mut binds = Binds::default();
     let mut environment = Environment::default();
     // The prepared repository, read-write, at its own path so the session's
@@ -273,16 +306,65 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
         environment.prepend_path(&bin);
     }
     let _grok = home_into(request, &mut binds, &mut environment)?;
+    // The proxy allows only this Trial Harness's provider hosts. An OpenCode
+    // Trial with no key fails in the homes above, as before; one naming an
+    // unknown provider fails here, before its session.
+    let allowed = proxy::allowed_hosts(request.harness, request.model).map_err(|error| {
+        anyhow::Error::new(NoLogin {
+            diagnostic: format!("{error:#}"),
+        })
+    })?;
+    let proxy = proxy::start(&allowed).map_err(|error| {
+        anyhow::Error::new(Unavailable {
+            diagnostic: format!("{error:#}"),
+        })
+    })?;
+    binds.read_write(proxy.socket_path().as_path(), Path::new(SOCKET_DEST));
+    binds.read_only(&socat, &socat);
+    // The Harness reaches its provider through the relay alone. OpenCode
+    // calls its own local server over HTTP, so it keeps loopback out of the
+    // proxy, as #1009's checks required.
+    let relay = format!("http://127.0.0.1:{RELAY_PORT}");
+    for name in ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy"] {
+        environment.set_str(name, &relay);
+    }
+    for name in ["NO_PROXY", "no_proxy"] {
+        environment.set_str(name, "127.0.0.1,localhost");
+    }
     let program = harness_into(request, &mut binds, &mut environment, &binary);
     let mut argv = base_argv();
     binds.argv(&mut argv);
     let env = environment.finish(&request.adapter_env);
+    let prefix = vec![SHELL.into(), "-c".into(), relay_script(&socat).into()];
     Ok(Prepared {
         argv,
         env,
         program,
+        prefix,
         _grok,
+        _proxy: proxy,
     })
+}
+
+/// The relay turning the sandbox's proxy port into the proxy's socket, then
+/// the Harness as `$0` with its arguments as `$@`. The shell waits for the
+/// relay's port before running the Harness: a relay that never answers fails
+/// the session before the Harness starts, as a sandbox that could not start.
+/// The relay's standard input comes from nowhere, so it never steals the
+/// Harness's own; when the Harness ends, its process namespace ends the relay
+/// with it.
+fn relay_script(socat: &Path) -> String {
+    let socat = socat.display();
+    format!(
+        "{socat} TCP-LISTEN:{RELAY_PORT},bind=127.0.0.1,reuseaddr,fork \
+         UNIX-CONNECT:{SOCKET_DEST} </dev/null >/dev/null & relay=$!; \
+         i=0; while [ \"$i\" -lt 50 ]; do \
+         {socat} - TCP:127.0.0.1:{RELAY_PORT} </dev/null >/dev/null 2>&1 && break; \
+         i=$((i + 1)); sleep 0.1; done; \
+         if {socat} - TCP:127.0.0.1:{RELAY_PORT} </dev/null >/dev/null 2>&1; then \
+         exec \"$0\" \"$@\"; else echo 'sandbox failed to start: its relay did not answer' >&2; \
+         kill $relay 2>/dev/null; exit 1; fi"
+    )
 }
 
 /// The sandbox's mounts, in order: later binds overlay earlier ones.
@@ -374,13 +456,14 @@ impl Environment {
 }
 
 /// The sandbox's own namespaces, devices and base system: its processes see
-/// only each other, and the base userland is read-only. The network stays the
-/// host's here; #1013 gives the sandbox its own.
+/// only each other, its network holds only its own loopback, and the base
+/// userland is read-only. Without the proxy there is no route out.
 fn base_argv() -> Vec<OsString> {
     let mut argv = vec![
         "--unshare-pid",
         "--unshare-ipc",
         "--unshare-uts",
+        "--unshare-net",
         "--die-with-parent",
         "--new-session",
         "--dev",
@@ -763,13 +846,10 @@ fn opencode_into(request: &Request<'_>, environment: &mut Environment) -> Result
 }
 
 /// The Trial's OpenCode config for `model`: the provider's `apiKey` set to
-/// `{env:…}` naming the variable that carries the key.
+/// `{env:…}` naming the variable that carries the key, with web search and
+/// web fetch denied, since a Trial runs behind the allowlisting proxy.
 fn provider_config(model: Option<&str>) -> Result<String> {
-    let provider = model
-        .and_then(|model| model.split('#').next())
-        .and_then(|model| model.split_once('/').map(|(provider, _)| provider))
-        .filter(|provider| !provider.is_empty());
-    let Some(provider) = provider else {
+    let Some(provider) = proxy::opencode_provider(model) else {
         bail!(
             "OpenCode Trial login failed: the Model must name its provider as \
              <provider>/<model>, so the Trial's config can set that provider's apiKey"
@@ -778,6 +858,10 @@ fn provider_config(model: Option<&str>) -> Result<String> {
     Ok(serde_json::json!({
         "provider": {
             provider: { "apiKey": format!("{{env:{OPENCODE_API_KEY_ENV}}}") }
+        },
+        "permission": {
+            "webfetch": "deny",
+            "websearch": "deny",
         }
     })
     .to_string())
@@ -939,6 +1023,170 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "isolated");
+    }
+
+    /// Whether the internet is reachable from here: without it, the tests
+    /// that dial out report themselves skipped rather than failing on the
+    /// dial. Opening a TCP connection sends no request.
+    fn internet_or_skip(reason: &str) -> bool {
+        use std::net::ToSocketAddrs;
+        let reachable = ("api.anthropic.com", 443)
+            .to_socket_addrs()
+            .ok()
+            .and_then(|mut resolved| resolved.next())
+            .is_some_and(|resolved| {
+                std::net::TcpStream::connect_timeout(
+                    &std::net::SocketAddr::new(resolved.ip(), 443),
+                    Duration::from_secs(8),
+                )
+                .is_ok()
+            });
+        if !reachable {
+            println!("SKIPPED ({reason}): no route to the internet");
+        }
+        reachable
+    }
+
+    /// This machine's non-loopback address, if it has one: connecting a UDP
+    /// socket chooses the address without sending anything.
+    fn local_ip() -> Option<std::net::IpAddr> {
+        let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+        socket.connect("8.8.8.8:80").ok()?;
+        socket
+            .local_addr()
+            .ok()
+            .map(|address| address.ip())
+            .filter(|address| !address.is_loopback())
+    }
+
+    /// A raw CONNECT through the sandbox's relay: prints the proxy's status
+    /// line for `target`.
+    fn connect_script(target: &str) -> String {
+        format!(
+            "printf 'CONNECT {target} HTTP/1.1\\r\\nHost: {target}\\r\\n\\r\\n' \
+             | socat - TCP:127.0.0.1:{RELAY_PORT} | head -n 1"
+        )
+    }
+
+    #[test]
+    fn a_sandboxed_process_reaches_an_allowed_host_through_the_proxy() {
+        if !bwrap_or_skip("proxy allow") || !internet_or_skip("proxy allow") {
+            return;
+        }
+        let layout = Layout::new();
+        let script = format!(
+            "test \"$HTTPS_PROXY\" = \"http://127.0.0.1:{RELAY_PORT}\" || exit 41; \
+             curl -sS -o /dev/null --max-time 20 https://api.anthropic.com"
+        );
+        let request = layout.request(Harness::Claude, &script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "allowed host unreachable through the proxy: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn a_disallowed_host_is_refused_through_the_proxy() {
+        if !bwrap_or_skip("proxy refuse") {
+            return;
+        }
+        let layout = Layout::new();
+        let script = connect_script("github.com:443");
+        let request = layout.request(Harness::Claude, &script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "HTTP/1.1 403 Forbidden"
+        );
+    }
+
+    /// `localhost` is refused before it resolves here: it is not on the
+    /// Harness's allowlist, so the proxy never resolves it. The resolution
+    /// guard itself is covered in `proxy.rs`, where `localhost` is allowed
+    /// and refused for resolving to loopback.
+    #[test]
+    fn a_name_that_resolves_to_loopback_is_refused_through_the_proxy() {
+        if !bwrap_or_skip("proxy loopback") {
+            return;
+        }
+        let layout = Layout::new();
+        let script = connect_script("localhost:443");
+        let request = layout.request(Harness::Claude, &script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "HTTP/1.1 403 Forbidden"
+        );
+    }
+
+    #[test]
+    fn this_machine_is_unreachable_through_the_proxy() {
+        if !bwrap_or_skip("proxy host address") {
+            return;
+        }
+        let Some(address) = local_ip() else {
+            println!("SKIPPED (proxy host address): no non-loopback address");
+            return;
+        };
+        let layout = Layout::new();
+        let script = connect_script(&format!("{address}:443"));
+        let request = layout.request(Harness::Claude, &script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "HTTP/1.1 403 Forbidden"
+        );
+    }
+
+    #[test]
+    fn without_the_proxy_a_sandboxed_process_has_no_route() {
+        if !bwrap_or_skip("no route") {
+            return;
+        }
+        let layout = Layout::new();
+        let script = "if env -u HTTPS_PROXY -u HTTP_PROXY -u https_proxy -u http_proxy \
+            curl -sS -o /dev/null --max-time 15 https://api.anthropic.com 2>/dev/null; \
+            then exit 51; fi";
+        let request = layout.request(Harness::Claude, script, Secrets::default(), None, &[]);
+        let prepared = prepare(&request).unwrap();
+
+        let output = run_script(&prepared, &layout.repo);
+
+        assert!(
+            output.status.success(),
+            "reached the internet without the proxy: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        assert!(output.stdout.is_empty());
     }
 
     #[test]
@@ -1127,7 +1375,13 @@ mod tests {
         let script = "test -n \"$THIRDSHIFT_OPENCODE_API_KEY\" || exit 21; \
             test ! -e \"$HOME/.local/share/opencode/opencode.db\" || exit 22; \
             echo \"$OPENCODE_CONFIG_CONTENT\"";
-        let request = layout.request(Harness::OpenCode, script, secrets, Some("acme/model"), &[]);
+        let request = layout.request(
+            Harness::OpenCode,
+            script,
+            secrets,
+            Some("anthropic/claude"),
+            &[],
+        );
         let prepared = prepare(&request).unwrap();
 
         let output = run_script(&prepared, &layout.repo);
@@ -1139,9 +1393,35 @@ mod tests {
         );
         let config: serde_json::Value = serde_json::from_slice(output.stdout.trim_ascii()).unwrap();
         assert_eq!(
-            config["provider"]["acme"]["apiKey"],
+            config["provider"]["anthropic"]["apiKey"],
             format!("{{env:{OPENCODE_API_KEY_ENV}}}")
         );
+        assert_eq!(config["permission"]["webfetch"], "deny");
+        assert_eq!(config["permission"]["websearch"], "deny");
+    }
+
+    #[test]
+    fn an_opencode_trial_naming_an_unknown_provider_fails_before_its_session_starts() {
+        if !bwrap_or_skip("opencode provider") {
+            return;
+        }
+        let layout = Layout::new();
+        let secrets = Secrets {
+            claude_setup_token: None,
+            opencode_api_key: Some("opencode-provider-key".into()),
+        };
+        let request = layout.request(
+            Harness::OpenCode,
+            "exit 99",
+            secrets,
+            Some("acme/model"),
+            &[],
+        );
+
+        let error = format!("{:#}", prepare(&request).err().unwrap());
+
+        assert!(error.contains("login failed"), "{error}");
+        assert!(error.contains("unknown provider acme"), "{error}");
     }
 
     #[test]

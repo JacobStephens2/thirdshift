@@ -349,6 +349,16 @@ fn void_cause(error: &anyhow::Error) -> Option<VoidCause> {
                 "failed to connect",
                 "could not connect",
                 "network unreachable",
+                "network is unreachable",
+                "no route to host",
+                // A Harness that ignores the sandbox's proxy finds no route,
+                // and its Trial is void: DNS fails before any connection.
+                "eai_again",
+                "getaddrinfo",
+                "temporary failure in name resolution",
+                "name or service not known",
+                "could not resolve host",
+                "no such host",
             ]
             .iter()
             .any(|text| diagnostic.contains(text));
