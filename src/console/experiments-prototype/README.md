@@ -20,6 +20,10 @@ The pages don't exist yet, and the Console renders on the server, so this is a s
 
 `&x=` picks the Experiment: `running`, `paused` (at a plan-limit warning), `waiting` (on 26 rechecks, provisionally a pass), `release` (inconclusive: code review can't settle), `inconclusive` (by its interval, with a memory-cap finding), `fail`, `dropped` (four Eval tasks void) and `pass`.
 
+## Chosen
+
+**E for the Experiment page and 3 for the list**, picked by Jacob on 2026-10-24 and recorded on #1020 with the screenshots in `design/`. E leads with B's sentence, then D's interval for each suite with its reason, the rechecks waiting (five, then all, each with a Copy button), A's Arms table and C's grid, with the Bar folded. While an Experiment runs or is paused, the grid comes before the Arms table. The list uses the Inbox's groups: Running, Needs you and Done.
+
 ## Run it
 
 ```sh

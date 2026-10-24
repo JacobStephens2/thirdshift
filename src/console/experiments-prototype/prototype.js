@@ -311,7 +311,7 @@
     if (x.running) return `<section aria-label="Trial details">${head}<p>${glyph(mark(e, x))} Running for ${dur(x.started_ms_ago)}. Its session writes its Session trace as it goes.</p><p><a href="#" data-dead="Opens the live Session trace.">Watch the Session trace</a></p></section>`;
     if (x.queued) return `<section aria-label="Trial details">${head}<p>${glyph(mark(e, x))} ${x.paused ? 'Not run yet: the Experiment paused before it.' : 'Queued. It starts when one of the two workers is free.'}</p></section>`;
     const m = mark(e, x), p = pendingOf(e, x), r = recheckOf(x), model = x.score.model, s = effective(x);
-    let h = `<section aria-label="Trial details">${head}<p class="x-big">${glyph(m)} <strong>${s.passed ? 'Passed' : 'Failed'}</strong>${r ? ', by your recheck' : ''}${x.outcome === 'void' ? ' · void' : ''}</p>`;
+    let h = `<section aria-label="Trial details">${head}<p class="x-big">${glyph(m)} <strong>${x.outcome === 'void' ? 'Void' : s.passed ? 'Passed' : 'Failed'}</strong>${r ? ', by your recheck' : ''}</p>`;
     if (p) h += `<div class="x-callout" data-tone="look"><p><strong>Waiting on your recheck</strong>: ${esc(why(x, p))}.</p>${cli(recheckCli(e, p, x))}</div>`;
     h += '<dl>';
     if (model) h += `<dt>Model Grader</dt><dd>${model.passed ? 'Pass' : 'Fail'}${model.borderline ? ', borderline' : ''}${model.wrong_finding ? ', wrong finding' : ''}. ${prose(model.reason)}<br><span class="x-dim">Scored as ${esc(model.label)} in the Eval task's blind packet.</span></dd>`;
