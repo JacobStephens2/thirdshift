@@ -65,6 +65,26 @@ async function pageFor(t, options) {
   return page;
 }
 
+test('Dismiss keeps Undo in Command details and updates another open Inbox', async t => {
+  const page = await pageFor(t);
+  const observer = await pageFor(t);
+  for (const current of [page, observer]) await current.goto(origin);
+  const waiting = '[data-group="needs you"] .command';
+  const count = await page.locator(waiting).count();
+  await page.locator(`${waiting} .peek-link`).first().click();
+  await page.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
+  await page.evaluate(() => { window.sameDocument = true; });
+  await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await page.getByRole('button', { name: 'Undo', exact: true }).waitFor({ timeout: 3000 });
+  assert.equal(await page.evaluate(() => window.sameDocument), true);
+  await observer.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count - 1, { waiting, count });
+  assert.match(await page.locator('#peek-content').textContent(), /thirdshift dismiss .* --undo/);
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
+  await observer.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count, { waiting, count });
+  assert.equal(await page.evaluate(() => window.sameDocument), true);
+});
+
 test("Shift+T switches all built-in Themes and saves hidden sections across browsers", async t => {
   const page = await pageFor(t);
   const remote = [];

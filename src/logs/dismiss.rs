@@ -1,4 +1,4 @@
-//! Dismiss an Inbox row from the CLI, or take a dismissal back, keeping
+//! Dismiss an Inbox row from the CLI or Console, or take a dismissal back, keeping
 //! each dismissal beside its Command record as a Stop request is kept.
 
 use std::io::Write;
@@ -116,6 +116,7 @@ struct DismissalTarget {
     group: Group,
     kind: String,
     members: Vec<(PathBuf, String)>,
+    dismissed: bool,
 }
 
 fn row_for(
@@ -143,6 +144,7 @@ fn row_for(
         group: Group::History,
         kind: String::new(),
         members: Vec::new(),
+        dismissed: false,
     };
     let selector = selected
         .observation
@@ -191,7 +193,43 @@ fn row_for(
         }
     };
     target.group = found.group;
+    target.dismissed = found.dismissal.is_some();
     Ok(target)
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Action {
+    Dismiss,
+    Undo,
+}
+
+/// Command details uses the same row and collapse selection as a request.
+pub(super) fn action(
+    snapshot: &Snapshot,
+    github: &super::github::Kept,
+    input: &str,
+    days: i64,
+) -> Option<Action> {
+    let target = row_for(snapshot, github, input, days, true).ok()?;
+    if matches!(target.group, Group::NeedsYou | Group::ReadyForReview) {
+        Some(Action::Dismiss)
+    } else if target.dismissed {
+        Some(Action::Undo)
+    } else {
+        None
+    }
+}
+
+pub(crate) struct Request {
+    pub who: String,
+    pub undo: bool,
+    pub from_console: bool,
+}
+
+pub(crate) struct Change {
+    name: String,
+    group: Group,
+    dismissal: Option<DismissalView>,
 }
 
 fn activity_write(config: &UserConfig, repository: &str, line: &str) -> Result<()> {
@@ -214,6 +252,46 @@ pub fn dismiss(input: &str, undo: bool, json: bool) -> Result<()> {
         bail!("could not identify the Unix user asking for dismissal");
     }
     let who = String::from_utf8(user.stdout)?.trim().to_owned();
+    let change = request(
+        input,
+        Request {
+            who,
+            undo,
+            from_console: false,
+        },
+    )?;
+    if let Some(dismissal) = change.dismissal {
+        if json {
+            println!(
+                "{}",
+                serde_json::json!({
+                    "version": 1, "name": change.name, "group": change.group,
+                    "dismissal": dismissal,
+                })
+            );
+        } else {
+            println!("dismissed {} from {}", change.name, change.group.title());
+        }
+    } else if json {
+        println!(
+            "{}",
+            serde_json::json!({"version": 1, "name": change.name, "undone": true})
+        );
+    } else {
+        println!("took back the dismissal of {}", change.name);
+    }
+    Ok(())
+}
+
+/// Shared mutation: Console callers supply their authenticated account; the CLI
+/// supplies its Unix user. Neither caller changes GitHub or the live Command.
+pub(crate) fn request(input: &str, request: Request) -> Result<Change> {
+    let Request {
+        who,
+        undo,
+        from_console,
+    } = request;
+    let source = if from_console { "Console" } else { "CLI" };
     let at = chrono::Local::now().to_rfc3339();
     let config = UserConfig::load()?;
     let snapshot = Snapshot::load_with_silence(
@@ -244,19 +322,15 @@ pub fn dismiss(input: &str, undo: bool, json: bool) -> Result<()> {
             &config,
             &target.repository,
             &format!(
-                "{} dismissal taken back from the CLI by {who}",
+                "{} dismissal taken back from the {source} by {who}",
                 target.subject
             ),
         )?;
-        if json {
-            println!(
-                "{}",
-                serde_json::json!({"version": 1, "name": target.name, "undone": true})
-            );
-        } else {
-            println!("took back the dismissal of {}", target.name);
-        }
-        return Ok(());
+        return Ok(Change {
+            name: target.name,
+            group: target.group,
+            dismissal: None,
+        });
     }
     for (record, selector) in &target.members {
         let mut file = read(record);
@@ -266,32 +340,23 @@ pub fn dismiss(input: &str, undo: bool, json: bool) -> Result<()> {
             kind: target.kind.clone(),
             who: who.clone(),
             at: at.clone(),
-            from_console: false,
+            from_console,
         });
         write(record, &file)?;
     }
     activity_write(
         &config,
         &target.repository,
-        &format!("{} dismissed from the CLI by {who}", target.subject),
+        &format!("{} dismissed from the {source} by {who}", target.subject),
     )?;
-    if json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "version": 1,
-                "name": target.name,
-                "group": target.group,
-                "dismissal": {
-                    "who": who,
-                    "dismissed_at": at,
-                    "source": "CLI",
-                    "kind": target.kind,
-                },
-            })
-        );
-    } else {
-        println!("dismissed {} from {}", target.name, target.group.title());
-    }
-    Ok(())
+    Ok(Change {
+        name: target.name,
+        group: target.group,
+        dismissal: Some(DismissalView {
+            who,
+            dismissed_at: at,
+            source,
+            kind: target.kind,
+        }),
+    })
 }

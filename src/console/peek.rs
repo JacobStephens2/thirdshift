@@ -15,6 +15,8 @@ pub(super) struct Peek {
     pub live: bool,
     pub stopping: bool,
     pub stop_cli: String,
+    pub dismissal: Option<DismissAction>,
+    pub csrf: String,
     pub branches: Vec<String>,
     pub pull_requests: Vec<String>,
     pub issue_url: Option<String>,
@@ -25,6 +27,12 @@ pub(super) struct Log {
     pub name: String,
     pub url: String,
 }
+
+pub(super) struct DismissAction {
+    path: &'static str,
+    label: &'static str,
+    cli: String,
+}
 pub(super) struct Fact {
     label: String,
     value: String,
@@ -32,7 +40,7 @@ pub(super) struct Fact {
 }
 
 impl Peek {
-    pub fn new(command: String, inspection: crate::logs::stop::Inspection) -> Self {
+    pub fn new(command: String, inspection: crate::logs::stop::Inspection, csrf: String) -> Self {
         let value = inspection.details;
         let (issue_url, issue_label) = match value.get("issue") {
             Some(Value::Object(issue)) => match (
@@ -64,6 +72,21 @@ impl Peek {
             command.replace('\'', "'\\''")
         );
         Self {
+            dismissal: inspection.dismissal.map(|action| {
+                let (path, label, suffix) = match action {
+                    crate::logs::dismiss::Action::Dismiss => ("/dismiss", "Dismiss", ""),
+                    crate::logs::dismiss::Action::Undo => ("/dismiss/undo", "Undo", " --undo"),
+                };
+                DismissAction {
+                    path,
+                    label,
+                    cli: format!(
+                        "thirdshift dismiss '{}'{suffix}",
+                        command.replace('\'', "'\\''")
+                    ),
+                }
+            }),
+            csrf,
             live: value["state"] == "live",
             stop_cli: format!("thirdshift stop '{}'", command.replace('\'', "'\\''")),
             can_stop: inspection.can_stop,
