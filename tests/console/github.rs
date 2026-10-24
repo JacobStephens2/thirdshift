@@ -266,3 +266,128 @@ fn a_binary_update_interrupts_an_inflight_github_read() {
     }
     assert_eq!(restarted.unwrap(), "replacement executed");
 }
+
+fn age_answer(home: &Path, seconds: u64) {
+    for name in ["github-inbox.json", "github-inbox.refreshed"] {
+        fs::File::options()
+            .write(true)
+            .open(home.join(".thirdshift/logs").join(name))
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(seconds))
+            .unwrap();
+    }
+}
+
+#[test]
+fn failure_warning_wakes_open_inbox_and_recovers() {
+    let scenario = Scenario::new();
+    let home = scenario.path("home");
+    configure(&home);
+    record(&home, 81, Some("ready for review"), 10);
+    pr_is(&scenario, "OPEN");
+    assert_eq!(scenario.run(&["status", "--json"]).code, Some(0));
+    age_answer(&home, 600);
+    hold_first_read(&scenario);
+    let console = start(&scenario);
+    wait_until(|| scenario.path("gh-state.json.started").exists());
+    // Start observing while the good read is blocked. Its unchanged answer
+    // must stay quiet, but a later failure becoming stale must wake this page.
+    let mut stream = events(&console);
+    assert!(sse_event(&mut stream).contains("event: commands"));
+    wait_until(|| scenario.gh_calls_of("api", "graphql").len() >= 2);
+    wait_until(|| {
+        fs::metadata(home.join(".thirdshift/logs/github-inbox.refreshed"))
+            .unwrap()
+            .modified()
+            .unwrap()
+            .elapsed()
+            .unwrap()
+            < Duration::from_secs(5)
+    });
+    let mut gh = scenario.gh_state();
+    gh["failing"] = json!(["api graphql"]);
+    gh["failing_stderr"] = json!("HTTP 401: Bad credentials <signed out>");
+    scenario.write_gh_state(&gh);
+    age_answer(&home, 299);
+    loop {
+        assert!(sse_event(&mut stream).contains("event: commands"));
+        let page = console.get("/").text().unwrap();
+        if page.contains("GitHub last answered at") {
+            assert!(
+                page.contains("HTTP 401: Bad credentials &#60;signed out&#62;"),
+                "{page}"
+            );
+            assert!(group(&page, "ready for review").contains("acme/widgets#81"));
+            break;
+        }
+    }
+    let output = scenario.run(&["status", "--json"]);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(
+        console
+            .get("/")
+            .text()
+            .unwrap()
+            .contains(status["github_last_answered_at"].as_str().unwrap())
+    );
+    gh["failing"] = json!([]);
+    scenario.write_gh_state(&gh);
+    pr_is(&scenario, "MERGED");
+    drop(stream);
+    let mut stream = events(&console);
+    wait_for(&console, &mut stream, "resolved");
+    assert!(
+        !console
+            .get("/")
+            .text()
+            .unwrap()
+            .contains("latest read failed")
+    );
+}
+
+#[test]
+fn console_and_status_share_both_quota_reserves_and_resume_at_reset() {
+    for (resource, description) in [("graphql", "GraphQL points"), ("core", "REST requests")] {
+        let scenario = Scenario::new();
+        let home = scenario.path("home");
+        configure(&home);
+        record(&home, 81, Some("ready for review"), 10);
+        pr_is(&scenario, "OPEN");
+        assert_eq!(scenario.run(&["status", "--json"]).code, Some(0));
+        age_answer(&home, 600);
+        let mut gh = scenario.gh_state();
+        gh["rate_limits"][resource] = json!({
+            "remaining": 499,
+            "reset": (chrono::Utc::now() + chrono::Duration::seconds(4)).timestamp(),
+        });
+        scenario.write_gh_state(&gh);
+        let console = start(&scenario);
+        wait_until(|| console.get("/").text().unwrap().contains(description));
+        let page = console.get("/").text().unwrap();
+        assert!(page.contains("499"));
+        assert!(page.contains("until"));
+        assert!(group(&page, "ready for review").contains("acme/widgets#81"));
+        let before = scenario.gh_calls();
+        let text = scenario.run(&["status"]);
+        assert!(text.stdout.contains(description), "{}", text.stdout);
+        std::thread::sleep(Duration::from_millis(700));
+        assert_eq!(
+            scenario.gh_calls(),
+            before,
+            "Console or status read before reset"
+        );
+        gh["rate_limits"][resource]["remaining"] = json!(5000);
+        scenario.write_gh_state(&gh);
+        let mut stream = events(&console);
+        loop {
+            assert!(sse_event(&mut stream).contains("event: commands"));
+            if !console.get("/").text().unwrap().contains(description) {
+                break;
+            }
+        }
+        assert!(scenario.gh_calls_of("api", "graphql").len() >= 2);
+        drop(stream);
+        drop(console);
+        assert!(!scenario.run(&["status"]).stdout.contains("Warning:"));
+    }
+}

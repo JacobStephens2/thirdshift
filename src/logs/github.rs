@@ -11,11 +11,12 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
+use chrono::{DateTime, SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
 
 use super::reading::{Group, Snapshot};
 use crate::config::UserConfig;
-use crate::github::{GitHub, PullRequestState};
+use crate::github::{GitHub, PullRequestState, Quotas};
 
 /// How long `status` reuses the kept answer before reading GitHub again.
 pub const FRESH_FOR: Duration = Duration::from_secs(5 * 60);
@@ -27,6 +28,14 @@ struct File {
     pull_requests: BTreeMap<String, Option<PullRequestState>>,
     #[serde(default)]
     history: BTreeMap<String, Option<PullRequestState>>,
+    #[serde(default)]
+    failure: Option<String>,
+    #[serde(default)]
+    quotas: Option<Quotas>,
+    /// The warning at the last refresh, so crossing the age threshold
+    /// wakes pages even when the facts and failure are unchanged.
+    #[serde(default)]
+    warning: Option<String>,
 }
 
 /// What the kept answer holds: every pull request read so far, and how old
@@ -38,9 +47,43 @@ pub struct Kept {
     states: BTreeMap<String, Option<PullRequestState>>,
     history: BTreeMap<String, Option<PullRequestState>>,
     pub age: Option<Duration>,
+    last_answered: Option<DateTime<Utc>>,
+    pub failure: Option<String>,
+    quotas: Option<Quotas>,
 }
 
 impl Kept {
+    pub fn last_answered_at(&self) -> Option<String> {
+        self.last_answered
+            .map(|at| at.to_rfc3339_opts(SecondsFormat::Secs, true))
+    }
+
+    pub fn warning(&self) -> Option<String> {
+        let mut reasons = Vec::new();
+        if let Some(reason) = self.quotas.as_ref().and_then(Quotas::warning) {
+            reasons.push(reason);
+        }
+        if self.age.is_none_or(|age| age > FRESH_FOR)
+            && let Some(failure) = &self.failure
+        {
+            reasons.push(format!("latest read failed: {failure}"));
+        }
+        if reasons.is_empty() {
+            return None;
+        }
+        let reason = reasons.join("; ");
+        Some(match self.last_answered_at() {
+            Some(at) => format!("GitHub last answered at {at}; {reason}"),
+            None => format!("GitHub has not answered yet; {reason}"),
+        })
+    }
+
+    /// An open Inbox must also learn when a failed answer becomes stale.
+    pub fn next_warning_change(&self) -> Option<Duration> {
+        let age = self.age?;
+        (age <= FRESH_FOR).then(|| FRESH_FOR - age + Duration::from_millis(1))
+    }
+
     pub fn state(&self, row: &str, url: &str) -> Option<&PullRequestState> {
         self.history
             .get(row)
@@ -89,21 +132,33 @@ pub fn bookkeeping(path: &Path, logs_dir: &Path) -> bool {
 /// nothing, so the next read starts over.
 pub fn load(logs_dir: &Path) -> Kept {
     let path = path(logs_dir);
-    let age = std::fs::metadata(path.with_extension("refreshed"))
-        .or_else(|_| std::fs::metadata(&path))
-        .and_then(|metadata| metadata.modified())
-        .ok()
-        .and_then(|modified| modified.elapsed().ok());
     let file = std::fs::read(&path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<File>(&bytes).ok())
-        .filter(|file| file.version == 1);
+        .filter(|file| matches!(file.version, 1 | 2));
     match file {
-        Some(file) => Kept {
-            states: file.pull_requests,
-            history: file.history,
-            age,
-        },
+        Some(file) => {
+            let modified = std::fs::metadata(path.with_extension("refreshed"))
+                // Version 1 used the answer's file time before it had a
+                // separate freshness marker. Version 2 may hold only a failure.
+                .or_else(|error| {
+                    if file.version == 1 {
+                        std::fs::metadata(&path)
+                    } else {
+                        Err(error)
+                    }
+                })
+                .and_then(|metadata| metadata.modified())
+                .ok();
+            Kept {
+                states: file.pull_requests,
+                history: file.history,
+                age: modified.and_then(|at| at.elapsed().ok()),
+                last_answered: modified.map(DateTime::from),
+                failure: file.failure,
+                quotas: file.quotas,
+            }
+        }
         None => Kept::default(),
     }
 }
@@ -130,6 +185,21 @@ pub(super) fn refresh(
     fresh_for: Duration,
 ) -> Result<Kept> {
     let mut kept = load(&config.logs_dir);
+    if snapshot
+        .ready_pull_requests(config.inbox_days, &kept)
+        .is_empty()
+    {
+        return Ok(kept);
+    }
+    // Serialize readers across status and Console processes. A busy reader
+    // already owns the refresh; status can show the kept answer immediately.
+    let lock = std::fs::File::create(config.logs_dir.join(".github-inbox-lock"))?;
+    match lock.try_lock() {
+        Ok(()) => {}
+        Err(std::fs::TryLockError::WouldBlock) => return Ok(kept),
+        Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+    }
+    kept = load(&config.logs_dir);
     // From History on, preserve the row's last facts even if another row
     // still in view shares its pull request.
     for item in snapshot.inbox(true, config.inbox_days, &kept) {
@@ -141,30 +211,59 @@ pub(super) fn refresh(
         }
     }
     let urls = snapshot.ready_pull_requests(config.inbox_days, &kept);
-    if kept.age.is_some_and(|age| age < fresh_for) || urls.is_empty() {
+    if kept.age.is_some_and(|age| age < fresh_for)
+        || urls.is_empty()
+        || kept.quotas.as_ref().and_then(Quotas::warning).is_some()
+    {
         return Ok(kept);
     }
-    match GitHub::new().pull_request_states(&urls) {
-        Ok(states) => {
-            for url in &urls {
-                kept.states.insert(url.clone(), states.get(url).cloned());
-            }
-            kept.age = Some(Duration::ZERO);
-            save(&config.logs_dir, &kept)?;
-        }
-        Err(_) => {
-            // GitHub could not be read: the Inbox keeps the last answer.
+    let github = GitHub::new();
+    match github.inbox_quotas() {
+        Ok(quotas) => kept.quotas = Some(quotas),
+        Err(error) => {
+            kept.failure = Some(format!("{error:#}"));
+            save(&config.logs_dir, &kept, false)?;
+            return Ok(kept);
         }
     }
+    let mut answered = false;
+    for chunk in urls.chunks(100) {
+        if kept.quotas.as_ref().and_then(Quotas::warning).is_some() {
+            break;
+        }
+        match github.pull_request_states(chunk) {
+            Ok((states, quota)) => {
+                for url in chunk {
+                    kept.states.insert(url.clone(), states.get(url).cloned());
+                }
+                kept.quotas
+                    .as_mut()
+                    .expect("quotas read before rows")
+                    .graphql = quota;
+                kept.age = Some(Duration::ZERO);
+                kept.last_answered = Some(Utc::now());
+                kept.failure = None;
+                answered = true;
+            }
+            Err(error) => {
+                kept.failure = Some(format!("{error:#}"));
+                break;
+            }
+        }
+    }
+    save(&config.logs_dir, &kept, answered)?;
     Ok(kept)
 }
 
-fn save(logs_dir: &Path, kept: &Kept) -> Result<()> {
+fn save(logs_dir: &Path, kept: &Kept, answered: bool) -> Result<()> {
     let path = path(logs_dir);
     let file = File {
-        version: 1,
+        version: 2,
         pull_requests: kept.states.clone(),
         history: kept.history.clone(),
+        failure: kept.failure.clone(),
+        quotas: kept.quotas.clone(),
+        warning: kept.warning(),
     };
     let bytes = serde_json::to_vec(&file)?;
     let previous = std::fs::read(&path).ok();
@@ -172,7 +271,7 @@ fn save(logs_dir: &Path, kept: &Kept) -> Result<()> {
         .as_deref()
         .and_then(|bytes| serde_json::from_slice::<File>(bytes).ok())
         .is_none_or(|previous| {
-            previous.version != 1 || previous.pull_requests != file.pull_requests
+            previous.pull_requests != file.pull_requests || previous.warning != file.warning
         });
     // Keep History freezes too, without waking pages for bookkeeping.
     if previous.as_deref() != Some(bytes.as_slice()) {
@@ -182,7 +281,9 @@ fn save(logs_dir: &Path, kept: &Kept) -> Result<()> {
         tmp.write_all(&bytes)?;
         tmp.persist(&path)?;
     }
-    std::fs::write(path.with_extension("refreshed"), [])?;
+    if answered {
+        std::fs::write(path.with_extension("refreshed"), [])?;
+    }
     if facts_changed {
         std::fs::write(path.with_extension("changed"), [])?;
     }

@@ -37,6 +37,7 @@
     </details>
     {% when None %}
     {% match inbox.warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning }}</p>{% when None %}{% endmatch %}
+    {% match inbox.github_warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning }}</p>{% when None %}{% endmatch %}
     {% if self.idle() %}
     <section class="idle-notice" aria-label="No running Commands">
       <h3>No Commands are running on this machine.</h3>

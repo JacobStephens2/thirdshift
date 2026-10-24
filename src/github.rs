@@ -16,7 +16,9 @@ use crate::labels::{Label, Labels};
 use crate::process::{self, Control, Interruption};
 
 mod check_read;
+mod quota;
 pub(crate) use check_read::is_transient as check_read_is_transient;
+pub(crate) use quota::{Quota, Quotas};
 
 mod advisories;
 mod session_issue;
@@ -689,8 +691,8 @@ impl GitHub {
             .collect()
     }
 
-    /// What GitHub last showed for the pull requests `urls` names, one
-    /// batched GraphQL query per hundred, split only if it must be. Each
+    /// What GitHub last showed for one batch of up to a hundred pull requests.
+    /// The Inbox checks the returned quota before asking for another batch. Each
     /// alias asks for its pull request's state and its merge or close time,
     /// and for the query's own `rateLimit`. A pull request GitHub can't
     /// resolve answers null and stays out of the map, without failing the
@@ -698,69 +700,65 @@ impl GitHub {
     pub(crate) fn pull_request_states(
         &self,
         urls: &[String],
-    ) -> Result<BTreeMap<String, PullRequestState>> {
+    ) -> Result<(BTreeMap<String, PullRequestState>, Quota)> {
         let mut states = BTreeMap::new();
-        for chunk in urls.chunks(100) {
-            let mut query = String::from("query {");
-            let mut aliases = Vec::new();
-            for (index, url) in chunk.iter().enumerate() {
-                let Some((owner, repo, number)) = split_pull_request_url(url) else {
-                    continue;
-                };
-                let alias = format!("pr{index}");
-                query.push_str(&format!(" {alias}: repository(owner: \"{owner}\", name: \"{repo}\") {{ pullRequest(number: {number}) {{ url state mergedAt closedAt }} }}"));
-                aliases.push((alias, url.clone()));
+        let mut query = String::from("query {");
+        let mut aliases = Vec::new();
+        for (index, url) in urls.iter().enumerate() {
+            let Some((owner, repo, number)) = split_pull_request_url(url) else {
+                continue;
+            };
+            let alias = format!("pr{index}");
+            query.push_str(&format!(" {alias}: repository(owner: \"{owner}\", name: \"{repo}\") {{ pullRequest(number: {number}) {{ url state mergedAt closedAt }} }}"));
+            aliases.push((alias, url.clone()));
+        }
+        query.push_str(" rateLimit { limit cost remaining resetAt } }");
+        let query = format!("query={query}");
+        // gh exits unsuccessfully for scoped GraphQL errors even when
+        // stdout contains healthy siblings. Only those partial answers
+        // are usable; a transport or query-wide failure remains a failed
+        // read so the Inbox keeps its previous answer.
+        let json = self.retry_read("gh api graphql", || {
+            let output = self.output(&["api", "graphql", "-f", &query])?;
+            let json = serde_json::from_slice::<Value>(&output.stdout);
+            let partial = json.as_ref().is_ok_and(|json| {
+                json["data"].is_object()
+                    && json["errors"].as_array().is_some_and(|errors| {
+                        !errors.is_empty()
+                            && errors.iter().all(|error| {
+                                error["path"][0].as_str().is_some_and(|path| {
+                                    aliases.iter().any(|(alias, _)| alias == path)
+                                })
+                            })
+                    })
+            });
+            if !output.status.success() && !partial {
+                bail!(check_read::ReadFailure {
+                    command: "gh api graphql".into(),
+                    stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                    private_status: None,
+                });
             }
-            if aliases.is_empty() {
+            json.context(CommandFailure::InvalidJson {
+                command: "gh api graphql".into(),
+            })
+        })?;
+        let data = &json["data"];
+        let quota = Quota::graphql(&data["rateLimit"])?;
+        for (alias, url) in aliases {
+            if json["errors"]
+                .as_array()
+                .is_some_and(|errors| errors.iter().any(|error| error["path"][0] == alias))
+            {
                 continue;
             }
-            query.push_str(" rateLimit { limit cost remaining resetAt } }");
-            let query = format!("query={query}");
-            // gh exits unsuccessfully for scoped GraphQL errors even when
-            // stdout contains healthy siblings. Only those partial answers
-            // are usable; a transport or query-wide failure remains a failed
-            // read so the Inbox keeps its previous answer.
-            let json = self.retry_read("gh api graphql", || {
-                let output = self.output(&["api", "graphql", "-f", &query])?;
-                let json = serde_json::from_slice::<Value>(&output.stdout);
-                let partial = json.as_ref().is_ok_and(|json| {
-                    json["data"].is_object()
-                        && json["errors"].as_array().is_some_and(|errors| {
-                            !errors.is_empty()
-                                && errors.iter().all(|error| {
-                                    error["path"][0].as_str().is_some_and(|path| {
-                                        aliases.iter().any(|(alias, _)| alias == path)
-                                    })
-                                })
-                        })
-                });
-                if !output.status.success() && !partial {
-                    bail!(check_read::ReadFailure {
-                        command: "gh api graphql".into(),
-                        stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-                        private_status: None,
-                    });
-                }
-                json.context(CommandFailure::InvalidJson {
-                    command: "gh api graphql".into(),
-                })
-            })?;
-            let data = &json["data"];
-            for (alias, url) in aliases {
-                if json["errors"]
-                    .as_array()
-                    .is_some_and(|errors| errors.iter().any(|error| error["path"][0] == alias))
-                {
-                    continue;
-                }
-                let pull = &data[alias.as_str()]["pullRequest"];
-                if pull.is_null() {
-                    continue;
-                }
-                states.insert(url.clone(), PullRequestState::from_json(&url, pull)?);
+            let pull = &data[alias.as_str()]["pullRequest"];
+            if pull.is_null() {
+                continue;
             }
+            states.insert(url.clone(), PullRequestState::from_json(&url, pull)?);
         }
-        Ok(states)
+        Ok((states, quota))
     }
 
     /// Open a draft pull request from `head` into `base`, and return its URL.

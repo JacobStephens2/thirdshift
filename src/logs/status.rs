@@ -27,6 +27,8 @@ struct Status<'a> {
     /// no answer is kept: with no ready pull requests to read, or before
     /// the first read.
     github_answer_age_seconds: Option<u64>,
+    github_last_answered_at: Option<String>,
+    github_failure: Option<&'a str>,
 }
 
 fn print_command(command: &Command, state_word: &str, indent: &str) {
@@ -95,11 +97,16 @@ pub fn show(json: bool, all: bool) -> Result<()> {
         commands: snapshot.inbox(all, config.inbox_days, &kept),
         idle_passes: &snapshot.idle_passes,
         github_answer_age_seconds: kept.age.map(|age| age.as_secs()),
+        github_last_answered_at: kept.last_answered_at(),
+        github_failure: kept.failure.as_deref(),
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
         println!("{}", status.hostname);
+        if let Some(warning) = kept.warning() {
+            println!("Warning: {warning}");
+        }
         for group in Group::ORDER {
             let items: Vec<_> = status
                 .commands

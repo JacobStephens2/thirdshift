@@ -1767,8 +1767,7 @@ fn merged_pull_request_takes_its_ready_row_into_resolved_saying_so() {
         "{}",
         text.stdout
     );
-    // One batched read asking for each pull request's state and the query's
-    // own rateLimit, and no call that writes anything.
+    // One batched read plus the quota preflight, and no call that writes anything.
     let calls = graphql_calls(&scenario);
     assert_eq!(calls.len(), 1, "{calls:?}");
     assert!(
@@ -1781,7 +1780,7 @@ fn merged_pull_request_takes_its_ready_row_into_resolved_saying_so() {
         scenario
             .gh_calls()
             .iter()
-            .all(|call| call[..2] == ["api".to_string(), "graphql".to_string()]),
+            .all(|call| call[0] == "api" && matches!(call[1].as_str(), "graphql" | "rate_limit")),
         "{:?}",
         scenario.gh_calls()
     );
@@ -2172,7 +2171,8 @@ fn failed_github_read_keeps_the_last_answer() {
     assert_eq!(output.code, Some(0), "{}", output.stderr);
     let status: Value = serde_json::from_str(&output.stdout).unwrap();
     assert_eq!(status["commands"][0]["group"], "history", "{status}");
-    assert!(!scenario.path(GITHUB_CACHE).exists());
+    assert_eq!(status["github_last_answered_at"], Value::Null);
+    assert!(status["github_failure"].as_str().is_some());
     // A good read keeps its answer; a later failed read keeps the last one,
     // even for a pull request GitHub has since merged.
     let mut gh = scenario.gh_state();
@@ -2197,6 +2197,171 @@ fn failed_github_read_keeps_the_last_answer() {
     assert_eq!(row["github_state"], "open", "{row}");
     assert!(graphql_calls(&scenario).len() > reads_before_failure);
     assert!(status["github_answer_age_seconds"].as_u64().unwrap() >= 360);
+}
+
+#[test]
+fn github_failures_warn_with_last_answer_and_clear_after_recovery() {
+    for diagnostic in [
+        "error connecting to api.github.com: network is unreachable",
+        "HTTP 401: Bad credentials (https://api.github.com/graphql)",
+        "HTTP 403: API rate limit exceeded (https://api.github.com/graphql)",
+    ] {
+        let scenario = Scenario::new();
+        ready_record_with_pr(&scenario, 7, &hours_ago(240), Some(7));
+        github_pr_is(&scenario, 7, "OPEN", None, None);
+        let good = scenario.run(&["status", "--json"]);
+        assert_eq!(good.code, Some(0), "{}", good.stderr);
+        age_cache_file(&scenario, 360);
+        // A never-read row still goes by age, while the old open row keeps
+        // the facts from its last answer even after GitHub merges it.
+        ready_record_with_pr(&scenario, 8, &hours_ago(240), Some(8));
+        github_pr_is(&scenario, 7, "MERGED", Some(&hours_ago(1)), None);
+        let mut gh = scenario.gh_state();
+        gh["failing"] = serde_json::json!(["api graphql"]);
+        gh["failing_stderr"] = diagnostic.into();
+        scenario.write_gh_state(&gh);
+        let output = scenario.run(&["status", "--all", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        let rows = status["commands"].as_array().unwrap();
+        assert!(
+            rows.iter()
+                .any(|row| row["issue"]["number"] == 7 && row["group"] == "ready for review"),
+            "{status}"
+        );
+        assert!(
+            rows.iter()
+                .any(|row| row["issue"]["number"] == 8 && row["group"] == "history"),
+            "{status}"
+        );
+        let answered = status["github_last_answered_at"]
+            .as_str()
+            .expect(&output.stdout);
+        assert!(chrono::DateTime::parse_from_rfc3339(answered).is_ok());
+        assert!(
+            status["github_failure"]
+                .as_str()
+                .unwrap()
+                .contains(diagnostic),
+            "{status}"
+        );
+        let text = scenario.run(&["status"]);
+        assert!(
+            text.stdout.contains("GitHub last answered"),
+            "{}",
+            text.stdout
+        );
+        assert!(text.stdout.contains(answered), "{}", text.stdout);
+        assert!(text.stdout.contains(diagnostic), "{}", text.stdout);
+        gh["failing"] = serde_json::json!([]);
+        scenario.write_gh_state(&gh);
+        let output = scenario.run(&["status", "--json"]);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(status["github_failure"], Value::Null, "{status}");
+        assert!(status["github_answer_age_seconds"].as_u64().unwrap() < 5);
+        assert!(
+            !scenario
+                .run(&["status"])
+                .stdout
+                .contains("GitHub last answered")
+        );
+    }
+}
+
+#[test]
+fn status_reserves_both_quotas_until_their_resets() {
+    for (resource, kept_name, description) in
+        [("graphql", "graphql", "GraphQL"), ("core", "rest", "REST")]
+    {
+        let scenario = Scenario::new();
+        ready_record_with_pr(&scenario, 7, &hours_ago(48), Some(7));
+        github_pr_is(&scenario, 7, "OPEN", None, None);
+        let reset = chrono::Utc::now() + chrono::Duration::hours(1);
+        let mut gh = scenario.gh_state();
+        gh["rate_limits"][resource] = serde_json::json!({
+            "remaining": 500, "reset": reset.timestamp(),
+        });
+        scenario.write_gh_state(&gh);
+        // Exactly 500 is allowed; fewer than 500 protects the reserve.
+        assert_eq!(scenario.run(&["status", "--json"]).code, Some(0));
+        assert_eq!(graphql_calls(&scenario).len(), 1);
+        age_cache_file(&scenario, 360);
+        gh["rate_limits"][resource]["remaining"] = 499.into();
+        scenario.write_gh_state(&gh);
+        let output = scenario.run(&["status", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        assert_eq!(
+            graphql_calls(&scenario).len(),
+            1,
+            "spent the factory's {description} reserve"
+        );
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(status["commands"][0]["group"], "ready for review");
+        assert!(status["github_answer_age_seconds"].as_u64().unwrap() >= 360);
+        let before = scenario.gh_calls();
+        let text = scenario.run(&["status"]);
+        assert!(text.stdout.contains(description), "{}", text.stdout);
+        assert!(text.stdout.contains("499"), "{}", text.stdout);
+        assert!(text.stdout.contains("until"), "{}", text.stdout);
+        assert_eq!(
+            scenario.gh_calls(),
+            before,
+            "read while {description} quota was low"
+        );
+        // Move the recorded reset into the past at the fixture's time seam.
+        let path = scenario.path(GITHUB_CACHE);
+        let mut kept: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        kept["quotas"][kept_name]["reset_at"] = hours_ago(1).into();
+        fs::write(path, serde_json::to_vec(&kept).unwrap()).unwrap();
+        gh["rate_limits"][resource]["remaining"] = 5000.into();
+        scenario.write_gh_state(&gh);
+        let output = scenario.run(&["status", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        assert_eq!(graphql_calls(&scenario).len(), 2);
+        assert!(!scenario.run(&["status"]).stdout.contains("Warning:"));
+    }
+}
+
+#[test]
+fn graphql_response_stops_following_batches_and_warns_while_fresh() {
+    let scenario = Scenario::new();
+    let ended = hours_ago(48);
+    for number in 1..=101 {
+        ready_record_with_pr(&scenario, number, &ended, Some(number.into()));
+        github_pr_is(&scenario, number.into(), "OPEN", None, None);
+    }
+    let mut gh = scenario.gh_state();
+    gh["inbox_rate_limit"] = serde_json::json!({
+        "remaining": 499,
+        "resetAt": (chrono::Utc::now() + chrono::Duration::hours(1)).to_rfc3339(),
+    });
+    scenario.write_gh_state(&gh);
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(
+        graphql_calls(&scenario).len(),
+        1,
+        "read another batch after reaching the reserve"
+    );
+    assert_eq!(
+        status["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["github_state"] == "open")
+            .count(),
+        100
+    );
+    assert!(status["github_answer_age_seconds"].as_u64().unwrap() < 5);
+    let before = scenario.gh_calls();
+    let text = scenario.run(&["status"]);
+    assert!(
+        text.stdout.contains("499 GraphQL points remaining"),
+        "{}",
+        text.stdout
+    );
+    assert_eq!(scenario.gh_calls(), before);
 }
 
 #[test]
