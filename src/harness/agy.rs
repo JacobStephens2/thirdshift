@@ -61,6 +61,13 @@ impl Adapter for Agy {
         }
         Invocation { args, stdin: None }
     }
+    /// No web-search switch exists to add: neither the flags nor the
+    /// settings know one, and its grounding tool runs at Google, past any
+    /// proxy. A Trial keeps the code review session unchanged; the proxy
+    /// still reaches only its provider hosts.
+    fn trial_session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation {
+        self.code_review_session(choice, resume, prompt)
+    }
     fn check(&self, choice: &mut Choice) -> Result<()> {
         if choice.model.is_none() && choice.effort.is_none() {
             return Ok(());
@@ -153,6 +160,22 @@ impl Adapter for Agy {
 mod tests {
     use super::*;
     use crate::harness::ChosenBy;
+
+    /// A Trial keeps the code review session unchanged: agy has no
+    /// web-search switch to add.
+    #[test]
+    fn trials_keep_the_code_review_session_unchanged() {
+        let chosen = Choice {
+            harness: Harness::Agy,
+            model: None,
+            effort: None,
+            chosen_by: ChosenBy::Command,
+        };
+        assert_eq!(
+            Agy.trial_session(&chosen, None, "review").args,
+            Agy.code_review_session(&chosen, None, "review").args
+        );
+    }
 
     /// Resume uses the same public invocation interface as a new session.
     #[test]

@@ -31,6 +31,7 @@ mod poll;
 mod process;
 mod progress;
 mod prompt;
+mod proxy;
 #[cfg(test)]
 mod prompts_page;
 mod pull_request;

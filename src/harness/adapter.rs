@@ -35,6 +35,19 @@ pub trait Adapter: Sync {
         self.session(choice, resume, prompt)
     }
 
+    /// A Trial's session, or its Resume: the code review session with the
+    /// Harness's web search switched off, since a Trial runs in a sandbox
+    /// whose proxy reaches only its provider. Harnesses with no such switch
+    /// keep the code review session unchanged.
+    fn trial_session(
+        &self,
+        choice: &Choice,
+        resume: Option<&str>,
+        prompt: &str,
+    ) -> Invocation {
+        self.code_review_session(choice, resume, prompt)
+    }
+
     /// A one-shot release summary, using stdin or `prompt_file` so release
     /// input never exceeds the operating system's argument-size limit.
     /// The file contains `prompt` and remains available until the CLI exits.

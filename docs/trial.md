@@ -64,14 +64,31 @@ no result and exits `1`.
 
 ## Sandbox
 
-The Trial's session runs in bwrap with a process namespace of its own: it
-sees neither an unbound path nor the host's processes, and everything it
-starts ends with it. Only these are bound: the prepared repository, the
-Harness's binary (Codex's release folder, since Codex looks for
-`codex-code-mode-host` beside it), the Factory skills folder, a fresh home,
-and the toolchains the session needs, read-only. Harness flags stay as
-ADR 0013 has them. The network stays the host's here; #1013 gives the sandbox
-its own.
+The Trial's session runs in bwrap with process and network namespaces of its
+own: it sees neither an unbound path nor the host's processes, and everything
+it starts ends with it. Its network holds only its own loopback. Only these
+are bound: the prepared repository, the Harness's binary (Codex's release
+folder, since Codex looks for `codex-code-mode-host` beside it), the Factory
+skills folder, a fresh home, the toolchains the session needs and socat,
+read-only, and the proxy's socket. Harness flags stay as ADR 0013 has them,
+except each Harness's own web-search switch, which a Trial's session adds.
+
+An allowlisting CONNECT proxy runs outside the sandbox, listening on a Unix
+socket in a short directory of its own under `/tmp` that is bound into the
+sandbox. A socat relay inside turns `127.0.0.1:3128` into that socket, and the
+Harness reaches its provider through `HTTPS_PROXY` (`HTTP_PROXY` too, with
+`NO_PROXY=127.0.0.1,localhost`, since OpenCode calls its own local server
+over HTTP). The proxy allows only that Harness's provider hosts, from #1009's
+live-checked lists, and refuses names that resolve to loopback or to the
+host's own addresses; anything it does not allow never resolves. A Harness
+that ignores the proxy finds no route: without it, even DNS has none, and the
+Trial fails into `session_unavailable`, void under the connection-failure
+rules. Web search stays off by each Harness's own flag: Claude denies
+`WebSearch` and `WebFetch`, Codex sets `web_search="disabled"`, Grok passes
+`--disable-web-search`, Muse passes `--disable-web-tools`, and the Trial's
+OpenCode config denies `webfetch` and `websearch`. agy has no such switch, so
+a Trial keeps its session unchanged; the proxy still reaches only its provider
+hosts.
 
 The fresh home holds the login, and the user-level instructions, rules,
 settings and hooks a Run's session reads, those read-only. Codex's `auth.json`
