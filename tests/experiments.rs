@@ -2328,6 +2328,50 @@ fn a_trial_over_its_cap_dies_alone_and_is_void_while_others_carry_on() {
 }
 
 #[test]
+fn aa_experiment_runs_identical_arms_through_to_a_verdict() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(review_reports_prelude());
+
+    let run = fixture.run(&[
+        "--baseline",
+        "candidate",
+        "--suite",
+        "spec-review",
+        "--baseline-harness",
+        "claude",
+        "--baseline-model",
+        "opus",
+        "--baseline-effort",
+        "high",
+        "--candidate-harness",
+        "claude",
+        "--candidate-model",
+        "opus",
+        "--candidate-effort",
+        "high",
+    ]);
+
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    assert_eq!(experiment["baseline"], experiment["candidate"]);
+    assert_eq!(experiment["baseline"]["commit"], fixture.candidate);
+    assert_eq!(experiment["baseline"]["harness"], "claude");
+    assert_eq!(experiment["baseline"]["model"], "opus");
+    assert_eq!(experiment["baseline"]["effort"], "high");
+    assert_eq!(experiment["state"], "completed");
+    let results = experiment["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    for arm in ["baseline", "candidate"] {
+        let result = results.iter().find(|result| result["arm"] == arm).unwrap();
+        assert_eq!(result["outcome"], "succeeded", "{result}");
+        assert_eq!(result["score"]["passed"], true, "{result}");
+    }
+    assert_eq!(fixture.trial_calls().len(), 2);
+    // One Eval task cannot establish the default Bar's pass level.
+    assert_eq!(experiment["verdict"]["verdict"], "inconclusive");
+}
+
+#[test]
 fn explicit_suites_compare_one_build_on_distinct_harnesses_and_keep_fixed_paths() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does(&format!(
