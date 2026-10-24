@@ -222,11 +222,10 @@ pub(super) fn refresh(
         Ok(quotas) => kept.quotas = Some(quotas),
         Err(error) => {
             kept.failure = Some(format!("{error:#}"));
-            save(&config.logs_dir, &kept, false)?;
+            save(&config.logs_dir, &kept)?;
             return Ok(kept);
         }
     }
-    let mut answered = false;
     for chunk in urls.chunks(100) {
         if kept.quotas.as_ref().and_then(Quotas::warning).is_some() {
             break;
@@ -243,7 +242,6 @@ pub(super) fn refresh(
                 kept.age = Some(Duration::ZERO);
                 kept.last_answered = Some(Utc::now());
                 kept.failure = None;
-                answered = true;
             }
             Err(error) => {
                 kept.failure = Some(format!("{error:#}"));
@@ -251,11 +249,11 @@ pub(super) fn refresh(
             }
         }
     }
-    save(&config.logs_dir, &kept, answered)?;
+    save(&config.logs_dir, &kept)?;
     Ok(kept)
 }
 
-fn save(logs_dir: &Path, kept: &Kept, answered: bool) -> Result<()> {
+fn save(logs_dir: &Path, kept: &Kept) -> Result<()> {
     let path = path(logs_dir);
     let file = File {
         version: 2,
@@ -281,8 +279,12 @@ fn save(logs_dir: &Path, kept: &Kept, answered: bool) -> Result<()> {
         tmp.write_all(&bytes)?;
         tmp.persist(&path)?;
     }
-    if answered {
-        std::fs::write(path.with_extension("refreshed"), [])?;
+    if let Some(at) = kept.last_answered {
+        // Also migrate a version-1 answer that used its JSON file time.
+        // A failed read must preserve that time, rather than erase it or
+        // make the old facts look freshly read.
+        let freshness = std::fs::File::create(path.with_extension("refreshed"))?;
+        freshness.set_modified(at.into())?;
     }
     if facts_changed {
         std::fs::write(path.with_extension("changed"), [])?;

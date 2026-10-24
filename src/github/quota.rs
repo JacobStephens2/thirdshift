@@ -9,7 +9,7 @@ use super::GitHub;
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Quota {
     remaining: u64,
-    reset_at: String,
+    reset_at: DateTime<Utc>,
 }
 
 impl Quota {
@@ -17,12 +17,13 @@ impl Quota {
         let reset_at = json["resetAt"]
             .as_str()
             .context("GitHub quota has no resetAt")?;
-        DateTime::parse_from_rfc3339(reset_at).context("invalid GitHub quota resetAt")?;
         Ok(Self {
             remaining: json["remaining"]
                 .as_u64()
                 .context("GitHub quota has no remaining")?,
-            reset_at: reset_at.into(),
+            reset_at: DateTime::parse_from_rfc3339(reset_at)
+                .context("invalid GitHub quota resetAt")?
+                .with_timezone(&Utc),
         })
     }
 
@@ -34,15 +35,12 @@ impl Quota {
             remaining: json["remaining"]
                 .as_u64()
                 .context("GitHub quota has no remaining")?,
-            reset_at: DateTime::from_timestamp(reset, 0)
-                .context("invalid GitHub quota reset")?
-                .to_rfc3339_opts(SecondsFormat::Secs, true),
+            reset_at: DateTime::from_timestamp(reset, 0).context("invalid GitHub quota reset")?,
         })
     }
 
     fn low(&self) -> bool {
-        self.remaining < 500
-            && DateTime::parse_from_rfc3339(&self.reset_at).is_ok_and(|reset| reset > Utc::now())
+        self.remaining < 500 && self.reset_at > Utc::now()
     }
 }
 
@@ -63,7 +61,8 @@ impl Quotas {
         .map(|(quota, name)| {
             format!(
                 "{} {name} remaining (fewer than 500); Inbox reads paused until {}",
-                quota.remaining, quota.reset_at,
+                quota.remaining,
+                quota.reset_at.to_rfc3339_opts(SecondsFormat::Secs, true),
             )
         })
         .collect();

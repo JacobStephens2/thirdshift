@@ -151,14 +151,7 @@ fn unchanged_github_reads_leave_open_inbox_idle_and_keep_status_fresh() {
     record(&home, 81, Some("ready for review"), 0);
     pr_is(&scenario, "OPEN");
     assert_eq!(scenario.run(&["status", "--json"]).code, Some(0));
-    for name in ["github-inbox.json", "github-inbox.refreshed"] {
-        fs::File::options()
-            .write(true)
-            .open(home.join(".thirdshift/logs").join(name))
-            .unwrap()
-            .set_modified(std::time::SystemTime::now() - Duration::from_secs(600))
-            .unwrap();
-    }
+    age_answer(&home, 600);
     let config = fs::read(home.join(".thirdshift/config.toml")).unwrap();
     let console = start(&scenario);
     // No HTTP request has been made: the Console still reads for this machine.

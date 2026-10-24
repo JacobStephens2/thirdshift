@@ -2365,6 +2365,46 @@ fn graphql_response_stops_following_batches_and_warns_while_fresh() {
 }
 
 #[test]
+fn legacy_github_answer_time_survives_a_failed_refresh() {
+    let scenario = Scenario::new();
+    ready_record_with_pr(&scenario, 7, &hours_ago(48), Some(7));
+    github_pr_is(&scenario, 7, "OPEN", None, None);
+    assert_eq!(scenario.run(&["status", "--json"]).code, Some(0));
+
+    // A supported version-1 answer predating the separate freshness marker.
+    let path = scenario.path(GITHUB_CACHE);
+    let mut legacy: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    legacy["version"] = 1.into();
+    for field in ["failure", "quotas", "warning"] {
+        legacy.as_object_mut().unwrap().remove(field);
+    }
+    fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    fs::remove_file(path.with_extension("refreshed")).unwrap();
+    age_cache_file(&scenario, 360);
+    scenario.gh_fails("api graphql");
+
+    let first = scenario.run(&["status", "--json"]);
+    assert_eq!(first.code, Some(0), "{}", first.stderr);
+    let first: Value = serde_json::from_str(&first.stdout).unwrap();
+    let answered = first["github_last_answered_at"]
+        .as_str()
+        .expect("the version-1 file records a last answer")
+        .to_owned();
+
+    let second = scenario.run(&["status", "--json"]);
+    assert_eq!(second.code, Some(0), "{}", second.stderr);
+    let second: Value = serde_json::from_str(&second.stdout).unwrap();
+    assert_eq!(second["commands"][0]["group"], "ready for review");
+    assert_eq!(
+        second["github_last_answered_at"], answered,
+        "a failed refresh must preserve the last successful read time: {second}"
+    );
+    let text = scenario.run(&["status"]);
+    assert!(text.stdout.contains(&answered), "{}", text.stdout);
+    assert!(!text.stdout.contains("GitHub has not answered yet"));
+}
+
+#[test]
 fn repair_resume_and_security_review_keep_their_own_session_logs() {
     let scenario = Scenario::new();
     scenario.agent_does_in_session(1, &support::leaves_running("cargo test"));
