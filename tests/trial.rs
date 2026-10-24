@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
-use support::{RunResult, Scenario, leaves_running};
+use support::{RunResult, Scenario, leaves_running, scope_available};
 
 /// Where a sandboxed Trial's fake Harness scripts and records live: inside the
 /// prepared repository, the one path the sandbox keeps.
@@ -862,19 +862,6 @@ fn oom_exec_raises_its_score_and_becomes_its_program() {
     );
     let usage = scenario.run(&["--oom-exec"]);
     assert_eq!(usage.code, Some(2), "{}", usage.stderr);
-}
-
-/// Whether Trial scopes can run here: systemd-run plus a reachable user
-/// manager, which logged-out launchers need lingering for.
-fn scope_available() -> bool {
-    std::process::Command::new("systemd-run")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-        && std::process::Command::new("systemctl")
-            .args(["--user", "show", "-p", "SystemState", "--value"])
-            .output()
-            .is_ok_and(|output| output.status.success())
 }
 
 #[test]

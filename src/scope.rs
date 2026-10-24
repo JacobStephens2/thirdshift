@@ -177,17 +177,10 @@ fn unit_name(kind: &str, detail: &str) -> String {
     )
 }
 
-/// A Trial launch: its command and, when scoped, its scope.
-pub struct TrialLaunch {
+/// A Trial or model Grader launch: its command and, when scoped, its scope.
+pub struct Launch {
     pub command: Command,
-    /// The scope the Trial runs in, when one was available.
-    pub scope: Option<Scope>,
-}
-
-/// A model Grader launch: its command and, when scoped, its scope.
-pub struct GraderLaunch {
-    pub command: Command,
-    /// The scope the Grader runs in, when one was available.
+    /// The scope the Trial or Grader runs in, when one was available.
     pub scope: Option<Scope>,
 }
 
@@ -225,7 +218,10 @@ impl Scope {
 pub fn watch_scope(unit: &str) -> Option<Watch> {
     let group = control_group(unit)?;
     let events = events_path(&group);
-    events.is_file().then_some(Watch { events, hit: false })
+    events.is_file().then_some(Watch {
+        events,
+        kernel_kill: false,
+    })
 }
 
 /// Where `group`, a cgroup path as the manager reports it, keeps its
@@ -241,22 +237,22 @@ fn events_path(group: &str) -> PathBuf {
 /// A live watch on one scope's `memory.events`.
 pub struct Watch {
     events: PathBuf,
-    hit: bool,
+    kernel_kill: bool,
 }
 
 impl Watch {
     /// Sample the scope's kernel kills. Best effort: a gone scope reads as no
     /// new evidence, never as an error.
     pub fn sample(&mut self) {
-        if self.hit {
+        if self.kernel_kill {
             return;
         }
-        self.hit = kill_count(&self.events).is_some_and(|kills| kills > 0);
+        self.kernel_kill = kill_count(&self.events).is_some_and(|kills| kills > 0);
     }
 
     /// Whether any sample saw a kernel kill in the scope.
-    pub fn hit(&self) -> bool {
-        self.hit
+    pub fn kernel_kill_seen(&self) -> bool {
+        self.kernel_kill
     }
 }
 
@@ -293,6 +289,15 @@ fn control_group(unit: &str) -> Option<String> {
     (!group.is_empty()).then_some(group)
 }
 
+/// `program` without a scope, still under the `--oom-exec` wrapper so the
+/// Trial or Grader raises its own `oom_score_adj`. The wrapper `exec`s into
+/// `program`, so signals, stdio, and exit status relay transparently.
+fn direct<S: AsRef<std::ffi::OsStr>>(program: &Path, args: &[S]) -> Result<Command> {
+    let mut command = Command::new(current_exe()?);
+    command.arg("--oom-exec").arg(program).args(args);
+    Ok(command)
+}
+
 /// `systemd-run --user --scope` with `unit` and the caps, before the `--`
 /// that starts the scope's command.
 fn scope_base(unit: &str, caps: &Caps) -> Command {
@@ -319,13 +324,11 @@ pub fn trial_command(
     trial: &str,
     attempt: usize,
     caps: &Caps,
-) -> Result<TrialLaunch> {
+) -> Result<Launch> {
     if !available() {
         warn_fallback();
-        let mut command = Command::new(program);
-        command.args(args);
-        return Ok(TrialLaunch {
-            command,
+        return Ok(Launch {
+            command: direct(program, args)?,
             scope: None,
         });
     }
@@ -336,7 +339,7 @@ pub fn trial_command(
         .arg("--oom-exec")
         .arg(program)
         .args(args);
-    Ok(TrialLaunch {
+    Ok(Launch {
         command,
         scope: Some(Scope { unit }),
     })
@@ -351,12 +354,12 @@ pub fn grader_command(
     args: &[String],
     directory: &Path,
     caps: &Caps,
-) -> Result<GraderLaunch> {
+) -> Result<Launch> {
     if !available() {
         warn_fallback();
-        let mut command = Command::new(program);
-        command.args(args).current_dir(directory);
-        return Ok(GraderLaunch {
+        let mut command = direct(program, args)?;
+        command.current_dir(directory);
+        return Ok(Launch {
             command,
             scope: None,
         });
@@ -369,7 +372,7 @@ pub fn grader_command(
         .arg(program)
         .args(args)
         .current_dir(directory);
-    Ok(GraderLaunch {
+    Ok(Launch {
         command,
         scope: Some(Scope { unit }),
     })
@@ -408,10 +411,9 @@ pub fn oom_exec(program: &str, args: &[String]) -> Result<()> {
     Err(error).with_context(|| format!("could not run {program}"))
 }
 
-/// The cause a cap kill carries, in Trials and in Grader errors.
-pub fn oom_cause() -> &'static str {
-    "Trial scope memory.events reported an oom_kill"
-}
+/// The cause a cap kill carries, in Trials and in Grader errors: the scope's
+/// `memory.events` reported an `oom_kill`.
+pub const OOM_KILL_CAUSE: &str = "scope memory.events reported an oom_kill";
 
 #[cfg(test)]
 mod tests {
@@ -474,7 +476,40 @@ mod tests {
         let _ = child.wait();
         let mut watch = watch.expect("the live scope must resolve its memory.events");
         watch.sample();
-        assert!(!watch.hit(), "an idle scope reports no kernel kills");
+        assert!(
+            !watch.kernel_kill_seen(),
+            "an idle scope reports no kernel kills"
+        );
+    }
+
+    #[test]
+    fn fallback_grader_command_keeps_a_raised_oom_score() {
+        if super::available() {
+            println!("SKIPPED: manager reachable, fallback untestable here");
+            return;
+        }
+        let caps = super::Caps {
+            high: "1G".to_string(),
+            max: "2G".to_string(),
+            swap_max: "1G".to_string(),
+        };
+        let launched = super::grader_command(
+            std::path::Path::new("cat"),
+            &["/proc/self/oom_score_adj".to_string()],
+            std::path::Path::new("/tmp"),
+            &caps,
+        )
+        .unwrap();
+        assert!(launched.scope.is_none(), "needs the no-manager fallback");
+        // The fallback routes through the scope wrapper, which raises its own
+        // score before becoming the Grader; the wrapper itself is covered by
+        // the live `--oom-exec` tests. This binary cannot exec itself here,
+        // so the routing shape is the assertion.
+        assert!(
+            format!("{:?}", launched.command).contains("--oom-exec"),
+            "a fallback Grader must run under the raising wrapper: {:?}",
+            launched.command
+        );
     }
 
     #[test]

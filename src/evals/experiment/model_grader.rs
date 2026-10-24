@@ -113,6 +113,8 @@ struct Trial {
 pub(super) fn run(experiment: &store::Stored) -> Result<()> {
     let grader: Grader =
         serde_json::from_slice(&fs::read(experiment.directory.join("grader.json"))?)?;
+    // Machine caps are read live, not fixed with the Bar.
+    let caps = crate::scope::Caps::from_config_or_env(&crate::config::UserConfig::load()?)?;
     for task in &experiment.tasks {
         interrupt::check()?;
         let key = Sha256::new()
@@ -147,6 +149,7 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
                 &directory,
                 &packet,
                 experiment.description.bar.timeout_seconds,
+                &caps,
             )?;
             let mut labels = BTreeSet::new();
             for score in &response.scores {
@@ -300,7 +303,13 @@ fn blind(text: &str) -> String {
     blinded
 }
 
-fn grade(grader: &Grader, directory: &Path, packet: &Packet, timeout: u64) -> Result<Response> {
+fn grade(
+    grader: &Grader,
+    directory: &Path,
+    packet: &Packet,
+    timeout: u64,
+    caps: &crate::scope::Caps,
+) -> Result<Response> {
     let workspace = tempfile::Builder::new()
         .prefix("session-")
         .tempdir_in(directory)?
@@ -315,10 +324,9 @@ fn grade(grader: &Grader, directory: &Path, packet: &Packet, timeout: u64) -> Re
     let invocation = adapter.session(&choice, None, &prompt);
     // Each Grader runs in a scope of its own, with the Trial caps, and raises
     // its own `oom_score_adj`. A Grader the cap kills dies alone; its failure
-    // below names the cap from the wrapper's `memory.events` evidence.
-    let caps = crate::scope::Caps::from_config_or_env(&crate::config::UserConfig::load()?)?;
+    // below names the cap from the scope's `memory.events` evidence.
     let mut launched =
-        crate::scope::grader_command(&grader.harness.path, &invocation.args, &workspace, &caps)?;
+        crate::scope::grader_command(&grader.harness.path, &invocation.args, &workspace, caps)?;
     launched
         .command
         .stderr(fs::File::create(workspace.join("stderr"))?)
@@ -351,7 +359,7 @@ fn grade(grader: &Grader, directory: &Path, packet: &Packet, timeout: u64) -> Re
             anyhow::anyhow!(
                 "model Grader hit its memory cap ({}); see private Grader artifacts, \
                  and raise the trial.memory_max User config to retry",
-                crate::scope::oom_cause()
+                crate::scope::OOM_KILL_CAUSE
             )
         } else {
             anyhow::anyhow!("model Grader session failed; see private Grader artifacts")

@@ -265,14 +265,20 @@ fn run_trial(
         ));
         let started = Instant::now();
         let mut trace = super::trace::Attempt::start(&attempt, &trial.key(), context)?;
+        // Machine caps are read live per attempt, not fixed with the Bar: an
+        // operator edit between attempts applies to the next one.
+        let caps = crate::scope::Caps::from_config_or_env(&crate::config::UserConfig::load()?)?;
         let launched = trial_command(
-            experiment,
-            arm,
-            trial.arm,
-            &request,
-            signal,
-            &trial.key(),
-            result.attempts.len(),
+            &Attempt {
+                experiment,
+                arm,
+                name: trial.arm,
+                request: &request,
+                signal,
+                trial: &trial.key(),
+                attempt: result.attempts.len(),
+            },
+            &caps,
         )?;
         // The unit name stays in the attempt for `journalctl --user -u` after.
         if let Some(scope) = &launched.scope {
@@ -313,7 +319,10 @@ fn run_trial(
         // the Trial diagnosed them, so limit pauses keep pausing, and an
         // agent's own out-of-memory error leaves no kernel kill behind.
         let cap_killed = || {
-            watch.borrow().as_ref().is_some_and(|watch| watch.hit())
+            watch
+                .borrow()
+                .as_ref()
+                .is_some_and(|watch| watch.kernel_kill_seen())
                 || launched
                     .scope
                     .as_ref()
@@ -370,7 +379,7 @@ fn run_trial(
         if protocol.outcome == Outcome::Failed && cap_killed() {
             protocol.outcome = Outcome::Void;
             protocol.void_cause = Some(VoidCause::MemoryCap);
-            protocol.cause = Some(crate::scope::oom_cause().into());
+            protocol.cause = Some(crate::scope::OOM_KILL_CAUSE.into());
         }
         let after = integrity::snapshot(&prepared_repo.repository);
         interrupt::check()?;
@@ -459,37 +468,49 @@ fn prepare_branches(repository: &Path, task: &Task) -> Result<()> {
 /// `memory.events` or journal evidence. Only the outer launcher makes these,
 /// never the Trial itself.
 fn void_memory_cap(total_ms: u128) -> Output {
-    let mut output = Output::failed(total_ms, crate::scope::oom_cause());
+    let mut output = Output::failed(total_ms, crate::scope::OOM_KILL_CAUSE);
     output.outcome = Outcome::Void;
     output.void_cause = Some(VoidCause::MemoryCap);
     output
 }
 
-fn trial_command(
-    experiment: &store::Stored,
-    arm: &arms::Arm,
+/// What one Trial attempt launches: the Arm, its request, and its attempt.
+struct Attempt<'a> {
+    experiment: &'a store::Stored,
+    arm: &'a arms::Arm,
     name: Arm,
-    request: &Path,
-    signal: &Path,
-    trial: &str,
+    request: &'a Path,
+    signal: &'a Path,
+    trial: &'a str,
     attempt: usize,
-) -> Result<crate::scope::TrialLaunch> {
-    let directory = experiment.directory.join("harnesses").join(name.name());
+}
+
+fn trial_command(attempt: &Attempt<'_>, caps: &crate::scope::Caps) -> Result<crate::scope::Launch> {
+    let directory = attempt
+        .experiment
+        .directory
+        .join("harnesses")
+        .join(attempt.name.name());
     let path = std::env::join_paths(std::iter::once(directory).chain(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     )))?;
     let path = path
         .into_string()
         .map_err(|_| anyhow::anyhow!("PATH is not valid Unicode"))?;
-    let caps = crate::scope::Caps::from_config_or_env(&crate::config::UserConfig::load()?)?;
-    let request = request
+    let request = attempt
+        .request
         .to_str()
         .context("Trial request path is not valid Unicode")?;
-    let mut launched =
-        crate::scope::trial_command(&arm.binary, &["--trial", request], trial, attempt, &caps)?;
+    let mut launched = crate::scope::trial_command(
+        &attempt.arm.binary,
+        &["--trial", request],
+        attempt.trial,
+        attempt.attempt,
+        caps,
+    )?;
     launched
         .command
-        .env(limits::SIGNAL_ENV, signal)
+        .env(limits::SIGNAL_ENV, attempt.signal)
         .env("PATH", path);
     Ok(launched)
 }

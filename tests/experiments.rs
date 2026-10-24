@@ -5,24 +5,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use serde_json::{Value, json};
-use support::Scenario;
+use support::{Scenario, scope_available};
 
 /// Trials run without their sandbox across the Experiment suite, so its fake
 /// Harnesses stay observable at fixed scenario paths.
 const NO_SANDBOX: [(&str, &str); 1] = [("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")];
-
-/// Whether Trial scopes can run here: systemd-run plus a reachable user
-/// manager, which logged-out launchers need lingering for.
-fn scope_available() -> bool {
-    std::process::Command::new("systemd-run")
-        .arg("--version")
-        .output()
-        .is_ok_and(|output| output.status.success())
-        && std::process::Command::new("systemctl")
-            .args(["--user", "show", "-p", "SystemState", "--value"])
-            .output()
-            .is_ok_and(|output| output.status.success())
-}
 
 #[path = "experiments/model_graders.rs"]
 mod model_graders;
