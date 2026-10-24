@@ -15,7 +15,7 @@ use crate::trial::{Outcome, Output};
 use crate::verdict::{self, Decision, TaskScores};
 
 #[derive(Serialize, Deserialize)]
-pub(super) struct Score {
+pub(crate) struct Score {
     pub passed: bool,
     pub wrong_finding: bool,
     #[serde(default)]
@@ -47,10 +47,10 @@ impl Score {
 }
 
 #[derive(Serialize, Deserialize)]
-pub(super) struct Check {
-    command: Option<Vec<String>>,
-    passed: bool,
-    reason: String,
+pub(crate) struct Check {
+    pub command: Option<Vec<String>>,
+    pub passed: bool,
+    pub reason: String,
 }
 
 pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) -> Result<Score> {
@@ -191,19 +191,19 @@ mod tests {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub(super) struct Verdict {
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Verdict {
     pub verdict: Conclusion,
     #[serde(default)]
     pub provisional_verdict: Option<Decision>,
-    suites: BTreeMap<String, verdict::Verdict>,
+    pub suites: BTreeMap<String, verdict::Verdict>,
     #[serde(default)]
     borderline_trials: usize,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub(super) enum Conclusion {
+pub(crate) enum Conclusion {
     Pass,
     Fail,
     Inconclusive,

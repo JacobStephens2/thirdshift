@@ -15,22 +15,31 @@ use crate::trial::Outcome;
 pub(super) type History = BTreeMap<String, Vec<Recheck>>;
 
 #[derive(Clone, Serialize, Deserialize)]
-pub(super) struct Recheck {
+pub(crate) struct Recheck {
     pub passed: bool,
     pub reason: String,
     pub wrong_finding: Option<bool>,
-    recorded_at: String,
+    pub recorded_at: String,
 }
 
-#[derive(Serialize, Deserialize)]
-pub(super) struct Pending {
-    id: String,
-    suite: String,
-    task: String,
-    arm: Arm,
-    trial: usize,
-    borderline: bool,
-    decisive: bool,
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Pending {
+    pub id: String,
+    pub suite: String,
+    pub task: String,
+    pub arm: Arm,
+    pub trial: usize,
+    pub borderline: bool,
+    pub decisive: bool,
+    #[serde(default)]
+    pub decisive_flips: Vec<Flip>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Flip {
+    Passed,
+    WrongFinding,
 }
 
 impl std::fmt::Display for Pending {
@@ -87,6 +96,7 @@ pub(super) fn assess(
         }
         let borderline = score.borderline;
         let mut decisive = false;
+        let mut decisive_flips = Vec::new();
         for wrong_finding in [false, true] {
             let score = results[index]
                 .score
@@ -101,7 +111,11 @@ pub(super) fn assess(
             flip(score, wrong_finding);
             if flipped? != original {
                 decisive = true;
-                break;
+                decisive_flips.push(if wrong_finding {
+                    Flip::WrongFinding
+                } else {
+                    Flip::Passed
+                });
             }
         }
         if borderline || decisive {
@@ -114,6 +128,7 @@ pub(super) fn assess(
                 trial: result.trial,
                 borderline,
                 decisive,
+                decisive_flips,
             });
         }
     }
