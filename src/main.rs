@@ -32,12 +32,14 @@ mod progress;
 mod prompt;
 #[cfg(test)]
 mod prompts_page;
+mod proxy;
 mod pull_request;
 mod ready;
 mod recovery;
 mod resend_key;
 mod run;
 mod run_ending;
+mod sandbox;
 mod scoring;
 mod security;
 mod session;

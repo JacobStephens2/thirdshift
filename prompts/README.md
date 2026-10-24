@@ -20,6 +20,7 @@ With `harness codex`, each session runs `codex exec --json --dangerously-bypass-
 
 | Prompt | When it is sent | File |
 | --- | --- | --- |
+| Scoring Grader | A Scoring run asks an independent Model to score one blind packet on Correct, Scoped, Tested, Honest and Standards. | [scoring-grader.md](scoring-grader.md) |
 | Fresh | Starts the implement session, which goes on to review and open the pull request, when the Run starts a new Issue branch. | [fresh.md](fresh.md) |
 | Continuation, with no pull request | Starts the implement session when the Run is a Continuation of an Issue branch that has no pull request. | [continuation.md](continuation.md) |
 | Continuation, with an open pull request | Starts the implement session when the Run is a Continuation of an Issue branch whose pull request is open. | [continuation-pr.md](continuation-pr.md) |

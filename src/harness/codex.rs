@@ -7,6 +7,7 @@ pub(crate) mod stream;
 pub use catalog::Catalog;
 
 use std::path::Path;
+mod limits;
 
 use anyhow::Result;
 

@@ -140,6 +140,9 @@ impl Dialect {
             });
         }
         if matches!(self, Self::Claude(_)) {
+            if super::limits::claude(event) {
+                evidence.push(Evidence::PlanLimit);
+            }
             if event["type"] == "result"
                 && let Some(usage) = event["modelUsage"].as_object()
             {

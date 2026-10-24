@@ -267,6 +267,25 @@ pub fn root(repo: &Repo) -> PathBuf {
     record().root(repo)
 }
 
+/// Resolve a locally retained Run by its pull request, including child Runs.
+pub(crate) fn record_for_pull_request(root: &Path, url: &str) -> anyhow::Result<Option<PathBuf>> {
+    fn find(command: &reading::Command, url: &str) -> Option<PathBuf> {
+        if command.record.pull_request.as_deref() == Some(url) {
+            return Some(command.record_path.clone());
+        }
+        command
+            .children
+            .iter()
+            .chain(&command.dispatched)
+            .find_map(|child| find(child, url))
+    }
+    let snapshot = reading::Snapshot::load(root, chrono::Local::now())?;
+    Ok(snapshot.entries().iter().find_map(|entry| match entry {
+        reading::Entry::Record(command) => find(command, url),
+        reading::Entry::History(_) => None,
+    }))
+}
+
 /// The command whose folder holds this process's Session logs.
 pub fn command_kind() -> CommandKind {
     record().command_kind()

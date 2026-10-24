@@ -25,6 +25,7 @@ use crate::prompt;
 use crate::skills;
 
 pub mod kind;
+pub(crate) mod limits;
 pub mod recording;
 mod review_reports;
 pub(crate) mod trace;
@@ -496,6 +497,7 @@ impl Outside for OnMachine {
             recording::Input {
                 prompt,
                 stdin: invocation.stdin.as_deref(),
+                ..Default::default()
             },
             log,
             interpretation,

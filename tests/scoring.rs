@@ -7,6 +7,9 @@ use support::Scenario;
 
 const LOGS: &str = "home/.thirdshift/logs/JacobStephens2/thirdshift/commands/scoring";
 
+#[path = "scoring/grading.rs"]
+mod grading;
+
 #[test]
 fn packet_diff_preserves_trailing_whitespace_in_the_last_changed_line() {
     let scenario = scenario();
@@ -237,7 +240,8 @@ fn packet_diff_excludes_changes_already_on_the_pull_requests_base() {
 
 fn scenario() -> Scenario {
     let scenario = Scenario::new();
-    scenario.user_config_is("[scoring]\nowners = [\"acme\"]\nsample_size = 3\n");
+    scenario.user_config_is("[scoring]\nowners = [\"acme\"]\nsample_size = 3\nmodel = 'grader-primary'\nfallback_model = 'grader-secondary'\n");
+    grading::grader(&scenario);
     scenario
 }
 
@@ -419,8 +423,9 @@ fn sample_spreads_across_harness_and_model_pairs_and_excludes_security_fixes() {
     let scenario = scenario();
     // Both sampled repositories use this fixture's local origin.
     scenario.set_origin_url("https://github.com/other/repository.git");
-    scenario
-        .user_config_is("[scoring]\nowners = [\"acme\", \"other\", \"acme\"]\nsample_size = 3\n");
+    scenario.user_config_is(
+        "[scoring]\nowners = [\"acme\", \"other\", \"acme\"]\nsample_size = 3\nmodel = 'grader'\n",
+    );
     let mut state = scenario.gh_state();
     let mut prs: Vec<Value> = (1..=12)
         .map(|n| pr(n, "acme/widgets", "claude", "opus", false))
@@ -563,7 +568,8 @@ fn a_failed_scoring_search_lands_in_needs_you_and_advances_no_window() {
 #[test]
 fn search_reads_every_page_before_drawing_the_sample() {
     let scenario = scenario();
-    scenario.user_config_is("[scoring]\nowners = [\"acme\"]\nsample_size = 200\n");
+    scenario
+        .user_config_is("[scoring]\nowners = [\"acme\"]\nsample_size = 200\nmodel = 'grader'\n");
     let mut state = scenario.gh_state();
     state["scoring_prs"] = (1..=105)
         .map(|number| pr(number, "acme/widgets", "claude", "opus", false))
@@ -638,8 +644,10 @@ gh pr create --base main --head issue-7 --title 'Add feature' --body 'Closes #7'
     let mut state = scenario.gh_state();
     let mut candidate = pr(1, "acme/widgets", "claude", "opus", false);
     candidate["body"] = state["prs"][0]["body"].clone();
+    candidate["url"] = state["prs"][0]["url"].clone();
     state["scoring_prs"] = serde_json::json!([candidate]);
     scenario.write_gh_state(&state);
+    grading::grader(&scenario);
     let result = scenario.run(&["score"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let retained = weeks(&scenario);
@@ -649,6 +657,11 @@ gh pr create --base main --head issue-7 --title 'Add feature' --body 'Closes #7'
     assert_eq!(sample[0]["harness_version"], "9.8.7");
     assert_eq!(sample[0]["model"], "default model");
     assert_eq!(sample[0]["effort"], "default effort");
+    let record = sample[0]["command_record"]
+        .as_str()
+        .expect("local Command record link");
+    let record: Value = serde_json::from_slice(&std::fs::read(record).unwrap()).unwrap();
+    assert_eq!(record["pull_request"], sample[0]["url"]);
 }
 
 #[test]

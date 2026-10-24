@@ -1,6 +1,7 @@
 //! Interpret a Harness session once, including optional retained records.
 
 use std::fmt;
+use std::path::Path;
 use std::process::{ExitStatus, Output};
 
 use anyhow::{Result, anyhow};
@@ -13,6 +14,7 @@ pub(super) use stream::Stream;
 pub mod event;
 #[cfg(test)]
 mod event_tests;
+pub(crate) mod limits;
 mod models;
 mod security;
 pub use security::SafeguardRefusal;
@@ -28,6 +30,7 @@ pub struct Interpretation {
     models: models::Models,
     events: Option<Vec<event::Event>>,
     work_started: bool,
+    plan_limit_reached: bool,
 }
 
 /// Reporting survives ordinary failures; only success supplies Resume facts.
@@ -110,6 +113,10 @@ pub(super) struct Facts {
 pub(super) trait Decoder: Send {
     fn condense(&mut self, raw: &str) -> StreamUpdate;
     fn complete(self: Box<Self>) -> Facts;
+    fn limit_records(&mut self) -> Vec<String> {
+        Vec::new()
+    }
+    fn set_home(&mut self, _home: &Path) {}
 }
 
 /// Live protocol knowledge stays in the decoder, including evidence from
@@ -129,6 +136,7 @@ pub struct Decoded {
 }
 
 pub(super) enum Evidence {
+    PlanLimit,
     WorkStarted,
     ObservedModel { name: String, scope: ModelScope },
     RequestedModelFallback,
@@ -225,6 +233,7 @@ impl Interpretation {
             models: models::Models::default(),
             events: None,
             work_started: false,
+            plan_limit_reached: false,
         }
     }
 
@@ -252,6 +261,18 @@ impl Interpretation {
         self.models.names().to_vec()
     }
 
+    pub fn plan_limit_reached(&self) -> bool {
+        self.plan_limit_reached
+    }
+
+    pub fn limit_records(&mut self) -> Vec<String> {
+        self.decoder.limit_records()
+    }
+
+    pub fn set_home(&mut self, home: &Path) {
+        self.decoder.set_home(home);
+    }
+
     /// Unknown or malformed lines produce no progress, never an error.
     pub fn condense(&mut self, raw: &str) -> Vec<String> {
         let decoded = self.read(raw);
@@ -275,6 +296,9 @@ impl Interpretation {
         } = self.decoder.condense(raw);
         self.work_started |= events.iter().any(work_started);
         for fact in evidence {
+            if matches!(fact, Evidence::PlanLimit) {
+                self.plan_limit_reached = true;
+            }
             if matches!(fact, Evidence::WorkStarted) {
                 self.work_started = true;
             }

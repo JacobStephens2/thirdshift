@@ -3,8 +3,12 @@
 //! The captured owning Command also governs child inheritance and collection.
 
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read, Write};
+#[cfg(test)]
+use std::io::{BufRead, BufReader};
+use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
+use std::process::ChildStdout;
 use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -28,6 +32,7 @@ pub struct Recording {
 pub struct Input<'a> {
     pub prompt: &'a str,
     pub stdin: Option<&'a str>,
+    pub stop_at_limit: bool,
 }
 
 impl Recording {
@@ -118,6 +123,7 @@ impl Recording {
         let (kind_owned, log_owned) = (kind.to_string(), log.to_path_buf());
         let choice_owned = choice.clone();
         let recording = self.clone();
+        let stop_at_limit = input.stop_at_limit;
         let executed = process::streaming(
             adapter,
             command,
@@ -131,6 +137,7 @@ impl Recording {
                     &log_owned,
                     stream,
                     &streaming_trace,
+                    stop_at_limit,
                 );
                 // The process owner joins this reader before returning, including
                 // on interruption, when it deliberately suppresses state recovery.
@@ -292,33 +299,86 @@ struct SessionModels {
 /// condenses to, until the stream ends.
 fn follow(
     kind: &str,
-    stream: impl Read,
+    stream: ChildStdout,
+    log_file: &mut File,
+    log: &Path,
+    progress: &mut Interpretation,
+    trace: &Mutex<super::trace::Trace>,
+    stop_at_limit: bool,
+) -> Result<()> {
+    let mut stream = stream;
+    let mut pending = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        let mut descriptor = libc::pollfd {
+            fd: stream.as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: the descriptor belongs to the held stream for this entire poll.
+        let ready = unsafe { libc::poll(&mut descriptor, 1, if stop_at_limit { 100 } else { -1 }) };
+        if ready < 0 {
+            let error = std::io::Error::last_os_error();
+            if error.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            return Err(error.into());
+        }
+        let mut eof = false;
+        if ready > 0 {
+            let count = stream
+                .read(&mut buffer)
+                .context("could not read the session stream")?;
+            eof = count == 0;
+            pending.extend_from_slice(&buffer[..count]);
+            let complete = if eof {
+                pending.len()
+            } else {
+                pending
+                    .iter()
+                    .rposition(|byte| *byte == b'\n')
+                    .map_or(0, |index| index + 1)
+            };
+            for line in pending[..complete].split_inclusive(|byte| *byte == b'\n') {
+                record_line(kind, line, log_file, log, progress, trace)?;
+                if stop_at_limit && progress.plan_limit_reached() {
+                    return Err(super::limits::Reached.into());
+                }
+            }
+            pending.drain(..complete);
+        }
+        if stop_at_limit {
+            for raw in progress.limit_records() {
+                record_line(kind, raw.as_bytes(), log_file, log, progress, trace)?;
+            }
+            if progress.plan_limit_reached() {
+                return Err(super::limits::Reached.into());
+            }
+        }
+        if eof {
+            return Ok(());
+        }
+    }
+}
+
+fn record_line(
+    kind: &str,
+    line: &[u8],
     log_file: &mut File,
     log: &Path,
     progress: &mut Interpretation,
     trace: &Mutex<super::trace::Trace>,
 ) -> Result<()> {
-    let mut stream = BufReader::new(stream);
-    let mut line = Vec::new();
-    loop {
-        line.clear();
-        if stream
-            .read_until(b'\n', &mut line)
-            .context("could not read the session stream")?
-            == 0
-        {
-            return Ok(());
-        }
-        log_file
-            .write_all(&line)
-            .with_context(|| format!("could not write {}", log.display()))?;
-        let raw = String::from_utf8_lossy(&line);
-        let decoded = progress.decode(&raw);
-        trace.lock().unwrap().record(&raw, &decoded.events)?;
-        for condensed in decoded.progress {
-            progress::step(format_args!("{kind}: {condensed}"));
-        }
+    log_file
+        .write_all(line)
+        .with_context(|| format!("could not write {}", log.display()))?;
+    let raw = String::from_utf8_lossy(line);
+    let decoded = progress.decode(&raw);
+    trace.lock().unwrap().record(&raw, &decoded.events)?;
+    for condensed in decoded.progress {
+        progress::step(format_args!("{kind}: {condensed}"));
     }
+    Ok(())
 }
 
 /// A Session trace that cannot be finished costs evidence, never the session.
