@@ -96,3 +96,48 @@ fn recording_clamps_backwards_ends_projects_the_latest_outcome_and_closes_open_c
         })
     );
 }
+
+#[test]
+fn a_tool_span_keeps_the_name_of_its_first_observation() {
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("7-20261003T120000-0400-implement.jsonl");
+    let mut trace = Trace::create(
+        &log,
+        "implement",
+        &Choice::default(),
+        "prompt",
+        Context::of_session(&log),
+        &std::process::Command::new("true"),
+        None,
+    )
+    .unwrap();
+    trace
+        .record_at(
+            b"{}",
+            &[Event::ToolCallStarted {
+                id: "t".into(),
+                parent_id: None,
+                tool: "Read".into(),
+                input: json!({}),
+            }],
+            1_000,
+        )
+        .unwrap();
+    trace
+        .record_at(
+            b"{}",
+            &[Event::ToolCallEnded {
+                id: "t".into(),
+                parent_id: None,
+                tool: "read_file".into(),
+                input: json!({}),
+                result: json!(""),
+                outcome: Outcome::Succeeded,
+                amended: false,
+            }],
+            2_000,
+        )
+        .unwrap();
+    let flushed = spans(&log.with_extension("spans.jsonl"));
+    assert_eq!(flushed[0].name, "execute_tool Read");
+}

@@ -334,15 +334,9 @@ impl Trace {
             trace_id: Some(self.context.trace),
             span_id: Some(call.span),
             parent_span_id: Some(call.parent_span),
-            name: match attributes
-                .iter()
-                .find(|attr| attr.key == "gen_ai.tool.name")
-                .and_then(|attr| attr.value.as_ref())
-            {
-                Some(AnyValue::String(tool)) if call.kind == SpanKind::Tool => {
-                    format!("execute_tool {tool}")
-                }
-                _ => format!("{} {}", call.kind, call.id),
+            name: match &call.tool {
+                Some(tool) => format!("execute_tool {tool}"),
+                None => format!("{} {}", call.kind, call.id),
             },
             kind: if call.kind == SpanKind::Model { 3 } else { 1 },
             start_time_unix_nano: start,

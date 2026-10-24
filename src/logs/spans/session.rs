@@ -132,7 +132,7 @@ pub(super) fn read(path: &Path, context: &Context, template: &Span) -> Result<Op
         harness.as_ref().and_then(Value::as_str),
         Some("claude" | "grok")
     );
-    let mut calls = Calls::new(session_bytes, excludes_cache, retained);
+    let mut replay = Calls::new(session_bytes, excludes_cache, retained);
     // Evidence the reader adds to calls: resource attributes and estimated times.
     let mut evidence = BTreeMap::<String, BTreeMap<String, Value>>::new();
     let mut first_record = None::<f64>;
@@ -176,7 +176,7 @@ pub(super) fn read(path: &Path, context: &Context, template: &Span) -> Result<Op
                     let Ok(event) = serde_json::from_value::<Event>(event) else {
                         continue;
                     };
-                    let Some(applied) = calls.apply(&event, time) else {
+                    let Some(applied) = replay.apply(&event, time) else {
                         if matches!(
                             event,
                             Event::Usage {
@@ -190,16 +190,16 @@ pub(super) fn read(path: &Path, context: &Context, template: &Span) -> Result<Op
                         }
                         continue;
                     };
-                    let evidence = evidence.entry(hex(applied.call.span)).or_default();
-                    evidence.extend(resource_attrs.clone());
+                    let call_evidence = evidence.entry(hex(applied.call.span)).or_default();
+                    call_evidence.extend(resource_attrs.clone());
                     if attrs.get("thirdshift.time.estimated") == Some(&Value::Bool(true)) {
-                        evidence.insert("thirdshift.time.estimated".into(), Value::Bool(true));
+                        call_evidence.insert("thirdshift.time.estimated".into(), Value::Bool(true));
                     }
                 }
             }
         }
     }
-    let mut calls: BTreeMap<_, _> = calls
+    let mut calls: BTreeMap<_, _> = replay
         .calls()
         .map(|call| {
             let mut span = template.clone();

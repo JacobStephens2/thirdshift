@@ -26,6 +26,8 @@ pub(crate) struct Call {
     pub kind: SpanKind,
     pub id: String,
     pub parent_id: Option<String>,
+    /// A tool call's tool, as first observed.
+    pub tool: Option<String>,
     pub started: Option<u64>,
     pub ended: Option<u64>,
     pub completed: bool,
@@ -36,8 +38,11 @@ pub(crate) struct Call {
     pub attributes: Vec<KeyValue>,
 }
 
+/// The call an event resolved to, as it stands after that event.
 pub(crate) struct Applied {
     pub call: Call,
+    /// Whether this event completed the call for the first time. Repeated
+    /// completions and late amendments refine it without completing it again.
     pub first_completion: bool,
 }
 
@@ -96,6 +101,7 @@ impl Calls {
             kind: fact.kind,
             id: fact.id.to_owned(),
             parent_id: fact.parent.map(str::to_owned),
+            tool: fact.tool.map(str::to_owned),
             started: time,
             ended: None,
             completed: false,
@@ -126,6 +132,7 @@ impl Calls {
         self.locations.get(id).map(|key| self.identity(key))
     }
 
+    /// Every call observed so far, in causal-key order.
     pub fn calls(&self) -> impl Iterator<Item = &Call> {
         self.calls.values()
     }
@@ -161,12 +168,17 @@ struct Fact<'a> {
     kind: SpanKind,
     id: &'a str,
     parent: Option<&'a str>,
+    tool: Option<&'a str>,
     completion: Option<Outcome>,
 }
 
 impl<'a> Fact<'a> {
     fn of(event: &'a Event) -> Option<Self> {
         use Event::*;
+        let tool = match event {
+            ToolCallStarted { tool, .. } | ToolCallEnded { tool, .. } => Some(tool.as_str()),
+            _ => None,
+        };
         let (kind, id, parent, completion) = match event {
             ModelCallStarted { id, parent_id, .. } => {
                 (SpanKind::Model, id, parent_id.as_deref(), None)
@@ -198,6 +210,7 @@ impl<'a> Fact<'a> {
             kind,
             id,
             parent,
+            tool,
             completion,
         })
     }

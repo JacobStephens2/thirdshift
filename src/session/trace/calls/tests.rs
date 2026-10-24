@@ -205,7 +205,7 @@ fn unknown_times_stay_unknown_and_the_first_known_completion_time_wins() {
         .apply(&tool_ended("t", Outcome::Succeeded, false), Some(3))
         .unwrap()
         .call;
-    // Raw facts are kept even when completion precedes the start.
+    // A later completion, even one clocked earlier, keeps the first known end.
     assert_eq!((call.started, call.ended), (None, Some(7)));
 }
 
@@ -268,4 +268,44 @@ fn closing_completes_only_unfinished_calls_without_an_outcome() {
     let done = calls.calls().find(|call| call.id == "done").unwrap();
     assert_eq!(done.ended, Some(2));
     assert!(calls.close(11).is_empty());
+}
+
+#[test]
+fn a_tool_keeps_its_first_observed_name_while_attributes_follow_the_latest() {
+    let mut calls = calls();
+    calls.apply(&tool_started("t", None), Some(1));
+    let mut renamed = tool_ended("t", Outcome::Succeeded, false);
+    if let Event::ToolCallEnded { tool, .. } = &mut renamed {
+        *tool = "read_file".into();
+    }
+    let call = calls.apply(&renamed, Some(2)).unwrap().call;
+    assert_eq!(call.tool.as_deref(), Some("Bash"));
+    assert_eq!(text(&call, "gen_ai.tool.name"), Some("read_file"));
+}
+
+#[test]
+fn an_end_only_subagent_completion_takes_its_retained_identity() {
+    let retained = Id([3; 8]);
+    let mut calls = Calls::new(
+        SESSION,
+        false,
+        [Retained {
+            kind: SpanKind::Agent,
+            id: "solo",
+            parent: None,
+            span: retained,
+        }],
+    );
+    let call = calls
+        .apply(
+            &Event::SubagentEnded {
+                id: "solo".into(),
+                outcome: Outcome::Succeeded,
+                result: json!(null),
+            },
+            Some(4),
+        )
+        .unwrap()
+        .call;
+    assert_eq!((call.span, call.parent_span), (retained, SESSION));
 }
