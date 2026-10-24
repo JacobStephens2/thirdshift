@@ -220,6 +220,10 @@ impl CodexProgress {
 }
 
 impl Decoder for CodexProgress {
+    fn set_home(&mut self, home: &Path) {
+        self.limits.set_home(home);
+    }
+
     fn limit_records(&mut self) -> Vec<String> {
         self.limits.records(self.session_id.as_deref(), &self.cwd)
     }

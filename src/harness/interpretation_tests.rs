@@ -1,5 +1,6 @@
 use super::*;
 use std::os::unix::process::ExitStatusExt;
+use std::path::Path;
 
 #[test]
 fn plan_limit_stream_evidence_is_live_and_does_not_fail_ordinary_sessions() {

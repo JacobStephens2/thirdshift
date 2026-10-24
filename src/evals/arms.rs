@@ -2,7 +2,6 @@
 
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -93,11 +92,7 @@ pub(super) fn prepare(repository: &Path, arms: [Requested; 2], record: &Path) ->
 
 pub(super) fn fixed_harness(harness: Harness) -> Result<FixedHarness> {
     let name = harness.name();
-    let path = std::env::var_os("PATH")
-        .into_iter()
-        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
-        .map(|directory| directory.join(name))
-        .find(|path| executable(path))
+    let path = process::find_executable(name)
         .with_context(|| format!("Arm Harness {name} is not on PATH"))?
         .canonicalize()?;
     let output = checked(
@@ -124,11 +119,6 @@ pub(super) fn fixed_harness(harness: Harness) -> Result<FixedHarness> {
     })
 }
 
-fn executable(path: &Path) -> bool {
-    path.metadata()
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
-}
-
 pub(super) fn build(repository: &Path, builds: &Path, commit: &str) -> Result<PathBuf> {
     let git = crate::git::Git::new(repository);
     if git.run(&["--no-replace-objects", "cat-file", "-t", commit])? != "commit" {
@@ -138,7 +128,7 @@ pub(super) fn build(repository: &Path, builds: &Path, commit: &str) -> Result<Pa
     lock.lock()?;
     let cached = builds.join(commit);
     let binary = cached.join("thirdshift");
-    if executable(&binary) {
+    if process::is_executable(&binary) {
         return Ok(binary);
     }
     if cached.try_exists()? {
@@ -177,7 +167,7 @@ pub(super) fn build(repository: &Path, builds: &Path, commit: &str) -> Result<Pa
     result.with_context(|| format!("could not build Arm {commit}"))?;
     cleanup?;
     let built = target.join("release/thirdshift");
-    if !executable(&built) {
+    if !process::is_executable(&built) {
         bail!(
             "Arm build {commit} produced no executable at {}",
             built.display()

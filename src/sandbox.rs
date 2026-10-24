@@ -192,7 +192,7 @@ pub(crate) fn for_session(
     .map(Some)
 }
 
-fn disabled() -> bool {
+pub(crate) fn disabled() -> bool {
     std::env::var_os("THIRDSHIFT_TRIAL_NO_SANDBOX").is_some_and(|flag| !flag.is_empty())
 }
 
@@ -460,36 +460,23 @@ impl Launch {
 
 /// Find bwrap on `PATH`, if it is executable.
 pub(crate) fn find_bwrap() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|directory| directory.join("bwrap"))
-        .find(|path| is_executable(path))
+    crate::process::find_executable("bwrap")
 }
 
 /// Resolve the Harness CLI named `name` the way a session launch would: the
 /// first executable on `PATH`, canonicalized so the sandbox binds its real
 /// file rather than a link.
 pub(crate) fn resolve_binary(name: &str) -> Result<PathBuf> {
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let found = std::env::split_paths(&path)
-        .map(|directory| directory.join(name))
-        .find(|path| is_executable(path))
-        .ok_or_else(|| {
-            anyhow::Error::new(Unavailable {
-                diagnostic: format!("{name} is not on PATH"),
-            })
-        })?;
+    let found = crate::process::find_executable(name).ok_or_else(|| {
+        anyhow::Error::new(Unavailable {
+            diagnostic: format!("{name} is not on PATH"),
+        })
+    })?;
     found.canonicalize().map_err(|error| {
         anyhow::Error::new(Unavailable {
             diagnostic: format!("could not resolve {}: {error:#}", found.display()),
         })
     })
-}
-
-fn is_executable(path: &Path) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    path.metadata()
-        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 /// The proxy port inside the sandbox: the relay listens on loopback here,
@@ -820,7 +807,7 @@ fn tool_bin_dirs_on(path_dirs: &[PathBuf], roots: &[PathBuf]) -> Vec<PathBuf> {
         let Some(path) = path_dirs
             .iter()
             .map(|directory| directory.join(tool))
-            .find(|path| is_executable(path))
+            .find(|path| crate::process::is_executable(path))
         else {
             continue;
         };
@@ -856,6 +843,16 @@ fn home_into(
         );
     }
 
+    // These Harnesses read the same production user instructions. Bind only
+    // instruction and hook paths, leaving their remembered sessions behind.
+    if matches!(
+        request.harness,
+        Harness::Claude | Harness::Grok | Harness::Muse
+    ) {
+        for path in [".claude/CLAUDE.md", ".claude/rules", ".claude/hooks"] {
+            user_file(request, binds, path);
+        }
+    }
     let mut guard = None;
     match request.harness {
         Harness::Claude => {
@@ -865,7 +862,6 @@ fn home_into(
                 environment.set_str(CLAUDE_TOKEN_ENV, token);
             }
             user_file(request, binds, ".claude.json");
-            user_file(request, binds, ".claude/CLAUDE.md");
             user_file(request, binds, ".claude/settings.json");
         }
         Harness::Codex => {
@@ -914,10 +910,14 @@ fn home_into(
         }
         Harness::Grok => {
             guard = Some(grok_into(request, binds)?);
+            for path in [".grok/settings.json", ".grok/rules", ".grok/hooks"] {
+                user_file(request, binds, path);
+            }
         }
         Harness::OpenCode => {
             opencode_into(request, environment)?;
             user_file(request, binds, ".config/opencode/opencode.json");
+            user_file(request, binds, ".config/opencode/AGENTS.md");
         }
     }
     Ok(guard)
@@ -1314,6 +1314,63 @@ mod tests {
             .current_dir(repository)
             .output()
             .expect("sandboxed session did not run")
+    }
+
+    #[test]
+    fn a_trial_keeps_production_user_rules() {
+        if !bwrap_or_skip("production user rules") {
+            return;
+        }
+        for harness in [
+            Harness::Claude,
+            Harness::Grok,
+            Harness::Muse,
+            Harness::OpenCode,
+        ] {
+            let layout = Layout::new();
+            let mut paths = if harness == Harness::OpenCode {
+                vec![".config/opencode/AGENTS.md"]
+            } else {
+                vec![
+                    ".claude/CLAUDE.md",
+                    ".claude/rules/fixture.md",
+                    ".claude/hooks/fixture.sh",
+                ]
+            };
+            if harness == Harness::Grok {
+                paths.push(".grok/rules/fixture.md");
+                let login = trials_home(&layout.home);
+                fs::create_dir_all(&login).unwrap();
+                fs::write(login.join("auth.json"), "{}").unwrap();
+            }
+            for path in &paths {
+                let source = layout.home.join(path);
+                fs::create_dir_all(source.parent().unwrap()).unwrap();
+                fs::write(source, "production-rule\n").unwrap();
+            }
+            let script = paths
+                .iter()
+                .map(|path| format!("cat \"$HOME/{path}\""))
+                .collect::<Vec<_>>()
+                .join(" && ");
+            let secrets = Secrets {
+                opencode_api_key: Some("fixture-key".into()),
+                ..Secrets::default()
+            };
+            let model = (harness == Harness::OpenCode).then_some("anthropic/claude");
+            let request = layout.request(harness, &script, secrets, model, &[]);
+            let prepared = prepare(&request).unwrap();
+            let output = run_script(&prepared, &layout.repo);
+            assert!(
+                output.status.success(),
+                "the {harness:?} Trial lost production rules: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout),
+                "production-rule\n".repeat(paths.len())
+            );
+        }
     }
 
     #[test]

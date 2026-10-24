@@ -145,7 +145,7 @@ fn override_or(env: &str, configured: &str) -> Result<String> {
 /// Whether `systemd-run --user --scope` can reach this user's manager here.
 /// Cron and other logged-out launchers need lingering for this to hold.
 pub fn available() -> bool {
-    if find_systemd_run().is_none() {
+    if crate::process::find_executable("systemd-run").is_none() {
         return false;
     }
     manager_command("systemctl")
@@ -166,21 +166,6 @@ fn manager_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
         command.env("XDG_RUNTIME_DIR", runtime);
     }
     command
-}
-
-/// Find `systemd-run` on `PATH`, if it is executable.
-fn find_systemd_run() -> Option<PathBuf> {
-    let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path)
-        .map(|directory| directory.join("systemd-run"))
-        .find(|candidate| {
-            candidate.is_file() && {
-                use std::os::unix::fs::PermissionsExt;
-                candidate
-                    .metadata()
-                    .is_ok_and(|metadata| metadata.permissions().mode() & 0o111 != 0)
-            }
-        })
 }
 
 static UNIT_COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -346,7 +331,8 @@ fn control_group(unit: &str) -> Option<String> {
 fn scope_base(unit: &str, caps: &Caps) -> Command {
     // Resolve before a sandbox applies its own PATH to the command. That
     // PATH belongs to the Harness, not to the outer scope launcher.
-    let program = find_systemd_run().unwrap_or_else(|| PathBuf::from("systemd-run"));
+    let program = crate::process::find_executable("systemd-run")
+        .unwrap_or_else(|| PathBuf::from("systemd-run"));
     let mut command = manager_command(program);
     command.args([
         "--user",

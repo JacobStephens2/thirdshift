@@ -506,7 +506,12 @@ impl Outside for OnMachine {
             }
             _ => (&self.harness, self.adapter),
         };
-        let interpretation = adapter.interpretation(&self.worktree, prompt);
+        let mut interpretation = adapter.interpretation(&self.worktree, prompt);
+        if let Some(launch) = &self.sandbox
+            && let Some((_, home)) = launch.env.iter().find(|(name, _)| name == "HOME")
+        {
+            interpretation.set_home(Path::new(home));
+        }
         let (mut invocation, interpretation) = match purpose {
             Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview => (
                 adapter.security_session(

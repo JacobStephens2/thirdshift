@@ -3,7 +3,7 @@
 
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -35,6 +35,18 @@ impl Default for Reader {
 }
 
 impl Reader {
+    pub(super) fn set_home(&mut self, home: &Path) {
+        let root = home.join(".codex");
+        if self.root.as_ref() == Some(&root) {
+            return;
+        }
+        self.root = Some(root);
+        self.file = None;
+        self.partial.clear();
+        self.verified = false;
+        self.rejected = false;
+    }
+
     pub(super) fn records(&mut self, id: Option<&str>, cwd: &str) -> Vec<String> {
         let Some(id) = id.filter(|id| !id.is_empty() && !id.contains(['/', '\\']) && *id != "..")
         else {

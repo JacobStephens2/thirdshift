@@ -45,6 +45,8 @@
 # PR is opened. A release already tagged only resumes the release workflow.
 # Before the branch exists, a local Git ref pins the content commit so a
 # restart keeps the same Candidate even if main advances during interruption.
+# If main gains different content after that selection, the script refuses
+# to merge or tag it under the old Experiment; choose a fresh release version.
 #
 # Prints a progress line on stderr for each step, with the release workflow
 # run's URL once it waits for that run, and the GitHub Release's URL last.
@@ -92,6 +94,7 @@ main() {
 		if [ -z "$head" ]; then
 			commit_bump
 			write_summary "nothing was pushed"
+			validate_main_content
 			git push --quiet origin "$head:refs/heads/$branch"
 			git update-ref -d "refs/thirdshift/release-candidates/$version"
 		else
@@ -117,6 +120,11 @@ main() {
 		;;
 	esac
 
+	# A merge can race the last main check, or have completed before a resume.
+	# Never publish a tree containing changes outside the measured Candidate.
+	if [ "$(git rev-parse "$merge^{tree}")" != "$(git rev-parse "$head^{tree}")" ]; then
+		refuse "the release merge contains content absent from its measured Candidate; no tag was pushed"
+	fi
 	git push --quiet origin "$merge:refs/tags/$tag"
 	progress "tagged $tag on ${merge:0:7} and pushed the tag"
 	wait_for_release
@@ -305,10 +313,21 @@ wait_and_merge() {
 		exit 1
 	fi
 
+	validate_main_content
 	gh pr merge "$url" --merge --match-head-commit "$head" >/dev/null
 	fetch_main
 	merge=$(merge_commit_of "$head")
 	progress "merged $url as ${merge:0:7}"
+}
+
+# validate_main_content
+# A version-only merge must retain exactly the measured Candidate's content.
+# Recheck after waiting too; main may move while the Experiment or CI runs.
+validate_main_content() {
+	fetch_main
+	if [ "$(bump_tree origin/main)" != "$(git rev-parse "$head^{tree}")" ]; then
+		refuse "main contains content absent from the measured Candidate; choose a fresh release version to measure current main"
+	fi
 }
 
 # wait_for_release

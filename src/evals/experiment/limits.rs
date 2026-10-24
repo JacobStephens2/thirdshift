@@ -17,6 +17,7 @@ pub(super) struct Monitor {
 
 struct Session {
     log: PathBuf,
+    home: PathBuf,
     file: Option<BufReader<File>>,
     partial: Vec<u8>,
     stream: Option<Interpretation>,
@@ -25,21 +26,27 @@ struct Session {
 impl Monitor {
     pub(super) fn new(output: &Path, repository: &Path, choice: &Choice) -> Self {
         Self {
-            sessions: ["trial-spec-review", "trial-spec-review-resume"]
-                .into_iter()
-                .map(|name| Session {
-                    log: output.join(format!("{name}.jsonl")),
-                    file: None,
-                    partial: Vec::new(),
-                    stream: Some(
-                        choice
-                            .harness
-                            .adapter()
-                            .interpretation(repository, "")
-                            .without_retained(),
-                    ),
-                })
-                .collect(),
+            sessions: [
+                "trial-spec-review",
+                "trial-spec-review-resume",
+                "trial-code-review",
+                "trial-code-review-resume",
+            ]
+            .into_iter()
+            .map(|name| Session {
+                log: output.join(format!("{name}.jsonl")),
+                home: output.join("home"),
+                file: None,
+                partial: Vec::new(),
+                stream: Some(
+                    choice
+                        .harness
+                        .adapter()
+                        .interpretation(repository, "")
+                        .without_retained(),
+                ),
+            })
+            .collect(),
         }
     }
 
@@ -97,6 +104,12 @@ impl Monitor {
 
 impl Session {
     fn read(&mut self) -> Result<()> {
+        // Older Arms create their fresh home only after the outer monitor
+        // starts. Follow it once it exists, retaining host-home observation
+        // for Arms that predate sandboxing and for pass-through launches.
+        if !crate::sandbox::disabled() && self.home.is_dir() {
+            self.stream.as_mut().unwrap().set_home(&self.home);
+        }
         if self.file.is_none() {
             match File::open(&self.log) {
                 Ok(file) => self.file = Some(BufReader::new(file)),

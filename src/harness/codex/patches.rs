@@ -121,6 +121,10 @@ impl Completion {
 }
 
 impl Retained for Completion {
+    fn set_home(&mut self, home: &Path) {
+        self.root = Some(home.join(".codex"));
+    }
+
     fn reconcile(self: Box<Self>, facts: &mut Facts) -> Result<()> {
         if let Some(amendments) = self.amendments(facts) {
             crate::harness::interpretation::event::reconcile(&mut facts.report.events, amendments);

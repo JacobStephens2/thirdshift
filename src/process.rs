@@ -2,6 +2,7 @@
 
 use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdout, Command, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, mpsc};
@@ -19,6 +20,21 @@ pub(crate) use tree::stop;
 mod faults;
 #[cfg(test)]
 mod tests;
+
+/// The first executable file on PATH; callers decide whether to canonicalize
+/// it and how a missing program affects their command.
+pub(crate) fn find_executable(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|directory| directory.join(name))
+        .find(|path| is_executable(path))
+}
+
+pub(crate) fn is_executable(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    path.metadata()
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
 
 /// Ordinary work stops for a recorded interrupt; completion work finishes
 /// independently without clearing the Command's recorded request.

@@ -47,6 +47,52 @@ fn calls(release: &Release) -> Vec<Value> {
 }
 
 #[test]
+fn a_resumed_release_cannot_ship_content_absent_from_its_experiment() {
+    let release = Release::new();
+    cargo_reports(&release, &[json!(1)]);
+    let interrupted = release.run_script("0.2.0");
+    assert!(!interrupted.status.success());
+    release.merge_pr(
+        "arrived-during-pause",
+        "Merge during release interruption",
+        "",
+    );
+    release.main_ci("completed", "success");
+    release.ci_reports(GREEN);
+    cargo_reports(&release, &[verdict("pass")]);
+    let resumed = release.run_script("0.2.0");
+    assert!(!resumed.status.success());
+    assert!(
+        stderr(&resumed).contains("main contains content absent from the measured Candidate"),
+        "{}",
+        stderr(&resumed)
+    );
+    assert!(!release.origin_branch("release-0.2.0"));
+    assert!(release.origin_tag("v0.2.0").is_none());
+}
+
+#[test]
+fn a_merged_release_cannot_tag_content_absent_from_its_experiment() {
+    let release = Release::new();
+    let head = release.push_bump("0.2.0");
+    release.open_bump_pr("0.2.0");
+    release.merge_pr("arrived-before-merge", "Merge while release PR waited", "");
+    release.merge_bump_pr("0.2.0", &head);
+    cargo_reports(&release, &[verdict("pass")]);
+
+    let resumed = release.run_script("0.2.0");
+
+    assert!(!resumed.status.success());
+    assert!(
+        stderr(&resumed)
+            .contains("release merge contains content absent from its measured Candidate"),
+        "{}",
+        stderr(&resumed)
+    );
+    assert!(release.origin_tag("v0.2.0").is_none());
+}
+
+#[test]
 fn a_passing_experiment_is_checked_before_any_push() {
     let release = Release::new();
     cargo_reports(&release, &[verdict("pass")]);

@@ -420,6 +420,42 @@ fn a_live_plan_limit_cuts_short_a_trial_and_keeps_its_evidence() {
 }
 
 #[test]
+fn sandboxed_codex_native_limits_use_the_fresh_home_without_an_override() {
+    if !bwrap_present() {
+        println!("SKIPPED (fresh-home Codex quota): bwrap unavailable");
+        return;
+    }
+    let scenario = Scenario::new();
+    let request = request(&scenario);
+    let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    document["harness"] = json!("codex");
+    fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
+    let escaped = scenario.launch_dir().join("continued-after-native-warning");
+    scenario.agent_does(&format!(r#"
+mkdir -p "$HOME/.codex/sessions/2026/10/23"
+native="$HOME/.codex/sessions/2026/10/23/rollout-fixture-fake-thread-1.jsonl"
+printf '{{"type":"session_meta","payload":{{"id":"fake-thread-1","cwd":"%s"}}}}\n' "$PWD" > "$native"
+sleep 1.1
+timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '{{"timestamp":"%s","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"secondary":{{"used_percent":85}}}}}}}}\n' "$timestamp" >> "$native"
+sleep 0.5
+touch '{}'
+"#, escaped.display()));
+    let result = run_trial(&scenario, &request, &[]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(
+        output["outcome"], "void",
+        "native quota warning was missed: {output}"
+    );
+    assert_eq!(output["void_cause"], "usage_limit");
+    assert!(
+        !escaped.exists(),
+        "Codex continued after its native warning"
+    );
+}
+
+#[test]
 fn codex_quota_reports_are_read_live_from_the_current_sessions_native_file() {
     let scenario = Scenario::new();
     let request = request(&scenario);

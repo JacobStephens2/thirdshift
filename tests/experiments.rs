@@ -1366,6 +1366,74 @@ esac
 }
 
 #[test]
+fn older_code_review_arms_stop_at_native_limits_in_their_fresh_homes() {
+    assert_older_arm_native_limits("code-review", 3);
+}
+
+#[test]
+fn older_arms_native_limits_are_monitored_in_their_fresh_homes() {
+    assert_older_arm_native_limits("spec-review", 1);
+}
+
+fn assert_older_arm_native_limits(session: &str, trials: usize) {
+    let fixture = Fixture::with_session(session, trials);
+    let continued = fixture.scenario.path("continued-after-native-warning");
+    for commit in [&fixture.baseline, &fixture.candidate] {
+        let binary = fixture.scenario.path(&format!(
+            "home/.thirdshift/evals/builds/{commit}/thirdshift"
+        ));
+        // A version-1 Arm with a sandbox home, before live quota detection.
+        // Native records are its public Harness output, absent from stdout.
+        fs::write(&binary, format!(r#"#!/usr/bin/env python3
+import datetime, json, pathlib, sys, time
+request = json.load(open(sys.argv[2]))
+output = pathlib.Path(request['output_dir'])
+native = output / 'home/.codex/sessions/2026/10/24/rollout-fake-thread-1.jsonl'
+native.parent.mkdir(parents=True)
+(output / 'trial-{session}.jsonl').write_text(json.dumps(dict(type='thread.started', thread_id='fake-thread-1')) + '\n')
+native.write_text(json.dumps(dict(type='session_meta', payload=dict(id='fake-thread-1', cwd=request['repository']))) + '\n')
+time.sleep(0.2)
+with native.open('a') as records:
+    records.write(json.dumps(dict(timestamp=datetime.datetime.now(datetime.timezone.utc).isoformat(), type='event_msg', payload=dict(type='token_count', rate_limits=dict(secondary=dict(used_percent=85))))) + '\n')
+time.sleep(2)
+pathlib.Path({continued:?}).touch()
+sys.exit(99)
+"#)).unwrap();
+        fs::set_permissions(binary, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let run = fixture.scenario.run(&[
+        "experiment",
+        "candidate",
+        "--json",
+        "--baseline-harness",
+        "codex",
+        "--candidate-harness",
+        "codex",
+    ]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    assert_eq!(experiment["state"], "paused");
+    assert!(
+        experiment["unfinished_trials"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|trial| {
+                trial["attempts"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|attempt| attempt["void_cause"] == "usage_limit")
+            }),
+        "the older Arm's native quota warning was not retained: {experiment}"
+    );
+    assert!(
+        !continued.exists(),
+        "an older Arm continued after its native warning"
+    );
+}
+
+#[test]
 fn a_baseline_built_before_this_change_pauses_at_its_live_warning() {
     let fixture = Fixture::new();
     let older = std::env::var_os("THIRDSHIFT_REVIEW_BASELINE_BIN").map(PathBuf::from).unwrap_or_else(|| {

@@ -1,11 +1,13 @@
 //! Durable Command facts shared by the recorder and status reader.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use anyhow::{Result, ensure};
 use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 
 use super::Work;
+use super::effects::{OnMachine, Outside};
 use crate::harness::Choice;
 use crate::issue::IssueUrl;
 
@@ -25,6 +27,30 @@ impl CommandTree {
             _ => &mut self.command,
         }
     }
+}
+
+/// A human recheck changes the Verdict, without changing when the Command ran.
+/// The Experiment's exclusive lock serializes this with completion and rechecks.
+pub(crate) fn experiment_rechecked(log: &Path, id: &str, outcome: &str) -> Result<()> {
+    let path = log.with_extension("command.json");
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut tree: CommandTree = serde_json::from_slice(&bytes)?;
+    ensure!(
+        tree.command.kind == "Experiment"
+            && tree
+                .command
+                .experiment
+                .as_ref()
+                .is_some_and(|experiment| experiment.id == id)
+            && tree.command.outcome.is_some(),
+        "Command record does not belong to the completed Experiment"
+    );
+    tree.command.outcome = Some(outcome.into());
+    OnMachine.replace_record(&path, &serde_json::to_vec_pretty(&tree)?)
 }
 
 #[derive(Serialize, Deserialize)]

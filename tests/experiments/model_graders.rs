@@ -201,18 +201,17 @@ fn export_spans(fixture: &Fixture, record: &Value) -> Vec<Value> {
     trace_spans(&export.join("spans.jsonl"))
 }
 
-#[test]
-fn metadata_rows_beneath_generic_table_headers_are_blinded() {
+fn assert_metadata_table_is_blinded(table: &str) {
     let fixture = Fixture::new();
-    fixture.scenario.agent_does(r#"
+    fixture.scenario.agent_does(&format!(r#"
 reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
 case "$PWD" in
   *--candidate--*) identity='candidate'; model='other-private-model' ;;
   *) identity='baseline'; model='private-model' ;;
 esac
-printf '| Field | Value |\n| --- | --- |\n| Harness | claude |\n| Model | %s |\n| Effort | max |\n| Arm | %s |\n' "$model" "$identity" > "$reports/standards.md"
+printf '{table}' "$model" "$identity" > "$reports/standards.md"
 printf 'Reported the invented finding.\n' > "$reports/spec.md"
-"#);
+"#));
     let run = fixture.run(&[
         "--baseline-model",
         "private-model",
@@ -234,35 +233,17 @@ printf 'Reported the invented finding.\n' > "$reports/spec.md"
 }
 
 #[test]
+fn metadata_rows_beneath_generic_table_headers_are_blinded() {
+    assert_metadata_table_is_blinded(
+        r"| Field | Value |\n| --- | --- |\n| Harness | claude |\n| Model | %s |\n| Effort | max |\n| Arm | %s |\n",
+    );
+}
+
+#[test]
 fn metadata_rows_beneath_setting_value_headers_are_blinded() {
-    let fixture = Fixture::new();
-    fixture.scenario.agent_does(r#"
-reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
-case "$PWD" in
-  *--candidate--*) identity='candidate'; model='other-private-model' ;;
-  *) identity='baseline'; model='private-model' ;;
-esac
-printf '| Field | Setting |\n| --- | --- |\n| Harness | claude |\n| Model | %s |\n| Effort | max |\n| Arm | %s |\n' "$model" "$identity" > "$reports/standards.md"
-printf 'Reported the invented finding.\n' > "$reports/spec.md"
-"#);
-    let run = fixture.run(&[
-        "--baseline-model",
-        "private-model",
-        "--candidate-model",
-        "other-private-model",
-        "--prior",
-        "0.01",
-    ]);
-    assert_eq!(run.code, Some(0), "{}", run.stderr);
-    let packet = fixture.grader_packet();
-    assert_eq!(packet["trials"].as_array().unwrap().len(), 2);
-    let text = packet.to_string().to_ascii_lowercase();
-    for identity in ["baseline", "candidate", "claude", "private-model", "max"] {
-        assert!(
-            !text.contains(identity),
-            "Grader packet leaked identifying metadata {identity}: {packet}"
-        );
-    }
+    assert_metadata_table_is_blinded(
+        r"| Field | Setting |\n| --- | --- |\n| Harness | claude |\n| Model | %s |\n| Effort | max |\n| Arm | %s |\n",
+    );
 }
 
 #[test]
@@ -300,34 +281,9 @@ EOF
 
 #[test]
 fn horizontal_metadata_tables_are_blinded() {
-    let fixture = Fixture::new();
-    fixture.scenario.agent_does(r#"
-reports=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*reports, with each axis.*to `\([^`]*\)\/standards.md`.*/\1/p')
-case "$PWD" in
-  *--candidate--*) identity='candidate'; model='other-private-model' ;;
-  *) identity='baseline'; model='private-model' ;;
-esac
-printf '| Harness | Model | Effort | Arm |\n| --- | --- | --- | --- |\n| claude | %s | max | %s |\n' "$model" "$identity" > "$reports/standards.md"
-printf 'Reported the invented finding.\n' > "$reports/spec.md"
-"#);
-    let run = fixture.run(&[
-        "--baseline-model",
-        "private-model",
-        "--candidate-model",
-        "other-private-model",
-        "--prior",
-        "0.01",
-    ]);
-    assert_eq!(run.code, Some(0), "{}", run.stderr);
-    let packet = fixture.grader_packet();
-    assert_eq!(packet["trials"].as_array().unwrap().len(), 2);
-    let text = packet.to_string().to_ascii_lowercase();
-    for identity in ["baseline", "candidate", "claude", "private-model", "max"] {
-        assert!(
-            !text.contains(identity),
-            "Grader packet leaked identifying metadata {identity}: {packet}"
-        );
-    }
+    assert_metadata_table_is_blinded(
+        r"| Harness | Model | Effort | Arm |\n| --- | --- | --- | --- |\n| claude | %s | max | %s |\n",
+    );
 }
 
 #[test]

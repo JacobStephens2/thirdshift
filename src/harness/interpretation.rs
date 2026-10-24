@@ -1,6 +1,7 @@
 //! Interpret a Harness session once, including optional retained records.
 
 use std::fmt;
+use std::path::Path;
 use std::process::{ExitStatus, Output};
 
 use anyhow::{Result, anyhow};
@@ -116,6 +117,7 @@ pub(super) trait Decoder: Send {
     fn limit_records(&mut self) -> Vec<String> {
         Vec::new()
     }
+    fn set_home(&mut self, _home: &Path) {}
 }
 
 /// Live protocol knowledge stays in the decoder, including evidence from
@@ -151,6 +153,7 @@ pub(super) enum ModelScope {
 /// Owned implementations follow Interpretation into the transcript reader.
 pub(super) trait Retained: Send {
     fn reconcile(self: Box<Self>, facts: &mut Facts) -> Result<()>;
+    fn set_home(&mut self, _home: &Path) {}
 }
 
 enum Failure {
@@ -244,6 +247,15 @@ impl Interpretation {
     pub(super) fn with_retained(mut self, retained: Box<dyn Retained>) -> Self {
         self.retained = Some(retained);
         self
+    }
+
+    /// Native evidence belongs to the launched session's home, which a Trial
+    /// sandbox can replace without changing the observing process's home.
+    pub(crate) fn set_home(&mut self, home: &Path) {
+        self.decoder.set_home(home);
+        if let Some(retained) = &mut self.retained {
+            retained.set_home(home);
+        }
     }
 
     /// Historical replay must not launch a Harness to export today's state.

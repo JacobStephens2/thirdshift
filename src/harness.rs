@@ -6,7 +6,6 @@
 //! `security.harness`, when set (ADR-0021).
 
 use std::fmt;
-use std::path::Path;
 use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail};
@@ -352,16 +351,7 @@ impl fmt::Display for ChosenBy {
 
 /// Whether an executable file named `cli` is in a directory on `PATH`.
 fn on_path(cli: &str) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| {
-        Path::new(&dir)
-            .join(cli)
-            .metadata()
-            .is_ok_and(|file| file.is_file() && file.permissions().mode() & 0o111 != 0)
-    })
+    crate::process::find_executable(cli).is_some()
 }
 
 #[cfg(test)]

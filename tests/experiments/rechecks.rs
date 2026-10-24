@@ -1,6 +1,36 @@
 use super::*;
 
 #[test]
+fn a_passed_recheck_moves_the_experiment_to_done() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(review_reports_prelude());
+    let run = fixture.run(&["--prior", "0.01"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    assert_eq!(experiment["verdict"]["verdict"], "waiting_on_rechecks");
+    let id = experiment["id"].as_str().unwrap();
+    let trial = experiment["pending_rechecks"][0]["id"].as_str().unwrap();
+    let checked = fixture.scenario.run(&[
+        "recheck",
+        id,
+        trial,
+        "pass",
+        "--reason",
+        "I verified the written criteria.",
+        "--json",
+    ]);
+    assert_eq!(checked.code, Some(0), "{}", checked.stderr);
+    assert_eq!(fixture.experiment()["verdict"]["verdict"], "pass");
+    let status = fixture.scenario.run(&["status", "--json"]);
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    assert_eq!(
+        status["commands"][0]["group"], "done",
+        "a completed passing Experiment belongs in Done: {status}"
+    );
+}
+
+#[test]
 fn decisive_score_waits_for_recheck_and_retains_both_scores_and_history() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does(review_reports_prelude());

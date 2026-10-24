@@ -597,8 +597,8 @@ log lines under `<logs.dir>/JacobStephens2/thirdshift/commands/experiment/`
 (the Activity log is at the repository level). The record names both Arms and
 the Bar and moves through Arm builds, Eval tasks and Trials. It appears in the
 Inbox: a pass goes in Done, and a fail, inconclusive Verdict or waiting rechecks
-go in Needs you. Command records retain the outcome at the end of that invocation;
-the Experiment views show the latest rechecks and Verdict.
+go in Needs you. Rechecking a Score updates the latest invocation's Command
+outcome and Inbox group alongside the saved Verdict, keeping its completion time.
 Use the name from `status` with `thirdshift stop <command>` to Stop it.
 The individual Trials keep no factory Command records.
 Trial and model Grader Session traces and code Grader spans join the invocation's
@@ -1574,6 +1574,11 @@ prints a note and carries on. An interrupted invocation resumes its saved
 Trials. A pushed bump branch is checked again before opening its PR, and an
 open or merged bump PR before merging or tagging. An already pushed tag only
 resumes the release workflow. Python 3 is needed to read the Experiment results.
+
+If `main` gains different content after the Candidate was selected, the script
+refuses to push or merge that release under its old Experiment; choose a fresh
+release version to measure current `main`. It also checks the merged tree before
+tagging, so a concurrent merge cannot publish unmeasured content.
 
 From a clone of this repo, signed in to `gh` and the User config's default Harness, run the release script with the new version:
 
