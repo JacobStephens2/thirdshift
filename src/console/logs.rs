@@ -141,7 +141,6 @@ pub(super) async fn stream(
             "invalid log offset"
         );
         Ok(LogStream {
-            config: std::sync::Arc::new(config),
             log: std::sync::Arc::new(log),
             offset,
             done: false,
@@ -167,7 +166,6 @@ pub(super) async fn stream(
             let revision = state.changes.borrow_and_update().accounts;
             let authorize = state.accounts_revision != Some(revision);
             state.accounts_revision = Some(revision);
-            let root = state.config.clone();
             let selected = state.log.clone();
             let signed_in = state.viewer.clone();
             let offset = state.offset;
@@ -175,7 +173,7 @@ pub(super) async fn stream(
                 if authorize && !signed_in.still_allowed()? {
                     return Ok(None);
                 }
-                catalog::find(&root, &selected.id)?;
+                // The captured reader rejects a file that leaves the inventory.
                 appended(&selected, offset).map(Some)
             })
             .await;
@@ -219,7 +217,6 @@ pub(super) async fn stream(
 }
 
 struct LogStream {
-    config: std::sync::Arc<UserConfig>,
     log: std::sync::Arc<Log>,
     offset: u64,
     done: bool,

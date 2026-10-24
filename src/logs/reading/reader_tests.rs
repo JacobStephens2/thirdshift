@@ -1,4 +1,6 @@
 //! Exercise the resolved-reader interface with retained files and native identities.
+use std::os::unix::ffi::OsStrExt;
+
 use super::*;
 use crate::logs::reading::Framing;
 
@@ -36,12 +38,149 @@ fn disappeared_dispatched_session_retains_its_captured_writer() {
     assert_eq!(pending.offset, first.offset);
 }
 
-fn exact(root: &Path, path: &Path) -> Reader {
+fn config(root: &Path) -> crate::config::UserConfig {
     let mut config = crate::config::UserConfig::parse("", &root.join("config.toml"), root).unwrap();
     config.logs_dir = root.to_owned();
-    catalog::find(&config, &catalog::id(path.strip_prefix(root).unwrap()))
-        .unwrap()
-        .reader
+    config
+}
+
+fn listed(root: &Path, path: &Path) -> Result<catalog::Log> {
+    catalog::find(
+        &config(root),
+        &catalog::id(path.strip_prefix(root).unwrap()),
+    )
+}
+
+fn exact(root: &Path, path: &Path) -> Reader {
+    listed(root, path).unwrap().reader
+}
+
+#[test]
+fn inventory_reads_unowned_files_by_path_bytes_and_refuses_excluded_storage() {
+    let dir = tempfile::tempdir().unwrap();
+    let commands = dir.path().join("acme/widgets/commands");
+    let unnamed = commands.join(std::ffi::OsStr::from_bytes(b"kind-\xff"));
+    fs::create_dir_all(commands.join("issue")).unwrap();
+    fs::create_dir_all(&unnamed).unwrap();
+    for path in [
+        commands.join("issue/notes.log"),
+        commands.join("issue/draft.logs.jsonl"),
+        unnamed.join("notes.log"),
+    ] {
+        fs::write(&path, b"unowned\n").unwrap();
+        let batch = exact(dir.path(), &path)
+            .read(0, Framing::Lines, 100)
+            .unwrap();
+        assert_eq!(batch.bytes, b"unowned\n", "{}", path.display());
+        assert!(batch.done, "{}", path.display());
+    }
+    let sessions = dir.path().join("acme/widgets/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    for path in [
+        sessions.join("7-20261019T110000-0400-implement.logs.jsonl"),
+        commands.join("issue/7-20261019T110000-0400-implement.jsonl"),
+        commands.join("issue/7-20261019T110000-0400-implement.spans.jsonl"),
+        commands.join("issue/7-20261019T110000-0400.notification.txt"),
+        commands.join("issue/.log"),
+        commands.join("loose.log"),
+    ] {
+        fs::write(&path, b"excluded\n").unwrap();
+        assert!(listed(dir.path(), &path).is_err(), "{}", path.display());
+    }
+}
+
+#[test]
+fn removing_or_symlinking_an_enumerated_entry_ends_inventory_reads() {
+    for replaced in [
+        "acme",
+        "acme/widgets",
+        "acme/widgets/commands/issue",
+        "acme/widgets/commands/issue/7-20261019T110000-0400~gone.log",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let elsewhere = tempfile::tempdir().unwrap();
+        let record_path = write(
+            dir.path(),
+            "7-20261019T110000-0400~gone.command.json",
+            &record(7),
+        );
+        let path = record_path.with_file_name("7-20261019T110000-0400~gone.log");
+        fs::write(&path, b"kept\n").unwrap();
+        let reader = exact(dir.path(), &path);
+        assert_eq!(
+            reader.read(0, Framing::Lines, 100).unwrap().bytes,
+            b"kept\n"
+        );
+        let entry = dir.path().join(replaced);
+        let moved = elsewhere.path().join("moved");
+        fs::rename(&entry, &moved).unwrap();
+        std::os::unix::fs::symlink(&moved, &entry).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"kept\n", "{replaced}");
+        let error = reader.read(0, Framing::Lines, 100).unwrap_err();
+        assert!(
+            error.to_string().contains("not in the current inventory"),
+            "{replaced}: {error:#}"
+        );
+        assert!(listed(dir.path(), &path).is_err(), "{replaced}");
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let path = write(dir.path(), "notes.log", &Value::Null);
+    let reader = exact(dir.path(), &path);
+    assert!(reader.read(0, Framing::Raw, 100).unwrap().done);
+    fs::remove_file(&path).unwrap();
+    assert!(reader.read(0, Framing::Raw, 100).is_err());
+}
+
+#[test]
+fn configured_root_and_commands_aliases_stay_readable() {
+    let dir = tempfile::tempdir().unwrap();
+    let stored = dir.path().join("stored-commands");
+    fs::create_dir_all(stored.join("issue")).unwrap();
+    fs::create_dir_all(dir.path().join("real/acme/widgets")).unwrap();
+    let commands = dir.path().join("real/acme/widgets/commands");
+    std::os::unix::fs::symlink(&stored, &commands).unwrap();
+    let root = dir.path().join("logs");
+    std::os::unix::fs::symlink(dir.path().join("real"), &root).unwrap();
+    let path = root.join("acme/widgets/commands/issue/notes.log");
+    fs::write(&path, b"through aliases\n").unwrap();
+    let reader = exact(&root, &path);
+    assert_eq!(
+        reader.read(0, Framing::Lines, 100).unwrap().bytes,
+        b"through aliases\n"
+    );
+    // Listing follows a retargeted `commands` alias, so reading does too.
+    let moved = dir.path().join("moved-commands");
+    fs::rename(&stored, &moved).unwrap();
+    fs::remove_file(&commands).unwrap();
+    std::os::unix::fs::symlink(&moved, &commands).unwrap();
+    let batch = reader.read(0, Framing::Lines, 100).unwrap();
+    assert_eq!(batch.bytes, b"through aliases\n");
+    assert!(batch.done);
+}
+
+#[test]
+fn a_selected_read_ignores_an_unrelated_malformed_subtree() {
+    let dir = tempfile::tempdir().unwrap();
+    let record_path = write(
+        dir.path(),
+        "7-20261019T110000-0400~local.command.json",
+        &record(7),
+    );
+    let path = record_path.with_file_name("7-20261019T110000-0400~local.log");
+    fs::write(&path, b"first\n").unwrap();
+    let reader = exact(dir.path(), &path);
+    let first = reader.read(0, Framing::Lines, 100).unwrap();
+    assert!(!first.done);
+    fs::create_dir_all(dir.path().join("acme/other")).unwrap();
+    fs::write(dir.path().join("acme/other/commands"), b"not a directory").unwrap();
+    assert!(
+        catalog::load(&config(dir.path()), None).is_err(),
+        "whole-store loading fails on this fixture"
+    );
+    fs::write(&path, b"first\nsecond\n").unwrap();
+    let next = reader.read(first.offset, Framing::Lines, 100).unwrap();
+    assert_eq!(next.bytes, b"second\n");
+    assert!(!next.done);
 }
 
 #[test]

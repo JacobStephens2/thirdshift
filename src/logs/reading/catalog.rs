@@ -62,6 +62,15 @@ pub(crate) fn id(path: &Path) -> String {
         .collect()
 }
 
+/// The filename predicate shared by listing and each inventory-created read.
+pub(super) fn listed(path: &Path) -> bool {
+    owner::inventory_session(path)
+        && matches!(
+            path.extension().and_then(|ext| ext.to_str()),
+            Some("log" | "jsonl")
+        )
+}
+
 pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<Vec<Log>> {
     let root = &config.logs_dir;
     let snapshot = Snapshot::load(root, Local::now())?;
@@ -136,13 +145,7 @@ pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<
             for folder in directories(&repo.join("commands"))? {
                 for entry in entries(&folder)? {
                     let path = entry.path();
-                    if !entry.file_type()?.is_file()
-                        || !owner::inventory_session(&path)
-                        || !matches!(
-                            path.extension().and_then(|ext| ext.to_str()),
-                            Some("log" | "jsonl")
-                        )
-                    {
+                    if !entry.file_type()?.is_file() || !listed(&path) {
                         continue;
                     }
                     let path = if path.extension().is_some_and(|ext| ext == "jsonl") {
@@ -163,7 +166,8 @@ pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<
                     }
                     logs.push(Log {
                         reader: reader
-                            .unwrap_or_else(|| Reader::captured(path.clone(), None, false)),
+                            .unwrap_or_else(|| Reader::captured(path.clone(), None, false))
+                            .within(root),
                         id: id(relative),
                         name: relative.to_string_lossy().into_owned(),
                         repository: repository.clone(),

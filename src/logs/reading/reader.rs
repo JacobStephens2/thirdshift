@@ -1,10 +1,11 @@
-//! Captured writer lifetime and byte draining, independent of presentation.
+//! Captured writer lifetime, inventory eligibility and byte draining,
+//! independent of presentation.
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
 
-use super::{Command, cache};
+use super::{Command, cache, catalog};
 use crate::logs::command_record::CommandRecord;
 
 #[derive(Clone, Debug)]
@@ -40,6 +41,8 @@ pub(crate) struct Reader {
     path: PathBuf,
     writer: Option<Writer>,
     session: Option<SessionOwner>,
+    /// The lexical root of the inventory that selected this file, if any.
+    inventory: Option<PathBuf>,
 }
 
 #[derive(Clone, Copy)]
@@ -65,7 +68,61 @@ impl Reader {
                 name: command.record.name.clone(),
                 started_at: command.record.started_at.clone(),
             }),
+            inventory: None,
         }
+    }
+
+    /// Require each read to find the file still listed beneath `root`.
+    pub(super) fn within(self, root: &Path) -> Self {
+        Self {
+            inventory: Some(root.to_owned()),
+            ..self
+        }
+    }
+
+    /// Check only the selected entries, as listing would see them: the root
+    /// and literal `commands` path may be aliases, but owner, repository,
+    /// kind and file must be real entries rather than symlinks.
+    fn listed(&self) -> Result<()> {
+        let Some(root) = &self.inventory else {
+            return Ok(());
+        };
+        let parts = self
+            .path
+            .strip_prefix(root)
+            .map(|relative| relative.components().collect::<Vec<_>>())
+            .unwrap_or_default();
+        let [
+            Component::Normal(owner),
+            Component::Normal(repository),
+            Component::Normal(commands),
+            Component::Normal(kind),
+            Component::Normal(_),
+        ] = parts[..]
+        else {
+            anyhow::bail!("log is not in the current inventory");
+        };
+        let real = |path: &Path, directory: bool| {
+            std::fs::symlink_metadata(path).is_ok_and(|entry| {
+                if directory {
+                    entry.is_dir()
+                } else {
+                    entry.is_file()
+                }
+            })
+        };
+        let owner = root.join(owner);
+        let repository = owner.join(repository);
+        ensure!(
+            commands == "commands"
+                && real(&owner, true)
+                && real(&repository, true)
+                && real(&repository.join(commands).join(kind), true)
+                && real(&self.path, false)
+                && catalog::listed(&self.path),
+            "log is not in the current inventory"
+        );
+        Ok(())
     }
 
     fn live(&self) -> Result<bool> {
@@ -106,8 +163,10 @@ impl Reader {
         Ok(true)
     }
 
-    /// Observe completion before draining; a bounded batch is done only at EOF.
+    /// Check eligibility, then observe completion before draining; a bounded
+    /// batch is done only at EOF.
     pub(crate) fn read(&self, offset: u64, framing: Framing, budget: usize) -> Result<Batch> {
+        self.listed()?;
         let complete = !self.live()?;
         let mut file = BufReader::new(
             std::fs::File::open(&self.path)
