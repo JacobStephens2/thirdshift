@@ -48,7 +48,12 @@ This skill authorizes verification edits only. Product fixes need their own task
 
 ## Coverage and sync
 
-Last confirmed source commit: `4d4756b102af44e1fedd1fc625a61ff1d4364fe7`.
+Last confirmed source commit: `3cd68bb`.
+The merge-time sync from `4d4756b` found no change to the modeled request order.
+Pickup ordering and paginated issue listing are outside the one-issue model;
+same-second Claim history is normalized within its complete, ordered-read
+assumption. The known pre-Claim counterexample and both sensitivity mutations
+remain reachable. No model or property was changed.
 The model describes these functions, including their ordering:
 
 | Source | Covered functions / requests |
