@@ -10,8 +10,9 @@
 //! binary (Codex's whole release folder, since Codex looks for
 //! `codex-code-mode-host` beside it), the Factory skills folder, a fresh
 //! home, the toolchains the session needs and socat, read-only, and the
-//! proxy's socket. The session otherwise inherits the Trial's environment,
-//! with its home, path, logins and proxy variables set for the sandbox.
+//! proxy's socket. The session's environment is only what this launcher sets:
+//! home, path, the Harness login, and the proxy variables. Ambient secrets
+//! stay outside.
 //!
 //! An allowlisting CONNECT proxy runs outside the sandbox, listening on a
 //! Unix socket bound into it. A socat relay inside turns the proxy port into
@@ -49,7 +50,7 @@ const OPENCODE_CONFIG_ENV: &str = "OPENCODE_CONFIG_CONTENT";
 const CLAUDE_TOKEN_ENV: &str = "CLAUDE_CODE_OAUTH_TOKEN";
 /// Grok's per-Trial home, bound as the Trial's `~/.grok`.
 const GROK_HOME_NAME: &str = ".grok";
-/// The Trials Grok home's login files, kept across the wipe before each Trial.
+/// The Trials Grok home's login files, copied into the fresh home.
 const GROK_KEPT: [&str; 2] = ["auth.json", "auth.json.lock"];
 
 /// A sandbox that could not start: bwrap missing, a bind source unusable, or
@@ -214,10 +215,11 @@ pub(crate) struct Launch {
 impl Launch {
     /// The bwrap command running the Harness's `args` inside the sandbox.
     /// The caller sets the working directory, which must be the bound
-    /// repository. The session inherits the caller's environment, with the
-    /// sandbox's overrides applied over it. The Harness runs behind the
-    /// relay: `prefix` starts the relay, then runs the program as `$0` with
-    /// `args` as `$@`, so the relay dies with the session.
+    /// repository. `argv` clears the environment and sets only the sandbox's
+    /// own variables, so a Grader cannot read the operator's ambient secrets.
+    /// The Harness runs behind the relay: `prefix` starts the relay, then
+    /// runs the program as `$0` with `args` as `$@`, so the relay dies with
+    /// the session.
     pub fn command(&self, args: &[String]) -> Result<Command> {
         let mut command = Command::new(find_bwrap().unwrap_or_else(|| PathBuf::from("bwrap")));
         self.configure_command(&mut command, args)?;
@@ -344,9 +346,17 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
         environment.set_str(name, "127.0.0.1,localhost");
     }
     let program = harness_into(request, &mut binds, &mut environment, &binary);
+    conceal_toolchain_credentials(request, &mut binds)?;
     let mut argv = base_argv();
     binds.argv(&mut argv);
     let env = environment.finish(&request.adapter_env);
+    // bwrap applies `--clearenv` to the sandboxed command, not to itself.
+    argv.push("--clearenv".into());
+    for (name, value) in &env {
+        argv.push("--setenv".into());
+        argv.push(name.clone());
+        argv.push(value.clone());
+    }
     // Test the complete mount/namespace setup before a Harness owns the
     // process. Otherwise bwrap's stderr can look like an agent failure to
     // Harnesses whose session protocol does not include launcher errors.
@@ -438,11 +448,11 @@ impl Binds {
     }
 }
 
-/// The session's environment overrides. The session otherwise inherits the
-/// Trial's environment, as an unsandboxed session would: the sandbox bounds
-/// what the session can see on disk and which processes it can see, not which
-/// variables it starts with. Secrets travel only as environment values, never
-/// in the Harness's arguments: the caller appends those after `--` itself.
+/// The session's whole environment. `--clearenv` drops everything the
+/// operator's process inherited, including `RESEND_API_KEY` and GitHub
+/// tokens, and these pairs are set back. The Harness login is one of them.
+/// Secrets travel only as these values, never in the Harness's arguments:
+/// the caller appends those after `--` itself.
 #[derive(Default)]
 struct Environment {
     pairs: Vec<(OsString, OsString)>,
@@ -465,9 +475,9 @@ impl Environment {
         }
     }
 
-    /// The overrides as command environment: the fresh home, a `PATH` of the
-    /// Harness's directories and the base system, the sandbox's `/tmp`, and
-    /// the login variables, over whatever the Trial's environment holds.
+    /// The session environment: the fresh home, a `PATH` of the Harness's
+    /// directories and the base system, the sandbox's `/tmp`, and the login
+    /// variables. `prepare` publishes these with `--setenv` after `--clearenv`.
     fn finish(mut self, adapter_env: &[(&str, &str)]) -> Vec<(OsString, OsString)> {
         for directory in [
             "/usr/local/bin",
@@ -571,6 +581,31 @@ fn toolchains(home: &Path) -> Vec<PathBuf> {
     seen
 }
 
+/// Hide Cargo registry credentials that a toolchain bind would otherwise
+/// expose. The empty stand-in is read-only, so the session cannot recreate
+/// the file inside the mount.
+fn conceal_toolchain_credentials(request: &Request<'_>, binds: &mut Binds) -> Result<()> {
+    let paths: Vec<PathBuf> = toolchains(request.home)
+        .into_iter()
+        .flat_map(|root| [root.join("credentials"), root.join("credentials.toml")])
+        .filter(|path| path.is_file())
+        .collect();
+    if paths.is_empty() {
+        return Ok(());
+    }
+    let blank = request.fresh_home.join(".toolchain-credential");
+    fs::write(&blank, "").with_context(|| {
+        format!(
+            "sandbox failed to start: could not create {}",
+            blank.display()
+        )
+    })?;
+    for path in paths {
+        binds.read_only(&blank, &path);
+    }
+    Ok(())
+}
+
 /// The `bin` directories of known tools that resolve under a bound toolchain
 /// root: versioned layouts (`~/.rustup/toolchains/<name>/bin`,
 /// `~/.nvm/versions/node/<version>/bin`) carry no top-level `bin` of their
@@ -648,12 +683,10 @@ fn home_into(
             user_file(request, binds, ".claude/settings.json");
         }
         Harness::Codex => {
-            // The login is bound read-write in place, so a refresh reaches
-            // the file production uses. Codex writes it in place, never by
-            // rename, so a single-file bind carries the refresh back.
+            // Copy the login into the fresh home. A refresh stays in that
+            // copy; the operator's file is not mounted.
             login_into(
                 request,
-                binds,
                 environment,
                 Some("CODEX_HOME"),
                 ".codex",
@@ -663,12 +696,11 @@ fn home_into(
             user_file(request, binds, ".codex/AGENTS.md");
         }
         Harness::Muse => {
-            // Each file is bound read-write in place, since Muse writes its
-            // login in place (#1009).
+            // Copy each login file. Muse writes its login in place (#1009);
+            // that write stays in the copy.
             for login in ["muse/auth.json", "muse/auth.json.lock"] {
                 login_into(
                     request,
-                    binds,
                     environment,
                     Some("XDG_CONFIG_HOME"),
                     ".config",
@@ -678,11 +710,10 @@ fn home_into(
             user_file(request, binds, ".config/muse/settings.json");
         }
         Harness::Agy => {
-            // The token file is bound read-write in place; never the D-Bus
-            // session bus, which would expose every user service on it.
+            // Copy the token file, never the D-Bus session bus, which would
+            // expose every user service on it.
             login_into(
                 request,
-                binds,
                 environment,
                 None,
                 ".gemini/antigravity-cli",
@@ -692,7 +723,7 @@ fn home_into(
             user_file(request, binds, ".gemini/settings.json");
         }
         Harness::Grok => {
-            guard = Some(grok_into(request, binds)?);
+            guard = Some(grok_into(request)?);
             for path in [".grok/settings.json", ".grok/rules", ".grok/hooks"] {
                 user_file(request, binds, path);
             }
@@ -706,16 +737,18 @@ fn home_into(
     Ok(guard)
 }
 
-/// Bind one login file read-write in place: `override_env` names the
+/// Copy one login file into the fresh home: `override_env` names the
 /// environment override when there is one (`CODEX_HOME`, `XDG_CONFIG_HOME`,
 /// none for agy), `default_dir` its home-relative default, and `file` the
-/// path under it. A missing login is left for the session: its login failure
-/// voids the Trial, as it does outside the sandbox. An override always keeps
-/// its meaning inside, pointed at the fresh home, so session state the
-/// Harness writes beside a missing login still lands where its reader looks.
+/// path under it. The copy is what the session reads and refreshes. The live
+/// file stays outside the sandbox, so a Grader that follows packet contents
+/// cannot replace the operator's login. A missing login is left for the
+/// session: its login failure voids the Trial, as it does outside the
+/// sandbox. An override always keeps its meaning inside, pointed at the
+/// fresh home, so session state the Harness writes beside a missing login
+/// still lands where its reader looks.
 fn login_into(
     request: &Request<'_>,
-    binds: &mut Binds,
     environment: &mut Environment,
     override_env: Option<&str>,
     default_dir: &str,
@@ -742,7 +775,12 @@ fn login_into(
         })?;
     }
     if source.is_file() {
-        binds.read_write(&source, &dest);
+        fs::copy(&source, &dest).with_context(|| {
+            format!(
+                "sandbox failed to start: could not copy the login {}",
+                source.display()
+            )
+        })?;
     }
     if let Some(env) = override_env {
         // The override names the directory the file sits `depth` levels
@@ -766,22 +804,19 @@ fn fresh_mirror(request: &Request<'_>, source: &Path) -> PathBuf {
 }
 
 /// The Trials Grok home: signed in once with
-/// `GROK_HOME=~/.thirdshift/trials/grok grok login`, wiped before each Trial
-/// down to its login and lock, and bound as the Trial's `~/.grok`. Grok
-/// renews its 6-hour key by renaming a new `auth.json` into place, which a
-/// single-file bind refuses: binding the folder carries the rename back to
-/// the Trials home, never to production's `~/.grok`.
+/// `GROK_HOME=~/.thirdshift/trials/grok grok login`. A session gets a copy of
+/// its login under the fresh home, not the live directory.
 fn trials_home(home: &Path) -> PathBuf {
     home.join(".thirdshift/trials/grok")
 }
 
-/// Bind the Trials Grok home for one Trial, holding it against every other
-/// Grok Trial until the session ends. Fails before the session when the home
-/// has no login.
-fn grok_into(request: &Request<'_>, binds: &mut Binds) -> Result<GrokGuard> {
+/// Copy the Trials Grok login into the fresh home, holding the Trials home
+/// against every other Grok session until this one ends. The live directory
+/// stays outside the sandbox. Fails before the session when the home has no
+/// login.
+fn grok_into(request: &Request<'_>) -> Result<GrokGuard> {
     let home = trials_home(request.home);
     let guard = GrokGuard::acquire(request.home)?;
-    wipe(&home)?;
     if !home.join("auth.json").is_file() {
         return Err(anyhow::Error::new(NoLogin {
             diagnostic: format!(
@@ -791,43 +826,25 @@ fn grok_into(request: &Request<'_>, binds: &mut Binds) -> Result<GrokGuard> {
             ),
         }));
     }
-    binds.read_write(&home, &request.fresh_home.join(GROK_HOME_NAME));
-    Ok(guard)
-}
-
-/// Delete everything in `home` but its login and lock.
-fn wipe(home: &Path) -> Result<()> {
-    fs::create_dir_all(home).with_context(|| {
+    let dest = request.fresh_home.join(GROK_HOME_NAME);
+    fs::create_dir_all(&dest).with_context(|| {
         format!(
             "sandbox failed to start: could not create {}",
-            home.display()
+            dest.display()
         )
     })?;
-    let entries = fs::read_dir(home)
-        .with_context(|| format!("sandbox failed to start: could not read {}", home.display()))?;
-    for entry in entries {
-        let entry = entry.with_context(|| {
-            format!("sandbox failed to start: could not read {}", home.display())
-        })?;
-        let name = entry.file_name();
-        if GROK_KEPT.iter().any(|kept| name == *kept) {
-            continue;
-        }
-        let path = entry.path();
-        let is_dir = fs::symlink_metadata(&path)
-            .map(|metadata| metadata.is_dir())
-            .unwrap_or(false);
-        if is_dir {
-            fs::remove_dir_all(&path).with_context(|| {
-                format!("sandbox failed to start: could not wipe {}", path.display())
-            })?;
-        } else {
-            fs::remove_file(&path).with_context(|| {
-                format!("sandbox failed to start: could not wipe {}", path.display())
+    for name in GROK_KEPT {
+        let source = home.join(name);
+        if source.is_file() {
+            fs::copy(&source, dest.join(name)).with_context(|| {
+                format!(
+                    "sandbox failed to start: could not copy the login {}",
+                    source.display()
+                )
             })?;
         }
     }
-    Ok(())
+    Ok(guard)
 }
 
 /// One Grok Trial at a time: the lock is a directory beside the Trials home,

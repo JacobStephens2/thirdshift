@@ -268,3 +268,103 @@ printf '%s\n' '{{"type":"result","subtype":"success","is_error":false}}'
         "host-only attribution"
     );
 }
+
+/// A sampled repository is untrusted input. The Grader process may read its
+/// own copied login, and must not see the operator's other secrets or replace
+/// the live login file.
+#[test]
+fn sandboxed_grader_cannot_read_ambient_secrets_or_replace_a_live_login() {
+    use std::os::unix::fs::PermissionsExt;
+    let probe = std::process::Command::new("bwrap")
+        .args([
+            "--ro-bind",
+            "/",
+            "/",
+            "--unshare-pid",
+            "--unshare-net",
+            "--proc",
+            "/proc",
+            "--",
+            "/bin/true",
+        ])
+        .output();
+    if !probe.is_ok_and(|output| output.status.success()) {
+        println!("SKIPPED: bwrap namespaces unavailable on this host");
+        return;
+    }
+    let scenario = scenario();
+    scenario.user_config_is(
+        "[scoring]\nowners = [\"acme\"]\nsample_size = 3\nharness = 'codex'\nmodel = 'grader-primary'\nfallback_harness = 'claude'\nfallback_model = 'grader-secondary'\n",
+    );
+    let login = scenario.path("home/.codex/auth.json");
+    std::fs::create_dir_all(login.parent().unwrap()).unwrap();
+    std::fs::write(&login, "operator-login\n").unwrap();
+    std::fs::set_permissions(&login, std::fs::Permissions::from_mode(0o600)).unwrap();
+    let cargo = scenario.path("home/.cargo/credentials.toml");
+    std::fs::create_dir_all(cargo.parent().unwrap()).unwrap();
+    std::fs::write(&cargo, "operator-cargo-token\n").unwrap();
+    let binary = scenario.path("bin/codex");
+    std::fs::remove_file(&binary).unwrap();
+    std::fs::write(
+        &binary,
+        format!(
+            r#"#!/bin/sh
+set -eu
+{{
+  printf 'resend=%s\n' "${{RESEND_API_KEY-unset}}"
+  if [ -s '{cargo}' ]; then printf 'cargo=%s\n' "$(cat '{cargo}')"; else printf 'cargo=hidden\n'; fi
+  if [ -f "$HOME/.codex/auth.json" ]; then printf 'saw-login=yes\n'; else printf 'saw-login=no\n'; fi
+}} > isolation-report
+if [ -f "$HOME/.codex/auth.json" ]; then
+  printf '%s\n' 'replaced-by-grader' > "$HOME/.codex/auth.json" || true
+fi
+cat > scores.json << 'SCORES'
+{response}
+SCORES
+printf '%s\n' '{{"type":"thread.started","thread_id":"grader-isolation"}}'
+printf '%s\n' '{{"type":"turn.started"}}'
+printf '%s\n' '{{"type":"turn.completed","usage":{{"input_tokens":1,"cached_input_tokens":0,"output_tokens":1}}}}'
+"#,
+            cargo = cargo.display(),
+            response = RESPONSE,
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "claude", "opus", false)]);
+    scenario.write_gh_state(&state);
+    let result = scenario.run_with_env(
+        &["score"],
+        &[
+            ("THIRDSHIFT_TRIAL_NO_SANDBOX", ""),
+            ("RESEND_API_KEY", "operator-ambient-secret"),
+        ],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let week = weeks(&scenario).remove(0);
+    let report = std::fs::read_to_string(
+        scenario
+            .path("home/.thirdshift/evals/scoring")
+            .join(week["packets"].as_str().unwrap())
+            .join("0/isolation-report"),
+    )
+    .unwrap();
+    assert!(
+        report.contains("resend=unset"),
+        "ambient secret reached the Grader:\n{report}"
+    );
+    assert!(
+        report.contains("cargo=hidden"),
+        "toolchain credential reached the Grader:\n{report}"
+    );
+    assert!(
+        report.contains("saw-login=yes"),
+        "Grader could not read its copied login:\n{report}"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&login).unwrap(),
+        "operator-login\n",
+        "Grader replaced the live login"
+    );
+}
