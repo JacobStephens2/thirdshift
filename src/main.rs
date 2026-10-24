@@ -82,7 +82,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift score                               Sample merged factory pull requests
-       thirdshift scores [--json]                      List the sample by week
+       thirdshift scores [<pull request>] [--json|--mine]  Show Scores; --mine enters yours
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
        thirdshift status [--all] [--json]             List this machine's Commands
@@ -155,7 +155,13 @@ fn main() -> ExitCode {
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
         Ok(Command::Score) => return score(),
-        Ok(Command::Scores { json }) => return printed(scoring::show(json)),
+        Ok(Command::Scores {
+            pull_request,
+            mine,
+            json,
+        }) => {
+            return printed(scoring::show(pull_request.as_deref(), mine, json));
+        }
         Ok(Command::CronJobs { json }) => return printed(cronjobs::show(json)),
         Ok(Command::ConsoleInstall { output: None }) => {
             return match console::install() {

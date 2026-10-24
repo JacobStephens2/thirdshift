@@ -172,18 +172,6 @@ pub(crate) fn disabled() -> bool {
 }
 
 impl Prepared {
-    /// What a session runner holds to launch inside the sandbox. The guards
-    /// stay with the `Prepared` they came from, which outlives the sessions.
-    pub(crate) fn launch(&self) -> Launch {
-        Launch {
-            argv: self.argv.clone(),
-            env: self.env.clone(),
-            program: self.program.clone(),
-            prefix: self.prefix.clone(),
-            stderr: Some(self.stderr.clone()),
-        }
-    }
-
     /// A later launch (including Resume) may fail even after the startup
     /// check succeeded. Retain bwrap's stderr outside the Harness protocol.
     pub(crate) fn startup_failure(&self, error: &anyhow::Error) -> Option<Unavailable> {
@@ -202,17 +190,7 @@ impl Prepared {
     }
 }
 
-/// How one session is launched inside a prepared sandbox.
-#[derive(Clone)]
-pub(crate) struct Launch {
-    pub argv: Vec<OsString>,
-    pub env: Vec<(OsString, OsString)>,
-    pub program: PathBuf,
-    prefix: Vec<OsString>,
-    stderr: Option<PathBuf>,
-}
-
-impl Launch {
+impl Prepared {
     /// The bwrap command running the Harness's `args` inside the sandbox.
     /// The caller sets the working directory, which must be the bound
     /// repository. `argv` clears the environment and sets only the sandbox's
@@ -222,21 +200,14 @@ impl Launch {
     /// the session.
     pub fn command(&self, args: &[String]) -> Result<Command> {
         let mut command = Command::new(find_bwrap().unwrap_or_else(|| PathBuf::from("bwrap")));
-        self.configure_command(&mut command, args)?;
-        Ok(command)
-    }
-
-    fn configure_command(&self, command: &mut Command, args: &[String]) -> Result<()> {
         command.args(&self.argv);
         command.arg("--");
         command.args(&self.prefix);
         command.arg(&self.program);
         command.args(args);
         command.envs(self.env.iter().map(|(name, value)| (name, value)));
-        if let Some(stderr) = &self.stderr {
-            command.stderr(fs::File::create(stderr)?);
-        }
-        Ok(())
+        command.stderr(fs::File::create(&self.stderr)?);
+        Ok(command)
     }
 }
 
