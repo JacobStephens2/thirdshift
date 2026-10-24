@@ -22,6 +22,52 @@ RELEASE_PATHS = [
 ]
 
 
+LEAST_PRIVILEGE_JOBS = (
+    "plan",
+    "build-local-artifacts",
+    "build-global-artifacts",
+)
+
+LEAST_PRIVILEGE_PERMISSIONS = (
+    '    permissions:\n'
+    '      "actions": "write"\n'
+    '      "contents": "read"\n'
+)
+
+
+def harden_release_workflow(generated):
+    """Narrow PR-reachable jobs and keep secrets off the PR smoke path.
+
+    The plan and build jobs run on pull requests, so they get job-level
+    least-privilege permissions (read the checkout, read/download and
+    write/upload workflow artifacts). The publishing jobs keep the
+    workflow top-level write permission. The smoke reusable call needs no
+    secrets, so drop its `secrets: inherit` instead of forwarding every
+    secret to a PR-reachable run; the publish-only reusable calls keep
+    theirs.
+    """
+    for job in LEAST_PRIVILEGE_JOBS:
+        anchor = f"  {job}:\n"
+        if generated.count(anchor) != 1:
+            raise RuntimeError(
+                f"cargo-dist workflow shape changed: expected one {anchor!r}"
+            )
+        if f"{anchor}{LEAST_PRIVILEGE_PERMISSIONS}" in generated:
+            continue
+        generated = generated.replace(
+            anchor, f"{anchor}{LEAST_PRIVILEGE_PERMISSIONS}", 1
+        )
+    smoke_anchor = "  custom-release-smoke:\n"
+    if generated.count(smoke_anchor) == 1:
+        start = generated.index(smoke_anchor)
+        match = re.search(r"^  \S", generated[start + len(smoke_anchor):], re.MULTILINE)
+        end = start + len(smoke_anchor) + match.start() if match else len(generated)
+        block = generated[start:end]
+        block = block.replace("    secrets: inherit\n", "")
+        generated = generated[:start] + block + generated[end:]
+    return generated
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true")
@@ -65,6 +111,7 @@ def main():
     paths = "    paths:\n" + "".join(f"      - '{path}'\n" for path in RELEASE_PATHS)
     generated = generated.replace("  pull_request:\n", "  pull_request:\n" + paths)
     generated = generated.replace("\njobs:\n", "\n" + concurrency + "\njobs:\n")
+    generated = harden_release_workflow(generated)
     generated = "# Regenerate with python3 scripts/generate-release.py; do not edit.\n" + generated
     if args.check:
         previous = original.decode() if original else ""
