@@ -1,6 +1,72 @@
 use super::*;
 
+#[test]
+fn scoring_grader_session_traces_stay_local_with_otlp_enabled() {
+    let scenario = scenario();
+    let collector = support::resend::ResendStandIn::replying(200, "{}");
+    scenario.user_config_is(&format!(
+        "[scoring]\nowners = ['acme']\nmodel = 'grader-primary'\nfallback_model = 'grader-secondary'\n[otlp]\nendpoint = '{}/v1/traces'\n",
+        collector.url()
+    ));
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "codex", "gpt", false)]);
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(
+        collector.requests().is_empty(),
+        "Scoring's private Grader Session traces were sent to the configured OTLP collector"
+    );
+}
+
 pub(super) const RESPONSE: &str = r#"{"scores":[{"criterion":"Correct","passed":true,"reason":"Implements the requested feature."},{"criterion":"Scoped","passed":true,"reason":"Only the requested change."},{"criterion":"Tested","passed":false,"reason":"No feature test in the diff."},{"criterion":"Honest","passed":true,"reason":"Claims match the diff and CI."},{"criterion":"Standards","passed":true,"reason":"Matches repository conventions."}]}"#;
+
+#[test]
+fn scoring_grader_does_not_put_login_tokens_in_session_traces() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if !sandbox_available() {
+        return;
+    }
+
+    let scenario = scenario();
+    let token = "dummy-grader-oauth-token-must-not-be-recorded";
+    std::fs::write(
+        scenario.path("home/.thirdshift/credentials.toml"),
+        format!("[claude]\nsetup_token = '{token}'\n"),
+    )
+    .unwrap();
+    let binary = scenario.path("bin/claude");
+    std::fs::remove_file(&binary).unwrap();
+    std::fs::write(
+        &binary,
+        format!(
+            "#!/bin/sh\nset -eu\ntest \"$CLAUDE_CODE_OAUTH_TOKEN\" = '{token}'\ncat > scores.json <<'SCORES'\n{RESPONSE}\nSCORES\nprintf '%s\\n' '{{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}}'\n"
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "codex", "gpt", false)]);
+    scenario.write_gh_state(&state);
+    let run = scenario.run_with_env(&["score"], &[("THIRDSHIFT_TRIAL_NO_SANDBOX", "")]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+
+    let mut inspected = 0;
+    for entry in std::fs::read_dir(scenario.path(LOGS)).unwrap() {
+        let path = entry.unwrap().path();
+        if path.to_string_lossy().ends_with(".spans.jsonl") {
+            inspected += 1;
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(
+                !text.contains(token),
+                "copied Grader login leaked into Session trace: {}",
+                path.display()
+            );
+        }
+    }
+    assert!(inspected > 0, "no Grader Session traces were inspected");
+}
 
 pub(super) fn grader(scenario: &Scenario) {
     scenario.agent_does(&format!(
@@ -213,9 +279,7 @@ fn invalid_scores_remain_pending_and_can_be_retried() {
     }
 }
 
-#[test]
-fn sandboxed_grader_sees_only_its_packet_and_cannot_write_the_repository() {
-    use std::os::unix::fs::PermissionsExt;
+fn sandbox_available() -> bool {
     let probe = std::process::Command::new("bwrap")
         .args([
             "--ro-bind",
@@ -231,6 +295,15 @@ fn sandboxed_grader_sees_only_its_packet_and_cannot_write_the_repository() {
         .output();
     if !probe.is_ok_and(|output| output.status.success()) {
         println!("SKIPPED: bwrap namespaces unavailable on this host");
+        return false;
+    }
+    true
+}
+
+#[test]
+fn sandboxed_grader_sees_only_its_packet_and_cannot_write_the_repository() {
+    use std::os::unix::fs::PermissionsExt;
+    if !sandbox_available() {
         return;
     }
     let scenario = scenario();
@@ -287,21 +360,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","is_error":false}}'
 #[test]
 fn sandboxed_grader_cannot_read_ambient_secrets_or_replace_a_live_login() {
     use std::os::unix::fs::PermissionsExt;
-    let probe = std::process::Command::new("bwrap")
-        .args([
-            "--ro-bind",
-            "/",
-            "/",
-            "--unshare-pid",
-            "--unshare-net",
-            "--proc",
-            "/proc",
-            "--",
-            "/bin/true",
-        ])
-        .output();
-    if !probe.is_ok_and(|output| output.status.success()) {
-        println!("SKIPPED: bwrap namespaces unavailable on this host");
+    if !sandbox_available() {
         return;
     }
     let scenario = scenario();

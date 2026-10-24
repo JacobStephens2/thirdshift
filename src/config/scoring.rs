@@ -32,12 +32,7 @@ impl Default for Settings {
 
 impl Settings {
     pub fn fallback_grader(&self) -> Choice {
-        Choice {
-            harness: Harness::named(&self.fallback_harness).expect("validated Scoring Harness"),
-            model: (!self.fallback_model.trim().is_empty()).then(|| self.fallback_model.clone()),
-            effort: None,
-            chosen_by: ChosenBy::UserConfig,
-        }
+        grader_choice(&self.fallback_harness, &self.fallback_model)
     }
     pub fn validate(&self) -> Result<()> {
         for owner in &self.owners {
@@ -61,11 +56,15 @@ impl Settings {
     }
 
     pub fn grader(&self) -> Choice {
-        Choice {
-            harness: Harness::named(&self.harness).expect("validated Scoring Harness"),
-            model: (!self.model.trim().is_empty()).then(|| self.model.clone()),
-            effort: None,
-            chosen_by: ChosenBy::UserConfig,
-        }
+        grader_choice(&self.harness, &self.model)
+    }
+}
+
+fn grader_choice(harness: &str, model: &str) -> Choice {
+    Choice {
+        harness: Harness::named(harness).expect("validated Scoring Harness"),
+        model: (!model.trim().is_empty()).then(|| model.to_owned()),
+        effort: None,
+        chosen_by: ChosenBy::UserConfig,
     }
 }

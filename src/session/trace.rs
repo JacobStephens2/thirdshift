@@ -97,13 +97,7 @@ impl Trace {
                     attrs.push(attribute("thirdshift.session.prompt", prompt));
                     attrs.push(attribute(
                         "thirdshift.harness.arguments",
-                        serde_json::to_string(
-                            &command
-                                .get_args()
-                                .map(|arg| arg.to_string_lossy())
-                                .collect::<Vec<_>>(),
-                        )
-                        .unwrap(),
+                        serde_json::to_string(&recorded_arguments(command)).unwrap(),
                     ));
                     if let Some(dir) = command.get_current_dir() {
                         attrs.push(attribute("thirdshift.harness.directory", dir.display()));
@@ -459,6 +453,34 @@ impl Trace {
             }],
         }
     }
+}
+
+/// Launcher environment values can be credentials. Keep the command's shape
+/// in evidence without copying those values into local spans or OTLP exports.
+fn recorded_arguments(command: &std::process::Command) -> Vec<String> {
+    let mut arguments: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
+    if Path::new(command.get_program())
+        .file_name()
+        .is_some_and(|name| name == "bwrap")
+    {
+        let mut index = 0;
+        while index < arguments.len() {
+            match arguments[index].as_str() {
+                "--" => break,
+                "--setenv" => {
+                    if let Some(value) = arguments.get_mut(index + 2) {
+                        *value = "[redacted]".into();
+                    }
+                    index += 3;
+                }
+                _ => index += 1,
+            }
+        }
+    }
+    arguments
 }
 
 fn status(outcome: Outcome) -> Status {

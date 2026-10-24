@@ -94,7 +94,7 @@ pub(super) fn run(
     let adapter = choice.harness.adapter();
     let invocation = adapter.session(&choice, None, &prompt);
     let mut command = match &sandbox {
-        Some(sandbox) => sandbox.launch().command(&invocation.args)?,
+        Some(sandbox) => sandbox.command(&invocation.args)?,
         None => {
             let mut command = Command::new(adapter.name());
             command.args(&invocation.args);
