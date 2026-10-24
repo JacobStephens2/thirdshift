@@ -53,6 +53,90 @@ pub(super) fn live_record(home: &Path, number: u64, pid: u32) -> Value {
 }
 
 #[test]
+fn outcome_does_not_finish_sse_or_polling_before_the_writer_exits() {
+    use std::io::Write;
+    for polling in [false, true] {
+        let home = tempfile::tempdir().unwrap();
+        configure(home.path());
+        let mut work = FixtureProcess(Command::new("sleep").arg("60").spawn().unwrap());
+        let mut fixture = live_record(home.path(), 81, work.0.id());
+        write_record(home.path(), 81, &fixture);
+        let path = home
+            .path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue/81-fixture.log");
+        fs::write(&path, "first line\n").unwrap();
+        let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+        let link = console.log_link("81-fixture.log");
+        let client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(4))
+            .build()
+            .unwrap();
+        let poll = |offset| -> Value {
+            client
+                .get(format!("{}{link}/stream/{offset}", console.address))
+                .header("accept", "application/json")
+                .send()
+                .unwrap()
+                .json()
+                .unwrap()
+        };
+        let mut stream = (!polling).then(|| {
+            BufReader::new(
+                client
+                    .get(format!("{}{link}/stream/0", console.address))
+                    .send()
+                    .unwrap(),
+            )
+        });
+        let first = if let Some(stream) = &mut stream {
+            sse_event(stream)
+        } else {
+            poll(0).to_string()
+        };
+        assert!(
+            first.contains("first line") && first.contains("\"done\":false"),
+            "{first}"
+        );
+        fixture["outcome"] = json!("ready for review");
+        write_record(home.path(), 81, &fixture);
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(b"later output\nfinal unterminated output")
+            .unwrap();
+        let later = if let Some(stream) = &mut stream {
+            sse_event(stream)
+        } else {
+            poll(11).to_string()
+        };
+        assert!(
+            later.contains("later output") && later.contains("\"done\":false"),
+            "{later}"
+        );
+        assert!(!later.contains("final unterminated output"), "{later}");
+        let initial = console.get(&link).text().unwrap();
+        assert!(!initial.contains("final unterminated output"), "{initial}");
+        // Let the observer settle after the append, then exit without another record write.
+        std::thread::sleep(Duration::from_millis(200));
+        let began = std::time::Instant::now();
+        work.0.kill().unwrap();
+        work.0.wait().unwrap();
+        let last = if let Some(stream) = &mut stream {
+            sse_event(stream)
+        } else {
+            poll(24).to_string()
+        };
+        assert!(
+            last.contains("final unterminated output") && last.contains("\"done\":true"),
+            "{last}"
+        );
+        assert!(!last.contains("later output"), "{last}");
+        assert!(began.elapsed() < Duration::from_secs(2));
+    }
+}
+
+#[test]
 fn process_death_finishes_the_existing_reader_without_a_record_write() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());

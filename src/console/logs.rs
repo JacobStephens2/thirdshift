@@ -1,6 +1,5 @@
 //! Log pages and their independent append-only HTML stream.
 use std::convert::Infallible;
-use std::io::{BufRead, BufReader, Seek, SeekFrom};
 
 use anyhow::{Result, ensure};
 use askama::Template;
@@ -15,6 +14,7 @@ use serde::Serialize;
 
 use super::conversation;
 use crate::config::UserConfig;
+use crate::logs::Framing;
 use crate::logs::catalog::{self, Log};
 
 #[derive(Template)]
@@ -66,7 +66,7 @@ pub(super) async fn reader(Path(id): Path<String>) -> Response {
         else {
             return Ok(None);
         };
-        let lines = read_lines(&log, 0, usize::MAX)?;
+        let lines = log.reader.read(0, Framing::Lines, usize::MAX)?;
         let html = conversation::render(&String::from_utf8_lossy(&lines.bytes), log.kind);
         Ok(Some(
             ReaderPage {
@@ -94,47 +94,12 @@ struct Batch {
     done: bool,
 }
 
-fn appended(config: &UserConfig, id: &str, offset: u64) -> Result<Batch> {
-    // Observe completion before the final drain, so final unterminated output
-    // is included even if the Command ended between polls.
-    let log = catalog::find(config, id)?;
-    let lines = read_lines(&log, offset, 256 * 1024)?;
+fn appended(log: &Log, offset: u64) -> Result<Batch> {
+    let lines = log.reader.read(offset, Framing::Lines, 256 * 1024)?;
     Ok(Batch {
         html: conversation::render(&String::from_utf8_lossy(&lines.bytes), log.kind),
         offset: lines.offset,
         done: lines.done,
-    })
-}
-
-struct Lines {
-    bytes: Vec<u8>,
-    offset: u64,
-    done: bool,
-}
-
-fn read_lines(log: &Log, offset: u64, budget: usize) -> Result<Lines> {
-    let mut file = BufReader::new(std::fs::File::open(&log.path)?);
-    let length = file.get_ref().metadata()?.len();
-    ensure!(offset <= length, "log was truncated; reopen the reader");
-    file.seek(SeekFrom::Start(offset))?;
-    let mut bytes = Vec::new();
-    let mut next = offset;
-    while next < length && bytes.len() < budget {
-        let mut line = Vec::new();
-        if file.read_until(b'\n', &mut line)? == 0 {
-            break;
-        }
-        if log.live && !line.ends_with(b"\n") {
-            break;
-        }
-        next += line.len() as u64;
-        bytes.extend(line);
-    }
-    let done = !log.live && next >= file.get_ref().metadata()?.len();
-    Ok(Lines {
-        bytes,
-        offset: next,
-        done,
     })
 }
 
@@ -152,7 +117,7 @@ pub(super) async fn stream(
         .is_some_and(|value| value == "application/json")
     {
         return match tokio::task::spawn_blocking(move || {
-            appended(&UserConfig::load()?, &id, offset)
+            appended(&catalog::find(&UserConfig::load()?, &id)?, offset)
         })
         .await
         {
@@ -170,12 +135,12 @@ pub(super) async fn stream(
         let config = UserConfig::load()?;
         let log = catalog::find(&config, &id)?;
         ensure!(
-            offset <= std::fs::metadata(log.path)?.len(),
+            offset <= std::fs::metadata(&log.path)?.len(),
             "invalid log offset"
         );
         Ok(LogStream {
             config: std::sync::Arc::new(config),
-            id,
+            log: std::sync::Arc::new(log),
             offset,
             done: false,
             viewer,
@@ -201,14 +166,15 @@ pub(super) async fn stream(
             let authorize = state.accounts_revision != Some(revision);
             state.accounts_revision = Some(revision);
             let root = state.config.clone();
-            let selected = state.id.clone();
+            let selected = state.log.clone();
             let signed_in = state.viewer.clone();
             let offset = state.offset;
             let result = tokio::task::spawn_blocking(move || {
                 if authorize && !signed_in.still_allowed()? {
                     return Ok(None);
                 }
-                appended(&root, &selected, offset).map(Some)
+                catalog::find(&root, &selected.id)?;
+                appended(&selected, offset).map(Some)
             })
             .await;
             match result {
@@ -252,7 +218,7 @@ pub(super) async fn stream(
 
 struct LogStream {
     config: std::sync::Arc<UserConfig>,
-    id: String,
+    log: std::sync::Arc<Log>,
     offset: u64,
     done: bool,
     viewer: super::auth::Viewer,

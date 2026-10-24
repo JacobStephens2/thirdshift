@@ -8,7 +8,6 @@ use serde::Serialize;
 
 use super::{Command, Entry};
 use crate::issue::IssueUrl;
-use crate::logs::effects::Outside;
 use crate::logs::owner;
 
 enum Name {
@@ -284,14 +283,12 @@ impl Selection<'_> {
 
     /// Outcomes precede final output. Recheck the captured process, not state.
     pub(in crate::logs) fn process_exited(self) -> bool {
-        self.owner.is_none_or(|command| {
-            let record = &command.record;
-            record.process_start.is_empty()
-                || crate::logs::effects::OnMachine
-                    .process_start(record.process_id)
-                    .as_deref()
-                    != Some(&record.process_start)
-        })
+        self.owner
+            .is_none_or(|command| !super::Writer::capture(&command.record).live())
+    }
+
+    pub(in crate::logs) fn reader(self, path: PathBuf) -> super::Reader {
+        super::Reader::captured(path, self.owner, false)
     }
 }
 
