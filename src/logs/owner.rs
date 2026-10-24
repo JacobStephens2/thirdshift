@@ -330,36 +330,25 @@ pub(super) enum SessionOwner {
 }
 
 impl SessionOwner {
+    fn named(identity: Identity<'_>) -> Self {
+        Self::Named {
+            stamp: identity.stamp.into(),
+            token: identity.token.map(str::to_owned),
+        }
+    }
+
     pub fn of(session: &Decoded<'_>, evidence: Option<PathBuf>) -> Self {
-        evidence.map_or_else(
-            || Self::Named {
-                stamp: session.identity.stamp.into(),
-                token: session.identity.token.map(str::to_owned),
-            },
-            Self::Evidenced,
-        )
+        evidence.map_or_else(|| Self::named(session.identity), Self::Evidenced)
     }
 
     /// Every owner whose Sessions belong to `log`, keyed lexically.
     pub fn of_log(log: &Path) -> impl Iterator<Item = Self> {
-        let named = decode(log).map(|command| Self::Named {
-            stamp: command.identity.stamp.into(),
-            token: command.identity.token.map(str::to_owned),
-        });
+        let named = decode(log).map(|command| Self::named(command.identity));
         std::iter::once(Self::Evidenced(log.to_owned())).chain(named)
     }
 
     pub fn owns(&self, log: &Path) -> bool {
-        match self {
-            Self::Evidenced(evidence) => evidence == log,
-            Self::Named { stamp, token } => decode(log).is_some_and(|command| {
-                command.identity
-                    == Identity {
-                        stamp,
-                        token: token.as_deref(),
-                    }
-            }),
-        }
+        Self::of_log(log).any(|owner| owner == *self)
     }
 }
 

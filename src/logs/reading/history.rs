@@ -126,14 +126,7 @@ pub(in crate::logs) fn read(
     covered: &HashSet<PathBuf>,
 ) -> Result<Vec<Command>> {
     let repo = captured.path.as_path();
-    let repository = format!(
-        "{}/{}",
-        repo.parent()
-            .and_then(Path::file_name)
-            .unwrap_or_default()
-            .to_string_lossy(),
-        repo.file_name().unwrap_or_default().to_string_lossy()
-    );
+    let repository = captured.name();
     let mut starts: Vec<Started> = Vec::new();
     for line in super::cache::text(&repo.join("activity.log"))?.lines() {
         let Some((time, text)) = line.split_once(' ').and_then(|(date, rest)| {

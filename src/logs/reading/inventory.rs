@@ -18,13 +18,13 @@ use crate::logs::owner::{self, SessionOwner};
 /// The filesystem effects of discovery, separable so tests can count them.
 pub(super) trait Files: Send + Sync {
     /// A directory's entries, each with its own type: symlinks are `Other`.
-    fn list(&self, path: &Path) -> io::Result<Vec<(PathBuf, Type)>>;
+    fn list(&self, path: &Path) -> io::Result<Vec<(PathBuf, EntryKind)>>;
     fn metadata(&self, path: &Path) -> io::Result<std::fs::Metadata>;
     fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Type {
+pub(super) enum EntryKind {
     File,
     Directory,
     Other,
@@ -33,17 +33,17 @@ pub(super) enum Type {
 pub(super) struct Native;
 
 impl Files for Native {
-    fn list(&self, path: &Path) -> io::Result<Vec<(PathBuf, Type)>> {
+    fn list(&self, path: &Path) -> io::Result<Vec<(PathBuf, EntryKind)>> {
         std::fs::read_dir(path)?
             .map(|entry| {
                 let entry = entry?;
                 let kind = entry.file_type()?;
                 let kind = if kind.is_file() {
-                    Type::File
+                    EntryKind::File
                 } else if kind.is_dir() {
-                    Type::Directory
+                    EntryKind::Directory
                 } else {
-                    Type::Other
+                    EntryKind::Other
                 };
                 Ok((entry.path(), kind))
             })
@@ -73,6 +73,24 @@ pub(super) struct Inventory {
 pub(super) struct Repository {
     pub(super) path: PathBuf,
     pub(super) folders: Vec<Arc<Folder>>,
+}
+
+impl Repository {
+    /// `owner/repository`, from the folder names as spelled.
+    pub(super) fn name(&self) -> String {
+        name(&self.path)
+    }
+}
+
+pub(super) fn name(repo: &Path) -> String {
+    format!(
+        "{}/{}",
+        repo.parent()
+            .and_then(Path::file_name)
+            .unwrap_or_default()
+            .to_string_lossy(),
+        repo.file_name().unwrap_or_default().to_string_lossy()
+    )
 }
 
 pub(super) struct Folder {
@@ -139,7 +157,7 @@ impl Inventory {
 
     /// A capture holding just the folders its queries name, such as one
     /// Command's folder reloaded after Stop.
-    pub(super) fn sparse() -> Self {
+    pub(super) fn on_demand() -> Self {
         Self::new(Arc::new(Native))
     }
 
@@ -147,7 +165,7 @@ impl Inventory {
         &self.repositories
     }
 
-    fn list(&self, path: &Path) -> Result<Vec<(PathBuf, Type)>> {
+    fn list(&self, path: &Path) -> Result<Vec<(PathBuf, EntryKind)>> {
         match self.files.list(path) {
             Ok(entries) => Ok(entries),
             Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(Vec::new()),
@@ -159,7 +177,7 @@ impl Inventory {
         Ok(self
             .list(path)?
             .into_iter()
-            .filter(|(_, kind)| *kind == Type::Directory)
+            .filter(|(_, kind)| *kind == EntryKind::Directory)
             .map(|(path, _)| path)
             .collect())
     }
@@ -174,7 +192,7 @@ impl Inventory {
             files: self
                 .list(path)?
                 .into_iter()
-                .filter(|(_, kind)| *kind == Type::File)
+                .filter(|(_, kind)| *kind == EntryKind::File)
                 .map(|(path, _)| path)
                 .collect(),
             sessions: OnceLock::new(),

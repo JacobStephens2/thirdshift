@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, UNIX_EPOCH};
 
 use super::*;
-use crate::logs::reading::inventory::{Files, Native, Type};
+use crate::logs::reading::inventory::{EntryKind, Files, Native};
 
 const STAMP: &str = "20261019T110000-0400";
 
@@ -31,7 +31,7 @@ impl Counting {
 }
 
 impl Files for Counting {
-    fn list(&self, path: &Path) -> std::io::Result<Vec<(PathBuf, Type)>> {
+    fn list(&self, path: &Path) -> std::io::Result<Vec<(PathBuf, EntryKind)>> {
         self.count("list", path);
         Native.list(path)
     }
@@ -287,20 +287,32 @@ fn one_capture_serves_every_session_projection_without_discovering_again() {
 }
 
 #[test]
-fn a_fresh_capture_observes_added_sessions_and_revised_evidence() {
+fn a_fresh_capture_observes_added_removed_and_retargeted_sessions_and_revised_evidence() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     write(root, &format!("7-{STAMP}~seven.command.json"), &record(7));
     let implement = session(root, &format!("7-{STAMP}~seven-implement.logs.jsonl"), 1);
     let review = session(root, &format!("7-{STAMP}-review.logs.jsonl"), 2);
+    let repair = session(root, &format!("7-{STAMP}~seven-repair-1.logs.jsonl"), 4);
     let log = folder(root).join(format!("7-{STAMP}~seven.log"));
     evidence(&review, Some(&log));
     let files = Arc::new(Counting::default());
     let first = capture(root, &files);
     let selected = first.resolve("widgets#7").unwrap().observation;
+    let listed = |snapshot: &Snapshot| -> Vec<PathBuf> {
+        catalog::list(snapshot, root, None)
+            .unwrap()
+            .into_iter()
+            .map(|log| log.path)
+            .collect()
+    };
     assert_eq!(
         selected.sessions().unwrap(),
-        [implement.clone(), review.clone()]
+        [implement.clone(), review.clone(), repair.clone()]
+    );
+    assert_eq!(
+        listed(&first),
+        [review.clone(), implement.clone(), repair.clone()]
     );
 
     let resume = session(
@@ -310,10 +322,19 @@ fn a_fresh_capture_observes_added_sessions_and_revised_evidence() {
     );
     evidence(&review, None);
     fs::remove_file(&implement).unwrap();
+    // A retargeted entry becomes a symlink, which the inventory excludes.
+    let elsewhere = tempfile::tempdir().unwrap();
+    let moved = elsewhere.path().join("moved.logs.jsonl");
+    fs::rename(&repair, &moved).unwrap();
+    std::os::unix::fs::symlink(&moved, &repair).unwrap();
     assert_eq!(
         selected.sessions().unwrap(),
-        [implement.clone(), review.clone()],
+        [implement.clone(), review.clone(), repair.clone()],
         "one capture stays coherent"
+    );
+    assert_eq!(
+        listed(&first),
+        [review.clone(), implement.clone(), repair.clone()]
     );
     assert_eq!(selected.session("implement").unwrap(), implement);
 
@@ -321,6 +342,8 @@ fn a_fresh_capture_observes_added_sessions_and_revised_evidence() {
     let selected = fresh.resolve("widgets#7").unwrap().observation;
     assert_eq!(selected.sessions().unwrap(), std::slice::from_ref(&resume));
     assert_eq!(selected.session("implement").unwrap(), resume);
+    assert!(selected.session("repair").is_err());
+    assert_eq!(listed(&fresh), [review.clone(), resume.clone()]);
     // Without evidence the tokenless Session is recovered on its own.
     let Some(Entry::History(history)) = fresh
         .entries()

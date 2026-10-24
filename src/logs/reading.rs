@@ -162,7 +162,7 @@ impl Snapshot {
 
 /// Reload only the captured Command's folder, after Stop cleanup has finished.
 pub(super) fn retained_work(path: &Path, now: DateTime<Local>) -> Result<RetainedWork> {
-    let inventory = Arc::new(Inventory::sparse());
+    let inventory = Arc::new(Inventory::on_demand());
     let folder = inventory.folder(path.parent().context("Command record has no directory")?)?;
     let mut records = read_records(&inventory, &folder)?;
     anyhow::ensure!(records.contains_key(path), "Command record is unavailable");
@@ -355,15 +355,7 @@ fn children(
 fn read_idle_passes(repo: &Path) -> Result<Vec<IdlePass>> {
     let path = repo.join(activity::FILE);
     let activity = cache::text(&path)?;
-    let repository = format!(
-        "{}/{}",
-        repo.parent()
-            .unwrap()
-            .file_name()
-            .unwrap()
-            .to_string_lossy(),
-        repo.file_name().unwrap().to_string_lossy()
-    );
+    let repository = inventory::name(repo);
     let mut idle = Vec::new();
     for pass in [Pass::Architect, Pass::Pickup, Pass::Security] {
         let kind = activity::Kind::Pass(pass);

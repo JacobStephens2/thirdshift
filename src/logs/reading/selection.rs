@@ -376,8 +376,8 @@ pub(in crate::logs) enum Detailed<'a> {
     History(Box<super::history::Command>),
 }
 
-/// The detailed view adds a complete Session inventory and a live event to
-/// each Run while retaining the status reader's version 1 field names.
+/// The detailed view adds each Run's complete Session list and a live event,
+/// retaining the status reader's version 1 field names.
 #[derive(Serialize)]
 pub(in crate::logs) struct Details<'a> {
     #[serde(flatten)]

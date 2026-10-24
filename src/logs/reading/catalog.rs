@@ -177,15 +177,7 @@ pub(super) fn list(
     }
     let mut logs = Vec::new();
     for repo in snapshot.inventory.repositories() {
-        let repository = format!(
-            "{}/{}",
-            repo.path
-                .parent()
-                .and_then(Path::file_name)
-                .unwrap_or_default()
-                .to_string_lossy(),
-            repo.path.file_name().unwrap_or_default().to_string_lossy()
-        );
+        let repository = repo.name();
         for folder in &repo.folders {
             for path in &folder.files {
                 if !listed_name(path) {
