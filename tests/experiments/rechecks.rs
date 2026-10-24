@@ -1,6 +1,266 @@
 use super::*;
 
 #[test]
+fn batch_rechecks_record_the_reviewed_pending_scores_and_retain_history() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(review_reports_prelude());
+    let script = fixture.scenario.path("claude-script.sh.grader");
+    fs::write(
+        &script,
+        fs::read_to_string(&script)
+            .unwrap()
+            .replace("borderline=False", "borderline=True"),
+    )
+    .unwrap();
+    assert_eq!(fixture.run(&["--prior", "0.01"]).code, Some(0));
+    let experiment = fixture.experiment();
+    let id = experiment["id"].as_str().unwrap();
+    assert_eq!(experiment["pending_rechecks"].as_array().unwrap().len(), 2);
+    let listed = fixture
+        .scenario
+        .run(&["recheck", id, "--pending", "--json"]);
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    let listed: Value = serde_json::from_str(&listed.stdout).unwrap();
+    assert_eq!(listed["experiment"], id);
+    assert_eq!(listed["pending_rechecks"], experiment["pending_rechecks"]);
+    let fingerprint = listed["fingerprint"].as_str().unwrap();
+    assert_eq!(fingerprint.len(), 64);
+    let text = fixture.scenario.run(&["recheck", id, "--pending"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    assert!(text.stdout.contains(fingerprint), "{}", text.stdout);
+    for pending in listed["pending_rechecks"].as_array().unwrap() {
+        for field in ["id", "suite", "task", "arm"] {
+            assert!(text.stdout.contains(pending[field].as_str().unwrap()));
+        }
+    }
+    assert!(
+        text.stdout.contains("Trial 0 (borderline"),
+        "{}",
+        text.stdout
+    );
+    assert_eq!(fixture.experiment(), experiment, "listing changes nothing");
+    let checked = fixture.scenario.run(&[
+        "recheck",
+        id,
+        "--batch",
+        fingerprint,
+        "pass",
+        "--reason",
+        "Checked every report.",
+        "--wrong-finding",
+        "false",
+        "--json",
+    ]);
+    assert_eq!(checked.code, Some(0), "{}", checked.stderr);
+    let checked: Value = serde_json::from_str(&checked.stdout).unwrap();
+    assert_eq!(checked, fixture.experiment());
+    assert_eq!(checked["pending_rechecks"], json!([]));
+    assert_eq!(checked["verdict"]["verdict"], "pass");
+    for result in checked["results"].as_array().unwrap() {
+        assert_eq!(result["score"]["passed"], true, "original Score remains");
+        assert_eq!(result["score"]["rechecks"].as_array().unwrap().len(), 1);
+        let recheck = &result["score"]["rechecks"][0];
+        assert_eq!(recheck["passed"], true);
+        assert_eq!(recheck["wrong_finding"], false);
+        assert_eq!(recheck["reason"], "Checked every report.");
+        assert!(recheck["recorded_at"].is_string());
+    }
+    let pending_id = listed["pending_rechecks"][0]["id"].as_str().unwrap();
+    let revised = fixture.scenario.run(&[
+        "recheck",
+        id,
+        pending_id,
+        "pass",
+        "--reason",
+        "Checked once more.",
+    ]);
+    assert_eq!(revised.code, Some(0), "{}", revised.stderr);
+    let revised = fixture.experiment();
+    let history = &revised["results"][0]["score"]["rechecks"];
+    assert_eq!(history.as_array().unwrap().len(), 2);
+    assert_eq!(history[0]["reason"], "Checked every report.");
+    assert_eq!(history[1]["reason"], "Checked once more.");
+    assert_eq!(
+        history[1]["wrong_finding"], false,
+        "omission retains the flag"
+    );
+    assert_eq!(fixture.run(&["--prior", "0.01"]).code, Some(0));
+    assert_eq!(fixture.experiment(), revised, "resume keeps batch history");
+    assert_eq!(fixture.trial_calls().len(), 2);
+    assert_eq!(fixture.grader_calls().len(), 1);
+}
+
+#[test]
+fn stale_batch_fingerprints_leave_every_score_and_saved_byte_unchanged() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(review_reports_prelude());
+    assert_eq!(fixture.run(&["--prior", "0.01"]).code, Some(0));
+    let experiment = fixture.experiment();
+    let id = experiment["id"].as_str().unwrap();
+    let listed = fixture
+        .scenario
+        .run(&["recheck", id, "--pending", "--json"]);
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    let listed: Value = serde_json::from_str(&listed.stdout).unwrap();
+    let trial = listed["pending_rechecks"][0]["id"].as_str().unwrap();
+    let changed = fixture.scenario.run(&[
+        "recheck",
+        id,
+        trial,
+        "fail",
+        "--reason",
+        "Missed the finding.",
+    ]);
+    assert_eq!(changed.code, Some(0), "{}", changed.stderr);
+    let changed = fixture.experiment();
+    assert_eq!(changed["pending_rechecks"][0]["arm"], "baseline");
+    let path = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{id}/experiment.json"
+    ));
+    let bytes = fs::read(&path).unwrap();
+    let stale = fixture.scenario.run(&[
+        "recheck",
+        id,
+        "--batch",
+        listed["fingerprint"].as_str().unwrap(),
+        "pass",
+        "--reason",
+        "Reviewed an older list.",
+    ]);
+    assert_eq!(stale.code, Some(1), "{}", stale.stdout);
+    assert!(
+        stale.stderr.contains("stale fingerprint"),
+        "{}",
+        stale.stderr
+    );
+    assert!(stale.stderr.contains("--pending"), "{}", stale.stderr);
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    assert_eq!(fixture.experiment(), changed);
+}
+
+#[test]
+fn invalid_concurrent_and_empty_batches_leave_the_experiment_unchanged() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(review_reports_prelude());
+    assert_eq!(fixture.run(&["--prior", "0.01"]).code, Some(0));
+    let experiment = fixture.experiment();
+    let id = experiment["id"].as_str().unwrap();
+    let listed = fixture
+        .scenario
+        .run(&["recheck", id, "--pending", "--json"]);
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    let listed: Value = serde_json::from_str(&listed.stdout).unwrap();
+    let fingerprint = listed["fingerprint"].as_str().unwrap();
+    let path = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{id}/experiment.json"
+    ));
+    let bytes = fs::read(&path).unwrap();
+    for args in [
+        vec!["recheck", id, "--batch", fingerprint, "pass"],
+        vec![
+            "recheck",
+            id,
+            "--batch",
+            fingerprint,
+            "pass",
+            "--reason",
+            "  ",
+        ],
+        vec![
+            "recheck",
+            id,
+            "--batch",
+            fingerprint,
+            "maybe",
+            "--reason",
+            "Bad decision.",
+        ],
+        vec![
+            "recheck",
+            id,
+            "--batch",
+            fingerprint,
+            "pass",
+            "--reason",
+            "Bad flag.",
+            "--wrong-finding",
+            "maybe",
+        ],
+        vec![
+            "recheck",
+            id,
+            "--batch",
+            "stale",
+            "pass",
+            "--reason",
+            "Wrong fingerprint.",
+        ],
+        vec!["recheck", id, "--pending", "--reason", "Not a decision."],
+    ] {
+        let check = fixture.scenario.run(&args);
+        assert_eq!(check.code, Some(1), "{args:?}: {}", check.stdout);
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+        assert_eq!(fixture.experiment(), experiment);
+    }
+    let lock = fs::File::open(path.parent().unwrap().join("lock")).unwrap();
+    lock.try_lock().unwrap();
+    let concurrent = fixture.scenario.run(&[
+        "recheck",
+        id,
+        "--batch",
+        fingerprint,
+        "pass",
+        "--reason",
+        "Concurrent.",
+    ]);
+    assert_eq!(concurrent.code, Some(1));
+    assert!(
+        concurrent
+            .stderr
+            .contains("already running or being rechecked"),
+        "{}",
+        concurrent.stderr
+    );
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    drop(lock);
+    let check = fixture.scenario.run(&[
+        "recheck",
+        id,
+        "--batch",
+        fingerprint,
+        "pass",
+        "--reason",
+        "Confirmed.",
+    ]);
+    assert_eq!(check.code, Some(0), "{}", check.stderr);
+    let checked = fixture.experiment();
+    let listed = fixture
+        .scenario
+        .run(&["recheck", id, "--pending", "--json"]);
+    assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+    let listed: Value = serde_json::from_str(&listed.stdout).unwrap();
+    assert_eq!(listed["pending_rechecks"], json!([]));
+    let bytes = fs::read(&path).unwrap();
+    let empty = fixture.scenario.run(&[
+        "recheck",
+        id,
+        "--batch",
+        listed["fingerprint"].as_str().unwrap(),
+        "pass",
+        "--reason",
+        "Nothing to review.",
+    ]);
+    assert_eq!(empty.code, Some(1));
+    assert!(
+        empty.stderr.contains("no pending Scores"),
+        "{}",
+        empty.stderr
+    );
+    assert_eq!(fs::read(&path).unwrap(), bytes);
+    assert_eq!(fixture.experiment(), checked);
+}
+
+#[test]
 fn a_passed_recheck_moves_the_experiment_to_done() {
     let fixture = Fixture::new();
     fixture.scenario.agent_does(review_reports_prelude());
@@ -47,6 +307,10 @@ fn decisive_score_waits_for_recheck_and_retains_both_scores_and_history() {
     assert_eq!(
         waiting[0]["decisive_flips"],
         json!(["passed", "wrong_finding"])
+    );
+    assert_eq!(
+        waiting[0]["decisive_verdicts"],
+        json!({"passed": "fail", "wrong_finding": "fail"})
     );
     let id = experiment["id"].as_str().unwrap();
     let trial = waiting[0]["id"].as_str().unwrap();
@@ -136,6 +400,8 @@ PY
         .unwrap();
     assert_eq!(baseline["borderline"], true);
     assert_eq!(baseline["decisive"], false);
+    assert_eq!(baseline["decisive_flips"], json!([]));
+    assert_eq!(baseline["decisive_verdicts"], json!({}));
     let id = experiment["id"].as_str().unwrap();
     let candidate = pending
         .iter()
@@ -313,6 +579,15 @@ fn completed_experiments_saved_before_rechecks_acquire_the_pending_gate() {
         "home/.thirdshift/evals/experiments/{id}/experiment.json"
     ));
     let mut legacy: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    for pending in legacy["pending_rechecks"].as_array_mut().unwrap() {
+        pending.as_object_mut().unwrap().remove("decisive_verdicts");
+    }
+    fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+    assert_eq!(
+        fixture.experiment(),
+        experiment,
+        "older pending lists acquire flip Verdicts"
+    );
     legacy.as_object_mut().unwrap().remove("rechecks");
     legacy.as_object_mut().unwrap().remove("pending_rechecks");
     legacy["verdict"]
