@@ -431,7 +431,10 @@ fn request_reruns<'a>(
         checks: failed.own.iter().chain(&failed.inherited).collect(),
         previous_attempt,
         all_requested: requested.len() == workflow_runs.len()
-            && failed.own.iter().all(|check| scoped_workflow_run(check).is_some()),
+            && failed
+                .own
+                .iter()
+                .all(|check| scoped_workflow_run(check).is_some()),
         requested,
     })
 }
@@ -2164,8 +2167,7 @@ mod tests {
             workflow_id: 10,
         });
         for spoofed in [without_listing, mismatched] {
-            let mut github =
-                InMemory::new().listing(HEAD, vec![vec![spoofed.clone()]]);
+            let mut github = InMemory::new().listing(HEAD, vec![vec![spoofed.clone()]]);
             let failed = FailedChecks {
                 own: vec![spoofed],
                 inherited: Vec::new(),
@@ -2224,7 +2226,10 @@ mod tests {
             github.reruns
         );
         assert!(
-            github.steps.iter().any(|line| line.contains("no workflow run")),
+            github
+                .steps
+                .iter()
+                .any(|line| line.contains("no workflow run")),
             "expected an off-commit decline line, got: {:?}",
             github.steps
         );

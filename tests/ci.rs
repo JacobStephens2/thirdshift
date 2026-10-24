@@ -65,8 +65,7 @@ gh fake run "{{\"databaseId\":901,\"workflow_id\":10,\"created_at\":\"2026-10-19
 /// the commit. Record exactly the runs the commit's checks name: a recorded
 /// run with no checks there would add a pending stand-in check.
 fn scoped_runs_on(commit: &str, runs: &[u64]) -> String {
-    runs
-        .iter()
+    runs.iter()
         .enumerate()
         .map(|(n, run)| {
             format!(
