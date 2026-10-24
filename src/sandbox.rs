@@ -363,7 +363,6 @@ pub(crate) fn prepare(request: &Request<'_>) -> Result<Prepared> {
             stop: &|child| crate::process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
         },
         std::time::Instant::now() + Duration::from_secs(5),
-        &|| Ok(()),
     )
     .map_err(|error| {
         anyhow::Error::new(Unavailable {

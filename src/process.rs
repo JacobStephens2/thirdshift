@@ -86,7 +86,7 @@ pub(crate) fn output(
     input: Option<&[u8]>,
     control: Control<'_>,
 ) -> Result<Output> {
-    captured(command, input, control, None, &|| Ok(()))
+    captured(command, input, control, None)
 }
 
 /// A Trial deadline includes pipe draining and uses the same whole-tree cleanup.
@@ -95,9 +95,8 @@ pub(crate) fn output_until(
     input: Option<&[u8]>,
     control: Control<'_>,
     deadline: Instant,
-    check: &dyn Fn() -> Result<()>,
 ) -> Result<Output> {
-    captured(command, input, control, Some(deadline), check)
+    captured(command, input, control, Some(deadline))
 }
 
 #[derive(Debug)]
@@ -131,18 +130,11 @@ fn captured(
     input: Option<&[u8]>,
     control: Control<'_>,
     deadline: Option<Instant>,
-    check: &dyn Fn() -> Result<()>,
 ) -> Result<Output> {
     let cli = control.name.to_owned();
-    let (execution, _) = execute(
-        command,
-        input,
-        control,
-        true,
-        deadline,
-        check,
-        move |pipe| read(pipe).with_context(|| format!("could not read {cli}'s stdout")),
-    );
+    let (execution, _) = execute(command, input, control, true, deadline, move |pipe| {
+        read(pipe).with_context(|| format!("could not read {cli}'s stdout"))
+    });
     let (status, stdout, stderr) = execution?;
     Ok(Output {
         status,
@@ -158,7 +150,7 @@ pub(crate) struct Streamed<T> {
     pub state: T,
 }
 
-/// Consume stdout concurrently with prompt I/O and an optional deadline. Preserve
+/// Consume stdout concurrently with prompt I/O. Preserve
 /// state after any normal consumer return, even when execution fails. Return
 /// only after completion or whole-tree cleanup and every worker is joined.
 /// A consumer panic or any startup failure returns no state. Recorded ordinary
@@ -167,36 +159,17 @@ pub(crate) fn streaming<T: Send + 'static>(
     command: &mut Command,
     input: Option<&[u8]>,
     control: Control<'_>,
-    state: T,
-    consume: impl FnOnce(ChildStdout, &mut T) -> Result<()> + Send + 'static,
-) -> Result<Streamed<T>> {
-    streaming_until(command, input, control, None, state, consume)
-}
-
-pub(crate) fn streaming_until<T: Send + 'static>(
-    command: &mut Command,
-    input: Option<&[u8]>,
-    control: Control<'_>,
-    deadline: Option<Instant>,
     mut state: T,
     consume: impl FnOnce(ChildStdout, &mut T) -> Result<()> + Send + 'static,
 ) -> Result<Streamed<T>> {
     // One send fits without waiting for the caller, which must first finish
     // supervising and joining all workers, including on transport failure.
     let (completed, recovered) = mpsc::sync_channel(1);
-    let (execution, started) = execute(
-        command,
-        input,
-        control,
-        false,
-        deadline,
-        &|| Ok(()),
-        move |pipe| {
-            let result = consume(pipe, &mut state);
-            let _ = completed.send(state);
-            result
-        },
-    );
+    let (execution, started) = execute(command, input, control, false, None, move |pipe| {
+        let result = consume(pipe, &mut state);
+        let _ = completed.send(state);
+        result
+    });
     let execution = execution.map(|(status, (), _)| status);
     control.interruption.check()?;
     if !started {
@@ -214,13 +187,12 @@ fn read(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
     Ok(bytes)
 }
 
-fn execute<'a, T: Send + 'static>(
+fn execute<T: Send + 'static>(
     command: &mut Command,
     input: Option<&[u8]>,
-    control: Control<'a>,
+    control: Control<'_>,
     capture_stderr: bool,
     deadline: Option<Instant>,
-    check: &'a dyn Fn() -> Result<()>,
     consume: impl FnOnce(ChildStdout) -> Result<T> + Send + 'static,
 ) -> (Result<(ExitStatus, T, Vec<u8>)>, bool) {
     let Control {
@@ -233,7 +205,6 @@ fn execute<'a, T: Send + 'static>(
         if interruption.requested() {
             bail!("interrupted");
         }
-        check()?;
         let cli = name.to_owned();
         let (wake, awakened) = mpsc::channel();
         #[cfg(test)]
@@ -257,7 +228,6 @@ fn execute<'a, T: Send + 'static>(
         // Install ownership immediately: every fallible step after spawn is
         // covered, including pipe extraction and starting workers.
         let mut owned = Execution {
-            check,
             deadline,
             control,
             child,
@@ -359,7 +329,6 @@ fn execute<'a, T: Send + 'static>(
 }
 
 struct Execution<'a, T> {
-    check: &'a dyn Fn() -> Result<()>,
     deadline: Option<Instant>,
     control: Control<'a>,
     child: Child,
@@ -377,7 +346,6 @@ impl<T> Execution<'_, T> {
             if self.control.interruption.requested() {
                 bail!("interrupted");
             }
-            (self.check)()?;
             if self
                 .deadline
                 .is_some_and(|deadline| Instant::now() >= deadline)
@@ -411,7 +379,6 @@ impl<T> Execution<'_, T> {
                 if self.control.interruption.requested() {
                     bail!("interrupted");
                 }
-                (self.check)()?;
                 return Ok(status);
             }
             // Worker completion (including unwind) wakes us immediately.
