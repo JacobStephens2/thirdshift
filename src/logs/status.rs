@@ -88,7 +88,7 @@ pub fn show(json: bool, all: bool) -> Result<()> {
     }
     let snapshot =
         Snapshot::load_with_silence(&config.logs_dir, Local::now(), config.silent_interval)?;
-    // Every ready row's pull request is looked up in one batched read,
+    // Needs you issues/pull requests and ready rows' pull requests share a batched read,
     // except a row that has already reached History: from there on it
     // keeps what GitHub last showed and is not read again.
     let mut kept = super::github::load(&config.logs_dir);
@@ -97,14 +97,17 @@ pub fn show(json: bool, all: bool) -> Result<()> {
     // again: only rows with a kept answer are frozen, so the first read
     // still looks up a row that local rules alone would call History.
     for item in first {
-        if item.group == Group::History
-            && let Some(url) = item.pull_request()
-            && let Some(row) = item.command.selector()
-        {
-            kept.freeze(row, url);
+        for item in std::iter::once(&item).chain(&item.collapsed) {
+            if item.group == Group::History
+                && let Some(row) = item.command.selector()
+            {
+                for url in item.github_urls() {
+                    kept.freeze(row.clone(), url);
+                }
+            }
         }
     }
-    let urls = snapshot.ready_pull_requests(config.inbox_days, &kept);
+    let urls = snapshot.github_subjects(config.inbox_days, &kept);
     let kept = super::github::refresh(&config.logs_dir, &urls, kept)?;
     let status = Status {
         version: 1,

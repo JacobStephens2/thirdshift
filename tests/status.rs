@@ -560,7 +560,6 @@ fn inbox_clears_ended_problems_on_a_later_local_start_or_the_configured_age() {
             }
         });
     }
-    let calls = scenario.gh_calls();
     let output = scenario.run(&["status", "--json"]);
     assert_eq!(output.code, Some(0), "{}", output.stderr);
     let status: Value = serde_json::from_str(&output.stdout).unwrap();
@@ -583,10 +582,12 @@ fn inbox_clears_ended_problems_on_a_later_local_start_or_the_configured_age() {
     assert_eq!(commands.len(), 1, "{status}");
     assert_eq!(commands[0]["issue"]["number"], 12);
     assert_eq!(commands[0]["group"], "needs you");
-    assert_eq!(
-        scenario.gh_calls(),
-        calls,
-        "status must use only this machine's files"
+    assert_eq!(graphql_calls(&scenario).len(), 1);
+    assert!(
+        scenario
+            .gh_calls()
+            .iter()
+            .all(|call| call[..2] == ["api", "graphql"])
     );
 }
 
@@ -791,8 +792,12 @@ fn inbox_puts_live_problems_first_and_points_to_silent_landing_without_duplicati
     write_record(&scenario, 11, &recent, None);
     write_record(&scenario, 12, &recent, Some(&recent));
     change_record(&scenario, 12, |record| record["outcome"] = "failed".into());
+    for number in [7, 8] {
+        github_issue_is(&scenario, number, "CLOSED", Some(&recent));
+    }
     let output = scenario.run(&["status", "--json"]);
     let text = scenario.run(&["status"]);
+    let reads_while_live = graphql_calls(&scenario);
     fs::write(scenario.path("release"), "").unwrap();
     held.finish();
     assert_eq!(output.code, Some(0), "{}", output.stderr);
@@ -848,11 +853,34 @@ fn inbox_puts_live_problems_first_and_points_to_silent_landing_without_duplicati
         "{}",
         text.stdout
     );
+    for number in [7, 8] {
+        assert!(
+            reads_while_live
+                .iter()
+                .flatten()
+                .any(|arg| arg.contains(&format!("issue(number: {number})"))),
+            "{reads_while_live:?}"
+        );
+    }
+    // The same closed-issue facts apply once these live Commands end.
+    let output = scenario.run(&["status", "--json"]);
+    let ended: Value = serde_json::from_str(&output.stdout).unwrap();
+    for number in [7, 8] {
+        let row = ended["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|row| row["issue"]["number"] == number)
+            .unwrap();
+        assert_eq!(row["group"], "resolved", "{row}");
+        assert_eq!(row["left_reason"], "issue closed", "{row}");
+    }
 }
 
 #[test]
 fn inbox_distinguishes_triage_stops_and_waiting_findings_from_completed_work() {
     let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["needs-triage"]);
     let time = chrono::Local::now().to_rfc3339();
     for number in 7..12 {
         write_record(&scenario, number, &time, Some(&time));
@@ -1726,6 +1754,298 @@ fn age_cache_file(scenario: &Scenario, seconds: u64) {
 
 fn hours_ago(hours: i64) -> String {
     (chrono::Local::now() - chrono::Duration::hours(hours)).to_rfc3339()
+}
+
+fn failed_record(scenario: &Scenario, number: u32, ended: &str) {
+    write_record(scenario, number, ended, Some(ended));
+    change_record(scenario, number, |record| {
+        record["outcome"] = "failed".into()
+    });
+}
+
+fn github_issue_is(scenario: &Scenario, number: u32, state: &str, closed_at: Option<&str>) {
+    scenario.issue_is(number, state);
+    let mut gh = scenario.gh_state();
+    gh["issue_closed_at"][number.to_string()] = closed_at.into();
+    scenario.write_gh_state(&gh);
+}
+
+#[test]
+fn closed_issue_takes_a_failed_row_into_resolved_from_its_close_time() {
+    let scenario = Scenario::new();
+    let closed = hours_ago(1);
+    failed_record(&scenario, 7, &hours_ago(240));
+    github_issue_is(&scenario, 7, "CLOSED", Some(&closed));
+    let output = scenario.run(&["status", "--json"]);
+    assert_eq!(output.code, Some(0), "{}", output.stderr);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let row = &status["commands"][0];
+    assert_eq!(row["group"], "resolved", "{status}");
+    assert_eq!(row["left_from"], "needs you", "{row}");
+    assert_eq!(row["left_reason"], "issue closed", "{row}");
+    assert_eq!(row["left_at"], closed, "{row}");
+    let text = scenario.run(&["status"]);
+    assert!(
+        text.stdout
+            .contains(&format!("left needs you: issue closed at {closed}")),
+        "{}",
+        text.stdout
+    );
+    assert_eq!(graphql_calls(&scenario).len(), 1);
+}
+
+#[test]
+fn failed_rows_leave_only_for_merged_pull_requests_while_their_issues_are_open() {
+    for (state, group, reason) in [
+        ("MERGED", "resolved", Some("pull request merged")),
+        ("CLOSED", "needs you", None),
+        ("OPEN", "needs you", None),
+    ] {
+        let scenario = Scenario::new();
+        let at = hours_ago(1);
+        failed_record(&scenario, 7, &hours_ago(240));
+        change_record(&scenario, 7, |record| {
+            record["pull_request"] = github_pr_url(7).into()
+        });
+        github_pr_is(
+            &scenario,
+            7,
+            state,
+            (state == "MERGED").then_some(at.as_str()),
+            (state == "CLOSED").then_some(at.as_str()),
+        );
+        let output = scenario.run(&["status", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        let row = &status["commands"][0];
+        assert_eq!(row["group"], group, "{state}: {status}");
+        assert_eq!(row["left_reason"].as_str(), reason, "{row}");
+        if reason.is_some() {
+            assert_eq!(row["left_at"], at, "{row}");
+        }
+        let calls = graphql_calls(&scenario);
+        assert_eq!(calls.len(), 1);
+        assert!(
+            calls[0]
+                .iter()
+                .any(|arg| arg.contains("issue(number:") && arg.contains("pullRequest(number:")),
+            "{calls:?}"
+        );
+    }
+}
+
+#[test]
+fn triage_rows_leave_when_the_label_is_removed_and_keep_the_first_observed_time() {
+    let scenario = Scenario::new();
+    failed_record(&scenario, 7, &hours_ago(240));
+    fs::write(
+        scenario.path(LOGS).join("7-fixture.command.stop.json"),
+        r#"{"who":"jacob","requeue":false}"#,
+    )
+    .unwrap();
+    scenario.issue_labelled(7, &["NEEDS-TRIAGE"]);
+    let output = scenario.run(&["status", "--json"]);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(
+        status["commands"][0]["needs_you_kind"], "triage",
+        "{status}"
+    );
+    scenario.issue_labelled(7, &[]);
+    age_cache_file(&scenario, 360);
+    let output = scenario.run(&["status", "--json"]);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let row = &status["commands"][0];
+    assert_eq!(row["group"], "resolved", "{status}");
+    assert_eq!(row["left_reason"], "needs-triage removed", "{row}");
+    let first = row["left_at"].as_str().unwrap();
+    assert!(
+        chrono::DateTime::parse_from_rfc3339(first).unwrap()
+            > chrono::Local::now() - chrono::Duration::minutes(1)
+    );
+    age_cache_file(&scenario, 360);
+    let output = scenario.run(&["status", "--json"]);
+    let refreshed: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(refreshed["commands"][0]["left_at"], first, "{refreshed}");
+    scenario.issue_labelled(7, &["needs-triage"]);
+    age_cache_file(&scenario, 360);
+    let output = scenario.run(&["status", "--json"]);
+    let reopened: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(reopened["commands"][0]["group"], "needs you", "{reopened}");
+}
+
+#[test]
+fn architect_and_security_failures_use_their_dispatched_plans_and_fixes() {
+    for (kind, run_kind, settlement) in [
+        ("Architect run", "Spec run", "issue closed"),
+        ("Architect run", "Run", "pull request merged"),
+        ("Security run", "Run", "issue closed"),
+        ("Security run", "Spec run", "pull request merged"),
+    ] {
+        let scenario = Scenario::new();
+        let at = hours_ago(1);
+        failed_record(&scenario, 8, &hours_ago(240));
+        let dispatched: Value = serde_json::from_slice(
+            &fs::read(scenario.path(LOGS).join("8-fixture.command.json")).unwrap(),
+        )
+        .unwrap();
+        change_record(&scenario, 8, |record| {
+            let mut run = dispatched.clone();
+            run["kind"] = run_kind.into();
+            run["pull_request"] = github_pr_url(8).into();
+            record["kind"] = kind.into();
+            record["name"] = "pass-fixture".into();
+            // A pass has no issue or pull request of its own.
+            record["issue"] = Value::Null;
+            record["dispatched"] = vec![run].into();
+        });
+        if settlement == "issue closed" {
+            github_issue_is(&scenario, 8, "CLOSED", Some(&at));
+            github_pr_is(&scenario, 8, "CLOSED", None, Some(&at));
+        } else {
+            github_issue_is(&scenario, 8, "OPEN", None);
+            github_pr_is(&scenario, 8, "MERGED", Some(&at), None);
+        }
+        let output = scenario.run(&["status", "--json"]);
+        assert_eq!(output.code, Some(0), "{}", output.stderr);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        let row = &status["commands"][0];
+        assert_eq!(row["kind"], kind, "{status}");
+        assert_eq!(row["group"], "resolved", "{status}");
+        assert_eq!(row["left_reason"], settlement, "{row}");
+        assert_eq!(row["left_at"], at, "{row}");
+    }
+}
+
+#[test]
+fn reopening_and_undo_put_failed_rows_where_github_says_without_overriding_dismissals() {
+    for hours in [12, 240] {
+        let scenario = Scenario::new();
+        let closed = hours_ago(1);
+        failed_record(&scenario, 7, &hours_ago(hours));
+        github_issue_is(&scenario, 7, "CLOSED", Some(&closed));
+        let output = scenario.run(&["status", "--json"]);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        let settled_group = if hours == 12 { "done" } else { "resolved" };
+        assert_eq!(status["commands"][0]["group"], settled_group, "{status}");
+        github_issue_is(&scenario, 7, "OPEN", None);
+        age_cache_file(&scenario, 360);
+        let output = scenario.run(&["status", "--json"]);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(status["commands"][0]["group"], "needs you", "{status}");
+        let dismissed = scenario.run(&["dismiss", "widgets#7"]);
+        assert_eq!(dismissed.code, Some(0), "{}", dismissed.stderr);
+        github_issue_is(&scenario, 7, "CLOSED", Some(&closed));
+        age_cache_file(&scenario, 360);
+        let output = scenario.run(&["status", "--json"]);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(status["commands"][0]["group"], settled_group, "{status}");
+        assert_eq!(
+            status["commands"][0]["dismissal"]["kind"], "Failed",
+            "{status}"
+        );
+        github_issue_is(&scenario, 7, "OPEN", None);
+        age_cache_file(&scenario, 360);
+        let output = scenario.run(&["status", "--json"]);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(status["commands"][0]["group"], settled_group, "{status}");
+        github_issue_is(&scenario, 7, "CLOSED", Some(&closed));
+        age_cache_file(&scenario, 360);
+        scenario.run(&["status", "--json"]);
+        let undone = scenario.run(&["dismiss", "widgets#7", "--undo"]);
+        assert_eq!(undone.code, Some(0), "{}", undone.stderr);
+        let output = scenario.run(&["status", "--json"]);
+        let status: Value = serde_json::from_str(&output.stdout).unwrap();
+        assert_eq!(status["commands"][0]["group"], settled_group, "{status}");
+        assert_eq!(
+            status["commands"][0]["left_reason"], "issue closed",
+            "{status}"
+        );
+        assert!(status["commands"][0].get("dismissal").is_none(), "{status}");
+    }
+}
+
+#[test]
+fn needs_you_ages_only_rows_github_cannot_speak_for() {
+    let scenario = Scenario::new();
+    let ended = hours_ago(240);
+    for number in [7, 8, 99] {
+        failed_record(&scenario, number, &ended);
+    }
+    change_record(&scenario, 8, |record| {
+        record["kind"] = "Architect run".into();
+        record["name"] = "architect-fixture".into();
+        record["issue"] = Value::Null;
+        record["cause"] = "billing failure".into();
+    });
+    scenario.gh_fails("api graphql");
+    let output = scenario.run(&["status", "--all", "--json"]);
+    let unread: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(
+        unread["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["group"] == "history"),
+        "{unread}"
+    );
+    let mut gh = scenario.gh_state();
+    gh["failing"] = serde_json::json!([]);
+    scenario.write_gh_state(&gh);
+    let output = scenario.run(&["status", "--all", "--json"]);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    let rows = status["commands"].as_array().unwrap();
+    assert_eq!(rows.len(), 3, "{status}");
+    for row in rows {
+        assert_eq!(
+            row["group"],
+            if row["issue"]["number"] == 7 {
+                "needs you"
+            } else {
+                "history"
+            },
+            "{row}"
+        );
+    }
+    // An issue closed outside the retention period goes straight to History
+    // and a later reopen cannot bring its frozen row back.
+    github_issue_is(&scenario, 7, "CLOSED", Some(&hours_ago(200)));
+    age_cache_file(&scenario, 360);
+    let output = scenario.run(&["status", "--all", "--json"]);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(
+        status["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["group"] == "history"),
+        "{status}"
+    );
+    let calls = graphql_calls(&scenario).len();
+    github_issue_is(&scenario, 7, "OPEN", None);
+    age_cache_file(&scenario, 360);
+    let output = scenario.run(&["status", "--all", "--json"]);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert!(
+        status["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|row| row["group"] == "history"),
+        "{status}"
+    );
+    assert_eq!(graphql_calls(&scenario).len(), calls);
+}
+
+#[test]
+fn github_settlement_bounds_resolved_even_when_the_command_ended_more_recently() {
+    let scenario = Scenario::new();
+    failed_record(&scenario, 7, &hours_ago(48));
+    let closed = hours_ago(200);
+    github_issue_is(&scenario, 7, "CLOSED", Some(&closed));
+    let output = scenario.run(&["status", "--all", "--json"]);
+    let status: Value = serde_json::from_str(&output.stdout).unwrap();
+    assert_eq!(status["commands"][0]["group"], "history", "{status}");
+    assert_eq!(status["commands"][0]["left_at"], closed, "{status}");
 }
 
 #[test]

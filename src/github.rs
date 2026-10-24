@@ -689,27 +689,36 @@ impl GitHub {
             .collect()
     }
 
-    /// What GitHub last showed for the pull requests `urls` names, one
+    /// What GitHub last showed for the issues and pull requests `urls` names, one
     /// batched GraphQL query per hundred, split only if it must be. Each
-    /// alias asks for its pull request's state and its merge or close time,
-    /// and for the query's own `rateLimit`. A pull request GitHub can't
+    /// alias asks for state and settlement times (plus issue triage labels),
+    /// and for the query's own `rateLimit`. A subject GitHub can't
     /// resolve answers null and stays out of the map, without failing the
     /// rest of the read. Only reads; nothing here writes to GitHub.
-    pub(crate) fn pull_request_states(
-        &self,
-        urls: &[String],
-    ) -> Result<BTreeMap<String, PullRequestState>> {
+    pub(crate) fn inbox_states(&self, urls: &[String]) -> Result<BTreeMap<String, InboxState>> {
         let mut states = BTreeMap::new();
         for chunk in urls.chunks(100) {
             let mut query = String::from("query {");
             let mut aliases = Vec::new();
             for (index, url) in chunk.iter().enumerate() {
-                let Some((owner, repo, number)) = split_pull_request_url(url) else {
+                let subject = split_pull_request_url(url)
+                    .map(|(owner, repo, number)| (owner, repo, number, "pullRequest"))
+                    .or_else(|| {
+                        IssueUrl::parse(url)
+                            .ok()
+                            .map(|issue| (issue.owner, issue.repo, issue.number, "issue"))
+                    });
+                let Some((owner, repo, number, field)) = subject else {
                     continue;
                 };
                 let alias = format!("pr{index}");
-                query.push_str(&format!(" {alias}: repository(owner: \"{owner}\", name: \"{repo}\") {{ pullRequest(number: {number}) {{ url state mergedAt closedAt }} }}"));
-                aliases.push((alias, url.clone()));
+                let fields = if field == "issue" {
+                    "state closedAt labels(first: 100) { nodes { name } }"
+                } else {
+                    "url state mergedAt closedAt"
+                };
+                query.push_str(&format!(" {alias}: repository(owner: \"{owner}\", name: \"{repo}\") {{ {field}(number: {number}) {{ {fields} }} }}"));
+                aliases.push((alias, url.clone(), field));
             }
             if aliases.is_empty() {
                 continue;
@@ -729,7 +738,7 @@ impl GitHub {
                             !errors.is_empty()
                                 && errors.iter().all(|error| {
                                     error["path"][0].as_str().is_some_and(|path| {
-                                        aliases.iter().any(|(alias, _)| alias == path)
+                                        aliases.iter().any(|(alias, _, _)| alias == path)
                                     })
                                 })
                         })
@@ -746,18 +755,23 @@ impl GitHub {
                 })
             })?;
             let data = &json["data"];
-            for (alias, url) in aliases {
+            for (alias, url, field) in aliases {
                 if json["errors"]
                     .as_array()
                     .is_some_and(|errors| errors.iter().any(|error| error["path"][0] == alias))
                 {
                     continue;
                 }
-                let pull = &data[alias.as_str()]["pullRequest"];
+                let pull = &data[alias.as_str()][field];
                 if pull.is_null() {
                     continue;
                 }
-                states.insert(url.clone(), PullRequestState::from_json(&url, pull)?);
+                let state = if field == "issue" {
+                    InboxState::Issue(IssueState::from_json(&url, pull)?)
+                } else {
+                    InboxState::PullRequest(PullRequestState::from_json(&url, pull)?)
+                };
+                states.insert(url, state);
             }
         }
         Ok(states)
@@ -1507,6 +1521,48 @@ impl PullRequest {
                 .context(CommandFailure::InvalidResponse(
                     "gh output has no isDraft".into(),
                 ))?,
+        })
+    }
+}
+
+/// The Inbox's facts for either kind of GitHub subject. Untagged to keep
+/// reading the pull-request-only cache written before issue reads existed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum InboxState {
+    Issue(IssueState),
+    PullRequest(PullRequestState),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct IssueState {
+    pub closed: bool,
+    pub closed_at: Option<String>,
+    pub needs_triage: bool,
+    /// The first kept answer showing needs-triage absent, reset if it returns.
+    pub triaged_at: Option<String>,
+}
+
+impl IssueState {
+    fn from_json(url: &str, json: &Value) -> Result<Self> {
+        let closed = match json["state"].as_str() {
+            Some("OPEN") => false,
+            Some("CLOSED") => true,
+            other => bail!(CommandFailure::InvalidResponse(format!(
+                "gh output has an unknown issue state {other:?} for {url}"
+            ))),
+        };
+        Ok(Self {
+            closed,
+            closed_at: json["closedAt"].as_str().map(String::from),
+            needs_triage: json["labels"]["nodes"].as_array().is_some_and(|labels| {
+                labels.iter().any(|label| {
+                    label["name"]
+                        .as_str()
+                        .is_some_and(|name| crate::labels::NEEDS_TRIAGE.is_named(name))
+                })
+            }),
+            triaged_at: None,
         })
     }
 }
