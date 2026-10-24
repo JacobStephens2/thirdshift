@@ -1,4 +1,4 @@
-//! Shared naming, Session inventory and captured selection ownership.
+//! Shared naming, Session membership and captured selection ownership.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -157,7 +157,7 @@ impl<'a> Observation<'a> {
     }
 
     pub(in crate::logs) fn sessions(self) -> Result<Vec<PathBuf>> {
-        let (mut paths, issue, kind) = match self {
+        let (mut paths, issue, kind, inventory) = match self {
             Self::Record(command) => {
                 let mut paths = Vec::new();
                 for path in command.record.session_references() {
@@ -170,12 +170,14 @@ impl<'a> Observation<'a> {
                     paths,
                     command.record.issue.as_ref(),
                     command.record.kind.as_str(),
+                    &command.inventory,
                 )
             }
             Self::History(command) => (
                 command.session_logs.clone(),
                 command.issue.as_ref(),
                 command.kind.as_str(),
+                &command.inventory,
             ),
         };
         // A stage can cover several sessions (for example Architecture review
@@ -187,31 +189,13 @@ impl<'a> Observation<'a> {
                 .map(|issue| issue.number.to_string())
                 .or_else(|| pass_prefix(kind).map(String::from))
                 .context("cannot name Session traces for this Command kind")?;
-            for entry in super::entries(log.parent().context("Command log has no directory")?)? {
-                let path = entry.path();
-                if entry.file_type()?.is_file()
-                    && owner::inventory_session(&path)
-                    && owner::decode(&path).is_some_and(|decoded| {
-                        decoded.session_kind.is_some() && decoded.subject == prefix
-                    })
-                    && owner::session_matches(&path, log)
-                    && !paths.contains(&path)
-                {
+            for path in inventory.sessions_of(log, &prefix)? {
+                if !paths.contains(&path) {
                     paths.push(path);
                 }
             }
         }
-        let mut dated = paths
-            .into_iter()
-            .map(|path| {
-                let modified = std::fs::metadata(&path)
-                    .and_then(|metadata| metadata.modified())
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                (modified, path)
-            })
-            .collect::<Vec<_>>();
-        dated.sort();
-        Ok(dated.into_iter().map(|(_, path)| path).collect())
+        Ok(inventory.ordered(paths))
     }
 
     pub(in crate::logs) fn session(self, kind: &str) -> Result<PathBuf> {
@@ -392,8 +376,8 @@ pub(in crate::logs) enum Detailed<'a> {
     History(Box<super::history::Command>),
 }
 
-/// The detailed view adds a complete Session inventory and a live event to
-/// each Run while retaining the status reader's version 1 field names.
+/// The detailed view adds each Run's complete Session list and a live event,
+/// retaining the status reader's version 1 field names.
 #[derive(Serialize)]
 pub(in crate::logs) struct Details<'a> {
     #[serde(flatten)]

@@ -287,7 +287,7 @@ For an exact older Command, `show` and `logs` also accept the absolute record
 or Command-log path. The Console adds `::name` to a record path to distinguish
 a dispatched Run from its enclosing Command. A retained Session-trace path can
 select a historical Command without a record; `logs --session` accepts an exact
-path from that Command's Session inventory as well as a session kind.
+path from that Command's Session traces as well as a session kind.
 Page 6, `/logs`, lists every Command log and Session trace in the current
 `commands/` layout, including Security logs, and marks the live ones. Every
 Command row links to its Command logs and Session traces, including child Ticket Runs.

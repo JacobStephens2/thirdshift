@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use chrono::Local;
 use serde::Serialize;
 
-use super::{Command, Entry, Observation, Reader, Snapshot, directories, entries};
+use super::{Command, Entry, Observation, Reader, Snapshot};
 use crate::config::UserConfig;
 use crate::logs::owner;
 
@@ -105,7 +105,16 @@ pub(super) fn still_listed(root: &Path, path: &Path) -> bool {
 
 pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<Vec<Log>> {
     let root = &config.logs_dir;
-    let snapshot = Snapshot::load(root, Local::now())?;
+    list(&Snapshot::load(root, Local::now())?, root, selected_owner)
+}
+
+/// List the physically discovered files of the Snapshot's own capture.
+/// Session membership supplies ownership, never listing eligibility.
+pub(super) fn list(
+    snapshot: &Snapshot,
+    root: &Path,
+    selected_owner: Option<&str>,
+) -> Result<Vec<Log>> {
     // A child Run keeps its own Sessions, while sharing its Command's log.
     let mut observed = BTreeMap::new();
     fn collect(
@@ -167,58 +176,51 @@ pub(crate) fn load(config: &UserConfig, selected_owner: Option<&str>) -> Result<
         }
     }
     let mut logs = Vec::new();
-    for owner_dir in directories(root)? {
-        for repo in directories(&owner_dir)? {
-            let repository = format!(
-                "{}/{}",
-                owner_dir.file_name().unwrap_or_default().to_string_lossy(),
-                repo.file_name().unwrap_or_default().to_string_lossy()
-            );
-            for folder in directories(&repo.join("commands"))? {
-                for entry in entries(&folder)? {
-                    let path = entry.path();
-                    if !entry.file_type()?.is_file() || !listed_name(&path) {
-                        continue;
-                    }
-                    let path = if path.extension().is_some_and(|ext| ext == "jsonl") {
-                        crate::logs::session::path(&path)
-                    } else {
-                        path
-                    };
-                    let relative = path.strip_prefix(root)?;
-                    let Observed {
-                        live,
-                        command,
-                        mut owners,
-                        selector,
-                        reader,
-                    } = observed.remove(&path).unwrap_or_default();
-                    if let Some(decoded) = owner::decode(&path) {
-                        owners.push(id(decoded.command_log(&path).strip_prefix(root)?));
-                    }
-                    logs.push(Log {
-                        reader: reader
-                            .unwrap_or_else(|| Reader::captured(path.clone(), None, false))
-                            .within(root),
-                        id: id(relative),
-                        name: relative.to_string_lossy().into_owned(),
-                        repository: repository.clone(),
-                        kind: if path.extension().is_some_and(|ext| ext == "jsonl") {
-                            Kind::Session
-                        } else {
-                            Kind::Command
-                        },
-                        live,
-                        command,
-                        owners,
-                        selector: if selector.is_empty() {
-                            path.to_string_lossy().into_owned()
-                        } else {
-                            selector
-                        },
-                        path,
-                    });
+    for repo in snapshot.inventory.repositories() {
+        let repository = repo.name();
+        for folder in &repo.folders {
+            for path in &folder.files {
+                if !listed_name(path) {
+                    continue;
                 }
+                let path = if path.extension().is_some_and(|ext| ext == "jsonl") {
+                    crate::logs::session::path(path)
+                } else {
+                    path.clone()
+                };
+                let relative = path.strip_prefix(root)?;
+                let Observed {
+                    live,
+                    command,
+                    mut owners,
+                    selector,
+                    reader,
+                } = observed.remove(&path).unwrap_or_default();
+                if let Some(decoded) = owner::decode(&path) {
+                    owners.push(id(decoded.command_log(&path).strip_prefix(root)?));
+                }
+                logs.push(Log {
+                    reader: reader
+                        .unwrap_or_else(|| Reader::captured(path.clone(), None, false))
+                        .within(root),
+                    id: id(relative),
+                    name: relative.to_string_lossy().into_owned(),
+                    repository: repository.clone(),
+                    kind: if path.extension().is_some_and(|ext| ext == "jsonl") {
+                        Kind::Session
+                    } else {
+                        Kind::Command
+                    },
+                    live,
+                    command,
+                    owners,
+                    selector: if selector.is_empty() {
+                        path.to_string_lossy().into_owned()
+                    } else {
+                        selector
+                    },
+                    path,
+                });
             }
         }
     }

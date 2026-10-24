@@ -2,11 +2,13 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Component, Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, FixedOffset, NaiveDateTime, NaiveTime};
 use serde::Serialize;
 
+use super::inventory::{Inventory, Repository};
 use crate::logs::activity::TIME_FORMAT;
 use crate::logs::command_record::Issue;
 use crate::logs::owner;
@@ -29,10 +31,13 @@ pub(in crate::logs) struct Command {
     stage: Option<()>,
     source: &'static str,
     pub state: &'static str,
+    #[serde(skip)]
+    pub(super) inventory: Arc<Inventory>,
 }
 
 impl Command {
     fn from_logs(
+        inventory: &Arc<Inventory>,
         repository: &str,
         kind: &str,
         number: Option<u64>,
@@ -59,6 +64,7 @@ impl Command {
             stage: None,
             source,
             state: "unknown",
+            inventory: inventory.clone(),
         }
     }
 }
@@ -114,15 +120,13 @@ impl Started {
     }
 }
 
-pub(in crate::logs) fn read(repo: &Path, covered: &HashSet<PathBuf>) -> Result<Vec<Command>> {
-    let repository = format!(
-        "{}/{}",
-        repo.parent()
-            .and_then(Path::file_name)
-            .unwrap_or_default()
-            .to_string_lossy(),
-        repo.file_name().unwrap_or_default().to_string_lossy()
-    );
+pub(in crate::logs) fn read(
+    inventory: &Arc<Inventory>,
+    captured: &Repository,
+    covered: &HashSet<PathBuf>,
+) -> Result<Vec<Command>> {
+    let repo = captured.path.as_path();
+    let repository = captured.name();
     let mut starts: Vec<Started> = Vec::new();
     for line in super::cache::text(&repo.join("activity.log"))?.lines() {
         let Some((time, text)) = line.split_once(' ').and_then(|(date, rest)| {
@@ -135,7 +139,7 @@ pub(in crate::logs) fn read(repo: &Path, covered: &HashSet<PathBuf>) -> Result<V
             continue;
         };
         if let Some((subject, detail)) = text.split_once(" started: ") {
-            if let Some(started) = start(repo, &repository, subject, detail, time)? {
+            if let Some(started) = start(inventory, repo, &repository, subject, detail, time)? {
                 starts.push(started);
             }
         } else if let Some((subject, outcome)) = text.split_once(" ended: ") {
@@ -202,11 +206,18 @@ pub(in crate::logs) fn read(repo: &Path, covered: &HashSet<PathBuf>) -> Result<V
     // Keep Activity entries unless a record covered them; all Activity starts
     // still suppress their Session traces, including starts with no end line.
     // `covered` above includes both sources for the Session-trace pass.
-    commands.extend(sessions(repo, &repository, &covered, &shared_owners)?);
+    commands.extend(sessions(
+        inventory,
+        captured,
+        &repository,
+        &covered,
+        &shared_owners,
+    ));
     Ok(commands)
 }
 
 fn start(
+    inventory: &Arc<Inventory>,
     repo: &Path,
     repository: &str,
     subject: &str,
@@ -252,6 +263,7 @@ fn start(
         .filter(|value| *value != "default effort")
         .map(String::from);
     let mut command = Command::from_logs(
+        inventory,
         repository,
         kind,
         number,
@@ -271,55 +283,49 @@ fn start(
 }
 
 fn sessions(
-    repo: &Path,
+    inventory: &Arc<Inventory>,
+    repo: &Repository,
     repository: &str,
     covered: &HashSet<PathBuf>,
     shared_owners: &[PathBuf],
-) -> Result<Vec<Command>> {
+) -> Vec<Command> {
     let mut groups: BTreeMap<PathBuf, Command> = BTreeMap::new();
-    for folder in super::directories(&repo.join("commands"))? {
-        for entry in super::entries(&folder)? {
-            if !entry.file_type()?.is_file() {
-                continue;
-            }
-            let path = entry.path();
-            if !owner::inventory_session(&path) {
-                continue;
-            }
-            let Some(decoded) =
-                owner::decode(&path).filter(|decoded| decoded.session_kind.is_some())
-            else {
-                continue;
-            };
-            let prefix = decoded.subject;
-            let stamp = decoded.time();
-            let (kind, number) = match prefix.parse::<u64>() {
+    for folder in &repo.folders {
+        for session in inventory.candidates(folder) {
+            let (kind, number) = match session.subject.parse::<u64>() {
                 Ok(number) => ("Run", Some(number)),
-                Err(_) if prefix == "architect" => ("Architect run", None),
-                Err(_) if prefix == "secure" => ("Security run", None),
+                Err(_) if session.subject == "architect" => ("Architect run", None),
+                Err(_) if session.subject == "secure" => ("Security run", None),
                 Err(_) => continue,
             };
-            let command_log =
-                owner::evidenced_log(&path).unwrap_or_else(|| decoded.command_log(&path));
-            if covered.contains(&path)
-                || covered.contains(&command_log)
-                || shared_owners.iter().any(|log| {
-                    log.parent() == Some(folder.as_path()) && owner::session_matches(&path, log)
-                })
+            let command_log = session.command_log();
+            if covered.contains(&session.path)
+                || covered.contains(command_log)
+                || shared_owners
+                    .iter()
+                    .any(|log| log.parent() == Some(folder.path.as_path()) && session.owned_by(log))
             {
                 continue;
             }
-            let command = groups.entry(command_log.clone()).or_insert_with(|| {
-                let mut command =
-                    Command::from_logs(repository, kind, number, stamp, "session_log");
-                command.command_log = command_log.is_file().then_some(command_log);
+            let command = groups.entry(command_log.to_owned()).or_insert_with(|| {
+                let mut command = Command::from_logs(
+                    inventory,
+                    repository,
+                    kind,
+                    number,
+                    session.time,
+                    "session_log",
+                );
+                command.command_log = inventory
+                    .is_file(command_log)
+                    .then(|| command_log.to_owned());
                 command
             });
-            command.session_logs.push(entry.path());
+            command.session_logs.push(session.path.clone());
         }
     }
     for command in groups.values_mut() {
         command.session_logs.sort();
     }
-    Ok(groups.into_values().collect())
+    groups.into_values().collect()
 }
