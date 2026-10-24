@@ -312,3 +312,81 @@ while ! test -f "$HOME/release"; do sleep 0.01; done
         }
     }
 }
+
+#[test]
+fn a_live_call_keeps_its_id_through_completion_amendment_and_a_retained_custom_id() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        r#"
+echo '{{"type":"assistant","message":{{"id":"m1","content":[{{"type":"tool_use","id":"deny","name":"Bash","input":{{"command":"git push"}}}}]}}}}'
+touch "$HOME/started"
+while ! test -f "$HOME/complete"; do sleep 0.01; done
+echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"deny","content":"opaque failure","is_error":true}}]}}}}'
+touch "$HOME/completed"
+while ! test -f "$HOME/amend"; do sleep 0.01; done
+echo '{{"type":"result","subtype":"success","permission_denials":[{{"tool_use_id":"deny","tool_name":"Bash","tool_input":{{"command":"git push"}}}}]}}'
+touch "$HOME/amended"
+while ! test -f "$HOME/finish"; do sleep 0.01; done
+{}"#,
+        opens_pr(7, "main")
+    ));
+    let tool = || {
+        let shown = scenario.run(&["show", "widgets#7", "--spans", "--json"]);
+        assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+        let tree: Value = serde_json::from_str(&shown.stdout).unwrap();
+        let tools: Vec<_> = tree["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|span| span["kind"] == "tool")
+            .cloned()
+            .collect();
+        assert_eq!(tools.len(), 1, "{tree}");
+        tools[0].clone()
+    };
+    let step = |release: &str, reached: &str| {
+        fs::write(scenario.path(&format!("home/{release}")), "").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !scenario.path(&format!("home/{reached}")).exists() {
+            assert!(std::time::Instant::now() < deadline, "{reached} never came");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    };
+    let run = scenario.run_until(&[&scenario.issue_url(7)], &[], "home/started");
+    let live = tool();
+    assert_eq!(live["status"], "running", "{live}");
+    step("complete", "completed");
+    let completed = tool();
+    assert_eq!(completed["id"], live["id"]);
+    assert_eq!(completed["start"], live["start"]);
+    assert_eq!(completed["error"], "Failed", "{completed}");
+    step("amend", "amended");
+    // Until Session finish rewrites it, the flushed span outranks replay.
+    let amended = tool();
+    assert_eq!(amended["id"], live["id"]);
+    assert_eq!(amended["error"], "Failed", "{amended}");
+    fs::write(scenario.path("home/finish"), "").unwrap();
+    let result = run.finish();
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let finished = tool();
+    assert_eq!(finished["id"], live["id"]);
+    assert_eq!(finished["start"], live["start"]);
+    assert_eq!(finished["end"], completed["end"]);
+    assert_eq!(finished["error"], "Denied", "{finished}");
+    assert_eq!(finished["attributes"]["thirdshift.outcome"], "denied");
+
+    // A retained custom ID, as a migration writes, replaces replay's identity.
+    let path = scenario
+        .entries(LOGS)
+        .into_iter()
+        .find(|name| name.ends_with(".spans.jsonl"))
+        .map(|name| scenario.path(LOGS).join(name))
+        .unwrap();
+    let live_id = live["id"].as_str().unwrap();
+    let retained = fs::read_to_string(&path).unwrap();
+    assert!(retained.contains(live_id));
+    fs::write(&path, retained.replace(live_id, "00000000000000ff")).unwrap();
+    let custom = tool();
+    assert_eq!(custom["id"], "00000000000000ff");
+    assert_eq!(custom["error"], "Denied", "{custom}");
+}
