@@ -138,6 +138,11 @@ and Ready tag colours, Landing keeps Working's live-activity marker, and a live
 row given a Stop shows Stopping with a drifting stripe until it ends. Pause
 motion and reduced motion hold the stripe still.
 
+Dismiss and Undo in Command details immediately show “Dismissing…” or
+“Taking back dismissal…” while the request is pending. The button stays disabled
+through live updates to prevent duplicate submissions. A failed request shows
+the error and enables the button for another try.
+
 Ended rows show their recorded finish date and time in UTC, followed by an
 explicit relative age, such as “Ended Oct 23, 2026 at 23:03:17 UTC · 52 min ago”.
 That age is time since finish, not run duration. Each nested Ticket run uses its
