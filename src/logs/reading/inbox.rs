@@ -9,7 +9,7 @@ use serde::Serialize;
 use super::{Command, Entry, Health, Observation};
 use crate::github::{PrState, PullRequestState};
 use crate::logs::dismiss::{self, DismissalView, READY_KIND};
-use crate::logs::github::Kept;
+use crate::logs::github::{Kept, Subject};
 use crate::logs::stop;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -302,7 +302,7 @@ pub(super) fn github_subjects(
     now: DateTime<Local>,
     days: i64,
     github: &Kept,
-) -> Vec<String> {
+) -> Vec<Subject> {
     let mut urls = BTreeMap::new();
     for item in list(entries, now, true, days, github) {
         for item in std::iter::once(&item).chain(&item.collapsed) {
@@ -311,12 +311,24 @@ pub(super) fn github_subjects(
                     && !github.is_frozen(&row, url)
                     && (item.group != Group::History || !github.has_answer(url))
                 {
-                    urls.insert(url.to_owned(), ());
+                    let triage_since = (item.command.problem() == Some(NeedsYouKind::Triage)
+                        && github_records(item.command).iter().any(|record| {
+                            record.issue.as_ref().is_some_and(|issue| issue.url == url)
+                        }))
+                    .then(|| time(item.command.facts().ended_at))
+                    .flatten();
+                    urls.entry(url.to_owned())
+                        .and_modify(|since: &mut Option<DateTime<FixedOffset>>| {
+                            *since = (*since).max(triage_since)
+                        })
+                        .or_insert(triage_since);
                 }
             }
         }
     }
-    urls.into_keys().collect()
+    urls.into_iter()
+        .map(|(url, triage_since)| Subject { url, triage_since })
+        .collect()
 }
 
 pub(super) fn list<'a>(
@@ -537,6 +549,11 @@ fn github_urls(observation: Observation<'_>) -> Vec<&str> {
 fn github_records(
     observation: Observation<'_>,
 ) -> Vec<&crate::logs::command_record::CommandRecord> {
+    // A successful fix speaks for that fix, not for other findings from
+    // its audit that still need the Day shift.
+    if observation.problem() == Some(NeedsYouKind::Finding) {
+        return Vec::new();
+    }
     let Observation::Record(command) = observation else {
         return Vec::new();
     };
@@ -618,6 +635,12 @@ fn github_left(
                     && let Some(issue) = issue
                     && !issue.needs_triage
                 {
+                    // Absence before this Stop says nothing about whether
+                    // its needs-triage label has since been removed.
+                    let at = time(issue.triaged_at.as_deref())?;
+                    if ended.is_some_and(|ended| at < ended) {
+                        return None;
+                    }
                     ("needs-triage removed", issue.triaged_at.as_deref())
                 } else {
                     let pull = github.pull_request(&row, record.pull_request.as_deref()?)?;

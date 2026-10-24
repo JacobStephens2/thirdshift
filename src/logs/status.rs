@@ -107,8 +107,8 @@ pub fn show(json: bool, all: bool) -> Result<()> {
             }
         }
     }
-    let urls = snapshot.github_subjects(config.inbox_days, &kept);
-    let kept = super::github::refresh(&config.logs_dir, &urls, kept)?;
+    let subjects = snapshot.github_subjects(config.inbox_days, &kept);
+    let kept = super::github::refresh(&config.logs_dir, &subjects, kept)?;
     let status = Status {
         version: 1,
         hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),

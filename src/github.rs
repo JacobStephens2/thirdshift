@@ -702,23 +702,19 @@ impl GitHub {
             let mut aliases = Vec::new();
             for (index, url) in chunk.iter().enumerate() {
                 let subject = split_pull_request_url(url)
-                    .map(|(owner, repo, number)| (owner, repo, number, "pullRequest"))
+                    .map(|(owner, repo, number)| (owner, repo, number, InboxSubject::PullRequest))
                     .or_else(|| {
-                        IssueUrl::parse(url)
-                            .ok()
-                            .map(|issue| (issue.owner, issue.repo, issue.number, "issue"))
+                        IssueUrl::parse(url).ok().map(|issue| {
+                            (issue.owner, issue.repo, issue.number, InboxSubject::Issue)
+                        })
                     });
-                let Some((owner, repo, number, field)) = subject else {
+                let Some((owner, repo, number, subject)) = subject else {
                     continue;
                 };
                 let alias = format!("pr{index}");
-                let fields = if field == "issue" {
-                    "state closedAt labels(first: 100) { nodes { name } }"
-                } else {
-                    "url state mergedAt closedAt"
-                };
+                let (field, fields) = subject.selection();
                 query.push_str(&format!(" {alias}: repository(owner: \"{owner}\", name: \"{repo}\") {{ {field}(number: {number}) {{ {fields} }} }}"));
-                aliases.push((alias, url.clone(), field));
+                aliases.push((alias, url.clone(), subject));
             }
             if aliases.is_empty() {
                 continue;
@@ -755,23 +751,19 @@ impl GitHub {
                 })
             })?;
             let data = &json["data"];
-            for (alias, url, field) in aliases {
+            for (alias, url, subject) in aliases {
                 if json["errors"]
                     .as_array()
                     .is_some_and(|errors| errors.iter().any(|error| error["path"][0] == alias))
                 {
                     continue;
                 }
+                let (field, _) = subject.selection();
                 let pull = &data[alias.as_str()][field];
                 if pull.is_null() {
                     continue;
                 }
-                let state = if field == "issue" {
-                    InboxState::Issue(IssueState::from_json(&url, pull)?)
-                } else {
-                    InboxState::PullRequest(PullRequestState::from_json(&url, pull)?)
-                };
-                states.insert(url, state);
+                states.insert(url.clone(), subject.read(&url, pull)?);
             }
         }
         Ok(states)
@@ -1522,6 +1514,34 @@ impl PullRequest {
                     "gh output has no isDraft".into(),
                 ))?,
         })
+    }
+}
+
+/// The two subjects the Inbox reads, owning their GraphQL selection and decoding.
+#[derive(Clone, Copy)]
+enum InboxSubject {
+    Issue,
+    PullRequest,
+}
+
+impl InboxSubject {
+    fn selection(self) -> (&'static str, &'static str) {
+        match self {
+            Self::Issue => (
+                "issue",
+                "state closedAt labels(first: 100) { nodes { name } }",
+            ),
+            Self::PullRequest => ("pullRequest", "url state mergedAt closedAt"),
+        }
+    }
+
+    fn read(self, url: &str, json: &Value) -> Result<InboxState> {
+        match self {
+            Self::Issue => IssueState::from_json(url, json).map(InboxState::Issue),
+            Self::PullRequest => {
+                PullRequestState::from_json(url, json).map(InboxState::PullRequest)
+            }
+        }
     }
 }
 

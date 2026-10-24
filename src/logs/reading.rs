@@ -120,7 +120,11 @@ impl Snapshot {
         inbox::list(&self.commands, self.now, all, days, github)
     }
 
-    pub(super) fn github_subjects(&self, days: i64, github: &super::github::Kept) -> Vec<String> {
+    pub(super) fn github_subjects(
+        &self,
+        days: i64,
+        github: &super::github::Kept,
+    ) -> Vec<super::github::Subject> {
         inbox::github_subjects(&self.commands, self.now, days, github)
     }
 

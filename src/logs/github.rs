@@ -10,12 +10,19 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::Result;
+use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 
 use crate::github::{GitHub, InboxState, IssueState, PullRequestState};
 
 /// How long `status` reuses the kept answer before reading GitHub again.
 pub const FRESH_FOR: Duration = Duration::from_secs(5 * 60);
+
+/// One requested subject, with the Triage wait its label observation must follow.
+pub(super) struct Subject {
+    pub url: String,
+    pub triage_since: Option<DateTime<FixedOffset>>,
+}
 
 #[derive(Serialize, Deserialize)]
 struct File {
@@ -108,23 +115,29 @@ pub fn load(logs_dir: &Path) -> Kept {
     }
 }
 
-/// Read GitHub for `urls` unless the kept answer is still fresh, and keep
+/// Read GitHub for `subjects` unless the kept answer is still fresh, and keep
 /// the merged answer. A failed read keeps the last answer, however old.
 /// Only reads; nothing here writes to GitHub.
-pub fn refresh(logs_dir: &Path, urls: &[String], mut kept: Kept) -> Result<Kept> {
-    if kept.age.is_some_and(|age| age < FRESH_FOR) || urls.is_empty() {
+pub(super) fn refresh(logs_dir: &Path, subjects: &[Subject], mut kept: Kept) -> Result<Kept> {
+    if kept.age.is_some_and(|age| age < FRESH_FOR) || subjects.is_empty() {
         return Ok(kept);
     }
-    match GitHub::new().inbox_states(urls) {
+    let urls: Vec<_> = subjects.iter().map(|subject| subject.url.clone()).collect();
+    match GitHub::new().inbox_states(&urls) {
         Ok(states) => {
-            for url in urls {
+            for subject in subjects {
+                let url = &subject.url;
                 let mut state = states.get(url).cloned();
                 if let Some(InboxState::Issue(issue)) = &mut state
                     && !issue.needs_triage
                 {
                     issue.triaged_at = match kept.states.get(url) {
                         Some(Some(InboxState::Issue(previous))) if !previous.needs_triage => {
-                            previous.triaged_at.clone()
+                            previous.triaged_at.clone().filter(|at| {
+                                subject.triage_since.is_none_or(|since| {
+                                    DateTime::parse_from_rfc3339(at).is_ok_and(|at| at >= since)
+                                })
+                            })
                         }
                         _ => None,
                     }
