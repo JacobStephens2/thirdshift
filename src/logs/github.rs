@@ -72,14 +72,16 @@ pub fn path(logs_dir: &Path) -> PathBuf {
     logs_dir.join("github-inbox.json")
 }
 
-/// Freshness and temporary saves are bookkeeping, not changed Inbox rows.
+/// Only github-inbox.changed wakes pages. The answer itself also keeps
+/// History bookkeeping, which can change without changing an Inbox row.
 pub fn bookkeeping(path: &Path, logs_dir: &Path) -> bool {
     path.parent() == Some(logs_dir)
         && path
             .file_name()
             .and_then(|name| name.to_str())
             .is_some_and(|name| {
-                name == "github-inbox.refreshed" || name.starts_with(".github-inbox-")
+                matches!(name, "github-inbox.json" | "github-inbox.refreshed")
+                    || name.starts_with(".github-inbox-")
             })
 }
 
@@ -165,9 +167,15 @@ fn save(logs_dir: &Path, kept: &Kept) -> Result<()> {
         history: kept.history.clone(),
     };
     let bytes = serde_json::to_vec(&file)?;
-    // Only changed facts replace the watched answer. A separate timestamp
-    // keeps status from rereading GitHub after successful unchanged reads.
-    if std::fs::read(&path).ok().as_deref() != Some(bytes.as_slice()) {
+    let previous = std::fs::read(&path).ok();
+    let facts_changed = previous
+        .as_deref()
+        .and_then(|bytes| serde_json::from_slice::<File>(bytes).ok())
+        .is_none_or(|previous| {
+            previous.version != 1 || previous.pull_requests != file.pull_requests
+        });
+    // Keep History freezes too, without waking pages for bookkeeping.
+    if previous.as_deref() != Some(bytes.as_slice()) {
         let mut tmp = tempfile::Builder::new()
             .prefix(".github-inbox-")
             .tempfile_in(logs_dir)?;
@@ -175,5 +183,8 @@ fn save(logs_dir: &Path, kept: &Kept) -> Result<()> {
         tmp.persist(&path)?;
     }
     std::fs::write(path.with_extension("refreshed"), [])?;
+    if facts_changed {
+        std::fs::write(path.with_extension("changed"), [])?;
+    }
     Ok(())
 }

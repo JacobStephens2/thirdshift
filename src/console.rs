@@ -371,6 +371,7 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             }
             // Dropping the sole sender closes every SSE response before
             // graceful shutdown waits for the connections to finish.
+            crate::interrupt::request();
             observer.abort();
             let _ = observer.await;
             github.abort();
