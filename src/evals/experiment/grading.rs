@@ -171,6 +171,13 @@ fn copy_repository(source: &Path, destination: &Path) -> Result<()> {
 mod tests {
     use super::*;
 
+    #[test]
+    fn legacy_verdict_preserves_an_explicit_null_provisional_verdict() {
+        let saved = serde_json::json!({"verdict":"inconclusive","provisional_verdict":null,"suites":{},"borderline_trials":0});
+        let decoded: super::Verdict = serde_json::from_value(saved.clone()).unwrap();
+        assert_eq!(serde_json::to_value(decoded).unwrap(), saved);
+    }
+
     /// Trial sessions leave sockets and FIFOs behind (dev servers, shell
     /// fixtures). Copying one into the Grader snapshot must not fail the
     /// whole Experiment over files no check can use once the Trial is gone.
@@ -194,11 +201,34 @@ mod tests {
 #[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct Verdict {
     pub verdict: Conclusion,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provisional_verdict: Option<Decision>,
+    #[serde(default, skip_serializing_if = "Provisional::is_missing")]
+    pub provisional_verdict: Provisional,
     pub suites: BTreeMap<String, verdict::Verdict>,
     #[serde(default)]
     borderline_trials: usize,
+}
+
+/// Missing and explicit null are distinct facts in a saved legacy Verdict.
+#[derive(Clone, Copy, Default, Serialize, Deserialize)]
+#[serde(untagged)]
+pub(crate) enum Provisional {
+    Recorded(Option<Decision>),
+    #[default]
+    #[serde(skip)]
+    Missing,
+}
+
+impl Provisional {
+    fn is_missing(&self) -> bool {
+        matches!(self, Self::Missing)
+    }
+
+    pub(crate) fn decision(self) -> Option<Decision> {
+        match self {
+            Self::Recorded(decision) => decision,
+            Self::Missing => None,
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -238,6 +268,7 @@ pub(super) fn judge(tasks: &[Task], results: &[TrialResult], bar: &Bar) -> Resul
 pub(super) fn decision(tasks: &[Task], results: &[TrialResult], bar: &Bar) -> Result<Decision> {
     Ok(evaluate(tasks, results, bar, false)?
         .provisional_verdict
+        .decision()
         .expect("a computed Verdict has a provisional decision"))
 }
 
@@ -316,7 +347,7 @@ fn evaluate(
         .count();
     Ok(Verdict {
         verdict: verdict.into(),
-        provisional_verdict: Some(verdict),
+        provisional_verdict: Provisional::Recorded(Some(verdict)),
         suites,
         borderline_trials,
     })

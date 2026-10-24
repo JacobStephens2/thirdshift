@@ -2204,6 +2204,7 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "sha2",
+ "shlex",
  "signal-hook",
  "stateright",
  "subtle",

@@ -48,6 +48,38 @@ impl ArmOptions {
     }
 }
 
+/// Translate a captured legacy command for readers, retaining every other
+/// argument literally and taking both levels from its recorded Bar.
+pub(super) fn resume_command(command: &str, levels: crate::verdict::Levels) -> Option<String> {
+    if !matches!(levels, crate::verdict::Levels::Legacy { .. }) {
+        return Some(command.to_owned());
+    }
+    let mut original = shlex::split(command)?.into_iter();
+    let mut updated = Vec::new();
+    while let Some(word) = original.next() {
+        if matches!(
+            word.as_str(),
+            "--credible-level" | "--pass-level" | "--fail-level"
+        ) {
+            original.next()?;
+        } else {
+            let takes_value =
+                word.starts_with("--") && !matches!(word.as_str(), "--json" | "--release");
+            updated.push(word);
+            if takes_value {
+                updated.push(original.next()?);
+            }
+        }
+    }
+    updated.extend([
+        "--pass-level".into(),
+        levels.pass().to_string(),
+        "--fail-level".into(),
+        levels.fail().to_string(),
+    ]);
+    Some(crate::args::shell_command(updated))
+}
+
 pub fn parse(args: &[String]) -> Result<Options> {
     let mut flags = BTreeMap::new();
     let mut suites = BTreeSet::new();

@@ -59,14 +59,15 @@ fn saved_single_level_experiments_keep_their_bar_and_verdict_when_read_and_resum
     }
     // A retained decision is authoritative, even if a fresh calculation differs.
     legacy["verdict"]["verdict"] = json!("fail");
-    for has_provisional in [false, true] {
-        if has_provisional {
-            legacy["verdict"]["provisional_verdict"] = json!("fail");
-        } else {
-            legacy["verdict"]
-                .as_object_mut()
-                .unwrap()
-                .remove("provisional_verdict");
+    for provisional in [None, Some(Value::Null), Some(json!("fail"))] {
+        match provisional {
+            Some(value) => legacy["verdict"]["provisional_verdict"] = value,
+            None => {
+                legacy["verdict"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("provisional_verdict");
+            }
         }
         fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
         let before = fs::read(&path).unwrap();
@@ -80,6 +81,61 @@ fn saved_single_level_experiments_keep_their_bar_and_verdict_when_read_and_resum
         let resumed: Value = serde_json::from_str(&resumed.stdout).unwrap();
         assert_eq!(resumed["bar"], legacy["bar"]);
         assert_eq!(resumed["verdict"], legacy["verdict"]);
+        assert_eq!(fixture.trial_calls().len(), trials);
+    }
+}
+
+#[test]
+fn legacy_resume_commands_keep_literal_model_arguments_and_the_recorded_levels() {
+    for model in ["--credible-level", "a model's name"] {
+        let fixture = Fixture::new();
+        let run = fixture.run(&[
+            "--candidate-model",
+            model,
+            "--pass-level",
+            "0.8",
+            "--fail-level",
+            "0.8",
+        ]);
+        assert_eq!(run.code, Some(0), "{}", run.stderr);
+        let id = fixture.experiment()["id"].as_str().unwrap().to_owned();
+        let path = fixture.scenario.path(&format!(
+            "home/.thirdshift/evals/experiments/{id}/experiment.json"
+        ));
+        let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        saved["state"] = json!("paused");
+        saved["verdict"] = Value::Null;
+        saved["bar"].as_object_mut().unwrap().remove("pass_level");
+        saved["bar"].as_object_mut().unwrap().remove("fail_level");
+        saved["bar"]["credible_level"] = json!(0.8);
+        saved["resume_command"] = json!(format!(
+            "thirdshift 'experiment' 'candidate' '--candidate-model' '{}' '--credible-level' '0.8' '--json'",
+            model.replace('\'', "'\\''")
+        ));
+        fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+        let before = fs::read(&path).unwrap();
+        let shown = fixture.experiment();
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before,
+            "reading must not rewrite stored inputs"
+        );
+        let command = shlex::split(shown["resume_command"].as_str().unwrap()).unwrap();
+        let args: Vec<_> = command.iter().skip(1).map(String::as_str).collect();
+        let trials = fixture.trial_calls().len();
+        let resumed = fixture.scenario.run_with_env(&args, &NO_SANDBOX);
+        assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+        let resumed: Value = serde_json::from_str(&resumed.stdout).unwrap();
+        assert_eq!(resumed["id"], id);
+        assert_eq!(resumed["candidate"]["model"], model);
+        assert_eq!(resumed["bar"], saved["bar"]);
+        assert_eq!(fixture.trial_calls().len(), trials);
+        // A subsequent invocation records the translated flags itself; its
+        // next saved view must still provide one supported resume command.
+        let command = shlex::split(resumed["resume_command"].as_str().unwrap()).unwrap();
+        let args: Vec<_> = command.iter().skip(1).map(String::as_str).collect();
+        let repeated = fixture.scenario.run_with_env(&args, &NO_SANDBOX);
+        assert_eq!(repeated.code, Some(0), "{}", repeated.stderr);
         assert_eq!(fixture.trial_calls().len(), trials);
     }
 }

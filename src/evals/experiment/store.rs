@@ -281,7 +281,7 @@ impl Stored {
             && self
                 .verdict
                 .as_ref()
-                .is_none_or(|verdict| verdict.provisional_verdict.is_none())
+                .is_none_or(|verdict| verdict.provisional_verdict.decision().is_none())
         {
             self.refresh_verdict()?;
         }
@@ -343,10 +343,14 @@ impl Stored {
             }
         }
         let findings = voids.findings();
+        let mut details = self.details.clone();
+        details.resume_command = details.resume_command.as_deref().and_then(|command| {
+            super::options::resume_command(command, self.description.bar.levels)
+        });
         Ok(View {
             description: self.description.clone(),
             state: self.state,
-            details: self.details.clone(),
+            details,
             created_at: self.created_at.clone(),
             tasks: self
                 .tasks

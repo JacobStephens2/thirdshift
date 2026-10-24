@@ -129,6 +129,7 @@ fn now(view: &View) -> String {
             decision(
                 verdict
                     .provisional_verdict
+                    .decision()
                     .unwrap_or(Decision::Inconclusive)
             )
         ));
@@ -293,6 +294,7 @@ fn lead(view: &View) -> String {
                     .as_ref()
                     .unwrap()
                     .provisional_verdict
+                    .decision()
                     .unwrap_or(Decision::Inconclusive)
             ),
             view.pending_rechecks.len()

@@ -82,7 +82,10 @@ pub(super) fn assess(
     bar: &Bar,
 ) -> Result<(Verdict, Vec<Pending>)> {
     let mut verdict = grading::judge(tasks, results, bar)?;
-    let original = verdict.provisional_verdict.expect("computed Verdict");
+    let original = verdict
+        .provisional_verdict
+        .decision()
+        .expect("computed Verdict");
     let mut pending = Vec::new();
     for index in 0..results.len() {
         let result = &results[index];

@@ -640,6 +640,9 @@ The Bar's JSON carries `pass_level` and `fail_level`; each metric carries
 `pass_interval` and `fail_interval`. New Verdicts use `paired-dirichlet-v2`.
 Saved Experiments under `paired-dirichlet-v1` remain readable with their stored
 single-level Bar and Verdict unchanged. See [ADR-0024](adr/0024-pass-and-fail-use-separate-levels.md).
+For a paused single-level Experiment, its saved view and Console show a resume
+command using both recorded levels in place of the removed `--credible-level`
+flag. Reading that command does not rewrite its stored Bar or Verdict.
 Provider usage/rate limits pause scheduling until the same Experiment is
 started again, consuming the same fresh-retry budget across resumes. Completed
 attempts count toward minutes and per-Arm Void totals even while paused or
