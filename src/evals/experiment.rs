@@ -7,6 +7,7 @@ mod limits;
 mod model_grader;
 mod options;
 mod rechecks;
+mod release;
 mod store;
 mod trace;
 mod usage;
@@ -132,16 +133,26 @@ struct Task {
 
 pub fn run(options: Options) -> Result<()> {
     interrupt::install()?;
-    let config = UserConfig::load()?;
     let repository = std::env::current_dir()?;
     let git = Git::new(&repository);
     let candidate = resolve(&git, &options.candidate)?;
-    let baseline = match &options.baseline {
+    let baseline_reference = if options.release {
+        Some(git.run(&[
+            "--no-replace-objects",
+            "describe",
+            "--tags",
+            "--abbrev=0",
+            "--match",
+            "v[0-9]*",
+            &candidate,
+        ])?)
+    } else {
+        options.baseline.clone()
+    };
+    let baseline = match &baseline_reference {
         Some(reference) => resolve(&git, reference)?,
         None => git.run(&["--no-replace-objects", "merge-base", "main", &candidate])?,
     };
-    let baseline = options.baseline_setup.resolve(baseline, &config);
-    let candidate = options.candidate_setup.resolve(candidate, &config);
     let root = crate::config::home()?.join(".thirdshift/evals");
     let suites_root = root.join("suites");
     let suites = if options.suites.is_empty() {
@@ -150,8 +161,8 @@ pub fn run(options: Options) -> Result<()> {
             "diff",
             "--name-only",
             "--no-renames",
-            &baseline.commit,
-            &candidate.commit,
+            &baseline,
+            &candidate,
             "--",
         ])?;
         suite::touched(
@@ -161,10 +172,28 @@ pub fn run(options: Options) -> Result<()> {
     } else {
         options.suites.clone()
     };
+    if suites.is_empty() && options.release {
+        return release::skip(
+            "no_suites",
+            "no Eval suite touched; no release Experiment needed",
+            options.json,
+        );
+    }
     ensure!(
         !suites.is_empty(),
         "no Eval suites selected; use --suite for a defaults-only Experiment"
     );
+    if options.release && !release::supports_trials(&repository, &root, &baseline)? {
+        let tag = baseline_reference.as_deref().expect("release Baseline tag");
+        return release::skip(
+            "baseline_without_trial",
+            &format!("last release {tag} has no Trial flag; carrying on without an Experiment"),
+            options.json,
+        );
+    }
+    let config = UserConfig::load()?;
+    let baseline = options.baseline_setup.resolve(baseline, &config);
+    let candidate = options.candidate_setup.resolve(candidate, &config);
     let mut bar = options.bar;
     for name in &suites {
         let manifest = suite::Manifest::load(&suites_root.join(name))?;

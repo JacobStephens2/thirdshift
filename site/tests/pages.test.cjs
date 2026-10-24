@@ -40,6 +40,8 @@ async function pageForTest(t, options) {
 
 // Nothing in the selected containers, or the page, scrolls sideways.
 async function assertFits(page, selector, message) {
+  // Font loading can finish after navigation; measure the rendered typeface.
+  await page.evaluate(() => document.fonts.ready);
   const overflow = await page.locator(selector).evaluateAll(nodes =>
     nodes.filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.textContent.trim().slice(0, 80)));
   assert.deepEqual(overflow, [], message);

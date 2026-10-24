@@ -17,6 +17,9 @@ mod model_graders;
 #[path = "experiments/rechecks.rs"]
 mod rechecks;
 
+#[path = "experiments/release.rs"]
+mod release;
+
 #[path = "experiments/sandbox.rs"]
 mod sandbox;
 

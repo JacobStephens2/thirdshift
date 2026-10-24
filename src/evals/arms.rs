@@ -129,7 +129,7 @@ fn executable(path: &Path) -> bool {
         .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
-fn build(repository: &Path, builds: &Path, commit: &str) -> Result<PathBuf> {
+pub(super) fn build(repository: &Path, builds: &Path, commit: &str) -> Result<PathBuf> {
     let git = crate::git::Git::new(repository);
     if git.run(&["--no-replace-objects", "cat-file", "-t", commit])? != "commit" {
         bail!("Arm {commit} is not a commit");

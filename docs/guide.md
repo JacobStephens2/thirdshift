@@ -401,6 +401,7 @@ thirdshift evals prepare <suite> <task> <destination>  # prepare a throwaway rep
 thirdshift evals verify <repository> <base>  # refuse history beyond the base commit
 thirdshift evals prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>  # cache builds and record fixed Harness paths
 thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json]  # run or resume an Experiment
+thirdshift experiment --release <commit> [--json]  # use the last release tag and touched suites
 thirdshift experiments [<id>] [--json]  # list Experiments or show one
 thirdshift recheck <id> <trial> <pass|fail> --reason <text> [--wrong-finding <true|false>] [--json]
 thirdshift update                   # update to the latest release (see Updating)
@@ -441,6 +442,14 @@ branch or commit with its merge-base with `main`. Use `--baseline <ref>` to name
 another Baseline. Suites default to those touched by the change, using their
 declarations; repeat `--suite <name>` to select them explicitly, including for a
 Harness, Model or Effort comparison with the same build in both Arms.
+
+`thirdshift experiment --release <commit>` uses the last reachable `v<version>`
+tag as its Baseline and selects suites touched since that tag. `--baseline`
+and `--suite` do not apply in this mode. When no suite is touched, or the last
+release's build has no Trial flag, it prints a note and succeeds without an
+Experiment. With `--json`, these cases return `release_skip` (`no_suites` or
+`baseline_without_trial`) and `reason`; otherwise the ordinary Experiment
+result and resume rules apply.
 
 Each Arm accepts `--baseline-harness`, `--baseline-model`, `--baseline-effort`
 or the corresponding `--candidate-*` flag, followed by a value. Unspecified
@@ -1526,13 +1535,30 @@ cargo test
 
 ## Releasing
 
+Before pushing anything, the release script runs `thirdshift experiment
+--release <commit>` using this checkout's runner and private Eval suites.
+It evaluates the content commit beneath the version-only bump, so reruns use
+the same Experiment even before a bump branch exists. It pins that commit in a
+local Git ref before starting, so a merge to `main` during interruption does
+not change the Candidate on restart. The pin is removed after the branch push,
+when the pushed bump retains the selection. A pass carries on;
+a fail or inconclusive Verdict shows each suite's accuracy and wrong-finding
+intervals and asks `release anyway? [y/N]`, including without `--review`.
+Only `y` or `yes` continues; EOF or any other answer stops. Pending borderline
+and decisive Scores are listed with their recheck commands and polled until
+you have rechecked them. No touched suite or a last release with no Trial flag
+prints a note and carries on. An interrupted invocation resumes its saved
+Trials. A pushed bump branch is checked again before opening its PR, and an
+open or merged bump PR before merging or tagging. An already pushed tag only
+resumes the release workflow. Python 3 is needed to read the Experiment results.
+
 From a clone of this repo, signed in to `gh` and the User config's default Harness, run the release script with the new version:
 
 ```sh
 scripts/release.sh 0.4.0
 ```
 
-It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged since the last tag, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review` it never prompts. It waits for the pull request's checks, merges it with a merge commit, then tags that merge commit `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below), and the script then waits for that workflow's run on the merge commit, printing the run's URL so you can watch it. CI's run on `main` for the same commit isn't waited for. Once the release workflow run succeeds, the GitHub Release is published with its final body and the crate is on crates.io, and the script prints the GitHub Release's URL and exits `0`. It prints a line on stderr for each step. If the checks fail, it stops before merging and leaves the pull request open. If the release workflow run fails, it exits `1`, naming the failed jobs and the run's URL, and leaves the tag in place: the tag is already public, so rerun the failed jobs with `gh run rerun --failed <run id>` rather than cutting a new version. Neither wait has an overall timeout.
+It works from `origin/main` in a temporary worktree, so your checked-out branch and uncommitted changes don't matter and aren't touched. It opens a pull request from `release-<version>` that bumps the version in `Cargo.toml` and `Cargo.lock` and nothing else. Its body is a summary of the release, then the version diff. The User config’s default Harness, with its configured Model and Effort (Claude Code when no default is set), writes the summary from the version diff and the title, number and body of each pull request merged since the last tag, following the prompt in [`scripts/release-summary.md`](../scripts/release-summary.md). The script uses `cargo run` in this checkout to share thirdshift’s config parser and Harness adapters, and runs the summary in a temporary directory without Factory skills. Because pull request titles and bodies are contributor-editable, no Harness gets its session permission bypass, and each runs with as few tools as its CLI allows. Claude runs with no tools. Codex runs read-only and sandboxed, with its shell, MCP, web, app, plugin, browser and hook tools off. Grok gets only its to-do tool. OpenCode refuses every tool call. Muse has no shell, writes or web, and one model step. agy denies every tool that needs a permission, though it can still read files. A summary that tries a refused tool usually comes back empty, so the script falls back as below. If the config is invalid, the chosen Harness fails, or it returns no summary, the script warns and uses GitHub's generated notes as the summary instead, with a note saying so. It writes the summary before it pushes anything. With `--review` (`scripts/release.sh --review 0.4.0`), it then prints the summary and asks `[y]es / [e]dit / [n]o`: `y` carries on, `e` opens the summary in `$EDITOR` and carries on with what you save, and `n` stops with no branch, pull request or tag pushed. Without `--review`, only a failed or inconclusive Experiment prompts. It waits for the pull request's checks, merges it with a merge commit, then tags that merge commit `v<version>` and pushes the tag. Pushing the tag starts the release workflow (below), and the script then waits for that workflow's run on the merge commit, printing the run's URL so you can watch it. CI's run on `main` for the same commit isn't waited for. Once the release workflow run succeeds, the GitHub Release is published with its final body and the crate is on crates.io, and the script prints the GitHub Release's URL and exits `0`. It prints a line on stderr for each step. If the checks fail, it stops before merging and leaves the pull request open. If the release workflow run fails, it exits `1`, naming the failed jobs and the run's URL, and leaves the tag in place: the tag is already public, so rerun the failed jobs with `gh run rerun --failed <run id>` rather than cutting a new version. Neither wait has an overall timeout.
 
 Before it pushes anything, it refuses a release that can't be cut and says why: a version that isn't plain `X.Y.Z` (no leading `v`), a version that isn't higher than the one in `Cargo.toml` on `origin/main`, a `v<version>` tag that already exists locally or on origin, or a CI run on main's current tip that ended without success. It prints a progress line and waits for that tip's CI run to appear and finish, with no overall timeout. While waiting, it fetches `main` again: if the tip moves, it names the old and new commits and waits for the new tip's CI, checking that the requested version is still higher. Once CI succeeds, it bumps the version from that commit and starts the release automatically; if CI ends without success, it names the commit and conclusion and stops without pushing anything.
 

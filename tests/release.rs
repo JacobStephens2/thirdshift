@@ -15,6 +15,10 @@ mod support;
 #[path = "release/lifetime.rs"]
 mod lifetime;
 
+#[cfg(target_os = "linux")]
+#[path = "release/experiments.rs"]
+mod experiments;
+
 use std::fs;
 #[cfg(not(target_os = "linux"))]
 use std::io::Write;
@@ -227,7 +231,7 @@ impl Release {
         let cargo = release.bin().join("cargo");
         fs::write(
             &cargo,
-            "#!/bin/sh\nexec \"$THIRDSHIFT_TEST_BINARY\" --release-summary\n",
+            "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$THIRDSHIFT_TEST_BINARY\" \"$@\"\n",
         )
         .unwrap();
         fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
