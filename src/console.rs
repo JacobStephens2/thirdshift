@@ -13,6 +13,7 @@ mod logs;
 mod look;
 pub use look::{export_theme, import_theme, sections, theme};
 mod changes;
+mod dismiss;
 mod peek;
 mod restart;
 mod stop;
@@ -87,12 +88,32 @@ enum View {
     Sections,
     StopPage,
     Stop,
+    Dismiss,
+    UndoDismissal,
     SetPasswordPage,
     SendCode,
     SetPassword,
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/dismiss",
+        cli: &[
+            "thirdshift dismiss widgets#7",
+            "thirdshift dismiss widgets#7 --json",
+        ],
+        method: Method::POST,
+        view: View::Dismiss,
+    },
+    PageRoute {
+        path: "/dismiss/undo",
+        cli: &[
+            "thirdshift dismiss widgets#7 --undo",
+            "thirdshift dismiss widgets#7 --undo --json",
+        ],
+        method: Method::POST,
+        view: View::UndoDismissal,
+    },
     PageRoute {
         path: "/cronjobs",
         cli: &["thirdshift cronjobs --json"],
@@ -388,6 +409,8 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::Sections, Method::POST) => post(look::set_sections),
             (View::StopPage, Method::GET) => get(stop::show),
             (View::Stop, Method::POST) => post(stop::submit),
+            (View::Dismiss, Method::POST) => post(dismiss::submit),
+            (View::UndoDismissal, Method::POST) => post(dismiss::undo),
             (View::SetPasswordPage, Method::GET) => get(auth::set_password_page),
             (View::SendCode, Method::POST) => post(auth::code),
             (View::SetPassword, Method::POST) => post(auth::set_password),
@@ -535,12 +558,15 @@ async fn render_page(
     .await?
 }
 
-async fn inspect(RawQuery(query): RawQuery) -> Response {
+async fn inspect(
+    axum::Extension(viewer): axum::Extension<auth::Viewer>,
+    RawQuery(query): RawQuery,
+) -> Response {
     let command = query_value(&query, "command");
     match tokio::task::spawn_blocking(move || -> Result<String> {
         let config = UserConfig::load()?;
         let details = crate::logs::stop::inspect(&config, &command)?;
-        Ok(peek::Peek::new(command, details).render()?)
+        Ok(peek::Peek::new(command, details, viewer.csrf).render()?)
     })
     .await
     {
