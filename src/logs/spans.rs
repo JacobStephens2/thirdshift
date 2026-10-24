@@ -3,7 +3,6 @@
 mod session;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
 
 use anyhow::{Context as _, Result, bail};
 use chrono::{DateTime, Local};
@@ -12,7 +11,8 @@ use serde_json::Value;
 
 use super::reading::{Command, Entry, Observation, Snapshot};
 use super::status::inspect;
-use super::trace::{Context, SpanKind};
+use super::trace::SpanKind;
+use super::trace::ancestry::{self, Fact, Node};
 use crate::config::UserConfig;
 
 #[derive(Clone, Serialize)]
@@ -247,53 +247,25 @@ pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
         now: now.timestamp_millis() as f64,
     };
     if let (Some(command), Some(owner)) = (selected, owner) {
-        let context = Context::of_session(&owner.command_log);
-        let root = record_span(
-            command,
-            hex(context.command),
-            None,
-            SpanKind::Cmd,
-            &tree.command,
-        );
-        tree.spans.push(root);
-        let mut builder = Builder {
-            context,
-            sessions: BTreeSet::new(),
-            spans: &mut tree.spans,
-        };
-        builder.record(command, hex(builder.context.command))?;
+        for node in ancestry::of(command, owner)? {
+            tree.spans.extend(spans(&node)?);
+        }
     }
     tree.roll_up();
     Ok(View { choices, tree })
 }
 
-struct Builder<'a> {
-    context: Context,
-    sessions: BTreeSet<PathBuf>,
-    spans: &'a mut Vec<Span>,
-}
-
-impl Builder<'_> {
-    fn record(&mut self, command: &Command, parent: String) -> Result<()> {
-        let context = self.context.for_record(&command.record);
-        let selector = Observation::Record(command).selector().unwrap_or_default();
-        let run_id = hex(context.run);
-        self.spans.push(record_span(
-            command,
-            run_id.clone(),
-            Some(parent),
-            SpanKind::Run,
-            &selector,
-        ));
-        let stages: Vec<_> = command.record.stage_times(None).collect();
-        for (index, timing) in stages.iter().enumerate() {
-            let mut span = record_span(
-                command,
-                hex(context.stage_id(timing.stage)),
-                Some(run_id.clone()),
-                SpanKind::Stage,
-                &selector,
-            );
+/// Project one ancestry node, reading an attached Session's own spans.
+fn spans(node: &Node) -> Result<Vec<Span>> {
+    let command = node.command;
+    let selector = Observation::Record(command).selector().unwrap_or_default();
+    let id = node.id().map(hex).unwrap_or_default();
+    let parent = node.parent.map(hex);
+    Ok(match &node.fact {
+        Fact::Command => vec![record_span(command, id, parent, SpanKind::Cmd, &selector)],
+        Fact::Run => vec![record_span(command, id, parent, SpanKind::Run, &selector)],
+        Fact::Stage(timing) => {
+            let mut span = record_span(command, id, parent, SpanKind::Stage, &selector);
             span.name = timing.stage.name.clone();
             span.start = timing.began.map(|time| time.timestamp_millis() as f64);
             span.end = timing.ended.map(|time| time.timestamp_millis() as f64);
@@ -306,54 +278,32 @@ impl Builder<'_> {
             }
             .into();
             span.error = None;
-            if index + 1 == stages.len() && command.record.cause.is_some() {
+            let last = command
+                .record
+                .stages
+                .last()
+                .is_some_and(|stage| std::ptr::eq(stage, timing.stage));
+            if last && command.record.cause.is_some() {
                 span.error.clone_from(&command.record.cause);
                 span.status = "error".into();
             }
             span.duration_ms = duration(span.start, span.end);
-            self.spans.push(span);
+            vec![span]
         }
-        // Dispatchers can inventory their child's same-issue Sessions. Let
-        // descendants claim them first so each Session retains its actual Run.
-        for child in command.dispatched.iter().chain(&command.children) {
-            let parent = hex(context.child_parent(&command.record, &child.record));
-            self.record(child, parent)?;
-        }
-        for path in Observation::Record(command).sessions()? {
-            let original = super::session::original(&path);
-            if !self.sessions.insert(original.clone()) {
-                continue;
-            }
-            let stage = stages.iter().find(|timing| {
-                timing
-                    .stage
-                    .session_log
-                    .as_deref()
-                    .is_some_and(|reference| super::session::original(reference) == original)
-            });
-            let parent = stage.map_or_else(
-                || run_id.clone(),
-                |timing| hex(context.stage_id(timing.stage)),
-            );
-            let mut template = record_span(
-                command,
-                String::new(),
-                Some(parent),
-                SpanKind::Sess,
-                &selector,
-            );
-            template.start = stage
+        Fact::Session(attachment) => {
+            let mut template = record_span(command, id, parent, SpanKind::Sess, &selector);
+            template.start = attachment
+                .stage
+                .as_ref()
                 .and_then(|timing| timing.began)
                 .map(|time| time.timestamp_millis() as f64)
                 .or(template.start);
             template.input = None;
-            template.conversation_url = Some(inspect::url("/log", &selector, Some(&path)));
-            if let Some(spans) = session::read(&path, &context, &template)? {
-                self.spans.extend(spans);
-            }
+            template.conversation_url =
+                Some(inspect::url("/log", &selector, Some(&attachment.path)));
+            session::read(&attachment.path, &node.context, &template)?.unwrap_or_default()
         }
-        Ok(())
-    }
+    })
 }
 
 fn record_span(
