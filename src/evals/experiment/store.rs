@@ -262,10 +262,14 @@ impl Stored {
 
     fn upgrade_verdict(&mut self) -> Result<()> {
         if self.state == State::Completed
-            && self
+            && (self
                 .verdict
                 .as_ref()
                 .is_none_or(|verdict| verdict.provisional_verdict.is_none())
+                || self
+                    .pending_rechecks
+                    .iter()
+                    .any(|pending| pending.decisive && pending.decisive_verdicts.is_empty()))
         {
             self.refresh_verdict()?;
         }
