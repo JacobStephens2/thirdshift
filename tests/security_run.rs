@@ -3067,7 +3067,7 @@ fn a_settling_issue_does_not_skip_the_security_audit() {
     scenario.issue_labelled(7, &["ready-for-agent"]);
     scenario.issue_timeline(
         7,
-        &[(support::TimelineEvent::Labelled("ready-for-agent"), 9)],
+        &[(support::TimelineEvent::Labelled("ready-for-agent"), 4)],
     );
     scenario.agent_does(&audit_script("[]"));
 
@@ -3078,7 +3078,7 @@ fn a_settling_issue_does_not_skip_the_security_audit() {
     assert!(
         result
             .stderr
-            .contains("#7 not settled: labelled ready-for-agent less than 30 minutes ago"),
+            .contains("#7 not settled: labelled ready-for-agent less than 5 minutes ago"),
         "{}",
         result.stderr
     );
