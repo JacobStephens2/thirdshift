@@ -20,7 +20,7 @@ pub(super) struct Stored {
     pub state: State,
     #[serde(flatten)]
     pub details: Details,
-    created_at: String,
+    pub(super) created_at: String,
     pub tasks: Vec<Task>,
     #[serde(default)]
     pub verdict: Option<super::grading::Verdict>,
@@ -93,7 +93,7 @@ pub(crate) struct ArmVoids {
 }
 
 impl Voids {
-    fn include(&mut self, result: &TrialResult) {
+    pub(super) fn include(&mut self, result: &TrialResult) {
         let arm = match result.arm {
             Arm::Baseline => &mut self.baseline,
             Arm::Candidate => &mut self.candidate,
@@ -108,7 +108,7 @@ impl Voids {
         }
     }
 
-    fn findings(&self) -> Vec<String> {
+    pub(super) fn findings(&self) -> Vec<String> {
         [("Baseline", &self.baseline), ("Candidate", &self.candidate)]
             .into_iter()
             .filter_map(|(name, arm)| {
@@ -143,7 +143,7 @@ pub(crate) struct Minutes {
 }
 
 impl Minutes {
-    fn include(&mut self, result: &TrialResult) {
+    pub(super) fn include(&mut self, result: &TrialResult) {
         let arm = match result.arm {
             Arm::Baseline => &mut self.baseline,
             Arm::Candidate => &mut self.candidate,
@@ -302,55 +302,7 @@ impl Stored {
     }
 
     fn view(&self) -> Result<View> {
-        let results = self.results()?;
-        let (running_trials, sessions) = super::evidence::inventory(self)?;
-        let mut minutes = Minutes::default();
-        let mut voids = Voids::default();
-        let terminal: std::collections::BTreeSet<_> =
-            results.iter().map(TrialResult::key).collect();
-        let mut unfinished_trials = Vec::new();
-        let trials = self.directory.join("trials");
-        if trials.exists() {
-            for trial in fs::read_dir(trials)? {
-                let pending = trial?.path().join("pending.json");
-                if pending.is_file() {
-                    // Every completed attempt is retained here before a pause
-                    // or final publication. Read it once per Trial, so live
-                    // and paused Experiments include time already spent too.
-                    let result: TrialResult = serde_json::from_slice(&fs::read(pending)?)?;
-                    minutes.include(&result);
-                    voids.include(&result);
-                    if !terminal.contains(&result.key()) {
-                        unfinished_trials.push(result);
-                    }
-                }
-            }
-        }
-        let findings = voids.findings();
-        Ok(View {
-            description: self.description.clone(),
-            state: self.state,
-            details: self.details.clone(),
-            created_at: self.created_at.clone(),
-            tasks: self
-                .tasks
-                .iter()
-                .map(|task| TaskName {
-                    suite: task.suite.clone(),
-                    name: task.name.clone(),
-                })
-                .collect(),
-            running_trials,
-            sessions,
-            results,
-            unfinished_trials,
-            verdict: self.verdict.clone(),
-            pending_rechecks: self.pending_rechecks.clone(),
-            minutes,
-            usage: super::usage::Arms::read(&self.directory)?,
-            voids,
-            findings,
-        })
+        super::reading::read(self)
     }
 
     pub fn render(&self, json: bool) -> Result<String> {
