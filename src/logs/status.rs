@@ -96,7 +96,7 @@ pub fn show(json: bool, all: bool) -> Result<()> {
         println!("{}", serde_json::to_string_pretty(&status)?);
     } else {
         println!("{}", status.hostname);
-        println!("{}", active_runs(status.active_runs));
+        println!("{}", active_runs_text(status.active_runs));
         for group in Group::ORDER {
             let items: Vec<_> = status
                 .commands
@@ -146,7 +146,7 @@ pub fn show(json: bool, all: bool) -> Result<()> {
 }
 
 /// The Inbox's total of outer Command trees with live work, in every group.
-pub(crate) fn active_runs(count: usize) -> String {
+pub(crate) fn active_runs_text(count: usize) -> String {
     format!("{count} active run{}", if count == 1 { "" } else { "s" })
 }
 

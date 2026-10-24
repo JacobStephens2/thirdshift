@@ -434,7 +434,7 @@ impl InboxPage {
     }
 
     fn active_runs(&self) -> String {
-        status::active_runs(self.inbox.active_runs)
+        status::active_runs_text(self.inbox.active_runs)
     }
 
     fn ready_for_review(&self) -> usize {

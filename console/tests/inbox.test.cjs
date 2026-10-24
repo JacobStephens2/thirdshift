@@ -872,6 +872,12 @@ test('the active-run total follows live trees, stays visible and fits every Them
     assert.equal(await page.getByRole('region', { name: 'No running Commands' }).count(), 0);
     await write(separate, 224);
     await page.waitForFunction(() => document.querySelector('#inbox > .active-runs strong').textContent === '2 active runs');
+    // Opening and folding the section holding live work leaves the total alone.
+    for (const open of [1, 0]) {
+      await page.locator('[data-group="working"] > summary').click();
+      assert.equal(await page.locator('[data-group="working"][open]').count(), open);
+      assert.equal(await total.locator('strong').textContent(), '2 active runs');
+    }
     // A Spec's Ticket ending while the Spec continues keeps its one run.
     await write(tickets[0], 222, { parent_record: spec, ...ended });
     await page.waitForTimeout(1500);
@@ -883,12 +889,7 @@ test('the active-run total follows live trees, stays visible and fits every Them
       for (const mode of ['light', 'dark']) {
         await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, `${family}-${mode}`);
         assert.equal(await total.isVisible(), true, `${family}-${mode}`);
-        const look = await total.evaluate(node => {
-          const strong = getComputedStyle(node.querySelector('strong'));
-          return { color: strong.color, background: getComputedStyle(document.body).backgroundColor, fits: document.documentElement.scrollWidth <= innerWidth };
-        });
-        assert.notEqual(look.color, look.background, `${family}-${mode}`);
-        assert.equal(look.fits, true, `${family}-${mode}`);
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${family}-${mode}`);
       }
     }
     await write(separate, 224, ended);

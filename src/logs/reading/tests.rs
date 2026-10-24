@@ -324,10 +324,16 @@ fn a_spec_run_counts_once_with_its_parallel_tickets_and_another_ticket_run_adds_
 
 #[test]
 fn a_pass_counts_once_with_its_dispatches_their_tickets_and_base_fixes() {
+    for kind in ["Pickup run", "Architect run", "Security run"] {
+        a_pass_counts_once(kind);
+    }
+}
+
+fn a_pass_counts_once(kind: &str) {
     let dir = tempfile::tempdir().unwrap();
     let mut pass = record(7);
-    pass["kind"] = "Pickup run".into();
-    pass["name"] = "pickup-20261019T110000-0400".into();
+    pass["kind"] = kind.into();
+    pass["name"] = "pass-20261019T110000-0400".into();
     let mut spec = record(20);
     spec["kind"] = "Spec run".into();
     let ready = {
@@ -357,8 +363,8 @@ fn a_pass_counts_once_with_its_dispatches_their_tickets_and_base_fixes() {
     }
     let snapshot = Snapshot::load(dir.path(), now()).unwrap();
     // The ready dispatched run has its own Inbox row but no separate tree.
-    assert_eq!(snapshot.inbox(false, 7).len(), 2);
-    assert_eq!(snapshot.active_runs(), 1);
+    assert_eq!(snapshot.inbox(false, 7).len(), 2, "{kind}");
+    assert_eq!(snapshot.active_runs(), 1, "{kind}");
 }
 
 #[test]
