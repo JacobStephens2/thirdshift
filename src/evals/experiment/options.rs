@@ -17,6 +17,7 @@ pub struct Options {
     pub(super) bar: Bar,
     pub(super) trials_per_task: Option<usize>,
     pub(super) json: bool,
+    pub(super) release: bool,
 }
 
 #[derive(Default)]
@@ -52,11 +53,15 @@ pub fn parse(args: &[String]) -> Result<Options> {
     let mut suites = BTreeSet::new();
     let mut candidate = None;
     let mut json = false;
+    let mut release = false;
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         if arg == "--json" {
             ensure!(!json, "repeated --json");
             json = true;
+        } else if arg == "--release" {
+            ensure!(!release, "repeated --release");
+            release = true;
         } else if arg.starts_with("--") {
             let value = args
                 .next()
@@ -95,6 +100,10 @@ pub fn parse(args: &[String]) -> Result<Options> {
     let baseline_setup = arm("baseline")?;
     let candidate_setup = arm("candidate")?;
     let baseline = flags.remove("--baseline").map(String::from);
+    ensure!(
+        !release || (baseline.is_none() && suites.is_empty()),
+        "release mode selects its Baseline and touched suites; --baseline and --suite do not apply"
+    );
     let mut bar = Bar::default();
     macro_rules! number {
         ($flag:literal, $target:expr) => {
@@ -151,5 +160,6 @@ pub fn parse(args: &[String]) -> Result<Options> {
         bar,
         trials_per_task,
         json,
+        release,
     })
 }

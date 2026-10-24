@@ -90,6 +90,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift setup                               Choose defaults and write the User config
        thirdshift evals <action>                      Manage Eval data and Arms, including import-replays; see the manual
        thirdshift experiment <candidate> [options]   Compare two Arms on private Eval suites
+       thirdshift experiment --release <commit>     Compare touched suites with the last release
        thirdshift experiments [<id>] [--json]        List Experiments or show one
        thirdshift recheck <id> <trial> <pass|fail> --reason <text>  Recheck a Trial's Score
        thirdshift status [--all] [--json]             List this machine's Commands
