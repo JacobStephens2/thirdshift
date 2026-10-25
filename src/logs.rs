@@ -47,7 +47,7 @@ use crate::session::Logged;
 
 use activity::Kind;
 pub use command_record::StageName as Stage;
-pub(crate) use command_record::{TicketRecord, TicketState, experiment_rechecked};
+pub(crate) use command_record::{Issue, TicketRecord, TicketState, experiment_rechecked};
 use effects::OnMachine;
 use recording::Record;
 
@@ -250,6 +250,11 @@ pub fn started(work: Work, harness: &Choice) {
 /// stays held, and is dropped with the Command log it never kept.
 pub fn skipped(pass: Pass, repo: &Repo, reason: impl Display) {
     record().skipped(pass, repo, reason);
+}
+
+/// Add an observation to the running command's repository Activity log.
+pub(crate) fn activity(message: impl Display) {
+    record().activity(message);
 }
 
 /// Record how the command ended, `outcome` in short: show any lines held

@@ -21,6 +21,7 @@ fn assert_help_text(text: &str) {
         "thirdshift pickup base <branch>",
         "thirdshift secure",
         "thirdshift secure base <branch>",
+        "thirdshift skill <skill> [issue <issue>]",
         "thirdshift email-test [<address>]",
         "thirdshift setup",
         "thirdshift update",

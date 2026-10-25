@@ -81,7 +81,7 @@ impl Machine {
         script
     }
 
-    fn run_script(&self, script: &str) -> Output {
+    fn run_script(&self, script: &str, tools: &[(&str, &str)]) -> Output {
         // Run the whole printed script without touching the host's /etc or services.
         let script = script.replace("/etc/", &format!("{}/", self.path("etc").display()));
         let path = self.path("run-install.sh");
@@ -102,8 +102,23 @@ impl Machine {
             "a2enmod",
             "a2ensite",
             "certbot",
+            "curl",
+            "journalctl",
         ] {
             self.tool(tool, "printf '%s\\n' \"$0 $*\" >> actions");
+        }
+        // Advance fake time without waiting. A runaway poll must fail the test
+        // rather than hang the suite, even if the script loses its retry bound.
+        self.tool(
+            "sleep",
+            r#"n=0
+[ ! -f waits ] || read -r n < waits
+n=$((n + 1))
+printf '%s\n' "$n" > waits
+[ "$n" -lt 30 ]"#,
+        );
+        for (name, body) in tools {
+            self.tool(name, body);
         }
         Command::new("/bin/sh")
             .arg(path)
@@ -111,6 +126,108 @@ impl Machine {
             .env("PATH", self.path("bin"))
             .output()
             .unwrap()
+    }
+}
+
+#[test]
+fn inactive_console_fails_installation_with_its_journal_before_proxy_changes() {
+    let machine = Machine::new();
+    machine.tool("apache2ctl", "exit 0");
+    let script = machine.script();
+    machine.tool("getent", "exit 0");
+
+    let output = machine.run_script(
+        &script,
+        &[
+            ("systemctl", "[ \"$1\" != is-active ]"),
+            (
+                "journalctl",
+                "printf 'Console failed: permission denied\\n'",
+            ),
+        ],
+    );
+
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("thirdshift-console.service"), "{output:?}");
+    assert!(
+        stderr.contains("Console failed: permission denied"),
+        "{output:?}"
+    );
+    assert!(!machine.path("etc/apache2").exists());
+    assert!(
+        !fs::read_to_string(machine.path("actions"))
+            .unwrap_or_default()
+            .contains("certbot")
+    );
+}
+
+#[test]
+fn active_console_must_answer_on_its_configured_port_to_finish_installation() {
+    for answers in [false, true] {
+        let machine = Machine::new();
+        machine.configure("", 9543);
+        let script = machine.script();
+        let probe = if answers {
+            // First connection is refused; the next response is a sign-in page.
+            "printf '%s\\n' \"$*\" >> probes\nif [ ! -f listening ]; then : > listening; exit 7; fi\nexit 0"
+        } else {
+            "printf '%s\\n' \"$*\" >> probes\nexit 7"
+        };
+
+        let output = machine.run_script(
+            &script,
+            &[
+                ("curl", probe),
+                ("journalctl", "printf 'Console has not bound its port\\n'"),
+            ],
+        );
+
+        assert_eq!(output.status.success(), answers, "{output:?}");
+        let probes = fs::read_to_string(machine.path("probes")).unwrap();
+        assert!(probes.contains("http://127.0.0.1:9543/"), "{probes}");
+        assert!(probes.lines().count() > 1, "{probes}");
+        if answers {
+            assert!(output.stderr.is_empty(), "{output:?}");
+        } else {
+            assert!(
+                String::from_utf8_lossy(&output.stderr).contains("Console has not bound its port"),
+                "{output:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn selinux_warning_is_only_printed_when_getenforce_reports_enforcing() {
+    for mode in [
+        None,
+        Some("Enforcing"),
+        Some("Permissive"),
+        Some("Disabled"),
+    ] {
+        let machine = Machine::new();
+        let script = machine.script();
+        if let Some(mode) = mode {
+            machine.tool("getenforce", &format!("printf '%s\\n' '{mode}'"));
+        }
+
+        let output = machine.run_script(&script, &[]);
+
+        assert!(output.status.success(), "{mode:?}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if mode == Some("Enforcing") {
+            assert!(
+                stderr.contains("SELinux can block the Console"),
+                "{output:?}"
+            );
+            assert!(
+                stderr.contains("https://github.com/JacobStephens2/thirdshift/issues/1078"),
+                "{output:?}"
+            );
+        } else {
+            assert!(stderr.is_empty(), "{mode:?}: {output:?}");
+        }
     }
 }
 
@@ -127,7 +244,7 @@ fn unresolved_console_address_stops_proxy_installation_before_any_changes() {
             "printf '%s\\n' \"$*\" > lookup\nprintf 'resolver noise\\n'\nexit 2",
         );
 
-        let output = machine.run_script(&script);
+        let output = machine.run_script(&script, &[]);
 
         assert!(!output.status.success(), "{proxy} installed without DNS");
         assert_eq!(
@@ -180,7 +297,7 @@ fn resolving_console_address_continues_proxy_installation() {
             fs::create_dir_all(machine.path("etc/caddy")).unwrap();
             fs::write(machine.path("etc/caddy/Caddyfile"), "# Existing sites\n").unwrap();
 
-            let output = machine.run_script(&script);
+            let output = machine.run_script(&script, &[]);
 
             assert!(output.status.success(), "{proxy}, {address}: {output:?}");
             assert!(output.stdout.is_empty(), "{proxy}, {address}: {output:?}");

@@ -350,7 +350,9 @@ thirdshift console install --output install-console.sh
 sudo sh install-console.sh
 ```
 
-`console install` only prints a script; `--output <file>` saves it to that file instead, replacing any earlier copy, and writes nothing if the settings can't make a script. On Linux it prefers a running Caddy or Apache service; otherwise it checks for `caddy`, `apache2ctl` or `httpd` on PATH. For either proxy, the script first checks the Console's address with the system resolver (`getent hosts`). If it doesn't resolve, it stops before writing files or changing services and asks you to add an A or AAAA record pointing at this server, then run the script again. It checks resolution only, not whether the address points at this machine. The script writes `thirdshift-console.service`, running the installed binary as you with your HOME and automatic restarts. Only the script needs root. It enables the service, then restarts the proxy.
+`console install` only prints a script; `--output <file>` saves it to that file instead, replacing any earlier copy, and writes nothing if the settings can't make a script. On Linux it prefers a running Caddy or Apache service; otherwise it checks for `caddy`, `apache2ctl` or `httpd` on PATH. For either proxy, the script first checks the Console's address with the system resolver (`getent hosts`). If it doesn't resolve, it stops before writing files or changing services and asks you to add an A or AAAA record pointing at this server, then run the script again. It checks resolution only, not whether the address points at this machine. The script writes `thirdshift-console.service`, running the installed binary as you with your HOME and automatic restarts. Only the script needs root.
+
+Install `curl` before running the script. After enabling and restarting the Console, it waits for the service to be active and answer at `127.0.0.1:<console.port>` before configuring or restarting the proxy. It tries up to 15 times, with one-second request timeouts and one-second pauses (about 30 seconds). A sign-in response counts as answering. If startup fails or the checks run out, the script exits nonzero and prints the unit's last 50 journal lines. If `getenforce` reports `Enforcing`, it also warns that SELinux can block the Console and links to [#1078](https://github.com/JacobStephens2/thirdshift/issues/1078); it does not change SELinux labels or policy.
 
 For Caddy it writes `/etc/caddy/sites/thirdshift-console.caddy`, imports the sites folder from `/etc/caddy/Caddyfile` if needed, and disables proxy buffering with `flush_interval -1`. Caddy handles HTTPS. It **restarts**, rather than reloads, Caddy to preserve HTTP/3 on Android. For Apache it writes the port-80 site under `/etc/apache2/sites-available` or `/etc/httpd/conf.d`, preserves Host, forwards the request protocol and disables gzip on the Console's event streams. Install certbot with its Apache plugin first; the script runs `certbot --apache -d <name>`. Debian's module/site helpers are included. On an `httpd` machine, enable `proxy`, `proxy_http`, `headers`, `ssl` and `setenvif` and permit proxy connections in the host's SELinux policy first.
 
@@ -501,6 +503,7 @@ thirdshift pickup highest-first   # take the highest-numbered Ready issue instea
 thirdshift pickup base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
 thirdshift secure                   # audit the Base branch and record findings privately (see Security runs)
 thirdshift secure base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
+thirdshift skill <skill> [issue <issue>]   # run one skill headlessly and print its final message
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
 thirdshift scores [<pull request>] [--json] # show Scores and calibration
 thirdshift scores <pull request> --mine [--json] # enter your five Scores
@@ -767,6 +770,35 @@ Both settings default to `0`, disabling that limit. Values are nonnegative whole
 Before every session, including a Resume, Repair, Security review or a preflight Model test call, thirdshift checks the host. If available RAM is below the minimum or load per CPU exceeds the maximum, it reports why and waits, rechecking every ten seconds. Running sessions continue. Limits are read again on every check, so editing the config can release a waiting Command. Stop or Ctrl-C interrupts the wait through normal cleanup. A failed resource read with limits enabled fails the Command rather than starting a session without a measurement.
 
 These are host snapshots, not resource reservations or per-session budgets: simultaneous Commands may both pass a check, and container quotas are not measured. `spec.parallel` still sets the upper bound on parallel Ticket runs. Limits apply to sessions; they do not prevent worktree preparation or Claims.
+
+### Standalone skills
+
+Run one skill without starting a Run:
+
+```sh
+thirdshift skill to-spec issue 42
+thirdshift skill thirdshift-code-review
+thirdshift skill my-repository-skill
+```
+
+The command uses the User config's default Harness, Model and Effort. It first
+looks for the exact name among the Factory skills and the repository's committed
+`.agents/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md` files. If none
+matches, it tries the Factory skill `thirdshift-<name>`. A skill file that
+resolves outside the worktree is not a match. An unknown name lists the
+available skills and starts no session. The optional issue is an Issue URL or a
+positive number resolved from `origin`. An Issue URL from another repository
+is an origin mismatch and stops the command before any work.
+
+The session runs in a temporary worktree at the head of the checked-out branch,
+with the Factory skills available. Uncommitted changes in your checkout stay out
+of it. Your checkout stays untouched. The final message goes to stdout; progress,
+failure causes and the path of any retained worktree go to stderr. A completed
+session exits `0`; a failed or incomplete session exits non-zero.
+
+The worktree is kept when it has uncommitted changes, commits absent from all
+remote-tracking branches, or uncertain ownership. Otherwise it is removed. No
+Command record, Console entry or Session log is created for a standalone skill.
 
 ### User config
 
@@ -1299,6 +1331,8 @@ A Spec run makes the [Claim](#the-claim) on the Spec, as a Ticket run does on it
 
 The Spec PR opens as a draft as soon as the first Ticket lands, titled from the Spec, with `Closes #<spec>` and a Tickets checklist: one line per Ticket, ticked once it is done, with its pull request, or saying it is running, failed, blocked or unready. thirdshift rewrites the checklist between its `<!-- thirdshift:tickets -->` markers as each Ticket starts and ends, leaving the rest of the body as it is. Once every Ticket is done, the **Spec review** rewrites the body, and thirdshift puts the checklist back, appending it if the markers are gone, before marking the Spec PR ready.
 
+An Unready Ticket's checklist and Command log line also name its open blockers, marking those outside the Spec and those labelled `ready-for-agent`. For example: `#24 unready: labelled ready-for-human; blocked by #99 (outside the Spec; ready-for-agent)`. The Spec run reports outside blockers but never starts them. Its Command record retains the Ticket and open blocker titles read with the graph, visible in `thirdshift show <command> --json`. Titles are best effort: `null` means no title was captured, including in older records; `show` does not fetch missing titles from GitHub.
+
 The Spec review session reviews the whole Spec branch against the Base branch and the Spec. Once it is marked ready, the Spec PR goes through the same step 6 as a Ticket run's pull request, with the Spec as the issue and the Spec branch as the Issue branch: the Base branch is merged in (never rebased), CI watched, and a conflict or red CI handed to a Repair, within the same budgets, with the same Check re-run after a CI-fix Repair that leaves the head unchanged. Inherited failures are told apart the same way everywhere: the Spec PR's against the Base branch, and a Ticket's against the Spec branch, its Base branch, with the cause shown on the Ticket's line of the checklist.
 
 Tickets always merge into the Spec branch, whatever the command or the User config says. `merge` (or `--merge`, or `merge.always = true` without `no-merge`) applies to the Spec PR alone: the Spec run ends with the Self-merge of the Spec PR into the Base branch, then deletes the Spec branch on `origin` and closes the Spec if the merge did not. Without it, the Spec run ends with the Spec PR ready for review. A Spec PR that fails from the Spec review on follows the [Failed ticket run](#failed-ticket-runs) rules for its pull request, back to draft unless only the Self-merge could not happen (a policy refusal), and the Spec run exits `1`.
@@ -1322,8 +1356,8 @@ When nothing is left to run and any Ticket is not done, the Spec run is a **Fail
 thirdshift: 03:12:40 #21 failed: claude exited 1 (session trace: ~/.thirdshift/logs/acme/widgets/commands/issue/21-….logs.jsonl)
 thirdshift: 03:12:40 #22 blocked by #21
 thirdshift: 03:12:40 #23 landed with https://github.com/acme/widgets/pull/1
-thirdshift: 03:12:40 #24 unready: labelled needs-info
-thirdshift: 03:12:40 #25 blocked by #99 (outside the Spec)
+thirdshift: 03:12:40 #24 unready: labelled needs-info; blocked by #99 (outside the Spec; ready-for-agent)
+thirdshift: 03:12:40 #25 blocked by #99 (outside the Spec; ready-for-agent)
 thirdshift: 03:12:40 #26 in a cycle: #26 blocked by #27 blocked by #26
 thirdshift: 03:12:40 #27 in a cycle: #27 blocked by #26 blocked by #27
 thirdshift: 03:12:40 Tickets not done: #21, #22, #24, #25, #26, #27
@@ -1508,6 +1542,8 @@ Fixing is off by default. `security-fix` on the command or `fix = true` under `[
 Closing is off by default too. `security-close` on the command or `close = true` under `[security]` lets a Security run close the finding its fix merged, naming the merged pull request; `no-security-close` overrides the setting. The words take effect only when fixing is also allowed. After a dispatched fix ends merged, the run re-runs the private record's proof-of-concept test against the merged Base branch in the reproduction sandbox. When the test now passes, the run names the merged pull request in the private record and closes it: a draft advisory through its description and state, a finding issue with a comment naming the pull request before it is closed. A fix left ready for review closes nothing, and a test that still fails, or cannot run, leaves the record open with a private note of what happened; a failed close never changes the fix's outcome. A closed record is never picked up as waiting or as the next fix.
 
 A publishing session reads the private record and follows the reproduction's fix-size decision: a single **Ticket**, or a **Spec** with **Tickets** through `thirdshift-to-spec` and `thirdshift-to-tickets`. Every new issue is terse, saying only what the fix changes and linking the private record. thirdshift checks all the issues, swaps the top issue's `needs-triage` for `ready-for-agent`, adds `security-fix` to every fix issue (creating the label when missing), records the fix link privately and dispatches its **Ticket run** or **Spec run**. The Security run ends as that run ends, including a **Ticket run** that Self-merges when asked by the command or the User config.
+
+On a public repository, thirdshift checks issues created during the publishing session's window before creating the staged issue or Spec, and again after linking a Spec's Tickets. The second sweep skips the staged Spec and its Tickets. Each other issue's title and body face the same public-text check as staged text: they must link the private record and include none of its private write-up lines or test text. Issues that fail are closed and fail the Security run. Issues that pass are left open, named in the **Activity log**, and do not fail the run. The time window alone does not establish who created an issue.
 
 On a private repository, the finding's own issue is the fix's Ticket or Spec, keeping its write-up and proof-of-concept. A one-session fix needs no publishing session or second issue: thirdshift marks the finding's issue ready and dispatches it. For a bigger fix, the publishing session adds terse Tickets as that issue's native sub-issues, with their blocking links.
 
@@ -1944,7 +1980,10 @@ intervals and asks `release anyway? [y/N]`, including without `--review`.
 Only `y` or `yes` continues; EOF or any other answer stops. Pending borderline
 and decisive Scores are listed with their recheck commands and polled until
 you have rechecked them. No touched suite or a last release with no Trial flag
-prints a note and carries on. An interrupted invocation resumes its saved
+prints a note and carries on. `--no-experiment` skips the release Experiment
+outright, on the first run and on every resume, and prints a line saying so:
+use it only when an Experiment can't give a Verdict worth its Trials, such as
+while every Trial is known to be void. An interrupted invocation resumes its saved
 Trials. A pushed bump branch is checked again before opening its PR, and an
 open or merged bump PR before merging or tagging. An already pushed tag only
 resumes the release workflow. Python 3 is needed to read the Experiment results.

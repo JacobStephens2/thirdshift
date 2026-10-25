@@ -60,9 +60,12 @@ impl Adapter for Claude {
             .insert(at, "--disallowedTools=WebSearch,WebFetch".to_string());
         invocation
     }
-    fn check(&self, choice: &mut Choice) -> Result<()> {
+    fn check(&self, choice: &mut Choice, probe: super::Probe) -> Result<()> {
         super::check_sign_in(self, &["auth", "status"])?;
-        test_call(choice)
+        match probe {
+            super::Probe::Allow => test_call(choice),
+            super::Probe::Skip => Ok(()),
+        }
     }
     fn summary(&self, choice: &Choice, prompt: &str, _prompt_file: &Path) -> Invocation {
         let mut invocation = self.session(choice, None, prompt);

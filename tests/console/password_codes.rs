@@ -183,6 +183,29 @@ fn email_code_creates_and_resets_an_account_without_revealing_the_allowlist() {
 }
 
 #[test]
+fn a_wrong_code_reply_uses_the_console_theme() {
+    let home = configured();
+    let resend = ResendStandIn::replying(200, "{}");
+    let console = start(home.path(), &resend, true);
+    let response = post(
+        &console,
+        "/set-password",
+        &[("email", EMAIL), ("code", "000000"), ("password", PASSWORD)],
+    );
+    assert_eq!(response.status(), 401);
+    let html = response.text().unwrap();
+    assert!(html.contains("data-theme=\"focus-auto\""), "{html}");
+    assert!(html.contains("<!doctype html>"), "{html}");
+    assert!(html.contains("href=\"/assets/console.css\""), "{html}");
+    assert!(
+        html.contains(
+            "Password not set. Check your code or <a href=\"/set-password\">request another</a>."
+        ),
+        "{html}"
+    );
+}
+
+#[test]
 fn the_code_page_uses_the_console_theme_and_stylesheet() {
     let home = configured();
     let config = home.path().join(".thirdshift/config.toml");
@@ -309,11 +332,17 @@ fn email_flow_is_off_without_a_key_and_in_no_sign_in_mode() {
             &[("email", EMAIL), ("code", "123456"), ("password", PASSWORD)],
         );
         assert_eq!(response.status(), 503);
+        assert_eq!(
+            response.headers()["content-type"],
+            "text/html; charset=utf-8"
+        );
+        let html = response.text().unwrap();
+        assert!(html.contains("data-theme=\"focus-auto\""), "{html}");
+        assert!(html.contains("<!doctype html>"), "{html}");
+        assert!(html.contains("href=\"/assets/console.css\""), "{html}");
         assert!(
-            response
-                .text()
-                .unwrap()
-                .contains("thirdshift console password")
+            html.contains("<p>Email password setup is off. Ask the machine's owner to run <code>thirdshift console password --email &lt;address&gt;</code>.</p>"),
+            "{html}"
         );
     }
     assert!(resend.requests().is_empty());

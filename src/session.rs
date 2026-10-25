@@ -704,6 +704,7 @@ mod tests {
             session_id: session_id.map(String::from),
             killed: killed.iter().map(|work| work.to_string()).collect(),
             final_message: Some(said.to_string()),
+            completed: true,
         })
     }
 

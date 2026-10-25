@@ -435,6 +435,7 @@ fn why_none_can_start(spec: &IssueUrl, tickets: &[Ticket]) -> String {
                         .open_blockers
                         .iter()
                         .map(|blocker| {
+                            let blocker = &blocker.issue;
                             if in_spec(blocker) {
                                 name(blocker)
                             } else {
@@ -646,6 +647,7 @@ mod tests {
     fn startable_ticket(number: u64) -> Ticket {
         Ticket {
             issue: url(number),
+            title: None,
             is_open: true,
             labels: [READY_FOR_AGENT.name()].into_iter().collect(),
             has_sub_issues: false,
@@ -658,7 +660,7 @@ mod tests {
     fn blocked_ticket(number: u64, blockers: &[IssueUrl]) -> Ticket {
         Ticket {
             blockers: blockers.to_vec(),
-            open_blockers: blockers.to_vec(),
+            open_blockers: blockers.iter().cloned().map(Into::into).collect(),
             ..startable_ticket(number)
         }
     }

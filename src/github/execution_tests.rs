@@ -1184,6 +1184,31 @@ esac
 }
 
 #[test]
+fn the_ticket_graph_fits_githubs_node_budget() {
+    with_recorded_signal(
+        "github::execution_tests::the_ticket_graph_fits_githubs_node_budget",
+        |_| {
+            let _fixture = Fixture::new(
+                r#"exec python3 - "$@" <<'PY'
+import json, re, sys
+query = next(arg[6:] for arg in sys.argv[1:] if arg.startswith('query='))
+sub_issues = int(re.search(r'subIssues\(first: (\d+)', query).group(1))
+blockers = int(re.search(r'blockedBy\(first: (\d+)', query).group(1))
+ticket_labels, blocker_labels = map(int, re.findall(r'labels\(first: (\d+)', query))
+# GitHub counts possible nodes from every nested connection's requested size.
+nodes = sub_issues * (1 + ticket_labels + blockers * (1 + blocker_labels))
+if nodes > 500_000:
+    print('MAX_NODE_LIMIT_EXCEEDED: ' + str(nodes), file=sys.stderr)
+    sys.exit(1)
+print(json.dumps({'data': {'repository': {'issue': {'subIssues': {'nodes': []}}}}}))
+PY"#,
+            );
+            assert!(GitHub::new().tickets(&issue()).unwrap().is_empty());
+        },
+    );
+}
+
+#[test]
 fn tickets_keep_the_urls_of_sub_issues_and_their_open_and_closed_blockers() {
     with_recorded_signal(
         "github::execution_tests::tickets_keep_the_urls_of_sub_issues_and_their_open_and_closed_blockers",
@@ -1191,9 +1216,9 @@ fn tickets_keep_the_urls_of_sub_issues_and_their_open_and_closed_blockers() {
             let _fixture = Fixture::new(
                 r#"
 case "$*" in
-  *'nodes { url state }'*)
+  *'nodes { url title state labels(first: 40) { nodes { name } pageInfo { hasNextPage } } }'*)
     cat <<'JSON'
-{"data":{"repository":{"issue":{"subIssues":{"nodes":[{"url":"https://github.com/other/widgets/issues/21","state":"OPEN","labels":{"nodes":[]},"subIssues":{"totalCount":0},"blockedBy":{"nodes":[{"url":"https://github.com/acme/widgets/issues/21","state":"OPEN"},{"url":"https://github.com/another/widgets/issues/21","state":"CLOSED"}]}}]}}}}}
+{"data":{"repository":{"issue":{"subIssues":{"nodes":[{"url":"https://github.com/other/widgets/issues/21","title":"A foreign Ticket","state":"OPEN","labels":{"nodes":[]},"subIssues":{"totalCount":0},"blockedBy":{"nodes":[{"url":"https://github.com/acme/widgets/issues/21","title":"A local blocker","state":"OPEN","labels":{"nodes":[{"name":"Ready-For-Agent"}],"pageInfo":{"hasNextPage":false}}},{"url":"https://github.com/another/widgets/issues/21","state":"CLOSED"}]}}]}}}}}
 JSON
     ;;
   *) echo '{}' ;;
@@ -1202,6 +1227,16 @@ esac
             );
             let tickets = GitHub::new().tickets(&issue()).unwrap();
             assert_eq!(tickets.len(), 1);
+            assert_eq!(tickets[0].title.as_deref(), Some("A foreign Ticket"));
+            assert_eq!(
+                tickets[0].open_blockers[0].title.as_deref(),
+                Some("A local blocker")
+            );
+            assert!(
+                tickets[0].open_blockers[0]
+                    .labels
+                    .has(crate::labels::READY_FOR_AGENT)
+            );
             assert_eq!(
                 tickets[0].issue.url,
                 "https://github.com/other/widgets/issues/21"
@@ -1221,7 +1256,7 @@ esac
                 tickets[0]
                     .open_blockers
                     .iter()
-                    .map(|issue| issue.url.as_str())
+                    .map(|blocker| blocker.issue.url.as_str())
                     .collect::<Vec<_>>(),
                 ["https://github.com/acme/widgets/issues/21"]
             );

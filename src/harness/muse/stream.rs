@@ -10,6 +10,7 @@ pub struct MuseProgress {
     session_id: Option<String>,
     started: bool,
     final_message: Option<String>,
+    completed: bool,
     failure: Option<String>,
     skill_load: SkillLoad,
     tasks: Vec<(String, String)>,
@@ -109,6 +110,7 @@ impl Decoder for MuseProgress {
                 Vec::new()
             }
             Some("run.terminal.completed") => {
+                self.completed = true;
                 if self.final_message.is_none() {
                     self.final_message = payload["text"].as_str().map(String::from);
                 }
@@ -147,6 +149,7 @@ impl Decoder for MuseProgress {
                 session_id: self.session_id,
                 killed: self.killed,
                 final_message: self.final_message,
+                completed: self.completed,
             },
             outcome,
             diagnostic: self.failure,
