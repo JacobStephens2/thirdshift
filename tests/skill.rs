@@ -428,3 +428,54 @@ fn partial_muse_and_opencode_messages_are_not_success() {
         );
     }
 }
+
+#[test]
+fn a_claude_turn_resumed_after_a_result_must_complete_before_success() {
+    let scenario = Scenario::new();
+    scenario.agent_does(r##"printf 'Waiting for background review.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+cat > "$FAKE_CLAUDE_AFTER_RESULT" <<'JSON'
+{"type":"system","subtype":"task_notification","task_id":"review","status":"completed","summary":"Review finished."}
+{"type":"assistant","parent_tool_use_id":null,"message":{"id":"resumed-root","role":"assistant","content":[{"type":"tool_use","id":"validate","name":"Bash","input":{"command":"cargo test"}}]}}
+JSON
+"##);
+    let result = scenario.run(&["skill", "to-spec"]);
+    assert_eq!(
+        result.code,
+        Some(1),
+        "resumed turn ended early: stdout={:?}, stderr={}",
+        result.stdout,
+        result.stderr
+    );
+    assert!(result.stdout.is_empty(), "{}", result.stdout);
+    assert!(
+        result.stderr.contains("ended before completing its turn"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn child_activity_and_completed_root_resumes_preserve_the_final_result() {
+    for (events, expected) in [
+        (
+            r#"{"type":"assistant","parent_tool_use_id":"child","message":{"content":[{"type":"text","text":"Child completed."}]}}"#,
+            "First result.\n",
+        ),
+        (
+            r#"{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"text","text":"Resuming."}]}}
+{"type":"result","parent_tool_use_id":null,"subtype":"success","is_error":false,"result":"Latest result."}"#,
+            "Latest result.\n",
+        ),
+    ] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&format!(
+            "printf 'First result.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n\
+             cat > \"$FAKE_CLAUDE_AFTER_RESULT\" <<'JSON'\n{events}\nJSON\n"
+        ));
+
+        let result = scenario.run(&["skill", "to-spec"]);
+
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(result.stdout, expected);
+    }
+}

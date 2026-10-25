@@ -255,6 +255,9 @@ impl Stream {
                 vec!["session started".to_string()]
             }
             Some("assistant") => {
+                if event["parent_tool_use_id"].is_null() {
+                    self.completed = false;
+                }
                 if let Dialect::Claude(claude) = &mut self.dialect {
                     claude.assistant(event);
                 }
