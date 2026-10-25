@@ -190,12 +190,35 @@ fn interrupted_check_cleans_up_without_a_score_and_experiment_resumes() {
 #[test]
 fn snapshot_preserves_files_directories_and_symlinks_but_skips_special_files() {
     let fixture = Fixture::new();
+    // These files belong to the prepared repository, before the session.
+    // Keep the Arm branches pinned while extending only the task's source.
+    fixture
+        .scenario
+        .launch_git(&["checkout", "-b", "prepared-files"]);
+    fs::create_dir(fixture.scenario.launch_dir().join("nested")).unwrap();
+    fixture
+        .scenario
+        .commit_locally("nested/file", "ordinary", "Prepared file");
+    std::os::unix::fs::symlink("nested/file", fixture.scenario.launch_dir().join("link")).unwrap();
+    fixture.scenario.launch_git(&["add", "link"]);
+    fixture
+        .scenario
+        .launch_git(&["commit", "-m", "Prepared symlink"]);
+    let commit = fixture.scenario.launch_git(&["rev-parse", "HEAD"]);
+    fixture.scenario.launch_git(&["checkout", "candidate"]);
+    let task = fixture
+        .scenario
+        .path("home/.thirdshift/evals/suites/spec-review/tasks/fixture/task.toml");
+    let mut manifest = fs::read_to_string(&task)
+        .unwrap()
+        .parse::<toml_edit::DocumentMut>()
+        .unwrap();
+    manifest["base"] = toml_edit::value(commit.trim());
+    manifest["change"] = toml_edit::value(commit.trim());
+    fs::write(task, manifest.to_string()).unwrap();
     fixture.scenario.agent_does(&format!(
         r#"
 {reports}
-mkdir nested
-printf ordinary > nested/file
-ln -s nested/file link
 mkfifo pipe
 python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.bind("server.sock")'
 exit 1
@@ -216,8 +239,8 @@ exit 1
     let results = experiment["results"].as_array().unwrap();
     assert_eq!(results.len(), 2);
     for result in results {
-        // A failed Trial still gets code checks; its ordinary leftovers must
-        // neither fail the whole Experiment nor alter the Trial repository.
+        // A failed Trial still gets code checks on its prepared files;
+        // session leftovers must not fail the Experiment or enter checks.
         assert_eq!(result["outcome"], "failed", "{result}");
         assert_eq!(result["score"]["checks"][2]["passed"], true, "{result}");
     }

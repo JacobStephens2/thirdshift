@@ -42,6 +42,22 @@ impl Snapshot {
             &mut digest,
             repository::git(repo, &["rev-parse", &self.base])?.as_bytes(),
         );
+        // Grafts and shallow boundaries can change the reviewed ancestry
+        // without changing commit objects or replacement refs.
+        hash(
+            &mut digest,
+            repository::git(
+                repo,
+                &[
+                    "rev-list",
+                    "--parents",
+                    "--no-walk",
+                    &self.base,
+                    &self.change,
+                ],
+            )?
+            .as_bytes(),
+        );
         // Pin the prepared change object, not the Issue branch's moving HEAD.
         // Include both commits' trees and blobs, even binary or ignored paths,
         // so corrupting an object cannot hide behind its unchanged object ID.
@@ -97,8 +113,11 @@ fn hash_input(digest: &mut Sha256, repo: &Path, name: &str) -> Result<()> {
             hash(digest, name.as_bytes());
             hash(digest, &metadata.permissions().mode().to_le_bytes());
             if metadata.is_symlink() {
-                hash(digest, fs::read_link(path)?.as_os_str().as_encoded_bytes());
-            } else if metadata.is_file() {
+                hash(digest, fs::read_link(&path)?.as_os_str().as_encoded_bytes());
+            }
+            // The implicit issue input may be a tracked symlink. Protect
+            // the text the session reads as well as the link itself.
+            if metadata.is_file() || metadata.is_symlink() {
                 hash(digest, &fs::read(path)?);
             }
         }

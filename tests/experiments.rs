@@ -541,7 +541,7 @@ fn arm_usage_sums_void_retries_and_both_sessions_of_each_resume() {
     fixture.scenario.agent_does(&format!(r#"
 echo '{{"type":"assistant","message":{{"id":"m1","model":"observed","usage":{{"input_tokens":7,"output_tokens":2}},"content":[]}}}}'
 echo '{{"type":"result","subtype":"success","total_cost_usd":0.05}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
-printf changed > changed.txt
+printf changed >> .thirdshift-issue.md
 {}
 "#, support::leaves_running("cargo test")));
     let run = fixture.run(&[]);

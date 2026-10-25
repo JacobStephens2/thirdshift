@@ -166,6 +166,12 @@ report.write_text('Review complete.\n')
 print(json.dumps(dict(version=1, outcome='succeeded', timings=dict(total_ms=12, session_ms=10), reports=dict(standards=str(report), spec=None), void_cause=None, cause=None, session_id=None, log=None, model_evidence=None)))
 "#;
 
+const GIT: &str = r#"
+import subprocess
+def git(*args):
+    return subprocess.check_output(['git', '-C', str(repository), *args], text=True).strip()
+"#;
+
 #[test]
 fn review_commits_and_repository_reports_are_graded_for_both_sessions() {
     if isolated(&[]) {
@@ -174,9 +180,7 @@ fn review_commits_and_repository_reports_are_graded_for_both_sessions() {
     for session in ["spec-review", "code-review"] {
         let mut fixture = Fixture::new(&format!(
             r#"
-import subprocess
-def git(*args):
-    return subprocess.check_output(['git', '-C', str(repository), *args], text=True).strip()
+{GIT}
 (repository / 'change.txt').write_text('Fixed by review\n')
 git('add', 'change.txt')
 git('-c', 'user.name=Review', '-c', 'user.email=review@example.invalid', 'commit', '-m', 'Review fix')
@@ -388,13 +392,13 @@ fn changes_to_reviewed_commits_void_an_otherwise_successful_execution() {
         "git('update-ref', 'refs/heads/base', 'HEAD')",
         "git('replace', 'HEAD', 'base')",
         "git('replace', 'base', 'HEAD')",
+        "(repository / '.git/info/grafts').write_text(git('rev-parse', 'HEAD') + '\\n')",
+        "(repository / '.git/shallow').write_text(git('rev-parse', 'HEAD') + '\\n')",
         "oid = git('rev-parse', 'HEAD'); (repository / '.git/objects' / oid[:2] / oid[2:]).unlink()",
     ] {
         let fixture = Fixture::new(&format!(
             r#"
-import subprocess
-def git(*args):
-    return subprocess.check_output(['git', '-C', str(repository), *args], text=True).strip()
+{GIT}
 {SUCCESS}
 {mutation}
 "#
@@ -409,6 +413,34 @@ def git(*args):
             })
             .unwrap();
     }
+}
+
+#[test]
+fn issue_symlink_target_edits_are_repository_changes() {
+    if isolated(&[]) {
+        return;
+    }
+    let mut fixture = Fixture::new(&format!(
+        "{SUCCESS}\n(repository / 'CLAUDE.md').write_text('Altered issue text')"
+    ));
+    fixture.task.manifest.checks.clear();
+    let source = fixture.root.join("source");
+    std::os::unix::fs::symlink("CLAUDE.md", source.join(crate::prompt::ISSUE_FILE)).unwrap();
+    let git = crate::git::Git::new(&source);
+    git.run(&["add", crate::prompt::ISSUE_FILE]).unwrap();
+    git.run(&["commit", "-m", "Issue input symlink"]).unwrap();
+    fixture.task.manifest.change = git.run(&["rev-parse", "HEAD"]).unwrap();
+    fixture
+        .execution(5)
+        .run(fixture.request(), |_, output, _| {
+            assert_eq!(
+                output.void_cause,
+                Some(VoidCause::RepositoryChanged),
+                "Editing the text read from .thirdshift-issue.md must void the Trial"
+            );
+            Ok(())
+        })
+        .unwrap();
 }
 
 #[test]
