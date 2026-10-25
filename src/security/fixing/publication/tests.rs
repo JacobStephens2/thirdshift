@@ -903,6 +903,25 @@ fn public_text_passing_window_issues_stay_open_in_both_sweeps() {
 }
 
 #[test]
+fn rejected_window_issue_is_closed_before_a_later_text_read_fails() {
+    let mut github = InMemory::new();
+    github.insert(issue(20), &[], &format!("{SECRET} {ADVISORY}"));
+    github.insert(issue(21), &[], &format!("Other work. {ADVISORY}"));
+    github.windows.push_back(vec![issue(20), issue(21)]);
+    github.fail = Some("text 21".into());
+
+    let error = github
+        .session(false, FixSize::Single, Some(&format!("{SINGLE}{ADVISORY}")))
+        .unwrap_err();
+
+    assert_eq!(error.to_string(), "failed text 21");
+    assert!(
+        !github.get(&issue(20)).view.is_open,
+        "already rejected public leak #20 remained open after #21 could not be read"
+    );
+}
+
+#[test]
 fn side_effect_sweeps_close_in_window_order_and_stop_at_the_first_close_failure() {
     for postlinking in [false, true] {
         for failed_close in [None, Some(20)] {

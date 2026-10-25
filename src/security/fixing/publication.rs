@@ -404,6 +404,7 @@ fn fail_on_side_effects(
     for issue in window {
         let text = github.issue_text(issue)?;
         if record.check_public_fix_text(&text, url).is_err() {
+            github.close_issue(issue, "Closed by thirdshift: the Security fix publishing session created this public issue outside the validated staged path.")?;
             leaks.push(issue);
         } else {
             crate::logs::activity(format_args!(
@@ -414,9 +415,6 @@ fn fail_on_side_effects(
     }
     if leaks.is_empty() {
         return Ok(());
-    }
-    for leak in &leaks {
-        github.close_issue(leak, "Closed by thirdshift: the Security fix publishing session created this public issue outside the validated staged path.")?;
     }
     let numbers = leaks
         .iter()
