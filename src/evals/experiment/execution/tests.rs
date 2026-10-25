@@ -227,8 +227,6 @@ fn completed_score_and_evidence_live_through_publication() {
     }
     let fixture = Fixture::new(SUCCESS);
     let execution = fixture.execution(5);
-    let mut writer =
-        trial_results::Writer::resume(&fixture.root, fixture.request().identity).unwrap();
     let attempt = execution
         .run(fixture.request(), |attempt, output, score| {
             assert!(output.outcome == Outcome::Succeeded);
@@ -243,8 +241,8 @@ fn completed_score_and_evidence_live_through_publication() {
             let started: Value =
                 serde_json::from_slice(&fs::read(attempt.join("started.json"))?).unwrap();
             assert_eq!(started["index"], 2);
-            writer.record_attempt(&attempt, output, score)?;
-            writer.finish()?;
+            store::write(&attempt.join("result.json"), &output)?;
+            store::write(&fixture.root.join("completed-score.json"), &score)?;
             assert!(attempt.parent().unwrap().join("active.json").is_file());
             Ok(attempt)
         })
@@ -330,14 +328,11 @@ fn callback_errors_propagate_after_trace_and_active_evidence_cleanup() {
         return;
     }
     let fixture = Fixture::new(SUCCESS);
-    let mut writer =
-        trial_results::Writer::resume(&fixture.root, fixture.request().identity).unwrap();
     let mut retained = None;
     let error = fixture
         .execution(5)
-        .run(fixture.request(), |attempt, output, score| -> Result<()> {
+        .run(fixture.request(), |attempt, _, _| -> Result<()> {
             assert!(attempt.parent().unwrap().join("active.json").is_file());
-            writer.record_attempt(&attempt, output, score)?;
             retained = Some(attempt);
             Err(std::io::Error::from_raw_os_error(libc::ENOSPC).into())
         })
@@ -356,7 +351,6 @@ fn callback_errors_propagate_after_trace_and_active_evidence_cleanup() {
     let attempt = retained.unwrap();
     assert!(!attempt.parent().unwrap().join("active.json").exists());
     assert!(attempt.join("trace.spans.jsonl").is_file());
-    assert_eq!(writer.progress().attempts.len(), 1);
     assert!(!trial_results::finished(
         &fixture.root,
         &fixture.request().identity
@@ -449,19 +443,16 @@ fn interruption_never_reaches_completion_or_creates_a_checkpoint() {
         return;
     }
     let fixture = Fixture::new("os.kill(os.getppid(), signal.SIGTERM)\ntime.sleep(20)");
-    let mut writer =
-        trial_results::Writer::resume(&fixture.root, fixture.request().identity).unwrap();
     let mut called = false;
     let error = fixture
         .execution(5)
-        .run(fixture.request(), |attempt, output, score| {
+        .run(fixture.request(), |_, _, _| {
             called = true;
-            writer.record_attempt(&attempt, output, score)
+            Ok(())
         })
         .unwrap_err();
     assert_eq!(error.to_string(), "interrupted");
     assert!(!called);
-    assert!(writer.progress().attempts.is_empty());
     let attempt =
         super::super::trial_sessions::experiment(&trial_results::files::Native, &fixture.root)
             .unwrap()
@@ -591,18 +582,15 @@ fn operational_failures_never_publish_completed_values() {
     ] {
         let fixture = Fixture::new(body);
         let execution = fixture.execution(5);
-        let mut writer =
-            trial_results::Writer::resume(&fixture.root, fixture.request().identity).unwrap();
         let mut called = false;
         let error = execution
-            .run(fixture.request(), |attempt, output, score| {
+            .run(fixture.request(), |_, _, _| {
                 called = true;
-                writer.record_attempt(&attempt, output, score)
+                Ok(())
             })
             .unwrap_err();
         assert!(error.to_string().contains(message), "{error:#}");
         assert!(!called);
-        assert!(writer.progress().attempts.is_empty());
         let trial = fixture
             .root
             .join("trials")

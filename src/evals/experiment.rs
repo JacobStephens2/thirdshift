@@ -13,6 +13,7 @@ mod release;
 mod session_evidence;
 mod store;
 mod trace;
+mod trial;
 mod trial_results;
 mod trial_sessions;
 mod usage;

@@ -6,15 +6,6 @@ use super::files::observed::Observed;
 use super::*;
 use crate::evals::experiment::trial_key;
 
-fn identity() -> Identity<'static> {
-    Identity {
-        suite: "code-review",
-        task: "fixture",
-        arm: Arm::Baseline,
-        trial: 0,
-    }
-}
-
 fn output(void: bool) -> Output {
     serde_json::from_value(json!({
         "version": 1, "outcome": if void { "void" } else { "succeeded" },
@@ -34,59 +25,31 @@ fn score() -> grading::Score {
 
 fn published_trial() -> (tempfile::TempDir, String) {
     let root = tempfile::tempdir().unwrap();
-    let attempt = root.path().join("attempt");
-    fs::create_dir_all(&attempt).unwrap();
-    let mut writer = Writer::resume(root.path(), identity()).unwrap();
-    writer
-        .record_attempt(&attempt, output(false), score())
-        .unwrap();
-    writer.finish().unwrap();
-    (root, writer.progress().key())
+    let result = retained(root.path(), vec![output(false)]);
+    (root, result.key())
 }
 
-#[test]
-fn completed_attempts_resume_and_finish_without_losing_pending_history() {
-    let root = tempfile::tempdir().unwrap();
-    let key = trial_key("code-review", "fixture", Arm::Baseline, 0);
-    let first = root.path().join("trials").join(&key).join("attempt-first");
-    fs::create_dir_all(&first).unwrap();
-    {
-        let mut writer = Writer::resume(root.path(), identity()).unwrap();
-        assert!(writer.progress().attempts.is_empty());
-        writer
-            .record_attempt(&first, output(true), score())
-            .unwrap();
-        assert_eq!(writer.progress().attempts.len(), 1);
-        assert!(writer.progress().outcome == crate::trial::Outcome::Void);
-    }
-    let mut resumed = Writer::resume(root.path(), identity()).unwrap();
-    assert_eq!(resumed.progress().attempts.len(), 1);
-    let terminal = root.path().join("results").join(format!("{key}.json"));
-    assert!(!terminal.exists());
-    let second = first.with_file_name("attempt-second");
-    fs::create_dir_all(&second).unwrap();
-    resumed
-        .record_attempt(&second, output(false), score())
-        .unwrap();
-    resumed.finish().unwrap();
-    let pending = first.parent().unwrap().join("pending.json");
-    let history: Value = serde_json::from_slice(&fs::read(pending).unwrap()).unwrap();
-    let published: Value = serde_json::from_slice(&fs::read(terminal).unwrap()).unwrap();
-    assert_eq!(published, history);
-    assert_eq!(history["attempts"].as_array().unwrap().len(), 2);
-    assert_eq!(history["outcome"], "succeeded");
-    assert_eq!(history["score"]["passed"], true);
-    let attempt: Value =
-        serde_json::from_slice(&fs::read(second.join("result.json")).unwrap()).unwrap();
-    assert_eq!(attempt["outcome"], "succeeded");
-    assert_eq!(
-        Writer::resume(root.path(), identity())
-            .unwrap()
-            .progress()
-            .attempts
-            .len(),
-        2
-    );
+/// Reader fixtures use the retained format, without choosing lifecycle operations.
+fn retained(root: &Path, attempts: Vec<Output>) -> TrialResult {
+    let result = TrialResult {
+        suite: "code-review".into(),
+        task: "fixture".into(),
+        arm: Arm::Baseline,
+        trial: 0,
+        outcome: attempts.last().unwrap().outcome,
+        score: Some(score()),
+        attempts,
+    };
+    let pending = root.join("trials").join(result.key());
+    fs::create_dir_all(&pending).unwrap();
+    fs::create_dir_all(root.join("results")).unwrap();
+    store::write(&pending.join("pending.json"), &result).unwrap();
+    store::write(
+        &root.join("results").join(format!("{}.json", result.key())),
+        &result,
+    )
+    .unwrap();
+    result
 }
 
 #[test]
@@ -109,17 +72,7 @@ fn terminal_only_reads_ignore_unrelated_corrupt_pending_history() {
 #[test]
 fn model_updates_preserve_pending_accounting_and_rechecks_never_enter_raw_evidence() {
     let root = tempfile::tempdir().unwrap();
-    let attempt = root.path().join("attempt");
-    fs::create_dir_all(&attempt).unwrap();
-    let mut writer = Writer::resume(root.path(), identity()).unwrap();
-    writer
-        .record_attempt(&attempt, output(true), score())
-        .unwrap();
-    writer
-        .record_attempt(&attempt, output(false), score())
-        .unwrap();
-    writer.finish().unwrap();
-    let key = writer.progress().key();
+    let key = retained(root.path(), vec![output(true), output(false)]).key();
     let pending = root.path().join("trials").join(&key).join("pending.json");
     let mechanical = fs::read(&pending).unwrap();
     let selected = root.path().join("results/legacy-selected.json");
@@ -188,21 +141,15 @@ fn model_updates_preserve_pending_accounting_and_rechecks_never_enter_raw_eviden
 #[test]
 fn capture_reuses_terminal_membership_and_absent_pending_until_the_next_observation() {
     let root = tempfile::tempdir().unwrap();
-    let attempt = root.path().join("attempt");
-    fs::create_dir_all(&attempt).unwrap();
-    let mut writer = Writer::resume(root.path(), identity()).unwrap();
-    writer
-        .record_attempt(&attempt, output(true), score())
-        .unwrap();
-    writer.finish().unwrap();
-    let baseline = writer.progress().key();
+    let result = retained(root.path(), vec![output(true)]);
+    let baseline = result.key();
     let pending = root
         .path()
         .join("trials")
         .join(&baseline)
         .join("pending.json");
     let saved = fs::read(&pending).unwrap();
-    let mut candidate = serde_json::to_value(writer.progress()).unwrap();
+    let mut candidate = serde_json::to_value(&result).unwrap();
     candidate["arm"] = json!("candidate");
     let candidate_key = trial_key("code-review", "fixture", Arm::Candidate, 0);
     let candidate_trial = root.path().join("trials").join(&candidate_key);
@@ -249,48 +196,6 @@ fn capture_reuses_terminal_membership_and_absent_pending_until_the_next_observat
     assert_eq!(fresh.results.len(), 2);
     assert_eq!(fresh.minutes.candidate, 1.0);
     assert!(fresh.unfinished_trials.is_empty());
-}
-
-#[test]
-fn failed_publication_keeps_only_the_already_written_prefix_for_resume() {
-    let root = tempfile::tempdir().unwrap();
-    let mut writer = Writer::resume(root.path(), identity()).unwrap();
-    let key = writer.progress().key();
-    let trial = root.path().join("trials").join(&key);
-    let attempt = trial.join("attempt-first");
-    assert!(
-        writer
-            .record_attempt(&attempt, output(true), score())
-            .is_err()
-    );
-    assert!(writer.progress().attempts.is_empty());
-    assert!(!trial.join("pending.json").exists());
-    fs::create_dir_all(&attempt).unwrap();
-    fs::create_dir(trial.join("pending.json")).unwrap();
-    assert!(
-        writer
-            .record_attempt(&attempt, output(true), score())
-            .is_err()
-    );
-    let completed: Output =
-        serde_json::from_slice(&fs::read(attempt.join("result.json")).unwrap()).unwrap();
-    assert!(completed.outcome == crate::trial::Outcome::Void);
-    fs::remove_dir(trial.join("pending.json")).unwrap();
-    drop(writer);
-    let mut resumed = Writer::resume(root.path(), identity()).unwrap();
-    assert!(resumed.progress().attempts.is_empty());
-    resumed
-        .record_attempt(&attempt, output(true), score())
-        .unwrap();
-    let terminal_path = root.path().join("results").join(format!("{key}.json"));
-    fs::create_dir(&terminal_path).unwrap();
-    assert!(resumed.finish().is_err());
-    drop(resumed);
-    let resumed = Writer::resume(root.path(), identity()).unwrap();
-    assert_eq!(resumed.progress().attempts.len(), 1);
-    fs::remove_dir(terminal_path).unwrap();
-    resumed.finish().unwrap();
-    assert_eq!(terminal(root.path()).unwrap()[0].result().attempts.len(), 1);
 }
 
 #[test]
