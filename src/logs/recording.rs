@@ -296,6 +296,13 @@ impl<O: Outside> Record<O> {
         );
     }
 
+    pub(super) fn activity(&mut self, message: impl Display) {
+        if let Some(started) = &self.activity_started {
+            let root = started.root.clone();
+            self.activity_write(&root, &message.to_string(), None);
+        }
+    }
+
     pub(super) fn ended(&mut self, outcome: impl Display) {
         self.show_held();
         if let Some(started) = &self.activity_started {
