@@ -85,7 +85,9 @@ pr_url = "https://github.com/acme/widgets/pull/1"
   is optional (defaults to `[]`), with one nonempty argument vector per code
   Grader check. Arguments are not shell text. Checks are recorded here, not
   executed by preparation. After a Trial, the Experiment runs each check with
-  an isolated view of the Trial repository as its working directory. Exit zero
+  an isolated copy of the prepared repository, captured before the session,
+  as its working directory. Session edits and commits cannot change the code
+  these checks grade. Exit zero
   passes; nonzero or the Bar's timeout fails the check. A sandbox that cannot
   start makes the Trial void. Each check gets
   `THIRDSHIFT_TRIAL_STANDARDS_REPORT`, `THIRDSHIFT_TRIAL_SPEC_REPORT` and
@@ -197,7 +199,16 @@ policy, ignoring caller hooks and global/system settings. All preparation
 finishes in the temporary sibling before publication; failures leave the
 destination absent and launch no Arm. Existing destinations are refused.
 Trial execution then establishes the selected Harness's instruction fallback
-and captures integrity before launching the Arm. `evals verify` retains its
+and captures integrity before launching the Arm. Repository-change detection
+protects `.thirdshift-issue.md`, every destination in `[inputs]`, and the Base
+branch and synthetic change commits under review. Editing or deleting an input,
+moving the Base branch, or altering or removing a protected Git object makes
+an otherwise successful Trial void with `repository_changed`. Ordinary Issue
+branch commits, pushes to the local origin, report files, and other tracked,
+untracked or ignored working-tree changes do not void a Trial. For tasks with
+`checks`, a private copy captured before the session supplies their repository;
+checks share their own build artifacts, never the session's edits.
+`evals verify` retains its
 inspection contract: it expects the detached base, before the synthetic commit.
 
 These commands prepare data for the Experiment runner; they start no Harness,

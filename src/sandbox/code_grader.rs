@@ -92,7 +92,8 @@ pub(crate) fn execute(
     Ok(checks)
 }
 
-fn copy_repository(source: &Path, destination: &Path) -> Result<()> {
+/// Capture repository files before exposing the working copy to a Trial.
+pub(crate) fn copy_repository(source: &Path, destination: &Path) -> Result<()> {
     fs::create_dir(destination)?;
     for entry in fs::read_dir(source)? {
         let entry = entry?;
