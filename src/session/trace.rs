@@ -412,7 +412,7 @@ fn status(outcome: Outcome) -> Status {
     }
 }
 
-fn set(attrs: &mut Vec<KeyValue>, attr: KeyValue) {
+pub(super) fn set(attrs: &mut Vec<KeyValue>, attr: KeyValue) {
     if let Some(old) = attrs.iter_mut().find(|old| old.key == attr.key) {
         *old = attr;
     } else {

@@ -251,6 +251,11 @@ When metrics are read, `confirmed_bug_origins` counts the confirmed Bug origins 
 
 At completion a Ticket run sums its Session-trace signals by session kind in `session_signals`, with observed and missing session counts. Each originating Session stage also retains its signals and Harness version; later stages referencing that same Session do not count it again. Tokens stay split by observed Model as input (including cache), output, cache read and cache write; an unreported Model is null, never inferred from the requested Model. Cost is in USD only when reported by the Harness, without a price table. Tool errors, permission denials, killed work and repeated tool calls remain separate counters. A repeated call uses the same tool and JSON input as an earlier call in that same session; object key order does not matter. Late permission metadata amends the original call. Missing measurements are null, including cost that a Harness does not report. A missing trace contributes a missing session rather than zero counters. Weekly Session rows summarize each signal independently, with tokens kept by observed Model.
 
+Token counts and cost use the same [Session usage rules as Experiments](#experiments).
+Partial authoritative totals refine only reported fields, retaining known input,
+cache counts and cost when omitted. Saved completion metrics remain unchanged;
+these rules also apply when reconstructing historical Session signals.
+
 Each session's shell commands are also checked against one code-owned pattern list: force pushes, explicit shared-branch history rewrites, and recursive deletes outside the Worktree. Matches appear as `destructive_commands` entries with `pattern` and the original `command` in the Session stage's signals and the Ticket run's per-kind summary. They are advisory and never block or fail a Ticket run. Weekly Session rows summarize the number of flags. Older saved signals without this field show missing evidence. A historical trace without a recorded Worktree directory also shows missing evidence when no matches can be established; known matches are retained. The check matches literal commands; it does not execute shell expansions or resolve filesystem symlinks.
 
 ```sh
@@ -680,6 +685,15 @@ in USD where the Harness reports one. JSON keeps these under `usage.baseline`
 and `usage.candidate`, with `models` and `cost_usd`; missing measurements are
 `null`, and tokens without a reported Model are grouped under `unknown`.
 Input tokens include cache reads and writes, which are also shown separately.
+Experiments and Run metrics share Session usage accounting. Partial Model totals
+replace only reported fields: a call with 11 input tokens and 5 cache reads,
+followed by a total reporting only 3 output tokens, keeps 16 inclusive input
+tokens and 5 cache reads. A raw input total of 20 instead yields 25 inclusive
+input tokens. A single matching Model can also be refined by Session totals;
+whole-Session tokens spanning several Models are not distributed or added again.
+Turn totals supply unknown-Model tokens only when call, Model and Session token
+evidence is absent. Reported Session cost wins, including zero; otherwise each
+Model's reported cost replaces its call-cost sum, retaining costs the total omits.
 Totals include all attempts and Resume sessions; Grader usage is not charged
 to either Arm. The text view shows usage beside each Arm's minutes.
 Both views show Void counts and causes per Arm, and report repeated
