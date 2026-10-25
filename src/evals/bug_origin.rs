@@ -5,6 +5,7 @@ use std::os::unix::fs::DirBuilderExt;
 
 use anyhow::{Result, ensure};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::format::{self, Session, State, Task};
 use crate::git::Git;
@@ -25,11 +26,15 @@ pub(crate) fn propose(
 ) -> Result<Reference> {
     let reference = Reference {
         suite: "code-review".into(),
+        // GitHub repository names allow dots; Eval names do not. Hash the
+        // complete identity to keep valid, distinct names across repositories.
         task: format!(
-            "bug-{}-{}-{}-pr-{}",
-            bug.owner.to_ascii_lowercase(),
-            bug.repo.to_ascii_lowercase(),
-            bug.number,
+            "bug-{:x}-pr-{}",
+            Sha256::digest(format!(
+                "{}#{}",
+                bug.repo_slug().to_ascii_lowercase(),
+                bug.number
+            )),
             pr.number
         ),
     };

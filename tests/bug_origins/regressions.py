@@ -12,7 +12,8 @@ import tomllib
 
 binary = Path(sys.argv[1]).resolve()
 mode = sys.argv[2]
-assert mode in {"merged-base", "no-issue", "reclosed"}
+assert mode in {"merged-base", "no-issue", "reclosed", "dotted-repo"}
+slug = "acme/widget.tools" if mode == "dotted-repo" else "acme/widgets"
 with tempfile.TemporaryDirectory(prefix="thirdshift-spec-") as temporary:
     root = Path(temporary)
     home, bins, repository = (root / name for name in ("home", "bin", "repository"))
@@ -58,11 +59,11 @@ with tempfile.TemporaryDirectory(prefix="thirdshift-spec-") as temporary:
     git("merge", "--no-ff", "-qm", "Merge reviewed feature", "feature")
     merge = git("rev-parse", "HEAD")
     (home / ".gitconfig").write_text(
-        f'[url "{repository}"]\n    insteadOf = https://github.com/acme/widgets.git\n'
+        f'[url "{repository}"]\n    insteadOf = https://github.com/{slug}.git\n'
         '[protocol "file"]\n    allow = always\n'
     )
-    issue = "https://github.com/acme/widgets/issues/8"
-    pr = "https://github.com/acme/widgets/pull/23"
+    issue = f"https://github.com/{slug}/issues/8"
+    pr = f"https://github.com/{slug}/pull/23"
     connection = lambda nodes: {"nodes": nodes, "pageInfo": {"hasNextPage": False}}
     metadata = {
         "body": "Reviewed feature", "headRefOid": head,
@@ -71,7 +72,7 @@ with tempfile.TemporaryDirectory(prefix="thirdshift-spec-") as temporary:
         "mergedAt": "2026-10-21T00:00:00Z",
         "commits": {"nodes": [{"commit": {"parents": {"nodes": [{"oid": base}]}}}]},
         "closingIssuesReferences": connection([] if mode == "no-issue" else [{
-            "url": "https://github.com/acme/widgets/issues/7", "labels": connection([])
+            "url": f"https://github.com/{slug}/issues/7", "labels": connection([])
         }]),
     }
     (root / "metadata.json").write_text(json.dumps(metadata))

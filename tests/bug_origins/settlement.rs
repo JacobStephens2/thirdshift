@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn historical_review_and_reclosed_origin_regressions() {
-    for mode in ["merged-base", "no-issue", "reclosed"] {
+    for mode in ["merged-base", "no-issue", "reclosed", "dotted-repo"] {
         let output = std::process::Command::new("python3")
             .arg(concat!(
                 env!("CARGO_MANIFEST_DIR"),
