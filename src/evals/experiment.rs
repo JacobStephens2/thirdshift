@@ -2,9 +2,9 @@
 //! recording stays in the ordinary logs; private Eval data stays here.
 
 mod evidence;
+mod execution;
 mod grading;
 mod integrity;
-mod limits;
 mod model_grader;
 mod options;
 mod reading;
