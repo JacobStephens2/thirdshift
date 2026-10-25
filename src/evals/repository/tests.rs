@@ -2,6 +2,12 @@ use serde_json::json;
 
 use super::*;
 
+#[test]
+fn spec_review_accepts_branch_below_base_seed() {
+    let fixture = Fixture::new("spec-review", "stable", "base/issue-7");
+    fixture.prepare().unwrap();
+}
+
 struct Fixture {
     root: tempfile::TempDir,
     task: Task,
@@ -66,9 +72,12 @@ impl Fixture {
 #[test]
 fn complete_trial_repository_preserves_reviewed_patch_inputs_and_custom_branches() {
     for session in ["code-review", "spec-review"] {
-        for (base_branch, issue_branch) in
-            [("release/stable", "changes/issue-7"), ("stable", "base")]
-        {
+        for (base_branch, issue_branch) in [
+            ("release/stable", "changes/issue-7"),
+            ("stable", "base"),
+            ("base/stable", "changes/issue-7"),
+            ("stable", "base/issue-7"),
+        ] {
             let fixture = Fixture::new(session, base_branch, issue_branch);
             let prepared = fixture.prepare().unwrap();
             assert_eq!(prepared.repository, fixture.destination());
@@ -145,7 +154,10 @@ fn complete_trial_repository_preserves_reviewed_patch_inputs_and_custom_branches
                         git(repo, &["rev-parse", &reference]).unwrap()
                     );
                 }
-                assert!(git(origin, &["show-ref", "--verify", "refs/heads/base"]).is_ok());
+                assert_eq!(
+                    git(origin, &["symbolic-ref", "HEAD"]).unwrap(),
+                    format!("refs/heads/{base_branch}")
+                );
                 fs::remove_dir_all(fixture.root.path().join("source")).unwrap();
                 git(
                     repo,

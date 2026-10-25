@@ -125,6 +125,9 @@ fn prepare_repository(
     prune(repo)?;
     verify(repo, &task.base)?;
     let origin = if task.session == Session::SpecReview {
+        // Seed a Trial's requested Base branch so the inspection name `base`
+        // cannot reserve a prefix needed by a custom Trial branch.
+        let seed_branch = trial.map_or("base", |inputs| inputs.base.as_str());
         let relative = ".git/eval-origin.git";
         let bare = repo.join(relative);
         git(
@@ -145,10 +148,13 @@ fn prepare_repository(
                 "--no-tags",
                 "--no-write-fetch-head",
                 source_path,
-                &format!("{}:refs/heads/base", task.base),
+                &format!("{}:refs/heads/{seed_branch}", task.base),
             ],
         )?;
-        git(&bare, &["symbolic-ref", "HEAD", "refs/heads/base"])?;
+        git(
+            &bare,
+            &["symbolic-ref", "HEAD", &format!("refs/heads/{seed_branch}")],
+        )?;
         prune(&bare)?;
         verify(&bare, &task.base)?;
         let final_origin = destination.join(relative);

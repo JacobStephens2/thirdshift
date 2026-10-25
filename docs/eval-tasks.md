@@ -187,8 +187,10 @@ base-only import and verification as inspection, then creates the requested
 branches and one synthetic reviewed commit directly above the recorded base.
 The commit uses the existing index: copied inputs and tracked worktree overlays
 are not added to the reviewed patch. The issue input is excluded locally.
-Code review has no origin; Spec review publishes both requested refs to the
-staged private origin, preserving its seed refs. The configured origin URL and
+Code review has no origin; Spec review seeds the staged private origin with the
+requested Base branch, then publishes both requested refs without removing the
+seed. Inspection keeps its conventional `base` seed; that name reserves no
+prefix in complete Trial preparation. The configured origin URL and
 returned paths name the final destination and remain usable after publication.
 Branch validation, checkout, commit and push share preparation's isolated Git
 policy, ignoring caller hooks and global/system settings. All preparation
