@@ -23,10 +23,10 @@ unbounded proof for every host count.
   parent, no disqualifying labels; a Spec has a Startable Ticket. Work published
   on origin is abstracted into the Run ending: keep the Claim, or fail with
   nothing on origin and restore its entry labels. Unrelated labels and read-only
-  checks are projected out. A bug Run may instead hand reproduction back for
+  checks are projected out. A bug Ticket run may instead hand reproduction back for
   information, removing Ready and Claim without requeueing. `needs-info` itself
   is projected out: Ready stays absent until a later Day shift hand-back.
-  Both Run kinds share dispatch and Claim handling.
+  Both Ticket runs and Spec runs share dispatch and Claim handling.
 - Crashes may occur at every live phase and never resume that attempt. A crashed
   owner's ref remains. The Day shift confirms death, observes its token, then
   deletes with that token as the lease. Hand-back follows confirmation that all
@@ -55,8 +55,8 @@ under the fixed gates above. The local markers retain dispatch-before-Claim.
 | `PutClaimLabels` | `Edit::apply` → `set_labels`: whole-label PUT, Ready off / Claim on |
 | `FailedRunReadsOrigin` | failed Run's `put_labels_back_unless_on_origin` → `branch::started`: absent origin work (branch and PR read results fixed absent) |
 | `KeepClaim` | local `Claimed::end`: ready for review, or failed with origin work, keeps Claim |
-| `ReadNeedsInfoLabels` | `Claim::needs_info` → `GitHub::issue_labels`: ending labels read after the session's needs-info handoff |
-| `PutNeedsInfoLabels` | `Claim::needs_info` → `Edit::apply` → `set_labels`: Ready and Claim off, needs-info on |
+| `ReadNeedsInfoLabels` | `Claim::needs_info` → `Claimed::needs_info` → `GitHub::issue_labels`: ending labels read after the session's needs-info handoff |
+| `PutNeedsInfoLabels` | `Claim::needs_info` → `Claimed::needs_info` → `Edit::apply` → `set_labels`: Ready and Claim off, needs-info on |
 | `ReadEndingLabels` | `put_labels_back_unless_on_origin` → `issue_labels`: current labels read |
 | `PutEndingLabels` | `release_labels` → `set_labels`: restore labels changed on entry, keep others from ending read |
 | `ReleaseReservation` | `Reservation::drop`: `git push --no-verify --force-with-lease=<ref>:<owner-token> origin :<ref>`; other tokens survive |
