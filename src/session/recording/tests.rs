@@ -346,7 +346,7 @@ fn recording_uses_the_input_session_prompt_for_skill_warnings() {
                     harness: Harness::OpenCode,
                     ..Choice::default()
                 },
-                Command::new("/bin/true").current_dir(fixture.root.path()),
+                Command::new("true").current_dir(fixture.root.path()),
                 Input {
                     prompt: "/thirdshift-implement issue",
                     ..Input::default()
