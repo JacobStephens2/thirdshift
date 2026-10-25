@@ -99,21 +99,26 @@ impl<'a> Execution<'a> {
         let before = integrity::Snapshot::capture(&prepared_repo.repository, &task.manifest)?;
         // This directory is outside the Trial's sandbox. Graders must see
         // the prepared state even when the review fixes and commits code.
+        // The pass-through launcher can write this temp directory. Checks
+        // run only when the copy still matches the pre-session digest.
         let grading_snapshot = if task.manifest.checks.is_empty() {
             None
         } else {
-            let snapshot = tempfile::Builder::new()
+            let directory = tempfile::Builder::new()
                 .prefix("prepared-grader-")
                 .tempdir()?;
-            crate::sandbox::code_grader::copy_repository(
-                &prepared_repo.repository,
-                &snapshot.path().join("repository"),
-            )?;
-            Some(snapshot)
+            let repository = directory.path().join("repository");
+            crate::sandbox::code_grader::copy_repository(&prepared_repo.repository, &repository)?;
+            let digest = integrity::tree_digest(&repository)?;
+            Some(SealedSnapshot {
+                repository,
+                digest,
+                _directory: directory,
+            })
         };
         let grading_repository = grading_snapshot.as_ref().map_or_else(
             || prepared_repo.repository.clone(),
-            |snapshot| snapshot.path().join("repository"),
+            |snapshot| snapshot.repository.clone(),
         );
         let inputs = task
             .manifest
@@ -222,10 +227,16 @@ impl<'a> Execution<'a> {
             protocol.cause = Some(crate::scope::OOM_KILL_CAUSE.into());
         }
         let unchanged = before.unchanged(&prepared_repo.repository);
+        let snapshot_intact = grading_snapshot.as_ref().is_none_or(|snapshot| {
+            integrity::tree_digest(&snapshot.repository)
+                .is_ok_and(|digest| digest == snapshot.digest)
+        });
         interrupt::check()?;
         // Keep known failures and external Void causes, including limit
         // stops. Repository changes invalidate an otherwise successful Trial.
-        if protocol.outcome == Outcome::Succeeded && !unchanged.is_ok_and(|unchanged| unchanged) {
+        if protocol.outcome == Outcome::Succeeded
+            && (!unchanged.is_ok_and(|unchanged| unchanged) || !snapshot_intact)
+        {
             protocol.outcome = Outcome::Void;
             protocol.void_cause = Some(VoidCause::RepositoryChanged);
             protocol.cause = Some("Trial repository changed during its session".into());
@@ -278,6 +289,13 @@ impl<'a> Execution<'a> {
             .env("PATH", path_env);
         Ok(launched)
     }
+}
+
+/// Prepared files checks grade, sealed before the session starts.
+struct SealedSnapshot {
+    repository: PathBuf,
+    digest: Vec<u8>,
+    _directory: tempfile::TempDir,
 }
 
 /// A Trial its scope's cap killed: void with `memory_cap`, from the scope's

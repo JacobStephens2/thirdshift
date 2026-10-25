@@ -253,6 +253,42 @@ fn session_edits_cannot_pass_checks_on_the_prepared_repository() {
 }
 
 #[test]
+fn session_cannot_pass_checks_by_editing_the_grader_snapshot() {
+    if isolated(&[]) {
+        return;
+    }
+    let mut fixture = Fixture::new(&format!(
+        r#"
+import tempfile
+for path in pathlib.Path(tempfile.gettempdir()).glob('prepared-grader-*/repository/change.txt'):
+    path.write_text('Fixed by review\n')
+{SUCCESS}
+"#
+    ));
+    let tmp = fixture.root.join("grader-tmp");
+    fs::create_dir(&tmp).unwrap();
+    // SAFETY: the test process is single-threaded until the Arm is spawned,
+    // and this env is the snapshot directory both sides must share.
+    unsafe { std::env::set_var("TMPDIR", &tmp) };
+    fixture.task.manifest.checks = vec![vec![
+        "sh".into(),
+        "-c".into(),
+        "grep -qx 'Fixed by review' change.txt".into(),
+    ]];
+    fixture
+        .execution(5)
+        .run(fixture.request(), |_, output, score| {
+            assert!(
+                !score.passed,
+                "session made mechanical checks pass by editing the grader snapshot ({})",
+                output.outcome
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn input_symlink_to_a_fifo_voids_without_blocking_the_supervisor() {
     if isolated(&[]) {
         return;

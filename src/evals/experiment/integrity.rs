@@ -1,6 +1,6 @@
 //! Protect the inputs and commits under review while allowing session work.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -105,6 +105,60 @@ impl Snapshot {
         }
         Ok(digest.finalize().to_vec())
     }
+}
+
+/// Digest of one captured tree. Symlinks stay links, and a FIFO or device
+/// does not block the read: a pass-through Trial can replace either after
+/// the copy, outside the Trial's own cap.
+pub(super) fn tree_digest(root: &Path) -> Result<Vec<u8>> {
+    let mut files = BTreeMap::new();
+    collect(root, "", &mut files)?;
+    let mut digest = Sha256::new();
+    for (path, bytes) in files {
+        hash(&mut digest, path.as_bytes());
+        hash(&mut digest, &bytes);
+    }
+    Ok(digest.finalize().to_vec())
+}
+
+fn collect(dir: &Path, prefix: &str, out: &mut BTreeMap<String, Vec<u8>>) -> Result<()> {
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        entries.push(entry?);
+    }
+    entries.sort_by_key(|entry| entry.file_name());
+    for entry in entries {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let rel = if prefix.is_empty() {
+            name.into_owned()
+        } else {
+            format!("{prefix}/{name}")
+        };
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(&path)?;
+        let mut record = metadata.permissions().mode().to_le_bytes().to_vec();
+        if metadata.is_dir() {
+            record.extend_from_slice(b"dir");
+            out.insert(rel.clone(), record);
+            collect(&path, &rel, out)?;
+        } else if metadata.is_symlink() {
+            record.extend_from_slice(b"link");
+            record.extend_from_slice(fs::read_link(&path)?.as_os_str().as_encoded_bytes());
+            out.insert(rel, record);
+        } else if metadata.is_file() {
+            record.extend_from_slice(b"file");
+            match read_regular(&path)? {
+                Some(bytes) => record.extend(bytes),
+                None => record.extend_from_slice(b"not-regular"),
+            }
+            out.insert(rel, record);
+        } else {
+            record.extend_from_slice(b"other");
+            out.insert(rel, record);
+        }
+    }
+    Ok(())
 }
 
 fn hash_input(digest: &mut Sha256, repo: &Path, name: &str) -> Result<()> {
