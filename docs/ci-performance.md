@@ -31,6 +31,30 @@ gate before enabling that requirement. CI's stable `test-macos` aggregate stays
 unfiltered: it runs with `always()` on every run and passes only on the macOS
 work its event requires, as below.
 
+### Linux test runner
+
+Issue [#1317](https://github.com/JacobStephens2/thirdshift/issues/1317) moves
+the full Linux Rust suite to `cargo nextest run` on PRs, pushes to `main` and
+manual runs. The nightly Linux run keeps `cargo test`, so CI still exercises
+the runner contributors use without installing nextest. Formatting, clippy,
+Python tooling and Release regeneration still run in the same `test` job on
+every event; its check name stays `test`.
+
+Both runners cover every unit and integration test in this binary-only crate;
+there is no library target or doctest coverage to lose. No filter, shard, retry
+or timeout is added. Nextest can schedule tests from different binaries at the
+same time, while `cargo test` runs each binary in turn
+([nextest's execution model](https://nexte.st/docs/design/how-it-works/)). The
+existing default profile reports slow tests without terminating them. macOS
+keeps its existing gate, opt-in full suite and four hash partitions.
+
+The successful [PR CI run 40191701060](https://github.com/JacobStephens2/thirdshift/actions/runs/40191701060)
+on 2026-10-25 spent **692 seconds** in `cargo test`, out of **744 seconds**
+for the Linux `test` job. Its macOS gate took 182 seconds, Console browser
+checks 121 seconds and site checks 60 seconds. These are job execution times
+from the Actions jobs API, excluding queue delay. Linux test execution was
+the critical path; runner changes target that cost while preserving coverage.
+
 ### Which runs test on macOS
 
 Issue [#893](https://github.com/JacobStephens2/thirdshift/issues/893) moved the
@@ -119,7 +143,8 @@ boundary, so a growing test appears before joining that tail. The
 [nextest slow-test contract](https://nexte.st/docs/features/slow-tests/) treats
 this as reporting only: no termination is configured, failures remain failures,
 and no retries are added. Slow tests remain visible in the final summary.
-Linux retains `cargo test`; macOS retains the same four hash partitions.
+Linux now uses the runner policy above; macOS retains the same four hash
+partitions.
 
 The final-message matrix now crosses `Review::from_final_message` and `Outcome`
 in process, preserving all 11 original malformed cases and missing `None`.
