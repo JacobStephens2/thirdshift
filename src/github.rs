@@ -204,11 +204,27 @@ impl GitHub {
             for blocker in nodes(&node["blockedBy"], "blockedBy")? {
                 blockers.push(node_issue(blocker)?);
                 if node_is_open(blocker)? {
-                    open_blockers.push(node_issue(blocker)?);
+                    let issue = node_issue(blocker)?;
+                    let labels = &blocker["labels"];
+                    let more_labels = labels["pageInfo"]["hasNextPage"].as_bool().context(
+                        CommandFailure::InvalidResponse(
+                            "blocker labels have no hasNextPage".into(),
+                        ),
+                    )?;
+                    open_blockers.push(TicketBlocker {
+                        labels: if more_labels {
+                            self.issue_labels(&issue)?
+                        } else {
+                            named(nodes(labels, "labels")?)
+                        },
+                        issue,
+                        title: blocker["title"].as_str().map(String::from),
+                    });
                 }
             }
             Ok(Ticket {
                 issue: node_issue(node)?,
+                title: node["title"].as_str().map(String::from),
                 is_open: node_is_open(node)?,
                 labels: named(nodes(&node["labels"], "labels")?),
                 has_sub_issues: sub_issue_count(node)? > 0,
@@ -1243,6 +1259,7 @@ pub fn add_label_command(issue: &IssueUrl, label: Label) -> String {
 #[derive(Clone)]
 pub struct Ticket {
     pub issue: IssueUrl,
+    pub title: Option<String>,
     pub is_open: bool,
     pub labels: Labels,
     /// It has sub-issues of its own.
@@ -1250,12 +1267,33 @@ pub struct Ticket {
     /// The issues it is blocked by, in the Spec or not.
     pub blockers: Vec<IssueUrl>,
     /// Those blockers that are open.
-    pub open_blockers: Vec<IssueUrl>,
+    pub open_blockers: Vec<TicketBlocker>,
+}
+
+/// An open blocker and the reporting facts read with the Ticket graph.
+#[derive(Clone)]
+pub struct TicketBlocker {
+    pub issue: IssueUrl,
+    pub title: Option<String>,
+    pub labels: Labels,
+}
+
+#[cfg(test)]
+impl From<IssueUrl> for TicketBlocker {
+    fn from(issue: IssueUrl) -> Self {
+        Self {
+            issue,
+            title: None,
+            labels: Labels::default(),
+        }
+    }
 }
 
 /// Every sub-issue of `issue`, open or closed, with its labels, whether it
 /// has sub-issues of its own and the issues it is blocked by: its GitHub
 /// "blocked by" links, never the text of its body.
+/// Forty labels per blocker keep the nested query at 420,100 possible nodes,
+/// below GitHub's 500,000-node limit; overflowing labels are read separately.
 const TICKETS_QUERY: &str = "\
 query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
@@ -1263,10 +1301,11 @@ query($owner: String!, $repo: String!, $number: Int!) {
       subIssues(first: 100) {
         nodes {
           url
+          title
           state
           labels(first: 100) { nodes { name } }
           subIssues { totalCount }
-          blockedBy(first: 100) { nodes { url state } }
+          blockedBy(first: 100) { nodes { url title state labels(first: 40) { nodes { name } pageInfo { hasNextPage } } } }
         }
       }
     }

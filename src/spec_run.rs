@@ -641,6 +641,7 @@ mod tests {
                 .iter()
                 .map(|node| Ticket {
                     issue: node.issue.clone(),
+                    title: None,
                     is_open: node.is_open,
                     labels: node.labels.iter().copied().collect(),
                     has_sub_issues: false,
@@ -650,6 +651,7 @@ mod tests {
                         .iter()
                         .filter(|blocker| is_open(blocker))
                         .cloned()
+                        .map(Into::into)
                         .collect(),
                 })
                 .collect()
