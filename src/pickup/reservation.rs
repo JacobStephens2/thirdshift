@@ -20,13 +20,26 @@ impl Reservation {
     /// Errors with an uncertain remote outcome retain the ref for recovery.
     pub(super) fn take(launch: &Git, issue: &IssueUrl) -> Result<Option<Self>> {
         let reference = format!("refs/heads/thirdshift/pickup/{}", issue.number);
+        Self::take_ref(launch, reference, &issue.url)
+    }
+
+    /// Serialize CI-red Ticket publication across all Base branches and hosts.
+    pub(super) fn ci_red(launch: &Git) -> Result<Option<Self>> {
+        Self::take_ref(
+            launch,
+            "refs/heads/thirdshift/pickup/ci-red".into(),
+            "CI-red Ticket filing",
+        )
+    }
+
+    fn take_ref(launch: &Git, reference: String, subject: &str) -> Result<Option<Self>> {
         let nonce = tempfile::Builder::new().rand_bytes(32).tempfile()?;
         // A reservation carries no source tree or parent: naming a Base branch
         // permits a Launch directory with unrelated, unpublished local work.
         let tree = launch.run(&["mktree"])?;
         let message = format!(
             "thirdshift Pickup reservation for {}\n\nToken: {}\nLaunch: {}\nProcess: {}\nStarted: {}",
-            issue.url,
+            subject,
             nonce.path().display(),
             launch.dir().display(),
             std::process::id(),
