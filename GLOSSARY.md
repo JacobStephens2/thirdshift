@@ -245,6 +245,9 @@ _Avoid_: init, onboarding, configure
 The events and timed work of one agent session, one per session, a **Resume** and each **Repair** included. Each belongs to its owning **Command**'s **Trace**. Kept with its repository's other logs, named for the session's kind and stamped with the local time its command started, so all of a command's Session traces sort together. The start stamp is a display and grouping fact; distinct Commands have distinct storage ownership even when their stamps agree. Model evidence is kept beside each Session trace and belongs to the exact owning **Command**, including across child Ticket runs. It survives an interrupted stream and is replaced by completed retained evidence only when a report is available, even when that report has no observed Models; an absent report leaves the stream evidence intact. Requested **Model** and **Effort** choices are recorded separately from observed Models. A session that ran the code review has its reviewers' reports kept beside its Session trace.
 _Avoid_: Session log, transcript, session file
 
+**Session usage**:
+The token counts and cost reported in one **Session trace**, grouped by observed **Model**. Partial authoritative totals refine only reported fields, without inventing missing measurements.
+
 **Trace**:
 A **Command**'s whole tree of work, its child **Ticket runs** and all of their **Session traces** included. Their shared identity keeps the tree together across sessions.
 

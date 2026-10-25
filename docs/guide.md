@@ -251,6 +251,11 @@ When metrics are read, `confirmed_bug_origins` counts the confirmed Bug origins 
 
 At completion a Ticket run sums its Session-trace signals by session kind in `session_signals`, with observed and missing session counts. Each originating Session stage also retains its signals and Harness version; later stages referencing that same Session do not count it again. Tokens stay split by observed Model as input (including cache), output, cache read and cache write; an unreported Model is null, never inferred from the requested Model. Cost is in USD only when reported by the Harness, without a price table. Tool errors, permission denials, killed work and repeated tool calls remain separate counters. A repeated call uses the same tool and JSON input as an earlier call in that same session; object key order does not matter. Late permission metadata amends the original call. Missing measurements are null, including cost that a Harness does not report. A missing trace contributes a missing session rather than zero counters. Weekly Session rows summarize each signal independently, with tokens kept by observed Model.
 
+Token counts and cost use the same [Session usage rules as Experiments](#experiments).
+Partial authoritative totals refine only reported fields, retaining known input,
+cache counts and cost when omitted. Saved completion metrics remain unchanged;
+these rules also apply when reconstructing historical Session signals.
+
 Each session's shell commands are also checked against one code-owned pattern list: force pushes, explicit shared-branch history rewrites, and recursive deletes outside the Worktree. Matches appear as `destructive_commands` entries with `pattern` and the original `command` in the Session stage's signals and the Ticket run's per-kind summary. They are advisory and never block or fail a Ticket run. Weekly Session rows summarize the number of flags. Older saved signals without this field show missing evidence. A historical trace without a recorded Worktree directory also shows missing evidence when no matches can be established; known matches are retained. The check matches literal commands; it does not execute shell expansions or resolve filesystem symlinks.
 
 ```sh
@@ -680,6 +685,15 @@ in USD where the Harness reports one. JSON keeps these under `usage.baseline`
 and `usage.candidate`, with `models` and `cost_usd`; missing measurements are
 `null`, and tokens without a reported Model are grouped under `unknown`.
 Input tokens include cache reads and writes, which are also shown separately.
+Experiments and Run metrics share Session usage accounting. Partial Model totals
+replace only reported fields: a call with 11 input tokens and 5 cache reads,
+followed by a total reporting only 3 output tokens, keeps 16 inclusive input
+tokens and 5 cache reads. A raw input total of 20 instead yields 25 inclusive
+input tokens. A single matching Model can also be refined by Session totals;
+whole-Session tokens spanning several Models are not distributed or added again.
+Turn totals supply unknown-Model tokens only when call, Model and Session token
+evidence is absent. Reported Session cost wins, including zero; otherwise each
+Model's reported cost replaces its call-cost sum, retaining costs the total omits.
 Totals include all attempts and Resume sessions; Grader usage is not charged
 to either Arm. The text view shows usage beside each Arm's minutes.
 Both views show Void counts and causes per Arm, and report repeated
@@ -894,6 +908,8 @@ Every key holds its real value, so a Ticket run reading it does exactly what it 
 8. Run notifications? (`email.always`). If yes, the address (`email.to`), asked again until it has an `@`, then the sender (`email.from`).
 9. With notifications on, the Resend API key, with input hidden. With none saved it asks `Resend API key (input hidden, Enter to skip):`; with one in the [Credentials](#email), `Resend API key (input hidden, Enter keeps the saved one):`, and a new one replaces it. Surrounding spaces are trimmed, and anything that doesn't start with `re_` is asked again. A key you give is saved in the Credentials, `~/.thirdshift/credentials.toml`, created with mode 600 (and `~/.thirdshift` with it) or edited in place, keeping its comments and anything else in it and changing only `resend.key`; `setup` then prints `wrote the Credentials <path>`. The key is never printed, nor written to the User config. Skipping writes no Credentials and says how to add a key later: rerun `thirdshift setup`, or set `RESEND_API_KEY`. With `RESEND_API_KEY` set and not empty, which wins over the Credentials, nothing is asked, and it says the key comes from `RESEND_API_KEY`. With a key found or given, it offers to send a test email (default No), as `thirdshift email-test` does, once the files are written.
 10. A Claude setup token, made separately with `claude setup-token`, with input hidden, whether notifications are on or off. Enter skips it, or keeps the saved token; a new one replaces `claude.setup_token` in the Credentials, keeping comments and the Resend key. Saving Credentials sets mode 600. The token is never printed or written to the User config. It is reserved for Trials; a Trial receives it as `CLAUDE_CODE_OAUTH_TOKEN`. Ordinary Runs keep using the Harness's existing login.
+
+For Claude's Model, Setup suggests `default`, `best`, `fable`, `opus`, `sonnet`, `haiku`, `opusplan`, `sonnet[1m]` and `opus[1m]` from [Claude Code's documented model settings](https://code.claude.com/docs/en/model-config#model-aliases). These are suggestions: you can type any Model ID. Enter keeps the current value, or Claude's own default when none is set. The suggestions are maintained with thirdshift against that documentation; Setup does not fetch a live catalog or pin the Model versions the aliases resolve to.
 
 When the saved `security.review` or `security.fix` is on, Setup also prints a Security sandbox probe result. On Linux it starts a real `bwrap` sandbox and tries a connection to a temporary host-loopback listener (no internet), opening the saved User config for writing without changing its contents, and writing a scratch file with a throwaway HOME. A failed check names the capability and prints operator-run commands for installing bubblewrap and granting `/usr/bin/bwrap` user namespaces through AppArmor on Ubuntu; Setup runs none of those commands and still saves the User config. The sandbox has a three-second deadline. With both settings off, no probe runs. On macOS the probe reports that it is unavailable. Passing checks these capabilities only: Security sessions must still enforce all the audit skill's controls, including credential isolation and resource limits.
 

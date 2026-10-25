@@ -5,8 +5,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::harness::interpretation::event::{Event, Outcome, Usage, UsageScope};
+use crate::harness::interpretation::event::{Event, Outcome};
 use crate::otlp_jsonl::{AnyValue, KeyValue, Logs};
+use crate::session::usage::{self, Measurement, Model};
 
 mod destructive;
 
@@ -58,18 +59,9 @@ impl Summary {
 
 impl Signals {
     pub fn add(&mut self, other: &Self) {
-        for tokens in &other.tokens_by_model {
-            let index = self
-                .tokens_by_model
-                .iter()
-                .position(|t| t.model == tokens.model);
-            if let Some(index) = index {
-                self.tokens_by_model[index].add(tokens);
-            } else {
-                self.tokens_by_model.push(tokens.clone());
-            }
-        }
-        sum(&mut self.cost_usd, other.cost_usd);
+        let mut usage = self.usage();
+        usage.add(&other.usage());
+        self.set_usage(usage);
         self.tool_errors += other.tool_errors;
         self.permission_denials += other.permission_denials;
         self.killed_work += other.killed_work;
@@ -80,30 +72,41 @@ impl Signals {
                 .extend(flags.iter().cloned());
         }
     }
-}
 
-fn sum<T: Default + std::ops::AddAssign>(total: &mut Option<T>, value: Option<T>) {
-    if let Some(value) = value {
-        *total.get_or_insert_default() += value;
-    }
-}
-
-impl ModelTokens {
-    fn of(model: Option<String>, usage: &Usage, excludes_cache: bool) -> Self {
-        Self {
-            model,
-            input_tokens: usage.input_including_cache(excludes_cache),
-            output_tokens: usage.output,
-            cache_read_tokens: usage.cache_read,
-            cache_write_tokens: usage.cache_write,
+    fn usage(&self) -> usage::Summary {
+        usage::Summary {
+            models: self
+                .tokens_by_model
+                .iter()
+                .map(|tokens| Model {
+                    model: tokens.model.clone(),
+                    measurement: Measurement {
+                        input_tokens: tokens.input_tokens,
+                        output_tokens: tokens.output_tokens,
+                        cache_read_tokens: tokens.cache_read_tokens,
+                        cache_write_tokens: tokens.cache_write_tokens,
+                        cost_usd: None,
+                    },
+                })
+                .collect(),
+            cost_usd: self.cost_usd,
         }
     }
 
-    fn add(&mut self, other: &Self) {
-        sum(&mut self.input_tokens, other.input_tokens);
-        sum(&mut self.output_tokens, other.output_tokens);
-        sum(&mut self.cache_read_tokens, other.cache_read_tokens);
-        sum(&mut self.cache_write_tokens, other.cache_write_tokens);
+    fn set_usage(&mut self, summary: usage::Summary) {
+        self.cost_usd = summary.cost_usd;
+        self.tokens_by_model = summary
+            .models
+            .into_iter()
+            .filter(|model| model.measurement.tokens_reported())
+            .map(|model| ModelTokens {
+                model: model.model,
+                input_tokens: model.measurement.input_tokens,
+                output_tokens: model.measurement.output_tokens,
+                cache_read_tokens: model.measurement.cache_read_tokens,
+                cache_write_tokens: model.measurement.cache_write_tokens,
+            })
+            .collect();
     }
 }
 
@@ -160,12 +163,11 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
         .as_deref()
         .and_then(crate::harness::Harness::named)
         .is_some_and(crate::harness::Harness::input_excludes_cache);
-    let mut turns = BTreeMap::new();
-    let mut session_usage = None;
+    let mut signals = Signals::default();
+    signals.set_usage(usage::from_events(&events, excludes_cache));
     let mut lifecycle =
         crate::session::trace::Calls::new(crate::otlp_jsonl::Id([0; 8]), excludes_cache, []);
     let mut calls = BTreeMap::new();
-    let mut reported_models = BTreeMap::new();
     let mut killed = HashSet::new();
     for event in events {
         if let Some(applied) = lifecycle.apply(&event, None) {
@@ -186,93 +188,13 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
                 calls.insert(key, event.clone());
             }
         }
-        match event {
-            Event::TurnEnded { id, usage, .. } => {
-                turns.insert(id, usage);
-            }
-            Event::Usage {
-                scope: UsageScope::Model,
-                model,
-                usage,
-                cost_usd,
-            } => {
-                reported_models.insert(model, (usage, cost_usd));
-            }
-            Event::Usage {
-                scope: UsageScope::Session,
-                model,
-                usage,
-                cost_usd,
-            } => {
-                session_usage = Some((model, usage, cost_usd));
-            }
-            Event::WorkEnded {
-                id,
-                outcome: Outcome::Killed,
-            } => {
-                killed.insert(work_aliases.get(&id).cloned().unwrap_or(id));
-            }
-            _ => {}
-        }
-    }
-    let mut signals = Signals::default();
-    for event in calls.values() {
-        if let Event::ModelCallEnded {
-            model,
-            usage,
-            cost_usd,
-            ..
+        if let Event::WorkEnded {
+            id,
+            outcome: Outcome::Killed,
         } = event
         {
-            signals.add(&Signals {
-                tokens_by_model: (usage != &Usage::default())
-                    .then(|| ModelTokens::of(model.clone(), usage, excludes_cache))
-                    .into_iter()
-                    .collect(),
-                cost_usd: *cost_usd,
-                ..Default::default()
-            });
+            killed.insert(work_aliases.get(&id).cloned().unwrap_or(id));
         }
-    }
-    // Per-Model totals replace per-call sums for those Models; they are not
-    // additional calls. A session total likewise never adds to call usage.
-    for (model, (usage, _)) in &reported_models {
-        let tokens = ModelTokens::of(model.clone(), usage, excludes_cache);
-        if let Some(old) = signals
-            .tokens_by_model
-            .iter_mut()
-            .find(|t| &t.model == model)
-        {
-            *old = tokens;
-        } else {
-            signals.tokens_by_model.push(tokens);
-        }
-    }
-    if !reported_models.is_empty() {
-        signals.cost_usd = None;
-        for (_, cost) in reported_models.values() {
-            sum(&mut signals.cost_usd, *cost);
-        }
-    }
-    if signals.tokens_by_model.is_empty() {
-        let mut tokens = ModelTokens::default();
-        if let Some((model, usage, _)) = &session_usage {
-            tokens = ModelTokens::of(model.clone(), usage, excludes_cache);
-        } else {
-            for usage in turns.values() {
-                tokens.add(&ModelTokens::of(None, usage, excludes_cache));
-            }
-        }
-        if tokens.input_tokens.is_some()
-            || tokens.output_tokens.is_some()
-            || tokens.cache_read_tokens.is_some()
-            || tokens.cache_write_tokens.is_some()
-        {
-            signals.tokens_by_model.push(tokens);
-        }
-    }
-    if let Some((_, _, Some(cost))) = session_usage {
-        signals.cost_usd = Some(cost);
     }
     let mut destructive_commands = Vec::new();
     let mut inputs = HashSet::new();
