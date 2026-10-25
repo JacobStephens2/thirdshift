@@ -12,7 +12,7 @@ import tomllib
 
 binary = Path(sys.argv[1]).resolve()
 mode = sys.argv[2]
-assert mode in {"merged-base", "no-issue", "reclosed", "dotted-repo"}
+assert mode in {"merged-base", "no-issue", "reclosed", "dotted-repo", "save-failure"}
 slug = "acme/widget.tools" if mode == "dotted-repo" else "acme/widgets"
 with tempfile.TemporaryDirectory(prefix="thirdshift-spec-") as temporary:
     root = Path(temporary)
@@ -79,7 +79,14 @@ with tempfile.TemporaryDirectory(prefix="thirdshift-spec-") as temporary:
     fake = bins / "gh"
     fake.write_text('''#!/usr/bin/env python3
 import json, os, sys
+from pathlib import Path
 if len(sys.argv) >= 3 and sys.argv[1] == "issue" and sys.argv[2] == "view":
+    marker = Path(os.environ["REVIEW_FIXTURE"]).parent / "block-checkpoint"
+    if marker.exists():
+        marker.unlink()
+        checkpoint = Path(os.environ["HOME"]) / ".thirdshift/evals/scoring/first.json"
+        checkpoint.rename(checkpoint.with_suffix(".saved"))
+        checkpoint.mkdir()
     print(json.dumps({"labels": []}))
     raise SystemExit(0)
 query = next((a for a in sys.argv if a.startswith("query=")), "")
@@ -127,6 +134,19 @@ print(json.dumps({"data": {"repository": {field: node}}}))
         assert patch_files == ["answer"], (
             f"Reviewed diff changes only answer; proposed Eval also contains {patch_files}"
         )
+    elif mode == "save-failure":
+        # The retained handle is loaded before GitHub runs. Make its atomic
+        # replacement fail after preparing a correction to a different PR.
+        (root / "block-checkpoint").touch()
+        failed = run("bug-origins", "8", "--correct", "24", "--json")
+        assert failed.returncode != 0, "checkpoint replacement should fail"
+        assert "Is a directory" in failed.stderr, failed.stderr
+        assert task_dir.is_dir(), "failed settlement withdrew the retained decision's Eval proposal"
+        (scoring / "first.json").rmdir()
+        (scoring / "first.saved").rename(scoring / "first.json")
+        retained = run("bug-origins", "8", "--json")
+        assert retained.returncode == 0, retained.stderr
+        assert json.loads(retained.stdout)[0] == confirmed_origin
     elif mode == "reclosed":
         # A reopened bug closes again in a later Scoring window, which retains
         # a new unsettled proposal alongside the old confirmed checkpoint.

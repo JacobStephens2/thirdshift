@@ -71,7 +71,7 @@ origins = [{"issue": f"https://github.com/acme/widgets/issues/{number}",
             "pull_requests": [{"url": sample["url"], "run": None}]} for number in [8, 9, 10]]
 directory = private / "evals/scoring"
 directory.mkdir(parents=True)
-(directory / "2026-W43.json").write_text(json.dumps({
+(directory / "arbitrary-retained-sample.json").write_text(json.dumps({
     "week": "2026-W43", "window_start": "2026-10-17T00:00:00Z",
     "window_end": "2026-10-24T00:00:00Z", "seed": 7, "sample": [sample], "bug_origins": origins,
 }))

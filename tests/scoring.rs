@@ -272,6 +272,21 @@ fn saved_weeks(scenario: &Scenario) -> Vec<Value> {
     saved
 }
 
+fn rename_sample(scenario: &Scenario) -> std::path::PathBuf {
+    let directory = scenario.path("home/.thirdshift/evals/scoring");
+    let original = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .unwrap();
+    let renamed = directory.join("arbitrary-retained-sample.json");
+    std::fs::rename(original, &renamed).unwrap();
+    renamed
+}
+
 fn pr(number: u64, repo: &str, harness: &str, model: &str, security: bool) -> Value {
     let merged = Utc::now() - chrono::TimeDelta::days(1);
     serde_json::json!({
