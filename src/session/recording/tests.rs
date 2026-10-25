@@ -1,5 +1,6 @@
 use super::*;
 use crate::harness::Harness;
+use crate::test_support::native_codex_command;
 use std::fs::File;
 
 const PARENT_OWNER: &str = "THIRDSHIFT_LOG_OWNER";
@@ -77,27 +78,6 @@ fn explicit_launch_home_stops_private_execution_on_native_codex_quota() {
         let trace = fs::read_to_string(fixture.log("trial").with_extension("logs.jsonl")).unwrap();
         assert!(trace.contains("used_percent"), "{trace}");
     }
-}
-
-fn native_codex_command(root: &Path, id: &str, directory: &Path, timestamp: &str) -> Command {
-    let mut command = Command::new("/bin/sh");
-    command
-        .env("HOME", root.join("home"))
-        .env("NATIVE_ID", id)
-        .env("NATIVE_CWD", directory)
-        .env("QUOTA_TIME", timestamp)
-        .args(["-c", r#"
-mkdir -p "$HOME/.codex/sessions/2026/10/23"
-native="$HOME/.codex/sessions/2026/10/23/rollout-fixture-$NATIVE_ID.jsonl"
-printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$NATIVE_ID" "$NATIVE_CWD" > "$native"
-sleep 1.1
-if [ "$QUOTA_TIME" = current ]; then QUOTA_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ); fi
-printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","rate_limits":{"secondary":{"used_percent":85}}}}\n' "$QUOTA_TIME" >> "$native"
-echo '{"type":"thread.started","thread_id":"s1"}'
-sleep 1
-touch "$HOME/../continued"
-"#]);
-    command
 }
 
 #[test]

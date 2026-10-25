@@ -5,20 +5,13 @@ use std::process::Command;
 #[test]
 fn recorded_model_grader_reads_native_codex_quota_from_its_launch_home() {
     let fixture = Fixture::new();
-    let mut command = Command::new("/bin/sh");
-    command.current_dir(fixture.directory.path())
-        .env("HOME", fixture.path("home"))
-        .args(["-c", r#"
-mkdir -p "$HOME/.codex/sessions/2026/10/23"
-native="$HOME/.codex/sessions/2026/10/23/rollout-fixture-grader.jsonl"
-printf '{"type":"session_meta","payload":{"id":"grader","cwd":"%s"}}\n' "$PWD" > "$native"
-sleep 1.1
-timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","rate_limits":{"secondary":{"used_percent":85}}}}\n' "$timestamp" >> "$native"
-echo '{"type":"thread.started","thread_id":"grader"}'
-sleep 1
-touch continued
-"#]);
+    let mut command = crate::test_support::native_codex_command(
+        fixture.directory.path(),
+        "s1",
+        fixture.directory.path(),
+        "current",
+    );
+    command.current_dir(fixture.directory.path());
     let mut launched = fixture.launch(command);
     let error = record_session(
         &mut launched,

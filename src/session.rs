@@ -519,16 +519,24 @@ impl Outside for OnMachine {
             }
             _ => (&self.harness, self.adapter),
         };
-        let mut invocation = match purpose {
-            Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview => adapter
-                .security_session(
+        let (mut invocation, policy) = match purpose {
+            Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview => (
+                adapter.security_session(
                     harness,
                     resume,
                     prompt,
                     matches!(purpose, Purpose::Security | Purpose::SecurityPublishing),
                 ),
-            Purpose::Ordinary => adapter.session(harness, resume, prompt),
-            Purpose::CodeReview => adapter.code_review_session(harness, resume, prompt),
+                recording::Policy::Security,
+            ),
+            Purpose::Ordinary => (
+                adapter.session(harness, resume, prompt),
+                recording::Policy::Ordinary,
+            ),
+            Purpose::CodeReview => (
+                adapter.code_review_session(harness, resume, prompt),
+                recording::Policy::Ordinary,
+            ),
         };
         // A sandboxed session is always a Trial's: it runs with the Harness's
         // web search switched off, behind the sandbox's allowlisting proxy.
@@ -575,12 +583,7 @@ impl Outside for OnMachine {
             &mut command,
             recording::Input {
                 prompt,
-                policy: match purpose {
-                    Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview => {
-                        recording::Policy::Security
-                    }
-                    Purpose::Ordinary | Purpose::CodeReview => recording::Policy::Ordinary,
-                },
+                policy,
                 stdin: invocation.stdin.as_deref(),
                 ..Default::default()
             },
