@@ -36,6 +36,9 @@ mod waterfall;
 #[path = "console/spans.rs"]
 mod spans;
 
+#[path = "console/metrics.rs"]
+mod metrics;
+
 #[cfg(target_os = "linux")]
 #[path = "console/idle.rs"]
 mod idle;

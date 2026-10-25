@@ -73,6 +73,7 @@ pub enum Command {
         command: String,
         json: bool,
     },
+    Metrics(MetricsArgs),
     Spans {
         command: String,
         span: Option<String>,
@@ -122,6 +123,15 @@ pub enum Command {
     Pickup(PassArgs),
     Secure(PassArgs),
     Run(Box<RunArgs>),
+}
+
+#[derive(Default)]
+pub struct MetricsArgs {
+    pub command: Option<String>,
+    pub json: bool,
+    pub from: Option<chrono::NaiveDate>,
+    pub through: Option<chrono::NaiveDate>,
+    pub repositories: Vec<String>,
 }
 
 /// The flag that stops an Architect run once its plan is published and
@@ -468,6 +478,9 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 json,
             });
         }
+        Some("metrics") => {
+            return metrics(&args[1..]).map(Command::Metrics);
+        }
         Some("dismiss") => {
             let usage = "usage: thirdshift dismiss <command> [--undo] [--json]";
             let Some((command, options)) = args[1..].split_first() else {
@@ -729,6 +742,68 @@ pub fn parse(args: &[String]) -> Result<Command> {
         flags,
         given,
     })))
+}
+
+fn metrics(args: &[String]) -> Result<MetricsArgs> {
+    use chrono::Datelike;
+    let usage = "usage: thirdshift metrics [<command>] [--json] [--from <Monday>] [--through <Monday>] [--repo <owner/repository>]";
+    let mut asked = MetricsArgs::default();
+    let mut words = args.iter();
+    while let Some(word) = words.next() {
+        match word.as_str() {
+            "--json" if !asked.json => asked.json = true,
+            "--from" | "--through" => {
+                let value = words.next().context(usage)?;
+                let date =
+                    chrono::NaiveDate::parse_from_str(value, "%Y-%m-%d").with_context(|| {
+                        format!("{word} needs a Monday week-start date (YYYY-MM-DD)")
+                    })?;
+                anyhow::ensure!(
+                    date.format("%Y-%m-%d").to_string() == *value
+                        && date.weekday() == chrono::Weekday::Mon,
+                    "{word} needs a Monday week-start date (YYYY-MM-DD)"
+                );
+                let slot = if word == "--from" {
+                    &mut asked.from
+                } else {
+                    &mut asked.through
+                };
+                anyhow::ensure!(slot.is_none(), "repeated argument: {word}");
+                *slot = Some(date);
+            }
+            "--repo" => {
+                let value = words.next().context(usage)?;
+                anyhow::ensure!(
+                    value.split('/').count() == 2
+                        && value.split('/').all(|part| {
+                            !part.is_empty()
+                                && part.bytes().all(|byte| {
+                                    byte.is_ascii_alphanumeric() || b"-_.".contains(&byte)
+                                })
+                        }),
+                    "--repo needs owner/repository"
+                );
+                asked.repositories.push(value.clone());
+            }
+            word if !word.starts_with('-') && asked.command.is_none() => {
+                asked.command = Some(word.into())
+            }
+            _ => bail!(usage),
+        }
+    }
+    anyhow::ensure!(
+        asked
+            .from
+            .zip(asked.through)
+            .is_none_or(|(from, through)| from <= through),
+        "--from must not be after --through"
+    );
+    anyhow::ensure!(
+        asked.command.is_none()
+            || (asked.from.is_none() && asked.through.is_none() && asked.repositories.is_empty()),
+        "week and repository filters apply only to metrics trends"
+    );
+    Ok(asked)
 }
 
 /// Parse the arguments after `architect`: at most one focus, and its flags,

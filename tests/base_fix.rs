@@ -152,6 +152,19 @@ fn with_base_fix_an_inherited_failure_gets_an_issue_a_merged_fix_and_the_run_fin
     assert!(prompts[1].contains(BASE_FIX_URL), "prompt: {}", prompts[1]);
     scenario.assert_cleaned_up("issue-7");
     scenario.assert_cleaned_up("issue-8");
+    let shown = scenario.run(&["show", "widgets#7", "--json"]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let shown: serde_json::Value = serde_json::from_str(&shown.stdout).unwrap();
+    let run = &shown["command"];
+    assert_eq!(run["run_metrics"]["outcome"], "ready for review");
+    assert_eq!(run["run_metrics"]["repairs"], 0);
+    assert_eq!(run["run_metrics"]["ci_rounds"], 2);
+    let fix = &run["children"][0];
+    assert_eq!(fix["kind"], "Base fix");
+    assert_eq!(fix["run_metrics"]["outcome"], "merged");
+    assert_eq!(fix["run_metrics"]["repairs"], 0);
+    assert_eq!(fix["run_metrics"]["ci_rounds"], 1);
+    assert!(fix["run_metrics"]["total_minutes"].is_number());
 }
 
 #[cfg(target_os = "linux")]

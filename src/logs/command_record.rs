@@ -14,10 +14,17 @@ use crate::issue::IssueUrl;
 /// A Pass owns its dispatched work in the same process and atomic record.
 #[derive(Clone, Serialize, Deserialize)]
 pub(super) struct CommandTree {
-    #[serde(flatten)]
+    #[serde(flatten, deserialize_with = "read_command")]
     pub command: CommandRecord,
     #[serde(default)]
     pub dispatched: Vec<CommandRecord>,
+}
+
+fn read_command<'de, D: serde::Deserializer<'de>>(reader: D) -> Result<CommandRecord, D::Error> {
+    // With arbitrary_precision, Serde's flattened buffer represents fractional
+    // numbers as maps. Value restores them before typed metrics read their f64s.
+    let value = serde_json::Value::deserialize(reader)?;
+    serde_json::from_value(value).map_err(serde::de::Error::custom)
 }
 
 impl CommandTree {
@@ -76,6 +83,8 @@ pub(super) struct CommandRecord {
     pub stages: Vec<Stage>,
     pub session_log: Option<PathBuf>,
     pub outcome: Option<String>,
+    #[serde(default)]
+    pub run_metrics: Option<super::run_metrics::RunMetrics>,
     pub cause: Option<String>,
     pub issue_branch: Option<String>,
     pub pull_request: Option<String>,
@@ -232,6 +241,23 @@ impl StageName {
             .any(|stage| stage.name() == name)
     }
 
+    /// Stages entered by Sessions, as distinct from delivery or dispatch work.
+    pub(super) fn is_session(name: &str) -> bool {
+        [
+            Self::Implement,
+            Self::Resume,
+            Self::Repair,
+            Self::SpecReview,
+            Self::SecurityReview,
+            Self::ArchitectureReview,
+            Self::SecurityAudit,
+            Self::SecurityReproduction,
+            Self::SecurityFixPublishing,
+        ]
+        .into_iter()
+        .any(|stage| stage.name() == name)
+    }
+
     pub(super) fn known(name: &str) -> bool {
         Self::order(name) != usize::MAX
     }
@@ -271,8 +297,14 @@ impl CommandRecord {
             .chain(self.session_log.as_ref())
     }
 
-    pub fn finish(&mut self, account: &crate::run_ending::Account<'_>, now: DateTime<FixedOffset>) {
-        self.ended_at = Some(now.to_rfc3339());
+    pub fn finish(
+        &mut self,
+        account: &crate::run_ending::Account<'_>,
+        outside: &mut impl super::effects::Outside,
+        ranges: &super::usual_range::UsualRanges,
+        unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
+    ) {
+        self.ended_at = Some(outside.now().to_rfc3339());
         self.outcome = Some(account.outcome.into());
         self.cause = account
             .ended
@@ -282,6 +314,14 @@ impl CommandRecord {
         self.pull_request = account.pr_url.map(String::from);
         self.security_findings_waiting = account.security_findings_waiting;
         self.security_findings = account.security_findings.unwrap_or_default().to_vec();
+        if matches!(self.kind.as_str(), "Run" | "Spec run" | "Base fix") {
+            self.run_metrics = Some(super::run_metrics::RunMetrics::of(
+                self,
+                ranges,
+                outside,
+                unaddressed_findings,
+            ));
+        }
     }
 
     pub fn live(&self, outside: &mut impl super::effects::Outside) -> bool {
@@ -311,7 +351,7 @@ impl CommandRecord {
             }
         };
         Self {
-            version: 1,
+            version: 2,
             kind: if matches!(work, Work::BaseFix(_)) {
                 "Base fix".into()
             } else {
@@ -332,6 +372,7 @@ impl CommandRecord {
             stages: Vec::new(),
             session_log: None,
             outcome: None,
+            run_metrics: None,
             cause: None,
             issue_branch: None,
             pull_request: None,

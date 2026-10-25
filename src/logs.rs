@@ -17,6 +17,7 @@ pub mod dismiss;
 mod effects;
 pub mod export;
 pub(crate) mod github;
+pub mod metrics;
 pub(crate) mod owner;
 mod process_identity;
 mod reading;
@@ -24,11 +25,14 @@ pub(crate) use reading::Framing;
 pub(crate) use reading::catalog;
 pub(crate) use reading::run_for_pull_request;
 mod recording;
+mod run_metrics;
 pub(crate) mod session;
+pub(crate) mod session_signals;
 pub(crate) mod spans;
 pub mod status;
 pub mod stop;
 pub(crate) mod trace;
+mod usual_range;
 
 use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
@@ -257,6 +261,11 @@ pub fn session(session: Logged, path: &Path) {
 /// The selected Issue branch, retained unless completion says it was removed.
 pub fn issue_branch(branch: Option<&str>) {
     record().issue_branch(branch);
+}
+
+/// Retain Delivery's final counts for the active Run's completion metrics.
+pub(crate) fn unaddressed_findings(counts: Option<crate::pull_request::UnaddressedFindings>) {
+    record().unaddressed_findings(counts);
 }
 
 /// Complete the durable facts from the same account used by other renderers.

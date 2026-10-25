@@ -275,6 +275,9 @@ applicable timing, usage, cost, call and error facts, relative-position bars,
 input/output and attributes, plus a conversation link and Copy CLI. Conversation
 links open the Session because that reader does not yet anchor individual
 records. Command details opens the existing Peek with Stop, logs and the PR.
+Its Run metrics come from the same details as `thirdshift show <command> --json`,
+including nested Ticket runs. Recorded zeroes stay zero; unavailable signals say
+Missing, including older Ticket runs without retained metrics.
 That Peek's Copy CLI copies its `thirdshift show '<command>' --json` line; if
 the browser refuses the clipboard, the line is selected to copy by keyboard,
 and stays selected through live refresh.

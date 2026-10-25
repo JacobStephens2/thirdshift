@@ -16,7 +16,6 @@ use crate::session::private;
 use crate::{interrupt, logs, prompt};
 
 mod settlement;
-pub(crate) use settlement::confirmed_counts;
 pub(crate) use settlement::{Options, apply, execute, parse, view};
 
 #[derive(Serialize, Deserialize, PartialEq, Eq)]

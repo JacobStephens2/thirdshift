@@ -23,13 +23,14 @@ use serde::Serialize;
 
 use super::command_record::{CommandRecord, CommandTree};
 use super::effects::OnMachine;
+pub(super) use super::usual_range::UsualRange;
 use super::{Pass, activity};
-pub(super) use health::{Health, UsualRange};
+pub(super) use health::Health;
 pub(super) use history::Command as HistoricalCommand;
 pub(super) use inbox::{Group, InboxItem};
 use inventory::{Folder, Inventory};
 pub(crate) use reader::{Framing, Reader, Writer};
-pub(super) use selection::{Detailed, Observation};
+pub(super) use selection::Observation;
 
 pub(super) struct Snapshot {
     commands: Vec<Entry>,
@@ -56,11 +57,33 @@ impl Snapshot {
         Self::capture(Arc::new(inventory::Native), root, now, silent)
     }
 
+    pub(super) fn load_metrics(root: &Path, now: DateTime<Local>) -> Result<Self> {
+        Self::load_metrics_with_silence(root, now, std::time::Duration::from_secs(600))
+    }
+
+    pub(super) fn load_metrics_with_silence(
+        root: &Path,
+        now: DateTime<Local>,
+        silent: std::time::Duration,
+    ) -> Result<Self> {
+        Self::capture_records(Arc::new(inventory::Native), root, now, silent, true)
+    }
+
     fn capture(
         files: Arc<dyn inventory::Files>,
         root: &Path,
         now: DateTime<Local>,
         silent: std::time::Duration,
+    ) -> Result<Self> {
+        Self::capture_records(files, root, now, silent, false)
+    }
+
+    fn capture_records(
+        files: Arc<dyn inventory::Files>,
+        root: &Path,
+        now: DateTime<Local>,
+        silent: std::time::Duration,
+        past_metrics: bool,
     ) -> Result<Self> {
         let inventory = Arc::new(Inventory::capture(files, root)?);
         let mut records = BTreeMap::new();
@@ -70,7 +93,7 @@ impl Snapshot {
             let mut covered = HashSet::new();
             idle_passes.extend(read_idle_passes(&repo.path)?);
             for folder in &repo.folders {
-                for (path, tree) in read_records(&inventory, folder)? {
+                for (path, tree) in read_records(&inventory, folder, past_metrics)? {
                     let record = &tree.command;
                     if record.parent_record.is_none() {
                         covered.insert(command_log(&path));
@@ -91,7 +114,7 @@ impl Snapshot {
                     .map(|command| Entry::History(Box::new(command))),
             );
         }
-        let ranges = health::UsualRanges::from_records(&records);
+        let ranges = super::usual_range::UsualRanges::from_records(&records);
         let roots: Vec<_> = records
             .iter()
             .filter(|(_, tree)| {
@@ -161,7 +184,7 @@ pub(crate) fn run_for_pull_request(root: &Path, url: &str) -> Result<Option<(Pat
 pub(super) fn retained_work(path: &Path, now: DateTime<Local>) -> Result<RetainedWork> {
     let inventory = Arc::new(Inventory::on_demand());
     let folder = inventory.folder(path.parent().context("Command record has no directory")?)?;
-    let mut records = read_records(&inventory, &folder)?;
+    let mut records = read_records(&inventory, &folder, false)?;
     anyhow::ensure!(records.contains_key(path), "Command record is unavailable");
     let command = tree(&inventory, path, None, &mut records, &now);
     let mut work = RetainedWork::default();
@@ -267,7 +290,21 @@ impl Command {
     }
 }
 
-fn read_records(inventory: &Inventory, folder: &Folder) -> Result<BTreeMap<PathBuf, CommandTree>> {
+pub(super) fn repository_records(root: &Path) -> Result<BTreeMap<PathBuf, CommandTree>> {
+    let inventory = Inventory::on_demand();
+    let mut records = BTreeMap::new();
+    for folder in inventory.directories(&root.join("commands"))? {
+        let folder = inventory.folder(&folder)?;
+        records.extend(read_records(&inventory, &folder, false)?);
+    }
+    Ok(records)
+}
+
+fn read_records(
+    inventory: &Inventory,
+    folder: &Folder,
+    past_metrics: bool,
+) -> Result<BTreeMap<PathBuf, CommandTree>> {
     let mut records = BTreeMap::new();
     for path in &folder.files {
         let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -277,12 +314,26 @@ fn read_records(inventory: &Inventory, folder: &Folder) -> Result<BTreeMap<PathB
         let Some(mut tree) = cache::record(path)? else {
             continue;
         };
-        let record = &mut tree.command;
-        if record.version != 1 {
+        if !matches!(tree.command.version, 1 | 2) {
             continue;
         }
+        if past_metrics {
+            for record in std::iter::once(&mut tree.command).chain(&mut tree.dispatched) {
+                if record.run_metrics.is_none() && record.outcome.is_some() {
+                    record.run_metrics = Some(super::run_metrics::RunMetrics::historical(record));
+                }
+                if let Some(mut metrics) = record.run_metrics.take() {
+                    metrics.add_session_signals(record, |log| {
+                        super::session_signals::read(log).ok().flatten()
+                    });
+                    record.run_metrics = Some(metrics);
+                }
+            }
+        }
+        let record = &mut tree.command;
         // Records written before completion times existed were last
-        // replaced when their outcome was recorded.
+        // replaced when their outcome was recorded. Keep that health fallback
+        // after metric reconstruction so it cannot invent recorded durations.
         if record.outcome.is_some() && record.ended_at.is_none() {
             record.end_time_estimated = true;
             record.ended_at = inventory

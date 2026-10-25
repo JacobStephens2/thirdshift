@@ -163,7 +163,7 @@ impl Delivery<'_> {
                 route.steps(&mut outside, &opening, checklist)
             },
         );
-        match delivered {
+        let result = match delivered {
             Ok(pr_url) => Ok(Reached {
                 pr_url,
                 goal: self.goal,
@@ -175,23 +175,26 @@ impl Delivery<'_> {
                     && worktree.fully_landed_at(&merged.head).unwrap_or(false)
                 {
                     progress::step("the pull request was merged while Delivery was running");
-                    return Ok(Reached {
+                    Ok(Reached {
                         pr_url: merged.pr.url.clone(),
                         goal: Goal::Merged,
                         log,
                         ticket_lines: Vec::new(),
-                    });
+                    })
+                } else {
+                    let stopped_at = stopped_at(&tracker, &error);
+                    let path = worktree.path().to_path_buf();
+                    let mut outside = OnFailure {
+                        base: self.base,
+                        worktree,
+                        pull_request,
+                    };
+                    Err(fail(&mut outside, stopped_at, path, log, error))
                 }
-                let stopped_at = stopped_at(&tracker, &error);
-                let path = worktree.path().to_path_buf();
-                let mut outside = OnFailure {
-                    base: self.base,
-                    worktree,
-                    pull_request,
-                };
-                Err(fail(&mut outside, stopped_at, path, log, error))
             }
-        }
+        };
+        crate::logs::unaddressed_findings(pull_request.unaddressed_findings());
+        result
     }
 }
 
@@ -545,6 +548,14 @@ impl Outside for InWorktree<'_> {
 
     fn security_review(&mut self, prompt: &str) -> (Result<Review>, Option<PathBuf>) {
         let review = self.review_while_actionable(prompt);
+        if !review
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.is::<UntrustedEdit>())
+        {
+            self.pull_request
+                .security_reviewed(review.as_ref().map_or(1, |review| review.findings.len()));
+        }
         (review, self.sessions.last_log_of(Kind::SecurityReview))
     }
 

@@ -1,8 +1,8 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use anyhow::{Context, Result, bail, ensure};
 
-use super::{Proposal, PullRequest, Run, Settlement, State};
+use super::{Proposal, PullRequest, Settlement, State};
 use crate::config::UserConfig;
 use crate::github::GitHub;
 use crate::issue::IssueUrl;
@@ -247,34 +247,4 @@ fn settle(origin: &mut Proposal, action: Action) -> Result<()> {
     });
     origin.state = State::Confirmed;
     Ok(())
-}
-
-/// Derive counts from the latest decision for each bug; rejected and unsettled
-/// origins cannot contribute, and no stale Command record needs rewriting.
-pub(crate) fn confirmed_counts() -> Result<BTreeMap<std::path::PathBuf, usize>> {
-    let mut latest = BTreeMap::new();
-    for sample in Store::open()?.load()? {
-        let week = sample.into_week();
-        for origin in week.bug_origins.into_iter().flatten() {
-            latest.insert(origin.issue.clone(), origin);
-        }
-    }
-    let mut counts = BTreeMap::new();
-    for origin in latest
-        .values()
-        .filter(|origin| origin.state == State::Confirmed)
-    {
-        if let Some(Settlement {
-            pull_request:
-                PullRequest {
-                    run: Some(Run::Local { command_record, .. }),
-                    ..
-                },
-            ..
-        }) = &origin.settlement
-        {
-            *counts.entry(command_record.clone()).or_default() += 1;
-        }
-    }
-    Ok(counts)
 }

@@ -15,17 +15,7 @@ fn usage_attributes(
     cost: Option<f64>,
     input_excludes_cache: bool,
 ) {
-    // Claude/Grok's Messages counters exclude cache reads and writes. The
-    // other normalized protocols already report inclusive input totals.
-    let input = usage.input.map(|input| {
-        if input_excludes_cache {
-            input
-                .saturating_add(usage.cache_read.unwrap_or(0))
-                .saturating_add(usage.cache_write.unwrap_or(0))
-        } else {
-            input
-        }
-    });
+    let input = usage.input_including_cache(input_excludes_cache);
     for (key, value) in [
         ("gen_ai.usage.input_tokens", input),
         ("gen_ai.usage.output_tokens", usage.output),

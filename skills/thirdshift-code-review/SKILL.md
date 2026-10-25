@@ -97,7 +97,9 @@ Present the two reports under `## Standards` and `## Spec` headings, verbatim or
 
 Include the final files-read list for each reviewer, separately list every confirmed generated-output exclusion with its evidence, and name every remaining unread changed file under its axis, or explicitly say none remains. Excluded paths must stay visible as intentionally not read, including in the PR's review coverage disclosure. Include findings from the follow-up in the same axis as its initial report.
 
-If the Session prompt names a place for the reviewers' reports, write the final Standards report to its `standards.md` and the final Spec report to its `spec.md`. Each file includes that axis's initial and follow-up findings, its combined files-read list, confirmed generated-output exclusions with evidence, and any remaining unread changed files (or explicitly none). Write both reports even when there are no findings. When the prompt names no place, report in the conversation only.
+If the Session prompt names a place for the reviewers' reports, write the final Standards report to its `standards.md` and the final Spec report to its `spec.md`. Each file includes that axis's initial and follow-up findings, its combined files-read list, confirmed generated-output exclusions with evidence, and any remaining unread changed files (or explicitly none). Write both reports even when there are no findings.
+
+Beside those reports, write `summary.json` with exactly two keys: `{"standards":2,"spec":1}`. Each value is that axis's nonnegative integer finding count across its initial review and follow-up, counting each finding once, including findings later fixed or declined. Use `0` when the axis found nothing and `null` when it was skipped or could not report a count. These counts describe what the reviewers raised, before the implementing agent decides findings. When the prompt names no report directory, report in the conversation only.
 
 End with a one-line summary: total findings per axis, and the worst issue _within each axis_ (if any). Don't pick a single winner across axes: that's the reranking the separation exists to prevent.
 
