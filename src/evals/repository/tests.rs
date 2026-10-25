@@ -50,7 +50,9 @@ impl Fixture {
     }
 
     fn destination(&self) -> PathBuf {
-        self.root.path().join("prepared")
+        // Canonical, as the prepared repository is: macOS temp dirs sit
+        // under the /var symlink.
+        self.root.path().canonicalize().unwrap().join("prepared")
     }
 
     fn prepare(&self) -> Result<Prepared> {
