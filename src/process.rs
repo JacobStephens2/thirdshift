@@ -80,9 +80,26 @@ pub(crate) struct Control<'a> {
     pub stop: &'a dyn Fn(&mut Child),
 }
 
+/// Configuration and execution borrow the same invocation, preserving its
+/// optional memory observer through Harness and Session recording adapters.
+pub(crate) trait Invocation {
+    fn command(&mut self) -> &mut Command;
+    fn parts(&mut self) -> (&mut Command, Option<&crate::scope::Scope>);
+}
+
+impl Invocation for Command {
+    fn command(&mut self) -> &mut Command {
+        self
+    }
+
+    fn parts(&mut self) -> (&mut Command, Option<&crate::scope::Scope>) {
+        (self, None)
+    }
+}
+
 /// Capture both output pipes without interpreting the child's exit status.
 pub(crate) fn output(
-    command: &mut Command,
+    command: &mut dyn Invocation,
     input: Option<&[u8]>,
     control: Control<'_>,
 ) -> Result<Output> {
@@ -91,7 +108,7 @@ pub(crate) fn output(
 
 /// A Trial deadline includes pipe draining and uses the same whole-tree cleanup.
 pub(crate) fn output_until(
-    command: &mut Command,
+    command: &mut dyn Invocation,
     input: Option<&[u8]>,
     control: Control<'_>,
     deadline: Instant,
@@ -127,7 +144,7 @@ impl std::fmt::Display for NotStarted {
 impl std::error::Error for NotStarted {}
 
 fn captured(
-    command: &mut Command,
+    command: &mut dyn Invocation,
     input: Option<&[u8]>,
     control: Control<'_>,
     deadline: Option<Instant>,
@@ -164,7 +181,7 @@ pub(crate) struct Streamed<T> {
 /// A consumer panic or any startup failure returns no state. Recorded ordinary
 /// interruption suppresses recovery even after a normal consumer return.
 pub(crate) fn streaming<T: Send + 'static>(
-    command: &mut Command,
+    command: &mut dyn Invocation,
     input: Option<&[u8]>,
     control: Control<'_>,
     deadline: Option<Instant>,
@@ -205,7 +222,7 @@ fn read(mut pipe: impl Read) -> std::io::Result<Vec<u8>> {
 }
 
 fn execute<'a, T: Send + 'static>(
-    command: &mut Command,
+    invocation: &'a mut dyn Invocation,
     input: Option<&[u8]>,
     control: Control<'a>,
     capture_stderr: bool,
@@ -213,6 +230,7 @@ fn execute<'a, T: Send + 'static>(
     check: &'a dyn Fn() -> Result<()>,
     consume: impl FnOnce(ChildStdout) -> Result<T> + Send + 'static,
 ) -> (Result<(ExitStatus, T, Vec<u8>)>, bool) {
+    let (command, observer) = invocation.parts();
     let Control {
         name,
         interruption,
@@ -247,6 +265,7 @@ fn execute<'a, T: Send + 'static>(
         // Install ownership immediately: every fallible step after spawn is
         // covered, including pipe extraction and starting workers.
         let mut owned = Execution {
+            observer,
             check,
             deadline,
             control,
@@ -349,6 +368,7 @@ fn execute<'a, T: Send + 'static>(
 }
 
 struct Execution<'a, T> {
+    observer: Option<&'a crate::scope::Scope>,
     check: &'a dyn Fn() -> Result<()>,
     deadline: Option<Instant>,
     control: Control<'a>,
@@ -364,6 +384,7 @@ impl<T> Execution<'_, T> {
     fn wait(&mut self) -> Result<ExitStatus> {
         let mut status = None;
         loop {
+            self.observe();
             if self.control.interruption.requested() {
                 bail!("interrupted");
             }
@@ -416,6 +437,12 @@ impl<T> Execution<'_, T> {
         }
     }
 
+    fn observe(&self) {
+        if let Some(observer) = self.observer {
+            observer.sample();
+        }
+    }
+
     fn cleanup(&mut self) {
         if self.completed {
             return;
@@ -442,6 +469,9 @@ impl<T> Execution<'_, T> {
 impl<T> Drop for Execution<'_, T> {
     fn drop(&mut self) {
         self.cleanup();
+        // Cleanup owns stopping, reaping and joining, including on unwind.
+        // Keep the last observation after all of them; never rerun `check`.
+        self.observe();
     }
 }
 

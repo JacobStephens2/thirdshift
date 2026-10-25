@@ -118,12 +118,13 @@ impl Recording {
         &self,
         kind: &str,
         choice: &Choice,
-        command: &mut Command,
+        invocation: &mut dyn crate::process::Invocation,
         input: Input<'_>,
         log: &Path,
         stream: Interpretation,
     ) -> Result<Ended> {
         let adapter = choice.harness.adapter();
+        let command = invocation.command();
         command.env_remove(logs::trace::TRIAL_CONTEXT);
         if matches!(self.owner, Ok(None)) {
             // A Trial must not lend a caller's stale Command identity to
@@ -158,7 +159,7 @@ impl Recording {
         let stop_at_limit = matches!(self.owner, Ok(None));
         let executed = process::streaming(
             adapter,
-            command,
+            invocation,
             input.stdin,
             input.deadline,
             stream,

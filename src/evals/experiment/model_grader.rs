@@ -241,29 +241,53 @@ fn grade(
         }
     };
     launched
-        .command
+        .command()
         .stderr(fs::File::create(workspace.join("stderr"))?)
         .env("THIRDSHIFT_GRADER_PACKET", &input)
         .env("THIRDSHIFT_GRADER_SCORES", &scores);
-    let scope = launched.scope;
     // The unit name stays in the workspace for `journalctl --user -u` after.
-    fs::write(workspace.join("scope"), scope.unit())?;
-    let ended = Recording::for_trial().run(
-        "model Grader",
+    fs::write(workspace.join("scope"), launched.unit())?;
+    let ended = record_session(
+        &mut launched,
         &choice,
-        &mut launched.command,
+        &workspace,
         Input {
             prompt: &prompt,
             stdin: invocation.stdin.as_deref(),
             deadline: Some(Instant::now() + Duration::from_secs(timeout)),
             private: true,
         },
+    )?;
+    ensure!(
+        ended.killed.is_empty(),
+        "model Grader left unfinished background work"
+    );
+    serde_json::from_slice(&fs::read(scores).context("model Grader left no Scores")?)
+        .map_err(|_| anyhow::anyhow!("invalid model Grader response; see private Grader artifacts"))
+}
+
+/// Record the intact invocation and diagnose only suspicious completions.
+fn record_session(
+    launched: &mut crate::scope::Launch,
+    choice: &Choice,
+    workspace: &Path,
+    input: Input<'_>,
+) -> Result<crate::harness::interpretation::Ended> {
+    let stream = choice
+        .harness
+        .adapter()
+        .interpretation(workspace, input.prompt);
+    let ended = Recording::for_trial().run(
+        "model Grader",
+        choice,
+        launched,
+        input,
         &workspace.join("stdout.jsonl"),
-        adapter.interpretation(&workspace, &prompt),
+        stream,
     );
     interrupt::check()?;
-    let ended = ended.map_err(|_| {
-        if scope.oom_killed() {
+    ended.map_err(|_| {
+        if launched.oom_killed() {
             anyhow::anyhow!(
                 "model Grader hit its memory cap ({}); see private Grader artifacts, \
                  and raise the trial.memory_max User config to retry",
@@ -272,11 +296,8 @@ fn grade(
         } else {
             anyhow::anyhow!("model Grader session failed; see private Grader artifacts")
         }
-    })?;
-    ensure!(
-        ended.killed.is_empty(),
-        "model Grader left unfinished background work"
-    );
-    serde_json::from_slice(&fs::read(scores).context("model Grader left no Scores")?)
-        .map_err(|_| anyhow::anyhow!("invalid model Grader response; see private Grader artifacts"))
+    })
 }
+
+#[cfg(test)]
+mod tests;
