@@ -76,13 +76,11 @@ pub(super) async fn approve(Path((suite, task)): Path<(String, String)>) -> Resp
 pub(super) async fn session(Path((id, session)): Path<(String, String)>) -> Response {
     let result = tokio::task::spawn_blocking(move || -> Result<String> {
         let config = UserConfig::load()?;
-        let view = experiment::read(Some(&id))?.pop().unwrap();
-        let log = view.sessions.iter().find(|log| log.id == session).ok_or_else(|| anyhow::anyhow!("Session not found"))?;
-        let contents = std::fs::read_to_string(&log.path)?;
+        let log = experiment::read_session(&id, &session)?;
         let evidence = if log.trace {
-            super::conversation::render(&contents, crate::logs::catalog::Kind::Session)
+            super::conversation::render(&log.contents, crate::logs::catalog::Kind::Session)
         } else {
-            super::conversation::render_trial_log(&contents)
+            super::conversation::render_trial_log(&log.contents)
         };
         let html = format!("<h1>{}</h1><p><a href=\"/experiments/{}\">Experiment</a></p><p><code>thirdshift experiments {} --session {}</code></p><section aria-label=\"Session evidence\">{evidence}</section>", if log.trace { "Session trace" } else { "Session log" }, escaped(&id), escaped(&id), escaped(&session));
         Ok(ExperimentsPage { page: super::PageContext::new(&config), title: "Trial session".into(), html, csrf: String::new(), proposals: Vec::new() }.render()?)

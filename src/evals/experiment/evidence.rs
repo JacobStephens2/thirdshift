@@ -1,4 +1,4 @@
-//! Active Trial publication and the retained evidence values readers expose.
+//! Active Trial publication.
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -9,16 +9,6 @@ use serde::{Deserialize, Serialize};
 pub(crate) struct RunningTrial {
     pub id: String,
     pub started_at: String,
-}
-
-#[derive(Serialize)]
-pub(crate) struct SessionLog {
-    pub id: String,
-    pub trial_id: String,
-    pub attempt: usize,
-    pub trace: bool,
-    #[serde(skip)]
-    pub path: PathBuf,
 }
 
 #[derive(Serialize, Deserialize)]

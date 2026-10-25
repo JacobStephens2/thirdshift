@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
+use super::trial_results::files::{Files, Native};
 use super::{Arm, Description, Task, TrialResult, trial_results};
 use crate::trial::{Outcome, VoidCause};
 
@@ -265,13 +266,39 @@ impl Stored {
         Ok(())
     }
 
-    pub fn load(root: &Path, id: &str, exclusive: bool) -> Result<Self> {
+    fn directory(root: &Path, id: &str) -> Result<PathBuf> {
         ensure!(
             id.len() == 64 && id.bytes().all(|c| c.is_ascii_hexdigit()),
             "invalid Experiment ID"
         );
         let directory = root.join(id);
         ensure!(directory.is_dir(), "Experiment not found");
+        Ok(directory)
+    }
+
+    /// Validate saved metadata without refreshing a legacy Verdict or reading
+    /// any Trial artifacts. Evidence readers share ordinary load validation.
+    pub(super) fn retained(files: &impl Files, root: &Path, id: &str) -> Result<Self> {
+        Self::metadata(files, Self::directory(root, id)?, id)
+    }
+
+    fn metadata(files: &impl Files, directory: PathBuf, id: &str) -> Result<Self> {
+        let mut stored: Self = serde_json::from_slice(
+            &files
+                .read(&directory.join("experiment.json"))
+                .context("Experiment not found")?,
+        )?;
+        ensure!(stored.format == 1, "unsupported Experiment format");
+        ensure!(
+            stored.description.id == id,
+            "Experiment ID does not match its folder"
+        );
+        stored.directory = directory;
+        Ok(stored)
+    }
+
+    pub fn load(root: &Path, id: &str, exclusive: bool) -> Result<Self> {
+        let directory = Self::directory(root, id)?;
         let lock = if exclusive {
             let lock = File::create(directory.join("lock"))?;
             lock.try_lock()
@@ -280,15 +307,7 @@ impl Stored {
         } else {
             None
         };
-        let mut stored: Self = serde_json::from_slice(
-            &fs::read(directory.join("experiment.json")).context("Experiment not found")?,
-        )?;
-        ensure!(stored.format == 1, "unsupported Experiment format");
-        ensure!(
-            stored.description.id == id,
-            "Experiment ID does not match its folder"
-        );
-        stored.directory = directory;
+        let mut stored = Self::metadata(&Native, directory, id)?;
         stored.lock = lock;
         stored.upgrade_verdict()?;
         Ok(stored)

@@ -2,13 +2,12 @@
 
 use std::io::BufReader;
 
-use anyhow::Result;
-use sha2::{Digest, Sha256};
-
-use super::evidence::{RunningTrial, SessionLog, Started};
+use super::evidence::{RunningTrial, Started};
+use super::session_evidence::{Inventory, SessionLog};
 use super::store::{Minutes, State, Stored, TaskName, View, Voids};
-use super::trial_results::files::{Files, Native, metadata, optional};
+use super::trial_results::files::{Files, Native, metadata};
 use super::{Arm, TrialResult, trial_results, trial_sessions, usage};
+use anyhow::Result;
 
 #[derive(Default)]
 struct Observation {
@@ -29,7 +28,7 @@ impl Observation {
     fn capture(files: &impl Files, stored: &Stored) -> Result<Self> {
         let capture = trial_results::capture(files, &stored.directory)?;
         let mut observation = Self::default();
-        let root = files.canonicalize(&stored.directory)?;
+        let inventory = Inventory::new(files, &stored.directory)?;
         for trial in capture.trials() {
             let id = &trial.id;
             let pending = &trial.pending;
@@ -68,47 +67,9 @@ impl Observation {
                         }
                     }
                 }
-                let mut readable = attempt
+                observation
                     .sessions
-                    .iter()
-                    .filter_map(|session| session.readable().map(|path| (session, path)))
-                    .peekable();
-                let Some((_, first)) = readable.peek() else {
-                    continue;
-                };
-                let Some(confined) = optional(files.canonicalize(first.parent().unwrap()))? else {
-                    continue;
-                };
-                if !confined.starts_with(&root) {
-                    continue;
-                }
-                for (session, path) in readable {
-                    let Some(canonical) = optional(files.canonicalize(path))? else {
-                        continue;
-                    };
-                    if !canonical.starts_with(&confined) {
-                        continue;
-                    }
-                    // Hash the original relative log path, preserving the ID
-                    // when an old raw log becomes a Session trace.
-                    let session_id = format!(
-                        "{:x}",
-                        Sha256::digest(
-                            session
-                                .original
-                                .strip_prefix(&stored.directory)?
-                                .as_os_str()
-                                .as_encoded_bytes()
-                        )
-                    );
-                    observation.sessions.push(SessionLog {
-                        id: session_id,
-                        trial_id: id.clone(),
-                        attempt: index,
-                        trace: session.logs.is_some(),
-                        path: path.to_owned(),
-                    });
-                }
+                    .extend(inventory.listing(files, &attempt, id, index)?);
             }
         }
         let progress = capture.into_progress(&stored.rechecks);
