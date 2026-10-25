@@ -10,6 +10,7 @@ mod options;
 mod reading;
 mod rechecks;
 mod release;
+mod session_evidence;
 mod store;
 mod trace;
 mod trial_results;
@@ -32,11 +33,12 @@ use crate::issue::Repo;
 use crate::trial::VoidCause;
 use crate::{interrupt, logs, progress};
 
-pub(crate) use evidence::{RunningTrial, SessionLog};
+pub(crate) use evidence::RunningTrial;
 pub(crate) use grading::Conclusion;
 pub use options::{Options, parse};
 pub(crate) use rechecks::record as recheck;
 pub(crate) use rechecks::{Flip, Pending};
+pub(crate) use session_evidence::{SessionLog, read as read_session};
 pub(crate) use store::{State, View, read};
 pub(crate) use trial_results::{Arm, TrialResult, trial_key};
 
@@ -355,19 +357,13 @@ pub fn show(args: &[String]) -> Result<String> {
     if let [id, flag, session] = positional.as_slice()
         && flag.as_str() == "--session"
     {
-        let view = read(Some(id))?.pop().context("Experiment not found")?;
-        let session = view
-            .sessions
-            .iter()
-            .find(|log| log.id == session.as_str())
-            .context("Session not found")?;
-        let contents = std::fs::read_to_string(&session.path)?;
+        let session = read_session(id, session)?;
         return Ok(if json {
             serde_json::to_string_pretty(&serde_json::json!({
-                "id": session.id, "trace": session.trace, "contents": contents
+                "id": session.id, "trace": session.trace, "contents": session.contents
             }))?
         } else {
-            contents
+            session.contents
         });
     }
     ensure!(

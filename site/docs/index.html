@@ -607,7 +607,14 @@ a Trial or Eval task to open its Peek, including Grader reasons, rechecks,
 Void causes and links to retained Session logs or Session traces. Both pages
 pair with <code>experiments --json</code>; its view includes task names, active Trial start
 times and the <code>sessions</code> inventory. Read one with
-<code>thirdshift experiments &lt;id&gt; --session &lt;session-id&gt;</code>. Pending rechecks offer a
+<code>thirdshift experiments &lt;id&gt; --session &lt;session-id&gt;</code> (add <code>--json</code> for exactly
+<code>id</code>, <code>trace</code> and UTF-8 <code>contents</code>). The CLI and Console share the Experiment&#39;s
+confined Session evidence reader. Reading one Session validates the saved
+Experiment and selects its evidence without calculating accounting, reading
+Trial metadata or upgrading a legacy Verdict. Healthy evidence remains readable
+when unrelated Trial metadata or usage spans are corrupt. Session IDs stay the
+same when raw logs become Session traces; converted log records take precedence.
+Pending rechecks offer a
 copyable CLI command and a filter for their Eval tasks; the Console records no
 recheck itself. The page polls every two seconds, including after completion
 so rechecks recorded in the CLI appear. Older records show unknown refs,

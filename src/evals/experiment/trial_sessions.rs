@@ -22,13 +22,8 @@ pub(super) struct Session {
     pub spans: Option<PathBuf>,
 }
 
-impl Session {
-    pub fn readable(&self) -> Option<&Path> {
-        self.logs.as_deref().or(self.raw.as_deref())
-    }
-}
-
-/// Whole export starts here, without acquiring result-storage dependencies.
+/// Whole-Experiment evidence reads and Trace exports start here, without
+/// acquiring result-storage dependencies.
 pub(super) fn experiment(files: &impl Files, root: &Path) -> Result<Vec<Attempt>> {
     let mut attempts = Vec::new();
     for entry in directory(files, &root.join("trials"))? {

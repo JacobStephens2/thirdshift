@@ -206,6 +206,7 @@ fn experiments_exposes_queued_running_and_retained_session_evidence() {
         evidence["contents"],
         fs::read_to_string(attempt.join("session/stdout.jsonl")).unwrap()
     );
+    assert_eq!(evidence.as_object().unwrap().len(), 3);
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get(&format!("/experiments/{id}")).text().unwrap();
     assert!(html.contains("v1.0"));
@@ -220,12 +221,18 @@ fn experiments_exposes_queued_running_and_retained_session_evidence() {
     let html = response.text().unwrap();
     assert!(html.contains("Trial evidence"));
     assert!(!html.contains("<script>unsafe()</script>"));
-    assert_eq!(
-        console
-            .get(&format!("/experiments/{id}/sessions/not-listed"))
-            .status(),
-        404
-    );
+    let unavailable = |session: &str| {
+        let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+            .env("HOME", home.path())
+            .args(["experiments", &id, "--session", session, "--json"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let response = console.get(&format!("/experiments/{id}/sessions/{session}"));
+        assert_eq!(response.status(), 404);
+        assert_eq!(response.text().unwrap(), "Session is unavailable.");
+    };
+    unavailable("not-listed");
 
     // A new Arm replaces its raw Session log with OTLP records. Existing links
     // still select that same session, while the page names it a Session trace.
@@ -240,13 +247,12 @@ fn experiments_exposes_queued_running_and_retained_session_evidence() {
     let html = response.text().unwrap();
     assert!(html.contains("Session trace"));
     assert!(html.contains("Trial evidence"));
+    assert!(!html.contains("<script>unsafe()</script>"));
     let evidence = session_json();
-    assert_eq!(evidence["trace"], true);
-    assert!(
-        evidence["contents"]
-            .as_str()
-            .unwrap()
-            .contains("Trial evidence")
+    assert_eq!(
+        evidence,
+        json!({"id": session, "trace": true,
+        "contents": fs::read_to_string(attempt.join("session/stdout.logs.jsonl")).unwrap()})
     );
 
     #[cfg(unix)]
@@ -261,5 +267,89 @@ fn experiments_exposes_queued_running_and_retained_session_evidence() {
             .unwrap();
         let view: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(view["sessions"].as_array().unwrap().len(), 1);
+        let escaped_id = format!(
+            "{:x}",
+            Sha256::digest(
+                attempt
+                    .join("session/elsewhere.jsonl")
+                    .strip_prefix(&directory)
+                    .unwrap()
+                    .as_os_str()
+                    .as_encoded_bytes()
+            )
+        );
+        unavailable(&escaped_id);
+        let outside = home.path().join("outside-session");
+        fs::create_dir_all(&outside).unwrap();
+        fs::rename(
+            attempt.join("session/stdout.logs.jsonl"),
+            outside.join("stdout.logs.jsonl"),
+        )
+        .unwrap();
+        fs::remove_dir_all(attempt.join("session")).unwrap();
+        std::os::unix::fs::symlink(&outside, attempt.join("session")).unwrap();
+        unavailable(session);
+        fs::remove_file(attempt.join("session")).unwrap();
+        fs::create_dir(attempt.join("session")).unwrap();
+    }
+    fs::write(attempt.join("session/stdout.logs.jsonl"), [0xff]).unwrap();
+    unavailable(session);
+    fs::remove_file(attempt.join("session/stdout.logs.jsonl")).unwrap();
+    unavailable(session);
+}
+
+#[test]
+fn selected_session_evidence_survives_unrelated_corruption_and_legacy_verdicts() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "d".repeat(64);
+    let directory = fixture(home.path(), &id, "2026-10-24T10:00:00Z");
+    let session_folder = directory.join("trials/healthy/attempt-old/session");
+    fs::create_dir_all(&session_folder).unwrap();
+    let contents = "Trial evidence <script>unsafe()</script>\n";
+    fs::write(session_folder.join("stdout.jsonl"), contents).unwrap();
+    let cli = |args: &[&str]| {
+        Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+            .env("HOME", home.path())
+            .args(args)
+            .output()
+            .unwrap()
+    };
+    let view: Value = serde_json::from_slice(&cli(&["experiments", &id, "--json"]).stdout).unwrap();
+    let session = view["sessions"][0]["id"].as_str().unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let metadata = directory.join("experiment.json");
+    let mut record: Value = serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
+    for state in ["running", "completed"] {
+        // No saved Verdict: an ordinary completed load must upgrade it.
+        record["state"] = json!(state);
+        fs::write(&metadata, serde_json::to_vec(&record).unwrap()).unwrap();
+        for relative in [
+            "trials/unrelated--baseline--0/attempt-old/session/stdout.spans.jsonl",
+            "results/unrelated--baseline--0.json",
+            "trials/unrelated--baseline--0/pending.json",
+            "trials/unrelated--baseline--0/active.json",
+            "trials/unrelated--baseline--0/attempt-old/started.json",
+        ] {
+            let corrupt = directory.join(relative);
+            fs::create_dir_all(corrupt.parent().unwrap()).unwrap();
+            fs::write(&corrupt, "malformed").unwrap();
+            let output = cli(&["experiments", &id, "--session", session, "--json"]);
+            assert!(
+                output.status.success(),
+                "{state}: {relative}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                serde_json::from_slice::<Value>(&output.stdout).unwrap(),
+                json!({"id": session, "trace": false, "contents": contents})
+            );
+            let response = console.get(&format!("/experiments/{id}/sessions/{session}"));
+            assert_eq!(response.status(), 200, "{state}: {relative}");
+            let html = response.text().unwrap();
+            assert!(html.contains("Trial evidence"));
+            assert!(!html.contains("<script>unsafe()</script>"));
+            fs::remove_file(corrupt).unwrap();
+        }
     }
 }

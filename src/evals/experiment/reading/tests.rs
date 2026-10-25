@@ -163,7 +163,7 @@ fn one_capture_reuses_pending_terminal_and_active_facts_for_the_whole_view() {
 }
 
 #[test]
-fn evidence_prefers_converted_logs_while_span_only_usage_is_captured_once() {
+fn span_only_usage_is_captured_once_without_reading_evidence_contents() {
     let root = tempfile::tempdir().unwrap();
     let stored = stored(root.path());
     let key = trial_key("code-review", "fixture", Arm::Baseline, 0);
@@ -174,8 +174,6 @@ fn evidence_prefers_converted_logs_while_span_only_usage_is_captured_once() {
         .join("attempt-old/session");
     fs::create_dir_all(&folder).unwrap();
     fs::write(folder.join("stdout.jsonl"), "raw").unwrap();
-    let raw = view(Observation::capture(&Native, &stored).unwrap(), &stored);
-    let id = raw["sessions"][0]["id"].clone();
     fs::write(folder.join("stdout.logs.jsonl"), "converted").unwrap();
     fs::write(folder.join("stdout.spans.jsonl"), "").unwrap();
     fs::write(
@@ -189,21 +187,6 @@ fn evidence_prefers_converted_logs_while_span_only_usage_is_captured_once() {
         ),
     )
     .unwrap();
-    let escaped = tempfile::tempdir().unwrap();
-    fs::write(escaped.path().join("private.jsonl"), "secret").unwrap();
-    std::os::unix::fs::symlink(
-        escaped.path().join("private.jsonl"),
-        folder.join("escape.jsonl"),
-    )
-    .unwrap();
-    let escaped_attempt = folder
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join("attempt-escape");
-    fs::create_dir_all(&escaped_attempt).unwrap();
-    std::os::unix::fs::symlink(escaped.path(), escaped_attempt.join("session")).unwrap();
     let files = Observed::default();
     let captured = Observation::capture(&files, &stored).unwrap();
     let counts = files.counts.borrow().clone();
@@ -215,9 +198,6 @@ fn evidence_prefers_converted_logs_while_span_only_usage_is_captured_once() {
     fs::write(folder.join("orphan.spans.jsonl"), "malformed after capture").unwrap();
     let captured = view(captured, &stored);
     assert_eq!(captured["sessions"].as_array().unwrap().len(), 1);
-    assert_eq!(captured["sessions"][0]["id"], id);
-    assert_eq!(captured["sessions"][0]["trace"], true);
-    assert_eq!(captured["sessions"][0]["attempt"], 0);
     assert_eq!(
         captured["usage"]["baseline"]["models"]["unknown"]["input_tokens"],
         11
@@ -227,6 +207,9 @@ fn evidence_prefers_converted_logs_while_span_only_usage_is_captured_once() {
         3
     );
     assert_eq!(*files.counts.borrow(), counts);
+    assert!(counts.keys().all(|(operation, path)| {
+        *operation != "read" || path.parent() != Some(folder.as_path())
+    }));
     assert!(Observation::capture(&Native, &stored).is_err());
 }
 

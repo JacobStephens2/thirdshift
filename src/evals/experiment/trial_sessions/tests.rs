@@ -51,18 +51,20 @@ fn discovery_scopes_share_ordered_owned_session_families_without_reading_content
             .collect::<Vec<_>>(),
         vec!["orphan.jsonl", "resume-1.jsonl", "stdout.jsonl"]
     );
-    assert_eq!(sessions[0].readable(), None);
+    assert_eq!(sessions[0].raw, None);
+    assert_eq!(sessions[0].logs, None);
     assert_eq!(
         sessions[0].spans.as_deref(),
         Some(older.join("session/orphan.spans.jsonl").as_path())
     );
     assert_eq!(
-        sessions[1].readable(),
+        sessions[1].raw.as_deref(),
         Some(older.join("session/resume-1.jsonl").as_path())
     );
     assert_eq!(sessions[1].spans, None);
+    assert_eq!(sessions[1].logs, None);
     assert_eq!(
-        sessions[2].readable(),
+        sessions[2].logs.as_deref(),
         Some(older.join("session/stdout.logs.jsonl").as_path())
     );
     assert_eq!(
@@ -79,9 +81,10 @@ fn discovery_scopes_share_ordered_owned_session_families_without_reading_content
     assert_eq!(fresh.len(), 2);
     assert_eq!(fresh[0].sessions.len(), 4);
     assert_eq!(
-        fresh[0].sessions[3].readable(),
+        fresh[0].sessions[3].raw.as_deref(),
         Some(older.join("session/stdout.jsonl").as_path())
     );
+    assert_eq!(fresh[0].sessions[3].logs, None);
     let local = attempt(&Native, &older).unwrap();
     assert_eq!(local, fresh[0]);
     assert_eq!(captured[1], fresh[1]);
@@ -99,7 +102,12 @@ fn readable_files_and_span_files_keep_their_distinct_type_rules() {
     fs::create_dir(folder.join("ignored.logs.jsonl")).unwrap();
     let captured = attempt(&Native, root.path()).unwrap();
     assert_eq!(captured.sessions.len(), 2);
-    assert!(captured.sessions.iter().all(|s| s.readable().is_none()));
+    assert!(
+        captured
+            .sessions
+            .iter()
+            .all(|s| s.raw.is_none() && s.logs.is_none())
+    );
     assert_eq!(
         captured.sessions[0].spans.as_deref(),
         Some(folder.join("directory.spans.jsonl").as_path())
