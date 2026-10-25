@@ -44,6 +44,42 @@ impl Fixture {
 const MODEL: &str = r#"{"type":"assistant","message":{"model":"reported-model","content":[]}}"#;
 
 #[test]
+fn private_recording_retains_live_scope_evidence_after_events_disappear() {
+    let fixture = Fixture::new();
+    let scope = crate::scope::testing::Fixture::new();
+    let mut command = Command::new("/bin/sh");
+    command.args([
+        "-c",
+        &format!(
+            "echo '{MODEL}'; echo 'oom_kill 1' > \"$EVENTS\"; {}",
+            crate::scope::testing::REMOVE_OBSERVED_EVENTS
+        ),
+    ]);
+    let mut launched = scope.launch(command);
+    let choice = Choice::default();
+    let result = Recording::for_trial().run(
+        "model Grader",
+        &choice,
+        &mut launched,
+        Input {
+            private: true,
+            ..Input::default()
+        },
+        &fixture.log("grader"),
+        choice
+            .harness
+            .adapter()
+            .interpretation(fixture.root.path(), ""),
+    );
+    assert!(result.is_err());
+    assert!(!scope.path("events").exists());
+    assert!(launched.oom_killed());
+    assert_eq!(scope.journal_reads(), 0);
+    let trace = fs::read_to_string(fixture.log("grader").with_extension("logs.jsonl")).unwrap();
+    assert!(trace.contains("reported-model"));
+}
+
+#[test]
 fn all_harnesses_preserve_raw_events_only_in_otlp_session_traces() {
     use crate::otlp_jsonl::{Logs, Reader, Spans};
     use opentelemetry_proto::tonic::collector::{

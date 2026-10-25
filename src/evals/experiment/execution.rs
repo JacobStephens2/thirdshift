@@ -133,13 +133,12 @@ impl<'a> Execution<'a> {
         // Machine caps are read live per attempt, not fixed with the Bar: an
         // operator edit between attempts applies to the next one.
         let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
-        let launched = self.command(arm, &request, &request_path, &caps)?;
+        let mut launched = self.command(arm, &request, &request_path, &caps)?;
         // The unit name stays in the attempt for `journalctl --user -u` after.
-        fs::write(attempt.join("scope"), launched.scope.unit())?;
-        let mut command = launched.command;
-        trace.inherit(&mut command)?;
+        fs::write(attempt.join("scope"), launched.unit())?;
+        trace.inherit(launched.command())?;
         let output = process::output_until(
-            &mut command,
+            &mut launched,
             None,
             Control {
                 name: "Trial",
@@ -147,11 +146,7 @@ impl<'a> Execution<'a> {
                 stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
             },
             Instant::now() + self.timeout,
-            &|| {
-                monitor.borrow_mut().check(self.signal)?;
-                launched.scope.sample();
-                Ok(())
-            },
+            &|| monitor.borrow_mut().check(self.signal),
         );
         interrupt::check()?;
         // A kernel kill in the Trial's scope is the outer launcher's evidence
@@ -160,7 +155,7 @@ impl<'a> Execution<'a> {
         // gone. Only failed Trials consult it: explicit Void causes stay as
         // the Trial diagnosed them, so limit pauses keep pausing, and an
         // agent's own out-of-memory error leaves no kernel kill behind.
-        let cap_killed = || launched.scope.oom_killed();
+        let cap_killed = || launched.oom_killed();
         let mut protocol = match output {
             Ok(output) => {
                 fs::write(attempt.join("stdout"), &output.stdout)?;
@@ -267,7 +262,7 @@ impl<'a> Execution<'a> {
             caps,
         )?;
         launched
-            .command
+            .command()
             .env(limits::SIGNAL_ENV, self.signal)
             .env("PATH", path_env);
         Ok(launched)

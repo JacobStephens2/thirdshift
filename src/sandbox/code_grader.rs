@@ -6,7 +6,6 @@ use std::io::{Read, Seek};
 use std::os::fd::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -55,7 +54,7 @@ pub(crate) fn execute(
     for command in commands {
         let mut child = launch(&snapshot, packet.path(), command, caps)?;
         let result = process::output_until(
-            &mut child.command,
+            &mut child.invocation,
             None,
             Control {
                 name: "code Grader",
@@ -63,13 +62,11 @@ pub(crate) fn execute(
                 stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
             },
             Instant::now() + timeout,
-            &|| {
-                child.scope.sample();
-                Ok(())
-            },
+            &|| Ok(()),
         );
         crate::interrupt::check()?;
-        if !result.as_ref().is_ok_and(|result| result.status.success()) && child.scope.oom_killed()
+        if !result.as_ref().is_ok_and(|result| result.status.success())
+            && child.invocation.oom_killed()
         {
             bail!("code Grader hit its memory cap; raise trial.memory_max to retry");
         }
@@ -141,10 +138,8 @@ fn launch(repository: &Path, packet: &Path, args: &[String], caps: &Caps) -> Res
     // An unlinked status file stays outside the packet and the sandbox. Only
     // bwrap writes it; the check's stdout and stderr cannot claim startup.
     let status = (!disabled()).then(tempfile::tempfile).transpose()?;
-    let (mut command, scope) = if disabled() {
-        let launched =
-            crate::scope::grader_command(Path::new(&args[0]), &args[1..], repository, caps)?;
-        (launched.command, launched.scope)
+    let mut invocation = if disabled() {
+        crate::scope::grader_command(Path::new(&args[0]), &args[1..], repository, caps)?
     } else {
         if find_bwrap().is_none() {
             return Err(anyhow::Error::new(Unavailable {
@@ -215,36 +210,30 @@ fn launch(repository: &Path, packet: &Path, args: &[String], caps: &Caps) -> Res
                 .to_vec(),
             stderr: None,
         };
-        let launched = launch.scoped_command(&args[1..], repository, caps)?;
-        let (mut command, scope) = (launched.command, launched.scope);
+        let mut launched = launch.scoped_command(&args[1..], repository, caps)?;
         // SAFETY: fcntl is async-signal-safe. The status file remains owned
         // by LaunchedCheck until its child has ended; no allocation occurs here.
         unsafe {
-            command.pre_exec(move || {
+            launched.command().pre_exec(move || {
                 if libc::fcntl(status_fd, libc::F_SETFD, 0) == -1 {
                     return Err(std::io::Error::last_os_error());
                 }
                 Ok(())
             });
         }
-        (command, scope)
+        launched
     };
     if disabled() {
-        command.envs(packet_env);
+        invocation.command().envs(packet_env);
     }
-    command.current_dir(repository);
-    Ok(LaunchedCheck {
-        command,
-        status,
-        scope,
-    })
+    invocation.command().current_dir(repository);
+    Ok(LaunchedCheck { invocation, status })
 }
 
 /// A Code Grader's command and launcher-owned startup evidence travel together.
 struct LaunchedCheck {
-    command: Command,
+    invocation: crate::scope::Launch,
     status: Option<fs::File>,
-    scope: crate::scope::Scope,
 }
 
 impl LaunchedCheck {

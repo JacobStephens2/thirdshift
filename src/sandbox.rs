@@ -258,7 +258,7 @@ impl Launch {
     ) -> Result<crate::scope::Launch> {
         let program = find_bwrap().unwrap_or_else(|| PathBuf::from("bwrap"));
         let mut launched = crate::scope::grader_command(&program, &[], directory, caps)?;
-        self.configure_command(&mut launched.command, args)?;
+        self.configure_command(launched.command(), args)?;
         Ok(launched)
     }
 

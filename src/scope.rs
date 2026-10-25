@@ -191,14 +191,39 @@ fn unit_name(kind: &str, detail: &str) -> String {
 
 /// A Trial or Grader launch and its required memory scope.
 pub struct Launch {
-    pub command: Command,
-    pub scope: Scope,
+    command: Command,
+    scope: Scope,
+}
+
+impl Launch {
+    pub fn command(&mut self) -> &mut Command {
+        &mut self.command
+    }
+
+    pub fn unit(&self) -> &str {
+        self.scope.unit()
+    }
+
+    pub fn oom_killed(&self) -> bool {
+        self.scope.oom_killed()
+    }
+}
+
+impl crate::process::Invocation for Launch {
+    fn command(&mut self) -> &mut Command {
+        &mut self.command
+    }
+
+    fn parts(&mut self) -> (&mut Command, Option<&Scope>) {
+        (&mut self.command, Some(&self.scope))
+    }
 }
 
 /// A scope a launcher created, named for `journalctl --user -u` after.
 pub struct Scope {
     unit: String,
     watch: RefCell<Option<Watch>>,
+    observation: Box<dyn Observation>,
 }
 
 impl Scope {
@@ -210,10 +235,16 @@ impl Scope {
     pub fn sample(&self) {
         let mut watch = self.watch.borrow_mut();
         if watch.is_none() {
-            *watch = watch_scope(&self.unit);
+            *watch = self.observation.events(&self.unit).map(|events| Watch {
+                events,
+                kernel_kill: false,
+            });
         }
         if let Some(watch) = watch.as_mut() {
             watch.sample();
+            if watch.kernel_kill_seen() {
+                self.observation.acknowledge();
+            }
         }
     }
 
@@ -224,17 +255,34 @@ impl Scope {
             .borrow()
             .as_ref()
             .is_some_and(Watch::kernel_kill_seen)
-            || self.journal_oom_killed()
+            || self.observation.journal_oom_killed(&self.unit)
+    }
+}
+
+/// Native manager/filesystem access, substituted privately by deterministic
+/// execution tests. Observation never participates in execution error policy.
+trait Observation {
+    fn events(&self, unit: &str) -> Option<PathBuf>;
+    fn acknowledge(&self) {}
+    fn journal_oom_killed(&self, unit: &str) -> bool;
+}
+
+struct Native;
+
+impl Observation for Native {
+    fn events(&self, unit: &str) -> Option<PathBuf> {
+        let events = events_path(&control_group(unit)?);
+        events.is_file().then_some(events)
     }
 
     /// Whether the user journal recorded an `oom-kill` result for this
     /// scope: the manager's own line, which survives the scope itself. Only
     /// for suspicious exits; retries briefly, as the journal can lag the
     /// scope's end.
-    fn journal_oom_killed(&self) -> bool {
+    fn journal_oom_killed(&self, unit: &str) -> bool {
         for _ in 0..3 {
             let output = manager_command("journalctl")
-                .args(["--user", "-u", &self.unit, "--no-pager", "-o", "cat"])
+                .args(["--user", "-u", unit, "--no-pager", "-o", "cat"])
                 .output();
             if output.is_ok_and(|output| {
                 output.status.success()
@@ -252,11 +300,10 @@ impl Scope {
 
 /// Watch `unit`'s `memory.events` while it runs: `None` where the scope is
 /// already gone, as after a fast kill.
+#[cfg(test)]
 fn watch_scope(unit: &str) -> Option<Watch> {
-    let group = control_group(unit)?;
-    let events = events_path(&group);
-    events.is_file().then_some(Watch {
-        events,
+    Some(Watch {
+        events: Native.events(unit)?,
         kernel_kill: false,
     })
 }
@@ -400,6 +447,7 @@ fn launch<S: AsRef<std::ffi::OsStr>>(
         scope: Scope {
             unit,
             watch: RefCell::new(None),
+            observation: Box::new(Native),
         },
     })
 }
@@ -440,6 +488,9 @@ pub fn oom_exec(program: &str, args: &[String]) -> Result<()> {
 /// The cause a cap kill carries, in Trials and in Grader errors: the scope's
 /// `memory.events` reported an `oom_kill`.
 pub const OOM_KILL_CAUSE: &str = "scope memory.events reported an oom_kill";
+
+#[cfg(test)]
+pub(crate) mod testing;
 
 #[cfg(test)]
 mod tests {
