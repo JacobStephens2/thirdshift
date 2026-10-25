@@ -304,14 +304,21 @@ impl<'a> Account<'a> {
         let base_fix = ended.base_fix.as_deref();
         match &ended.outcome {
             Ok(reached) => Account {
-                outcome: reached.goal.outcome(),
-                ended: Ok(format!(
-                    "PR {} is {}",
-                    reached.pr_url,
-                    reached.goal.outcome()
-                )),
+                outcome: reached
+                    .resolution
+                    .goal()
+                    .map(|goal| goal.outcome())
+                    .unwrap_or("bug not reproduced"),
+                ended: Ok(match &reached.resolution {
+                    crate::run::Resolution::PullRequest { url, goal } => {
+                        format!("PR {url} is {}", goal.outcome())
+                    }
+                    crate::run::Resolution::NotReproduced { comment_url } => {
+                        format!("bug not reproduced: {comment_url}")
+                    }
+                }),
                 interrupted: false,
-                pr_url: Some(&reached.pr_url),
+                pr_url: reached.resolution.goal().map(|_| reached.resolution.url()),
                 advice: &[],
                 base_fix,
                 log: reached.log.as_deref(),
@@ -324,7 +331,7 @@ impl<'a> Account<'a> {
                 failed_reproduction: None,
                 pre_audit_failure: None,
                 recovery: None,
-                urls: vec![&reached.pr_url],
+                urls: vec![reached.resolution.url()],
             },
             Err(failed) => Account {
                 advice: &ended.advice,
@@ -576,6 +583,11 @@ pub struct Reader {
 }
 
 impl Reader {
+    /// A successful child can hand a bug back instead of delivering a PR.
+    pub fn not_reproduced(&self) -> Option<&str> {
+        self.cause.as_deref()?.strip_prefix("bug not reproduced: ")
+    }
+
     /// Read the next line of the child's stderr.
     pub fn read(&mut self, line: ChildLine<'_>) {
         let ChildLine::Own(message) = line else {
@@ -1149,8 +1161,10 @@ mod tests {
     fn reached(goal: Goal) -> Ended {
         Ended {
             outcome: Ok(Reached {
-                pr_url: PR.to_string(),
-                goal,
+                resolution: crate::run::Resolution::PullRequest {
+                    url: PR.to_string(),
+                    goal,
+                },
                 log: Some(PathBuf::from(LOG)),
                 ticket_lines: Vec::new(),
             }),

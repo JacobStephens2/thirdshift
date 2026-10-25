@@ -645,6 +645,6 @@ mod tests {
         assert_eq!(took.issue.number, 9);
         assert_eq!(took.title, "Issue 9");
         let reached = took.ended.outcome.ok().expect("the dispatched run failed");
-        assert_eq!(reached.pr_url, PR_URL);
+        assert_eq!(reached.resolution.url(), PR_URL);
     }
 }

@@ -49,6 +49,14 @@ gh pr create --base {base} --head issue-{issue} --title "Work on {issue}" --body
     )
 }
 
+/// A successful diagnosis followed by PR delivery for a bug-labelled issue.
+fn agent_fixes_bug(issue: u32, base: &str) -> String {
+    format!(
+        "{}echo 'Bug reproduced: fixed' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+        agent_opens_pr(issue, base),
+    )
+}
+
 /// Keep fault scripts at their call sites while sharing wrapper installation.
 fn install_git_wrapper(scenario: &Scenario, script: impl FnOnce(&str) -> String) {
     let git = std::process::Command::new("which")
@@ -98,7 +106,7 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
     let scenario = Scenario::new();
     ready_issue(&scenario, 9, &["bug"]);
     ready_issue(&scenario, 7, &["bug"]);
-    scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+    scenario.agent_does_for(7, &agent_fixes_bug(7, "main"));
 
     let result = scenario.run(&["pickup"]);
 
@@ -114,7 +122,7 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
     let prompt = calls[0]["prompt"].as_str().unwrap();
     assert!(
         prompt.starts_with(&format!(
-            "/thirdshift-implement {}\n",
+            "/thirdshift-diagnosing-bugs {}\n",
             scenario.issue_url(7)
         )),
         "{prompt}"
@@ -132,7 +140,7 @@ fn pickup_takes(extra: &[&str], taken: u32, left: u32) {
     let scenario = Scenario::new();
     ready_issue(&scenario, 9, &["bug"]);
     ready_issue(&scenario, 7, &["bug"]);
-    scenario.agent_does_for(taken, &agent_opens_pr(taken, "main"));
+    scenario.agent_does_for(taken, &agent_fixes_bug(taken, "main"));
 
     let mut command = vec!["pickup"];
     command.extend(extra);
@@ -169,7 +177,7 @@ fn pickup_order_in_the_user_config_sets_which_ready_issue_is_run() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 9, &["bug"]);
     ready_issue(&scenario, 7, &["bug"]);
-    scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
+    scenario.agent_does_for(9, &agent_fixes_bug(9, "main"));
     scenario.user_config_is("[pickup]\norder = \"highest-first\"\n");
 
     let result = scenario.run(&["pickup"]);
@@ -188,7 +196,7 @@ fn a_pickup_order_flag_beats_pickup_order_in_the_user_config() {
         let scenario = Scenario::new();
         ready_issue(&scenario, 9, &["bug"]);
         ready_issue(&scenario, 7, &["bug"]);
-        scenario.agent_does_for(taken, &agent_opens_pr(taken, "main"));
+        scenario.agent_does_for(taken, &agent_fixes_bug(taken, "main"));
         scenario.user_config_is(&format!("[pickup]\norder = \"{configured}\"\n"));
 
         let result = scenario.run(&["pickup", flag]);

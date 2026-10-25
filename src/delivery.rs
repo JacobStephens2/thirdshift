@@ -34,7 +34,7 @@ use crate::issue::IssueUrl;
 use crate::progress;
 use crate::prompt;
 use crate::recovery::{self, Preservation, Recovery};
-use crate::run::{Goal, Reached};
+use crate::run::{Goal, Reached, Resolution};
 use crate::run_ending::Cause;
 use crate::security::review::{Hold as SecurityHold, Outcome as SecurityOutcome, Review};
 use crate::session::{Kind, Logs, Sessions};
@@ -76,6 +76,8 @@ pub struct Opening {
 pub enum OpeningSession {
     /// A Run's implement session.
     Implementation,
+    /// A bug Ticket run diagnoses before implementing, and may need information.
+    BugDiagnosis,
     /// A Spec run's Spec review, once its Tickets have landed.
     SpecReview,
 }
@@ -84,7 +86,7 @@ impl OpeningSession {
     /// The session's kind.
     pub fn kind(self) -> Kind {
         match self {
-            Self::Implementation => Kind::Implementation,
+            Self::Implementation | Self::BugDiagnosis => Kind::Implementation,
             Self::SpecReview => Kind::SpecReview,
         }
     }
@@ -97,7 +99,7 @@ impl OpeningSession {
 
     fn stage(self) -> Stage {
         match self {
-            Self::Implementation => Stage::Implementation,
+            Self::Implementation | Self::BugDiagnosis => Stage::Implementation,
             Self::SpecReview => Stage::SpecReview,
         }
     }
@@ -164,9 +166,8 @@ impl Delivery<'_> {
             },
         );
         let result = match delivered {
-            Ok(pr_url) => Ok(Reached {
-                pr_url,
-                goal: self.goal,
+            Ok(resolution) => Ok(Reached {
+                resolution,
                 log,
                 ticket_lines: Vec::new(),
             }),
@@ -176,8 +177,10 @@ impl Delivery<'_> {
                 {
                     progress::step("the pull request was merged while Delivery was running");
                     Ok(Reached {
-                        pr_url: merged.pr.url.clone(),
-                        goal: Goal::Merged,
+                        resolution: Resolution::PullRequest {
+                            url: merged.pr.url.clone(),
+                            goal: Goal::Merged,
+                        },
                         log,
                         ticket_lines: Vec::new(),
                     })
@@ -209,6 +212,33 @@ struct Route<'a> {
     harness: &'a Choice,
 }
 
+/// Read one of the two explicit diagnosis completion lines. Missing or
+/// malformed handoffs fail instead of falling through to publication.
+fn not_reproduced(issue: &IssueUrl, final_message: Option<&str>) -> Result<Option<String>> {
+    let line = final_message
+        .and_then(|message| message.trim_end().lines().last())
+        .unwrap_or("");
+    if line == prompt::BUG_REPRODUCED_LINE {
+        return Ok(None);
+    }
+    let url = line
+        .strip_prefix(prompt::BUG_NOT_REPRODUCED_LINE)
+        .context("bug diagnosis ended without a reproduced or not reproduced completion line")?;
+    anyhow::ensure!(
+        url.split_once("#issuecomment-")
+            .is_some_and(|(comment_issue, id)| {
+                IssueUrl::parse(comment_issue)
+                    .is_ok_and(|comment_issue| comment_issue.identity() == issue.identity())
+                    && !id.is_empty()
+                    && id.bytes().all(|b| b.is_ascii_digit())
+                    && id.parse::<u64>().is_ok_and(|n| n > 0)
+            }),
+        "bug not reproduced ending must link a comment on {}",
+        issue.url
+    );
+    Ok(Some(url.to_string()))
+}
+
 impl Route<'_> {
     /// [`Delivery::deliver`]'s steps, through `outside`, in order: catch up
     /// from origin if `opening` says to, the opening session, the push, the
@@ -220,13 +250,19 @@ impl Route<'_> {
         outside: &mut O,
         opening: &Opening,
         checklist: Option<&str>,
-    ) -> Result<String> {
+    ) -> Result<Resolution> {
         let session = opening.session;
         if session.catches_up_from_origin() {
             outside.catch_up()?;
         }
         outside.stage(session.stage());
-        outside.session(session.kind(), &opening.prompt)?;
+        let final_message = outside.session(session.kind(), &opening.prompt)?;
+        if session == OpeningSession::BugDiagnosis
+            && let Some(comment_url) = not_reproduced(self.issue, final_message.as_deref())?
+        {
+            outside.confirm_needs_info()?;
+            return Ok(Resolution::NotReproduced { comment_url });
+        }
         let review = match self.security_review.then(|| {
             outside.stage(Stage::SecurityReview);
             outside.security_review(&prompt::security_review(self.issue, self.base, self.branch))
@@ -267,7 +303,10 @@ impl Route<'_> {
         if self.goal == Goal::Merged {
             self.after_merge(outside, &pr);
         }
-        Ok(pr.url)
+        Ok(Resolution::PullRequest {
+            url: pr.url,
+            goal: self.goal,
+        })
     }
 
     /// Write the line that says the pull request was built with the Harness
@@ -429,7 +468,9 @@ trait Outside {
     /// Fast-forward the Issue branch to its head on origin.
     fn catch_up(&mut self) -> Result<()>;
     /// Run a session of `kind` given `prompt`.
-    fn session(&mut self, kind: Kind, prompt: &str) -> Result<()>;
+    fn session(&mut self, kind: Kind, prompt: &str) -> Result<Option<String>>;
+    /// The diagnosis session completed its label handoff.
+    fn confirm_needs_info(&mut self) -> Result<()>;
     /// Run the Security review given `prompt`, with its Session trace, its
     /// Resume's if it got one, if it started a session.
     fn security_review(&mut self, prompt: &str) -> (Result<Review>, Option<PathBuf>);
@@ -541,9 +582,19 @@ impl Outside for InWorktree<'_> {
         self.worktree.fast_forward_to_origin()
     }
 
-    fn session(&mut self, kind: Kind, prompt: &str) -> Result<()> {
-        self.sessions.run(kind, prompt)?;
-        self.pull_request.ensure_actionable(false)
+    fn session(&mut self, kind: Kind, prompt: &str) -> Result<Option<String>> {
+        let final_message = self.sessions.run(kind, prompt)?;
+        self.pull_request.ensure_actionable(false)?;
+        Ok(final_message)
+    }
+
+    fn confirm_needs_info(&mut self) -> Result<()> {
+        let labels = GitHub::new().issue_labels(self.issue)?;
+        anyhow::ensure!(
+            labels.has(crate::labels::NEEDS_INFO) && !labels.has(crate::labels::READY_FOR_AGENT),
+            "bug not reproduced ending requires needs-info with ready-for-agent absent"
+        );
+        Ok(())
     }
 
     fn security_review(&mut self, prompt: &str) -> (Result<Review>, Option<PathBuf>) {
@@ -904,10 +955,13 @@ mod tests {
             self.calls.push(Call::CatchUp);
             self.check(Fails::CatchUp)
         }
-        fn session(&mut self, kind: Kind, _: &str) -> Result<()> {
+        fn session(&mut self, kind: Kind, _: &str) -> Result<Option<String>> {
             self.calls.push(Call::Session(kind));
             self.log = Some(PathBuf::from(format!("/logs/{}.jsonl", kind.token())));
-            self.check(Fails::Session)
+            self.check(Fails::Session).map(|()| None)
+        }
+        fn confirm_needs_info(&mut self) -> Result<()> {
+            Ok(())
         }
         fn push(&mut self) -> Result<()> {
             self.calls.push(Call::Push);
@@ -1000,6 +1054,7 @@ mod tests {
         };
         route
             .steps(outside, &opening, spec.then_some("Tickets"))
+            .map(|resolution| resolution.url().to_string())
             .map_err(|error| {
                 // The real adapters enter each stage the steps name.
                 let tracker = Tracker::new(opening.session.stage(), Recorded::default());

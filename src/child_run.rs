@@ -397,6 +397,8 @@ fn not_yet_given<T>(given: &Option<T>, arg: &str) -> Result<()> {
 /// How a child Run ended.
 #[derive(Debug)]
 pub enum Ended {
+    /// Diagnosis completed, but the Ticket remains open needing information.
+    NotReproduced { comment_url: String },
     /// It reached its goal, with its PR as it printed it, and what became
     /// of the Base fix it took, if any, as it reported it.
     Reached {
@@ -749,8 +751,12 @@ impl Handle {
             .expect("a reaped Run without a wait error has a status");
         let stdout = self.stdout.as_mut().unwrap().value.take().unwrap();
         let reader = self.stderr.as_mut().unwrap().value.take().unwrap();
+        let not_reproduced = reader.not_reproduced().map(String::from);
         let ending = reader.finish(&stdout, status.success());
         Ok(match ending.outcome {
+            Ok(_) if not_reproduced.is_some() => Ended::NotReproduced {
+                comment_url: not_reproduced.unwrap(),
+            },
             Ok(pr_url) => Ended::Reached {
                 pr_url,
                 base_fix: ending.base_fix,
