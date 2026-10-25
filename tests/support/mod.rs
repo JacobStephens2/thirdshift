@@ -46,6 +46,7 @@ pub use executable::write_executable;
 
 pub mod fakes;
 pub mod resend;
+pub mod scoring;
 pub mod session_trace;
 
 use std::fs;

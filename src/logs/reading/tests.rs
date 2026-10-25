@@ -6,6 +6,9 @@ use serde_json::{Value, json};
 
 use super::*;
 
+#[path = "attribution_tests.rs"]
+mod attribution_tests;
+
 #[path = "inventory_tests.rs"]
 mod inventory_tests;
 #[path = "reader_tests.rs"]
@@ -36,6 +39,25 @@ fn write(root: &Path, name: &str, value: &Value) -> PathBuf {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(&path, serde_json::to_vec(value).unwrap()).unwrap();
     path
+}
+
+#[test]
+fn retained_pull_request_lookup_orders_instants_across_offsets() {
+    let dir = tempfile::tempdir().unwrap();
+    let url = "https://github.com/acme/widgets/pull/23";
+    let mut older = record(7);
+    older["pull_request"] = url.into();
+    older["started_at"] = "2026-10-19T12:00:00+02:00".into();
+    write(dir.path(), "older.command.json", &older);
+    let mut newer = record(7);
+    newer["pull_request"] = url.into();
+    newer["started_at"] = "2026-10-19T11:00:00Z".into();
+    let path = write(dir.path(), "newer.command.json", &newer);
+
+    assert_eq!(
+        run_for_pull_request(dir.path(), url).unwrap(),
+        Some((path, "acme/widgets#7".into()))
+    );
 }
 
 #[test]

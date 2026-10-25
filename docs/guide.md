@@ -247,7 +247,7 @@ At completion, each Ticket run, Base fix and Spec run writes `run_metrics` into 
 
 `thirdshift metrics [--json]` reads this machine's Command records across repositories, including child Ticket runs exactly once. It groups Ticket runs by their start week (Monday in UTC), repository, Harness, requested Model and Effort, and kind of Ticket run. Session-stage rows add the kind of session and Harness version from the Session trace's resource, and use that session's own retained Harness, requested Model and Effort when available, so a Security review can differ from its Command. Without retained session setup, ordinary sessions inherit the Command's choices; a Security review's setup remains missing because it may have used another Harness. Ticket run totals have null `session_kind` and `harness_version`, so totals are never repeated for every session or version. Records without completion metrics contribute missing values. It neither reads another machine nor contacts GitHub.
 
-When metrics are read, `confirmed_bug_origins` counts the confirmed Bug origins against the Ticket run whose pull request introduced each bug. The reader uses the Scoring data under `~/.thirdshift/evals/scoring/`, which covers both hosts, and matches only this machine's Ticket runs. A retained local Ticket run identity selects that exact Ticket run; when only cross-host pull-request attribution is available, the latest local Ticket run for that pull request is selected, as in Scoring. A Continuation sharing the pull request never multiplies the count. A confirmation made after the Ticket run ended still counts in that Ticket run's start week. The latest Scoring window's decision for each bug wins: rejected and unsettled origins count for nothing, and a correction counts against the settled pull request. Counts are computed without rewriting Command records; weekly Ticket run totals summarize them separately from other signals.
+When metrics are read, `confirmed_bug_origins` counts the confirmed Bug origins against the Ticket run whose pull request introduced each bug. The reader uses the Scoring data under `~/.thirdshift/evals/scoring/`, which covers both hosts, and matches only this machine's Ticket runs. A retained local identity selects that exact record path and Command name under the matching pull request; an unavailable or mismatched identity counts for nothing, with no fallback to another Continuation. Absent local attribution and cross-host attribution select the latest local Command, using the same matching and chronological ordering as Scoring (described below). A Continuation sharing the pull request never multiplies the count. A confirmation made after the Ticket run ended still counts in that Ticket run's start week. The latest Scoring window's decision for each bug wins: rejected and unsettled origins count for nothing, and a correction counts against the settled pull request. Counts are computed without contacting GitHub or rewriting Command records; weekly Ticket run totals summarize them separately from other signals.
 
 At completion a Ticket run sums its Session-trace signals by session kind in `session_signals`, with observed and missing session counts. Each originating Session stage also retains its signals and Harness version; later stages referencing that same Session do not count it again. Tokens stay split by observed Model as input (including cache), output, cache read and cache write; an unreported Model is null, never inferred from the requested Model. Cost is in USD only when reported by the Harness, without a price table. Tool errors, permission denials, killed work and repeated tool calls remain separate counters. A repeated call uses the same tool and JSON input as an earlier call in that same session; object key order does not matter. Late permission metadata amends the original call. Missing measurements are null, including cost that a Harness does not report. A missing trace contributes a missing session rather than zero counters. Weekly Session rows summarize each signal independently, with tokens kept by observed Model.
 
@@ -1729,6 +1729,14 @@ record. Both `scores` formats withhold model Scores until all five human Scores
 are saved for that pull request. Revealed Scores include each criterion's
 calibration: `calibrated`, `matches` and `compared` in JSON.
 
+Scoring samples, Bug-origin proposals and settlements, and read-time Run metrics
+share retained pull-request attribution. Matching ignores ASCII letter case and
+trailing slashes. Latest means the greatest parsed RFC 3339 instant, including
+UTC offsets; ties use greatest lexical record path, then greatest Command name.
+An unparseable start sorts before every valid time, with the same path/name ties.
+Selection follows the captured Command ownership tree, including dispatched work,
+nested Ticket runs and Base fixes. It does not admit orphaned child records.
+
 The first Scoring run also draws 20 past pull requests across Harness and Model
 pairs, or all eligible work if fewer than 20 exist. They are marked `for_you`
 and graded too. They can predate the weekly window; overlaps with that week's
@@ -1803,6 +1811,10 @@ local Run's `thirdshift show <command> --json` includes
 `command.run_metrics.confirmed_bug_origins`, derived from the latest decisions;
 rejected and unsettled origins contribute zero. Correcting an origin moves
 its attribution to the chosen Run, without rewriting old Command records.
+The saved local record path and Command name remain authoritative: if that pair
+is missing or belongs to a different pull request, metrics count no match rather
+than substituting another Continuation. Only absent or cross-host attribution
+uses latest local selection.
 
 Confirmation also creates a private `proposed` Eval task in the `code-review`
 suite, creating the suite with its usual dependencies when absent. Its local
