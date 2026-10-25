@@ -201,6 +201,25 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
     )
 }
 
+/// The last line of a bug implement session that handed reproduction back
+/// to the reporter, followed by the triage comment's URL.
+pub const BUG_NOT_REPRODUCED_LINE: &str = "Bug not reproduced: ";
+/// The completion line after reproduction, regression testing and PR delivery.
+pub const BUG_REPRODUCED_LINE: &str = "Bug reproduced: fixed";
+
+/// Diagnose first on a bug Ticket run, retaining its fresh or Continuation facts
+/// and its implementation steps for the reproduced ending only.
+pub fn diagnosing_bugs(issue: &IssueUrl, implementation: &str) -> String {
+    format!(
+        "/thirdshift-diagnosing-bugs {url}\n\
+         Use the `thirdshift-diagnosing-bugs` skill before changing code.\n\
+         Follow the skill to one of its two endings. Its not reproduced ending replaces the implementation steps below.\n\
+         Completion lines (the final message's last line): reproduced: `{BUG_REPRODUCED_LINE}`; not reproduced: `{BUG_NOT_REPRODUCED_LINE}<comment URL>`.\n\n\
+         Implementation after reproduction:\n{implementation}",
+        url = issue.url,
+    )
+}
+
 /// A review-only Code review of an Eval task's prepared historical diff.
 pub fn code_review(issue: &IssueUrl, base: &str, branch: &str) -> String {
     format!(
