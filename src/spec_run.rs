@@ -313,6 +313,9 @@ impl Outside for ChildRunsAndGitHub<'_> {
             .expect("the Ticket board has an outstanding Run");
         if let Ok(ended) = &ending {
             progress::step(match ended {
+                Ended::NotReproduced { comment_url } => {
+                    format!("#{number} bug not reproduced: {comment_url}")
+                }
                 Ended::Reached { .. } => format!("#{number} landed"),
                 Ended::Interrupted { .. } => format!("#{number} interrupted"),
                 Ended::Failed { .. } => format!("#{number} failed"),
@@ -759,8 +762,10 @@ mod tests {
             });
             match delivered {
                 Ok(()) => Ok(Reached {
-                    pr_url: SPEC_PR.to_string(),
-                    goal: Goal::ReadyForReview,
+                    resolution: crate::run::Resolution::PullRequest {
+                        url: SPEC_PR.to_string(),
+                        goal: Goal::ReadyForReview,
+                    },
                     log: Some(PathBuf::from(DELIVERY_LOG)),
                     ticket_lines: Vec::new(),
                 }),
@@ -870,7 +875,7 @@ mod tests {
     /// The Failed spec run of `ended`, which must be one.
     fn failed_of(ended: Result<Reached, FailedRun>) -> FailedRun {
         match ended {
-            Ok(reached) => panic!("reached {}", reached.pr_url),
+            Ok(reached) => panic!("reached {}", reached.resolution.url()),
             Err(failed) => failed,
         }
     }
@@ -1464,7 +1469,7 @@ mod tests {
                 Did::Ready,
             ]
         );
-        assert_eq!(reached.pr_url, SPEC_PR);
+        assert_eq!(reached.resolution.url(), SPEC_PR);
         assert_eq!(reached.log, Some(PathBuf::from(DELIVERY_LOG)));
         assert_eq!(reached.ticket_lines, ["#21 landed"]);
     }

@@ -189,6 +189,46 @@ fn history_without_an_introducing_commit_retains_no_guess() {
 }
 
 #[test]
+fn a_failed_session_records_no_commit_keeps_its_artifacts_and_the_window_advances() {
+    let scenario = scenario();
+    let fix = scenario
+        .origin_git(&["rev-parse", "main"])
+        .trim()
+        .to_string();
+    let mut state = scenario.gh_state();
+    state["scoring_bugs"] = json!([bug(8, Some(&fix), 1), bug(9, Some(&fix), 1)]);
+    scenario.write_gh_state(&state);
+    scenario.agent_does(
+        r#"
+if grep -q 'issues/8"' input.json; then echo 'session broke' >&2; exit 1; fi
+printf '%s' '{"commit":null,"reason":"No introducing change is shown."}' > proposal.json
+"#,
+    );
+    let run = score(&scenario);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let week = &weeks(&scenario)[0];
+    let origins = week["bug_origins"].as_array().unwrap();
+    assert_eq!(origins.len(), 2, "{week}");
+    let failed = origins
+        .iter()
+        .find(|origin| origin["issue"] == "https://github.com/acme/widgets/issues/8")
+        .unwrap();
+    assert!(failed["commit"].is_null());
+    assert_eq!(failed["pull_requests"], json!([]));
+    assert!(
+        failed["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Bug-origin session failed"),
+        "{failed}"
+    );
+    let packets = scenario
+        .path("home/.thirdshift/evals/scoring")
+        .join(week["packets"].as_str().unwrap());
+    assert!(packets.join("origins/0/stderr").is_file());
+}
+
+#[test]
 fn security_fixes_get_no_proposal_or_session() {
     let scenario = scenario();
     let fix = scenario

@@ -58,6 +58,7 @@
       <summary class="sec-head"><p class="eyebrow">01 / The human handoff</p><h2 id="handoff-title">Start with work you can describe</h2></summary>
       <div class="guide-content" id="handoff">
       <p>The <strong>Day shift</strong> is you: settle what should change, what success looks like, and what is out of scope. Put that in a GitHub issue. One session's worth of work can stand alone; a larger <strong>Spec</strong> is an issue with <strong>Tickets</strong> as GitHub sub-issues. We'll follow a standalone issue first.</p>
+      <p>For issues labelled <code>bug</code>, a fresh Ticket run or Continuation uses <a href="/prompts/#skill-thirdshift-diagnosing-bugs"><code>/thirdshift-diagnosing-bugs</code></a> before changing code. It captures a failing regression test, then fixes it. If the bug cannot be reproduced, it comments with triage notes, replaces <code>ready-for-agent</code> with <code>needs-info</code> and ends successfully with the comment link, without opening or merging a pull request. Security fixes and Base fixes keep their own flow.</p>
       <figure class="guide-diagram grid-bg">
         <figcaption>Human intent becomes the agent's brief</figcaption>
         <ol class="guide-flow">

@@ -58,11 +58,13 @@ pub const NEEDS_TRIAGE: Label =
 /// fix issue is opened with, and what a Claim takes off.
 pub const READY_FOR_AGENT: Label = Label::new("ready-for-agent", "Ready for an agent to take on");
 
+pub const NEEDS_INFO: Label = Label::new("needs-info", "Waiting on reporter for more information");
+
 /// The triage labels that make an open Ticket an Unready Ticket, in the
 /// order they are looked for.
 pub const UNREADY: [Label; 4] = [
     Label::new("ready-for-human", "Requires human implementation"),
-    Label::new("needs-info", "Waiting on reporter for more information"),
+    NEEDS_INFO,
     Label::new("wontfix", "Will not be actioned"),
     NEEDS_TRIAGE,
 ];
