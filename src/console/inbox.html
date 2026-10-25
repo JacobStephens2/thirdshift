@@ -50,6 +50,7 @@
       <p>Last recorded skipped Passes:</p>
       <ul>{% for pass in inbox.idle_passes %}<li>{{ pass|linkify }}</li>{% endfor %}</ul>
       {% endif %}
+      <ul>{% for pass in inbox.pass_starts %}<li>{% include "console/pass_start.html" %}</li>{% endfor %}</ul>
       <p>Check <a href="/cronjobs">Cron jobs</a> and the scheduler's output for launch failures. Activity logs record skipped Passes; <code>thirdshift status</code> shows their reasons. The Console does not start work.</p>
     </section>
     {% endif %}
@@ -63,6 +64,7 @@
     </details>
     {% endfor %}
     {% if !self.idle() && !inbox.idle_passes.is_empty() %}<aside aria-label="Idle Passes">{% for pass in inbox.idle_passes %}<p>{{ pass|linkify }}</p>{% endfor %}</aside>{% endif %}
+    {% if !self.idle() && !inbox.pass_starts.is_empty() %}<aside aria-label="Last fired Passes">{% for pass in inbox.pass_starts %}<p>{% include "console/pass_start.html" %}</p>{% endfor %}</aside>{% endif %}
     {% endmatch %}
   </main>
   {% include "console/chrome.html" %}
