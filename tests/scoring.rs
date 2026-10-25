@@ -670,26 +670,10 @@ fn setup_completes_scoring_defaults_and_preserves_configured_choices() {
 fn scoring_samples_and_metrics_agree_on_normalized_chronological_attribution() {
     let scenario = scenario();
     scenario.origin_has_commit("main", "feature", "work\n", "Feature");
-    let folder = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");
-    std::fs::create_dir_all(&folder).unwrap();
-    let mut records = Vec::new();
-    for (filename, started_at) in [
-        ("older.command.json", "2026-10-19T01:00:00+02:00"),
-        ("newer.command.json", "2026-10-19T00:30:00Z"),
-    ] {
-        let record = serde_json::json!({
-            "version":1, "kind":"Run", "repository":"acme/widgets", "name":"acme/widgets#7",
-            "issue":{"number":7,"url":scenario.issue_url(7)}, "hostname":"factory",
-            "process_id":0, "process_start":"gone", "harness":"codex", "model":"model", "effort":"high",
-            "started_at":started_at, "ended_at":"2026-10-19T02:00:00Z", "stages":[],
-            "outcome":"ready for review", "session_log":null, "cause":null, "issue_branch":"issue-7",
-            "pull_request":"https://github.com/ACME/WIDGETS/pull/23/"
-        });
-        let path = folder.join(filename);
-        let bytes = serde_json::to_vec(&record).unwrap();
-        std::fs::write(&path, &bytes).unwrap();
-        records.push((path, bytes));
-    }
+    let records = support::scoring::continuations(
+        &scenario,
+        ["2026-10-19T01:00:00+02:00", "2026-10-19T00:30:00Z"],
+    );
     let mut state = scenario.gh_state();
     state["scoring_prs"] = serde_json::json!([pr(23, "acme/widgets", "codex", "model", false)]);
     scenario.write_gh_state(&state);
