@@ -1,0 +1,16 @@
+{% extends "console/account_base.html" %}
+{% block title %}{{ reply.title() }}{% endblock %}
+{% block navigation %}{% endblock %}
+{% block content %}
+<h1>{{ reply.title() }}</h1>
+{% match reply %}
+{% when Reply::SignInRefused %}
+<p>Sign-in failed. <a href="/sign-in">Try again</a>.</p>
+{% when Reply::SignInSlowdown %}
+<p>Sign-in failed. Wait one minute, then <a href="/sign-in">try again</a>.</p>
+{% when Reply::PasswordNotSet %}
+<p>Password not set. Check your code or <a href="/set-password">request another</a>.</p>
+{% when Reply::PasswordOff %}
+{% include "console/password_off.html" %}
+{% endmatch %}
+{% endblock %}
