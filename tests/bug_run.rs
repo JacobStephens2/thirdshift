@@ -1,4 +1,4 @@
-//! Bug Runs diagnose before implementation, and may end needing more information.
+//! Bug Ticket runs diagnose before implementation, and may end needing more information.
 
 mod support;
 
@@ -143,6 +143,24 @@ echo 'Bug not reproduced: https://github.com/acme/widgets/issues/7#issuecomment-
             .first_prompt()
             .contains("Update PR https://github.com/acme/widgets/pull/1")
     );
+}
+
+#[test]
+fn not_reproduced_accepts_canonical_comment_for_leading_zero_issue_url() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
+    scenario.agent_does(r#"
+gh fake labels 7 '["bug", "needs-info", "in-progress"]'
+echo 'Bug not reproduced: https://github.com/acme/widgets/issues/7#issuecomment-42' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#);
+    let input = "https://github.com/acme/widgets/issues/007";
+    let result = scenario.run(&[input, "--merge"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        result.stdout,
+        "https://github.com/acme/widgets/issues/7#issuecomment-42\n"
+    );
+    assert_eq!(scenario.gh_state()["prs"], serde_json::json!([]));
 }
 
 #[test]

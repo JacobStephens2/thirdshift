@@ -44,7 +44,7 @@ impl Goal {
     }
 }
 
-/// A successful Run ending: a delivered PR, or a bug handed back for information.
+/// A successful Ticket run ending: a PR, or a bug handed back for information.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Resolution {
     PullRequest { url: String, goal: Goal },
@@ -68,7 +68,7 @@ impl Resolution {
     }
 }
 
-/// A Run, or a Spec run, that completed without failure.
+/// A Ticket run, or a Spec run, that completed without failure.
 pub struct Reached {
     pub resolution: Resolution,
     /// The most recent session's log, if a session was started.

@@ -76,7 +76,7 @@ pub struct Opening {
 pub enum OpeningSession {
     /// A Run's implement session.
     Implementation,
-    /// A bug Run diagnoses before implementing, and may need information.
+    /// A bug Ticket run diagnoses before implementing, and may need information.
     BugDiagnosis,
     /// A Spec run's Spec review, once its Tickets have landed.
     SpecReview,
@@ -224,13 +224,15 @@ fn not_reproduced(issue: &IssueUrl, final_message: Option<&str>) -> Result<Optio
     let url = line
         .strip_prefix(prompt::BUG_NOT_REPRODUCED_LINE)
         .context("bug diagnosis ended without a reproduced or not reproduced completion line")?;
-    let prefix = format!("{}#issuecomment-", issue.url.trim_end_matches('/'));
     anyhow::ensure!(
-        url.strip_prefix(&prefix).is_some_and(|id| {
-            !id.is_empty()
-                && id.bytes().all(|b| b.is_ascii_digit())
-                && id.parse::<u64>().is_ok_and(|n| n > 0)
-        }),
+        url.split_once("#issuecomment-")
+            .is_some_and(|(comment_issue, id)| {
+                IssueUrl::parse(comment_issue)
+                    .is_ok_and(|comment_issue| comment_issue.identity() == issue.identity())
+                    && !id.is_empty()
+                    && id.bytes().all(|b| b.is_ascii_digit())
+                    && id.parse::<u64>().is_ok_and(|n| n > 0)
+            }),
         "bug not reproduced ending must link a comment on {}",
         issue.url
     );
