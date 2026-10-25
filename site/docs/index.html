@@ -1638,7 +1638,10 @@ intervals and asks <code>release anyway? [y/N]</code>, including without <code>-
 Only <code>y</code> or <code>yes</code> continues; EOF or any other answer stops. Pending borderline
 and decisive Scores are listed with their recheck commands and polled until
 you have rechecked them. No touched suite or a last release with no Trial flag
-prints a note and carries on. An interrupted invocation resumes its saved
+prints a note and carries on. <code>--no-experiment</code> skips the release Experiment
+outright, on the first run and on every resume, and prints a line saying so:
+use it only when an Experiment can&#39;t give a Verdict worth its Trials, such as
+while every Trial is known to be void. An interrupted invocation resumes its saved
 Trials. A pushed bump branch is checked again before opening its PR, and an
 open or merged bump PR before merging or tagging. An already pushed tag only
 resumes the release workflow. Python 3 is needed to read the Experiment results.</p>

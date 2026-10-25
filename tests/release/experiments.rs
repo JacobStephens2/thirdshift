@@ -196,6 +196,28 @@ fn resume_reuses_the_content_commit_and_checks_a_pushed_branch_before_opening_it
 }
 
 #[test]
+fn no_experiment_releases_without_running_one_and_says_so() {
+    for args in [
+        &["--no-experiment", "0.2.0"][..],
+        &["--review", "--no-experiment", "0.2.0"][..],
+        &["--no-experiment", "--review", "0.2.0"][..],
+    ] {
+        let release = Release::new();
+        cargo_reports(&release, &[]);
+        release.ci_reports(GREEN);
+        let output = release.run_script_with(args, "y\n", &[]);
+        let err = unstamped(&output);
+        assert!(output.status.success(), "{args:?}: {err}");
+        assert!(
+            err.contains("skipping the release Experiment (--no-experiment)"),
+            "{err}"
+        );
+        assert!(calls(&release).is_empty(), "{args:?} ran an Experiment");
+        assert!(release.origin_tag("v0.2.0").is_some());
+    }
+}
+
+#[test]
 fn skipped_experiments_carry_on_with_a_note() {
     for (code, reason) in [
         ("no_suites", "no Eval suite touched"),
