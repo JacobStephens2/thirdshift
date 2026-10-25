@@ -127,6 +127,31 @@ fn account_pages_and_sign_in_follow_the_configured_theme() {
 }
 
 #[test]
+fn a_refused_sign_in_reply_uses_the_configured_console_theme() {
+    let home = configured();
+    assert!(
+        cli(home.path(), &["console", "theme", "garden-dark"])
+            .status
+            .success()
+    );
+    let console = Console::start_mode(
+        Path::new(env!("CARGO_BIN_EXE_thirdshift")),
+        home.path(),
+        false,
+    );
+    let response = sign_in(&console, EMAIL, "wrong");
+    assert_eq!(response.status(), 401);
+    let html = response.text().unwrap();
+    assert!(html.contains("data-theme=\"garden-dark\""), "{html}");
+    assert!(html.contains("<!doctype html>"), "{html}");
+    assert!(html.contains("href=\"/assets/console.css\""), "{html}");
+    assert!(
+        html.contains("Sign-in failed. <a href=\"/sign-in\">Try again</a>."),
+        "{html}"
+    );
+}
+
+#[test]
 fn sign_in_guards_pages_streams_and_actions_and_pairs_the_console_log_with_cli() {
     let home = configured();
     let (status, _) = password(home.path(), None, PASSWORD, PASSWORD);
@@ -423,6 +448,11 @@ fn cli_and_allowlist_changes_revoke_http_sessions_without_deleting_the_account()
 #[test]
 fn http_slowdown_survives_restarts_and_allowed_accounts_still_need_a_password() {
     let home = configured();
+    assert!(
+        cli(home.path(), &["console", "theme", "garden-dark"])
+            .status
+            .success()
+    );
     let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
     let console = Console::start_mode(binary, home.path(), false);
     assert_eq!(
@@ -437,6 +467,14 @@ fn http_slowdown_survives_restarts_and_allowed_accounts_still_need_a_password() 
     let response = sign_in(&console, EMAIL, PASSWORD);
     assert_eq!(response.status(), 429);
     assert_eq!(response.headers()["retry-after"], "60");
+    let html = response.text().unwrap();
+    assert!(html.contains("data-theme=\"garden-dark\""), "{html}");
+    assert!(html.contains("<!doctype html>"), "{html}");
+    assert!(html.contains("href=\"/assets/console.css\""), "{html}");
+    assert!(
+        html.contains("Sign-in failed. Wait one minute, then <a href=\"/sign-in\">try again</a>."),
+        "{html}"
+    );
     drop(console);
     let console = Console::start_mode(binary, home.path(), false);
     assert_eq!(sign_in(&console, EMAIL, PASSWORD).status(), 429);
