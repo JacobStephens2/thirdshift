@@ -38,6 +38,7 @@ pub fn run(name: &str, issue: Option<IssueInput>) -> Result<String> {
             delivery::hand_over_issue(issue, worktree.path())?;
         }
         let prompt = prompt::skill(&skill.name, &skill.path, issue.as_ref());
+        crate::resources::wait()?;
         progress::step(format_args!("running {} with {choice}", skill.name));
         let invocation = adapter.session(&choice, None, &prompt);
         let executed = process::streaming(
@@ -46,6 +47,7 @@ pub fn run(name: &str, issue: Option<IssueInput>) -> Result<String> {
                 .args(invocation.args)
                 .current_dir(worktree.path()),
             invocation.stdin.as_deref(),
+            None,
             adapter.interpretation(worktree.path(), &prompt),
             |output, interpretation| {
                 for line in BufReader::new(output).lines() {

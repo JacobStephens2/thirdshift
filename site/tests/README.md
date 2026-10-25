@@ -12,6 +12,13 @@ npm test
 The tests start a local server on an unused port and close it and the browser
 before exiting. CI runs them in the `site-test` job.
 
+After a click, key press or navigation, a test waits for the state it expects
+rather than reading it once: `locator.waitFor({ state })` for visibility, an open
+fold or an inserted element, `page.waitForURL` for the address, and the suite's
+`waitUntil` for a reading no locator expresses, such as scroll position. A
+snapshot read such as `isVisible()` races the page's handlers. The waits use
+Playwright's default timeout, and the runner adds no retries.
+
 The page tests also consume the site without JavaScript to check canonical URLs,
 distinct search metadata, homepage site-name structured data and sitemap discovery
 through `robots.txt`. When adding a public page, give it a canonical URL and unique

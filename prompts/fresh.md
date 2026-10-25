@@ -2,13 +2,13 @@
 
 # Fresh
 
-Starts the implement session, which goes on to review and open the pull request, when the Run starts a new Issue branch.
+Starts the implement session, which goes on to review and open the pull request, when the Ticket run starts a new Issue branch.
 
 ```
 /thirdshift-implement <Issue URL>
 The base branch is <base>. Review with the `thirdshift-code-review` skill using <base> as the fixed point.
 For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with.
-Write the reviewers' reports, with each axis's final files-read list, to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec).
+Write the reviewers' reports, with each axis's final files-read list, to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec). Write `<review reports directory>/summary.json` beside them with the finding counts, following the `thirdshift-code-review` skill's summary format.
 Push branch <branch> and create a pull request against <base> using the `thirdshift-pr` skill, marked ready for review.
 In the PR body, add an "Unaddressed findings" section listing each skipped finding under Standards or Spec, with the line of code, plan decision, ADR or run that refutes each finding. If you decline a finding because a Spec or the Day shift must decide, file a `needs-triage` issue unless an open issue already covers it, and link the issue from the entry. The issue must say what the finding is, its evidence, which pull request raised it, and why the call is not yours to make. Give a new issue only the `needs-triage` label so it pauses nothing. Name in the pull request body any changed file the review left unread.
 Include "Closes #<n>" in the PR body.
@@ -18,5 +18,5 @@ For source edits, prefer an available structured patch/edit tool that makes the 
 
 Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.
 
-You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on. thirdshift records this session as a Session trace, with Model evidence and any review reports beside it.
 ```

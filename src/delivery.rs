@@ -34,7 +34,7 @@ use crate::issue::IssueUrl;
 use crate::progress;
 use crate::prompt;
 use crate::recovery::{self, Preservation, Recovery};
-use crate::run::{Goal, Reached};
+use crate::run::{Goal, Reached, Resolution};
 use crate::run_ending::Cause;
 use crate::security::review::{Hold as SecurityHold, Outcome as SecurityOutcome, Review};
 use crate::session::{Kind, Logs, Sessions};
@@ -58,7 +58,7 @@ pub struct Delivery<'a> {
     /// The one Base fix the Delivery may start, or wait on, when its only red
     /// checks are Inherited failures.
     pub base_fix: &'a mut BaseFix,
-    /// Where its Session logs go.
+    /// Where its Session traces go.
     pub logs: &'a Logs,
     /// When the Run began: an untrusted edit to `issue` made since then
     /// starts no further session.
@@ -76,6 +76,8 @@ pub struct Opening {
 pub enum OpeningSession {
     /// A Run's implement session.
     Implementation,
+    /// A bug Ticket run diagnoses before implementing, and may need information.
+    BugDiagnosis,
     /// A Spec run's Spec review, once its Tickets have landed.
     SpecReview,
 }
@@ -84,7 +86,7 @@ impl OpeningSession {
     /// The session's kind.
     pub fn kind(self) -> Kind {
         match self {
-            Self::Implementation => Kind::Implementation,
+            Self::Implementation | Self::BugDiagnosis => Kind::Implementation,
             Self::SpecReview => Kind::SpecReview,
         }
     }
@@ -97,7 +99,7 @@ impl OpeningSession {
 
     fn stage(self) -> Stage {
         match self {
-            Self::Implementation => Stage::Implementation,
+            Self::Implementation | Self::BugDiagnosis => Stage::Implementation,
             Self::SpecReview => Stage::SpecReview,
         }
     }
@@ -147,6 +149,7 @@ impl Delivery<'_> {
             worktree.path(),
             &self.child_asks.harness,
             self.child_asks.security_review_harness.as_ref(),
+            self.child_asks.security_review_default.as_ref(),
             &before_each,
             |sessions| {
                 let mut outside = InWorktree {
@@ -162,10 +165,9 @@ impl Delivery<'_> {
                 route.steps(&mut outside, &opening, checklist)
             },
         );
-        match delivered {
-            Ok(pr_url) => Ok(Reached {
-                pr_url,
-                goal: self.goal,
+        let result = match delivered {
+            Ok(resolution) => Ok(Reached {
+                resolution,
                 log,
                 ticket_lines: Vec::new(),
             }),
@@ -174,23 +176,28 @@ impl Delivery<'_> {
                     && worktree.fully_landed_at(&merged.head).unwrap_or(false)
                 {
                     progress::step("the pull request was merged while Delivery was running");
-                    return Ok(Reached {
-                        pr_url: merged.pr.url.clone(),
-                        goal: Goal::Merged,
+                    Ok(Reached {
+                        resolution: Resolution::PullRequest {
+                            url: merged.pr.url.clone(),
+                            goal: Goal::Merged,
+                        },
                         log,
                         ticket_lines: Vec::new(),
-                    });
+                    })
+                } else {
+                    let stopped_at = stopped_at(&tracker, &error);
+                    let path = worktree.path().to_path_buf();
+                    let mut outside = OnFailure {
+                        base: self.base,
+                        worktree,
+                        pull_request,
+                    };
+                    Err(fail(&mut outside, stopped_at, path, log, error))
                 }
-                let stopped_at = stopped_at(&tracker, &error);
-                let path = worktree.path().to_path_buf();
-                let mut outside = OnFailure {
-                    base: self.base,
-                    worktree,
-                    pull_request,
-                };
-                Err(fail(&mut outside, stopped_at, path, log, error))
             }
-        }
+        };
+        crate::logs::unaddressed_findings(pull_request.unaddressed_findings());
+        result
     }
 }
 
@@ -205,6 +212,33 @@ struct Route<'a> {
     harness: &'a Choice,
 }
 
+/// Read one of the two explicit diagnosis completion lines. Missing or
+/// malformed handoffs fail instead of falling through to publication.
+fn not_reproduced(issue: &IssueUrl, final_message: Option<&str>) -> Result<Option<String>> {
+    let line = final_message
+        .and_then(|message| message.trim_end().lines().last())
+        .unwrap_or("");
+    if line == prompt::BUG_REPRODUCED_LINE {
+        return Ok(None);
+    }
+    let url = line
+        .strip_prefix(prompt::BUG_NOT_REPRODUCED_LINE)
+        .context("bug diagnosis ended without a reproduced or not reproduced completion line")?;
+    anyhow::ensure!(
+        url.split_once("#issuecomment-")
+            .is_some_and(|(comment_issue, id)| {
+                IssueUrl::parse(comment_issue)
+                    .is_ok_and(|comment_issue| comment_issue.identity() == issue.identity())
+                    && !id.is_empty()
+                    && id.bytes().all(|b| b.is_ascii_digit())
+                    && id.parse::<u64>().is_ok_and(|n| n > 0)
+            }),
+        "bug not reproduced ending must link a comment on {}",
+        issue.url
+    );
+    Ok(Some(url.to_string()))
+}
+
 impl Route<'_> {
     /// [`Delivery::deliver`]'s steps, through `outside`, in order: catch up
     /// from origin if `opening` says to, the opening session, the push, the
@@ -216,13 +250,19 @@ impl Route<'_> {
         outside: &mut O,
         opening: &Opening,
         checklist: Option<&str>,
-    ) -> Result<String> {
+    ) -> Result<Resolution> {
         let session = opening.session;
         if session.catches_up_from_origin() {
             outside.catch_up()?;
         }
         outside.stage(session.stage());
-        outside.session(session.kind(), &opening.prompt)?;
+        let final_message = outside.session(session.kind(), &opening.prompt)?;
+        if session == OpeningSession::BugDiagnosis
+            && let Some(comment_url) = not_reproduced(self.issue, final_message.as_deref())?
+        {
+            outside.confirm_needs_info()?;
+            return Ok(Resolution::NotReproduced { comment_url });
+        }
         let review = match self.security_review.then(|| {
             outside.stage(Stage::SecurityReview);
             outside.security_review(&prompt::security_review(self.issue, self.base, self.branch))
@@ -263,7 +303,10 @@ impl Route<'_> {
         if self.goal == Goal::Merged {
             self.after_merge(outside, &pr);
         }
-        Ok(pr.url)
+        Ok(Resolution::PullRequest {
+            url: pr.url,
+            goal: self.goal,
+        })
     }
 
     /// Write the line that says the pull request was built with the Harness
@@ -271,11 +314,10 @@ impl Route<'_> {
     /// warning if that fails, as the work is done without it. Nothing if
     /// there is no pull request: marking it ready says so.
     fn write_built_with(&self, outside: &mut impl Outside) {
-        let built_with = self.harness.built_with();
         if let Err(error) = outside.write_built_with(self.harness) {
             outside.warn(
                 &error,
-                format!("could not write \"{built_with}\" in the pull request's body"),
+                "could not write the Built-with line in the pull request's body".into(),
             );
         }
     }
@@ -299,7 +341,7 @@ impl Route<'_> {
             );
         }
         let comment = format!(
-            "Closed by #{}, merged into {} by a thirdshift Merge run.",
+            "Closed by #{}, merged into {} by a thirdshift Ticket run with Self-merge.",
             pr.number, self.base
         );
         if let Err(error) = retry_if_interrupted(outside, |outside| {
@@ -351,8 +393,8 @@ fn retry_if_interrupted<O: Outside>(
 /// head whose CI was watched. Problems along the way are reported, not
 /// raised, so the error is what the Run fails with. Worktree owns preservation
 /// and retains work that may not have reached origin. `log` is the most recent
-/// Session log, if a session created one, which the Failed run reports unless
-/// the error is a Security hold with its review's own Session log: a hold is
+/// Session trace, if a session created one, which the Failed run reports unless
+/// the error is a Security hold with its review's own Session trace: a hold is
 /// raised only after the Repair loop, whose sessions may have run since.
 /// `stopped_at` is the stage its recovery lines report; `worktree`, where work
 /// preserved only locally is.
@@ -383,7 +425,7 @@ fn fail(
             Ok(Preserved::NoChanges) => Preservation::None,
             Err(problem) => {
                 outside.step(format!(
-                    "could not push the failed run's work, so it may exist only locally: {problem:#}"
+                    "could not push the failed ticket run's work, so it may exist only locally: {problem:#}"
                 ));
                 Preservation::Local
             }
@@ -426,8 +468,10 @@ trait Outside {
     /// Fast-forward the Issue branch to its head on origin.
     fn catch_up(&mut self) -> Result<()>;
     /// Run a session of `kind` given `prompt`.
-    fn session(&mut self, kind: Kind, prompt: &str) -> Result<()>;
-    /// Run the Security review given `prompt`, with its Session log, its
+    fn session(&mut self, kind: Kind, prompt: &str) -> Result<Option<String>>;
+    /// The diagnosis session completed its label handoff.
+    fn confirm_needs_info(&mut self) -> Result<()>;
+    /// Run the Security review given `prompt`, with its Session trace, its
     /// Resume's if it got one, if it started a session.
     fn security_review(&mut self, prompt: &str) -> (Result<Review>, Option<PathBuf>);
     fn record_security_review(&mut self, review: &SecurityOutcome) -> Result<()>;
@@ -507,7 +551,7 @@ impl std::fmt::Display for UntrustedEdit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "#{} {} edited since the Run started by an account that is not a Trusted account; starting no further session",
+            "#{} {} edited since the Ticket run started by an account that is not a Trusted account; starting no further session",
             self.number, self.text
         )
     }
@@ -538,13 +582,31 @@ impl Outside for InWorktree<'_> {
         self.worktree.fast_forward_to_origin()
     }
 
-    fn session(&mut self, kind: Kind, prompt: &str) -> Result<()> {
-        self.sessions.run(kind, prompt)?;
-        self.pull_request.ensure_actionable(false)
+    fn session(&mut self, kind: Kind, prompt: &str) -> Result<Option<String>> {
+        let final_message = self.sessions.run(kind, prompt)?;
+        self.pull_request.ensure_actionable(false)?;
+        Ok(final_message)
+    }
+
+    fn confirm_needs_info(&mut self) -> Result<()> {
+        let labels = GitHub::new().issue_labels(self.issue)?;
+        anyhow::ensure!(
+            labels.has(crate::labels::NEEDS_INFO) && !labels.has(crate::labels::READY_FOR_AGENT),
+            "bug not reproduced ending requires needs-info with ready-for-agent absent"
+        );
+        Ok(())
     }
 
     fn security_review(&mut self, prompt: &str) -> (Result<Review>, Option<PathBuf>) {
         let review = self.review_while_actionable(prompt);
+        if !review
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.is::<UntrustedEdit>())
+        {
+            self.pull_request
+                .security_reviewed(review.as_ref().map_or(1, |review| review.findings.len()));
+        }
         (review, self.sessions.last_log_of(Kind::SecurityReview))
     }
 
@@ -673,6 +735,21 @@ struct RunOutside<'a> {
     ci_watch: ci::Watch<'a>,
 }
 
+impl RunOutside<'_> {
+    /// A Repair or Base fix may have reported a new Harness version. Refresh
+    /// attribution while the PR is still actionable, before any Self-merge.
+    fn refresh_built_with(&mut self) -> Result<()> {
+        self.pull_request.ensure_actionable(true)?;
+        if let Err(error) = self.pull_request.write_built_with(&self.child_asks.harness) {
+            progress::warn(
+                &error,
+                format_args!("could not write the Built-with line in the pull request's body"),
+            );
+        }
+        Ok(())
+    }
+}
+
 impl repair_loop::Outside for RunOutside<'_> {
     type Pending = PendingMerge;
 
@@ -743,8 +820,9 @@ impl repair_loop::Outside for RunOutside<'_> {
             Repair::Review { from } => prompt::review_repair(issue, branch, pr_url, from),
         };
         self.pull_request.ensure_actionable(true)?;
-        self.sessions.run(kind, &prompt)?;
-        self.pull_request.ensure_actionable(true)
+        let result = self.sessions.run(kind, &prompt);
+        let refreshed = self.refresh_built_with();
+        result.and(refreshed)
     }
 
     fn sees_inherited_failures(&mut self) -> bool {
@@ -757,8 +835,11 @@ impl repair_loop::Outside for RunOutside<'_> {
             issue: self.issue,
             asks: self.child_asks,
         };
-        self.base_fix
-            .fix(outside, self.pr_url, self.base, base_commit, failed)
+        let result = self
+            .base_fix
+            .fix(outside, self.pr_url, self.base, base_commit, failed);
+        let refreshed = self.refresh_built_with();
+        result.and(refreshed)
     }
 
     fn pr_mergeable(&mut self) -> Result<bool> {
@@ -874,10 +955,13 @@ mod tests {
             self.calls.push(Call::CatchUp);
             self.check(Fails::CatchUp)
         }
-        fn session(&mut self, kind: Kind, _: &str) -> Result<()> {
+        fn session(&mut self, kind: Kind, _: &str) -> Result<Option<String>> {
             self.calls.push(Call::Session(kind));
             self.log = Some(PathBuf::from(format!("/logs/{}.jsonl", kind.token())));
-            self.check(Fails::Session)
+            self.check(Fails::Session).map(|()| None)
+        }
+        fn confirm_needs_info(&mut self) -> Result<()> {
+            Ok(())
         }
         fn push(&mut self) -> Result<()> {
             self.calls.push(Call::Push);
@@ -970,6 +1054,7 @@ mod tests {
         };
         route
             .steps(outside, &opening, spec.then_some("Tickets"))
+            .map(|resolution| resolution.url().to_string())
             .map_err(|error| {
                 // The real adapters enter each stage the steps name.
                 let tracker = Tracker::new(opening.session.stage(), Recorded::default());
@@ -1050,9 +1135,12 @@ mod tests {
         let mut outside = Scripted::default();
         assert!(deliver(&mut outside, Goal::Merged, false).is_ok());
         assert!(outside.calls.contains(&Call::Delete));
-        assert!(outside.calls.contains(&Call::Close(
-            "Closed by #12, merged into main by a thirdshift Merge run.".to_string()
-        )));
+        assert!(
+            outside.calls.contains(&Call::Close(
+                "Closed by #12, merged into main by a thirdshift Ticket run with Self-merge."
+                    .to_string()
+            ))
+        );
     }
 
     #[test]
@@ -1268,7 +1356,7 @@ mod tests {
     #[test]
     fn a_failure_after_a_repair_reports_the_most_recent_session_log() {
         // A failing Repair session, or a cause no session gave, as with
-        // Repairs exhausted, is reported with the most recent Session log,
+        // Repairs exhausted, is reported with the most recent Session trace,
         // whether or not a Security review ran before it.
         for reviews_security in [false, true] {
             let mut outside = Scripted {

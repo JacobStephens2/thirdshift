@@ -161,7 +161,8 @@ fn merge_into_develop(scenario: &Scenario, then: &str) {
     ));
 }
 
-const CLOSING_COMMENT: &str = "Closed by #1, merged into develop by a thirdshift Merge run.";
+const CLOSING_COMMENT: &str =
+    "Closed by #1, merged into develop by a thirdshift Ticket run with Self-merge.";
 
 /// Assert that `base`'s tip on origin is a merge commit of the head commit
 /// thirdshift asked `gh pr merge` to match, and return that head.
@@ -406,7 +407,7 @@ fn an_issue_close_failure_links_the_issue_and_keeps_the_manual_close_command() {
             "could not close issue #7 (https://github.com/acme/widgets/issues/7), \
              so if it is still open, close it by hand: \
              gh issue close 7 --repo acme/widgets --comment \
-             'Closed by #1, merged into develop by a thirdshift Merge run.'"
+             'Closed by #1, merged into develop by a thirdshift Ticket run with Self-merge.'"
         ),
         "stderr: {}",
         result.stderr
@@ -862,7 +863,7 @@ fn an_empty_foreign_review_does_not_bounce_but_a_later_changed_batch_is_reviewed
     );
     assert_eq!(
         scenario.gh_state()["prs"][0]["body"],
-        "Closes #7\n\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\n"
+        "Closes #7\n\nBuilt with claude 9.8.7 · default model · default effort <!-- thirdshift:built-with -->\n"
     );
     scenario.assert_cleaned_up("issue-7");
 }
@@ -902,7 +903,7 @@ rm -rf "$other"
     assert_issue_7_merged_into(&scenario, "main");
     assert_eq!(
         scenario.gh_state()["prs"][0]["body"],
-        "Closes #7\n\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\n"
+        "Closes #7\n\nBuilt with claude 9.8.7 · default model · default effort <!-- thirdshift:built-with -->\n"
     );
     scenario.assert_cleaned_up("issue-7");
 }
@@ -958,7 +959,7 @@ rm -rf "$other"
     assert_review_repair_from(&calls[2]["prompt"], &restored);
     assert_eq!(
         scenario.gh_state()["prs"][0]["body"],
-        "Closes #7\n\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\n"
+        "Closes #7\n\nBuilt with claude 9.8.7 · default model · default effort <!-- thirdshift:built-with -->\n"
     );
     assert_eq!(
         scenario.origin_file("main", "first.txt").unwrap(),
@@ -1061,7 +1062,7 @@ fn a_review_repair_whose_background_work_was_killed_gets_a_resume() {
     let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
     assert!(
         logs.iter()
-            .any(|log| log.ends_with("-repair-1-resume.jsonl")),
+            .any(|log| log.ends_with("-repair-1-resume.logs.jsonl")),
         "logs: {logs:?}"
     );
 }
@@ -1091,7 +1092,7 @@ fn an_untrusted_edit_while_the_run_is_under_way_starts_no_repair() {
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert!(
         result.stderr.contains(
-            "#7 body edited since the Run started by an account that is not a Trusted account; starting no further session"
+            "#7 body edited since the Ticket run started by an account that is not a Trusted account; starting no further session"
         ),
         "stderr: {}",
         result.stderr
@@ -1199,7 +1200,9 @@ fn a_merge_refused_with_nothing_left_to_fix_leaves_the_pr_ready_for_review() {
 fn a_merge_run_ends_with_the_issue_closed_and_its_claim_removed() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
-    scenario.agent_does(AGENT_OPENS_PR);
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}echo 'Bug reproduced: fixed' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n"
+    ));
 
     let result = scenario.run(&["merge", &scenario.issue_url(7)]);
 

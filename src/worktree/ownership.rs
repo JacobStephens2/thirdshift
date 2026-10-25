@@ -111,7 +111,7 @@ impl Checkout {
         let branch = self
             .branch
             .as_deref()
-            .context("Failed run preservation requires an acquired Issue branch")?;
+            .context("Failed ticket run preservation requires an acquired Issue branch")?;
         operation.verify_repository()?;
         let _lock = lock_launch(&operation.launch).with_context(|| operation.context.clone())?;
         let _refs_lock = operation
@@ -127,7 +127,7 @@ impl Checkout {
         let has_work = !operation.succeeds(&["diff", "--cached", "--quiet", &base])?;
         if has_work {
             let message = format!(
-                "thirdshift: failed run ({reason})\n\n\
+                "thirdshift: failed ticket run ({reason})\n\n\
                  {timestamp}, host {host}. Uncommitted work at the time of failure is included in this commit.",
                 timestamp = Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
                 host = host::name().as_deref().unwrap_or("unknown"),
@@ -178,7 +178,11 @@ impl Checkout {
         let launch = launch.completion();
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if kept {
-                self.retain(&launch, "Failed run preservation did not finish", true);
+                self.retain(
+                    &launch,
+                    "Failed ticket run preservation did not finish",
+                    true,
+                );
                 return;
             }
             progress::step(match &self.branch {

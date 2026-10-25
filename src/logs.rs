@@ -1,6 +1,6 @@
 //! A command's record in its repository's logs: its stamp, its Command log
 //! and its lines in the Activity log, all under the root of the repository's
-//! logs, `<logs.dir>/<owner>/<repo>/`, with its Session logs.
+//! logs, `<logs.dir>/<owner>/<repo>/`, with its Session traces.
 //!
 //! A command says how it [`begin`]s, that it is [`configured`], what work it
 //! [`started`], what pass was [`skipped`], and how it [`ended`]; this module
@@ -13,18 +13,27 @@
 
 mod activity;
 mod command_record;
-pub(crate) mod convert;
+pub mod dismiss;
 mod effects;
 pub mod export;
+pub(crate) mod github;
+pub mod metrics;
 pub(crate) mod owner;
+pub(crate) mod pass_starts;
 mod process_identity;
 mod reading;
+pub(crate) use reading::Framing;
 pub(crate) use reading::catalog;
+pub(crate) use reading::run_for_pull_request;
 mod recording;
+mod run_metrics;
 pub(crate) mod session;
+pub(crate) mod session_signals;
+pub(crate) mod spans;
 pub mod status;
 pub mod stop;
 pub(crate) mod trace;
+mod usual_range;
 
 use std::fmt::{self, Display};
 use std::path::{Path, PathBuf};
@@ -38,17 +47,43 @@ use crate::session::Logged;
 
 use activity::Kind;
 pub use command_record::StageName as Stage;
-pub(crate) use command_record::{TicketRecord, TicketState};
+pub(crate) use command_record::{TicketRecord, TicketState, experiment_rechecked};
 use effects::OnMachine;
 use recording::Record;
 
-/// The command typed, which owns its Session logs and all child Runs' logs.
+/// The Unix actor recorded for a CLI action, shared by Stop and Dismissal.
+fn unix_user(action: &str) -> anyhow::Result<String> {
+    use anyhow::Context;
+
+    let failure = format!("could not identify the Unix user asking for {action}");
+    let user = std::process::Command::new("id")
+        .arg("-un")
+        .output()
+        .with_context(|| failure.clone())?;
+    if !user.status.success() {
+        anyhow::bail!(failure);
+    }
+    Ok(String::from_utf8(user.stdout)?.trim().to_owned())
+}
+
+/// Human-facing names for stable stored kinds and dispatch stages (ADR 0022).
+pub(crate) fn display_name(stored: &str) -> &str {
+    match stored {
+        "Run" => "Ticket run",
+        "dispatched Run" => "dispatched Ticket run",
+        other => other,
+    }
+}
+
+/// The command typed, which owns its Session traces and all child Runs' logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CommandKind {
     Issue,
     Architect,
     Pickup,
     Secure,
+    Scoring,
+    Experiment,
 }
 
 impl CommandKind {
@@ -58,6 +93,8 @@ impl CommandKind {
             Self::Architect => "architect",
             Self::Pickup => "pickup",
             Self::Secure => "secure",
+            Self::Scoring => "scoring",
+            Self::Experiment => "experiment",
         }
     }
 
@@ -67,6 +104,8 @@ impl CommandKind {
             "architect" => Some(Self::Architect),
             "pickup" => Some(Self::Pickup),
             "secure" => Some(Self::Secure),
+            "scoring" => Some(Self::Scoring),
+            "experiment" => Some(Self::Experiment),
             _ => None,
         }
     }
@@ -85,6 +124,8 @@ pub enum Begin<'a> {
     /// `thirdshift pickup`, a pass.
     PickupRun,
     SecurityRun,
+    ScoringRun,
+    Experiment,
 }
 
 /// The work a command starts.
@@ -102,23 +143,37 @@ pub enum Work<'a> {
     ArchitectRun(&'a Repo),
     /// A Security run, on its repository.
     SecurityRun(&'a Repo),
+    ScoringRun(&'a Repo),
+    Experiment(&'a Repo),
 }
 
 /// A Pass, a command that may be skipped before it starts work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Pass {
     Architect,
     Pickup,
     Security,
 }
 
+impl Pass {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Architect => "Architect",
+            Self::Pickup => "Pickup",
+            Self::Security => "Security",
+        }
+    }
+}
+
 impl Display for Pass {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(match self {
-            Pass::Architect => "Architect run",
-            Pass::Pickup => "Pickup run",
-            Pass::Security => "Security run",
-        })
+        write!(f, "{} run", self.name())
+    }
+}
+
+impl serde::Serialize for Pass {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
     }
 }
 
@@ -173,6 +228,11 @@ pub fn configured(config: &UserConfig) {
     record().configured(config);
 }
 
+/// Keep the Pass's latest start once its repository is known, before gates.
+pub(crate) fn pass_fired(repo: &Repo) {
+    record().pass_fired(repo);
+}
+
 /// Record that the command starts `work`, its sessions on `harness`: keep its
 /// Command log, showing any lines held from the terminal, with a line naming
 /// the Harness, Model and Effort, then write the Activity log's line that it
@@ -210,7 +270,7 @@ pub fn stage(stage: Stage) {
     record().stage(stage, None);
 }
 
-/// Keep the current Session log, including a Resume's own log, as
+/// Keep the current Session trace, including a Resume's own log, as
 /// `session` enters its stage.
 pub fn session(session: Logged, path: &Path) {
     record().stage(session.stage(), Some(path));
@@ -221,9 +281,22 @@ pub fn issue_branch(branch: Option<&str>) {
     record().issue_branch(branch);
 }
 
+/// Retain Delivery's final counts for the active Run's completion metrics.
+pub(crate) fn unaddressed_findings(counts: Option<crate::pull_request::UnaddressedFindings>) {
+    record().unaddressed_findings(counts);
+}
+
 /// Complete the durable facts from the same account used by other renderers.
 pub fn finished(account: &crate::run_ending::Account<'_>) {
     record().finished(account);
+}
+
+pub(crate) fn experiment(description: &crate::evals::experiment::Description) {
+    record().experiment(description);
+}
+
+pub(crate) fn experiment_finished(outcome: &str, cause: Option<&str>) {
+    record().experiment_finished(outcome, cause);
 }
 
 /// The Stop given to this Command, if interruption is being handled.
@@ -252,7 +325,7 @@ pub fn show_held() {
 
 /// The root of `repo`'s logs: `<logs.dir>/<owner>/<repo>/`, named for the
 /// GitHub repository, not the checkout, so every checkout of it logs to the
-/// same place. Its Command logs, Session logs and Activity log are all under
+/// same place. Its Command logs, Session traces and Activity log are all under
 /// it.
 ///
 /// # Panics
@@ -262,12 +335,17 @@ pub fn root(repo: &Repo) -> PathBuf {
     record().root(repo)
 }
 
-/// The command whose folder holds this process's Session logs.
+/// The command whose folder holds this process's Session traces.
 pub fn command_kind() -> CommandKind {
     record().command_kind()
 }
 
-/// Where this command and all its child Runs keep Session logs on `repo`.
+/// Resolve a locally retained Run by its pull request, including child Runs.
+pub(crate) fn record_for_pull_request(root: &Path, url: &str) -> anyhow::Result<Option<PathBuf>> {
+    Ok(run_for_pull_request(root, url)?.map(|(path, _)| path))
+}
+
+/// Where this command and all its child Runs keep Session traces on `repo`.
 pub fn session_dir(repo: &Repo) -> PathBuf {
     let record = record();
     record
@@ -277,7 +355,7 @@ pub fn session_dir(repo: &Repo) -> PathBuf {
 }
 
 /// The command's start stamp, as in `20261003T120000-0400`, which names its
-/// Command log and its Session logs.
+/// Command log and its Session traces.
 pub fn stamp() -> String {
     record().stamp()
 }
@@ -320,7 +398,9 @@ impl<'a> Work<'a> {
             Work::Run(_) | Work::BaseFix(_) => Some(Stage::Implement),
             Work::SpecRun(_) => Some(Stage::Tickets),
             Work::ArchitectRun(_) => Some(Stage::ArchitectureReview),
+            Work::ScoringRun(_) => Some(Stage::Sampling),
             Work::PickupRun(_) | Work::SecurityRun(_) => None,
+            Work::Experiment(_) => Some(Stage::ArmBuilds),
         }
     }
 
@@ -329,7 +409,10 @@ impl<'a> Work<'a> {
         match self {
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => issue.repo(),
             Work::PickupRun(listed) => listed.issue.repo(),
-            Work::ArchitectRun(repo) | Work::SecurityRun(repo) => repo.clone(),
+            Work::ArchitectRun(repo)
+            | Work::SecurityRun(repo)
+            | Work::ScoringRun(repo)
+            | Work::Experiment(repo) => repo.clone(),
         }
     }
 
@@ -341,6 +424,8 @@ impl<'a> Work<'a> {
             Work::PickupRun(_) => Kind::Pass(Pass::Pickup),
             Work::ArchitectRun(_) => Kind::Pass(Pass::Architect),
             Work::SecurityRun(_) => Kind::Pass(Pass::Security),
+            Work::ScoringRun(_) => Kind::ScoringRun,
+            Work::Experiment(_) => Kind::Experiment,
         }
     }
 
@@ -349,7 +434,10 @@ impl<'a> Work<'a> {
         match self {
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => Some(issue),
             Work::PickupRun(listed) => Some(&listed.issue),
-            Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
+            Work::ArchitectRun(_)
+            | Work::SecurityRun(_)
+            | Work::ScoringRun(_)
+            | Work::Experiment(_) => None,
         }
     }
 

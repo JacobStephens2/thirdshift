@@ -92,11 +92,11 @@ echo '{{"event":"step_update","step_update":{{"step_index":2,"state":"DONE","ste
         scenario.gh_state()["prs"][0]["body"]
             .as_str()
             .unwrap()
-            .contains("Built with agy · gemini-3.8-flash · medium")
+            .contains("Built with agy 9.8.7 · gemini-3.8-flash · medium")
     );
     let sessions = "home/.thirdshift/logs/acme/widgets/commands/issue";
     let logs = scenario.log_files(sessions, "jsonl");
-    let log = std::fs::read_to_string(scenario.path(&format!("{sessions}/{}", logs[0]))).unwrap();
+    let log = support::session_trace::events(scenario.path(&format!("{sessions}/{}", logs[0])));
     assert!(log.contains("\"event\": \"init\""), "{log}");
     assert!(log.contains("\"status\": \"SUCCESS\""), "{log}");
     assert!(log.contains("step_update"), "{log}");

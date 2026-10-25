@@ -40,24 +40,56 @@ async function pageForTest(t, options) {
 
 // Nothing in the selected containers, or the page, scrolls sideways.
 async function assertFits(page, selector, message) {
+  // Font loading can finish after navigation; measure the rendered typeface.
+  await page.evaluate(() => document.fonts.ready);
   const overflow = await page.locator(selector).evaluateAll(nodes =>
     nodes.filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.textContent.trim().slice(0, 80)));
   assert.deepEqual(overflow, [], message);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "no horizontal page scrolling");
 }
 
+// Playwright's default timeout, which the suite never changes, so its own polls give up when Playwright's waits do.
+const DEFAULT_TIMEOUT_MS = 30000;
+
+// Polls a reading no locator state expresses, such as a scroll position.
+// page.waitForFunction polls inside the page, so on a page without JavaScript it never checks again.
+async function waitUntil(read, message) {
+  const deadline = Date.now() + DEFAULT_TIMEOUT_MS;
+  while (!await read()) {
+    assert.ok(Date.now() < deadline, message);
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+}
+
+// Waits for the element to reach the top of the viewport, as following a link to its fragment scrolls it.
+function waitForScrolledIntoView(page, selector) {
+  return waitUntil(() => page.locator(selector).evaluate(node => Math.abs(node.getBoundingClientRect().top) < 40),
+    `${selector} scrolls into view`);
+}
+
+// The fold a heading controls, matched only while it is open.
+const openFold = heading => heading.locator("xpath=ancestor::details[1][@open]");
+
 async function checkSectionToggles(page, contentSelector, closeKey) {
   for (const heading of await page.locator("main h2").all()) {
-    assert.equal(await heading.isVisible(), true);
+    await heading.waitFor({ state: "visible" });
     const fold = heading.locator("xpath=ancestor::details[1]");
     const content = fold.locator(contentSelector);
-    assert.equal(await content.isVisible(), false);
+    await content.waitFor({ state: "hidden" });
     await heading.click();
-    assert.equal(await content.isVisible(), true);
+    await content.waitFor({ state: "visible" });
     assert.equal(await page.locator("main details[open]").count(), 1);
     await fold.locator(":scope > summary").focus();
     await page.keyboard.press(closeKey);
-    assert.equal(await content.isVisible(), false);
+    await content.waitFor({ state: "hidden" });
+  }
+}
+
+// Unfolds each of the guide's sections in turn, as a reader does.
+async function unfoldGuide(page) {
+  for (const heading of await page.locator("main h2").all()) {
+    await heading.click();
+    await openFold(heading).waitFor({ state: "attached" });
   }
 }
 
@@ -77,15 +109,15 @@ test("the manual starts folded and readers can unfold nested sections without Ja
   assert.equal(await page.locator("main details[open]").count(), 0);
   assert.equal(await page.locator("main details").count(), await page.locator("main :is(h2,h3,h4)").count());
   await checkSectionToggles(page, ":scope > .manual-content", "Enter");
-  await page.getByRole("heading", { name: "What a Run does", exact: true }).click();
+  await page.getByRole("heading", { name: "What a Ticket run does", exact: true }).click();
   const claim = page.getByRole("heading", { name: "The Claim", exact: true });
-  assert.equal(await claim.isVisible(), true);
+  await claim.waitFor({ state: "visible" });
   const ends = page.getByRole("heading", { name: "When the Claim ends", exact: true });
-  assert.equal(await ends.isVisible(), false);
+  await ends.waitFor({ state: "hidden" });
   await claim.click();
-  assert.equal(await ends.isVisible(), true);
+  await ends.waitFor({ state: "visible" });
   await ends.click();
-  assert.equal(await page.getByRole("link", { name: "Sweep", exact: true }).first().isVisible(), true);
+  await page.getByRole("link", { name: "Sweep", exact: true }).first().waitFor({ state: "visible" });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 });
 
@@ -129,6 +161,18 @@ test("every public page identifies its canonical URL, purpose and share metadata
   assert.match(await page.title(), /GitHub issues.*pull requests/);
 });
 
+test("hand-written pages describe the current share card in both alt tags", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  for (const path of ["/", "/how-it-works/", "/architecture/"]) {
+    await page.goto(`${origin}${path}`);
+    for (const selector of ['meta[property="og:image:alt"]', 'meta[name="twitter:image:alt"]']) {
+      const alt = await page.locator(selector).getAttribute("content");
+      assert.match(alt, /Your issues become pull requests overnight\./, `${path}: ${selector}`);
+      assert.doesNotMatch(alt, /go to press|FEEDER|DELIVERY PILE|units [1-4]/i, `${path}: ${selector}`);
+    }
+  }
+});
+
 test("robots advertises a valid sitemap of reachable canonical pages", async (t) => {
   const page = await pageForTest(t, { javaScriptEnabled: false });
   const robots = await page.request.get(`${origin}/robots.txt`);
@@ -166,10 +210,10 @@ test("the homepage links to the shared Markdown manual without JavaScript", asyn
   const page = await pageForTest(t, { javaScriptEnabled: false, viewport: { width: 320, height: 900 } });
   await page.goto(`${origin}/`);
   await page.getByRole("link", { name: "Documentation", exact: true }).first().click({ timeout: 2000 });
-  assert.equal(new URL(page.url()).pathname, "/docs/");
-  assert.equal(await page.getByRole("heading", { name: "thirdshift", exact: true, level: 1 }).isVisible(), true);
+  await page.waitForURL(url => url.pathname === "/docs/");
+  await page.getByRole("heading", { name: "thirdshift", exact: true, level: 1 }).waitFor({ state: "visible" });
   await page.getByRole("navigation", { name: "Manual sections" }).getByRole("link", { name: "Install", exact: true }).click();
-  assert.equal(new URL(page.url()).hash, "#install");
+  await page.waitForURL(url => url.hash === "#install");
   assert.equal(await page.locator("#install > pre code").first().textContent(),
     "curl -LsSf https://github.com/JacobStephens2/thirdshift/releases/latest/download/thirdshift-installer.sh | sh\n");
   assert.equal(await page.getByRole("link", { name: "Markdown source", exact: true }).getAttribute("href"),
@@ -187,19 +231,91 @@ test("the homepage links to the shared Markdown manual without JavaScript", asyn
   }
 });
 
+test("hand-written pages link directly to unique manual sections", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  const fragments = new Set();
+  for (const path of ["/", "/how-it-works/", "/architecture/"]) {
+    await page.goto(`${origin}${path}`);
+    for (const href of await page.locator("a[href]").evaluateAll(nodes => nodes.map(node => node.getAttribute("href")))) {
+      const link = new URL(href, page.url());
+      assert.equal(link.hostname === "github.com" &&
+        /^\/JacobStephens2\/thirdshift\/?$/.test(link.pathname) && Boolean(link.hash), false,
+      `${path}: README section link ${href}`);
+      if (link.origin === origin && link.pathname === "/docs/" && link.hash) {
+        fragments.add(decodeURIComponent(link.hash.slice(1)));
+      }
+    }
+  }
+  assert.ok(fragments.size > 0, "pages link to manual sections");
+  await page.goto(`${origin}/docs/`);
+  for (const fragment of fragments) {
+    assert.equal(await page.locator("[id]").evaluateAll((nodes, id) =>
+      nodes.filter(node => node.id === id).length, fragment), 1, fragment);
+  }
+});
+
+test("homepage accessible names use steps in place of press units", async (t) => {
+  const page = await pageForTest(t);
+  await page.goto(`${origin}/`);
+  assert.equal(await page.getByRole("group", { name: "Ticket run steps", exact: true }).count(), 1);
+  for (const number of [1, 2, 3, 4]) {
+    assert.equal(await page.locator(`.unit-col .stderr-lines[aria-label="stderr lines from step ${number}"]`).count(), 1);
+  }
+  assert.equal(await page.getByRole("log", { name: "Terminal replay of the selected step's stderr lines", exact: true }).count(), 1);
+});
+
+test("the homepage explains Ticket runs and five workflows in plain words", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  await page.goto(`${origin}/`);
+  assert.equal(await page.locator("h1").textContent(), "Your issues become pull requests overnight.");
+  for (const phrase of ["You plan by day. Agents work at night.", "How a Ticket run works",
+    "When a Ticket run fails", "Results", "What you get back", "Workflows", "Five workflows",
+    "Examples", "Real pull requests", "About the name"]) {
+    assert.ok((await page.locator("body").textContent()).includes(phrase), phrase);
+  }
+  const opening = await page.locator(".framing").textContent();
+  assert.match(opening, /coding agents you already use, logged in as you/);
+  assert.match(opening, /each agent's plan or account/);
+  assert.match(opening, /Claude Code.*subscription.*usage allowance/);
+  assert.match(opening, /free and open source/);
+  assert.deepEqual(await page.locator(".floor .line-label").allTextContents(), [
+    "1 · TICKET RUN", "2 · SPEC RUN", "3 · ARCHITECT RUN", "4 · PICKUP RUN", "5 · SECURITY RUN",
+  ]);
+  assert.doesNotMatch(await page.locator(".floor").textContent(), /INSTALLED|MERGE RUN/);
+  assert.doesNotMatch(await page.locator(".press-svg").textContent(), /FEEDER|DELIVERY PILE|UNIT [1-4]/);
+});
+
+test("hand-written pages use the five workflow names outside the recorded replay", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  for (const path of ["/", "/how-it-works/", "/architecture/"]) {
+    await page.goto(`${origin}${path}`);
+    const prose = await page.locator("body").evaluate(node => {
+      const copy = node.cloneNode(true);
+      copy.querySelectorAll(".unit-col .stderr-lines").forEach(replay => replay.remove());
+      return copy.textContent;
+    });
+    assert.doesNotMatch(prose, /\bMerge runs?\b|\bFailed runs?\b|\bWeeding\b|\bFencing\b/, path);
+    // Run remains a verb and part of Run notification / Run metrics.
+    assert.doesNotMatch(prose, /\bRun\b(?! notification| metrics| from)/, path);
+    assert.match(prose, /Ticket run/, path);
+    assert.match(prose, /Failed ticket run/, path);
+  }
+  assert.equal(await page.locator("#merge-run-title").textContent(), "A Ticket run that Self-merges");
+});
+
 test("the homepage leads to a guide that teaches the process in order", async (t) => {
   const page = await pageForTest(t);
   await page.goto(`${origin}/`);
   await page.getByRole("link", { name: "How thirdshift works", exact: true }).first().click();
-  assert.equal(new URL(page.url()).pathname, "/how-it-works/");
-  assert.equal(await page.getByRole("heading", { name: "How thirdshift works", level: 1 }).isVisible(), true);
+  await page.waitForURL(url => url.pathname === "/how-it-works/");
+  await page.getByRole("heading", { name: "How thirdshift works", level: 1 }).waitFor({ state: "visible" });
   assert.deepEqual(await page.locator("main h2").allTextContents(), [
     "Start with work you can describe",
-    "Give the Run its own checkout",
+    "Give the Ticket run its own checkout",
     "Let the agent implement and review",
     "Deliver against the latest Base branch",
     "Know what comes back",
-    "Scale one Run into a Spec run",
+    "Scale one Ticket run into a Spec run",
     "Choose how the next work starts",
   ]);
 });
@@ -212,15 +328,15 @@ test("guide navigation and Repair loop links reach visible explanations without 
   for (const link of await links.all()) {
     const href = await link.getAttribute("href");
     await link.click();
-    assert.equal(new URL(page.url()).hash, href);
-    assert.equal(await page.locator(href).isVisible(), true);
-    assert.ok(await page.locator(href).evaluate(node => Math.abs(node.getBoundingClientRect().top) < 40), `${href} scrolls into view`);
+    await page.waitForURL(url => url.hash === href);
+    await page.locator(href).waitFor({ state: "visible" });
+    await waitForScrolledIntoView(page, href);
   }
   await page.getByRole("link", { name: "Then return to merging the Base branch" }).click();
-  assert.equal(new URL(page.url()).hash, "#delivery-sync");
-  assert.equal(await page.locator("#delivery-sync").isVisible(), true);
+  await page.waitForURL(url => url.hash === "#delivery-sync");
+  await page.locator("#delivery-sync").waitFor({ state: "visible" });
   await page.getByRole("link", { name: "thirdshift / home" }).click();
-  assert.equal(new URL(page.url()).pathname, "/");
+  await page.waitForURL(url => url.pathname === "/");
 });
 
 test("the guide's local links and styles resolve, including prompt deep links", async (t) => {
@@ -240,7 +356,7 @@ test("the guide's local links and styles resolve, including prompt deep links", 
   }
   await page.getByRole("heading", { name: "Let the agent implement and review", exact: true }).click();
   await page.getByRole("link", { name: "the review procedure" }).click();
-  await page.locator("#skill-thirdshift-code-review .job-body").waitFor({ state: "visible", timeout: 5000 });
+  await page.locator("#skill-thirdshift-code-review .job-body").waitFor({ state: "visible" });
   assert.deepEqual(errors, []);
 });
 
@@ -252,11 +368,11 @@ for (const width of [320, 390, 768, 1280]) {
       viewport: { width, height: 900 },
     });
     await page.goto(`${origin}/how-it-works/`);
-    for (const heading of await page.locator("main h2").all()) await heading.click();
+    await unfoldGuide(page);
     const diagrams = page.locator("main figure");
     assert.equal(await diagrams.count(), 6);
     for (const diagram of await diagrams.all()) {
-      assert.equal(await diagram.isVisible(), true);
+      await diagram.waitFor({ state: "visible" });
       assert.ok(await diagram.locator("figcaption").textContent());
     }
     await assertFits(page, "main, header, .guide-diagram, .guide-node, .guide-flow > li, pre", "text and diagrams fit their containers");
@@ -272,19 +388,21 @@ for (const javaScriptEnabled of [false, true]) {
     ]) {
       await page.goto(`${origin}${path}#${fragment}`);
       const target = page.locator(`#${fragment}`);
-      await target.waitFor({ state: "visible", timeout: 2000 });
+      await target.waitFor({ state: "visible" });
       assert.match(await target.textContent(), new RegExp(text));
-      assert.ok(await target.evaluate(node => Math.abs(node.getBoundingClientRect().top) < 40), "fragment scrolls into view");
+      await waitForScrolledIntoView(page, `#${fragment}`);
     }
     await page.goto(`${origin}/docs/`);
     const installLink = page.getByRole("navigation", { name: "Manual sections" }).getByRole("link", { name: "Install", exact: true });
+    const install = page.locator("#install > pre").first();
     await installLink.click();
-    assert.equal(await page.locator("#install > pre").first().isVisible(), true);
+    await install.waitFor({ state: "visible" });
     await page.getByRole("heading", { name: "Install", exact: true }).click();
-    assert.equal(await page.locator("#install > pre").first().isVisible(), false);
+    await install.waitFor({ state: "hidden" });
     await installLink.click();
-    await page.locator("#install > pre").first().waitFor({ state: "visible", timeout: 2000 });
-    assert.equal(await page.locator("#workflows").isVisible(), false, "unrelated sections stay folded");
+    await install.waitFor({ state: "visible" });
+    // Unrelated sections stay folded.
+    await page.locator("#workflows").waitFor({ state: "hidden" });
   });
 }
 
@@ -293,7 +411,7 @@ test("the homepage, the guide and the videos page link to the architecture page 
   for (const path of ["/", "/how-it-works/", "/videos/"]) {
     await page.goto(`${origin}${path}`);
     await page.getByRole("link", { name: "Architecture", exact: true }).first().click();
-    assert.equal(new URL(page.url()).pathname, "/architecture/", path);
+    await page.waitForURL(url => url.pathname === "/architecture/");
   }
 });
 
@@ -303,11 +421,12 @@ test("the architecture page shows six captioned, described figures, each reachab
   const figures = page.locator("main figure");
   assert.equal(await figures.count(), 6);
   for (const [index, figure] of (await figures.all()).entries()) {
-    assert.equal(await figure.isVisible(), true);
+    await figure.waitFor({ state: "visible" });
     assert.match(await figure.locator("figcaption").textContent(), new RegExp(`^Figure ${index + 1} `));
     // Each drawing names its own description, so a screen reader hears the figure in words.
     const svg = figure.locator("svg");
-    const description = await svg.evaluate(node => document.getElementById(node.getAttribute("aria-labelledby"))?.textContent ?? "");
+    const description = await svg.evaluate(node => document.getElementById(
+      node.getAttribute("aria-describedby") ?? node.getAttribute("aria-labelledby"))?.textContent ?? "");
     assert.ok(description.length > 100, `figure ${index + 1} has a description`);
   }
   const ids = await page.locator("svg [id]").evaluateAll(nodes => nodes.map(node => node.id));
@@ -317,8 +436,8 @@ test("the architecture page shows six captioned, described figures, each reachab
   for (const link of await links.all()) {
     const href = await link.getAttribute("href");
     await link.click();
-    assert.equal(new URL(page.url()).hash, href);
-    assert.ok(await page.locator(href).evaluate(node => Math.abs(node.getBoundingClientRect().top) < 40), `${href} scrolls into view`);
+    await page.waitForURL(url => url.hash === href);
+    await waitForScrolledIntoView(page, href);
   }
   for (const path of await page.locator('a[href^="/"], link[href^="/"]').evaluateAll(nodes => [...new Set(nodes.map(node => node.getAttribute("href").split("#")[0]))])) {
     assert.equal((await page.request.get(`${origin}${path}`)).status(), 200, path);
@@ -334,6 +453,23 @@ for (const width of [320, 390, 768, 1280]) {
     const svgWidth = await page.locator("main svg").first().evaluate(node => node.getBoundingClientRect().width);
     assert.ok(svgWidth >= Math.min(720, width - 80), `figure is ${svgWidth}px wide`);
   });
+}
+
+for (const width of [320, 390, 1280]) {
+  for (const javaScriptEnabled of [false, true]) {
+    test(`hand-written pages fit ${width}px (JavaScript: ${javaScriptEnabled})`, async (t) => {
+      const page = await pageForTest(t, {
+        javaScriptEnabled,
+        reducedMotion: "reduce",
+        viewport: { width, height: 900 },
+      });
+      for (const path of ["/", "/how-it-works/", "/architecture/"]) {
+        await page.goto(`${origin}${path}`);
+        if (path === "/how-it-works/") await unfoldGuide(page);
+        await assertFits(page, "main, pre, .misprint, .guide-node, .arch-fig, .arch-layers", path);
+      }
+    });
+  }
 }
 
 // The videos page's entries, in order.
@@ -359,7 +495,7 @@ test("the homepage and the guide link to the videos page without JavaScript", as
   for (const path of ["/", "/how-it-works/"]) {
     await page.goto(`${origin}${path}`);
     await page.getByRole("link", { name: "Videos", exact: true }).first().click();
-    assert.equal(new URL(page.url()).pathname, "/videos/", path);
+    await page.waitForURL(url => url.pathname === "/videos/");
   }
 });
 
@@ -387,7 +523,7 @@ test("the videos page lists every video in order, each a thumbnail linking to Yo
   }
   await page.route("https://youtu.be/**", route => route.fulfill({ contentType: "text/html", body: "YouTube" }));
   await page.locator("a.video-play").first().click();
-  assert.equal(page.url(), `https://youtu.be/${videos[0].id}`);
+  await page.waitForURL(`https://youtu.be/${videos[0].id}`);
 });
 
 test("the videos page requests nothing from YouTube or Google until a video plays, then embeds only that video", async (t) => {
@@ -427,15 +563,19 @@ test("each video plays from the keyboard, with a visible focus style", async (t)
   await page.goto(`${origin}/videos/`);
   const focusedPlay = () => page.evaluate(() => document.activeElement.matches("a.video-play"));
   for (let presses = 0; presses < 20 && !await focusedPlay(); presses++) await page.keyboard.press("Tab");
-  assert.equal(await focusedPlay(), true, "Tab reaches the first video");
-  assert.notEqual(await page.evaluate(() => getComputedStyle(document.activeElement).outlineStyle), "none");
+  // Tab reaches the first video.
+  const focused = page.locator("a.video-play:focus");
+  await focused.waitFor({ state: "visible" });
+  assert.notEqual(await focused.evaluate(node => getComputedStyle(node).outlineStyle), "none");
   await page.keyboard.press("Enter");
+  const players = page.locator("main .video iframe");
+  await players.first().waitFor({ state: "visible" });
   // Space, which scrolls the page from a link, plays the next one instead.
   await page.locator("a.video-play").first().focus();
   const scrollY = await page.evaluate(() => scrollY);
   await page.keyboard.press("Space");
+  await players.nth(1).waitFor({ state: "visible" });
   assert.equal(await page.evaluate(() => scrollY), scrollY);
-  const players = page.locator("main .video iframe");
   assert.deepEqual(await players.evaluateAll(nodes => nodes.map(node => [node.title, node.src])),
     videos.slice(0, 2).map(({ title, id }) => [title, playerUrl(id)]));
   assert.equal(await page.evaluate(() => document.activeElement.title), videos[1].title, "focus moves to the player");
@@ -447,7 +587,10 @@ for (const width of [320, 390, 1280]) {
       const page = await pageForTest(t, { javaScriptEnabled, viewport: { width, height: 900 } });
       await stubPlayer(page);
       await page.goto(`${origin}/videos/`);
-      if (javaScriptEnabled) await page.locator("a.video-play").first().click();
+      if (javaScriptEnabled) {
+        await page.locator("a.video-play").first().click();
+        await page.locator("main .video iframe").waitFor({ state: "visible" });
+      }
       await assertFits(page, "main, header, .video, .video-frame", "text and videos fit their containers");
     });
   }
@@ -492,21 +635,29 @@ test("every headed section but a skill's SKILL.md starts closed, and each toggle
     for (const parent of ancestors) {
       if (!await page.locator(`#${parent}`).evaluate(node => node.closest("details").open)) {
         await page.locator(`#${parent}`).click();
+        await openFold(page.locator(`#${parent}`)).waitFor({ state: "attached" });
       }
     }
     // Fold a SKILL.md first, so every heading is tested opening then folding.
-    if (isSkillMd(id)) await heading.click();
+    if (isSkillMd(id)) {
+      await heading.click();
+      await openFold(heading).waitFor({ state: "detached" });
+    }
     await heading.click();
-    assert.equal(await heading.evaluate(node => node.closest("details").open), true, id);
+    await openFold(heading).waitFor({ state: "attached" });
+    // The heading reveals its content, then hides it.
     const content = heading.locator("xpath=ancestor::summary/parent::details/*[not(self::summary)][1]");
-    assert.equal(await content.isVisible(), true, `${id} reveals its content`);
+    await content.waitFor({ state: "visible" });
     await heading.click();
-    assert.equal(await heading.evaluate(node => node.closest("details").open), false, id);
-    assert.equal(await content.isVisible(), false, `${id} hides its content`);
+    await openFold(heading).waitFor({ state: "detached" });
+    await content.waitFor({ state: "hidden" });
   }
   await page.locator("#command-title").click();
+  await openFold(page.locator("#command-title")).waitFor({ state: "attached" });
+  // The loop left Prompts open around its prompts; folding it leaves Command open.
   await page.locator("#prompts-title").click();
-  assert.equal(await page.locator("#command-title").evaluate(node => node.closest("details").open), true);
+  await openFold(page.locator("#prompts-title")).waitFor({ state: "detached" });
+  await openFold(page.locator("#command-title")).waitFor({ state: "attached" });
 });
 
 test("opening a skill shows its SKILL.md, which still folds by its heading", async (t) => {
@@ -514,34 +665,34 @@ test("opening a skill shows its SKILL.md, which still folds by its heading", asy
   await page.goto(`${origin}/prompts/`);
   await page.locator("#skills-title").click();
   const skillMd = page.locator("#file-thirdshift-code-review-skill-md").locator("xpath=ancestor::details[1]/pre");
-  assert.equal(await skillMd.isVisible(), false);
+  await skillMd.waitFor({ state: "hidden" });
   await page.locator("#skill-thirdshift-code-review-title").click();
-  assert.equal(await skillMd.isVisible(), true);
+  await skillMd.waitFor({ state: "visible" });
   // The supporting files stay folded.
   const others = page.locator("#skill-thirdshift-code-review h4:not(#file-thirdshift-code-review-skill-md)");
   assert.ok(await others.count() > 0);
   for (const heading of await others.all()) {
-    assert.equal(await heading.evaluate(node => node.closest("details").open), false);
+    await openFold(heading).waitFor({ state: "detached" });
   }
   await page.locator("#file-thirdshift-code-review-skill-md").click();
-  assert.equal(await skillMd.isVisible(), false);
+  await skillMd.waitFor({ state: "hidden" });
 });
 
 test("fragment links reveal the prompt or supporting file and its containing sections", async (t) => {
   const page = await pageForTest(t);
   await page.goto(`${origin}/prompts/#prompt-resume`);
-  assert.equal(await page.locator("#prompt-resume .job-text").isVisible(), true);
+  await page.locator("#prompt-resume .job-text").waitFor({ state: "visible" });
   await page.goto(`${origin}/prompts/`);
   await page.locator("#licence-title").click();
   await page.locator('a[href="#file-thirdshift-pr-credits-md"]').click();
   const credits = page.locator("#file-thirdshift-pr-credits-md").locator("xpath=ancestor::details[1]/pre");
   // The page reveals a new fragment on hashchange, which can fire after the click returns.
-  await credits.waitFor({ state: "visible", timeout: 5000 });
+  await credits.waitFor({ state: "visible" });
   // A link to the current fragment must reveal a section the reader closed.
   await page.locator("#file-thirdshift-pr-credits-md").click();
-  assert.equal(await credits.isVisible(), false);
+  await credits.waitFor({ state: "hidden" });
   await page.locator('a[href="#file-thirdshift-pr-credits-md"]').click();
-  assert.equal(await credits.isVisible(), true);
+  await credits.waitFor({ state: "visible" });
 });
 
 test("mobile readers can toggle headings with the keyboard without JavaScript", async (t) => {
@@ -552,12 +703,13 @@ test("mobile readers can toggle headings with the keyboard without JavaScript", 
   const prompts = page.locator("#prompts-title").locator("xpath=parent::summary");
   await prompts.focus();
   await page.keyboard.press("Enter");
-  assert.equal(await page.locator("#prompt-fresh-title").isVisible(), true);
+  await page.locator("#prompt-fresh-title").waitFor({ state: "visible" });
   const fresh = page.locator("#prompt-fresh-title").locator("xpath=parent::summary");
   await fresh.focus();
+  const freshText = page.locator("#prompt-fresh .job-text");
   await page.keyboard.press("Space");
-  assert.equal(await page.locator("#prompt-fresh .job-text").isVisible(), true);
+  await freshText.waitFor({ state: "visible" });
   await page.keyboard.press("Space");
-  assert.equal(await page.locator("#prompt-fresh .job-text").isVisible(), false);
+  await freshText.waitFor({ state: "hidden" });
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 });

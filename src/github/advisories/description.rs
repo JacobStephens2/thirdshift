@@ -8,6 +8,7 @@ use crate::security::reproduction::{FixSize, Outcome, Reproduction, Severity};
 
 const FIX_TICKET_MARKER: &str = "\n<!-- thirdshift:security-fix -->\nFix Ticket: ";
 const REPRODUCTION_MARKER: &str = "\n<!-- thirdshift:security-reproduction -->\n";
+const CLOSE_MARKER: &str = "\n<!-- thirdshift:security-close -->\n";
 
 pub(super) struct Description<'a>(pub(super) &'a str);
 
@@ -51,17 +52,20 @@ impl<'a> Description<'a> {
         self.0.lines().any(|line| line == marker)
     }
 
-    pub(super) fn reproduced_outcome(&self) -> Option<(Severity, FixSize)> {
+    /// The first recorded outcome; a failed or unfinished reproduction writes none.
+    pub(super) fn completed_reproduction(&self) -> Option<Outcome> {
         let (_, reproduction) = self.0.split_once(REPRODUCTION_MARKER)?;
-        let outcome = reproduction
-            .lines()
-            .find_map(|line| line.strip_prefix("Outcome: "))?;
-        match outcome.split_whitespace().collect::<Vec<_>>().as_slice() {
-            ["reproduced", severity, "single"] => {
-                Some((Severity::parse(severity)?, FixSize::Single))
-            }
-            ["reproduced", severity, "spec"] => Some((Severity::parse(severity)?, FixSize::Spec)),
-            _ => None,
+        Outcome::parse(
+            reproduction
+                .lines()
+                .find_map(|line| line.strip_prefix("Outcome: "))?,
+        )
+    }
+
+    pub(super) fn reproduced_outcome(&self) -> Option<(Severity, FixSize)> {
+        match self.completed_reproduction()? {
+            Outcome::Reproduced { severity, size } => Some((severity, size)),
+            Outcome::NotReproduced => None,
         }
     }
 
@@ -165,6 +169,59 @@ impl<'a> Description<'a> {
             FixEnding::Succeeded => "Fix Run: succeeded",
         };
         Ok(format!("{}\n{ending}\n", self.0.trim_end()))
+    }
+
+    /// The pull request that closed the finding, if a close was recorded.
+    pub(super) fn closed_by(&self) -> Option<&str> {
+        self.0
+            .rsplit_once(CLOSE_MARKER)
+            .and_then(|(_, close)| close.lines().next())
+            .and_then(|line| line.strip_prefix("Closed by: "))
+            .filter(|url| !url.trim().is_empty())
+    }
+
+    /// Name `pr_url` as the merged pull request that closed the finding.
+    /// The fix link must still name the dispatched fix, whose run must have
+    /// succeeded: any other change since it was read leaves the record
+    /// unchanged.
+    pub(super) fn with_close(&self, issue: &IssueUrl, pr_url: &str) -> Result<String> {
+        if self.closed_by().is_some() {
+            bail!("the private record is already closed; leaving it unchanged");
+        }
+        if self.fix_link() != Some(issue.url.as_str()) {
+            bail!("the private record's fix Ticket changed during its Run; leaving it unchanged");
+        }
+        if !matches!(self.fix_status(), Some(FixStatus::Succeeded)) {
+            bail!("the private record's fix did not succeed; leaving it unchanged");
+        }
+        if pr_url.trim().is_empty() || pr_url.contains(['\r', '\n']) {
+            bail!("the merged pull request URL is invalid; leaving it unchanged");
+        }
+        Ok(format!(
+            "{}{CLOSE_MARKER}Closed by: {pr_url}\n",
+            self.0.trim_end()
+        ))
+    }
+
+    /// Note why the finding was left open, keeping the record for the Day
+    /// shift. The fix link must still name the dispatched fix, and the
+    /// record must not already be closed: a 'Closed by' line claims the
+    /// finding is closed.
+    pub(super) fn with_left_open_note(&self, issue: &IssueUrl, reason: &str) -> Result<String> {
+        if self.closed_by().is_some() {
+            bail!("the private record is already closed; leaving it unchanged");
+        }
+        if self.fix_link() != Some(issue.url.as_str()) {
+            bail!("the private record's fix Ticket changed during its Run; leaving it unchanged");
+        }
+        // The reason carries check output and API errors, which can span
+        // lines. Flatten it so it can never smuggle another protocol marker
+        // (notably a `Closed by` line) into the record.
+        let reason = reason.replace(['\r', '\n'], " ");
+        Ok(format!(
+            "{}\nSecurity close left open: {reason}\n",
+            self.0.trim_end()
+        ))
     }
     pub(super) fn check_public_fix_text(&self, body: &str, url: &str) -> Result<()> {
         if !body.contains(url) {

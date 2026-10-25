@@ -48,7 +48,20 @@ impl Adapter for Claude {
             stdin: None,
         }
     }
+    /// A Trial runs behind the allowlisting proxy, so its web search and web
+    /// fetch stay off: the provider cannot search past the proxy for it.
+    fn trial_session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation {
+        let mut invocation = self.code_review_session(choice, resume, prompt);
+        let at = invocation.args.len() - 1;
+        // One argument: the flag takes every following word as a tool name,
+        // so a separate value would also take the prompt after it.
+        invocation
+            .args
+            .insert(at, "--disallowedTools=WebSearch,WebFetch".to_string());
+        invocation
+    }
     fn check(&self, choice: &mut Choice, probe: super::Probe) -> Result<()> {
+        super::check_sign_in(self, &["auth", "status"])?;
         match probe {
             super::Probe::Allow => test_call(choice),
             super::Probe::Skip => Ok(()),
@@ -130,6 +143,7 @@ pub fn test_call(choice: &Choice) -> Result<()> {
     let Some(model) = &choice.model else {
         return Ok(());
     };
+    crate::resources::wait()?;
     progress::step(format_args!(
         "checking the Model {model} with a test call to {cli}"
     ));
@@ -156,9 +170,16 @@ pub fn test_call(choice: &Choice) -> Result<()> {
 const TEST_PROMPT: &str = "Reply with OK.";
 
 /// Ask Claude's Model and Effort, with `current` as the defaults. A Model is
-/// checked with a test call, as a Run checks it, and on a refusal the Model
+/// checked with a test call, as a Ticket run checks it, and on a refusal the Model
 /// and Effort are asked again.
 fn ask_claude(outside: &mut dyn Terminal, current: &ModelAndEffort) -> Result<ModelAndEffort> {
+    // Suggested settings from https://code.claude.com/docs/en/model-config#model-aliases.
+    // Reviewed 2026-10-25; refresh from that page when updating Claude Setup.
+    // Claude resolves alias versions; these suggestions never restrict Model IDs.
+    outside.say(
+        "Claude's Model suggestions: default, best, fable, opus, sonnet, haiku, opusplan, sonnet[1m], opus[1m]. Type any Model ID, or press Enter to keep the default shown."
+            .into(),
+    );
     loop {
         let chosen = ModelAndEffort {
             model: ask_setting(outside, "Model", Harness::Claude, current.model.as_deref())?,
@@ -209,6 +230,33 @@ mod tests {
             ]
         );
         assert_eq!(invocation.stdin.as_deref(), Some("summarize"));
+    }
+
+    #[test]
+    fn trials_deny_web_search_and_web_fetch() {
+        let choice = Choice::default();
+        for resume in [None, Some("session-id")] {
+            let trial = Claude.trial_session(&choice, resume, "review");
+            // One argument: the flag takes every following word as a tool,
+            // so a separate value would swallow the prompt after it.
+            assert!(
+                trial
+                    .args
+                    .iter()
+                    .any(|arg| arg == "--disallowedTools=WebSearch,WebFetch"),
+                "a Trial must deny web tools: {:?}",
+                trial.args
+            );
+            assert!(!trial.args.iter().any(|arg| arg == "--disallowedTools"));
+            assert_eq!(trial.args.last().unwrap(), "review");
+            assert!(
+                !Claude
+                    .session(&choice, resume, "review")
+                    .args
+                    .iter()
+                    .any(|arg| arg.starts_with("--disallowedTools"))
+            );
+        }
     }
 
     #[test]

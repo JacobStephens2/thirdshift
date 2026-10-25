@@ -7,8 +7,12 @@ use anyhow::{Context, Result, bail};
 use crate::failed_run::PolicyRefusal;
 use crate::github::{GitHub, Mergeable, PrSnapshot, PrState};
 use crate::harness::Choice;
+use crate::harness::built_with::MARKER as BUILT_WITH_MARKER;
 use crate::issue::IssueUrl;
 use crate::{poll, progress};
+
+mod findings;
+pub(crate) use findings::UnaddressedFindings;
 
 /// Immutable information for reporting and confirmed Self-merge finishing.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -49,6 +53,7 @@ pub(crate) struct PullRequest<A = GitHub> {
     base: String,
     identified: Option<Identified>,
     scope: CaptureScope,
+    security_review_count: Option<usize>,
     adapter: A,
 }
 
@@ -66,6 +71,7 @@ impl<A: Adapter> PullRequest<A> {
             base: base.to_string(),
             identified: None,
             scope: CaptureScope::Delivery,
+            security_review_count: None,
             adapter,
         }
     }
@@ -209,12 +215,15 @@ impl<A: Adapter> PullRequest<A> {
         };
         self.validate(&snapshot, false)?;
         let body = self.adapter.body(&self.issue, snapshot.pr.number, false)?;
-        let written = with_built_with(&body, choice);
+        let owner = crate::logs::captured_owner().ok();
+        let version = crate::harness::version::detected(
+            choice.harness,
+            owner.as_ref().and_then(|owner| owner.log_path()),
+        );
+        let line = choice.built_with(&version);
+        let written = with_built_with(&body, &line);
         if written != body {
-            progress::step(format!(
-                "writing \"{}\" in the pull request's body",
-                choice.built_with()
-            ));
+            progress::step(format!("writing \"{line}\" in the pull request's body"));
             self.adapter
                 .set_body(&self.issue, snapshot.pr.number, &written, false)?;
         }
@@ -277,6 +286,32 @@ impl<A: Adapter> PullRequest<A> {
     /// identity captured only by Failed run completion discovery.
     pub fn info(&self) -> Option<Identified> {
         self.identified.clone()
+    }
+
+    /// Read only the captured PR, after publication and any Repairs. Completion
+    /// reads also work after interruption or a merge; metrics grant no authority.
+    pub fn unaddressed_findings(&mut self) -> Option<UnaddressedFindings> {
+        let pr = self.identified.as_ref()?;
+        let mut counts = match self.adapter.body(&self.issue, pr.number, true) {
+            Ok(body) => UnaddressedFindings::from_body(&body),
+            Err(error) => {
+                progress::step(format!(
+                    "warning: could not read Unaddressed findings for Run metrics: {error:#}"
+                ));
+                return self
+                    .security_review_count
+                    .map(UnaddressedFindings::from_security_review);
+            }
+        };
+        if let Some(count) = self.security_review_count {
+            counts.include_security_review(count);
+        }
+        Some(counts)
+    }
+
+    /// The review's own count survives a failed body write or later publication.
+    pub fn security_reviewed(&mut self, count: usize) {
+        self.security_review_count = Some(count);
     }
 
     /// Every unknown-mergeability poll repeats all readiness checks on one
@@ -607,11 +642,9 @@ fn with_checklist(body: &str, checklist: &str) -> String {
     format!("{}\n\n{checklist}", body.trim_end())
 }
 
-const BUILT_WITH_MARKER: &str = "<!-- thirdshift:built-with -->";
-
 /// Preserve unrelated text and replace only thirdshift's annotation line.
-fn with_built_with(body: &str, choice: &Choice) -> String {
-    let line = format!("{} {BUILT_WITH_MARKER}", choice.built_with());
+fn with_built_with(body: &str, line: &str) -> String {
+    let line = format!("{line} {BUILT_WITH_MARKER}");
     if body.contains(BUILT_WITH_MARKER) {
         return body
             .split_inclusive('\n')
@@ -1244,7 +1277,7 @@ mod tests {
         pr.write_built_with(&Choice::default()).unwrap();
         pr.write_built_with(&choice).unwrap();
         let expected =
-            "Closes #7\n\nBuilt with claude · opus · high <!-- thirdshift:built-with -->\n";
+            "Closes #7\n\nBuilt with claude unknown · opus · high <!-- thirdshift:built-with -->\n";
         assert_eq!(world.borrow().body, expected);
         assert_eq!(world.borrow().edits.len(), 2);
         assert!(world.borrow().edits.iter().all(|(number, _)| *number == 12));
@@ -1260,7 +1293,7 @@ mod tests {
         pr.write_built_with(&Choice::default()).unwrap();
         assert_eq!(
             world.borrow().body,
-            "Summary\r\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\r\n\r\nCloses #7\r\n"
+            "Summary\r\nBuilt with claude unknown · default model · default effort <!-- thirdshift:built-with -->\r\n\r\nCloses #7\r\n"
         );
     }
 

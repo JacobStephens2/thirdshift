@@ -47,13 +47,62 @@ pub struct BaseBranch {
 
 /// Which command opened the Launch directory, which says how a detached HEAD
 /// with no Base branch named fails it.
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 enum Opening {
     /// A Run, from an Issue URL.
     Run,
     /// A Pass, with no Issue URL, whose
     /// command can name its Base branch with `base <branch>`.
     Pass,
+}
+
+/// Base branch validation keeps diagnostics on stderr and exposes only a
+/// fixed category to a Security run's pre-audit notification.
+#[derive(Debug)]
+enum BaseBranchFailure {
+    Detached(Opening),
+    NotFound(String),
+    NotOnOrigin { base: String, refspec: String },
+    Ahead { base: String, ahead: String },
+}
+
+impl fmt::Display for BaseBranchFailure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Detached(opening) => {
+                f.write_str("HEAD is detached; check out the branch the work should be based on")?;
+                if matches!(opening, Opening::Pass) {
+                    f.write_str(", or name it with base <branch>")?;
+                }
+                Ok(())
+            }
+            Self::NotFound(base) => write!(
+                f,
+                "base branch {base} does not exist on origin or locally; \
+                 create or obtain that branch first, or select a valid Base branch"
+            ),
+            Self::NotOnOrigin { base, refspec } => write!(
+                f,
+                "base branch {base} does not exist on origin; push it first with: \
+                 git push --set-upstream origin '{refspec}'"
+            ),
+            Self::Ahead { base, ahead } => write!(
+                f,
+                "local {base} is {ahead} commit(s) ahead of origin/{base}; push them first"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for BaseBranchFailure {}
+
+pub(crate) fn base_branch_cause(error: &anyhow::Error) -> Option<&'static str> {
+    Some(match error.downcast_ref::<BaseBranchFailure>()? {
+        BaseBranchFailure::Detached(_) => "Base branch not selected",
+        BaseBranchFailure::NotFound(_) => "Base branch not found",
+        BaseBranchFailure::NotOnOrigin { .. } => "Base branch not on origin",
+        BaseBranchFailure::Ahead { .. } => "Base branch ahead of origin",
+    })
 }
 
 impl LaunchDirectory {
@@ -67,9 +116,11 @@ impl LaunchDirectory {
         let directory = Self::open(current_dir()?, Opening::Run)?;
         if !issue.matches_origin(&directory.origin) {
             bail!(
-                "origin mismatch: {} is not in the repository at origin {}",
+                "origin mismatch: {} is not in the repository at origin {}; \
+                 start it from a clone of {}",
                 issue.url,
-                directory.origin
+                directory.origin,
+                issue.repo().slug()
             );
         }
         if !GitHub::new().issue_is_open(issue)? {
@@ -140,15 +191,7 @@ impl LaunchDirectory {
     /// for its optional checkout update, without changing the checkout now.
     pub fn prepare_base_branch(&self, named: Option<&str>) -> Result<BaseBranch> {
         let Some(base) = named.or(self.checked_out()) else {
-            match self.opening {
-                Opening::Run => {
-                    bail!("HEAD is detached; check out the branch the work should be based on")
-                }
-                Opening::Pass => bail!(
-                    "HEAD is detached; check out the branch the work should be based on, \
-                     or name it with base <branch>"
-                ),
-            }
+            bail!(BaseBranchFailure::Detached(self.opening));
         };
         let local_ref = format!("refs/heads/{base}");
         if !self.git.on_origin(base)? {
@@ -156,16 +199,13 @@ impl LaunchDirectory {
                 .git
                 .succeeds(&["show-ref", "--verify", "--quiet", &local_ref])?
             {
-                bail!(
-                    "base branch {base} does not exist on origin or locally; \
-                     create or obtain that branch first, or select a valid Base branch"
-                );
+                bail!(BaseBranchFailure::NotFound(base.to_string()));
             }
             let refspec = format!("{local_ref}:{local_ref}").replace('\'', r"'\''");
-            bail!(
-                "base branch {base} does not exist on origin; push it first with: \
-                 git push --set-upstream origin '{refspec}'"
-            );
+            bail!(BaseBranchFailure::NotOnOrigin {
+                base: base.to_string(),
+                refspec,
+            });
         }
         self.git.fetch(&[base])?;
         let origin_commit = self.git.run(&[
@@ -185,7 +225,10 @@ impl LaunchDirectory {
                 &format!("{origin_commit}..{local_commit}"),
             ])?;
             if ahead != "0" {
-                bail!("local {base} is {ahead} commit(s) ahead of origin/{base}; push them first");
+                bail!(BaseBranchFailure::Ahead {
+                    base: base.to_string(),
+                    ahead,
+                });
             }
         }
         Ok(BaseBranch {
@@ -321,6 +364,7 @@ impl fmt::Display for AlreadyRunning {
 pub fn start(base: Option<&str>) -> Result<Start> {
     let directory = LaunchDirectory::open(current_dir()?, Opening::Pass)?;
     let repo = directory.repo()?;
+    crate::logs::pass_fired(&repo);
     directory.check_identity()?;
     let base = directory.prepare_base_branch(base)?;
     let Some(lock) = try_pass_lock(&repo)? else {

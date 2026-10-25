@@ -15,6 +15,10 @@ mod support;
 #[path = "release/lifetime.rs"]
 mod lifetime;
 
+#[cfg(target_os = "linux")]
+#[path = "release/experiments.rs"]
+mod experiments;
+
 use std::fs;
 #[cfg(not(target_os = "linux"))]
 use std::io::Write;
@@ -25,6 +29,7 @@ use std::process::Stdio;
 use std::process::{Command, Output};
 
 use serde_json::{Value, json};
+use support::write_executable;
 use tempfile::TempDir;
 
 const REPO: &str = "JacobStephens2/thirdshift";
@@ -225,12 +230,10 @@ impl Release {
         // Execute the built binary through the script's Cargo interface, so
         // release tests do not rebuild it or depend on the machine's rustup.
         let cargo = release.bin().join("cargo");
-        fs::write(
+        write_executable(
             &cargo,
-            "#!/bin/sh\nexec \"$THIRDSHIFT_TEST_BINARY\" --release-summary\n",
-        )
-        .unwrap();
-        fs::set_permissions(&cargo, fs::Permissions::from_mode(0o755)).unwrap();
+            "#!/bin/sh\nwhile [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$THIRDSHIFT_TEST_BINARY\" \"$@\"\n",
+        );
         fs::create_dir(root.join("home")).unwrap();
         fs::write(
             root.join("gh-state.json"),
@@ -394,6 +397,43 @@ impl Release {
             "pending_polls": pending_polls,
         });
         self.gh(&["fake", "run", &run.to_string()]);
+    }
+
+    /// Moves origin's main just after the first CI listing, so the script
+    /// must fetch again before using that listing to start the release.
+    fn move_main_after_ci_read(&self, sha: &str) {
+        let unwrapped = self.bin().join("unwrapped");
+        fs::create_dir(&unwrapped).unwrap();
+        let gh = self.bin().join("gh");
+        fs::rename(&gh, unwrapped.join("gh")).unwrap();
+        write_executable(
+            &gh,
+            &format!(
+                r#"#!/bin/bash
+set -euo pipefail
+"$(dirname "$0")/unwrapped/gh" "$@"
+if [ "$1 $2" = 'run list' ] && [[ " $* " == *' --workflow ci.yml '* ]] &&
+    [ ! -e "$FAKE_GH_STATE.main-moved" ]; then
+    touch "$FAKE_GH_STATE.main-moved"
+    git -C "${{FAKE_GH_STATE%/*}}/origin.git" update-ref refs/heads/main {sha}
+fi
+"#
+            ),
+        );
+    }
+
+    /// Arranges a merge during the first tip's pending CI, with CI on the
+    /// new tip pending too before it reaches `conclusion`.
+    fn main_moves_while_waiting(&self, conclusion: &str) -> (String, String) {
+        let old = self.origin(&["rev-parse", "main"]);
+        self.merge_pr("incoming", "Merge while releasing", "");
+        let new = self.origin(&["rev-parse", "main"]);
+        self.origin(&["update-ref", "refs/heads/main", &old]);
+        self.main_ci_on(&new, "completed", conclusion, 2);
+        // An older commit's run can be listed newest; select CI by commit.
+        self.main_ci_on(&old, "completed", "success", 3);
+        self.move_main_after_ci_read(&new);
+        (old, new)
     }
 
     /// Every ref on origin with the commit it points at, to show a refusal
@@ -666,6 +706,33 @@ fn summary_and_rest(body: &str) -> (&str, &str) {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).into_owned()
+}
+
+/// The stderr of `output`, with each progress line's `HH:MM:SS` stamp checked
+/// and taken out, so `release: 18:20:32 opened …` reads `release: opened …`.
+/// Other lines are kept as they are.
+fn unstamped(output: &Output) -> String {
+    stderr(output)
+        .lines()
+        .map(|line| match stamped(line) {
+            Some((_, message)) => format!("release: {message}\n"),
+            None => format!("{line}\n"),
+        })
+        .collect()
+}
+
+/// The `HH:MM:SS` stamp of progress `line` and the message after it, or
+/// `None` if `line` is not a progress line. Panics on a progress line with no
+/// stamp.
+fn stamped(line: &str) -> Option<(chrono::NaiveTime, &str)> {
+    let rest = line.strip_prefix("release: ")?;
+    let (stamp, message) = rest
+        .split_once(' ')
+        .unwrap_or_else(|| panic!("no stamp in {line:?}"));
+    assert_eq!(stamp.len(), 8, "no HH:MM:SS stamp in {line:?}");
+    let stamp = chrono::NaiveTime::parse_from_str(stamp, "%H:%M:%S")
+        .unwrap_or_else(|_| panic!("no HH:MM:SS stamp in {line:?}"));
+    Some((stamp, message))
 }
 
 #[cfg(target_os = "linux")]
@@ -1040,7 +1107,7 @@ fn a_failed_or_blank_selected_harness_falls_back_without_trying_claude() {
 
         assert!(output.status.success(), "{}", stderr(&output));
         assert!(release.agent_calls().is_empty());
-        assert!(stderr(&output).contains("release: warning: the agent summary is unavailable"));
+        assert!(unstamped(&output).contains("release: warning: the agent summary is unavailable"));
         let body = release.pr_body("release-0.2.0");
         assert!(
             summary_and_rest(&body)
@@ -1176,7 +1243,7 @@ fn when_the_agent_fails_the_summary_is_the_generated_notes() {
     let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    let err = stderr(&output);
+    let err = unstamped(&output);
     assert!(
         err.lines()
             .any(|line| line.starts_with("release: warning:") && line.contains("agent summary")),
@@ -1221,8 +1288,41 @@ fn the_summary_is_the_agents_unless_it_fails_or_prints_only_blank_space() {
 
         assert!(output.status.success(), "{agent}: {}", stderr(&output));
         assert_eq!(stdout(&output), summary, "{agent}");
-        let warned = stderr(&output).contains("release: warning: the agent summary is unavailable");
+        let warned =
+            unstamped(&output).contains("release: warning: the agent summary is unavailable");
         assert_eq!(warned, summary == notes, "{agent}: {}", stderr(&output));
+    }
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn a_progress_line_is_stamped_with_the_local_time_it_was_printed() {
+    use chrono::Timelike;
+
+    // Kiritimati keeps UTC+14 all year, so its clock is never the host's or UTC's.
+    let kiritimati = chrono::FixedOffset::east_opt(14 * 3600).unwrap();
+    let now = || chrono::Utc::now().with_timezone(&kiritimati).time();
+    let before = now().with_nanosecond(0).unwrap();
+    let output = with_functions_of(
+        "release.sh",
+        "TZ=Pacific/Kiritimati progress waiting on 100% of '%s' runs",
+    );
+    let after = now();
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    let line = err
+        .strip_suffix('\n')
+        .filter(|line| !line.contains('\n'))
+        .unwrap_or_else(|| panic!("not one line: {err:?}"));
+    let (stamp, message) = stamped(line).unwrap_or_else(|| panic!("not a progress line: {err:?}"));
+    assert_eq!(message, "waiting on 100% of %s runs");
+    // A run across midnight wraps the clock, so only a forward span is bounded.
+    if before <= after {
+        assert!(
+            before <= stamp && stamp <= after,
+            "{stamp} not in {before}..{after}"
+        );
     }
 }
 
@@ -1252,7 +1352,7 @@ fn each_step_prints_a_progress_line_on_stderr() {
         ),
         format!("release: released v0.2.0 at {}", release_url()),
     ];
-    let err = stderr(&output);
+    let err = unstamped(&output);
     let lines: Vec<&str> = err.lines().collect();
     let mut at = 0;
     for line in &expected {
@@ -1279,7 +1379,7 @@ fn after_the_tag_the_script_waits_for_the_release_workflow_run_to_be_listed_and_
     let run = release.release_run();
     assert_eq!(run["hidden_polls"], 0);
     assert_eq!(run["pending_polls"], 0);
-    let err = stderr(&output);
+    let err = unstamped(&output);
     let waiting = [
         "release: waiting for the release workflow on v0.2.0 to start".to_owned(),
         format!(
@@ -1416,9 +1516,11 @@ fn review_prints_the_summary_and_yes_carries_on_with_it_as_written() {
     let output = release.run_script_with(&["--review", "0.2.0"], "y\n", &[]);
 
     assert!(output.status.success(), "{}", stderr(&output));
-    let err = stderr(&output);
+    let err = unstamped(&output);
     let summary_at = err.find(AGENT_SUMMARY).expect(&err);
-    let prompt_at = err.find("[y]es / [e]dit / [n]o").expect(&err);
+    let prompt_at = err
+        .find("release: open the PR with this summary? [y]es / [e]dit / [n]o")
+        .expect(&err);
     assert!(summary_at < prompt_at, "{err}");
     let body = release.pr_body("release-0.2.0");
     assert_eq!(
@@ -1436,8 +1538,7 @@ fn review_edit_opens_the_summary_in_the_editor_and_carries_on_with_what_was_save
     let release = Release::new();
     release.ci_reports(GREEN);
     let editor = release.root().join("editor.sh");
-    fs::write(&editor, "#!/bin/sh\nsed -i 's/headline/big news/' \"$1\"\n").unwrap();
-    fs::set_permissions(&editor, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&editor, "#!/bin/sh\nsed -i 's/headline/big news/' \"$1\"\n");
 
     let output = release.run_script_with(
         &["--review", "0.2.0"],
@@ -1622,8 +1723,11 @@ fn assert_refused_by(
     let output = run();
 
     assert_eq!(output.status.code(), Some(1), "{case} was not refused");
-    let err = stderr(&output);
-    assert!(err.contains("refusing to release"), "{case}: {err}");
+    let err = unstamped(&output);
+    assert!(
+        err.contains("release: refusing to release"),
+        "{case}: {err}"
+    );
     for reason in reasons {
         assert!(err.contains(reason), "{case}: no {reason:?} in {err}");
     }
@@ -1799,11 +1903,131 @@ fn an_unfinished_ci_run_on_main_that_does_not_succeed_pushes_nothing() {
 
 #[test]
 #[cfg(target_os = "linux")]
-fn a_main_whose_tip_ci_has_not_run_on_is_refused() {
+fn a_main_whose_tip_ci_appears_after_a_few_polls_is_released() {
     let release = Release::new();
     release.merge_pr("untested", "Not yet built", "");
+    let base = release.origin(&["rev-parse", "main"]);
+    release.gh(&[
+        "fake",
+        "run",
+        &json!({
+            "branch": "main",
+            "workflow": "ci.yml",
+            "event": "push",
+            "headSha": base,
+            "status": "completed",
+            "conclusion": "success",
+            "hidden_polls": 3,
+        })
+        .to_string(),
+    ]);
+    release.ci_reports(GREEN);
 
-    assert_refused(&release, "0.2.0", &["CI has not run on main at"]);
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    let waiting = err
+        .find(&format!(
+            "waiting for CI on main at {} to start",
+            &base[..7]
+        ))
+        .expect(&err);
+    assert!(
+        waiting < err.find("bumping the version").expect(&err),
+        "{err}"
+    );
+    let head = release.pr_head("release-0.2.0");
+    assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), base);
+    assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
+    assert_eq!(
+        release.origin_tag("v0.2.0"),
+        Some(release.origin(&["rev-parse", "main"]))
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn main_moving_during_ci_is_followed_and_the_bump_uses_the_tested_tip() {
+    let release = Release::new();
+    let (old, new) = release.main_moves_while_waiting("success");
+    release.ci_reports(GREEN);
+
+    let output = release.run_script("0.2.0");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    let err = stderr(&output);
+    let moved = err
+        .find(&format!(
+            "main moved from {} to {}; waiting for CI on {}",
+            &old[..7],
+            &new[..7],
+            &new[..7]
+        ))
+        .expect(&err);
+    assert!(
+        moved < err.find("bumping the version").expect(&err),
+        "{err}"
+    );
+    let head = release.pr_head("release-0.2.0");
+    assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), new);
+    assert_eq!(
+        release.origin(&["diff", "--numstat", &new, &head]),
+        "1\t1\tCargo.lock\n1\t1\tCargo.toml"
+    );
+    assert_eq!(release.pr("release-0.2.0")["state"], "MERGED");
+    assert_eq!(
+        release.origin_tag("v0.2.0"),
+        Some(release.origin(&["rev-parse", "main"]))
+    );
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn failed_ci_on_the_newest_tip_refuses_without_pushing() {
+    let release = Release::new();
+    let (old, new) = release.main_moves_while_waiting("failure");
+    let refs_before = release.origin_refs();
+    let prs_before = release.gh_state()["prs"].clone();
+
+    let output = release.run_script("0.2.0");
+
+    assert_eq!(output.status.code(), Some(1), "{}", stderr(&output));
+    let err = stderr(&output);
+    assert!(
+        err.contains(&format!(
+            "refusing to release 0.2.0: CI on main at {} ended in failure",
+            &new[..7]
+        )),
+        "{err}"
+    );
+    // Only the simulated incoming merge may change origin, not the release.
+    assert_eq!(
+        release.origin_refs(),
+        refs_before.replace(
+            &format!("refs/heads/main {old}"),
+            &format!("refs/heads/main {new}")
+        )
+    );
+    assert_eq!(release.gh_state()["prs"], prs_before);
+    assert!(release.agent_calls().is_empty());
+}
+
+#[test]
+#[cfg(target_os = "linux")]
+fn main_moving_during_a_completed_ci_read_is_followed() {
+    for conclusion in ["success", "failure"] {
+        let release = Release::new();
+        let (old, new) = release.main_moves_while_waiting("success");
+        release.main_ci_on(&old, "completed", conclusion, 0);
+        release.ci_reports(GREEN);
+
+        let output = release.run_script("0.2.0");
+
+        assert!(output.status.success(), "{}", stderr(&output));
+        let head = release.pr_head("release-0.2.0");
+        assert_eq!(release.origin(&["rev-parse", &format!("{head}^")]), new);
+    }
 }
 
 #[test]
@@ -1948,7 +2172,7 @@ fn a_rerun_after_the_pr_was_opened_merges_and_tags_without_a_second_pr_or_bump()
     let merge = release.origin(&["rev-parse", "main"]);
     assert_eq!(release.origin(&["rev-parse", &format!("{merge}^2")]), head);
     assert_eq!(release.origin_tag("v0.2.0"), Some(merge));
-    let err = stderr(&output);
+    let err = unstamped(&output);
     assert!(
         err.contains("release: waiting for CI on https://github.com/"),
         "{err}"
@@ -1971,7 +2195,7 @@ fn a_rerun_after_the_merge_tags_the_merge_commit_and_pushes_the_tag() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(release.origin_tag("v0.2.0"), Some(merge.clone()));
     assert_eq!(release.prs_from("release-0.2.0").len(), 1);
-    let err = stderr(&output);
+    let err = unstamped(&output);
     assert!(
         err.contains(&format!(
             "release: tagged v0.2.0 on {} and pushed the tag",
@@ -1995,7 +2219,7 @@ fn a_rerun_once_the_release_workflow_succeeded_prints_the_release_and_changes_no
     let output = release.run_script("0.2.0");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    let err = stderr(&output);
+    let err = unstamped(&output);
     assert!(err.contains("v0.2.0 is already tagged"), "{err}");
     assert_eq!(
         err.lines().last(),

@@ -1,7 +1,9 @@
-//! The search for the lowest-numbered Ready issue in a repository, saying
-//! why it passed over each issue labelled `ready-for-agent` before it. A
-//! Pickup run takes the issue it finds; any run can ask whether a repository
-//! has one, against the very same definition.
+//! The search for the Ready issue at the configured end of the issue
+//! numbers in a repository, saying why it passed over each issue labelled
+//! `ready-for-agent` before it. A Pickup run takes the issue it finds; any
+//! run can ask whether a repository has one, against the very same
+//! definition. An Architect run also waits for an issue that meets every
+//! Ready issue condition except settling.
 
 use anyhow::Result;
 use chrono::{DateTime, TimeDelta, Utc};
@@ -17,7 +19,45 @@ use crate::progress;
 use crate::spec_run::{self, Unstartable};
 use crate::trust::{self, UntrustedIssue};
 
-/// The lowest-numbered Ready issue a search found.
+/// Which end of the issue numbers a Pickup run takes its Ready issue from.
+/// Two hosts working through the same `ready-for-agent` queue from opposite
+/// ends collide less often; the reservation still protects either choice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PickupOrder {
+    /// The lowest-numbered Ready issue, the default.
+    #[default]
+    LowestFirst,
+    /// The highest-numbered Ready issue.
+    HighestFirst,
+}
+
+impl PickupOrder {
+    /// The `pickup.order` value and the Pickup flag that ask for `self`.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::LowestFirst => "lowest-first",
+            Self::HighestFirst => "highest-first",
+        }
+    }
+
+    /// The order `name`, a `pickup.order` value or Pickup flag word without
+    /// its dashes, asks for, if it names one.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "lowest-first" => Some(Self::LowestFirst),
+            "highest-first" => Some(Self::HighestFirst),
+            _ => None,
+        }
+    }
+}
+
+impl std::fmt::Display for PickupOrder {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
+/// The Ready issue a search found, at `order`'s end of the issue numbers.
 pub struct ReadyIssue {
     /// The issue, as the search listed it.
     pub listed: ListedIssue,
@@ -27,13 +67,61 @@ pub struct ReadyIssue {
     pub claim_generation: usize,
 }
 
-/// The lowest-numbered Ready issue in `repo`, the Launch directory
-/// `launch`'s repository, if there is one, with a line on stderr for each
-/// issue labelled `ready-for-agent` passed over before it, with why.
-/// Nothing is changed, on GitHub or in `launch`.
+/// An issue that goes before an Architect run, lowest number first.
+pub enum PriorityIssue {
+    Ready(ReadyIssue),
+    /// Every other Ready issue condition holds, including a Spec having a
+    /// Startable Ticket. Pickup still cannot take it.
+    Settling(ListedIssue),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Settling {
+    Wait,
+    Include,
+}
+
+/// The Ready issue at `order`'s end of the issue numbers in `repo`, the
+/// Launch directory `launch`'s repository, if there is one, with a line on
+/// stderr for each issue labelled `ready-for-agent` passed over before it,
+/// with why. Nothing is changed, on GitHub or in `launch`.
 /// `wait` is the User config's settling window since the latest shaping
-/// event; every pass uses the same Ready issue definition.
-pub fn first(launch: &Git, repo: &Repo, wait: TimeDelta) -> Result<Option<ReadyIssue>> {
+/// event.
+pub fn first(
+    launch: &Git,
+    repo: &Repo,
+    wait: TimeDelta,
+    order: PickupOrder,
+) -> Result<Option<ReadyIssue>> {
+    Ok(match search(launch, repo, wait, Settling::Wait, order)? {
+        Some(PriorityIssue::Ready(ready)) => Some(ready),
+        _ => None,
+    })
+}
+
+/// The lowest-numbered issue that is Ready or would be Ready once settled.
+/// Only Architect uses this search; Pickup and Security use `first`.
+pub fn before_architect(
+    launch: &Git,
+    repo: &Repo,
+    wait: TimeDelta,
+) -> Result<Option<PriorityIssue>> {
+    search(
+        launch,
+        repo,
+        wait,
+        Settling::Include,
+        PickupOrder::LowestFirst,
+    )
+}
+
+fn search(
+    launch: &Git,
+    repo: &Repo,
+    wait: TimeDelta,
+    settling: Settling,
+    order: PickupOrder,
+) -> Result<Option<PriorityIssue>> {
     let reads = GitHubAndOrigin {
         launch,
         github: GitHub::new(),
@@ -41,7 +129,8 @@ pub fn first(launch: &Git, repo: &Repo, wait: TimeDelta) -> Result<Option<ReadyI
     let candidates = reads
         .github
         .open_issues_labelled(&repo.slug(), READY_FOR_AGENT)?;
-    Search::new(&reads, candidates, Utc::now(), wait, progress::step).first_ready()
+    Search::new(&reads, candidates, Utc::now(), wait, order, progress::step)
+        .first_priority(settling)
 }
 
 /// Recheck only the selected issue after Pickup reserves it on origin. A
@@ -65,7 +154,7 @@ pub fn refresh(launch: &Git, selected: ReadyIssue, wait: TimeDelta) -> Result<Op
         title: current.title.unwrap_or_default(),
         labels: current.labels,
     };
-    match standing_of(&reads, &listed, Utc::now(), wait)? {
+    match standing_of(&reads, &listed, Utc::now(), wait, Settling::Wait)? {
         Standing::Ready {
             is_spec,
             claim_generation,
@@ -159,11 +248,11 @@ enum Reason {
 }
 
 /// The search of a repository's open issues labelled `ready-for-agent` for
-/// the lowest-numbered Ready issue.
+/// the Ready issue at `order`'s end of the issue numbers.
 struct Search<'a, R, P> {
     /// What it reads of each issue beyond its listing.
     reads: &'a R,
-    /// The issues, lowest number first.
+    /// The issues, in the order they are considered.
     candidates: Vec<ListedIssue>,
     /// Where each stands, in the same order, once it has been worked out.
     standings: Vec<Option<Standing>>,
@@ -172,6 +261,8 @@ struct Search<'a, R, P> {
     /// How long an issue is left after it was last shaped before it is a
     /// Ready issue, so a Spec is not taken while Tickets are attached.
     wait: TimeDelta,
+    /// Whether the search is also for an issue that is only settling.
+    settling: Settling,
     /// Where each line on an issue passed over goes, as soon as it is.
     passed_over: P,
 }
@@ -182,9 +273,13 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
         mut candidates: Vec<ListedIssue>,
         now: DateTime<Utc>,
         wait: TimeDelta,
+        order: PickupOrder,
         passed_over: P,
     ) -> Self {
         candidates.sort_by_key(|candidate| candidate.issue.number);
+        if order == PickupOrder::HighestFirst {
+            candidates.reverse();
+        }
         let standings = vec![None; candidates.len()];
         Search {
             reads,
@@ -192,13 +287,13 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
             standings,
             now,
             wait,
+            settling: Settling::Wait,
             passed_over,
         }
     }
 
-    /// The lowest-numbered Ready issue, if there is one, with a line for
-    /// each issue passed over before it.
-    fn first_ready(mut self) -> Result<Option<ReadyIssue>> {
+    fn first_priority(mut self, settling: Settling) -> Result<Option<PriorityIssue>> {
+        self.settling = settling;
         for at in 0..self.candidates.len() {
             match self.standing(at)? {
                 Standing::Ready {
@@ -206,11 +301,16 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
                     claim_generation,
                 } => {
                     let listed = self.candidates.swap_remove(at);
-                    return Ok(Some(ReadyIssue {
+                    return Ok(Some(PriorityIssue::Ready(ReadyIssue {
                         listed,
                         is_spec,
                         claim_generation,
-                    }));
+                    })));
+                }
+                Standing::PassedOver(Reason::Unsettled(_)) if settling == Settling::Include => {
+                    return Ok(Some(PriorityIssue::Settling(
+                        self.candidates.swap_remove(at),
+                    )));
                 }
                 Standing::PassedOver(reason) => {
                     if let Some(line) = self.line(at, &reason)? {
@@ -227,7 +327,13 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
         if let Some(standing) = &self.standings[at] {
             return Ok(standing.clone());
         }
-        let standing = standing_of(self.reads, &self.candidates[at], self.now, self.wait)?;
+        let standing = standing_of(
+            self.reads,
+            &self.candidates[at],
+            self.now,
+            self.wait,
+            self.settling,
+        )?;
         self.standings[at] = Some(standing.clone());
         Ok(standing)
     }
@@ -361,6 +467,7 @@ fn standing_of(
     candidate: &ListedIssue,
     now: DateTime<Utc>,
     wait: TimeDelta,
+    settling: Settling,
 ) -> Result<Standing> {
     let passed_over = |reason| Ok(Standing::PassedOver(reason));
     if let Some(label) = candidate.labels.unready() {
@@ -396,9 +503,14 @@ fn standing_of(
     if spec_run::all_closed(read.sub_issue_is_open.iter().copied()) {
         return passed_over(Reason::TicketsClosed);
     }
-    if wait > TimeDelta::zero()
-        && let Some(shaped) = read.last_shaped
-        && now - shaped.at < wait
+    let unsettled = read
+        .last_shaped
+        .filter(|shaped| wait > TimeDelta::zero() && now - shaped.at < wait);
+    // Pickup keeps its existing short circuit and passed-over reason.
+    // Architect must check every other condition before treating settling
+    // as the only reason an issue is not Ready.
+    if settling == Settling::Wait
+        && let Some(shaped) = &unsettled
     {
         return passed_over(Reason::Unsettled(shaped.by));
     }
@@ -415,6 +527,9 @@ fn standing_of(
         {
             return passed_over(Reason::NoStartableTicket(tickets));
         }
+    }
+    if let Some(shaped) = unsettled {
+        return passed_over(Reason::Unsettled(shaped.by));
     }
     Ok(Standing::Ready {
         is_spec,
@@ -603,16 +718,38 @@ mod tests {
         candidates: Vec<ListedIssue>,
         facts: Vec<(u64, Facts)>,
     ) -> (Option<(u64, bool)>, Vec<Seen>) {
+        search_ordered(candidates, facts, PickupOrder::LowestFirst)
+    }
+
+    /// [`search`], taking its Ready issue from `order`'s end of the issue
+    /// numbers.
+    fn search_ordered(
+        candidates: Vec<ListedIssue>,
+        facts: Vec<(u64, Facts)>,
+        order: PickupOrder,
+    ) -> (Option<(u64, bool)>, Vec<Seen>) {
         let seen = RefCell::new(Vec::new());
         let reads = InMemory {
             facts: facts.into_iter().collect(),
             seen: &seen,
         };
         let sink = |line| seen.borrow_mut().push(Seen::Line(line));
-        let ready = Search::new(&reads, candidates, now(), TimeDelta::minutes(30), sink)
-            .first_ready()
-            .unwrap()
-            .map(|ready| (ready.listed.issue.number, ready.is_spec));
+        let ready = Search::new(
+            &reads,
+            candidates,
+            now(),
+            TimeDelta::minutes(30),
+            order,
+            sink,
+        )
+        .first_priority(Settling::Wait)
+        .unwrap()
+        .map(|priority| {
+            let PriorityIssue::Ready(ready) = priority else {
+                panic!("a search waiting for settling selected an unsettled issue");
+            };
+            (ready.listed.issue.number, ready.is_spec)
+        });
         (ready, seen.into_inner())
     }
 
@@ -1247,6 +1384,79 @@ mod tests {
                 passed_over("#9 labelled in-progress"),
                 candidate_70,
                 started_70,
+            ]
+        );
+    }
+
+    #[test]
+    fn pickup_order_names_parse_back_to_themselves() {
+        for order in [PickupOrder::LowestFirst, PickupOrder::HighestFirst] {
+            assert_eq!(PickupOrder::parse(order.name()), Some(order));
+        }
+        assert_eq!(PickupOrder::parse("lowest"), None);
+        assert_eq!(PickupOrder::parse(""), None);
+        assert_eq!(PickupOrder::default(), PickupOrder::LowestFirst);
+    }
+
+    #[test]
+    fn highest_first_takes_the_highest_ready_issue_passing_over_downward() {
+        let started = Facts {
+            started: Some(Started::Branch("issue-71".to_string())),
+            ..Facts::default()
+        };
+        let (ready, seen) = search_ordered(
+            vec![
+                listed(7, &[]),
+                listed(9, &["in-progress"]),
+                listed(70, &[]),
+                listed(71, &[]),
+            ],
+            vec![(71, started)],
+            PickupOrder::HighestFirst,
+        );
+
+        assert_eq!(ready, Some((70, false)));
+        let [candidate_71, started_71] = every_read(71);
+        let [candidate_70, started_70] = every_read(70);
+        assert_eq!(
+            seen,
+            [
+                candidate_71,
+                started_71,
+                passed_over(
+                    "#71 started: issue-71 is on origin; no ready-for-agent hand-back after the last Claim ended"
+                ),
+                candidate_70,
+                started_70,
+            ]
+        );
+    }
+
+    #[test]
+    fn highest_first_gives_no_line_to_a_ticket_above_its_ready_spec() {
+        let ticket = || Facts {
+            parent: Some(url(20)),
+            ..Facts::default()
+        };
+        let spec = || Facts {
+            sub_issue_is_open: vec![true, true],
+            ..Facts::default()
+        };
+        let (ready, seen) = search_ordered(
+            vec![listed(7, &[]), listed(20, &[]), listed(21, &[])],
+            vec![(7, ticket()), (20, spec()), (21, ticket())],
+            PickupOrder::HighestFirst,
+        );
+
+        assert_eq!(ready, Some((20, true)));
+        let [candidate_20, started_20] = every_read(20);
+        assert_eq!(
+            seen,
+            [
+                Seen::CandidateRead(21),
+                candidate_20,
+                started_20,
+                Seen::TicketsRead(20),
             ]
         );
     }

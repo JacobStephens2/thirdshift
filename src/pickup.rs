@@ -1,11 +1,11 @@
 //! A Pickup run: from the Launch directory with no Issue URL, the search
-//! for the lowest-numbered Ready issue in the repository, saying why it
-//! passed over each issue labelled `ready-for-agent` before it, then that
-//! issue dispatched as a Spec run or a Run. Only one Pass per repository
-//! runs at a time on a machine: one started while another Pass is still
-//! running is skipped, before any search. One that runs first makes
-//! the Sweep, and is then skipped if it finds the repository at its Claim
-//! limit, or with no Ready issue.
+//! for the Ready issue at its order's end of the issue numbers in the
+//! repository, saying why it passed over each issue labelled
+//! `ready-for-agent` before it, then that issue dispatched as a Spec run or
+//! a Run. Only one Pass per repository runs at a time on a machine: one
+//! started while another Pass is still running is skipped, before any
+//! search. One that runs first makes the Sweep, and is then skipped if it
+//! finds the repository at its Claim limit, or with no Ready issue.
 
 use std::fmt;
 use std::num::NonZeroUsize;
@@ -22,7 +22,7 @@ use crate::labels::Edit;
 use crate::launch::{self, AlreadyRunning, Launch, Start};
 use crate::logs::{self, Pass, Work};
 use crate::pass::{Dispatch, LaunchAndGitHub, Outside};
-use crate::ready::ReadyIssue;
+use crate::ready::{PickupOrder, ReadyIssue};
 use crate::run::Ended;
 
 mod reservation;
@@ -104,31 +104,33 @@ impl fmt::Display for Skipped {
     }
 }
 
-/// Take the lowest-numbered Ready issue in the Launch directory's
-/// repository, saying which on stderr, after a line there on each issue
-/// labelled `ready-for-agent` it passed over on the way, with why, and
-/// dispatch it as `thirdshift <Issue URL>` with `flags` would run it, but on
-/// the Pickup run's Base branch. The Base branch is `base`, the branch the
-/// command named, whatever the Launch directory has checked out, or without
-/// one the branch checked out there. Nothing is changed in the Launch
-/// directory's checkout, nor on the issue taken: the run it is dispatched as
-/// makes the Claim. An auxiliary origin ref reserves the issue across hosts
-/// before dispatch; a stale Ready selection is rechecked while it is held.
+/// Take the Ready issue at `order`'s end of the issue numbers in the Launch
+/// directory's repository, saying which on stderr, after a line there on
+/// each issue labelled `ready-for-agent` it passed over on the way, with
+/// why, and dispatch it as `thirdshift <Issue URL>` with `flags` would run
+/// it, but on the Pickup run's Base branch. The Base branch is `base`, the
+/// branch the command named, whatever the Launch directory has checked out,
+/// or without one the branch checked out there. Nothing is changed in the
+/// Launch directory's checkout, nor on the issue taken: the run it is
+/// dispatched as makes the Claim. An auxiliary origin ref reserves the
+/// issue across hosts before dispatch; a stale Ready selection is rechecked
+/// while it is held.
 ///
 /// Once the preflight checks pass, and before any search, the Pickup run is
 /// skipped if another Pass on the same repository
 /// is still running on this machine. Otherwise this process is that
 /// repository's one such run until it exits, through whatever it dispatches.
 /// A skip is recorded in the repository's Activity log. The rest, from the
-/// Sweep to the dispatch, is [`run_through`], with `config`'s Claim limit,
-/// through the Launch directory, GitHub, the logs and `harness`, the
-/// Harness, Model and Effort the run it dispatches will run its sessions on,
-/// and `flags` and `config`, which ask that run.
+/// Sweep to the dispatch, is [`run_through`], with `config`'s Claim limit
+/// and `order`, through the Launch directory, GitHub, the logs and
+/// `harness`, the Harness, Model and Effort the run it dispatches will run
+/// its sessions on, and `flags` and `config`, which ask that run.
 pub fn run(
     base: Option<&str>,
     flags: &Flags,
     config: &UserConfig,
     harness: &mut Choice,
+    order: PickupOrder,
 ) -> Result<Outcome> {
     let Launch {
         directory,
@@ -155,6 +157,7 @@ pub fn run(
         &repo,
         base.name(),
         config.pickup_limit,
+        order,
         |ready| {
             let Some(reservation) =
                 reservation::Reservation::take(directory.git(), &ready.listed.issue)?
@@ -182,9 +185,10 @@ fn run_through<R>(
     repo: &Repo,
     base: &str,
     limit: NonZeroUsize,
+    order: PickupOrder,
     reserve: impl FnOnce(ReadyIssue) -> Result<Option<(ReadyIssue, R)>>,
 ) -> Result<Outcome> {
-    let ready = match gates(outside, repo, limit)? {
+    let ready = match gates(outside, repo, limit, order)? {
         Decision::Take(ready) => ready,
         Decision::Skip(skipped) => {
             outside.skipped(Pass::Pickup, &skipped);
@@ -233,9 +237,14 @@ enum Decision {
 
 /// The gates of a Pickup run on `repo`, reaching it through `outside`: the
 /// Sweep, then, if `limit` or more of its open issues carry a Claim, a skip
-/// for the Claim limit, then the Ready issue search, a skip if it finds
-/// none. No gate is read once one skips.
-fn gates(outside: &mut impl Outside, repo: &Repo, limit: NonZeroUsize) -> Result<Decision> {
+/// for the Claim limit, then the Ready issue search at `order`'s end of the
+/// issue numbers, a skip if it finds none. No gate is read once one skips.
+fn gates(
+    outside: &mut impl Outside,
+    repo: &Repo,
+    limit: NonZeroUsize,
+    order: PickupOrder,
+) -> Result<Decision> {
     sweep(outside);
     let mut claimed: Vec<_> = outside
         .open_issues(claim::IN_PROGRESS)?
@@ -250,7 +259,7 @@ fn gates(outside: &mut impl Outside, repo: &Repo, limit: NonZeroUsize) -> Result
             limit,
         }));
     }
-    Ok(match outside.ready_issue()? {
+    Ok(match outside.ready_issue(order)? {
         Some(ready) => Decision::Take(ready),
         None => Decision::Skip(Skipped::NoReadyIssue(repo.clone())),
     })
@@ -300,7 +309,7 @@ mod tests {
     /// issue it takes and whether it is a Spec, and what the gates did.
     fn decide(mut repo: InMemory, limit: usize) -> (Result<(u64, bool), String>, Vec<Call>) {
         let limit = NonZeroUsize::new(limit).unwrap();
-        let decided = match gates(&mut repo, &widgets(), limit).unwrap() {
+        let decided = match gates(&mut repo, &widgets(), limit, PickupOrder::LowestFirst).unwrap() {
             Decision::Take(ready) => Ok((ready.listed.issue.number, ready.is_spec)),
             Decision::Skip(skipped) => Err(skipped.to_string()),
         };
@@ -512,9 +521,14 @@ mod tests {
     fn pickup(repo: InMemory) -> (Result<Outcome>, Vec<Call>) {
         let mut repo = repo.dispatched_ending(ready_for_review());
         let limit = NonZeroUsize::new(3).unwrap();
-        let outcome = run_through(&mut repo, &widgets(), "main", limit, |ready| {
-            Ok(Some((ready, ())))
-        });
+        let outcome = run_through(
+            &mut repo,
+            &widgets(),
+            "main",
+            limit,
+            PickupOrder::LowestFirst,
+            |ready| Ok(Some((ready, ()))),
+        );
         (outcome, repo.calls)
     }
 
@@ -631,6 +645,6 @@ mod tests {
         assert_eq!(took.issue.number, 9);
         assert_eq!(took.title, "Issue 9");
         let reached = took.ended.outcome.ok().expect("the dispatched run failed");
-        assert_eq!(reached.pr_url, PR_URL);
+        assert_eq!(reached.resolution.url(), PR_URL);
     }
 }

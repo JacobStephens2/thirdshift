@@ -4,13 +4,30 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use serde::Serialize;
 
+use crate::config::UserConfig;
+use crate::logs::pass_starts::{self, PassStart};
+
+#[derive(Serialize)]
+pub(crate) struct CronJobs {
+    pub jobs: Vec<CronJob>,
+    pub pass_starts: Vec<PassStart>,
+}
+
 #[derive(Serialize)]
 pub struct CronJob {
     pub schedule: String,
     pub command: String,
 }
 
-pub fn load() -> Result<Vec<CronJob>> {
+pub(crate) fn load() -> Result<CronJobs> {
+    let config = UserConfig::load()?;
+    Ok(CronJobs {
+        jobs: jobs()?,
+        pass_starts: pass_starts::load(&config.logs_dir)?,
+    })
+}
+
+fn jobs() -> Result<Vec<CronJob>> {
     let output = Command::new("crontab")
         .arg("-l")
         .env("LC_ALL", "C")
@@ -36,18 +53,25 @@ pub fn load() -> Result<Vec<CronJob>> {
 }
 
 pub fn show(json: bool) -> Result<String> {
-    let jobs = load()?;
+    let inventory = load()?;
     if json {
-        return Ok(serde_json::to_string_pretty(&jobs)?);
+        return Ok(serde_json::to_string_pretty(&inventory)?);
     }
-    if jobs.is_empty() {
-        return Ok("No thirdshift cron jobs in this account's crontab.".into());
+    let mut lines = Vec::new();
+    if inventory.jobs.is_empty() {
+        lines.push("No thirdshift cron jobs in this account's crontab.".into());
     }
-    Ok(jobs
-        .iter()
-        .map(|job| format!("{}  {}", job.schedule, job.command))
-        .collect::<Vec<_>>()
-        .join("\n"))
+    lines.extend(
+        inventory
+            .jobs
+            .iter()
+            .map(|job| format!("{}  {}", job.schedule, job.command)),
+    );
+    lines.extend(inventory.pass_starts.iter().map(PassStart::line));
+    if inventory.pass_starts.is_empty() {
+        lines.push("No Pass start times recorded on this host.".into());
+    }
+    Ok(lines.join("\n"))
 }
 
 fn entry(line: &str) -> Option<CronJob> {

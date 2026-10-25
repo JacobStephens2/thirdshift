@@ -44,11 +44,33 @@ impl Goal {
     }
 }
 
-/// A Run, or a Spec run, that reached its goal.
+/// A successful Ticket run ending: a PR, or a bug handed back for information.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Resolution {
+    PullRequest { url: String, goal: Goal },
+    NotReproduced { comment_url: String },
+}
+
+impl Resolution {
+    pub fn goal(&self) -> Option<Goal> {
+        match self {
+            Self::PullRequest { goal, .. } => Some(*goal),
+            Self::NotReproduced { .. } => None,
+        }
+    }
+
+    /// The PR or triage comment the ending points to.
+    pub fn url(&self) -> &str {
+        match self {
+            Self::PullRequest { url, .. } => url,
+            Self::NotReproduced { comment_url } => comment_url,
+        }
+    }
+}
+
+/// A Ticket run, or a Spec run, that completed without failure.
 pub struct Reached {
-    pub pr_url: String,
-    /// The goal reached.
-    pub goal: Goal,
+    pub resolution: Resolution,
     /// The most recent session's log, if a session was started.
     pub log: Option<PathBuf>,
     /// In a Spec run, a line on each Ticket it landed; empty in a Run.
@@ -169,8 +191,10 @@ fn run(
                 issue.number
             )),
         }
-        asks.harness
-            .check_with_security_review(asks.security_review_harness.as_mut())?;
+        asks.harness.check_with_security_review(
+            &mut asks.security_review_harness,
+            asks.security_review_default.as_mut(),
+        )?;
     }
     let asks = &*asks;
     let child_asks = ChildAsks::of(asks);
@@ -178,13 +202,14 @@ fn run(
         directory: &directory,
         issue,
         goal: asks.goal,
-        security_review: child_asks.runs_security_review(started_by.child()),
+        security_review: child_asks.security_review,
         child_asks: &child_asks,
         base_fix,
         logs: Logs::of_run(issue),
         claim: None,
         issue_branch: None,
         child: started_by.child().is_some(),
+        diagnose_bugs: !matches!(started_by.child(), Some(Kind::BaseFix { .. })),
         started: Utc::now() - STARTED_MARGIN,
     };
     let outcome = start(
@@ -288,9 +313,15 @@ fn start<O: Outside>(
             },
             matches!(selection, Selection::Continuation { .. }),
         );
+        if let Some(review) = &asks.security_review_harness
+            && review.chosen_by == crate::harness::ChosenBy::SecurityConfig
+            && review.harness != asks.harness.harness
+        {
+            recovery.add_security_review_harness(review.harness);
+        }
     }
     if claims {
-        outside.end_claim(outcome.as_ref().ok().map(|reached| reached.goal));
+        outside.end_claim(outcome.as_ref().ok().map(|reached| &reached.resolution));
     }
     outcome
 }
@@ -359,7 +390,7 @@ trait Outside {
     /// Make the Claim on the issue.
     fn make_claim(&mut self) -> Result<()>;
     /// End the Claim made, with `reached`, the goal the Run reached, or none.
-    fn end_claim(&mut self, reached: Option<Goal>);
+    fn end_claim(&mut self, resolution: Option<&Resolution>);
     /// Create the worktree for the Issue branch `branch`, by `checkout`, on
     /// the Base branch `base`.
     fn worktree(&mut self, checkout: Checkout, branch: &str, base: &str) -> Result<Self::Worktree>;
@@ -401,6 +432,8 @@ struct LaunchAndGitHub<'a> {
     claim: Option<Claim<'a>>,
     issue_branch: Option<String>,
     child: bool,
+    /// Base fixes have their own reproduction flow.
+    diagnose_bugs: bool,
     /// When the Run began, less [`STARTED_MARGIN`], for its sessions' check
     /// for untrusted edits.
     started: DateTime<Utc>,
@@ -500,9 +533,12 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
         Ok(())
     }
 
-    fn end_claim(&mut self, reached: Option<Goal>) {
+    fn end_claim(&mut self, resolution: Option<&Resolution>) {
         if let Some(claim) = self.claim.take() {
-            claim.end(reached);
+            match resolution {
+                Some(Resolution::NotReproduced { .. }) => claim.needs_info(),
+                _ => claim.end(resolution.and_then(Resolution::goal)),
+            }
         }
     }
 
@@ -528,8 +564,17 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
         &mut self,
         worktree: Worktree,
         base: &str,
-        opening: Opening,
+        mut opening: Opening,
     ) -> Result<Reached, FailedRun> {
+        if self.diagnose_bugs {
+            let labels = GitHub::new().issue_labels(self.issue)?;
+            if labels.has(crate::labels::Label::new("bug", "A reported bug"))
+                && !labels.has(crate::security::fixing::SECURITY_FIX)
+            {
+                opening.session = OpeningSession::BugDiagnosis;
+                opening.prompt = prompt::diagnosing_bugs(self.issue, &opening.prompt);
+            }
+        }
         let mut pull_request = crate::pull_request::PullRequest::new(
             self.issue,
             worktree.branch(),
@@ -627,8 +672,10 @@ mod tests {
                 return Err(anyhow!("the work failed").into());
             }
             Ok(Reached {
-                pr_url: PR_URL.to_string(),
-                goal: self.goal,
+                resolution: Resolution::PullRequest {
+                    url: PR_URL.to_string(),
+                    goal: self.goal,
+                },
                 log: None,
                 ticket_lines: Vec::new(),
             })
@@ -658,7 +705,11 @@ mod tests {
             let spec_run = match work {
                 Work::Run(_) | Work::BaseFix(_) => false,
                 Work::SpecRun(_) => true,
-                Work::PickupRun(_) | Work::ArchitectRun(_) | Work::SecurityRun(_) => {
+                Work::PickupRun(_)
+                | Work::ArchitectRun(_)
+                | Work::SecurityRun(_)
+                | Work::ScoringRun(_)
+                | Work::Experiment(_) => {
                     panic!("not a Run's work")
                 }
             };
@@ -697,8 +748,9 @@ mod tests {
             Ok(())
         }
 
-        fn end_claim(&mut self, reached: Option<Goal>) {
-            self.calls.push(Call::EndClaim(reached));
+        fn end_claim(&mut self, resolution: Option<&Resolution>) {
+            self.calls
+                .push(Call::EndClaim(resolution.and_then(Resolution::goal)));
         }
 
         fn worktree(&mut self, checkout: Checkout, branch: &str, base: &str) -> Result<Checkout> {
@@ -792,6 +844,7 @@ mod tests {
     fn asks() -> Asks {
         Asks {
             security_review_harness: None,
+            security_review_default: None,
             security_fix: false,
             security_review: false,
             goal: Goal::ReadyForReview,
@@ -898,7 +951,9 @@ mod tests {
         let (calls, ended) = run_on(Script::default());
 
         assert_eq!(
-            ended.ok().map(|reached| reached.pr_url),
+            ended
+                .ok()
+                .map(|reached| reached.resolution.url().to_string()),
             Some(PR_URL.to_string())
         );
         assert_eq!(

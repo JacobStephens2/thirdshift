@@ -1,17 +1,22 @@
 //! Owned Inbox presentation for the Console, from the same observations as status.
 use anyhow::Result;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, Utc};
 use std::path::Path;
 
 use super::{age, stage_text, ticket_text};
 use crate::config::UserConfig;
 use crate::logs::command_record::Issue;
+use crate::logs::pass_starts::PassStart;
 use crate::logs::reading::{Command, Entry, Group, Health, Observation, Snapshot};
 
 pub(crate) struct Inbox {
+    /// Outer Command trees with live work, independent of sections and rows.
+    pub active_runs: usize,
     pub sections: Vec<Section>,
     pub idle_passes: Vec<String>,
+    pub pass_starts: Vec<PassStart>,
     pub warning: Option<&'static str>,
+    pub github_warning: Option<String>,
 }
 
 pub(crate) struct Section {
@@ -37,15 +42,53 @@ pub(crate) struct Row {
     pub title: String,
     pub state: String,
     pub now_line: String,
-    pub age: String,
+    pub timing: Timing,
     pub count: usize,
     pub cause: String,
+    /// Why and when the row left Needs you or Ready for review, empty
+    /// while it still waits or never waited.
+    pub left: String,
     pub harness: String,
     pub pull_request: String,
     pub tickets: Vec<String>,
     pub children: Vec<Row>,
     pub findings: Vec<crate::security::RecordedFinding>,
     pub sessions: Vec<std::path::PathBuf>,
+}
+
+pub(crate) struct Timing {
+    pub finish: Option<Finish>,
+    pub age: String,
+}
+
+pub(crate) struct Finish {
+    pub datetime: String,
+    pub label: String,
+}
+
+impl Timing {
+    fn new(live: bool, start: &str, end: Option<&str>, now: DateTime<Local>) -> Self {
+        if live {
+            return Self {
+                finish: None,
+                age: elapsed(start, now),
+            };
+        }
+        let finish = end.and_then(|end| {
+            DateTime::parse_from_rfc3339(end).ok().map(|time| Finish {
+                datetime: end.into(),
+                label: time
+                    .with_timezone(&Utc)
+                    .format("%b %-d, %Y at %H:%M:%S UTC")
+                    .to_string(),
+            })
+        });
+        let age = finish.as_ref().map_or_else(
+            || "End time unknown".into(),
+            |finish| format!("{} ago", elapsed(&finish.datetime, now)),
+        );
+        Self { finish, age }
+    }
 }
 
 impl Row {
@@ -151,7 +194,7 @@ pub(crate) fn archive(
 
 fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Path) -> Result<Row> {
     match entry {
-        Observation::Record(command) => row(command, now, None, root),
+        Observation::Record(command) => row(command, now, root),
         Observation::History(command) => {
             let (subject, title) =
                 subject(&command.repository, &command.kind, command.issue.as_ref());
@@ -179,12 +222,10 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                     .outcome
                     .clone()
                     .unwrap_or_else(|| "unknown outcome".into()),
-                age: elapsed(
-                    command.ended_at.as_deref().unwrap_or(&command.started_at),
-                    now,
-                ),
+                timing: Timing::new(false, &command.started_at, command.ended_at.as_deref(), now),
                 count: 1,
                 cause: String::new(),
+                left: String::new(),
                 harness: String::new(),
                 pull_request: String::new(),
                 tickets: Vec::new(),
@@ -199,10 +240,15 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
 pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
     let now = Local::now();
     let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
-    let items = snapshot.inbox(false, config.inbox_days);
-    let ready_selectors: std::collections::BTreeSet<_> = items
+    // The Console shows the same groups as `status` by reading the same
+    // kept answer. The Console's background reader refreshes it independently
+    // of requests; status reads GitHub only when that answer is too old.
+    let kept = crate::logs::github::load(&config.logs_dir);
+    let items = snapshot
+        .evaluate_inbox(config.inbox_days, &kept)
+        .into_rows(false);
+    let listed: std::collections::BTreeSet<_> = items
         .iter()
-        .filter(|item| item.group == Group::ReadyForReview)
         .filter_map(|item| item.command.selector())
         .collect();
     let sections = Group::ORDER
@@ -214,15 +260,22 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                 .filter(|item| item.group == group)
                 .map(|item| {
                     let mut row = entry_row(item.command, now, &config.logs_dir)?;
-                    // Ready dispatched Runs have their own Inbox row. Preserve
-                    // the full tree in history/show without duplicating DOM IDs.
+                    // Ready dispatched Runs have their own Inbox row, in
+                    // whichever group they reached. Preserve the full tree in
+                    // history/show without duplicating DOM IDs.
                     row.children
-                        .retain(|child| !ready_selectors.contains(&child.selector));
-                    if let Some(kind) = item.needs_you_kind {
-                        row.state = kind.title().into();
-                    }
+                        .retain(|child| !listed.contains(&child.selector));
+                    row.state = item.state_word().into();
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
+                    row.left = item
+                        .dismissal
+                        .as_ref()
+                        .map(|dismissal| dismissal.line())
+                        .into_iter()
+                        .chain(item.left_line())
+                        .collect::<Vec<_>>()
+                        .join("; ");
                     Ok(row)
                 })
                 .collect::<Result<_>>()?;
@@ -264,8 +317,11 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
         })
         .collect::<Result<_>>()?;
     Ok(Inbox {
+        active_runs: snapshot.active_runs(),
         sections,
+        github_warning: kept.warning(),
         idle_passes: snapshot.idle_passes.iter().map(|pass| format!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason)).collect(),
+        pass_starts: snapshot.pass_starts,
         warning: (config.effective_waiting_line_interval() != config.waiting_line_interval).then_some(
             "logs.waiting_line_minutes must be less than inbox.silent_minutes; using half the silent time for waiting lines"),
     })
@@ -280,7 +336,10 @@ fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, Stri
                 .clone()
                 .unwrap_or_else(|| "(title unavailable)".into()),
         ),
-        None => (format!("{name} on {repository}"), String::new()),
+        None => (
+            format!("{} on {repository}", crate::logs::display_name(name)),
+            String::new(),
+        ),
     }
 }
 
@@ -290,14 +349,9 @@ fn issue_url(issue: Option<&Issue>) -> Option<String> {
         .filter(|url| url.starts_with("https://"))
 }
 
-fn row(
-    command: &Command,
-    now: DateTime<Local>,
-    outer_log: Option<&Path>,
-    root: &Path,
-) -> Result<Row> {
+fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
     let facts = &command.record;
-    let log = outer_log.unwrap_or(&command.command_log);
+    let (log_length, session_length) = command.activity_lengths();
     let live = command.state == "live";
     let (subject, title) = subject(&facts.repository, &facts.name, facts.issue.as_ref());
     Ok(Row {
@@ -315,17 +369,7 @@ fn row(
         occurred_ms: timestamp(facts.ended_at.as_deref().unwrap_or(&facts.started_at)),
         live,
         logging: live && !matches!(command.health, Some(Health::Silent { .. })),
-        log_growth: format!(
-            "{}:{}",
-            log_length(Some(log)),
-            log_length(
-                facts
-                    .session_log
-                    .as_deref()
-                    .map(crate::logs::session::path)
-                    .as_deref()
-            )
-        ),
+        log_growth: format!("{log_length}:{session_length}"),
         selector: Observation::Record(command).selector().unwrap_or_default(),
         logs_url: logs_url(&command.record_path, root),
         subject,
@@ -333,9 +377,18 @@ fn row(
         title,
         state: command.state.into(),
         now_line: stage_text(command),
-        age: elapsed(facts.ended_at.as_deref().unwrap_or(&facts.started_at), now),
+        timing: Timing::new(
+            live,
+            &facts.started_at,
+            facts
+                .ended_at
+                .as_deref()
+                .filter(|_| !facts.end_time_estimated),
+            now,
+        ),
         count: 1,
         cause: facts.cause.clone().unwrap_or_default(),
+        left: String::new(),
         harness: format!(
             "{} · {} · {}",
             facts.harness,
@@ -352,7 +405,7 @@ fn row(
             .dispatched
             .iter()
             .chain(&command.children)
-            .map(|child| row(child, now, Some(log), root))
+            .map(|child| row(child, now, root))
             .collect::<Result<_>>()?,
         findings: facts.security_findings.clone(),
         sessions: command.sessions()?,
@@ -363,11 +416,6 @@ fn logs_url(path: &std::path::Path, root: &std::path::Path) -> String {
     path.strip_prefix(root)
         .map(|path| format!("/logs/command/{}", crate::logs::catalog::id(path)))
         .unwrap_or_else(|_| "/?page=logs".into())
-}
-
-fn log_length(path: Option<&Path>) -> u64 {
-    path.and_then(|path| std::fs::metadata(path).ok())
-        .map_or(0, |file| file.len())
 }
 
 fn timestamp(value: &str) -> i64 {

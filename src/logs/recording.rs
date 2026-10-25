@@ -37,6 +37,7 @@ pub(super) struct Record<O: Outside> {
     parent_record: Option<PathBuf>,
     parent_dispatch: Option<String>,
     record_warned: bool,
+    unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
 }
 
 enum Log<W> {
@@ -88,6 +89,7 @@ impl<O: Outside> Record<O> {
             parent_record: None,
             parent_dispatch: None,
             record_warned: false,
+            unaddressed_findings: None,
         }
     }
 
@@ -98,6 +100,8 @@ impl<O: Outside> Record<O> {
             Begin::ArchitectRun => CommandKind::Architect,
             Begin::PickupRun => CommandKind::Pickup,
             Begin::SecurityRun => CommandKind::Secure,
+            Begin::ScoringRun => CommandKind::Scoring,
+            Begin::Experiment => CommandKind::Experiment,
         };
         let (starting, quiet) = match begin {
             Begin::ChildRun(stamp, _) => {
@@ -109,6 +113,8 @@ impl<O: Outside> Record<O> {
             Begin::ArchitectRun => ("Architect run starting".into(), true),
             Begin::PickupRun => ("Pickup run starting".into(), true),
             Begin::SecurityRun => ("Security run starting".into(), true),
+            Begin::ScoringRun => ("Scoring run starting".into(), false),
+            Begin::Experiment => ("Experiment starting".into(), false),
         };
         let now = self.outside.now();
         self.stamp
@@ -125,6 +131,25 @@ impl<O: Outside> Record<O> {
         self.otlp_endpoint = config.otlp_endpoint.clone();
         if !config.quiet_skips {
             self.show_held();
+        }
+    }
+
+    pub(super) fn pass_fired(&mut self, repo: &Repo) {
+        let pass = match self.command {
+            CommandKind::Architect => Pass::Architect,
+            CommandKind::Pickup => Pass::Pickup,
+            CommandKind::Secure => Pass::Security,
+            _ => return,
+        };
+        let path = super::pass_starts::path(&self.root(repo), pass);
+        let time = self.outside.now().to_rfc3339();
+        // One atomic replacement per kind also keeps competing launches from
+        // truncating a reader's time or overwriting another kind's start.
+        if let Err(error) = self.outside.replace_record(&path, time.as_bytes()) {
+            self.show_held();
+            self.step(format_args!(
+                "warning: could not keep the Pass's last-fired time: {error:#}"
+            ));
         }
     }
 
@@ -329,18 +354,53 @@ impl<O: Outside> Record<O> {
         self.write_record();
     }
 
+    pub(super) fn unaddressed_findings(
+        &mut self,
+        counts: Option<crate::pull_request::UnaddressedFindings>,
+    ) {
+        self.unaddressed_findings = counts;
+    }
+
     pub(super) fn finished(&mut self, account: &crate::run_ending::Account<'_>) {
+        let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record {
-            tree.command.finish(account, self.outside.now());
+            tree.command.finish(
+                account,
+                &mut self.outside,
+                &ranges,
+                self.unaddressed_findings.take(),
+            );
+            self.write_record();
+        }
+    }
+
+    pub(super) fn experiment(&mut self, description: &crate::evals::experiment::Description) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.experiment = Some(description.clone());
+            self.write_record();
+        }
+    }
+
+    pub(super) fn experiment_finished(&mut self, outcome: &str, cause: Option<&str>) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.outcome = Some(outcome.into());
+            tree.command.cause = cause.map(String::from);
+            tree.command.ended_at = Some(self.outside.now().to_rfc3339());
             self.write_record();
         }
     }
 
     pub(super) fn dispatch_ended(&mut self, account: &crate::run_ending::Account<'_>) {
+        let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record
             && let Some(dispatched) = tree.dispatched.last_mut()
         {
-            dispatched.finish(account, self.outside.now());
+            dispatched.finish(
+                account,
+                &mut self.outside,
+                &ranges,
+                self.unaddressed_findings.take(),
+            );
             self.write_record();
         }
     }
@@ -359,6 +419,30 @@ impl<O: Outside> Record<O> {
             facts.process_start = tree.command.process_start.clone();
             tree.dispatched.push(facts);
             self.write_record();
+        }
+    }
+
+    fn usual_ranges(&mut self) -> super::usual_range::UsualRanges {
+        let Some((path, tree)) = &self.command_record else {
+            return super::usual_range::UsualRanges::default();
+        };
+        let root = self
+            .logs_dir
+            .as_ref()
+            .unwrap()
+            .join(&tree.command.repository);
+        match self.outside.command_records(&root) {
+            Ok(mut records) => {
+                // The Run being finished must not supply its own comparison times.
+                records.remove(path);
+                super::usual_range::UsualRanges::from_records(&records)
+            }
+            Err(error) => {
+                self.step(format_args!(
+                    "warning: could not read Usual ranges for Run metrics: {error:#}"
+                ));
+                super::usual_range::UsualRanges::default()
+            }
         }
     }
 
@@ -443,10 +527,10 @@ impl<O: Outside> Record<O> {
         Some(super::trace::Context::from_record(owner, active))
     }
 
-    /// Child Runs carry the owning CommandKind, so a Security run's entire
-    /// Session tree stays local even while it dispatches public fixes.
+    /// Child Runs carry the owning CommandKind, so private Security and
+    /// Scoring Session trees stay local, including public Security fixes.
     pub(super) fn otlp_endpoint(&self) -> Option<String> {
-        if self.command == CommandKind::Secure {
+        if matches!(self.command, CommandKind::Secure | CommandKind::Scoring) {
             None
         } else {
             self.otlp_endpoint.clone()

@@ -134,18 +134,17 @@ echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","name":"ru
     }
     scenario.assert_every_grok_session_found_the_factory_skills();
     let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
-    let log = std::fs::read_to_string(scenario.path(&format!(
+    let log = support::session_trace::events(scenario.path(&format!(
         "home/.thirdshift/logs/acme/widgets/commands/issue/{}",
         logs[0]
-    )))
-    .unwrap();
+    )));
     assert!(log.contains("fake-grok-1"));
     assert!(log.contains("\"type\": \"result\""));
     assert!(
         scenario.gh_state()["prs"][0]["body"]
             .as_str()
             .unwrap()
-            .contains("Built with grok · grok-4.7 · high")
+            .contains("Built with grok 9.8.7 · grok-4.7 · high")
     );
 }
 
@@ -174,11 +173,10 @@ fn groks_error_is_in_the_failure_cause_even_when_the_cli_exits_zero() {
         assert_eq!(result.code, Some(1), "{}", result.stderr);
         assert!(result.stderr.contains(cause), "{}", result.stderr);
         let logs = scenario.log_files("home/.thirdshift/logs/acme/widgets/commands/issue", "jsonl");
-        let log = std::fs::read_to_string(scenario.path(&format!(
+        let log = support::session_trace::events(scenario.path(&format!(
             "home/.thirdshift/logs/acme/widgets/commands/issue/{}",
             logs[0]
-        )))
-        .unwrap();
+        )));
         let results = log
             .lines()
             .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())

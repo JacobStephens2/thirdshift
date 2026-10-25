@@ -71,7 +71,7 @@ pub struct Given {
     /// The start stamp of the command that started it, which its Session
     /// logs take.
     pub stamp: String,
-    /// The owning command, whose folder its Session logs inherit.
+    /// The owning command, whose folder its Session traces inherit.
     pub command: logs::CommandKind,
     /// What it is asked about a Base fix.
     pub base_fix: BaseFixAsk,
@@ -101,6 +101,9 @@ const ALLOW_BASE_FIX: &str = "--allow-base-fix";
 /// The hidden arguments that give a child Run [`ChildAsks::security_review`]
 /// and [`ChildAsks::security_fix`].
 const SECURITY_REVIEW: &str = "--run-security-review";
+const SECURITY_REVIEW_DEFAULT: &str = "--security-review-default";
+const SECURITY_REVIEW_DEFAULT_MODEL: &str = "--security-review-default-model";
+const SECURITY_REVIEW_DEFAULT_EFFORT: &str = "--security-review-default-effort";
 const ALLOW_SECURITY_FIX: &str = "--allow-security-fix";
 
 /// The hidden argument followed by the command that starts the Spec run
@@ -156,24 +159,91 @@ impl Given {
         if self.asks.security_review {
             args.push(SECURITY_REVIEW);
         }
-        let harness = &self.asks.harness;
-        args.extend([SESSIONS_HARNESS, harness.harness.name()]);
-        if let Some(model) = &harness.model {
-            args.extend([SESSIONS_MODEL, model]);
+        if let Some(default) = &self.asks.security_review_default {
+            append_choice(&mut args, default, DEFAULT_FLAGS);
         }
-        if let Some(effort) = &harness.effort {
-            args.extend([SESSIONS_EFFORT, effort]);
-        }
+        append_choice(&mut args, &self.asks.harness, SESSION_FLAGS);
         if let Some(security) = &self.asks.security_review_harness {
-            args.extend([SECURITY_REVIEW_HARNESS, security.harness.name()]);
-            if let Some(model) = &security.model {
-                args.extend([SECURITY_REVIEW_MODEL, model]);
-            }
-            if let Some(effort) = &security.effort {
-                args.extend([SECURITY_REVIEW_EFFORT, effort]);
-            }
+            append_choice(&mut args, security, REVIEW_FLAGS);
         }
         args
+    }
+}
+
+const SESSION_FLAGS: [&str; 3] = [SESSIONS_HARNESS, SESSIONS_MODEL, SESSIONS_EFFORT];
+const REVIEW_FLAGS: [&str; 3] = [
+    SECURITY_REVIEW_HARNESS,
+    SECURITY_REVIEW_MODEL,
+    SECURITY_REVIEW_EFFORT,
+];
+const DEFAULT_FLAGS: [&str; 3] = [
+    SECURITY_REVIEW_DEFAULT,
+    SECURITY_REVIEW_DEFAULT_MODEL,
+    SECURITY_REVIEW_DEFAULT_EFFORT,
+];
+
+fn append_choice<'a>(args: &mut Vec<&'a str>, choice: &'a Choice, flags: [&'static str; 3]) {
+    args.extend([flags[0], choice.harness.name()]);
+    for (flag, value) in [(flags[1], &choice.model), (flags[2], &choice.effort)] {
+        if let Some(value) = value {
+            args.extend([flag, value]);
+        }
+    }
+}
+
+/// One Harness choice while its hidden command arguments are being read.
+#[derive(Default)]
+struct PendingChoice {
+    harness: Option<Harness>,
+    model: Option<String>,
+    effort: Option<String>,
+}
+
+impl PendingChoice {
+    fn is_given(&self) -> bool {
+        self.harness.is_some() || self.model.is_some() || self.effort.is_some()
+    }
+
+    fn take<'a>(
+        &mut self,
+        arg: &str,
+        rest: &mut impl Iterator<Item = &'a String>,
+        flags: [&str; 3],
+    ) -> Result<bool> {
+        let Some(at) = flags.iter().position(|flag| *flag == arg) else {
+            return Ok(false);
+        };
+        let name = ["Harness", "Model", "Effort"][at];
+        if at == 0 {
+            not_yet_given(&self.harness, arg)?;
+            let value = rest.next().with_context(|| format!("missing {name}"))?;
+            self.harness =
+                Some(Harness::named(value).with_context(|| {
+                    format!("{arg} must be followed by a Harness, not {value}")
+                })?);
+        } else {
+            let given = if at == 1 {
+                &mut self.model
+            } else {
+                &mut self.effort
+            };
+            not_yet_given(given, arg)?;
+            let value = rest.next().with_context(|| format!("missing {name}"))?;
+            *given = Some(value.clone());
+        }
+        Ok(true)
+    }
+
+    fn finish(self, flags: [&str; 3], chosen_by: ChosenBy) -> Result<Option<Choice>> {
+        if self.harness.is_none() && (self.model.is_some() || self.effort.is_some()) {
+            bail!("{} and {} need {}", flags[1], flags[2], flags[0]);
+        }
+        Ok(self.harness.map(|harness| Choice {
+            harness,
+            model: self.model,
+            effort: self.effort,
+            chosen_by,
+        }))
     }
 }
 
@@ -188,12 +258,9 @@ pub struct Reader {
     base_fix: Option<BaseFixAsk>,
     security_review: bool,
     security_fix: bool,
-    harness: Option<Harness>,
-    model: Option<String>,
-    effort: Option<String>,
-    security_review_harness: Option<Harness>,
-    security_review_model: Option<String>,
-    security_review_effort: Option<String>,
+    sessions: PendingChoice,
+    review: PendingChoice,
+    review_default: PendingChoice,
 }
 
 impl Reader {
@@ -205,6 +272,12 @@ impl Reader {
         arg: &str,
         rest: &mut impl Iterator<Item = &'a String>,
     ) -> Result<bool> {
+        if self.sessions.take(arg, rest, SESSION_FLAGS)?
+            || self.review.take(arg, rest, REVIEW_FLAGS)?
+            || self.review_default.take(arg, rest, DEFAULT_FLAGS)?
+        {
+            return Ok(true);
+        }
         let mut value = |missing: &str| match rest.next() {
             Some(value) => Ok(value.clone()),
             None => bail!("missing {missing}"),
@@ -257,34 +330,6 @@ impl Reader {
                     }
                 });
             }
-            SESSIONS_HARNESS | SECURITY_REVIEW_HARNESS => {
-                let given = if arg == SESSIONS_HARNESS {
-                    &mut self.harness
-                } else {
-                    &mut self.security_review_harness
-                };
-                not_yet_given(given, arg)?;
-                let name = value("Harness")?;
-                let harness = Harness::named(&name)
-                    .with_context(|| format!("{arg} must be followed by a Harness, not {name}"))?;
-                *given = Some(harness);
-            }
-            SECURITY_REVIEW_MODEL => {
-                not_yet_given(&self.security_review_model, arg)?;
-                self.security_review_model = Some(value("Model")?);
-            }
-            SECURITY_REVIEW_EFFORT => {
-                not_yet_given(&self.security_review_effort, arg)?;
-                self.security_review_effort = Some(value("Effort")?);
-            }
-            SESSIONS_MODEL => {
-                not_yet_given(&self.model, arg)?;
-                self.model = Some(value("Model")?);
-            }
-            SESSIONS_EFFORT => {
-                not_yet_given(&self.effort, arg)?;
-                self.effort = Some(value("Effort")?);
-            }
             _ => return Ok(false),
         }
         Ok(true)
@@ -300,40 +345,28 @@ impl Reader {
                 || self.base_fix.is_some()
                 || self.security_review
                 || self.security_fix
-                || self.harness.is_some()
-                || self.model.is_some()
-                || self.effort.is_some()
-                || self.security_review_harness.is_some()
-                || self.security_review_model.is_some()
-                || self.security_review_effort.is_some()
+                || self.sessions.is_given()
+                || self.review.is_given()
+                || self.review_default.is_given()
             {
                 bail!(
-                    "only a child Run is given {STAMP}, {ALLOW_BASE_FIX}, {OFFER_BASE_FIX}, \
+                    "only a child Ticket run is given {STAMP}, {ALLOW_BASE_FIX}, {OFFER_BASE_FIX}, \
                      {SESSIONS_HARNESS}, {SESSIONS_MODEL}, {SESSIONS_EFFORT}, \
                      {SECURITY_REVIEW_HARNESS}, {SECURITY_REVIEW_MODEL}, \
-                     {SECURITY_REVIEW_EFFORT} or {LOGS_COMMAND}"
+                     {SECURITY_REVIEW_EFFORT}, {SECURITY_REVIEW_DEFAULT}, \
+                     {SECURITY_REVIEW_DEFAULT_MODEL}, {SECURITY_REVIEW_DEFAULT_EFFORT} or {LOGS_COMMAND}"
                 );
             }
             return Ok(None);
         };
-        if self.security_review_harness.is_none()
-            && (self.security_review_model.is_some() || self.security_review_effort.is_some())
-        {
-            bail!(
-                "{SECURITY_REVIEW_MODEL} and {SECURITY_REVIEW_EFFORT} need {SECURITY_REVIEW_HARNESS}"
-            );
-        }
-        let security_review_harness = self.security_review_harness.map(|harness| Choice {
-            harness,
-            model: self.security_review_model,
-            effort: self.security_review_effort,
-            // Chosen by the User config of the command that started it,
-            // whose checks it passed.
-            chosen_by: ChosenBy::SecurityConfig,
-        });
+        let security_review_harness = self.review.finish(REVIEW_FLAGS, ChosenBy::SecurityConfig)?;
+        let security_review_default = self
+            .review_default
+            .finish(DEFAULT_FLAGS, ChosenBy::UserConfig)?;
         let stamp = self.stamp.with_context(|| format!("missing {STAMP}"))?;
         let harness = self
-            .harness
+            .sessions
+            .finish(SESSION_FLAGS, ChosenBy::Command)?
             .with_context(|| format!("missing {SESSIONS_HARNESS}"))?;
         Ok(Some(Given {
             kind,
@@ -343,15 +376,9 @@ impl Reader {
                 .with_context(|| format!("missing {LOGS_COMMAND}"))?,
             base_fix: self.base_fix.unwrap_or(BaseFixAsk::Forbid),
             asks: ChildAsks {
-                harness: Choice {
-                    harness,
-                    model: self.model,
-                    effort: self.effort,
-                    // Chosen by the command that started it, whose checks it
-                    // passed.
-                    chosen_by: ChosenBy::Command,
-                },
+                harness,
                 security_review_harness,
+                security_review_default,
                 security_fix: self.security_fix,
                 security_review: self.security_review,
             },
@@ -370,13 +397,15 @@ fn not_yet_given<T>(given: &Option<T>, arg: &str) -> Result<()> {
 /// How a child Run ended.
 #[derive(Debug)]
 pub enum Ended {
+    /// Diagnosis completed, but the Ticket remains open needing information.
+    NotReproduced { comment_url: String },
     /// It reached its goal, with its PR as it printed it, and what became
     /// of the Base fix it took, if any, as it reported it.
     Reached {
         pr_url: Option<String>,
         base_fix: Option<String>,
     },
-    /// Why, and its session log, as it reported them.
+    /// Why, and its session trace, as it reported them.
     Failed {
         cause: String,
         log: Option<String>,
@@ -406,7 +435,7 @@ pub struct Handle {
 }
 
 /// Start a Run of `kind` on `issue` in a child `thirdshift`, from the same
-/// Launch directory, given this command's start stamp for its Session logs,
+/// Launch directory, given this command's start stamp for its Session traces,
 /// asked `base_fix` about a Base fix, and handed `asks`.
 pub fn start(
     issue: &IssueUrl,
@@ -477,7 +506,7 @@ fn start_using(
                 Err(_) => String::new(),
             };
             format!(
-                "could not start the Run for #{} from {}{leads_to}",
+                "could not start the Ticket run for #{} from {}{leads_to}",
                 issue.number,
                 executable.display()
             )
@@ -537,7 +566,7 @@ impl Handle {
             .child
             .stdout
             .take()
-            .with_context(|| format!("no stdout from the Run for #{number}"))?;
+            .with_context(|| format!("no stdout from the Ticket run for #{number}"))?;
         #[cfg(test)]
         self.inject_fault(Fault::StdoutStart)?;
         #[cfg(test)]
@@ -545,18 +574,18 @@ impl Handle {
             .fault
             .take_if(|fault| matches!(fault, Fault::StdoutRead | Fault::StdoutPanic));
         self.stdout = Some(Worker::start(
-            format!("stdout reader of the Run for #{number}"),
+            format!("stdout reader of the Ticket run for #{number}"),
             move || {
                 #[cfg(test)]
                 if let Some(fault) = fault {
                     fault
                         .fire()
-                        .with_context(|| format!("could not read the Run for #{number}"))?;
+                        .with_context(|| format!("could not read the Ticket run for #{number}"))?;
                 }
                 let mut text = String::new();
                 stdout
                     .read_to_string(&mut text)
-                    .with_context(|| format!("could not read the Run for #{number}"))?;
+                    .with_context(|| format!("could not read the Ticket run for #{number}"))?;
                 Ok(text)
             },
         )?);
@@ -566,7 +595,7 @@ impl Handle {
             .child
             .stderr
             .take()
-            .with_context(|| format!("no stderr from the Run for #{number}"))?;
+            .with_context(|| format!("no stderr from the Ticket run for #{number}"))?;
         #[cfg(test)]
         self.inject_fault(Fault::StderrStart)?;
         #[cfg(test)]
@@ -574,20 +603,20 @@ impl Handle {
             .fault
             .take_if(|fault| matches!(fault, Fault::StderrRead | Fault::StderrPanic));
         self.stderr = Some(Worker::start(
-            format!("relay of the Run for #{number}"),
+            format!("relay of the Ticket run for #{number}"),
             move || {
                 #[cfg(test)]
                 if let Some(fault) = fault {
                     fault
                         .fire()
-                        .with_context(|| format!("could not read the Run for #{number}"))?;
+                        .with_context(|| format!("could not read the Ticket run for #{number}"))?;
                 }
                 let mut reader = run_ending::Reader::default();
                 let mut stderr = BufReader::new(stderr);
                 let mut bytes = Vec::new();
                 while stderr
                     .read_until(b'\n', &mut bytes)
-                    .with_context(|| format!("could not read the Run for #{number}"))?
+                    .with_context(|| format!("could not read the Ticket run for #{number}"))?
                     != 0
                 {
                     if bytes.last() == Some(&b'\n') {
@@ -636,9 +665,10 @@ impl Handle {
         if !self.reaped {
             #[cfg(test)]
             if let Err(error) = self.inject_fault(Fault::Wait) {
-                self.fail(
-                    error.context(format!("could not wait for the Run for #{}", self.number)),
-                );
+                self.fail(error.context(format!(
+                    "could not wait for the Ticket run for #{}",
+                    self.number
+                )));
                 return false;
             }
             match self.child.try_wait() {
@@ -651,10 +681,10 @@ impl Handle {
                     // ECHILD means ownership of the PID has already ended.
                     // Never signal a PID after the OS says it isn't our child.
                     self.reaped = error.raw_os_error() == Some(libc::ECHILD);
-                    self.fail(
-                        anyhow!(error)
-                            .context(format!("could not wait for the Run for #{}", self.number)),
-                    );
+                    self.fail(anyhow!(error).context(format!(
+                        "could not wait for the Ticket run for #{}",
+                        self.number
+                    )));
                 }
             }
         }
@@ -682,11 +712,9 @@ impl Handle {
     #[cfg(test)]
     fn inject_fault(&mut self, at: Fault) -> Result<()> {
         if self.fault == Some(at) {
-            self.fault
-                .take()
-                .unwrap()
-                .fire()
-                .with_context(|| format!("could not prepare the Run for #{}", self.number))?;
+            self.fault.take().unwrap().fire().with_context(|| {
+                format!("could not prepare the Ticket run for #{}", self.number)
+            })?;
         }
         Ok(())
     }
@@ -723,15 +751,21 @@ impl Handle {
             .expect("a reaped Run without a wait error has a status");
         let stdout = self.stdout.as_mut().unwrap().value.take().unwrap();
         let reader = self.stderr.as_mut().unwrap().value.take().unwrap();
+        let not_reproduced = reader.not_reproduced().map(String::from);
         let ending = reader.finish(&stdout, status.success());
         Ok(match ending.outcome {
+            Ok(_) if not_reproduced.is_some() => Ended::NotReproduced {
+                comment_url: not_reproduced.unwrap(),
+            },
             Ok(pr_url) => Ended::Reached {
                 pr_url,
                 base_fix: ending.base_fix,
             },
             Err(_) if interrupt::requested() => Ended::Interrupted { local_work },
             Err(failure) => Ended::Failed {
-                cause: failure.cause.unwrap_or_else(|| format!("the Run {status}")),
+                cause: failure
+                    .cause
+                    .unwrap_or_else(|| format!("the Ticket run {status}")),
                 log: failure.log,
                 local_work,
             },
@@ -884,6 +918,12 @@ mod tests {
                     asks: ChildAsks {
                         harness: harness.clone(),
                         security_review_harness: security_review_harness.clone(),
+                        security_review_default: security_review.then(|| Choice {
+                            harness: Harness::Codex,
+                            model: Some("gpt-6.1-sol".to_string()),
+                            effort: Some("high".to_string()),
+                            chosen_by: ChosenBy::UserConfig,
+                        }),
                         security_fix,
                         security_review,
                     },
@@ -909,9 +949,10 @@ mod tests {
 
     /// What a Run given a hidden argument only a child Run is given, without
     /// a kind, is rejected with.
-    const ONLY_A_CHILD_RUN: &str = "only a child Run is given --stamp, --allow-base-fix, \
+    const ONLY_A_CHILD_RUN: &str = "only a child Ticket run is given --stamp, --allow-base-fix, \
         --offer-base-fix, --sessions-harness, --sessions-model, --sessions-effort, \
-        --security-review-harness, --security-review-model, --security-review-effort or \
+        --security-review-harness, --security-review-model, --security-review-effort, \
+        --security-review-default, --security-review-default-model, --security-review-default-effort or \
         --logs-command";
 
     #[test]
@@ -1031,7 +1072,7 @@ mod tests {
         let cause = cause_of_not_starting_from(Path::new("/no/such/thirdshift"));
 
         assert!(
-            cause.starts_with("could not start the Run for #248 from /no/such/thirdshift: "),
+            cause.starts_with("could not start the Ticket run for #248 from /no/such/thirdshift: "),
             "{cause}"
         );
     }
@@ -1046,7 +1087,7 @@ mod tests {
 
         assert!(
             cause.starts_with(&format!(
-                "could not start the Run for #248 from {} (/no/such/thirdshift (deleted)): ",
+                "could not start the Ticket run for #248 from {} (/no/such/thirdshift (deleted)): ",
                 link.display()
             )),
             "{cause}"

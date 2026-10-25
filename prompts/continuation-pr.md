@@ -2,7 +2,7 @@
 
 # Continuation, with an open pull request
 
-Starts the implement session when the Run is a Continuation of an Issue branch whose pull request is open.
+Starts the implement session when the Ticket run is a Continuation of an Issue branch whose pull request is open.
 
 ```
 /thirdshift-implement <Issue URL>
@@ -12,7 +12,7 @@ You are continuing work on branch <branch>, which already has commits (see git l
 The base branch is <base>. Review with the `thirdshift-code-review` skill using <base> as the fixed point.
 
 For each Standards or Spec finding that says behaviour is wrong, run its test or command as written before deciding the finding. If it fails as the finding says, fix the code and keep the test. If it passes, you may decline the finding, citing the run. A passing run counts only when it exercises that finding; a green suite does not. Address the Standards and Spec findings you agree with.
-Write the reviewers' reports, with each axis's final files-read list, to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec).
+Write the reviewers' reports, with each axis's final files-read list, to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec). Write `<review reports directory>/summary.json` beside them with the finding counts, following the `thirdshift-code-review` skill's summary format.
 
 Push branch <branch>.
 
@@ -28,5 +28,5 @@ For source edits, prefer an available structured patch/edit tool that makes the 
 
 Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.
 
-You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on. thirdshift records this session as a Session trace, with Model evidence and any review reports beside it.
 ```

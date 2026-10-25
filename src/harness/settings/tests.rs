@@ -133,7 +133,7 @@ fn registered_order_and_enter_defaults_produce_one_complete_answer() {
     assert_eq!(
         terminal.prompts,
         [
-            "Harness for every Run's sessions, claude or codex or agy or grok or muse or opencode [claude]: ",
+            "Harness for every Ticket run's sessions, claude or codex or agy or grok or muse or opencode [claude]: ",
             "Model for claude [claude's own default]: ",
             "Effort for claude [claude's own default]: ",
         ]
@@ -216,7 +216,7 @@ fn configured_default_is_preferred_when_installed() {
 
     assert_eq!(
         terminal.prompts[0],
-        "Harness for every Run's sessions, claude or codex [codex]: "
+        "Harness for every Ticket run's sessions, claude or codex [codex]: "
     );
 }
 
@@ -238,7 +238,7 @@ fn an_uninstalled_default_falls_back_to_the_first_registered_installed_harness()
 
     assert_eq!(
         terminal.prompts[0],
-        "Harness for every Run's sessions, codex or agy [codex]: "
+        "Harness for every Ticket run's sessions, codex or agy [codex]: "
     );
 }
 
@@ -265,7 +265,7 @@ fn unknown_or_uninstalled_harnesses_are_refused_and_only_selection_is_reasked() 
 
     assert_eq!(
         terminal.prompts[0],
-        "Harness for every Run's sessions, codex [codex]: "
+        "Harness for every Ticket run's sessions, codex [codex]: "
     );
     assert_eq!(
         terminal.said[..2],
@@ -277,16 +277,16 @@ fn unknown_or_uninstalled_harnesses_are_refused_and_only_selection_is_reasked() 
 }
 
 #[test]
-fn claude_checks_the_named_model_and_effort_with_the_existing_stdin_prompt() {
+fn claude_suggests_aliases_and_checks_a_custom_model_and_effort() {
     if isolated(
-        "claude_checks_the_named_model_and_effort_with_the_existing_stdin_prompt",
+        "claude_suggests_aliases_and_checks_a_custom_model_and_effort",
         &[Harness::Claude],
     ) {
         return;
     }
     let mut terminal = Scripted::answering(&[
         ("Harness", ""),
-        ("Model", "claude-opus-5-5"),
+        ("Model", "my-claude-deployment"),
         ("Effort", "high"),
     ]);
 
@@ -294,15 +294,21 @@ fn claude_checks_the_named_model_and_effort_with_the_existing_stdin_prompt() {
         chosen(&mut terminal, &Settings::default()),
         (
             Harness::Claude,
-            model_and_effort(Some("claude-opus-5-5"), Some("high"))
+            model_and_effort(Some("my-claude-deployment"), Some("high"))
         )
     );
 
+    assert_eq!(
+        terminal.said,
+        [
+            "Claude's Model suggestions: default, best, fable, opus, sonnet, haiku, opusplan, sonnet[1m], opus[1m]. Type any Model ID, or press Enter to keep the default shown."
+        ]
+    );
     let calls = records("FAKE_CLAUDE_RECORD");
     assert_eq!(calls.as_array().unwrap().len(), 1);
     assert_eq!(
         calls[0]["argv"],
-        serde_json::json!(["-p", "--model", "claude-opus-5-5", "--effort", "high"])
+        serde_json::json!(["-p", "--model", "my-claude-deployment", "--effort", "high"])
     );
     assert_eq!(calls[0]["stdin"], "Reply with OK.");
 }
@@ -345,10 +351,8 @@ fn a_claude_refusal_reports_the_error_and_reasks_the_model_and_effort_pair() {
     );
 
     assert_eq!(
-        terminal.said,
-        [
-            "claude refused a test call on the Model Opus 5.5 with the Effort low: There's an issue with the selected model (Opus 5.5)."
-        ]
+        terminal.said.last().unwrap(),
+        "claude refused a test call on the Model Opus 5.5 with the Effort low: There's an issue with the selected model (Opus 5.5)."
     );
     let calls = records("FAKE_CLAUDE_RECORD");
     assert_eq!(calls.as_array().unwrap().len(), 2);
@@ -555,7 +559,7 @@ fn agy_accepts_a_bare_alias_before_its_required_effort_and_retries_only_that_eff
 
     assert_eq!(
         terminal.prompts[0],
-        "Harness for every Run's sessions, agy [agy]: "
+        "Harness for every Ticket run's sessions, agy [agy]: "
     );
     let said = terminal.said.join("\n");
     assert!(said.contains("the Model gemini-99 is not in"), "{said}");
@@ -978,7 +982,7 @@ fn an_interrupted_model_check_is_an_error_instead_of_retrying_the_pair() {
         "interrupted"
     );
     assert_eq!(terminal.prompts.len(), 3);
-    assert!(terminal.said.is_empty());
+    assert_eq!(terminal.said.len(), 1); // Suggestions only; no refusal or retry.
     assert_eq!(records("FAKE_CLAUDE_RECORD").as_array().unwrap().len(), 1);
 }
 

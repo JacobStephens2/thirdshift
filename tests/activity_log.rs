@@ -5,7 +5,7 @@
 //! command dispatched or started writes none of its own. A skipped Pass
 //! writes a line only when its reason differs from the
 //! last line of its own kind. With `activity.quiet_skips`, a skipped pass
-//! prints nothing at all, its Activity log line its only trace.
+//! prints nothing at all, while its last-fired time still advances.
 
 mod support;
 
@@ -216,6 +216,41 @@ fn the_first_skip_on_a_repository_creates_its_folder_and_repeated_skips_write_on
 }
 
 #[test]
+fn an_unchanged_skip_updates_last_fired_without_adding_activity_lines() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(QUIET_SKIPS);
+    let mut previous = None;
+    for _ in 0..2 {
+        let before = Utc::now();
+        let skipped = run_in_zone(&scenario, &["pickup"]);
+        let after = Utc::now();
+        assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
+        assert!(skipped.stderr.is_empty());
+        let result = scenario.run(&["status", "--json"]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        let status: serde_json::Value = serde_json::from_str(&result.stdout).unwrap();
+        let starts = status["pass_starts"].as_array().expect(&result.stdout);
+        assert_eq!(starts.len(), 1);
+        assert_eq!(starts[0]["repository"], "acme/widgets");
+        assert_eq!(starts[0]["kind"], "Pickup run");
+        let fired =
+            chrono::DateTime::parse_from_rfc3339(starts[0]["last_fired_at"].as_str().unwrap())
+                .unwrap()
+                .with_timezone(&Utc);
+        assert!(fired >= before && fired <= after, "{status}");
+        if let Some(previous) = previous {
+            assert!(fired > previous, "{status}");
+        }
+        previous = Some(fired);
+        assert!(starts[0]["age_seconds"].as_i64().unwrap() <= 30);
+        assert_eq!(
+            activity(&scenario),
+            ["Pickup run skipped: no Ready issue on acme/widgets"]
+        );
+    }
+}
+
+#[test]
 fn a_claim_limit_skip_is_recorded_again_only_when_its_holders_change() {
     let scenario = Scenario::new();
     for number in [6, 4, 5] {
@@ -383,7 +418,7 @@ fn with_quiet_skips_a_pass_that_works_prints_as_ever() {
 fn with_quiet_skips_a_pass_that_fails_prints_its_lines_and_its_error() {
     let scenario = Scenario::new();
     scenario.user_config_is(QUIET_SKIPS);
-    scenario.gh_fails("issue list");
+    scenario.gh_fails("api --paginate");
 
     let result = run_in_zone(&scenario, &["pickup"]);
 

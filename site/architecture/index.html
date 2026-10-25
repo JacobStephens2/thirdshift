@@ -4,20 +4,20 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Architecture · thirdshift</title>
-<meta name="description" content="Six diagrams of thirdshift's architecture: what runs where, which steps an agent does and which thirdshift does, the Run, Merge run, Spec run and Passes, and the boundaries around an agent session.">
+<meta name="description" content="Six diagrams of thirdshift's architecture: what runs where, which steps an agent does and which thirdshift does, Ticket runs, Self-merge, Spec runs and Passes, and the boundaries around an agent session.">
 <link rel="canonical" href="https://thirdshift.app/architecture/">
 <meta property="og:type" content="website">
 <meta property="og:site_name" content="thirdshift">
 <meta property="og:url" content="https://thirdshift.app/architecture/">
 <meta property="og:title" content="Architecture · thirdshift">
-<meta property="og:description" content="Six diagrams of thirdshift's architecture: what runs where, which steps an agent does and which thirdshift does, the Run, Merge run, Spec run and Passes, and the boundaries around an agent session.">
+<meta property="og:description" content="Six diagrams of thirdshift's architecture: what runs where, which steps an agent does and which thirdshift does, Ticket runs, Self-merge, Spec runs and Passes, and the boundaries around an agent session.">
 <meta property="og:image" content="https://thirdshift.app/share-card.png">
-<meta property="og:image:alt" content="thirdshift: your issues go to press overnight.">
+<meta property="og:image:alt" content="Your issues become pull requests overnight. Issue #663 passes through Step 1 · Prepare, Step 2 · Implement, Step 3 · Review and Step 4 · Finish, and comes out as pull request #665, merged.">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:title" content="Architecture · thirdshift">
-<meta name="twitter:description" content="Six diagrams of thirdshift's architecture: what runs where, which steps an agent does and which thirdshift does, the Run, Merge run, Spec run and Passes, and the boundaries around an agent session.">
+<meta name="twitter:description" content="Six diagrams of thirdshift's architecture: what runs where, which steps an agent does and which thirdshift does, Ticket runs, Self-merge, Spec runs and Passes, and the boundaries around an agent session.">
 <meta name="twitter:image" content="https://thirdshift.app/share-card.png">
-<meta name="twitter:image:alt" content="thirdshift: your issues go to press overnight.">
+<meta name="twitter:image:alt" content="Your issues become pull requests overnight. Issue #663 passes through Step 1 · Prepare, Step 2 · Implement, Step 3 · Review and Step 4 · Finish, and comes out as pull request #665, merged.">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/fonts/fonts.css">
 <link rel="stylesheet" href="/styles.css">
@@ -44,8 +44,8 @@
     <p class="eyebrow">The figures</p>
     <ol>
       <li><a href="#factory"><span>Figure 1</span>The factory</a></li>
-      <li><a href="#run"><span>Figure 2</span>A Run</a></li>
-      <li><a href="#merge-run"><span>Figure 3</span>A Merge run</a></li>
+      <li><a href="#run"><span>Figure 2</span>A Ticket run</a></li>
+      <li><a href="#merge-run"><span>Figure 3</span>A Ticket run that Self-merges</a></li>
       <li><a href="#spec-run"><span>Figure 4</span>A Spec run</a></li>
       <li><a href="#passes"><span>Figure 5</span>The Passes</a></li>
       <li><a href="#containment"><span>Figure 6</span>Containment</a></li>
@@ -63,8 +63,11 @@
     <div class="wrap">
       <div class="sec-head"><p class="eyebrow">Figure 1 · the whole system</p><h2 id="factory-title">Agents write the code; thirdshift decides when it counts</h2></div>
       <p class="lede">An agent session can do anything your user account can, with nobody there to approve it. So every decision that matters is made outside the session, by thirdshift, before the session starts and after it ends. The <strong>Day shift</strong> is you: you shape the issues and review the pull requests.</p>
+      <p><a href="/docs/#scoring-runs"><code>thirdshift score</code></a> also creates a Command: a Scoring run with a machine-wide lock, sampling merged factory work across configured GitHub owners. Samples, seeds and blind packets stay under <code>~/.thirdshift/evals/scoring/</code>; <code>thirdshift scores --json</code> lists them by week. A packet holds historical issue text, the merged diff, pull request and CI conclusions, plus merge-time repository files without Git metadata. An independent Grader runs in the Experiment sandbox and checkpoints five criterion Scores per pull request, with its Harness and Model and a local Command-record link when available. A plan-limit warning leaves unscored packets for the next Scoring run. Its record and logs belong to thirdshift's own repository, and the Inbox and Stop read them through the same Command interface. Closed bugs also get proposed Bug origins through the shared Eval sandbox: fix and earlier history → introducing commit or none → GitHub pull requests → local Command record or Built-with line. The first proposal run backfills all closed bugs; Security fixes are excluded. <code>thirdshift bug-origins [issue] --json</code> reads the retained evidence and settlement; <code>--confirm</code>, <code>--correct &lt;pull request&gt;</code> and <code>--none</code> share Scoring’s writer lock. Confirmed origins contribute to their exact retained Ticket run’s <code>show --json</code> metrics and atomically publish proposed code-review Eval task folders. Each pins the PR head and its historical merge-base, keeps historical issue text (or the PR body when no issue was linked) and a draft catch criterion, and requires explicit Eval approval before running. Rejecting or correcting withdraws an old unapproved proposal. A plan-limit warning during Bug-origin analysis advances no window; a failed Bug-origin session records that bug with no commit, keeps its artifacts, and lets the window carry on.</p>
+      <p>Scoring samples, Bug-origin proposals and settlements, and Run metrics share retained pull-request attribution. Matching ignores ASCII letter case and trailing slashes. Latest means chronological RFC 3339 time, including UTC offsets, then greatest lexical record path and Command name for ties; invalid times sort before valid ones. Saved local record-path/name pairs select that exact Command under the matching pull request. Missing or mismatched local identities count for nothing; only absent or cross-host attribution selects the latest local Command, so Continuations never multiply a count.</p>
+      <p>The first sample adds a historical draw of 20 for human calibration; later weeks mark two for you. <code>thirdshift scores &lt;pull request&gt; --mine --json</code> takes the same writer lock and saves your five Scores atomically before returning them beside the model's as JSON. Ordinary CLI and Console reads share a view that withholds model Scores until human Scores exist. Calibration uses the stored assessments before withholding them, taking the latest 20 distinct paired pull requests separately for each criterion, with 18 agreements required.</p>
       <figure class="arch-fig">
-        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 1, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 652" role="img" aria-labelledby="fig-factory-desc"><title id="fig-factory-desc">The Day shift files issues on GitHub and starts thirdshift, or the operating system’s scheduler starts a Pass. On your machine, thirdshift runs seven deterministic stages: pre-flight checks, the Claim, a Worktree, Delivery, keeping the pull request green, the Self-merge in a Merge run, and cleaning up or failing safely. Inside the Worktree, an agent session on the chosen Harness writes and reviews the code, with Repair sessions when the branch needs work. Every stage that touches GitHub is thirdshift’s, and the pull request goes back to the Day shift for review.</title><defs><marker id="fig-factory-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-factory-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-factory-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-factory-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
+        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 1, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 780" role="img" aria-labelledby="fig-factory-title" aria-describedby="fig-factory-desc"><title id="fig-factory-title">The factory and this machine’s Console</title><desc id="fig-factory-desc">The Day shift files issues on GitHub and starts thirdshift, or the operating system’s scheduler starts a Pass. On your machine, thirdshift runs seven deterministic stages: pre-flight checks, the Claim, a Worktree, Delivery, keeping the pull request green, the Self-merge in a Ticket run that Self-merges, and cleaning up or failing safely. Inside the Worktree, an agent session on the chosen Harness writes and reviews the code, with Repair sessions when the branch needs work. The pull request goes back to the Day shift for review. Commands write their records, Session traces and logs on this machine. Its Console reads them into an Inbox with stages and logs; a signed-in account can Stop or Requeue a live Command.</desc><defs><marker id="fig-factory-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-factory-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-factory-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-factory-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
 <rect class="zone" x="10.5" y="40.5" width="210" height="572" rx="4"/>
 <rect class="lbg" x="16" y="47" width="77.3" height="15"/><text class="zl" x="20" y="58.5">DAY SHIFT</text>
 <text class="zs" x="20" y="75">you</text>
@@ -75,12 +78,12 @@
 <rect class="box" x="25.5" y="300.5" width="180" height="64" rx="3"/>
 <text class="bt" x="35" y="321">Run notification</text>
 <text class="bl" x="35" y="338">email and logs when</text>
-<text class="bl" x="35" y="352.5">each Run ends</text>
+<text class="bl" x="35" y="352.5">each Ticket run ends</text>
 <rect class="box" x="25.5" y="505.5" width="180" height="64" rx="3"/>
 <text class="bt" x="35" y="526">Review the PR</text>
-<text class="bl" x="35" y="543">or let a Merge run</text>
-<text class="bl" x="35" y="557.5">merge it itself</text>
-<rect class="zone" x="235.5" y="40.5" width="550" height="572" rx="4"/>
+<text class="bl" x="35" y="543">or ask for Self-merge</text>
+<text class="bl" x="35" y="557.5">on the watched head</text>
+<rect class="zone" x="235.5" y="40.5" width="550" height="720" rx="4"/>
 <rect class="lbg" x="241" y="47" width="100.39999999999999" height="15"/><text class="zl" x="245" y="58.5">YOUR MACHINE</text>
 <text class="zs" x="245" y="75">ideally a VM with nothing from production on it</text>
 <rect class="box" x="255.5" y="85.5" width="240" height="60" rx="3"/>
@@ -137,11 +140,11 @@
 <circle class="badge" cx="530" cy="436" r="9"/><text class="badge-n" x="530" y="440" text-anchor="middle">5</text>
 <rect class="box tool" x="530.5" y="488.5" width="220" height="40" rx="3"/>
 <text class="bt" x="540" y="506">Self-merge</text>
-<text class="bl" x="540" y="521">Merge run: watched head</text>
+<text class="bl" x="540" y="521">when asked: watched head</text>
 <circle class="badge" cx="530" cy="488" r="9"/><text class="badge-n" x="530" y="492" text-anchor="middle">6</text>
 <rect class="box tool" x="530.5" y="540.5" width="220" height="40" rx="3"/>
 <text class="bt" x="540" y="558">Clean up, or fail safely</text>
-<text class="bl" x="540" y="573">Failed run: push, draft</text>
+<text class="bl" x="540" y="573">Failed ticket run: push, draft</text>
 <circle class="badge" cx="530" cy="540" r="9"/><text class="badge-n" x="530" y="544" text-anchor="middle">7</text>
 <rect class="zone" x="800.5" y="40.5" width="190" height="572" rx="4"/>
 <rect class="lbg" x="806" y="47" width="54.199999999999996" height="15"/><text class="zl" x="810" y="58.5">GITHUB</text>
@@ -162,7 +165,8 @@
 <text class="bt" x="822" y="509">Pull request</text>
 <text class="bl" x="822" y="526">ready for review,</text>
 <text class="bl" x="822" y="540.5">merged, or a draft</text>
-<text class="bl" x="822" y="555">after a Failed run</text>
+<text class="bl" x="822" y="555">after a Failed</text>
+<text class="bl" x="822" y="569.5">ticket run</text>
 <path class="ar acc" d="M750 248H810" marker-end="url(#fig-factory-acc)"/>
 <path class="ar acc" d="M750 300H810" marker-end="url(#fig-factory-acc)"/>
 <path class="ar acc" d="M750 404H810" marker-end="url(#fig-factory-acc)"/>
@@ -180,27 +184,59 @@
 <rect class="lbg" x="423" y="12" width="274" height="16"/><text class="al" x="560" y="24" text-anchor="middle">files issues, marks them ready-for-agent</text>
 <path class="ar ink" d="M955 578V634H115V571" marker-end="url(#fig-factory-ink)"/>
 <rect class="lbg" x="456" y="624" width="208" height="16"/><text class="al" x="560" y="636" text-anchor="middle">pull request, ready for review</text>
+<rect class="box" x="255.5" y="660.5" width="220" height="80" rx="3"/>
+<text class="bt" x="265" y="681">Commands</text>
+<text class="bl" x="265" y="698">Command records,</text>
+<text class="bl" x="265" y="712.5">Session traces and logs</text>
+<rect class="box tool" x="520.5" y="660.5" width="245" height="80" rx="3"/>
+<text class="bt" x="530" y="681">Console</text>
+<text class="bl" x="530" y="698">Inbox · stages and logs</text>
+<text class="bl" x="530" y="712.5">Stop / Requeue (signed in)</text>
+<text class="bl" x="530" y="727">does only what the CLI does</text>
+<path class="ar ink" d="M475 700H518" marker-end="url(#fig-factory-ink)"/>
+<text class="al" x="498" y="691" text-anchor="middle">reads</text>
 </svg></div>
         <figcaption><b>Figure 1</b> The factory. The numbered stages are thirdshift's; only the magenta boxes are agents.</figcaption>
       </figure>
+      <p>The <a href="/docs/#console-installation">Console</a> reads this machine's Commands and opens on its <strong>Inbox</strong>. Filesystem changes wake its Inbox and log readers; process exits and elapsed-time boundaries have their own wakeups. A slow recovery check catches missed notifications and expired sessions. A signed-in account can <strong>Stop</strong> or Requeue a live Command. It does nothing the CLI can't do and starts no work (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0016-the-console-is-a-long-running-reader.md">ADR-0016</a>).</p>
+      <p>The Console reads ready rows' pull requests and Needs you rows' issues and pull requests in a batched GraphQL query in the background once a minute, with blocking <code>gh</code> calls off its async thread. It keeps one answer per machine beside the logs. A changed answer or warning wakes open Inbox pages through the file watcher; unchanged reads update freshness without rendering or waking pages. <code>thirdshift status</code> uses that answer and reads GitHub itself only when it is missing or five minutes old. Failed reads retain the last facts and failure; after five minutes without a good read, both readers warn with when GitHub last answered and why the latest read failed. Both share a quota gate: fewer than 500 GraphQL points or REST requests holds off all their reads until reset, with a warning, preserving the rest for the factory. These limits and timings are not User config settings. An ended Needs you row moves to Done, Resolved or History when its issue closes or its pull request merges; a Triage row also moves when <code>needs-triage</code> is removed. Architect and Security runs use their dispatched Spec run's or Ticket run's issue and pull request. Live Silent and Slow rows stay until their Commands end. Ready rows leave on a merged or closed pull request. Resolved counts from the settlement time, and only rows GitHub cannot speak for age out while still waiting. Reopening brings back rows still in Done or Resolved. Rows in History retain the last facts without further reads, including when another row shares their issue or pull request. Dismissals hold across GitHub changes, and Undo uses the latest kept facts. These reads never write to GitHub (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0023-the-inbox-reads-github-to-learn-the-day-shift-acted.md">ADR-0023</a>).</p>
+      <p>Command details offers any signed-in account <a href="/docs/#dismissing-a-row">Dismiss</a> for a row in Needs you or Ready for review, and Undo for a dismissed row, each beside its CLI form: <code>thirdshift dismiss &lt;command&gt;</code> or <code>thirdshift dismiss &lt;command&gt; --undo</code>. Both use the Console's session and CSRF checks. The browser keeps pending feedback and disables duplicate submissions through live updates; failed requests show their error and allow a retry. The dismissal lives beside the Command record and changes only the row's group; filesystem notifications update open pages, and the Activity log names the account and the Console. A live Command keeps running, and nothing is written to GitHub.</p>
+      <p>A dismissal accumulates covered kinds for the whole row, across child Ticket runs, and <code>status --json</code> exposes them as <code>dismissal.kinds</code>. An uncovered kind brings the row back, including a Finding behind a dismissed Security failure only while GitHub still shows its findings waiting. Each read adds one paginated REST list per repository with a Security run whose findings were waiting, respecting the quota reserve and using the Security run’s private-storage selection. The kept answer holds only finding URLs and waiting flags, with the first observed triage time; it retains no finding title, severity or write-up. A Finding leaves saying “findings triaged” once its records no longer wait: a draft advisory without severity or an open <code>security-finding</code> issue labelled <code>needs-triage</code> waits, and a record closed by a merged fix does not.</p>
+      <p><code>status --json</code> exposes each row's kept issue, pull request and finding facts with their observation times in <code>github</code>. History freezes those times alongside the facts. Unchanged reads update observation times without waking pages. A dismissed row's Resolved clock stays anchored to its dismissal even if GitHub settles it later.</p>
+      <p>Before each agent session, optional <a href="/docs/#host-resources">host resource limits</a> delay its start while available memory is too low or one-minute CPU load is too high. <code>thirdshift resources</code> and the Console's Resources page show the current snapshot and configured limits. Existing sessions continue.</p>
+      <p>A <strong>Session trace</strong> records each agent session. A Command's whole <strong>Trace</strong> includes its child Ticket runs and stages; export it with <code>thirdshift logs &lt;command&gt; --export &lt;dir&gt;</code>. <a href="/docs/#logs">Logs and Trace export</a>.</p>
+      <p>The Experiments list and live Experiment page read the same retained view as <code>thirdshift experiments <wbr>[id] --json</code>. The grid opens Trial and Eval task Peeks with Scores and Grader reasons. Session links and <code>thirdshift experiments <wbr>&lt;id&gt; --session &lt;session-id&gt;</code> share the Experiment's confined Session evidence reader. It validates saved Experiment metadata and reads the selected contents independently of Trial metadata, usage accounting and legacy Verdict upgrades, so unrelated corruption does not hide healthy evidence. Session IDs survive conversion from raw logs to Session traces. Rechecks remain CLI commands, and their updated Verdict appears on the page.</p>
+      <p>These pages also read proposed Eval tasks from the private suites listed by <code>thirdshift evals list</code>. Their approval action shares <code>thirdshift evals approve &lt;suite&gt; &lt;task&gt; --json</code>'s manifest update, behind the Console's sign-in and CSRF checks. Approval changes only the state and starts no work. Future Experiments may select the task; existing Experiments retain their fixed inputs on resume.</p>
+      <p>The Console's Scores and Bug origins pages read the CLI's retained weekly samples and origin views. Human Scores use the same validation, machine lock and atomic checkpoint write as <code>scores &lt;pull request&gt; --mine</code>; model Scores are withheld from the form response until all five human Scores are saved. Bug-origin Confirm, Correct and Reject call the CLI settlement operation, including its Eval-task proposals and withdrawals. Both pages keep the Console's sign-in, CSRF checks and Themes, and start no work.</p>
+      <p>For Evals, the hidden <code>--trial</code> flag runs one Code review or Spec review through the same session code in a prepared repository. A Code review reviews the historical diff and keeps both axis reports without fixing or publishing anything. Its versioned JSON result and separate output folder keep Trials out of the Inbox and the Usual ranges. <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/trial.md">Trial protocol</a>.</p>
+      <p><code>thirdshift experiment <wbr>&lt;candidate&gt;</code> owns the two Arms, the fixed Bar and an alternating Trial queue with two workers. Code Graders retain mechanical Scores; fresh model Graders score written criteria from shuffled blind packets on a configured Model outside both Arms when available. Scores retain reasons, wrong findings and borderline marks. The Verdict module computes paired suite intervals, with borderline counts, Arm minutes, tokens by Model, reported cost and Void counts and causes shown beside the Experiment's Verdict. Trial and model Grader Session traces and code Grader spans share its Command's Trace. Void Trials retry fresh up to twice, exhausted tasks leave both Arms, and more than a tenth dropped makes the Verdict inconclusive. Repeated Trial-only memory-cap stops produce an Arm finding. Its Command outcome puts a pass in Done and a fail or inconclusive Verdict in Needs you. Its Command record and logs live under thirdshift's repository; private Trial results and Grader artifacts stay under <code>~/.thirdshift/<wbr>evals/<wbr>experiments/</code>. Both workers stop scheduling at a plan-limit warning, and a Trial cut short is void. It supports resume after that pause or interruption, Inbox observation and Stop. <a href="/docs/#experiments">Experiments</a>.</p>
+      <p>A prepared Trial runner owns retries, pauses and ordered publication; the two workers submit an Eval task, Arm and Trial index. Fresh execution and recovery follow the saved Bar's cause list and remaining retry budget. Recovery publishes already terminal pending history without another attempt, including after a publication failure, and never replays a retained pause. Attempt results, pending history and terminal results publish while the Trial's execution evidence remains live.</p>
+      <p>Before either Arm is built, Experiments report approved Eval tasks missing Trial inputs, including in release mode. Spec review Trials keep the production prompt, with no PR service: <code>gh</code> calls fail inside the sandbox and only the reports are graded.</p>
+      <p>Each Trial, code Grader and model Grader gets its own <code>systemd-run --user --scope</code> with <code>MemoryHigh</code>, <code>MemoryMax</code>, <code>MemorySwapMax</code> and <code>OOMPolicy=kill</code>. Its process raises <code>oom_score_adj</code> before starting work. The <a href="/docs/#user-config">User config</a> defaults are 1 GiB, 2 GiB and 1 GiB; scopes require a reachable user manager with lingering enabled for logged-out work.</p>
+      <p>The Experiment owns recheck history beside its immutable Grader Scores. <code>thirdshift experiments <wbr>&lt;id&gt; --json</code> exposes pending borderline and decisive Scores. <code>thirdshift recheck <wbr>&lt;id&gt; &lt;trial&gt; pass|fail --reason '…'</code> takes the Experiment's exclusive lock and atomically saves the history, recalculated Verdict and pending list. It also updates the latest invocation's Command outcome and Inbox group, preserving its completion time. The Verdict waits until the list is empty; flipping either pass/fail or a wrong-finding flag can make a Score decisive. Waiting rechecks place that invocation in Needs you; a confirmed pass moves it to Done.</p>
+      <p><code>thirdshift experiment <wbr>--release <wbr>&lt;commit&gt;</code> compares the content commit with the last release tag on touched suites. The release script waits for rechecks and asks permission for a fail or inconclusive Verdict before pushing. Reruns reuse the Experiment, including before opening a pushed branch's PR. It refuses different main content before pushing or merging and checks the merged tree before tagging, so the release cannot contain unmeasured changes. No touched suite or a last release without the Trial flag carries on with a note. <a href="/docs/#releasing">Releasing</a>.</p>
+      <p>Each Ticket run's own process saves its <strong>Run metrics</strong> at completion in its Command record, including Ticket runs and Base fixes: outcome, Repairs, CI rounds, Unaddressed findings by Standards, Spec and Security, stage times against their Usual ranges, and minutes by stage and in total. Unaddressed findings counts retain Delivery's final PR body and the Security review's count, so later edits do not change them. Each Session stage keeps the review's Standards and Spec finding counts from its summary, with missing counts left missing. <code>thirdshift show &lt;command&gt; --json</code> includes these retained facts. The Console reads the same details, showing each Ticket run's available metrics and marking unavailable signals as Missing. <code>thirdshift metrics &lt;command&gt; [--json]</code> reads a Ticket run with its children; without a Command it groups weekly trends by repository, Harness, requested Model and Effort, Ticket run kind and session kind. Week and repository filters narrow that view. Historical metrics are computed from Command records without writing back, and missing signals stay missing. No combined score is produced.</p>
+      <p>Run metrics and Experiments share one Session usage module for tokens by observed Model and Harness-reported cost. Its normalized-event and retained-span readers resolve call amendments and partial totals, retaining fields a total omits. Input includes cache reads and writes. Reported Session cost wins; otherwise each Model's reported cost replaces its call costs. The metrics reader separately counts tool errors, permission denials, killed work and repeated tool calls within that session. Completion metrics sum these by session kind, and weekly Session trends split by the Harness version from each trace's resource. Saved completion metrics stay fixed. Historical metrics also read converted Session traces, leaving missing traces and unreported measurements missing.</p>
+      <p>Confirmed Bug origins are joined when metrics are read, from local Scoring checkpoints under <code>~/.thirdshift/evals/scoring/</code>. The latest window's decision for each bug wins. Its retained local Ticket run identity selects the exact Ticket run; cross-host pull-request attribution selects the latest local Ticket run for that URL, as in Scoring, so Continuations never multiply a count. The Scoring data covers both hosts; metrics read no remote records. Late confirmations count in the Ticket run's start week, corrections move the count to the settled pull request, and rejected or unsettled origins count for nothing. Command details in <code>show --json</code> and the Console share this projection and reconstruct available historical metrics. Command records are never rewritten.</p>
+      <p>The same reader checks each session's shell commands against one code-owned destructive-command pattern list. Force pushes, shared-branch history rewrites and recursive deletes outside the Worktree are retained with their commands in Run metrics, with flag counts in weekly Session trends. This check is advisory: it never blocks or fails a Ticket run.</p>
       <ol class="arch-stages">
-        <li><b>Pre-flight checks</b> stop a Run before anything is created: the Issue URL must match the clone's <code>origin</code>, the issue must be open, and the Base branch must be on <code>origin</code>.</li>
+        <li><b>Pre-flight checks</b> stop a Ticket run before anything is created: the Issue URL must match the clone's <code>origin</code>, the issue must be open, and the Base branch must be on <code>origin</code>.</li>
         <li><b>The Claim</b> labels the issue <code>in-progress</code>, so the issue list shows what the factory is working on.</li>
-        <li><b>A Worktree</b> gives the Run its own checkout beside your clone, so yours is never touched.</li>
-        <li><b>Delivery</b> pushes the branch and checks that the pull request exists and targets the Base branch. thirdshift, not the agent, marks it ready.</li>
-        <li><b>Keeping it green</b> merges the Base branch in and watches CI. A conflict or the branch's own red check starts a Repair, at most 5 a Run.</li>
-        <li><b>The Self-merge</b>, in a Merge run only, merges exactly the head commit whose CI thirdshift watched.</li>
-        <li><b>Cleaning up</b> removes the Worktree. A <b>Failed run</b> pushes its work first and turns the pull request back into a draft.</li>
+        <li><b>A Worktree</b> gives the Ticket run its own checkout beside your clone, so yours is never touched.</li>
+        <li><b>Delivery</b> starts the implement session. On issues labelled <code>bug</code>, diagnosis comes first: a reproduced bug gets a failing regression test and fix; an unreproduced bug ends successfully with triage notes and <code>needs-info</code>, without PR delivery. Security fixes and Base fixes keep their own flow. Otherwise Delivery pushes the branch and checks that the pull request exists and targets the Base branch. thirdshift, not the agent, marks it ready.</li>
+        <li><b>Keeping it green</b> merges the Base branch in and watches CI. A conflict or the branch's own red check starts a Repair, at most 5 a Ticket run.</li>
+        <li><b>The Self-merge</b>, when asked, merges exactly the head commit whose CI thirdshift watched.</li>
+        <li><b>Cleaning up</b> removes the Worktree. A <b>Failed ticket run</b> pushes its work first and turns the pull request back into a draft.</li>
       </ol>
     </div>
   </section>
 
   <section class="sec arch-sec" id="run" aria-labelledby="run-title">
     <div class="wrap">
-      <div class="sec-head"><p class="eyebrow">Figure 2 · <code>thirdshift &lt;Issue URL&gt;</code></p><h2 id="run-title">A Run: one issue in, one pull request out</h2></div>
-      <p class="lede">Work reaches a Run as a <strong>Ready issue</strong>, labelled <code>ready-for-agent</code>. You write most of them, but thirdshift writes some too: an Architect run publishes its plan, a Security run allowed to fix files the fix, and a Base fix files the red CI on the Base branch. One agent session writes, tests and reviews the change, then opens the pull request. A second session reviews it for security, if you ask for that. Then thirdshift checks, pushes and watches.</p>
+      <div class="sec-head"><p class="eyebrow">Figure 2 · <code>thirdshift &lt;Issue URL&gt;</code></p><h2 id="run-title">A Ticket run: one issue in, one pull request out</h2></div>
+      <p class="lede">Work reaches a Ticket run as a <strong>Ready issue</strong>, labelled <code>ready-for-agent</code>. You write most of them, but thirdshift writes some too: an Architect run publishes its plan, a Security run allowed to fix files the fix, and a Base fix files the red CI on the Base branch. One agent session writes, tests and reviews the change, then opens the pull request. A second session reviews it for security, if you ask for that. Then thirdshift checks, pushes and watches.</p>
       <figure class="arch-fig">
-        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 2, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 392" role="img" aria-labelledby="fig-run-desc"><title id="fig-run-desc">Ready issues come from the Day shift by hand, or from thirdshift itself: an Architect run publishes a plan, a Security run allowed to fix files a fix issue, and a Base fix files an issue for red CI on the Base branch. You, a Pickup run or the run that filed the issue starts a Run on it. thirdshift prepares the Run with checks, the Claim and a Worktree; an agent session implements, tests, reviews and opens the pull request; thirdshift then delivers it and watches CI. Red CI or a conflict starts a Repair session, at most five per Run; out of Repairs, the Run fails with its work pushed and the pull request back to draft. Otherwise the pull request is left ready for review.</title><defs><marker id="fig-run-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-run-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-run-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-run-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
+        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 2, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 392" role="img" aria-labelledby="fig-run-desc"><title id="fig-run-desc">Ready issues come from the Day shift by hand, or from thirdshift itself: an Architect run publishes a plan, a Security run allowed to fix files a fix issue, and a Base fix files an issue for red CI on the Base branch. You, a Pickup run or the run that filed the issue starts a Ticket run on it. thirdshift prepares the Ticket run with checks, the Claim and a Worktree; an agent session implements, tests, reviews and opens the pull request; thirdshift then delivers it and watches CI. Red CI or a conflict starts a Repair session, at most five per Ticket run; out of Repairs, the Ticket run fails with its work pushed and the pull request back to draft. Otherwise the pull request is left ready for review.</title><defs><marker id="fig-run-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-run-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-run-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-run-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
 <path class="vm" d="M136 2H864V384H136Z"/>
 <rect class="lbg" x="146" y="364" width="100.39999999999999" height="15"/><text class="zl" x="150" y="376">YOUR MACHINE</text>
 <rect class="lbg" x="250.39999999999998" y="364" width="318.2" height="15"/><text class="zs" x="254.39999999999998" y="376">ideally a VM with nothing from production on it</text>
@@ -264,7 +300,7 @@
 <path class="ar agent" d="M620 280V216" marker-end="url(#fig-run-agent)"/>
 <rect class="lbg" x="605.1" y="238" width="29.799999999999997" height="16"/><text class="al" x="620" y="250" text-anchor="middle">≤ 5</text>
 <rect class="box" x="324.5" y="280.5" width="210" height="60" rx="3"/>
-<text class="bt" x="334" y="301">Failed run</text>
+<text class="bt" x="334" y="301">Failed ticket run</text>
 <text class="bl" x="334" y="318">out of Repairs: push work,</text>
 <text class="bl" x="334" y="332.5">PR to draft, Claim kept</text>
 <path class="ar faint" d="M600 310H536" marker-end="url(#fig-run-faint)"/>
@@ -273,17 +309,17 @@
 <text class="bl o" x="884" y="188">for review</text>
 <path class="ar ink" d="M848 182H872" marker-end="url(#fig-run-ink)"/>
 </svg></div>
-        <figcaption><b>Figure 2</b> A Run. The agent writes and reviews the code, but only thirdshift decides the pull request is ready.</figcaption>
+        <figcaption><b>Figure 2</b> A Ticket run. The agent writes and reviews the code, but only thirdshift decides the pull request is ready.</figcaption>
       </figure>
     </div>
   </section>
 
   <section class="sec arch-sec" id="merge-run" aria-labelledby="merge-run-title">
     <div class="wrap">
-      <div class="sec-head"><p class="eyebrow">Figure 3 · <code>thirdshift merge &lt;Issue URL&gt;</code></p><h2 id="merge-run-title">A Merge run: the Run, then thirdshift merges it</h2></div>
-      <p class="lede">The same Run, one step further. Once the pull request is open, ready, mergeable and green, thirdshift merges it with a merge commit, on exactly the head whose CI it watched. Commits someone else pushed to the branch are reviewed first. A required human review still stops it, leaving the pull request ready for you.</p>
+      <div class="sec-head"><p class="eyebrow">Figure 3 · <code>thirdshift merge &lt;Issue URL&gt;</code></p><h2 id="merge-run-title">A Ticket run that Self-merges</h2></div>
+      <p class="lede">The same Ticket run, one step further. Once the pull request is open, ready, mergeable and green, thirdshift merges it with a merge commit, on exactly the head whose CI it watched. Commits someone else pushed to the branch are reviewed first. A required human review still stops it, leaving the pull request ready for you.</p>
       <figure class="arch-fig">
-        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 3, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 392" role="img" aria-labelledby="fig-merge-desc"><title id="fig-merge-desc">A Merge run is a Run that goes one step further. If someone else pushed commits to the Issue branch, a review Repair looks at them first. Once the pull request is open, ready, mergeable and green, thirdshift checks the review decision and merges it with a merge commit on exactly the head whose CI it watched. The issue is closed and its Claim removed.</title><defs><marker id="fig-merge-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-merge-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-merge-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-merge-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
+        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 3, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 392" role="img" aria-labelledby="fig-merge-desc"><title id="fig-merge-desc">A Ticket run that Self-merges goes one step further. If someone else pushed commits to the Issue branch, a review Repair looks at them first. Once the pull request is open, ready, mergeable and green, thirdshift checks the review decision and merges it with a merge commit on exactly the head whose CI it watched. The issue is closed and its Claim removed.</title><defs><marker id="fig-merge-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-merge-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-merge-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-merge-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
 <path class="vm" d="M136 2H996V262H864V384H136Z"/>
 <rect class="lbg" x="146" y="364" width="100.39999999999999" height="15"/><text class="zl" x="150" y="376">YOUR MACHINE</text>
 <rect class="lbg" x="250.39999999999998" y="364" width="318.2" height="15"/><text class="zs" x="254.39999999999998" y="376">ideally a VM with nothing from production on it</text>
@@ -347,7 +383,7 @@
 <path class="ar agent" d="M620 280V216" marker-end="url(#fig-merge-agent)"/>
 <rect class="lbg" x="605.1" y="238" width="29.799999999999997" height="16"/><text class="al" x="620" y="250" text-anchor="middle">≤ 5</text>
 <rect class="box" x="324.5" y="280.5" width="210" height="60" rx="3"/>
-<text class="bt" x="334" y="301">Failed run</text>
+<text class="bt" x="334" y="301">Failed ticket run</text>
 <text class="bl" x="334" y="318">out of Repairs: push work,</text>
 <text class="bl" x="334" y="332.5">PR to draft, Claim kept</text>
 <path class="ar faint" d="M600 310H536" marker-end="url(#fig-merge-faint)"/>
@@ -373,17 +409,17 @@
 <path class="ar ink" d="M932 232V298" marker-end="url(#fig-merge-ink)"/>
 </svg></div>
         <ul class="arch-key"><li class="k-new">new in this workflow</li></ul>
-        <figcaption><b>Figure 3</b> A Merge run. thirdshift merges only code an agent wrote or reviewed, never through GitHub's auto-merge.</figcaption>
+        <figcaption><b>Figure 3</b> A Ticket run that Self-merges. thirdshift merges only code an agent wrote or reviewed, never through GitHub's auto-merge.</figcaption>
       </figure>
     </div>
   </section>
 
   <section class="sec arch-sec" id="spec-run" aria-labelledby="spec-run-title">
     <div class="wrap">
-      <div class="sec-head"><p class="eyebrow">Figure 4 · <code>thirdshift &lt;Spec URL&gt;</code></p><h2 id="spec-run-title">A Spec run: many Merge runs, one pull request</h2></div>
-      <p class="lede">An issue with sub-issues is a <strong>Spec</strong>, and its sub-issues are <strong>Tickets</strong>. Each Ticket gets its own Merge run, not into <code>main</code> but into the <strong>Spec branch</strong>, in the order GitHub's “blocked by” links allow. Independent Tickets run at once, each in its own Worktree. The Spec ends as one pull request for you to review.</p>
+      <div class="sec-head"><p class="eyebrow">Figure 4 · <code>thirdshift &lt;Spec URL&gt;</code></p><h2 id="spec-run-title">A Spec run: many Ticket runs, one pull request</h2></div>
+      <p class="lede">An issue with sub-issues is a <strong>Spec</strong>, and its sub-issues are <strong>Tickets</strong>. Each Ticket gets its own Ticket run that Self-merges, not into <code>main</code> but into the <strong>Spec branch</strong>, in the order GitHub's “blocked by” links allow. Independent Tickets run at once, each in its own Worktree. The Spec ends as one pull request for you to review.</p>
       <figure class="arch-fig">
-        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 4, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 312" role="img" aria-labelledby="fig-spec-desc"><title id="fig-spec-desc">A Spec is an issue whose sub-issues are Tickets. Each Ticket gets its own Merge run into the Spec branch, in the order its blocked-by links allow. One session then reviews the whole Spec branch against the Spec, thirdshift delivers it and watches CI, and the Spec ends as one Spec PR ready for review.</title><defs><marker id="fig-spec-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-spec-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-spec-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-spec-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
+        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 4, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 312" role="img" aria-labelledby="fig-spec-desc"><title id="fig-spec-desc">A Spec is an issue whose sub-issues are Tickets. Each Ticket gets its own Ticket run that Self-merges into the Spec branch, in the order its blocked-by links allow. One session then reviews the whole Spec branch against the Spec, thirdshift delivers it and watches CI, and the Spec ends as one Spec PR ready for review.</title><defs><marker id="fig-spec-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-spec-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-spec-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-spec-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
 <path class="vm" d="M140 2H892V304H140Z"/>
 <rect class="lbg" x="150" y="284" width="100.39999999999999" height="15"/><text class="zl" x="154" y="296">YOUR MACHINE</text>
 <rect class="lbg" x="254.39999999999998" y="284" width="318.2" height="15"/><text class="zs" x="258.4" y="296">ideally a VM with nothing from production on it</text>
@@ -392,14 +428,14 @@
 <text class="bl" x="20" y="150">an issue with</text>
 <text class="bl" x="20" y="164.5">sub-issues</text>
 <rect class="box tool new" x="160.5" y="24.5" width="190" height="56" rx="3"/>
-<text class="bt" x="170" y="45">Ticket a · Merge run</text>
+<text class="bt" x="170" y="45">Ticket a · Self-merge</text>
 <text class="bl" x="170" y="62">blocked by nothing</text>
 <rect class="tagbg" x="315.1" y="16" width="28.9" height="15"/><text class="tag" x="320.1" y="27">new</text>
 <rect class="box tool new" x="160.5" y="116.5" width="190" height="56" rx="3"/>
-<text class="bt" x="170" y="137">Ticket b · Merge run</text>
+<text class="bt" x="170" y="137">Ticket b · Self-merge</text>
 <text class="bl" x="170" y="154">blocked by a</text>
 <rect class="box tool new" x="160.5" y="208.5" width="190" height="56" rx="3"/>
-<text class="bt" x="170" y="229">Ticket c · Merge run</text>
+<text class="bt" x="170" y="229">Ticket c · Self-merge</text>
 <text class="bl" x="170" y="246">blocked by a and b</text>
 <path class="ar ink" d="M122 144H140V52H158" marker-end="url(#fig-spec-ink)"/>
 <path class="ar ink" d="M140 144H158" marker-end="url(#fig-spec-ink)"/>
@@ -431,7 +467,7 @@
 <text class="note" x="390" y="245" text-anchor="start">The Spec carries the Claim; its Tickets make none.</text>
 </svg></div>
         <ul class="arch-key"><li class="k-new">new in this workflow</li></ul>
-        <figcaption><b>Figure 4</b> A Spec run. Many Merge runs land on a Spec branch, and one Spec PR reaches the Day shift.</figcaption>
+        <figcaption><b>Figure 4</b> A Spec run. Many Ticket runs that Self-merge land on a Spec branch, and one Spec PR reaches the Day shift.</figcaption>
       </figure>
     </div>
   </section>
@@ -439,9 +475,10 @@
   <section class="sec arch-sec" id="passes" aria-labelledby="passes-title">
     <div class="wrap">
       <div class="sec-head"><p class="eyebrow">Figure 5 · <code>thirdshift pickup</code>, <code>architect</code>, <code>secure</code></p><h2 id="passes-title">The Passes: the factory finds its own work</h2></div>
-      <p class="lede">A <strong>Pass</strong> takes no Issue URL, so your operating system's scheduler can start it; thirdshift never schedules itself. Only one Pass runs on a repository at a time, and a Pass with nothing to do is skipped, not failed. Architect and Security runs wait while a Ready issue is open, so work you shaped goes first.</p>
+      <p>Once a Pass knows its repository, it replaces that kind's last-fired time under the repository's log folder, before launch checks or the local Pass lock. Repeated skips update the time without adding Activity log lines. <code>thirdshift status</code>, <code>thirdshift cronjobs</code> and their Console views read the same per-repository times; no reader starts work.</p>
+      <p class="lede">A <strong>Pass</strong> takes no Issue URL, so your operating system's scheduler can start it; thirdshift never schedules itself. Only one Pass runs on a repository at a time, and a Pass with nothing to do is skipped, not failed. Architect and Security runs wait while a Ready issue is open, so work you shaped goes first. Your scheduler can start <a href="/docs/#architect-runs-every-few-minutes">Architect runs every few minutes</a> and <a href="/docs/#security-runs-on-a-schedule-with-fixing-allowed">Security runs on a schedule, with fixing allowed</a>.</p>
       <figure class="arch-fig">
-        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 5, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 334" role="img" aria-labelledby="fig-passes-desc"><title id="fig-passes-desc">The operating system’s scheduler starts three kinds of Pass, each taking no Issue URL. A Pickup run sweeps closed issues, respects the Claim limit and runs the lowest-numbered Ready issue. An Architect run reviews the architecture and either publishes a plan, which it builds with a Run or Spec run, or files an idea for the Day shift to triage. A Security run audits the Base branch, runs target code to reproduce what it finds, records each finding privately and, when fixing is allowed, files a fix issue and runs it. Running target code is why the Security run needs an OS sandbox, which is proposed but not built.</title><defs><marker id="fig-passes-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-passes-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-passes-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-passes-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
+        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 5, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 334" role="img" aria-labelledby="fig-passes-title" aria-describedby="fig-passes-desc"><title id="fig-passes-title">The three Passes</title><desc id="fig-passes-desc">The operating system’s scheduler starts three kinds of Pass, each taking no Issue URL. A Pickup run sweeps closed issues, respects the Claim limit and runs the lowest-numbered Ready issue by default. An Architect run reviews the architecture and either publishes a plan, which it builds with a Ticket run or Spec run, or files an idea for the Day shift to triage. A Security run audits the Base branch, reproduces findings, records each privately and, when fixing is allowed, files a fix issue and runs it. Its target code may run only inside an OS-enforced sandbox, as the Security audit skill requires.</desc><defs><marker id="fig-passes-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-passes-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-passes-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-passes-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
 <path class="vm" d="M2 2H998V326H2Z"/>
 <rect class="lbg" x="10" y="306" width="100.39999999999999" height="15"/><text class="zl" x="14" y="318">YOUR MACHINE</text>
 <rect class="lbg" x="114.39999999999999" y="306" width="423.79999999999995" height="15"/><text class="zs" x="118.39999999999999" y="318">results leave only as GitHub issues, PRs and private advisories</text>
@@ -455,9 +492,9 @@
 <rect class="box tool" x="170.5" y="14.5" width="220" height="60" rx="3"/>
 <text class="bt" x="180" y="35">Pickup run</text>
 <text class="bl" x="180" y="52">Sweep, Claim limit, then</text>
-<text class="bl" x="180" y="66.5">the lowest Ready issue</text>
+<text class="bl" x="180" y="66.5">lowest Ready issue by default</text>
 <rect class="box tool" x="420.5" y="14.5" width="140" height="60" rx="3"/>
-<text class="bt" x="430" y="35">Run</text>
+<text class="bt" x="430" y="35">Ticket run</text>
 <text class="bl" x="430" y="52">Figure 2</text>
 <path class="ar ink" d="M390 44H418" marker-end="url(#fig-passes-ink)"/>
 <rect class="box agent" x="170.5" y="120.5" width="220" height="60" rx="3"/>
@@ -473,11 +510,10 @@
 <path class="ar ink" d="M390 140H418" marker-end="url(#fig-passes-ink)"/>
 <path class="ar faint" d="M390 165H404V182H418" marker-end="url(#fig-passes-faint)"/>
 <rect class="box tool" x="630.5" y="106.5" width="150" height="44" rx="3"/>
-<text class="bt" x="640" y="124">Run or Spec run</text>
-<text class="bl" x="640" y="139">Figures 2 to 4</text>
+<text class="bt" x="640" y="124">Ticket run</text>
+<text class="bl" x="640" y="139">or Spec run · Fig. 2–4</text>
 <path class="ar ink" d="M600 128H628" marker-end="url(#fig-passes-ink)"/>
-<rect class="ring prop" x="160.5" y="214.5" width="240" height="84" rx="5"/>
-<rect class="proptag" x="193" y="206" width="199" height="15"/><text class="tag" x="198" y="217">needs an OS sandbox · proposed</text>
+<rect class="tagbg" x="170" y="206" width="240" height="15"/><text class="tag" x="175" y="217">target code: OS sandbox required</text>
 <rect class="box agent" x="170.5" y="226.5" width="220" height="60" rx="3"/>
 <text class="bt" x="180" y="247">Security run</text>
 <text class="bl" x="180" y="264">audits the Base branch;</text>
@@ -490,13 +526,14 @@
 <text class="bt" x="660" y="247">Security fix</text>
 <text class="bl" x="660" y="264">if allowed: files an</text>
 <text class="bl" x="660" y="278.5">issue and runs it</text>
-<path class="ar ink" d="M400 256H428" marker-end="url(#fig-passes-ink)"/>
+<path class="ar ink" d="M390 256H428" marker-end="url(#fig-passes-ink)"/>
 <path class="ar faint" d="M620 256H648" marker-end="url(#fig-passes-faint)"/>
-<text class="note" x="860" y="248" text-anchor="start">Fencing: on a</text>
-<text class="note" x="860" y="263" text-anchor="start">schedule, with</text>
-<text class="note" x="860" y="278" text-anchor="start">fixing allowed</text>
+<text class="note" x="850" y="233" text-anchor="start">Security runs</text>
+<text class="note" x="850" y="248" text-anchor="start">on a schedule,</text>
+<text class="note" x="850" y="263" text-anchor="start">with fixing</text>
+<text class="note" x="850" y="278" text-anchor="start">allowed</text>
 </svg></div>
-        <ul class="arch-key"><li class="k-new">new in this workflow</li><li class="k-prop">proposed, not built</li></ul>
+        <ul class="arch-key"><li class="k-new">new in this workflow</li></ul>
         <figcaption><b>Figure 5</b> The Passes. The factory finds Ready issues, architecture plans and vulnerabilities by itself.</figcaption>
       </figure>
     </div>
@@ -505,9 +542,9 @@
   <section class="sec arch-sec" id="containment" aria-labelledby="containment-title">
     <div class="wrap">
       <div class="sec-head"><p class="eyebrow">Figure 6 · from the outside in</p><h2 id="containment-title">Containment: where the boundaries are</h2></div>
-      <p class="lede">thirdshift draws no security boundary around its agents: every session can do what your user account can. So containment comes from where you run it. The boundary that holds is the machine: best a virtual machine with nothing from production on it. An OS sandbox inside it, for the code an agent runs, is proposed but not built.</p>
+      <p class="lede">Ticket run, Spec run and Security sessions can do what your user account can. So containment comes from where you run it. The boundary that holds is the machine: best a virtual machine with nothing from production on it. Security sessions may run target code only inside an OS-enforced sandbox, as the Security audit skill requires. thirdshift ships a sandbox runner for Trials and Graders; Ticket run, Spec run and Security sessions run unsandboxed.</p>
       <figure class="arch-fig">
-        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 6, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 500" role="img" aria-labelledby="fig-containment-desc"><title id="fig-containment-desc">Nested boundaries around an agent session, from the outside in: your machine, ideally a virtual machine with nothing from production on it; your user account, whose permissions and logins every session has; the Worktree, which keeps checkouts apart but is not a security boundary; and, proposed but not built, an OS sandbox inside it for the target code an agent runs. Work leaves the machine only to GitHub and to the model provider.</title><defs><marker id="fig-containment-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-containment-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-containment-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-containment-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
+        <div class="arch-scroll" tabindex="0" role="group" aria-label="Figure 6, scrolls sideways on narrow screens"><svg class="arch-svg" viewBox="0 0 1000 500" role="img" aria-labelledby="fig-containment-title" aria-describedby="fig-containment-desc"><title id="fig-containment-title">Containment, Trusted accounts and the sandbox probe</title><desc id="fig-containment-desc">Nested boundaries around an agent session: your machine, ideally a virtual machine with nothing from production on it; your user account, whose permissions and logins every session has; and the Worktree, which keeps checkouts apart but is not a security boundary. Setup probes bubblewrap on Linux when security is enabled, reporting unavailable on macOS. Security target code requires an OS sandbox; thirdshift’s bwrap runner covers Trials and Graders, while Ticket run, Spec run and Security sessions are unsandboxed. The dotted runner is proposed. Trusted accounts gate Pickup’s authors and ready labels, and which issue comments sessions receive. Work leaves through GitHub and the model provider.</desc><defs><marker id="fig-containment-ink" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk ink" d="M0 0 10 5 0 10z"/></marker><marker id="fig-containment-faint" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk faint" d="M0 0 10 5 0 10z"/></marker><marker id="fig-containment-acc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk acc" d="M0 0 10 5 0 10z"/></marker><marker id="fig-containment-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path class="mk agent" d="M0 0 10 5 0 10z"/></marker></defs>
 <rect class="ring vmr" x="10.5" y="30.5" width="640" height="455" rx="5"/>
 <text class="zl" x="22" y="50">YOUR MACHINE</text>
 <text class="zs" x="22" y="66">ideally a VM with nothing from production on it</text>
@@ -522,9 +559,12 @@
 <text class="bl" x="60" y="284">gh, git, Harness:</text>
 <text class="bl" x="60" y="298.5">any session can</text>
 <text class="bl" x="60" y="313">read and use them</text>
-<rect class="box" x="50.5" y="340.5" width="160" height="56" rx="3"/>
-<text class="bt" x="60" y="361">Logs</text>
-<text class="bl" x="60" y="378">sessions, audits</text>
+<rect class="box tool" x="50.5" y="340.5" width="160" height="104" rx="3"/>
+<text class="bt" x="60" y="361">Setup</text>
+<text class="bl" x="60" y="378">Security enabled:</text>
+<text class="bl" x="60" y="392.5">bubblewrap probe</text>
+<text class="bl" x="60" y="407">Linux; unavailable</text>
+<text class="bl" x="60" y="421.5">on macOS</text>
 <rect class="ring soft" x="230.5" y="152.5" width="380" height="300" rx="5"/>
 <text class="zl" x="242" y="172">WORKTREE</text>
 <text class="zs" x="242" y="188">keeps checkouts apart; not a boundary</text>
@@ -534,20 +574,25 @@
 <text class="bl" x="260" y="258.5">(ADR-0013); Claude Code’s auto</text>
 <text class="bl" x="260" y="273">mode screens risky actions</text>
 <rect class="ring prop" x="250.5" y="318.5" width="340" height="116" rx="5"/>
-<text class="zl" x="262" y="338">OS SANDBOX</text>
-<text class="zs" x="262" y="354">bubblewrap + AppArmor, or Podman</text>
-<rect class="proptag" x="414.5" y="310" width="167.5" height="15"/><text class="tag" x="419.5" y="321">proposed · #726 #608 #398</text>
-<text class="note" x="262" y="392" text-anchor="start">target code would run here: builds,</text>
-<text class="note" x="262" y="407" text-anchor="start">tests, proofs of concept, with no</text>
-<text class="note" x="262" y="422" text-anchor="start">network and scratch-only writes</text>
+<text class="zl" x="262" y="338">OS SANDBOX RUNNER</text>
+<text class="zs" x="262" y="354">required for Security target code</text>
+<rect class="proptag" x="434.5" y="310" width="147.5" height="15"/><text class="tag" x="439.5" y="321">not shipped · #726</text>
+<text class="note" x="262" y="392" text-anchor="start">no target-code runner yet</text>
+<text class="note" x="262" y="407" text-anchor="start">Ticket run, Spec run and Security sessions are unsandboxed</text>
+<text class="note" x="262" y="422" text-anchor="start">#398: sandboxed Codex still open</text>
 <path class="ar agent" d="M330 280V316" marker-end="url(#fig-containment-agent)"/>
-<rect class="lbg" x="342.9" y="289" width="122.19999999999999" height="16"/><text class="al" x="404" y="301" text-anchor="middle">would run code in</text>
+<rect class="lbg" x="342" y="289" width="190" height="16"/><text class="al" x="437" y="301" text-anchor="middle">required for target code</text>
 <path class="ar acc" d="M210 198H230V243H248" marker-end="url(#fig-containment-acc)"/>
 <path class="ar faint" d="M250 262H212" marker-end="url(#fig-containment-faint)"/>
 <rect class="box" x="700.5" y="130.5" width="280" height="74" rx="3"/>
 <text class="bt" x="710" y="151">GitHub</text>
 <text class="bl" x="710" y="168">pushes, PRs, labels, private</text>
 <text class="bl" x="710" y="182.5">advisories: the work leaves here</text>
+<rect class="box tool" x="700.5" y="26.5" width="280" height="80" rx="3"/>
+<text class="bt" x="710" y="47">Trusted accounts</text>
+<text class="bl" x="710" y="64">Pickup: author and ready label</text>
+<text class="bl" x="710" y="78.5">Sessions: only their comments</text>
+<path class="ar acc" d="M840 106V128" marker-end="url(#fig-containment-acc)"/>
 <rect class="box" x="700.5" y="260.5" width="280" height="74" rx="3"/>
 <text class="bt" x="710" y="281">Model provider API</text>
 <text class="bl" x="710" y="298">prompts, and the code quoted</text>
@@ -558,13 +603,15 @@
 <rect class="lbg" x="650.5" y="278" width="43" height="16"/><text class="al" x="672" y="290" text-anchor="middle">HTTPS</text>
 </svg></div>
         <ul class="arch-key"><li class="k-machine">your machine</li><li class="k-user">enforced by the OS</li><li class="k-soft">keeps things apart, not security</li><li class="k-prop">proposed, not built</li></ul>
-        <figcaption><b>Figure 6</b> Containment. Your machine is the boundary that holds; an OS sandbox is the proposed wall inside it.</figcaption>
+        <figcaption><b>Figure 6</b> Containment. Setup's probe is shipped; thirdshift's sandbox runner covers Trials and Graders. Trusted accounts limit the issue material handed to a session, not what the session can do.</figcaption>
       </figure>
       <dl class="arch-layers">
         <div><dt>Your machine</dt><dd><em class="st-hold">holds · your setup</em> Keep production data, keys and unrelated logins off it, and assume a session can read or change anything on it.</dd></div>
         <div><dt>Your user account</dt><dd><em class="st-part">enforced, but shared</em> It separates thirdshift from other users, not from its own sessions: a session can read the <code>gh</code> and <code>git</code> logins and push with them (<a href="https://github.com/JacobStephens2/thirdshift/issues/691">#691</a>).</dd></div>
-        <div><dt>The Worktree</dt><dd><em class="st-none">not a security boundary</em> It keeps your checkout and other Runs apart. Every Harness runs with its own sandbox and approvals off (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0013-every-harness-runs-unattended-and-fully-trusted.md">ADR-0013</a>). Claude Code's auto mode screens risky actions, but enforces no boundary.</dd></div>
-        <div><dt>An OS sandbox</dt><dd><em class="st-prop">proposed</em> A second wall inside the machine, for the code an agent runs: no network, writes only to scratch space, a dummy home directory. On Ubuntu 24.04, bubblewrap needs an AppArmor profile that lets it create user namespaces. Tracked in <a href="https://github.com/JacobStephens2/thirdshift/issues/726">#726</a> (a runner), <a href="https://github.com/JacobStephens2/thirdshift/issues/608">#608</a> (a setup check) and <a href="https://github.com/JacobStephens2/thirdshift/issues/398">#398</a> (sandboxed Codex).</dd></div>
+        <div><dt>The Worktree</dt><dd><em class="st-none">not a security boundary</em> It keeps your checkout and other Ticket runs apart. Every Harness runs with its own sandbox and approvals off (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0013-every-harness-runs-unattended-and-fully-trusted.md">ADR-0013</a>). Claude Code's auto mode screens risky actions, but enforces no boundary.</dd></div>
+        <div><dt>Setup's sandbox probe</dt><dd><em class="st-hold">shipped · capability check</em> With <code>security.review</code> or <code>security.fix</code> on, Setup checks this machine's bubblewrap sandbox on Linux: network isolation, a read-only host home and scratch writes with a dummy home directory. On macOS it reports the check unavailable. Passing is a capability check, not isolation for later sessions. <a href="/docs/#user-config">Setup and User config</a>.</dd></div>
+        <div><dt>An OS sandbox</dt><dd><em class="st-prop">required for Security target code · runner not shipped</em> The <a href="/prompts/#skill-thirdshift-security-audit">Security audit skill</a> requires an OS-enforced sandbox before running target code, with network, credential, write and resource isolation. If those controls cannot be enforced, the session must leave execution for validation. thirdshift ships no runner for Security target code yet (<a href="https://github.com/JacobStephens2/thirdshift/issues/726">#726</a>). Trials and model Graders run in bwrap sandboxes with provider-only networks; Code Graders run offline. Graders see their packets and, for Code Graders, the prepared repository; raw Trial logs and Arm mappings stay hidden. Ticket run, Spec run and Security sessions run unsandboxed; sandboxed Codex sessions remain open work (<a href="https://github.com/JacobStephens2/thirdshift/issues/398">#398</a>, ADR-0013).</dd></div>
+        <div><dt>Trusted accounts</dt><dd><em class="st-part">issue input, not process isolation</em> The repository's owner, organization members and collaborators. A session gets its issue's title, body and only these accounts' comments. Pickup takes only issues a Trusted account wrote and whose latest <code>ready-for-agent</code> label a Trusted account applied, with no later title or body edit by another account. <a href="/docs/#pickup-runs">Pickup's trust checks</a>.</dd></div>
       </dl>
       <p class="arch-next">Next: <a href="/docs/#unattended-sessions">what an unattended session can do</a>, <a href="/how-it-works/">How thirdshift works</a> step by step, or <a href="/prompts/">every prompt and skill</a> the agents get.</p>
     </div>

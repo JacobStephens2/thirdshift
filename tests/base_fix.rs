@@ -87,7 +87,9 @@ fn prompts(scenario: &Scenario) -> Vec<String> {
 fn with_base_fix_an_inherited_failure_gets_an_issue_a_merged_fix_and_the_run_finishes_green() {
     let scenario = Scenario::new();
     scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
-    scenario.agent_does_for(8, &format!("{BASE_FIX_OPENS_PR}{GREEN_ON_HEAD}"));
+    scenario.agent_does_for(8, &format!(
+        "printf '%s\\n' '{{\"type\":\"system\",\"subtype\":\"init\",\"claude_code_version\":\"10.0.0\"}}'\n{BASE_FIX_OPENS_PR}{GREEN_ON_HEAD}"
+    ));
     let red_base = scenario.origin_git(&["rev-parse", "main"]);
 
     let result = scenario.run(&[&scenario.issue_url(7), "base-fix"]);
@@ -95,6 +97,20 @@ fn with_base_fix_an_inherited_failure_gets_an_issue_a_merged_fix_and_the_run_fin
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
     let gh = scenario.gh_state();
+    for pr in gh["prs"].as_array().unwrap() {
+        assert!(
+            pr["body"]
+                .as_str()
+                .unwrap()
+                .contains("Built with claude 10.0.0 · "),
+            "{pr}"
+        );
+    }
+    let (_, notification) = support::resend::saved_notification(&scenario, "issue");
+    assert!(
+        notification.contains("Built with claude 10.0.0 · "),
+        "{notification}"
+    );
     assert_eq!(gh["titles"]["8"], "CI red on main: test");
     assert_eq!(
         gh["bodies"]["8"],
@@ -103,7 +119,7 @@ fn with_base_fix_an_inherited_failure_gets_an_issue_a_merged_fix_and_the_run_fin
              \n\
              - test: https://ci.example/main/test\n\
              \n\
-             Found by the thirdshift Run on #7, whose pull request is https://github.com/acme/widgets/pull/1.\n\
+             Found by the thirdshift Ticket run on #7, whose pull request is https://github.com/acme/widgets/pull/1.\n\
              \n\
              Fix the checks on `main`. Do not skip, disable, or weaken tests or checks to make them pass.\n",
             &red_base[..7]
@@ -136,6 +152,19 @@ fn with_base_fix_an_inherited_failure_gets_an_issue_a_merged_fix_and_the_run_fin
     assert!(prompts[1].contains(BASE_FIX_URL), "prompt: {}", prompts[1]);
     scenario.assert_cleaned_up("issue-7");
     scenario.assert_cleaned_up("issue-8");
+    let shown = scenario.run(&["show", "widgets#7", "--json"]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let shown: serde_json::Value = serde_json::from_str(&shown.stdout).unwrap();
+    let run = &shown["command"];
+    assert_eq!(run["run_metrics"]["outcome"], "ready for review");
+    assert_eq!(run["run_metrics"]["repairs"], 0);
+    assert_eq!(run["run_metrics"]["ci_rounds"], 2);
+    let fix = &run["children"][0];
+    assert_eq!(fix["kind"], "Base fix");
+    assert_eq!(fix["run_metrics"]["outcome"], "merged");
+    assert_eq!(fix["run_metrics"]["repairs"], 0);
+    assert_eq!(fix["run_metrics"]["ci_rounds"], 1);
+    assert!(fix["run_metrics"]["total_minutes"].is_number());
 }
 
 #[cfg(target_os = "linux")]
@@ -341,7 +370,7 @@ fn a_failing_base_fix_fails_the_run_naming_its_issue() {
     assert_eq!(gh["prs"][0]["isDraft"], true);
     assert!(
         scenario.origin_log("issue-7").unwrap()[0]
-            .starts_with(&format!("thirdshift: failed run ({cause}")),
+            .starts_with(&format!("thirdshift: failed ticket run ({cause}")),
         "log: {:?}",
         scenario.origin_log("issue-7")
     );
@@ -429,7 +458,7 @@ const BASE_CHECK: &str = "test: https://ci.example/main/test";
 
 /// What follows `Or set:`, after the retry command.
 const OR_SET: &str = "base.fix = true in ~/.thirdshift/config.toml, \
-                      to allow a Base fix for every Run on this machine";
+                      to allow a Base fix for every Ticket run on this machine";
 
 #[test]
 fn a_run_not_asked_about_a_base_fix_links_the_base_branchs_failing_checks_and_offers_one() {
@@ -467,7 +496,7 @@ fn a_run_not_asked_about_a_base_fix_links_the_base_branchs_failing_checks_and_of
              thirdshift: Base check: {BASE_CHECK}\n\
              thirdshift: Retry with: {retry}\n\
              thirdshift: Or set: {OR_SET}\n\
-             thirdshift: session log: "
+             thirdshift: session trace: "
         )),
         "stderr: {}",
         result.stderr
@@ -481,7 +510,7 @@ fn a_run_not_asked_about_a_base_fix_links_the_base_branchs_failing_checks_and_of
              Base check:   {BASE_CHECK}\n\
              Retry with:   {retry}\n\
              Or set:       {OR_SET}\n\
-             Session log:  "
+             Session trace:  "
         )),
         "text: {text}"
     );
@@ -511,7 +540,7 @@ fn a_run_not_asked_about_a_base_fix_links_the_base_branchs_failing_checks_and_of
     // The cause alone is the Failed-run commit's message.
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[0],
-        format!("thirdshift: failed run ({cause})")
+        format!("thirdshift: failed ticket run ({cause})")
     );
     assert!(scenario.gh_calls_of("issue", "create").is_empty());
 }

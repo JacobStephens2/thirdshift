@@ -6,6 +6,63 @@ mod support;
 use support::{AGENT_COMMITS_AND_OPENS_PR, Scenario};
 
 #[test]
+fn harness_checks_reject_signed_out_claude_and_codex_before_any_session() {
+    for (harness, variable) in [
+        ("claude", "FAKE_CLAUDE_SIGNED_OUT"),
+        ("codex", "FAKE_CODEX_SIGNED_OUT"),
+    ] {
+        let scenario = Scenario::new();
+        scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+        let result = scenario.run_with_env(
+            &["harness", harness, &scenario.issue_url(7)],
+            &[(variable, "1")],
+        );
+        scenario.assert_rejected_before_any_work(&result, &format!("{harness} is not signed in"));
+    }
+}
+
+#[test]
+fn a_default_review_harness_failure_or_two_unusable_harnesses_stops_before_work() {
+    for security in ["claude", "codex"] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(&format!(
+            "[harness]\ndefault = 'claude'\n[security]\nharness = '{security}'\n"
+        ));
+        let result = scenario.run_with_env(
+            &["harness", "grok", &scenario.issue_url(7), "security-review"],
+            &[
+                ("FAKE_CLAUDE_SIGNED_OUT", "1"),
+                ("FAKE_CODEX_SIGNED_OUT", "1"),
+            ],
+        );
+        scenario.assert_rejected_before_any_work(&result, "claude is not signed in");
+    }
+}
+
+#[test]
+fn security_review_off_checks_neither_the_review_harness_nor_its_default_fallback() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "[harness]\ndefault = 'claude'\n[security]\nharness = 'codex'\nreview = true\n",
+    );
+    scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
+    let result = scenario.run_with_env(
+        &[
+            "harness",
+            "grok",
+            &scenario.issue_url(7),
+            "no-security-review",
+        ],
+        &[
+            ("FAKE_CLAUDE_SIGNED_OUT", "1"),
+            ("FAKE_CODEX_SIGNED_OUT", "1"),
+        ],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(!result.stderr.contains("warning: Security review"));
+}
+
+#[test]
 fn a_closed_issue_is_rejected() {
     let scenario = Scenario::new();
     scenario.issue_is(7, "CLOSED");
@@ -66,16 +123,23 @@ fn the_origin_match_accepts_https_and_ssh_with_or_without_git_in_any_case() {
 }
 
 #[test]
-fn an_issue_in_another_owners_or_repos_repository_is_an_origin_mismatch() {
-    for url in [
-        "https://github.com/other/widgets/issues/7",
-        "https://github.com/acme/gadgets/issues/7",
+fn an_issue_in_another_owners_or_repos_repository_is_an_origin_mismatch_naming_where_to_start() {
+    for (url, repo) in [
+        ("https://github.com/other/widgets/issues/7", "other/widgets"),
+        ("https://github.com/acme/gadgets/issues/7", "acme/gadgets"),
     ] {
         let scenario = Scenario::new();
 
         let result = scenario.run(&[url]);
 
-        scenario.assert_rejected_before_any_work(&result, "origin mismatch");
+        scenario.assert_rejected_before_any_work(
+            &result,
+            &format!(
+                "origin mismatch: {url} is not in the repository at origin {}; \
+                 start it from a clone of {repo}",
+                scenario.github_url()
+            ),
+        );
     }
 }
 
