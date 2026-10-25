@@ -260,6 +260,107 @@ echo '{"type":"result","subtype":"success","total_cost_usd":0.25,"modelUsage":{"
     );
 }
 
+#[test]
+fn trial_export_ignores_result_metadata_but_requires_trace_context_and_complete_pairs() {
+    let fixture = Fixture::new();
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let experiment = fixture.experiment();
+    let directory = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}",
+        experiment["id"].as_str().unwrap()
+    ));
+    for entry in fs::read_dir(directory.join("results")).unwrap() {
+        fs::write(entry.unwrap().path(), "malformed result").unwrap();
+    }
+    let mut session_spans = Vec::new();
+    for trial in fs::read_dir(directory.join("trials")).unwrap() {
+        let trial = trial.unwrap().path();
+        for name in ["pending.json", "active.json"] {
+            fs::write(trial.join(name), "malformed unrelated metadata").unwrap();
+        }
+        for attempt in fs::read_dir(&trial).unwrap() {
+            let attempt = attempt.unwrap().path();
+            if !attempt.is_dir() {
+                continue;
+            }
+            for name in ["started.json", "result.json"] {
+                fs::write(attempt.join(name), "malformed unrelated metadata").unwrap();
+            }
+            for entry in fs::read_dir(attempt.join("session")).unwrap() {
+                let path = entry.unwrap().path();
+                if path.to_string_lossy().ends_with(".spans.jsonl") {
+                    session_spans.push(path);
+                }
+            }
+        }
+    }
+    session_spans.sort();
+    assert_eq!(session_spans.len(), 2);
+    let spans = &session_spans[0];
+    let bytes = fs::read_to_string(spans).unwrap();
+    let preserved = bytes.replacen('{', "{\"futureTrialField\":{\"opaque\":true},", 1);
+    fs::write(spans, &preserved).unwrap();
+    let unassociated = directory.join("trials/unassociated/attempt-old");
+    fs::create_dir_all(unassociated.join("session")).unwrap();
+    fs::write(
+        unassociated.join("session/orphan.spans.jsonl"),
+        "not decoded",
+    )
+    .unwrap();
+    let record = fixture
+        .scenario
+        .command_record("home/.thirdshift/logs/JacobStephens2/thirdshift/commands/experiment");
+    let export = |name: &str| {
+        let output = fixture.scenario.path(name);
+        fixture.scenario.run(&[
+            "logs",
+            record["name"].as_str().unwrap(),
+            "--export",
+            output.to_str().unwrap(),
+        ])
+    };
+    let run = export("export-valid");
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(
+        fs::read_to_string(fixture.scenario.path("export-valid/spans.jsonl"))
+            .unwrap()
+            .contains(&preserved)
+    );
+    let spans = trace_spans(&fixture.scenario.path("export-valid/spans.jsonl"));
+    assert_eq!(
+        spans
+            .iter()
+            .filter(|span| span["name"] == "invoke_agent spec-review")
+            .count(),
+        2
+    );
+
+    let context = unassociated.join("trace-context.json");
+    fs::write(&context, "malformed context").unwrap();
+    let run = export("export-bad-context");
+    assert_eq!(run.code, Some(1));
+    assert!(run.stderr.contains("trace-context.json"), "{}", run.stderr);
+    fs::remove_file(context).unwrap();
+
+    let logs = session_spans[0].with_file_name("trial-spec-review.logs.jsonl");
+    assert!(logs.is_file(), "{}", logs.display());
+    fs::remove_file(&logs).unwrap();
+    let run = export("export-partial-pair");
+    assert_eq!(run.code, Some(1));
+    assert!(
+        run.stderr.contains(logs.to_str().unwrap()),
+        "{}",
+        run.stderr
+    );
+    assert!(
+        !fixture
+            .scenario
+            .path("export-partial-pair/spans.jsonl")
+            .exists()
+    );
+}
+
 fn trace_spans(path: &std::path::Path) -> Vec<Value> {
     fs::read_to_string(path)
         .unwrap()

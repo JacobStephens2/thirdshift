@@ -408,10 +408,12 @@ fn interruption_never_reaches_completion_or_creates_a_checkpoint() {
     assert_eq!(error.to_string(), "interrupted");
     assert!(!called);
     assert!(writer.progress().attempts.is_empty());
-    let attempt = super::super::trace::attempts(&fixture.root)
-        .unwrap()
-        .pop()
-        .unwrap();
+    let attempt =
+        super::super::trial_sessions::experiment(&trial_results::files::Native, &fixture.root)
+            .unwrap()
+            .pop()
+            .unwrap()
+            .path;
     assert!(!attempt.parent().unwrap().join("active.json").exists());
     assert!(!attempt.parent().unwrap().join("pending.json").exists());
     assert!(!attempt.join("result.json").exists());
@@ -557,10 +559,12 @@ fn operational_failures_never_publish_completed_values() {
             &fixture.root,
             &fixture.request().identity
         ));
-        let attempts = super::super::trace::attempts(&fixture.root).unwrap();
+        let attempts =
+            super::super::trial_sessions::experiment(&trial_results::files::Native, &fixture.root)
+                .unwrap();
         assert_eq!(attempts.len(), 1);
-        assert!(attempts[0].join("stdout").is_file());
-        assert!(attempts[0].join("trace.spans.jsonl").is_file());
-        assert!(!attempts[0].join("result.json").exists());
+        assert!(attempts[0].path.join("stdout").is_file());
+        assert!(attempts[0].path.join("trace.spans.jsonl").is_file());
+        assert!(!attempts[0].path.join("result.json").exists());
     }
 }

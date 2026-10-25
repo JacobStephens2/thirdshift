@@ -7,6 +7,8 @@ use std::process::Command;
 
 use anyhow::Result;
 
+use super::trial_results::files::{Native, metadata};
+use super::trial_sessions;
 use crate::logs::trace::{Context, TRIAL_CONTEXT, id};
 use crate::otlp_jsonl::{
     AnyValue, KeyValue, Logs, Reader, Resource, ResourceSpans, ScopeSpans, Span, Spans, Status,
@@ -94,7 +96,11 @@ impl Attempt {
         }
         // Older version-1 Arms have no context inheritance. Join their local
         // traces too, preserving span IDs and all within-Session ancestry.
-        for session in sessions(&self.directory)? {
+        for session in trial_sessions::attempt(&Native, &self.directory)?.sessions {
+            if session.spans.is_none() {
+                continue;
+            }
+            let session = session.original;
             rewrite::<Spans>(&session.with_extension("spans.jsonl"), |request| {
                 for resource in &mut request.resource_spans {
                     self.resource(&mut resource.resource);
@@ -176,59 +182,27 @@ fn rewrite<R: crate::otlp_jsonl::Request>(
     Ok(())
 }
 
-pub(super) fn attempts(directory: &Path) -> Result<Vec<PathBuf>> {
-    let mut attempts = Vec::new();
-    let trials = directory.join("trials");
-    if trials.is_dir() {
-        for trial in fs::read_dir(trials)? {
-            for entry in fs::read_dir(trial?.path())? {
-                let entry = entry?;
-                if entry.file_type()?.is_dir()
-                    && entry.file_name().to_string_lossy().starts_with("attempt-")
-                {
-                    attempts.push(entry.path());
-                }
-            }
-        }
-    }
-    attempts.sort();
-    Ok(attempts)
-}
-
-pub(super) fn sessions(attempt: &Path) -> Result<Vec<PathBuf>> {
-    let directory = attempt.join("session");
-    let mut sessions = Vec::new();
-    if directory.is_dir() {
-        for entry in fs::read_dir(directory)? {
-            let path = entry?.path();
-            if let Some(stem) = path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .and_then(|name| name.strip_suffix(".spans.jsonl"))
-            {
-                sessions.push(path.with_file_name(format!("{stem}.jsonl")));
-            }
-        }
-    }
-    sessions.sort();
-    Ok(sessions)
-}
-
 impl super::Description {
     pub(crate) fn trace_sessions(&self, context: &Context) -> Result<Vec<PathBuf>> {
         let directory = crate::config::home()?
             .join(".thirdshift/evals/experiments")
             .join(&self.id);
         let mut paths = Vec::new();
-        for attempt in attempts(&directory)? {
-            let path = attempt.join("trace-context.json");
-            if !path.exists() {
+        for attempt in trial_sessions::experiment(&Native, &directory)? {
+            let Some(recorded) =
+                metadata::<Context>(&Native, &attempt.path.join("trace-context.json"))?
+            else {
                 continue;
-            }
-            let recorded: Context = serde_json::from_slice(&fs::read(path)?)?;
+            };
             if recorded.trace == context.trace {
-                paths.push(attempt.join("trace.jsonl"));
-                paths.extend(sessions(&attempt)?);
+                paths.push(attempt.path.join("trace.jsonl"));
+                paths.extend(
+                    attempt
+                        .sessions
+                        .into_iter()
+                        .filter(|session| session.spans.is_some())
+                        .map(|session| session.original),
+                );
             }
         }
         let graders = directory.join("graders");
