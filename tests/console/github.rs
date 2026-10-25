@@ -69,6 +69,21 @@ fn wait_until(mut condition: impl FnMut() -> bool) {
     }
 }
 
+/// Kill the Console and return its `gh` calls once they settle. A fake `gh`
+/// it spawned before the kill can still record its call afterwards.
+fn stop(console: Console, scenario: &Scenario) -> Vec<Vec<String>> {
+    drop(console);
+    let mut calls = scenario.gh_calls();
+    loop {
+        std::thread::sleep(Duration::from_millis(500));
+        let now = scenario.gh_calls();
+        if now == calls {
+            return calls;
+        }
+        calls = now;
+    }
+}
+
 fn hold_first_read(scenario: &Scenario) {
     fs::create_dir(scenario.path("bin/held")).unwrap();
     fs::rename(scenario.path("bin/gh"), scenario.path("bin/held/gh")).unwrap();
@@ -126,8 +141,7 @@ fn github_merge_wakes_open_inbox_and_status_reuses_the_answer() {
     );
     // Stop the Console to distinguish status's reads from the background reads.
     drop(stream);
-    drop(console);
-    let before = scenario.gh_calls();
+    let before = stop(console, &scenario);
     let output = scenario.run(&["status", "--json"]);
     assert_eq!(output.code, Some(0), "{}", output.stderr);
     let status: Value = serde_json::from_str(&output.stdout).unwrap();
@@ -166,8 +180,7 @@ fn github_issue_closure_wakes_needs_you_and_status_reuses_the_answer() {
     // unchanged facts must leave open pages idle too.
     assert_idle_events(&console, Duration::from_secs(2));
     drop(stream);
-    drop(console);
-    let before = scenario.gh_calls();
+    let before = stop(console, &scenario);
     let output = scenario.run(&["status", "--json"]);
     assert_eq!(output.code, Some(0), "{}", output.stderr);
     let status: Value = serde_json::from_str(&output.stdout).unwrap();
@@ -197,8 +210,7 @@ fn unchanged_github_reads_leave_open_inbox_idle_and_keep_status_fresh() {
     wait_until(|| scenario.gh_calls_of("api", "graphql").len() >= 3);
     assert_idle_events(&console, Duration::from_secs(2));
     assert!(scenario.gh_calls_of("api", "graphql").len() >= 6);
-    drop(console);
-    let before = scenario.gh_calls();
+    let before = stop(console, &scenario);
     let output = scenario.run(&["status", "--json"]);
     assert_eq!(output.code, Some(0), "{}", output.stderr);
     let status: Value = serde_json::from_str(&output.stdout).unwrap();
