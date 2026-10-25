@@ -2235,6 +2235,23 @@ fn an_issue_written_by_an_untrusted_account_is_passed_over() {
 }
 
 #[test]
+fn an_issue_with_no_ready_labelling_history_is_passed_over() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    let mut state = scenario.gh_state();
+    state["trust_events"] = serde_json::json!({"7": []});
+    scenario.write_gh_state(&state);
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_skipped(
+        &scenario,
+        &result,
+        &no_ready_issue_after(&["#7 has never been labelled ready-for-agent"]),
+    );
+}
+
+#[test]
 fn ready_labels_are_read_from_label_events_and_their_actors_trusted_by_membership() {
     for (association, actor, owner_type, collaborators, members) in [
         ("COLLABORATOR", "reader", "User", vec!["reader"], vec![]),
