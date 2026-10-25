@@ -121,6 +121,7 @@ fn model_grader_timeout_keeps_trace_and_resume_reuses_trials() {
     let records = fixture.scenario.log_files(folder, "json");
     assert_eq!(records.len(), 2);
     let mut grader_ids = Vec::new();
+    let mut trial_counts = Vec::new();
     for file in records {
         let record: Value =
             serde_json::from_slice(&fs::read(fixture.scenario.path(folder).join(file)).unwrap())
@@ -132,8 +133,29 @@ fn model_grader_timeout_keeps_trace_and_resume_reuses_trials() {
             .collect();
         assert_eq!(graders.len(), 1, "each Command must export its own Grader");
         grader_ids.push(graders[0]["spanId"].clone());
+        let trials: Vec<_> = spans
+            .iter()
+            .filter(|span| span["name"].as_str().unwrap().starts_with("Trial "))
+            .collect();
+        let sessions: Vec<_> = spans
+            .iter()
+            .filter(|span| span["name"] == "invoke_agent spec-review")
+            .collect();
+        assert_eq!(trials.len(), sessions.len());
+        assert!(sessions.iter().all(|session| {
+            trials
+                .iter()
+                .any(|trial| trial["spanId"] == session["parentSpanId"])
+        }));
+        trial_counts.push(trials.len());
     }
     assert_ne!(grader_ids[0], grader_ids[1]);
+    trial_counts.sort();
+    assert_eq!(
+        trial_counts,
+        vec![0, 2],
+        "resume must not export the earlier Command's Trials or Sessions"
+    );
 }
 
 #[test]
