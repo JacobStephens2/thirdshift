@@ -364,6 +364,7 @@ impl fmt::Display for AlreadyRunning {
 pub fn start(base: Option<&str>) -> Result<Start> {
     let directory = LaunchDirectory::open(current_dir()?, Opening::Pass)?;
     let repo = directory.repo()?;
+    crate::logs::pass_fired(&repo);
     directory.check_identity()?;
     let base = directory.prepare_base_branch(base)?;
     let Some(lock) = try_pass_lock(&repo)? else {

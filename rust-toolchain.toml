@@ -3,6 +3,6 @@
 # version. To move the pin, change `channel` in a pull request, so the new
 # compiler gets its own CI run (README, "The Rust version").
 [toolchain]
-channel = "1.99.0"
+channel = "1.99.1"
 profile = "minimal"
 components = ["rustfmt", "clippy"]

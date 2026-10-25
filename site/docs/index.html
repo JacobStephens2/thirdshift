@@ -168,6 +168,8 @@
 <p>For each repository and kind of Pass whose latest Activity log line is a skip, status also shows that Pass as idle with its reason, even when the skip is older than another kind&#39;s activity. A later start or end for that kind clears its idle entry. For example:</p>
 <pre><code class="language-text">Architect run idle on acme/widgets: Ready issue #7 &quot;Make widgets&quot; goes first: https://github.com/acme/widgets/issues/7
 </code></pre>
+<p><code>status</code> and the Console Inbox also show <code>Pickup last fired &lt;age&gt; ago on &lt;owner&gt;/&lt;repo&gt;</code> (and the equivalent for Architect and Security), even when repeated Passes skip for the same reason. Every Pass saves its start once its repository is known, before launch checks and the local Pass lock, in <code>&lt;logs.dir&gt;/&lt;owner&gt;/&lt;repo&gt;/&lt;pickup|architect|secure&gt;.last-fired</code>. This replaces the previous time without adding Activity log lines. A repository with no saved start has no last-fired entry; older Activity log times are not used as evidence that the scheduler recently fired.</p>
+<p><code>thirdshift cronjobs</code> and the Console&#39;s Cron jobs page show this same per-repository start inventory alongside this account&#39;s thirdshift crontab entries. The starts include manually launched Passes and other schedulers; they do not prove a particular cron entry fired. Cron commands are displayed without execution or repository inference. <code>cronjobs --json</code> returns an object with <code>jobs</code> (each entry&#39;s <code>schedule</code> and <code>command</code>) and <code>pass_starts</code>. Both it and <code>status --json</code> expose <code>pass_starts</code> entries with <code>repository</code>, <code>kind</code>, RFC 3339 <code>last_fired_at</code> and nonnegative <code>age_seconds</code>.</p>
 <p><code>thirdshift status --json</code> is the versioned API for agents; the <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0016-the-console-is-a-long-running-reader.md">Console</a> shows the same Inbox. It runs outside a repository too. Version 1 has this shape:</p>
 <pre><code class="language-json">{
   &quot;version&quot;: 1,
@@ -207,6 +209,12 @@
     &quot;parent_dispatch&quot;: null,
     &quot;tickets&quot;: [],
     &quot;children&quot;: []
+  }],
+  &quot;pass_starts&quot;: [{
+    &quot;repository&quot;: &quot;acme/widgets&quot;,
+    &quot;kind&quot;: &quot;Pickup run&quot;,
+    &quot;last_fired_at&quot;: &quot;2026-10-18T12:00:00-04:00&quot;,
+    &quot;age_seconds&quot;: 52
   }],
   &quot;idle_passes&quot;: [{
     &quot;repository&quot;: &quot;acme/widgets&quot;,
@@ -1034,7 +1042,7 @@ invented completion time.</p>
 2026-10-03 10:00:01 Pickup run skipped: no Ready issue on acme/widgets
 </code></pre>
 <p>Each line is appended whole, so passes that run at once on one repository never garble it. One that can&#39;t be written is one <code>warning:</code> line on stderr, and the command carries on as for a Command log. thirdshift never rotates it: collapsed skips keep it small. Existing logs, including Session traces in <code>&lt;owner&gt;/&lt;repo&gt;/sessions/</code> and logs from before the per-repository layout, are not moved.</p>
-<p>With <code>quiet_skips = true</code> in the <code>[activity]</code> section of the <a href="#user-config">User config</a>, a skipped Pass prints nothing on stdout or stderr, its dated first line included, and leaves only its Activity log line. A pass that does work, or fails, prints as ever, so a scheduler&#39;s log file catches only what went wrong. Without it, a skipped pass prints as it always has, for a pass you type by hand.</p>
+<p>With <code>quiet_skips = true</code> in the <code>[activity]</code> section of the <a href="#user-config">User config</a>, a skipped Pass prints nothing on stdout or stderr, its dated first line included. It keeps its last-fired time and writes an Activity log line only when the reason changes. A pass that does work, or fails, prints as ever, so a scheduler&#39;s log file catches only what went wrong. Without it, a skipped pass prints as it always has, for a pass you type by hand.</p>
 </div></details>
 </div></details>
 <details class="fold"><summary><h2>Foreign commits in a Ticket run that Self-merges</h2></summary>

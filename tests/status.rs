@@ -88,6 +88,16 @@ fn status_shows_each_idle_pass_until_its_own_kind_starts_work() {
     assert_eq!(status["commands"], serde_json::json!([]));
     let idle = status["idle_passes"].as_array().expect(&result.stdout);
     assert_eq!(idle.len(), 3, "{status}");
+    let starts = status["pass_starts"].as_array().expect(&result.stdout);
+    assert_eq!(starts.len(), 3, "{status}");
+    for kind in ["Pickup run", "Architect run", "Security run"] {
+        assert!(
+            starts.iter().any(|start| start["kind"] == kind
+                && start["repository"] == "acme/widgets"
+                && start["last_fired_at"].as_str().is_some()),
+            "{status}"
+        );
+    }
     assert!(
         idle.iter().any(|pass| pass["kind"] == "Pickup run"
             && pass["reason"] == "no Ready issue on acme/widgets")
@@ -116,6 +126,7 @@ fn status_shows_each_idle_pass_until_its_own_kind_starts_work() {
     let idle = status["idle_passes"].as_array().unwrap();
     assert_eq!(idle.len(), 2, "{status}");
     assert!(!idle.iter().any(|pass| pass["kind"] == "Pickup run"));
+    assert_eq!(status["pass_starts"].as_array().unwrap().len(), 3);
     for flags in [
         ["status", "--json"].as_slice(),
         &["status", "--all", "--json"],
