@@ -17,42 +17,71 @@ use crate::{interrupt, logs, prompt};
 
 mod settlement;
 pub(crate) use settlement::confirmed_counts;
-pub(crate) use settlement::{Options, execute, parse};
+pub(crate) use settlement::{Options, apply, execute, parse, view};
 
 #[derive(Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-enum State {
+pub(crate) enum State {
     Proposed,
     Confirmed,
     Rejected,
 }
 
-#[derive(Serialize, Deserialize)]
-pub(super) struct Proposal {
-    issue: String,
-    closed_at: DateTime<Utc>,
-    state: State,
-    commit: Option<String>,
-    reason: String,
-    pull_requests: Vec<PullRequest>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    settlement: Option<Settlement>,
+impl State {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Proposed => "proposed",
+            Self::Confirmed => "confirmed",
+            Self::Rejected => "rejected",
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
-struct Settlement {
-    pull_request: PullRequest,
-    corrected: bool,
-    eval_task: crate::evals::bug_origin::Reference,
+pub(crate) struct Proposal {
+    pub issue: String,
+    pub closed_at: DateTime<Utc>,
+    pub state: State,
+    pub commit: Option<String>,
+    pub reason: String,
+    pub pull_requests: Vec<PullRequest>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub settlement: Option<Settlement>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub(crate) struct Settlement {
+    pub pull_request: PullRequest,
+    pub corrected: bool,
+    pub eval_task: crate::evals::bug_origin::Reference,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-struct PullRequest {
-    url: String,
+pub(crate) struct PullRequest {
+    pub url: String,
     run: Option<Run>,
 }
 
 impl PullRequest {
+    pub fn attribution(&self) -> String {
+        match &self.run {
+            Some(Run::Local { name, .. }) => format!("Ticket run: {name}"),
+            Some(Run::BuiltWith {
+                harness,
+                version,
+                model,
+                effort,
+            }) => format!(
+                "{} {} · {} · {}",
+                harness,
+                version.as_deref().unwrap_or("version unknown"),
+                model,
+                effort
+            ),
+            None => "No retained Ticket run".into(),
+        }
+    }
+
     fn attributed(logs_dir: &Path, url: String, body: &str) -> Result<Self> {
         let run = if let Some((command_record, name)) = logs::run_for_pull_request(logs_dir, &url)?
         {

@@ -15,7 +15,7 @@ use crate::session::recording::{Input, Recording};
 use crate::{logs, prompt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-pub(super) enum Criterion {
+pub(crate) enum Criterion {
     Correct,
     Scoped,
     Tested,
@@ -24,6 +24,16 @@ pub(super) enum Criterion {
 }
 
 impl Criterion {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Correct => "Correct",
+            Self::Scoped => "Scoped",
+            Self::Tested => "Tested",
+            Self::Honest => "Honest",
+            Self::Standards => "Standards",
+        }
+    }
+
     pub const ALL: [Self; 5] = [
         Self::Correct,
         Self::Scoped,
@@ -35,20 +45,20 @@ impl Criterion {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Score {
+pub(crate) struct Score {
     pub criterion: Criterion,
     pub passed: bool,
     pub reason: String,
 }
 
 #[derive(Serialize, Deserialize)]
-pub(super) struct Grader {
+pub(crate) struct Grader {
     pub harness: String,
     pub model: String,
 }
 
 #[derive(Serialize, Deserialize)]
-pub(super) struct Assessment {
+pub(crate) struct Assessment {
     pub grader: Grader,
     pub scores: Vec<Score>,
 }

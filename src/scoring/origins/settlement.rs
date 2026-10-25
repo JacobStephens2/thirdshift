@@ -57,8 +57,15 @@ pub(crate) fn parse(args: &[String]) -> Result<Options> {
 }
 
 pub(crate) fn execute(options: Options) -> Result<String> {
-    let _lock = if options.action.is_some() {
+    if options.action.is_some() {
         crate::interrupt::install()?;
+    }
+    apply(options)
+}
+
+/// Shared operation; process signal handling belongs to the CLI entry point.
+pub(crate) fn apply(options: Options) -> Result<String> {
+    let _lock = if options.action.is_some() {
         Some(scoring::lock()?.context("another Scoring writer is running")?)
     } else {
         None
@@ -138,9 +145,8 @@ pub(crate) fn execute(options: Options) -> Result<String> {
             }
         }
     }
-    let origins: Vec<&Proposal> = weeks
-        .iter()
-        .flat_map(|week| week.bug_origins.iter().flatten())
+    let origins: Vec<Proposal> = listed(weeks)
+        .into_iter()
         .filter(|origin| issue.as_ref().is_none_or(|issue| &origin.issue == issue))
         .collect();
     if options.json {
@@ -148,11 +154,7 @@ pub(crate) fn execute(options: Options) -> Result<String> {
     }
     let mut text = String::new();
     for origin in origins {
-        let state = match origin.state {
-            State::Proposed => "proposed",
-            State::Confirmed => "confirmed",
-            State::Rejected => "rejected",
-        };
+        let state = origin.state.name();
         text.push_str(&format!("{}  {state}\n{}\n", origin.issue, origin.reason));
         if let Some(settlement) = &origin.settlement {
             text.push_str(&format!(
@@ -173,6 +175,17 @@ pub(crate) fn execute(options: Options) -> Result<String> {
         }
     }
     Ok(text)
+}
+
+pub(crate) fn view() -> Result<Vec<Proposal>> {
+    Ok(listed(scoring::read(&scoring::directory()?)?))
+}
+
+fn listed(weeks: Vec<scoring::Week>) -> Vec<Proposal> {
+    weeks
+        .into_iter()
+        .flat_map(|week| week.bug_origins.unwrap_or_default())
+        .collect()
 }
 
 fn settle(origin: &mut Proposal, action: Action) -> Result<()> {

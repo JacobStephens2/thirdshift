@@ -2,7 +2,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Write};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -11,9 +11,27 @@ use super::grader::{Criterion, Score};
 use crate::terminal;
 
 #[derive(Serialize, Deserialize)]
-pub(super) struct HumanScores {
+pub(crate) struct HumanScores {
     scored_at: DateTime<Utc>,
     pub scores: Vec<Score>,
+}
+
+impl HumanScores {
+    pub(super) fn new(scores: Vec<Score>) -> Result<Self> {
+        let criteria: BTreeSet<_> = scores.iter().map(|score| score.criterion).collect();
+        ensure!(
+            scores.len() == 5 && criteria.len() == 5,
+            "all five Scores are required exactly once"
+        );
+        ensure!(
+            scores.iter().all(|score| !score.reason.trim().is_empty()),
+            "every Score needs a reason"
+        );
+        Ok(Self {
+            scored_at: Utc::now(),
+            scores,
+        })
+    }
 }
 
 pub(super) fn enter() -> Result<HumanScores> {
@@ -40,10 +58,7 @@ pub(super) fn enter() -> Result<HumanScores> {
             reason,
         });
     }
-    Ok(HumanScores {
-        scored_at: Utc::now(),
-        scores,
-    })
+    HumanScores::new(scores)
 }
 
 fn ask(prompt: &str) -> Result<String> {
@@ -53,13 +68,13 @@ fn ask(prompt: &str) -> Result<String> {
 }
 
 #[derive(Serialize)]
-pub(super) struct State {
+pub(crate) struct State {
     pub calibrated: bool,
     pub matches: usize,
     pub compared: usize,
 }
 
-pub(super) type Calibration = BTreeMap<Criterion, State>;
+pub(crate) type Calibration = BTreeMap<Criterion, State>;
 
 pub(super) fn measure(weeks: &[Week]) -> Calibration {
     let mut paired: Vec<_> = weeks
