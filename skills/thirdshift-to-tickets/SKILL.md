@@ -45,6 +45,10 @@ Give each ticket its **blocking edges**: the other tickets that must complete be
 
 When the whole change fits a single fresh context window, the breakdown is one ticket with no blocking edges. Don't split it to make a set.
 
+**Split the spec at any ticket that needs a release of the spec's own earlier tickets.** Here a **release** is any release, deployment or host install that has to contain earlier work before a ticket can run, verify or migrate anything. A spec's work reaches the base branch through one pull request, only after every ticket is done, so no release can contain an earlier ticket's work while the spec is running, and a ticket that needs one blocks its own spec from the start. In thirdshift's own tracker, spec [#700](https://github.com/JacobStephens2/thirdshift/issues/700) had ticket #994 run a conversion "once a release with #993 is installed on each host", with #997 blocked by #994. #993 had landed only on the spec's branch, whose pull request was waiting on #994, so the run failed after 7h 37m with four tickets not done.
+
+Split the work at that point into three: **spec A**, the work that has to ship first; a standalone `ready-for-human` issue for the release and any Day shift step after it, blocked by spec A; and **spec B**, the work that comes after, blocked by that issue. For #700, spec A would have been session traces and the conversion's code, the `ready-for-human` issue installing the release and running the conversion, and spec B the switch and the span tree. This skill creates no parent issue and modifies none beyond linking its sub-issues, so publish only spec A's tickets: those that neither need the release nor are blocked, directly or through others, by a ticket that does. Leave the `ready-for-human` issue and spec B for the Day shift. In your final message, before any lines your session prompt says must end it, report that the rest needs a separate spec after a release: name the ticket that needs the release, and list the held-back work.
+
 ### 4. Check the breakdown
 
 Nobody is there to approve the breakdown, so check it yourself. Write the proposed breakdown as a numbered list. For each ticket:
@@ -57,6 +61,7 @@ Answer for yourself:
 
 - Is the granularity right? (too coarse / too fine)
 - Are the blocking edges correct: does each ticket only depend on tickets that genuinely gate it?
+- Does any ticket need a release of an earlier ticket's work? Then split the spec there, as above.
 - Should any tickets be merged or split further?
 
 Iterate until every answer holds.
