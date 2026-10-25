@@ -300,7 +300,9 @@ fn claude_suggests_aliases_and_checks_a_custom_model_and_effort() {
 
     assert_eq!(
         terminal.said,
-        ["Claude's Model suggestions: default, best, fable, opus, sonnet, haiku, opusplan, sonnet[1m], opus[1m]. Type any Model ID, or press Enter to keep the default shown."]
+        [
+            "Claude's Model suggestions: default, best, fable, opus, sonnet, haiku, opusplan, sonnet[1m], opus[1m]. Type any Model ID, or press Enter to keep the default shown."
+        ]
     );
     let calls = records("FAKE_CLAUDE_RECORD");
     assert_eq!(calls.as_array().unwrap().len(), 1);
