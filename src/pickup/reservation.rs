@@ -25,9 +25,10 @@ impl Reservation {
         // permits a Launch directory with unrelated, unpublished local work.
         let tree = launch.run(&["mktree"])?;
         let message = format!(
-            "thirdshift Pickup reservation for {}\n\nToken: {}\nLaunch: {}\nProcess: {}\nStarted: {}",
+            "thirdshift Pickup reservation for {}\n\nToken: {}\nHost: {}\nLaunch: {}\nProcess: {}\nStarted: {}",
             issue.url,
             nonce.path().display(),
+            crate::host::name().unwrap_or_else(|| "unknown".into()),
             launch.dir().display(),
             std::process::id(),
             chrono::Utc::now(),
