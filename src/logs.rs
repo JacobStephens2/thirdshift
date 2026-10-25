@@ -19,6 +19,7 @@ pub mod export;
 pub(crate) mod github;
 pub mod metrics;
 pub(crate) mod owner;
+pub(crate) mod pass_starts;
 mod process_identity;
 mod reading;
 pub(crate) use reading::Framing;
@@ -213,6 +214,11 @@ pub(crate) fn tickets(tickets: Vec<TicketRecord>) {
 /// nothing.
 pub fn configured(config: &UserConfig) {
     record().configured(config);
+}
+
+/// Keep the Pass's latest start once its repository is known, before gates.
+pub(crate) fn pass_fired(repo: &Repo) {
+    record().pass_fired(repo);
 }
 
 /// Record that the command starts `work`, its sessions on `harness`: keep its

@@ -24,6 +24,7 @@ use serde::Serialize;
 
 use super::command_record::{CommandRecord, CommandTree};
 use super::effects::OnMachine;
+use super::pass_starts::{self, PassStart};
 pub(super) use super::usual_range::UsualRange;
 use super::{Pass, activity};
 pub(super) use attribution::{CommandIdentity, PullRequestAttribution};
@@ -37,6 +38,7 @@ pub(super) use selection::Observation;
 pub(super) struct Snapshot {
     commands: Vec<Entry>,
     pub(super) idle_passes: Vec<IdlePass>,
+    pub(super) pass_starts: Vec<PassStart>,
     now: DateTime<Local>,
     /// The capture its Commands' Session queries and the Logs listing share.
     inventory: Arc<Inventory>,
@@ -91,9 +93,11 @@ impl Snapshot {
         let mut records = BTreeMap::new();
         let mut commands = Vec::new();
         let mut idle_passes = Vec::new();
+        let mut pass_starts = Vec::new();
         for repo in inventory.repositories() {
             let mut covered = HashSet::new();
             idle_passes.extend(read_idle_passes(&repo.path)?);
+            pass_starts.extend(pass_starts::read(&repo.path, &repo.name(), now)?);
             for folder in &repo.folders {
                 for (path, tree) in read_records(&inventory, folder, past_metrics)? {
                     let record = &tree.command;
@@ -134,9 +138,11 @@ impl Snapshot {
             }
         }
         idle_passes.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
+        pass_starts.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
         Ok(Self {
             commands,
             idle_passes,
+            pass_starts,
             now,
             inventory,
         })
@@ -157,6 +163,17 @@ impl Snapshot {
     pub(super) fn resolve(&self, input: &str) -> Result<selection::Selection<'_>> {
         selection::resolve(&self.commands, input)
     }
+}
+
+/// Start times alone, without reading unrelated Command records or GitHub.
+pub(super) fn pass_starts(root: &Path, now: DateTime<Local>) -> Result<Vec<PassStart>> {
+    let inventory = Inventory::capture(Arc::new(inventory::Native), root)?;
+    let mut starts = Vec::new();
+    for repo in inventory.repositories() {
+        starts.extend(pass_starts::read(&repo.path, &repo.name(), now)?);
+    }
+    starts.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
+    Ok(starts)
 }
 
 /// Match a PR to the exact retained Run, including child and dispatched Runs.

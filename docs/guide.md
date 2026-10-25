@@ -133,6 +133,10 @@ For each repository and kind of Pass whose latest Activity log line is a skip, s
 Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: https://github.com/acme/widgets/issues/7
 ```
 
+`status` and the Console Inbox also show `Pickup last fired <age> ago on <owner>/<repo>` (and the equivalent for Architect and Security), even when repeated Passes skip for the same reason. Every Pass saves its start once its repository is known, before launch checks and the local Pass lock, in `<logs.dir>/<owner>/<repo>/<pickup|architect|secure>.last-fired`. This replaces the previous time without adding Activity log lines. A repository with no saved start has no last-fired entry; older Activity log times are not used as evidence that the scheduler recently fired.
+
+`thirdshift cronjobs` and the Console's Cron jobs page show this same per-repository start inventory alongside this account's thirdshift crontab entries. The starts include manually launched Passes and other schedulers; they do not prove a particular cron entry fired. Cron commands are displayed without execution or repository inference. `cronjobs --json` returns an object with `jobs` (each entry's `schedule` and `command`) and `pass_starts`. Both it and `status --json` expose `pass_starts` entries with `repository`, `kind`, RFC 3339 `last_fired_at` and nonnegative `age_seconds`.
+
 `thirdshift status --json` is the versioned API for agents; the [Console](adr/0016-the-console-is-a-long-running-reader.md) shows the same Inbox. It runs outside a repository too. Version 1 has this shape:
 
 ```json
@@ -174,6 +178,12 @@ Architect run idle on acme/widgets: Ready issue #7 "Make widgets" goes first: ht
     "parent_dispatch": null,
     "tickets": [],
     "children": []
+  }],
+  "pass_starts": [{
+    "repository": "acme/widgets",
+    "kind": "Pickup run",
+    "last_fired_at": "2026-10-18T12:00:00-04:00",
+    "age_seconds": 52
   }],
   "idle_passes": [{
     "repository": "acme/widgets",
@@ -1185,7 +1195,7 @@ The **Activity log**, `activity.log`, is a short running record of what the fact
 
 Each line is appended whole, so passes that run at once on one repository never garble it. One that can't be written is one `warning:` line on stderr, and the command carries on as for a Command log. thirdshift never rotates it: collapsed skips keep it small. Existing logs, including Session traces in `<owner>/<repo>/sessions/` and logs from before the per-repository layout, are not moved.
 
-With `quiet_skips = true` in the `[activity]` section of the [User config](#user-config), a skipped Pass prints nothing on stdout or stderr, its dated first line included, and leaves only its Activity log line. A pass that does work, or fails, prints as ever, so a scheduler's log file catches only what went wrong. Without it, a skipped pass prints as it always has, for a pass you type by hand.
+With `quiet_skips = true` in the `[activity]` section of the [User config](#user-config), a skipped Pass prints nothing on stdout or stderr, its dated first line included. It keeps its last-fired time and writes an Activity log line only when the reason changes. A pass that does work, or fails, prints as ever, so a scheduler's log file catches only what went wrong. Without it, a skipped pass prints as it always has, for a pass you type by hand.
 
 ## Foreign commits in a Ticket run that Self-merges
 
