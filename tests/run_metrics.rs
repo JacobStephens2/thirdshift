@@ -86,6 +86,7 @@ fn a_run_records_session_trace_signals_at_completion() {
     let scenario = Scenario::new();
     scenario.agent_does(r#"
 echo '{"type":"assistant","message":{"id":"m1","model":"reported-model","content":[],"usage":{"input_tokens":8,"output_tokens":4,"cache_read_input_tokens":2,"cache_creation_input_tokens":3}}}'
+echo '{"type":"result","subtype":"success","modelUsage":{"reported-model":{"outputTokens":6}}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
 echo work > work.txt
 git add work.txt
 git commit -qm 'Make widgets'
@@ -100,7 +101,7 @@ gh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7
     assert_eq!(
         summary["signals"]["tokens_by_model"],
         serde_json::json!([{
-            "model":"reported-model", "input_tokens":13, "output_tokens":4,
+            "model":"reported-model", "input_tokens":13, "output_tokens":6,
             "cache_read_tokens":2, "cache_write_tokens":3
         }])
     );
