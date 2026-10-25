@@ -13,6 +13,7 @@ use chrono::Local;
 use serde::Serialize;
 
 use super::command_record::CommandRecord;
+use super::pass_starts::PassStart;
 use super::reading::{Command, Group, IdlePass, InboxItem, Observation, Snapshot};
 use crate::config::UserConfig;
 use crate::issue::IssueUrl;
@@ -24,6 +25,7 @@ struct Status<'a> {
     active_runs: usize,
     commands: Vec<InboxItem<'a>>,
     idle_passes: &'a [IdlePass],
+    pass_starts: &'a [PassStart],
     /// How old the Inbox's kept GitHub answer is, in seconds. `None` where
     /// no answer is kept: with no ready pull requests to read, or before
     /// the first read.
@@ -100,6 +102,7 @@ pub fn show(json: bool, all: bool) -> Result<()> {
             .evaluate_inbox(config.inbox_days, &kept)
             .into_rows(all),
         idle_passes: &snapshot.idle_passes,
+        pass_starts: &snapshot.pass_starts,
         github_answer_age_seconds: kept.age.map(|age| age.as_secs()),
         github_last_answered_at: kept.last_answered_at(),
         github_failure: kept.failure.as_deref(),
@@ -161,6 +164,9 @@ pub fn show(json: bool, all: bool) -> Result<()> {
         }
         for pass in status.idle_passes {
             println!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason);
+        }
+        for pass in status.pass_starts {
+            println!("{}", pass.line());
         }
     }
     Ok(())
@@ -239,7 +245,7 @@ fn ticket_text(ticket: &super::command_record::TicketRecord, repository: &str) -
     format!("Ticket #{} · {state}", ticket.issue.number)
 }
 
-fn age(seconds: i64) -> String {
+pub(super) fn age(seconds: i64) -> String {
     if seconds < 60 {
         format!("{seconds} sec")
     } else if seconds < 3600 {
