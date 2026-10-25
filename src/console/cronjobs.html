@@ -9,6 +9,6 @@
 {% if inventory.jobs.is_empty() %}<p>No thirdshift cron jobs in this account's crontab.</p>{% endif %}
 <h2>Last fired by repository</h2>
 <p>Observed Pass starts on this host, including manual launches and skipped Passes. A start does not identify which scheduler launched it.</p>
-<ul>{% for pass in inventory.pass_starts %}<li>{{ pass.line() }}</li>{% endfor %}</ul>
+<ul>{% for pass in inventory.pass_starts %}<li>{{ pass.kind.name() }} last fired <span data-pass-fired-at="{{ pass.datetime() }}">{{ pass.age() }}</span> ago on {{ pass.repository }}</li>{% endfor %}</ul>
 {% if inventory.pass_starts.is_empty() %}<p>No Pass start times recorded on this host.</p>{% endif %}
 </main>{% include "console/chrome.html" %}</body></html>

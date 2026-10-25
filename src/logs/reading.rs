@@ -93,11 +93,10 @@ impl Snapshot {
         let mut records = BTreeMap::new();
         let mut commands = Vec::new();
         let mut idle_passes = Vec::new();
-        let mut pass_starts = Vec::new();
+        let pass_starts = starts_in(&inventory, now)?;
         for repo in inventory.repositories() {
             let mut covered = HashSet::new();
             idle_passes.extend(read_idle_passes(&repo.path)?);
-            pass_starts.extend(pass_starts::read(&repo.path, &repo.name(), now)?);
             for folder in &repo.folders {
                 for (path, tree) in read_records(&inventory, folder, past_metrics)? {
                     let record = &tree.command;
@@ -138,7 +137,6 @@ impl Snapshot {
             }
         }
         idle_passes.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
-        pass_starts.sort_by(|a, b| (&a.repository, &a.kind).cmp(&(&b.repository, &b.kind)));
         Ok(Self {
             commands,
             idle_passes,
@@ -168,6 +166,10 @@ impl Snapshot {
 /// Start times alone, without reading unrelated Command records or GitHub.
 pub(super) fn pass_starts(root: &Path, now: DateTime<Local>) -> Result<Vec<PassStart>> {
     let inventory = Inventory::capture(Arc::new(inventory::Native), root)?;
+    starts_in(&inventory, now)
+}
+
+fn starts_in(inventory: &Inventory, now: DateTime<Local>) -> Result<Vec<PassStart>> {
     let mut starts = Vec::new();
     for repo in inventory.repositories() {
         starts.extend(pass_starts::read(&repo.path, &repo.name(), now)?);

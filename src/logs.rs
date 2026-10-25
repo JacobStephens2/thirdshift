@@ -148,20 +148,32 @@ pub enum Work<'a> {
 }
 
 /// A Pass, a command that may be skipped before it starts work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Pass {
     Architect,
     Pickup,
     Security,
 }
 
+impl Pass {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Architect => "Architect",
+            Self::Pickup => "Pickup",
+            Self::Security => "Security",
+        }
+    }
+}
+
 impl Display for Pass {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(match self {
-            Pass::Architect => "Architect run",
-            Pass::Pickup => "Pickup run",
-            Pass::Security => "Security run",
-        })
+        write!(f, "{} run", self.name())
+    }
+}
+
+impl serde::Serialize for Pass {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
     }
 }
 

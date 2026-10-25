@@ -131,11 +131,17 @@ fn last_fired_times_pair_both_cli_views_with_the_console_per_repository() {
         assert_eq!(response.status(), 200);
         let html = response.text().unwrap();
         for line in [
-            "Pickup last fired 5 min ago on acme/widgets",
-            "Pickup last fired 5 min ago on acme/other",
-            "Architect last fired 5 min ago on acme/widgets",
+            format!(
+                "Pickup last fired <span data-pass-fired-at=\"{fired}\">5 min</span> ago on acme/widgets"
+            ),
+            format!(
+                "Pickup last fired <span data-pass-fired-at=\"{fired}\">5 min</span> ago on acme/other"
+            ),
+            format!(
+                "Architect last fired <span data-pass-fired-at=\"{fired}\">5 min</span> ago on acme/widgets"
+            ),
         ] {
-            assert!(html.contains(line), "{path}: {html}");
+            assert!(html.contains(&line), "{path}: {html}");
         }
     }
 }

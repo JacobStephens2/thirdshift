@@ -4,6 +4,22 @@ import { initSpanTree } from './spans.js';
 import { initStages } from './stages.js';
 let spanTree;
 
+// Elapsed Pass ages keep advancing even when no Command or file changes.
+function agePassStarts() {
+  for (const element of document.querySelectorAll('[data-pass-fired-at]')) {
+    const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(element.dataset.passFiredAt)) / 1000));
+    if (!Number.isFinite(seconds)) continue;
+    element.textContent = seconds < 60 ? `${seconds} sec`
+      : seconds < 3600 ? `${Math.floor(seconds / 60)} min`
+      : `${Math.floor(seconds / 3600)} hr ${Math.floor(seconds % 3600 / 60)} min`;
+  }
+}
+// Inbox refreshes can introduce the first observed Pass after page load.
+if (document.getElementById('inbox') || document.querySelector('[data-pass-fired-at]')) {
+  agePassStarts();
+  setInterval(agePassStarts, 1000);
+}
+
 // Browser preferences are conveniences; malformed or unavailable storage hides nothing.
 function stored(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }

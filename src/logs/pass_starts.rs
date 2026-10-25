@@ -10,7 +10,7 @@ use super::{Pass, reading, status};
 #[derive(Serialize)]
 pub(crate) struct PassStart {
     pub repository: String,
-    pub kind: String,
+    pub kind: Pass,
     pub last_fired_at: DateTime<FixedOffset>,
     pub age_seconds: i64,
 }
@@ -19,10 +19,19 @@ impl PassStart {
     pub fn line(&self) -> String {
         format!(
             "{} last fired {} ago on {}",
-            self.kind.strip_suffix(" run").unwrap_or(&self.kind),
-            status::age(self.age_seconds),
+            self.kind.name(),
+            self.age(),
             self.repository
         )
+    }
+
+    pub fn age(&self) -> String {
+        status::age(self.age_seconds)
+    }
+
+    pub fn datetime(&self) -> String {
+        self.last_fired_at
+            .to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true)
     }
 }
 
@@ -54,7 +63,7 @@ pub(super) fn read(root: &Path, repository: &str, now: DateTime<Local>) -> Resul
         if let Ok(last_fired_at) = DateTime::parse_from_rfc3339(text.trim()) {
             starts.push(PassStart {
                 repository: repository.into(),
-                kind: pass.to_string(),
+                kind: pass,
                 last_fired_at,
                 age_seconds: (now.fixed_offset() - last_fired_at).num_seconds().max(0),
             });

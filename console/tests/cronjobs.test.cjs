@@ -60,3 +60,21 @@ test('Cron jobs is reachable by link and keyboard, escapes commands and fits a p
   assert.doesNotMatch(await page.locator('main').textContent(), /@reboot/);
   assert.deepEqual(errors, []);
 });
+
+test('last-fired ages advance on a quiet Inbox and Cron jobs page without another Pass', async t => {
+  const root = join(home, '.thirdshift/logs/acme/widgets');
+  await mkdir(root, { recursive: true });
+  await writeFile(join(root, 'pickup.last-fired'), new Date().toISOString());
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  const page = await context.newPage();
+  for (const path of ['/', '/cronjobs']) {
+    await page.goto(`${origin}${path}`);
+    const lastFired = page.locator('li').filter({ hasText: /^Pickup last fired/ });
+    const before = await lastFired.textContent();
+    assert.match(before, /^Pickup last fired \d+ sec ago on acme\/widgets$/);
+    await page.waitForTimeout(3000);
+    const after = await lastFired.textContent();
+    assert.notEqual(after, before, 'The open page must advance elapsed last-fired age without another Pass');
+  }
+});
