@@ -167,6 +167,60 @@ print(json.dumps(dict(version=1, outcome='succeeded', timings=dict(total_ms=12, 
 "#;
 
 #[test]
+fn trial_preparation_ignores_caller_checkout_and_push_hooks() {
+    if isolated(&[]) {
+        return;
+    }
+    let mut fixture = Fixture::new(SUCCESS);
+    fixture.task.manifest.session = crate::evals::format::Session::SpecReview;
+    let hooks = fixture.root.join("hooks");
+    fs::create_dir(&hooks).unwrap();
+    for hook in ["post-checkout", "pre-push"] {
+        executable(&hooks.join(hook), "#!/bin/sh\ntouch \"$0.called\"\n");
+    }
+    let config = fixture.root.join("caller.gitconfig");
+    fs::write(
+        &config,
+        format!("[core]\n hooksPath = {}\n", hooks.display()),
+    )
+    .unwrap();
+    // Install after source construction: isolated() disables global config.
+    unsafe { std::env::set_var("GIT_CONFIG_GLOBAL", &config) };
+    fixture
+        .execution(5)
+        .run(fixture.request(), |_, output, _| {
+            assert!(output.outcome == Outcome::Succeeded);
+            Ok(())
+        })
+        .unwrap();
+    for hook in ["post-checkout", "pre-push"] {
+        assert!(!hooks.join(format!("{hook}.called")).exists(), "{hook} ran");
+    }
+}
+
+#[test]
+fn preparation_failure_publishes_no_repository_and_launches_no_arm() {
+    if isolated(&[]) {
+        return;
+    }
+    let mut fixture = Fixture::new("(repository.parent / 'arm-started').touch()");
+    fixture.task.manifest.trial.as_mut().unwrap().branch = "base/issue-7".into();
+    let result: Result<()> = fixture.execution(5).run(fixture.request(), |_, _, _| {
+        panic!("preparation failure reached completion")
+    });
+    assert!(result.is_err());
+    assert!(!fixture.root.join("started").exists());
+    let trial = fixture
+        .root
+        .join("trials")
+        .join(fixture.request().identity.key());
+    let attempts: Vec<_> = fs::read_dir(trial).unwrap().map(Result::unwrap).collect();
+    assert_eq!(attempts.len(), 1);
+    assert!(!attempts[0].path().join("repository").exists());
+    assert!(!attempts[0].path().join("arm-started").exists());
+}
+
+#[test]
 fn completed_score_and_evidence_live_through_publication() {
     if isolated(&[]) {
         return;

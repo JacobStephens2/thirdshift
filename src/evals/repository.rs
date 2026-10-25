@@ -6,7 +6,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
 
 use super::format::{Session, State, Task};
@@ -19,6 +19,26 @@ pub(super) struct Prepared {
 }
 
 pub(super) fn prepare(directory: &Path, task: &Task, destination: &Path) -> Result<Prepared> {
+    prepare_repository(directory, task, destination, None)
+}
+
+pub(super) fn prepare_trial(directory: &Path, task: &Task, destination: &Path) -> Result<Prepared> {
+    let inputs = task.trial.as_ref().context("missing Trial inputs")?;
+    git(directory, &["check-ref-format", "--branch", &inputs.base])?;
+    git(directory, &["check-ref-format", "--branch", &inputs.branch])?;
+    ensure!(
+        inputs.base != inputs.branch,
+        "Trial Base branch and Issue branch must differ"
+    );
+    prepare_repository(directory, task, destination, Some(inputs))
+}
+
+fn prepare_repository(
+    directory: &Path,
+    task: &Task,
+    destination: &Path,
+    trial: Option<&crate::trial::Inputs>,
+) -> Result<Prepared> {
     if task.state != State::Approved {
         bail!("proposed Eval tasks cannot be prepared or run");
     }
@@ -143,14 +163,56 @@ pub(super) fn prepare(directory: &Path, task: &Task, destination: &Path) -> Resu
                     .context("Eval origin path must be UTF-8")?,
             ],
         )?;
-        Some(final_origin)
+        Some((bare, final_origin))
     } else {
         None
     };
+    if let Some(inputs) = trial {
+        git(repo, &["branch", &inputs.base, &task.base])?;
+        git(repo, &["checkout", "-b", &inputs.branch])?;
+        // Commit the staged patch only. Copied inputs may overlay tracked
+        // worktree files without belonging to the reviewed change.
+        git(
+            repo,
+            &[
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Eval",
+                "-c",
+                "user.email=eval@example.invalid",
+                "commit",
+                "--allow-empty",
+                "-m",
+                "Eval change",
+            ],
+        )?;
+        if let Some((bare, _)) = &origin {
+            // The configured remote names the final destination, which does
+            // not exist until publication. Push to the staged origin directly.
+            git(
+                repo,
+                &[
+                    "push",
+                    bare.to_str().context("Eval origin path must be UTF-8")?,
+                    &format!("refs/heads/{0}:refs/heads/{0}", inputs.base),
+                    &format!("refs/heads/{0}:refs/heads/{0}", inputs.branch),
+                ],
+            )?;
+        }
+        // This repository is uniquely owned, unlike ordinary shared worktrees.
+        fs::create_dir_all(repo.join(".git/info"))?;
+        fs::write(
+            repo.join(".git/info/exclude"),
+            format!("/{}\n", crate::prompt::ISSUE_FILE),
+        )?;
+    }
     fs::rename(repo, &destination).context("could not publish prepared Eval repository")?;
     Ok(Prepared {
         repository: destination,
-        origin,
+        origin: origin.map(|(_, final_origin)| final_origin),
     })
 }
 
@@ -239,3 +301,6 @@ fn bytes(repo: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>> {
     }
     Ok(output.stdout)
 }
+
+#[cfg(test)]
+mod tests;

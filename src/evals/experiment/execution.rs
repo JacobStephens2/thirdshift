@@ -84,15 +84,10 @@ impl<'a> Execution<'a> {
             .prefix("attempt-")
             .tempdir_in(&directory)?
             .keep();
-        let prepared_repo = super::super::repository::prepare(
+        let prepared_repo = super::super::repository::prepare_trial(
             &task.directory,
             &task.manifest,
             &attempt.join("repository"),
-        )?;
-        prepare_branches(&prepared_repo.repository, task)?;
-        crate::skills::exclude(
-            &crate::git::Git::new(&prepared_repo.repository),
-            &format!("/{}", crate::prompt::ISSUE_FILE),
         )?;
         // Establish the Harness's idempotent instruction fallback before the
         // comparison. The session may read it, but editing it still voids a Trial.
@@ -267,41 +262,6 @@ impl<'a> Execution<'a> {
             .env("PATH", path_env);
         Ok(launched)
     }
-}
-
-fn prepare_branches(repository: &Path, task: &Task) -> Result<()> {
-    let inputs = task
-        .manifest
-        .trial
-        .as_ref()
-        .context("missing Trial inputs")?;
-    let git = crate::git::Git::new(repository);
-    git.run(&["check-ref-format", "--branch", &inputs.base])?;
-    git.run(&["check-ref-format", "--branch", &inputs.branch])?;
-    ensure!(
-        inputs.base != inputs.branch,
-        "Trial Base branch and Issue branch must differ"
-    );
-    git.run(&["branch", &inputs.base, &task.manifest.base])?;
-    git.run(&["checkout", "-b", &inputs.branch])?;
-    git.run(&[
-        "-c",
-        "core.hooksPath=/dev/null",
-        "-c",
-        "commit.gpgsign=false",
-        "-c",
-        "user.name=Eval",
-        "-c",
-        "user.email=eval@example.invalid",
-        "commit",
-        "--allow-empty",
-        "-m",
-        "Eval change",
-    ])?;
-    if task.manifest.session == super::super::format::Session::SpecReview {
-        git.run(&["push", "origin", &inputs.base, &inputs.branch])?;
-    }
-    Ok(())
 }
 
 /// A Trial its scope's cap killed: void with `memory_cap`, from the scope's
