@@ -9,6 +9,7 @@ pub struct OpenCodeProgress {
     session_id: Option<String>,
     started: bool,
     message: Option<String>,
+    completed: bool,
     failure: Option<String>,
     skill_load: SkillLoad,
     events: super::events::Events,
@@ -63,7 +64,10 @@ impl Decoder for OpenCodeProgress {
                     vec![shorten(tool)]
                 }
             }
-            Some("step_finish") => vec!["step finished".into()],
+            Some("step_finish") => {
+                self.completed = part["reason"] == "stop";
+                vec!["step finished".into()]
+            }
             Some("error") => {
                 let error = &event["error"];
                 let message = super::error_text(error).unwrap_or("OpenCode's turn failed");
@@ -98,6 +102,7 @@ impl Decoder for OpenCodeProgress {
                 // Tool cancellation alone is not killed-work evidence.
                 killed: Vec::new(),
                 final_message: self.message,
+                completed: self.completed,
             },
             outcome,
             diagnostic: self.failure,

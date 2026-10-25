@@ -61,7 +61,7 @@ impl Adapter for Agy {
         }
         Invocation { args, stdin: None }
     }
-    fn check(&self, choice: &mut Choice) -> Result<()> {
+    fn check(&self, choice: &mut Choice, _probe: super::Probe) -> Result<()> {
         if choice.model.is_none() && choice.effort.is_none() {
             return Ok(());
         }

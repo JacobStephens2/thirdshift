@@ -3,7 +3,7 @@
 
 use std::process::Command;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use super::{Asked, Choice, Settings, process};
 use crate::progress;
@@ -34,14 +34,7 @@ pub fn write(settings: &Settings, prompt: &str) -> Result<String> {
         interpretation.condense(line);
     }
     let ended = interpretation.finish(Ok(output.status)).outcome?;
-    if !ended.killed.is_empty() {
-        bail!(
-            "the summary ended with unfinished background work: {}",
-            ended.killed.join("; ")
-        );
-    }
     ended
-        .final_message
-        .filter(|text| !text.trim().is_empty())
+        .require_final_message("the summary")
         .context("the release summary Harness returned no summary")
 }

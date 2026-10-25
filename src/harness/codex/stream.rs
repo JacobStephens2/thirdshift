@@ -38,6 +38,7 @@ pub struct CodexProgress {
     /// Token totals from `turn.completed`.
     tokens: Option<Tokens>,
     final_message: Option<String>,
+    completed: bool,
     /// What failed the turn, from `turn.failed`.
     failure: Option<String>,
     /// The last error the stream reported, which may have been retried.
@@ -185,6 +186,7 @@ impl CodexProgress {
             }
             Some("item.started" | "item.updated" | "item.completed") => self.item(&event["item"]),
             Some("turn.completed") => {
+                self.completed = true;
                 let usage = &event["usage"];
                 let count = |key: &str| usage[key].as_u64();
                 if let (Some(input), Some(output)) = (count("input_tokens"), count("output_tokens"))
@@ -266,6 +268,7 @@ impl Decoder for CodexProgress {
                 session_id: self.session_id,
                 killed: self.killed,
                 final_message: self.final_message,
+                completed: self.completed,
             },
             outcome,
             diagnostic: self.failure.or(self.last_error),
