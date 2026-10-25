@@ -21,8 +21,8 @@ fn same_stamp_session_history_keeps_legacy_and_owned_inventories_disjoint() {
         .unwrap();
         for kind in ["implement", "implement-resume", "repair-1", "repair-2"] {
             fs::write(
-                folder.join(format!("{stem}-{kind}.jsonl")),
-                format!("{owner} {kind}\n"),
+                folder.join(format!("{stem}-{kind}.logs.jsonl")),
+                support::session_trace::records(&format!("{owner} {kind}\n")),
             )
             .unwrap();
         }
@@ -40,7 +40,7 @@ fn same_stamp_session_history_keeps_legacy_and_owned_inventories_disjoint() {
         let sessions = command["session_logs"].as_array().unwrap();
         assert_eq!(sessions.len(), 4, "{command}");
         for kind in ["implement", "implement-resume", "repair-1", "repair-2"] {
-            let path = folder.join(format!("{stem}-{kind}.jsonl"));
+            let path = folder.join(format!("{stem}-{kind}.logs.jsonl"));
             assert!(sessions.contains(&serde_json::json!(path)), "{command}");
         }
     }
@@ -73,9 +73,9 @@ fn owned_and_legacy_commands_keep_exact_paths_and_record_precedence() {
         ),
     ] {
         let log = folder.join(format!("{stem}.log"));
-        let session = folder.join(format!("{stem}-implement.jsonl"));
+        let session = folder.join(format!("{stem}-implement.logs.jsonl"));
         fs::write(&log, format!("{marker} Command output\n")).unwrap();
-        fs::write(&session, format!("{marker} Session output\n")).unwrap();
+        support::session_trace::write(&session, format!("{marker} Session output\n"));
         let record = serde_json::json!({
             "version": 1, "kind": "Run", "repository": "acme/widgets", "name": "acme/widgets#7",
             "issue": {"number": 7, "url": scenario.issue_url(7), "title": marker},
@@ -124,7 +124,7 @@ fn owned_and_legacy_commands_keep_exact_paths_and_record_precedence() {
     );
     assert_eq!(
         shown["command"]["session_logs"],
-        serde_json::json!([folder.join("7-20261003T120000-0400~ownerB-implement.jsonl")])
+        serde_json::json!([folder.join("7-20261003T120000-0400~ownerB-implement.logs.jsonl")])
     );
     for args in [
         vec!["logs", "widgets#7"],
@@ -136,7 +136,10 @@ fn owned_and_legacy_commands_keep_exact_paths_and_record_precedence() {
     }
     let session = scenario.run(&["logs", "widgets#7", "--session", "implement"]);
     assert_eq!(session.code, Some(0), "{}", session.stderr);
-    assert_eq!(session.stdout, "second Session output\n");
+    assert_eq!(
+        session.stdout,
+        support::session_trace::records("second Session output\n")
+    );
 }
 
 #[test]
@@ -165,7 +168,7 @@ fn show_activity_history_lists_its_session_logs() {
             .unwrap()
             .iter()
             .any(|path| path.as_str() == Some(session.as_str())),
-        "missing Session log: {result}"
+        "missing Session trace: {result}"
     );
 }
 
@@ -187,8 +190,8 @@ printf 'Architecture review plan: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
     let name = status["commands"][0]["name"].as_str().unwrap();
     let current = std::path::Path::new(status["commands"][0]["session_log"].as_str().unwrap());
     let original = std::path::PathBuf::from(current.to_string_lossy().replace(
-        "-architecture-review-resume.jsonl",
-        "-architecture-review.jsonl",
+        "-architecture-review-resume.logs.jsonl",
+        "-architecture-review.logs.jsonl",
     ));
     assert_ne!(current, original.as_path());
     assert!(original.is_file(), "{}", original.display());
@@ -198,12 +201,12 @@ printf 'Architecture review plan: %s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
     assert_eq!(json.code, Some(0), "{}", json.stderr);
     assert!(
         text.stdout.contains(original.to_str().unwrap()),
-        "original Session log missing: {}",
+        "original Session trace missing: {}",
         text.stdout
     );
     assert!(
         json.stdout.contains(original.to_str().unwrap()),
-        "original Session log missing: {}",
+        "original Session trace missing: {}",
         json.stdout
     );
 }
@@ -407,10 +410,10 @@ fn logs_follow_streams_appended_bytes_and_exits_when_the_command_ends() {
 
 #[test]
 fn logs_follow_drains_final_bytes_after_an_outcome_or_selected_child_ends() {
-    for selected in ["widgets#7", "widgets#21"] {
+    for selected in ["widgets#7", "widgets#21", "exact-file"] {
         let scenario = Scenario::new();
         scenario.agent_does(&format!(
-            "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{{\"command\":\"echo final bytes after durable outcome\"}}}}]}}}}'\n{OPENS_PR}",
+            "touch '{}'\nwhile ! test -f '{}' && test \"$SECONDS\" -lt 30; do sleep 0.02; done\necho '{{\"type\":\"assistant\",\"message\":{{\"content\":[{{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{{\"command\":\"echo final bytes after durable outcome\"}}}}]}}}}'\n{OPENS_PR}",
             scenario.path("started").display(),
             scenario.path("release").display()
         ));
@@ -439,7 +442,22 @@ fn logs_follow_drains_final_bytes_after_an_outcome_or_selected_child_ends() {
         let status: Value = serde_json::from_str(&status.stdout).unwrap();
         let ended_for_display = status["commands"][0]["state"] == "ended";
         let output = scenario.path("followed.txt");
-        let follower = scenario.read_to_file(&["logs", selected, "--follow"], &output);
+        let inventory = scenario.run(&["logs", "--json"]);
+        let inventory: Value = serde_json::from_str(&inventory.stdout).unwrap();
+        let file_id = inventory["logs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|log| log["kind"] == "Command log")
+            .unwrap()["id"]
+            .as_str()
+            .unwrap();
+        let args = if selected == "exact-file" {
+            vec!["logs", "--file", file_id, "--follow"]
+        } else {
+            vec!["logs", selected, "--follow"]
+        };
+        let follower = scenario.read_to_file(&args, &output);
         let deadline = Instant::now() + Duration::from_secs(5);
         while fs::read_to_string(&output).unwrap().is_empty() && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(20));
@@ -488,7 +506,7 @@ fn logs_session_repair_selects_the_latest_numbered_repair() {
         .unwrap()
         .iter()
         .filter_map(|stage| stage["session_log"].as_str())
-        .find(|path| path.ends_with("-repair-2.jsonl"))
+        .find(|path| path.ends_with("-repair-2.logs.jsonl"))
         .unwrap();
     let logs = scenario.run(&["logs", "widgets#7", "--session", "repair"]);
     assert_eq!(logs.code, Some(0), "{}", logs.stderr);
@@ -509,7 +527,7 @@ fn logs_session_selects_the_latest_implement_including_its_resume() {
         .unwrap()
         .iter()
         .filter_map(|stage| stage["session_log"].as_str())
-        .find(|path| path.ends_with("-implement-resume.jsonl"))
+        .find(|path| path.ends_with("-implement-resume.logs.jsonl"))
         .unwrap();
     let expected = fs::read_to_string(session).unwrap();
     let result = scenario.run(&["logs", "widgets#7", "--session", "implement"]);
@@ -518,7 +536,7 @@ fn logs_session_selects_the_latest_implement_including_its_resume() {
     let missing = scenario.run(&["logs", "widgets#7", "--session", "spec-review"]);
     assert_ne!(missing.code, Some(0));
     assert!(
-        missing.stderr.contains("no spec-review Session log"),
+        missing.stderr.contains("no spec-review Session trace"),
         "{}",
         missing.stderr
     );
@@ -559,7 +577,7 @@ fn logs_can_read_sessions_from_activity_and_session_only_history() {
 
 #[test]
 fn show_reads_the_latest_live_event_from_claude_and_codex_session_tails() {
-    for trace in [false, true] {
+    {
         for (harness, event) in [
             (
                 "claude",
@@ -590,15 +608,7 @@ fn show_reads_the_latest_live_event_from_claude_and_codex_session_tails() {
                 "{}\n{event}\n{{\"type\":\"future-event\"}}\nnot json\n{{\"partial\":",
                 "x".repeat(100_000)
             );
-            let records = std::path::Path::new(session).with_extension("logs.jsonl");
-            if trace {
-                fs::write(&records, support::session_trace::records(&contents)).unwrap();
-                // Stale dual-recorded output must not win over the Session trace.
-                fs::write(session, event.replace("cargo test", "stale command")).unwrap();
-            } else {
-                fs::remove_file(records).unwrap();
-                fs::write(session, contents).unwrap();
-            }
+            fs::write(session, support::session_trace::records(&contents)).unwrap();
             let result = scenario.run(&["show", "widgets#7", "--json"]);
             let text = scenario.run(&["show", "widgets#7"]);
             fs::write(scenario.path("release"), "").unwrap();
@@ -640,14 +650,13 @@ fn show_keeps_the_latest_event_when_otlp_escaping_expands_a_record_past_64_kib()
             "aggregated_output": "\"".repeat(quotes), "status": "completed", "exit_code": 0
         }})
         .to_string();
-        fs::write(session, format!("{event}\n")).unwrap();
         let records = support::session_trace::records(&event);
         if quotes == 20_000 {
             assert!(event.len() < 64 * 1024);
         }
         assert!(records.len() > 64 * 1024);
         let earlier = support::session_trace::records("Earlier diagnostic\n");
-        fs::write(session.with_extension("logs.jsonl"), earlier + &records).unwrap();
+        fs::write(session, earlier + &records).unwrap();
         let result = scenario.run(&["show", "widgets#7", "--json"]);
         let text = scenario.run(&["show", "widgets#7"]);
         fs::write(scenario.path("release"), "").unwrap();
@@ -658,6 +667,39 @@ fn show_keeps_the_latest_event_when_otlp_escaping_expands_a_record_past_64_kib()
         assert_eq!(shown["command"]["latest_event"], "Bash: cargo test");
         assert!(text.stdout.contains("Bash: cargo test"), "{}", text.stdout);
     }
+}
+
+#[test]
+fn show_keeps_the_last_tool_call_after_large_session_trace_results() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        "touch '{}'\nwhile ! test -f '{}'; do sleep 0.02; done\n{OPENS_PR}",
+        scenario.path("started").display(),
+        scenario.path("release").display()
+    ));
+    let held = scenario.run_until(&[&scenario.issue_url(7)], &[], "started");
+    let status = scenario.run(&["status", "--json"]);
+    let status: Value = serde_json::from_str(&status.stdout).unwrap();
+    let session = std::path::Path::new(status["commands"][0]["session_log"].as_str().unwrap());
+    let tool = r#"{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo test"}}]}}"#;
+    // Enough trailing results to fill the encoded window, while the tool call
+    // remains well inside the old raw window after a long Session's history.
+    let contents = format!(
+        "{}\n{tool}\n{}",
+        "older diagnostic\n".repeat(20_000),
+        support::session_trace::large_result_tail()
+    );
+    support::session_trace::write(session, &contents);
+    let trace = scenario.run(&["show", "widgets#7", "--json"]);
+    let text = scenario.run(&["show", "widgets#7"]);
+    fs::write(scenario.path("release"), "").unwrap();
+    let ended = held.finish();
+    assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+    assert_eq!(trace.code, Some(0), "{}", trace.stderr);
+    let shown: Value = serde_json::from_str(&trace.stdout).unwrap();
+    assert_eq!(shown["command"]["latest_event"], "Bash: cargo test");
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    assert!(text.stdout.contains("Bash: cargo test"), "{}", text.stdout);
 }
 
 #[test]

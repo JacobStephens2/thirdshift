@@ -10,7 +10,8 @@ use anyhow::Result;
 use crate::config::EmailSettings;
 use crate::email::Resend;
 use crate::github::GitHub;
-use crate::harness::Choice;
+use crate::harness::interpretation::event::ErrorKind;
+use crate::harness::{Choice, Harness};
 use crate::host;
 use crate::issue::{IssueUrl, Repo};
 use crate::launch;
@@ -19,11 +20,14 @@ use crate::progress;
 use crate::run_ending::Account;
 
 /// Whether a Run or a Pass emails its Run notification, by its command or,
-/// without `email` or `no-email`, by the User config.
+/// without `email`, `email-unless-merged` or `no-email`, by the User config.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NotificationAsk {
     /// Send one, to this address, else to `email.to`.
     Send(Option<String>),
+    /// Send one as [`NotificationAsk::Send`] does, unless the command ended
+    /// merged: then save it without emailing it.
+    SendUnlessMerged(Option<String>),
     /// Save it without emailing it.
     Skip,
 }
@@ -38,6 +42,7 @@ pub enum About<'a> {
     PickupRun,
     /// A Security run, from the Launch directory.
     SecurityRun,
+    ScoringRun,
 }
 
 /// What a Run notification's subject names.
@@ -56,6 +61,7 @@ enum Subject {
     ArchitectRun(Option<Repo>),
     /// A Security run, with its repository if origin names one.
     SecurityRun(Option<Repo>),
+    ScoringRun,
     /// A Pass whose notification subject has not been established yet.
     Pending,
 }
@@ -67,6 +73,7 @@ impl Subject {
         match self {
             Subject::ArchitectRun(repo) => Some(("Architect run", repo.as_ref())),
             Subject::SecurityRun(repo) => Some(("Security run", repo.as_ref())),
+            Subject::ScoringRun => Some(("Scoring run", None)),
             Subject::Issue { .. } | Subject::Pending => None,
         }
     }
@@ -76,11 +83,13 @@ impl Subject {
 /// when requested.
 pub struct RunNotification {
     resend: Option<Resend>,
+    /// Whether the email is left unsent when the command ended merged.
+    unless_merged: bool,
     started: Instant,
     started_at: chrono::DateTime<chrono::Utc>,
     subject: Subject,
     /// The command's configured Harness, Model and Effort, once known.
-    configured: Option<String>,
+    configured: Option<Choice>,
 }
 
 impl RunNotification {
@@ -94,8 +103,11 @@ impl RunNotification {
     pub fn new(ask: NotificationAsk, settings: &EmailSettings, about: About) -> Result<Self> {
         let started = Instant::now();
         let started_at = chrono::Utc::now();
+        let unless_merged = matches!(ask, NotificationAsk::SendUnlessMerged(_));
         let resend = match ask {
-            NotificationAsk::Send(to) => Some(Resend::new(to, settings)?),
+            NotificationAsk::Send(to) | NotificationAsk::SendUnlessMerged(to) => {
+                Some(Resend::new(to, settings)?)
+            }
             NotificationAsk::Skip => None,
         };
         let subject = match about {
@@ -116,9 +128,11 @@ impl RunNotification {
             About::ArchitectRun => Subject::ArchitectRun(launch::repo().ok()),
             About::PickupRun => Subject::Pending,
             About::SecurityRun => Subject::SecurityRun(launch::repo().ok()),
+            About::ScoringRun => Subject::ScoringRun,
         };
         Ok(RunNotification {
             resend,
+            unless_merged,
             started,
             started_at,
             subject,
@@ -141,11 +155,12 @@ impl RunNotification {
     /// Name the configured Harness, Model and Effort without claiming
     /// that the Harness confirmed which Model executed.
     pub fn built_with(&mut self, harness: &Choice) {
-        self.configured = Some(format!("{harness} (configured)"));
+        self.configured = Some(harness.clone());
     }
 
     /// Save the one notification for the command that ended as `account`
-    /// tells, and email it if asked. A Pickup run that took no issue has
+    /// tells, and email it if asked, unless asked only for a command that
+    /// did not end merged and it merged with nothing waiting. A Pickup run that took no issue has
     /// nothing to tell, as a skipped pass, which has no account, does not
     /// either. A failed write or send is only a warning: it never changes
     /// the command's outcome.
@@ -155,10 +170,19 @@ impl RunNotification {
         };
         let host = host::name();
         let command_log = logs::command_log_path();
+        // Detection happens during sessions, after the choice was configured.
+        let configured = self.configured.as_ref().map(|choice| {
+            if account.pre_audit_failure.is_some() {
+                return format!("{choice} (configured)");
+            }
+            let version = crate::harness::version::detected(choice.harness, command_log.as_deref());
+            let line = choice.built_with(&version);
+            format!("{} (configured)", line.strip_prefix("Built with ").unwrap())
+        });
         let mut text = body(
             &self.subject,
             account,
-            self.configured.as_deref(),
+            configured.as_deref(),
             command_log.as_deref(),
             host.as_deref().unwrap_or("unknown host"),
             self.started.elapsed(),
@@ -188,6 +212,7 @@ impl RunNotification {
             }
         }
         if let Some(resend) = self.resend
+            && !(self.unless_merged && account.merged_with_nothing_waiting())
             && let Err(error) = resend.send(&subject, &text)
         {
             progress::step(format_args!(
@@ -259,9 +284,9 @@ fn body(
             text += &format!("Title:        {title}\n");
         }
         let command = match (*picked_up, *is_spec) {
-            (false, false) => "Run",
+            (false, false) => "Ticket run",
             (false, true) => "Spec run",
-            (true, false) => "Pickup run, which dispatched a Run",
+            (true, false) => "Pickup run, which dispatched a Ticket run",
             (true, true) => "Pickup run, which dispatched a Spec run",
         };
         text += &command_lines(command, None);
@@ -270,11 +295,13 @@ fn body(
         text += &command_lines(command, repo);
     }
     if let Some(findings) = account.security_findings {
-        let audit = match &account.ended {
-            Err(_) if account.pre_audit_failure.is_some() => "not started",
-            Err(_) if account.failed_reproduction.is_some() => "audit complete",
-            Ok(line) => line.as_str(),
-            Err(_) => account.outcome,
+        // A fix's ending is told by the Result and Pull request lines.
+        let audit = match (&account.security_fix, &account.ended) {
+            (Some(fix), _) => fix.audit.as_deref().unwrap_or("not run"),
+            (None, Err(_)) if account.pre_audit_failure.is_some() => "not started",
+            (None, Err(_)) if account.failed_reproduction.is_some() => "audit complete",
+            (None, Ok(line)) => line.as_str(),
+            (None, Err(_)) => account.outcome,
         };
         text += &format!("Audit:        {audit}\n");
         if let Some(number) = account.failed_reproduction {
@@ -293,8 +320,30 @@ fn body(
             };
             text += &format!("Reproduction: {number} {status}\n");
         }
-        if !findings.is_empty() {
-            text += "\nSecurity findings:\n";
+        // A dispatched fix addresses one finding; the audit's others are
+        // listed apart from it.
+        let sections = match &account.security_fix {
+            Some(fix) => vec![
+                (
+                    if account.ended.is_ok() {
+                        "Addressed by the pull request"
+                    } else {
+                        "Fix attempted, not fixed"
+                    },
+                    vec![fix.finding],
+                ),
+                ("Recorded, waiting for the Day shift", fix.waiting.clone()),
+                ("Also recorded by the audit", fix.recorded.clone()),
+            ],
+            None => vec![("Security findings", findings.iter().collect())],
+        };
+        let mut listed = false;
+        for (heading, findings) in sections {
+            if findings.is_empty() {
+                continue;
+            }
+            listed = true;
+            text += &format!("\n{heading}:\n");
             for finding in findings {
                 let severity = finding
                     .severity
@@ -303,7 +352,18 @@ fn body(
                     .unwrap_or_default();
                 text += &format!("- {severity}{}: {}\n", finding.title, finding.url);
             }
+        }
+        if listed {
             text += "\n";
+        }
+        match &account.security_close {
+            Some(crate::run_ending::SecurityClose::Closed { finding, pr_url }) => {
+                text += &format!("Closed: {} by {}\n", finding.title, pr_url);
+            }
+            Some(crate::run_ending::SecurityClose::LeftOpen { finding, reason }) => {
+                text += &format!("Close: {} left open: {reason}\n", finding.title);
+            }
+            None => {}
         }
     }
     if let Some(review) = &account.review {
@@ -341,6 +401,9 @@ fn body(
             text += &format!("Cause:        {cause}\n");
         }
     }
+    if let Some(limit) = usage_limit(account) {
+        text += &format!("Usage limit:  {limit}\n");
+    }
     for line in account.advice {
         text += &format!("{:<14}{}\n", format!("{}:", line.label), line.value);
     }
@@ -348,7 +411,7 @@ fn body(
         text += &format!("Base fix:     {base_fix}\n");
     }
     if let Some(log) = account.log {
-        text += &format!("Session log:  {}\n", log.display());
+        text += &format!("Session trace:  {}\n", log.display());
     }
     if let Some(log) = command_log {
         text += &format!("Command log:  {}\n", log.display());
@@ -375,6 +438,43 @@ fn body(
         }
     }
     text
+}
+
+/// Promote usage exhaustion out of a Spec's Ticket details without replacing
+/// its other failure causes. Read only failed Harness diagnostics, never log
+/// paths or successful sessions that may have recovered from a limit.
+fn usage_limit(account: &Account) -> Option<String> {
+    let cause = account.ended.as_ref().err()?;
+    if account.interrupted {
+        return None;
+    }
+    let limited = |cause: &str| {
+        let diagnostic = cause.split(" (session trace: ").next().unwrap_or(cause);
+        Harness::ALL.iter().any(|harness| {
+            let name = harness.name();
+            (diagnostic.contains(&format!("{name} exited "))
+                || diagnostic.contains(&format!("{name}'s turn failed:")))
+                && ErrorKind::from_text(diagnostic) == ErrorKind::UsageLimit
+        })
+    };
+    let tickets: Vec<_> = account
+        .ticket_lines
+        .iter()
+        .filter_map(|line| line.split_once(" failed: "))
+        .filter(|(_, cause)| limited(cause))
+        .map(|(ticket, _)| ticket)
+        .collect();
+    let affected = if tickets.is_empty() {
+        if !limited(cause.full()) {
+            return None;
+        }
+        String::new()
+    } else {
+        format!(" in Tickets {}", tickets.join(", "))
+    };
+    Some(format!(
+        "Harness usage allowance exhausted{affected}. Retry when usage is available."
+    ))
 }
 
 /// The body lines naming the `command` a notification is about, and its
@@ -430,6 +530,8 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
+            security_close: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -452,6 +554,8 @@ mod tests {
             review: None,
             security_findings: None,
             security_findings_waiting: false,
+            security_fix: None,
+            security_close: None,
             failed_reproduction: None,
             pre_audit_failure: None,
             recovery: None,
@@ -488,9 +592,9 @@ mod tests {
                     "Result:       merged\n\
                      Issue:        https://github.com/acme/widgets/issues/123\n\
                      Title:        Add export button\n\
-                     Command:      Run\n\
+                     Command:      Ticket run\n\
                      Pull request: {PR}\n\
-                     Session log:  {LOG}\n\
+                     Session trace:  {LOG}\n\
                      Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
@@ -511,10 +615,10 @@ mod tests {
                     "Result:       failed\n\
                      Issue:        https://github.com/acme/widgets/issues/123\n\
                      Title:        Add export button\n\
-                     Command:      Run\n\
+                     Command:      Ticket run\n\
                      Cause:        claude exited 1\n\
                      Base fix:     {PLAN} not merged\n\
-                     Session log:  {LOG}\n\
+                     Session trace:  {LOG}\n\
                      Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
@@ -537,7 +641,7 @@ mod tests {
                 "Result:       interrupted\n\
                  Issue:        https://github.com/acme/widgets/issues/123\n\
                  Title:        Add export button\n\
-                 Command:      Run\n\
+                 Command:      Ticket run\n\
                  Sent by:      thirdshift\n\
                  Host:         droplet-1\n\
                  Took:         4s\n"
@@ -569,7 +673,7 @@ mod tests {
                      Strength:     Strong\n\
                      Dispatched:   merged\n\
                      Pull request: {PR}\n\
-                     Session log:  {LOG}\n\
+                     Session trace:  {LOG}\n\
                      Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
@@ -637,7 +741,7 @@ mod tests {
                      Command:      Architect run\n\
                      Review:       failed\n\
                      Cause:        claude exited 1\n\
-                     Session log:  {LOG}\n\
+                     Session trace:  {LOG}\n\
                      Sent by:      thirdshift\n\
                      Host:         droplet-1\n\
                      Took:         4s\n"
@@ -711,6 +815,46 @@ mod tests {
     }
 
     #[test]
+    fn a_security_fix_notification_names_the_finding_its_pull_request_closed() {
+        use crate::security::RecordedFinding;
+        let findings = [RecordedFinding {
+            severity: Some("high".to_string()),
+            title: "Bound input".to_string(),
+            url: "https://github.com/acme/widgets/security/advisories/GHSA-first".to_string(),
+        }];
+        let subject = Subject::SecurityRun(Repo::of_origin("https://github.com/acme/widgets.git"));
+        let closed = crate::run_ending::SecurityClose::Closed {
+            finding: &findings[0],
+            pr_url: PR,
+        };
+        let account = Account {
+            security_findings: Some(&findings),
+            security_close: Some(closed),
+            ..merged()
+        };
+        let body = body_of(&subject, &account);
+        assert!(
+            body.contains("Closed: Bound input by https://github.com/acme/widgets/pull/1"),
+            "{body}"
+        );
+        assert!(!body.contains("Private"), "{body}");
+        let left_open = crate::run_ending::SecurityClose::LeftOpen {
+            finding: &findings[0],
+            reason: "the proof-of-concept still fails",
+        };
+        let account = Account {
+            security_findings: Some(&findings),
+            security_close: Some(left_open),
+            ..merged()
+        };
+        let body = body_of(&subject, &account);
+        assert!(
+            body.contains("Close: Bound input left open: the proof-of-concept still fails"),
+            "{body}"
+        );
+    }
+
+    #[test]
     fn a_pickup_run_that_took_nothing_has_no_notification() {
         assert_eq!(told(&Subject::Pending, &merged()), None);
     }
@@ -752,7 +896,7 @@ mod tests {
             ),
             "Result:       merged\n\
              Pull request: https://github.com/acme/widgets/pull/1\n\
-             Session log:  /home/me/.thirdshift/logs/sessions/x.jsonl\n\
+             Session trace:  /home/me/.thirdshift/logs/sessions/x.jsonl\n\
              Command log:  /home/me/.thirdshift/logs/commands/issue/x.log\n\
              Built with claude · opus · high\n\
              Sent by:      thirdshift\n\
@@ -805,7 +949,7 @@ mod tests {
              Cause:        CI red on test, which also fails on main at 362b9ca; fix main first\n\
              Base check:   test: https://ci.example/main/test\n\
              Or set:       base.fix = true\n\
-             Session log:  /home/me/.thirdshift/logs/x.jsonl\n\
+             Session trace:  /home/me/.thirdshift/logs/x.jsonl\n\
              Sent by:      thirdshift\n\
              Host:         droplet-1\n\
              Took:         4s\n"
@@ -834,6 +978,98 @@ mod tests {
              #21 failed: claude exited 1\n\
              #22 blocked by #21\n"
         );
+    }
+
+    #[test]
+    fn usage_exhaustion_is_prominent_without_hiding_other_ticket_failures() {
+        let tickets = [
+            "#1190 landed with https://github.com/acme/widgets/pull/1".to_string(),
+            "#1191 failed: muse exited 1: Subscription quota exhausted. Your usage window resets at 2026-10-24T03:28:16Z.".to_string(),
+            "#1192 blocked by #1191".to_string(),
+            "#1194 failed: muse's turn failed: stream protocol error".to_string(),
+            "#1195 failed: claude exited 1: You've hit your monthly spend limit".to_string(),
+        ];
+        let account = Account {
+            ticket_lines: &tickets,
+            ..failed("Tickets not done: #1191, #1192, #1194, #1195")
+        };
+        let text = body_of(&Subject::Pending, &account);
+        let (summary, details) = text.split_once("\nTickets:\n").unwrap();
+        assert!(
+            summary.contains("Cause:        Tickets not done:"),
+            "{text}"
+        );
+        assert!(
+            summary.contains("Usage limit:  Harness usage allowance exhausted in Tickets #1191, #1195. Retry when usage is available.\n"),
+            "{text}"
+        );
+        for ticket in &tickets {
+            assert!(details.contains(ticket), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_failed_session_can_report_exhausted_usage_for_any_harness() {
+        for diagnostic in [
+            "claude exited 1: You've hit your monthly spend limit",
+            "codex's turn failed: usage_limit_reached",
+            "agy exited 1: usage limit exceeded",
+            "grok's turn failed: quota exceeded",
+            "muse exited 1: Subscription quota exhausted. Your usage window resets at 2026-10-24T03:28:16Z.",
+            "opencode's turn failed: insufficient_quota",
+            "claude's turn failed: Provider's limit message.\napi_error: usage_limit_reached",
+        ] {
+            let text = body_of(&Subject::Pending, &failed(diagnostic));
+            assert!(
+                text.contains("Usage limit:  Harness usage allowance exhausted. Retry when usage is available.\n"),
+                "{text}"
+            );
+            assert!(text.contains(diagnostic), "{text}");
+        }
+    }
+
+    #[test]
+    fn usage_is_not_inferred_from_throttling_other_failures_or_trace_paths() {
+        for cause in [
+            "muse exited 1: API error 429: rate_limit_error",
+            "claude's turn failed: temporarily rate limited",
+            "muse's turn failed: stream protocol error",
+            "git push failed: disk quota exceeded",
+            "claude exited 1",
+        ] {
+            let tickets = [format!(
+                "#21 failed: {cause} (session trace: /logs/usage_limit/session.jsonl)"
+            )];
+            for account in [
+                failed(cause),
+                Account {
+                    ticket_lines: &tickets,
+                    ..failed("Tickets not done: #21")
+                },
+            ] {
+                let text = body_of(&Subject::Pending, &account);
+                assert!(!text.contains("Usage limit:"), "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn successful_and_interrupted_runs_do_not_report_usage_exhaustion() {
+        let tickets = ["#21 failed: muse exited 1: quota exhausted".to_string()];
+        for account in [
+            Account {
+                ticket_lines: &tickets,
+                ..merged()
+            },
+            Account {
+                interrupted: true,
+                ticket_lines: &tickets,
+                ..failed("muse exited 1: quota exhausted")
+            },
+        ] {
+            let text = body_of(&Subject::Pending, &account);
+            assert!(!text.contains("Usage limit:"), "{text}");
+        }
     }
 
     #[test]

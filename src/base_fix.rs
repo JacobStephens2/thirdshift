@@ -299,7 +299,7 @@ impl BaseFix {
             } => {
                 taken.local_work = local_work;
                 if let Some(log) = log {
-                    outside.step(format!("Base fix #{number} session log: {log}"));
+                    outside.step(format!("Base fix #{number} session trace: {log}"));
                 }
                 bail!("Base fix {} failed: {cause}", taken.issue.url)
             }
@@ -374,7 +374,7 @@ impl BaseFix {
             advice.push(Advice {
                 label: OR_SET,
                 value: "base.fix = true in ~/.thirdshift/config.toml, \
-                        to allow a Base fix for every Run on this machine"
+                        to allow a Base fix for every Ticket run on this machine"
                     .to_string(),
             });
         }
@@ -630,7 +630,7 @@ fn issue_body(
          \n\
          {checks}\
          \n\
-         Found by the thirdshift Run on #{}, whose pull request is {pr_url}.\n\
+         Found by the thirdshift Ticket run on #{}, whose pull request is {pr_url}.\n\
          \n\
          Fix the checks on `{base}`. Do not skip, disable, or weaken tests or checks to make them pass.\n",
         issue.number
@@ -967,7 +967,7 @@ mod tests {
                 "Base check: test: https://ci.example/main/test",
                 "Retry with: thirdshift https://github.com/acme/widgets/issues/7 base-fix",
                 "Or set: base.fix = true in ~/.thirdshift/config.toml, \
-                 to allow a Base fix for every Run on this machine",
+                 to allow a Base fix for every Ticket run on this machine",
             ]
         );
     }
@@ -984,7 +984,7 @@ mod tests {
                  \n\
                  - test: https://ci.example/main/test\n\
                  \n\
-                 Found by the thirdshift Run on #7, whose pull request is \
+                 Found by the thirdshift Ticket run on #7, whose pull request is \
                  https://github.com/acme/widgets/pull/1.\n\
                  \n\
                  Fix the checks on `main`. Do not skip, disable, or weaken \
@@ -1027,7 +1027,7 @@ mod tests {
         for (log, log_line) in [
             (
                 Some("/logs/8.log".to_string()),
-                Some(line("Base fix #8 session log: /logs/8.log")),
+                Some(line("Base fix #8 session trace: /logs/8.log")),
             ),
             (None, None),
         ] {

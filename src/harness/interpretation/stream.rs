@@ -122,6 +122,9 @@ impl Dialect {
     /// shares assistant framing without Claude's usage or safeguard rules.
     fn evidence(&self, event: &Value) -> Vec<Evidence> {
         let mut evidence = Vec::new();
+        if event["num_turns"].as_u64().is_some_and(|turns| turns > 0) {
+            evidence.push(Evidence::WorkStarted);
+        }
         if event["type"] == "assistant"
             && event["is_api_error_message"] != true
             && let Some(name) = event["message"]["model"].as_str()
@@ -137,6 +140,9 @@ impl Dialect {
             });
         }
         if matches!(self, Self::Claude(_)) {
+            if super::limits::claude(event) {
+                evidence.push(Evidence::PlanLimit);
+            }
             if event["type"] == "result"
                 && let Some(usage) = event["modelUsage"].as_object()
             {

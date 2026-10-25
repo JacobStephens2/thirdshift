@@ -44,7 +44,7 @@ pub fn ask(
     let harness = loop {
         let name = answer(
             outside,
-            &format!("Harness for every Run's sessions, {harnesses}"),
+            &format!("Harness for every Ticket run's sessions, {harnesses}"),
             Some(default.name()),
         )?;
         match Harness::named(&name) {

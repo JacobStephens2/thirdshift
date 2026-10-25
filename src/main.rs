@@ -12,6 +12,7 @@ mod console;
 mod cronjobs;
 mod delivery;
 mod email;
+mod evals;
 mod failed_run;
 mod git;
 mod github;
@@ -32,12 +33,17 @@ mod progress;
 mod prompt;
 #[cfg(test)]
 mod prompts_page;
+mod proxy;
 mod pull_request;
 mod ready;
 mod recovery;
 mod resend_key;
+mod resources;
 mod run;
 mod run_ending;
+mod sandbox;
+mod scope;
+mod scoring;
 mod security;
 mod session;
 mod setup;
@@ -46,8 +52,12 @@ mod spec_run;
 mod terminal;
 #[cfg(test)]
 mod test_support;
+mod trial;
 mod trust;
 mod update;
+// The Experiment runner will consume this independently tested module.
+#[allow(dead_code)]
+mod verdict;
 mod worktree;
 
 use std::process::ExitCode;
@@ -74,14 +84,22 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift architect [<focus>]                 Review architecture, publish a plan and run it
        thirdshift architect [<focus>] --plan-only     Publish a plan and stop
        thirdshift architect base <branch> [<focus>]   Use <branch> as the Base branch
-       thirdshift pickup                              Take the lowest-numbered Ready issue and run it
+       thirdshift pickup [lowest-first|highest-first] Take the Ready issue at that end of the issue numbers (default lowest-first)
        thirdshift pickup base <branch>                Use <branch> as the Base branch
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
+       thirdshift score                               Sample merged factory work and propose Bug origins
+       thirdshift scores [<pull request>] [--mine] [--json]  Show Scores; --mine enters yours
+       thirdshift bug-origins [<issue>] [--json]       Show origins; --confirm / --correct <pr> / --none settles one
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
+       thirdshift evals <action>                      Manage Eval data and Arms, including import-replays; see the manual
+       thirdshift experiment [--release] <candidate> [options]  Compare Arms; --release uses the last tag
+       thirdshift experiments [<id>] [--json]        List Experiments or show one
+       thirdshift recheck <id> <trial> <pass|fail> --reason <text>  Recheck a Trial's Score
        thirdshift status [--all] [--json]             List this machine's Commands
        thirdshift cronjobs [--json]                   List this account's thirdshift cron jobs
+       thirdshift resources [--json]                  Show host memory, CPU load and session limits
        thirdshift console [--no-sign-in]              Serve this machine's Console on localhost
        thirdshift console install [--output <file>]   Print, or save, a service and proxy install script for sudo
        thirdshift console password [--email <address>]  Set a Console password privately
@@ -91,43 +109,35 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console theme import <file>        Import a Theme JSON document
        thirdshift console theme export <name>        Export a Theme as JSON
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
-       thirdshift show <command> [--json]             Show one Command in full
+       thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
+       thirdshift metrics [<command>] [--json]         Show Run metrics or weekly trends
        thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
+       thirdshift dismiss <command> [--undo] [--json]  Dismiss an Inbox row, or take it back
        thirdshift logs [--command <id>] [--json]      List this machine's logs
-       thirdshift logs --file <id> [--follow]         Read a log; --convert / --remove-converted migrate old Sessions
+       thirdshift logs --file <id> [--follow]         Read a log
        thirdshift logs <command> [--session <kind>] [--follow]  Read a log; --export <dir> writes its whole Trace
        thirdshift update                              Update to the latest release
        thirdshift version                             Print the version
        thirdshift help                                Print this reference
-
 Start from the issue's repository clone. The Base branch is the branch checked out.
-Use a positive decimal number anywhere an Issue URL is accepted, e.g. thirdshift merge 106.
-Numbers use origin's GitHub repository, including from nested directories in the clone.
+Positive issue numbers use origin's GitHub repository, including from nested directories.
 An issue with sub-issues starts a Spec run: its Tickets merge into a Spec branch.
 merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
-
 Shared options (before or after the Issue URL or number, or after a Pass command):
   merge / no-merge                    Merge the pull request / leave it for review
-  email [<address>] / no-email        Send a Run notification / skip it
+  email [<address>] / no-email        Send a Run notification / skip it (email-unless-merged [<address>]: unless merged)
   base-fix / no-base-fix              Allow / forbid fixing inherited CI failures
   parallel <n>                       Run up to <n> Tickets at once (Spec runs; default 3)
   harness <name>                     Choose claude, codex, agy, grok, muse, opencode
-  model <name>                       Choose the Harness's Model
-  effort <level>                     Choose the Harness's Effort
-  security-review / no-security-review  Enable / disable a Run's Security review
-  security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings
-
-Options also accept a -- prefix. Each option may be given once; opposite options
-cannot be combined. Command options override the User config's defaults.
-
+  model <name>, effort <level>       Choose the Harness's Model and Effort
+  security-review / no-security-review  Enable / disable a Ticket run's Security review
+  security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings, or closing a finding its fix merged (security-close / no-security-close)
+Options accept -- prefixes, once each, without opposites; commands override User config defaults.
 Pass commands: architect, pickup, secure (no Issue URL).
   base <branch>                      Use an origin branch, whatever is checked out
-  --plan-only                        architect only; stops before dispatching a Run
-With --plan-only, only base, email and no-email apply.
-
-Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting.
-For workflow details, settings, Harness setup, email, logs and scheduling, see the README:
-  https://github.com/JacobStephens2/thirdshift#readme
+  --plan-only                        architect only; publish and stop; only base, email, email-unless-merged and no-email apply
+Defaults: ~/.thirdshift/config.toml; thirdshift setup writes every setting. Full manual:
+  https://thirdshift.app/docs/
 ";
 
 fn main() -> ExitCode {
@@ -151,7 +161,26 @@ fn main() -> ExitCode {
         }
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
+        Ok(Command::Score) => return score(),
+        Ok(Command::BugOrigins(options)) => return printed(scoring::origins::execute(options)),
+        Ok(Command::Scores {
+            pull_request,
+            mine,
+            json,
+        }) => {
+            return printed(scoring::show(pull_request.as_deref(), mine, json));
+        }
+        Ok(Command::Evals(action)) => return printed(evals::execute(action)),
+        Ok(Command::Experiment(options)) => {
+            return match evals::experiment::run(options) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::Experiments(args)) => return printed(evals::experiment::show(&args)),
+        Ok(Command::Recheck(args)) => return printed(evals::experiment::recheck(&args)),
         Ok(Command::CronJobs { json }) => return printed(cronjobs::show(json)),
+        Ok(Command::Resources { json }) => return printed(resources::show(json)),
         Ok(Command::ConsoleInstall { output: None }) => {
             return match console::install() {
                 Ok(script) => {
@@ -201,14 +230,34 @@ fn main() -> ExitCode {
                 Err(error) => failure(&error),
             };
         }
-        Ok(Command::Show { command, json }) => {
-            return match logs::status::inspect::show(&command, json) {
+        Ok(Command::Dismiss {
+            command,
+            undo,
+            json,
+        }) => {
+            return match logs::dismiss::dismiss(&command, undo, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
         }
-        Ok(Command::LogsConvert { remove }) => {
-            return match logs::convert::run(remove) {
+        Ok(Command::Spans {
+            command,
+            span,
+            json,
+        }) => {
+            return match logs::spans::show(&command, span.as_deref(), json) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::Metrics(asked)) => {
+            return match logs::metrics::show(&asked) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::Show { command, json }) => {
+            return match logs::status::inspect::show(&command, json) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };
@@ -248,6 +297,12 @@ fn main() -> ExitCode {
             };
         }
         Ok(Command::ReleaseSummary) => return release_summary(),
+        Ok(Command::Trial(request)) => return printed(trial::run(&request)),
+        Ok(Command::OomExec { program, args }) => match scope::oom_exec(&program, &args) {
+            // Unreachable on success: `exec` replaces this process.
+            Ok(()) => return ExitCode::SUCCESS,
+            Err(error) => return failure(&error),
+        },
         Ok(Command::EmailTest(to)) => {
             return outcome(
                 UserConfig::load().and_then(|config| email::send_test(to, &config.email)),
@@ -294,7 +349,7 @@ fn main() -> ExitCode {
 /// candidate and so published no plan to dispatch, puts the URL of the issue
 /// it ended on on stdout: the plan, the idea issue the review filed, or the
 /// issue that already covers its top recommendation. One whose review or
-/// plan fails puts the cause and the session log on stderr. One that is
+/// plan fails puts the cause and the session trace on stderr. One that is
 /// skipped says why on stderr, and is no failure: as another Pass on its
 /// repository is still running, it puts nothing on stdout,
 /// and as Architect plans are still open there, or Architect ideas wait for
@@ -330,10 +385,11 @@ fn architect(args: ArchitectArgs) -> ExitCode {
     })
 }
 
-/// A Pickup run: the search for the lowest-numbered Ready issue in the Launch
-/// directory's repository, then that issue dispatched as `thirdshift <Issue
-/// URL>` with the same flags would be, but on the Pickup run's Base branch,
-/// whatever the Launch directory has checked out. The dispatched run's ending
+/// A Pickup run: the search for the Ready issue at its order's end of the
+/// issue numbers in the Launch directory's repository, then that issue
+/// dispatched as `thirdshift <Issue URL>` with the same flags would be, but
+/// on the Pickup run's Base branch, whatever the Launch directory has
+/// checked out. The dispatched run's ending
 /// is the Pickup run's. One that is skipped, as when the repository is at the
 /// User config's Claim limit, says why on stderr, puts nothing on stdout, and
 /// is no failure. If asked, by the command or the User config, one that took
@@ -352,7 +408,14 @@ fn pickup(args: PassArgs) -> ExitCode {
         Err(failure) => return failure,
     };
     let mut harness = args.flags.harness(&config);
-    let took = pickup::run(args.base.as_deref(), &args.flags, &config, &mut harness);
+    let order = args.order.unwrap_or(config.pickup_order);
+    let took = pickup::run(
+        args.base.as_deref(),
+        &args.flags,
+        &config,
+        &mut harness,
+        order,
+    );
     started.built_with(&harness);
     match took {
         Ok(pickup::Outcome::Took(Took {
@@ -388,8 +451,41 @@ fn secure(args: PassArgs) -> ExitCode {
             urls: Vec::new(),
         }),
         security::Outcome::Audited(audited) => Ending::Security(audited),
-        security::Outcome::Fixed { ended, findings } => Ending::SecurityFix { ended, findings },
+        security::Outcome::Fixed {
+            ended,
+            finding,
+            audit,
+            close,
+        } => Ending::SecurityFix {
+            ended,
+            finding,
+            audit,
+            close,
+        },
     })
+}
+
+fn score() -> ExitCode {
+    let _lock = match scoring::lock() {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            progress::step("Scoring run skipped: another Scoring run is running on this machine");
+            return ExitCode::SUCCESS;
+        }
+        Err(error) => return failure(&error),
+    };
+    let started_at = chrono::Utc::now();
+    let (config, started) = match command::start(
+        Begin::ScoringRun,
+        |_| notification::NotificationAsk::Skip,
+        About::ScoringRun,
+    ) {
+        Ok(started) => started,
+        Err(failure) => return failure,
+    };
+    started.finish(Ending::Scoring(
+        scoring::sample(&config, started_at).map_err(Into::into),
+    ))
 }
 
 /// The release script's internal interface: the prompt on stdin, only the
@@ -401,6 +497,7 @@ fn release_summary() -> ExitCode {
         let config = UserConfig::load()?;
         let mut prompt = String::new();
         std::io::stdin().read_to_string(&mut prompt)?;
+        resources::wait()?;
         harness::write_summary(&config.harness, &prompt)
     })();
     match summary {

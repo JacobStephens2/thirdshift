@@ -58,7 +58,7 @@ pub struct Delivery<'a> {
     /// The one Base fix the Delivery may start, or wait on, when its only red
     /// checks are Inherited failures.
     pub base_fix: &'a mut BaseFix,
-    /// Where its Session logs go.
+    /// Where its Session traces go.
     pub logs: &'a Logs,
     /// When the Run began: an untrusted edit to `issue` made since then
     /// starts no further session.
@@ -149,6 +149,7 @@ impl Delivery<'_> {
             worktree.path(),
             &self.child_asks.harness,
             self.child_asks.security_review_harness.as_ref(),
+            self.child_asks.security_review_default.as_ref(),
             &before_each,
             |sessions| {
                 let mut outside = InWorktree {
@@ -164,7 +165,7 @@ impl Delivery<'_> {
                 route.steps(&mut outside, &opening, checklist)
             },
         );
-        match delivered {
+        let result = match delivered {
             Ok(resolution) => Ok(Reached {
                 resolution,
                 log,
@@ -175,25 +176,28 @@ impl Delivery<'_> {
                     && worktree.fully_landed_at(&merged.head).unwrap_or(false)
                 {
                     progress::step("the pull request was merged while Delivery was running");
-                    return Ok(Reached {
+                    Ok(Reached {
                         resolution: Resolution::PullRequest {
                             url: merged.pr.url.clone(),
                             goal: Goal::Merged,
                         },
                         log,
                         ticket_lines: Vec::new(),
-                    });
+                    })
+                } else {
+                    let stopped_at = stopped_at(&tracker, &error);
+                    let path = worktree.path().to_path_buf();
+                    let mut outside = OnFailure {
+                        base: self.base,
+                        worktree,
+                        pull_request,
+                    };
+                    Err(fail(&mut outside, stopped_at, path, log, error))
                 }
-                let stopped_at = stopped_at(&tracker, &error);
-                let path = worktree.path().to_path_buf();
-                let mut outside = OnFailure {
-                    base: self.base,
-                    worktree,
-                    pull_request,
-                };
-                Err(fail(&mut outside, stopped_at, path, log, error))
             }
-        }
+        };
+        crate::logs::unaddressed_findings(pull_request.unaddressed_findings());
+        result
     }
 }
 
@@ -308,11 +312,10 @@ impl Route<'_> {
     /// warning if that fails, as the work is done without it. Nothing if
     /// there is no pull request: marking it ready says so.
     fn write_built_with(&self, outside: &mut impl Outside) {
-        let built_with = self.harness.built_with();
         if let Err(error) = outside.write_built_with(self.harness) {
             outside.warn(
                 &error,
-                format!("could not write \"{built_with}\" in the pull request's body"),
+                "could not write the Built-with line in the pull request's body".into(),
             );
         }
     }
@@ -336,7 +339,7 @@ impl Route<'_> {
             );
         }
         let comment = format!(
-            "Closed by #{}, merged into {} by a thirdshift Merge run.",
+            "Closed by #{}, merged into {} by a thirdshift Ticket run with Self-merge.",
             pr.number, self.base
         );
         if let Err(error) = retry_if_interrupted(outside, |outside| {
@@ -388,8 +391,8 @@ fn retry_if_interrupted<O: Outside>(
 /// head whose CI was watched. Problems along the way are reported, not
 /// raised, so the error is what the Run fails with. Worktree owns preservation
 /// and retains work that may not have reached origin. `log` is the most recent
-/// Session log, if a session created one, which the Failed run reports unless
-/// the error is a Security hold with its review's own Session log: a hold is
+/// Session trace, if a session created one, which the Failed run reports unless
+/// the error is a Security hold with its review's own Session trace: a hold is
 /// raised only after the Repair loop, whose sessions may have run since.
 /// `stopped_at` is the stage its recovery lines report; `worktree`, where work
 /// preserved only locally is.
@@ -420,7 +423,7 @@ fn fail(
             Ok(Preserved::NoChanges) => Preservation::None,
             Err(problem) => {
                 outside.step(format!(
-                    "could not push the failed run's work, so it may exist only locally: {problem:#}"
+                    "could not push the failed ticket run's work, so it may exist only locally: {problem:#}"
                 ));
                 Preservation::Local
             }
@@ -466,7 +469,7 @@ trait Outside {
     fn session(&mut self, kind: Kind, prompt: &str) -> Result<Option<String>>;
     /// The diagnosis session completed its label handoff.
     fn confirm_needs_info(&mut self) -> Result<()>;
-    /// Run the Security review given `prompt`, with its Session log, its
+    /// Run the Security review given `prompt`, with its Session trace, its
     /// Resume's if it got one, if it started a session.
     fn security_review(&mut self, prompt: &str) -> (Result<Review>, Option<PathBuf>);
     fn record_security_review(&mut self, review: &SecurityOutcome) -> Result<()>;
@@ -546,7 +549,7 @@ impl std::fmt::Display for UntrustedEdit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "#{} {} edited since the Run started by an account that is not a Trusted account; starting no further session",
+            "#{} {} edited since the Ticket run started by an account that is not a Trusted account; starting no further session",
             self.number, self.text
         )
     }
@@ -594,6 +597,14 @@ impl Outside for InWorktree<'_> {
 
     fn security_review(&mut self, prompt: &str) -> (Result<Review>, Option<PathBuf>) {
         let review = self.review_while_actionable(prompt);
+        if !review
+            .as_ref()
+            .err()
+            .is_some_and(|error| error.is::<UntrustedEdit>())
+        {
+            self.pull_request
+                .security_reviewed(review.as_ref().map_or(1, |review| review.findings.len()));
+        }
         (review, self.sessions.last_log_of(Kind::SecurityReview))
     }
 
@@ -722,6 +733,21 @@ struct RunOutside<'a> {
     ci_watch: ci::Watch<'a>,
 }
 
+impl RunOutside<'_> {
+    /// A Repair or Base fix may have reported a new Harness version. Refresh
+    /// attribution while the PR is still actionable, before any Self-merge.
+    fn refresh_built_with(&mut self) -> Result<()> {
+        self.pull_request.ensure_actionable(true)?;
+        if let Err(error) = self.pull_request.write_built_with(&self.child_asks.harness) {
+            progress::warn(
+                &error,
+                format_args!("could not write the Built-with line in the pull request's body"),
+            );
+        }
+        Ok(())
+    }
+}
+
 impl repair_loop::Outside for RunOutside<'_> {
     type Pending = PendingMerge;
 
@@ -792,8 +818,9 @@ impl repair_loop::Outside for RunOutside<'_> {
             Repair::Review { from } => prompt::review_repair(issue, branch, pr_url, from),
         };
         self.pull_request.ensure_actionable(true)?;
-        self.sessions.run(kind, &prompt)?;
-        self.pull_request.ensure_actionable(true)
+        let result = self.sessions.run(kind, &prompt);
+        let refreshed = self.refresh_built_with();
+        result.and(refreshed)
     }
 
     fn sees_inherited_failures(&mut self) -> bool {
@@ -806,8 +833,11 @@ impl repair_loop::Outside for RunOutside<'_> {
             issue: self.issue,
             asks: self.child_asks,
         };
-        self.base_fix
-            .fix(outside, self.pr_url, self.base, base_commit, failed)
+        let result = self
+            .base_fix
+            .fix(outside, self.pr_url, self.base, base_commit, failed);
+        let refreshed = self.refresh_built_with();
+        result.and(refreshed)
     }
 
     fn pr_mergeable(&mut self) -> Result<bool> {
@@ -1103,9 +1133,12 @@ mod tests {
         let mut outside = Scripted::default();
         assert!(deliver(&mut outside, Goal::Merged, false).is_ok());
         assert!(outside.calls.contains(&Call::Delete));
-        assert!(outside.calls.contains(&Call::Close(
-            "Closed by #12, merged into main by a thirdshift Merge run.".to_string()
-        )));
+        assert!(
+            outside.calls.contains(&Call::Close(
+                "Closed by #12, merged into main by a thirdshift Ticket run with Self-merge."
+                    .to_string()
+            ))
+        );
     }
 
     #[test]
@@ -1321,7 +1354,7 @@ mod tests {
     #[test]
     fn a_failure_after_a_repair_reports_the_most_recent_session_log() {
         // A failing Repair session, or a cause no session gave, as with
-        // Repairs exhausted, is reported with the most recent Session log,
+        // Repairs exhausted, is reported with the most recent Session trace,
         // whether or not a Security review ran before it.
         for reviews_security in [false, true] {
             let mut outside = Scripted {

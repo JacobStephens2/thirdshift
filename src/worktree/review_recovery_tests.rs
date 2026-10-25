@@ -329,7 +329,6 @@ fn live_review_cleanup_does_not_require_restart_evidence() {
 
 #[test]
 fn process_death_with_prepared_markers_does_not_authorize_a_review_retry() {
-    use std::os::unix::fs::PermissionsExt;
     use std::process::{Command, Stdio};
     use std::time::{Duration, Instant};
     const NAME: &str = "worktree::review_recovery_tests::process_death_with_prepared_markers_does_not_authorize_a_review_retry";
@@ -348,7 +347,9 @@ fn process_death_with_prepared_markers_does_not_authorize_a_review_retry() {
     let gate = temp.path().join("prepared");
     let release = temp.path().join("release");
     let shim = bin.join("git");
-    fs::write(&shim, r#"#!/bin/sh
+    crate::test_support::write_executable(
+        &shim,
+        r#"#!/bin/sh
 set -e
 if test "$1" = rev-parse && test "$2" = --symbolic-full-name && test -f .thirdshift-review-token; then
   printf 'scratch before publication\n' > retained.txt
@@ -356,8 +357,8 @@ if test "$1" = rev-parse && test "$2" = --symbolic-full-name && test -f .thirdsh
   while test ! -f "$THIRDSHIFT_REVIEW_CRASH_RELEASE"; do sleep 0.02; done
 fi
 exec "$THIRDSHIFT_REAL_GIT" "$@"
-"#).unwrap();
-    fs::set_permissions(&shim, fs::Permissions::from_mode(0o755)).unwrap();
+"#,
+    );
     let search = std::env::var_os("PATH").unwrap();
     let path_env =
         std::env::join_paths(std::iter::once(bin).chain(std::env::split_paths(&search))).unwrap();
@@ -448,7 +449,6 @@ fn recorded_interruption_leaves_an_eligible_stale_review_untouched() {
 
 #[test]
 fn token_creation_never_overwrites_existing_files_links_or_tracked_tokens() {
-    use std::os::unix::fs::PermissionsExt;
     for collision in ["file", "link", "tracked"] {
         let (temp, launch) = super::tests::launch_directory();
         let path = temp.path().join("work-architect");
@@ -472,12 +472,10 @@ fn token_creation_never_overwrites_existing_files_links_or_tracked_tokens() {
             } else {
                 "ln -s ../token-target .thirdshift-review-token"
             };
-            fs::write(
+            crate::test_support::write_executable(
                 &hook,
-                format!("#!/bin/sh\nset -e\n{create}\nprintf 'hook scratch\\n' > retained.txt\n"),
-            )
-            .unwrap();
-            fs::set_permissions(hook, fs::Permissions::from_mode(0o755)).unwrap();
+                &format!("#!/bin/sh\nset -e\n{create}\nprintf 'hook scratch\\n' > retained.txt\n"),
+            );
         }
         let error = ReviewWorktree::create(&launch, "work", "main")
             .err()

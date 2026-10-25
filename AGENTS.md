@@ -21,3 +21,7 @@ For final local validation, run `scripts/affected-tests <base>` (normally `main`
 ### Generated prompts
 
 `prompts/` and the generated fragment in `site/prompts/index.html` come from `src/prompts_page.rs`: prompts in `src/prompt.rs`, titles/when sentences in `src/prompts_page.rs`, plus session arguments (`src/harness/claude.rs`, `src/harness/codex.rs`) and embedded Factory skills (`skills/`) for the site. Edit the sources and regenerate with `UPDATE_PROMPTS=1 cargo test prompts_page`; verify with `cargo test prompts_page`. Preserve the site's surrounding hand-written HTML.
+
+### Hand-written site pages
+
+`site/index.html`, `site/how-it-works/` and `site/architecture/` are written by hand, and nothing checks them against the code. When a change alters user-visible behavior, search them for its issue number, commands and glossary terms, and correct what they say in the same pull request. A new top-level command or workflow gets a mention where those pages cover its neighbours.

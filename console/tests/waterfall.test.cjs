@@ -29,9 +29,22 @@ before(async () => {
   };
   const parent = join(folder, '7-fixture.command.json');
   await writeFile(parent, JSON.stringify(record));
-  const session = join(folder, '99-20261001T120000+0000-implement.jsonl');
-  const item = (id, command) => JSON.stringify({ type: 'item.completed', item: { id, type: 'command_execution', command, status: 'completed' } }) + '\n';
-  await writeFile(session, item('a', 'first <unsafe>') + item('b', 'unmatched') + item('c', 'last'));
+  const session = join(folder, '99-20261001T120000+0000-implement.logs.jsonl');
+  const spans = [
+    ['a', 'first <unsafe>', '1790856015000000000', '1790856030000000000'],
+    ['b', 'unmatched', '0', '0'],
+    ['c', 'last', '1790856030000000000', '1790856040000000000'],
+  ].map(([id, command, start, end], index) => ({
+    spanId: (index + 1).toString(16).padStart(16, '0'), name: `execute_tool Bash ${command}`,
+    startTimeUnixNano: start, endTimeUnixNano: end,
+    attributes: [
+      { key: 'gen_ai.operation.name', value: { stringValue: 'execute_tool' } },
+      { key: 'gen_ai.tool.call.id', value: { stringValue: id } },
+      { key: 'gen_ai.tool.name', value: { stringValue: 'Bash' } },
+    ]
+  }));
+  await writeFile(session, '');
+  await writeFile(session.replace('.logs.jsonl', '.spans.jsonl'), JSON.stringify({ resourceSpans: [{ scopeSpans: [{ spans }] }] }) + '\n');
   await writeFile(join(folder, '7-fixture.issue-99.child.json'), JSON.stringify({
     ...record, kind: 'Run', name: 'ticket-99', issue: { ...record.issue, number: 99 }, parent_record: parent,
     started_at: '2026-10-01T12:00:10+00:00', ended_at: '2026-10-01T12:00:40+00:00', session_log: session,
@@ -78,33 +91,41 @@ test('Waterfall draws overlapping Session-trace spans and running start records'
   for (const width of [1200, 390]) {
     await page.setViewportSize({ width, height: 844 });
     await page.goto(`${origin}/waterfall?command=widgets%2310`);
-    const tools = page.locator('.waterfall-tool');
+    await page.getByRole('button', { name: 'Every call', exact: true }).click();
+    const tools = page.locator('.span-item[data-kind="tool"]');
     assert.equal(await tools.count(), 4);
-    assert.equal(await tools.nth(0).getAttribute('data-start'), '2026-10-01T12:00:15.250+00:00');
-    assert.equal(await tools.nth(0).getAttribute('data-seconds'), '3.5');
-    assert.equal(await tools.nth(1).getAttribute('data-start'), '2026-10-01T12:00:16.500+00:00');
-    assert.equal(await tools.nth(1).getAttribute('data-seconds'), '0.625');
-    const track = await tools.nth(0).locator('.timeline').boundingBox();
-    const first = await tools.nth(0).locator('.timeline rect').boundingBox();
-    const second = await tools.nth(1).locator('.timeline rect').boundingBox();
+    const data = await (await context.request.get(`${origin}/spans?command=widgets%2310`)).json();
+    const spans = data.spans.filter(span => span.kind === 'tool').sort((a, b) => a.start - b.start);
+    assert.equal(spans[0].start, Date.parse('2026-10-01T12:00:15.250+00:00'));
+    assert.equal(spans[0].duration_ms, 3500);
+    assert.equal(spans[1].start, Date.parse('2026-10-01T12:00:16.500+00:00'));
+    assert.equal(spans[1].duration_ms, 625);
+    const track = await tools.nth(0).locator('.span-track').boundingBox();
+    const first = await tools.nth(0).locator('.span-bar').boundingBox();
+    const second = await tools.nth(1).locator('.span-bar').boundingBox();
     assert.ok(Math.abs(first.width - track.width * 3.5 / 60) <= 1.01);
     assert.ok(Math.abs(second.width - track.width * 0.625 / 60) <= 1.01);
     assert.ok(Math.abs((first.x - track.x) / track.width - 15.25 / 60) < 0.002);
     assert.ok(first.x + first.width > second.x);
-    assert.equal(await tools.nth(2).getAttribute('data-start'), '2026-10-01T12:00:20.125+00:00');
-    assert.equal(await tools.nth(2).getAttribute('data-seconds'), '');
+    assert.equal(spans[2].start, Date.parse('2026-10-01T12:00:20.125+00:00'));
+    assert.equal(spans[2].duration_ms, null);
     assert.match(await tools.nth(2).textContent(), /Time unknown/);
-    assert.equal(await page.locator('main script, main unsafe').count(), 0);
+    assert.equal(await page.locator('main script:not([type="application/json"]), main unsafe').count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     if (process.platform === 'linux') {
       await page.goto(`${origin}/waterfall?command=widgets%239`);
-      const running = page.locator('.waterfall-tool');
+      await page.getByRole('button', { name: 'Every call', exact: true }).click();
+      const running = page.locator('.span-item[data-kind="tool"]');
       assert.equal(await running.count(), 1);
       assert.match(await running.textContent(), /still running/);
-      assert.ok(Date.parse(await running.getAttribute('data-start')) > Date.now() - 120000);
-      const seconds = Number(await running.getAttribute('data-seconds'));
+      const live = await (await context.request.get(`${origin}/spans?command=widgets%239`)).json();
+      const call = live.spans.find(span => span.kind === 'tool');
+      assert.ok(call.start > Date.now() - 120000);
+      const seconds = (Date.now() - call.start) / 1000;
       assert.ok(seconds >= 10 && seconds < 120, `${seconds} seconds`);
-      assert.ok((await running.locator('.timeline rect').boundingBox()).width > 0);
+      const initial = (await running.locator('.span-duration').textContent());
+      await page.waitForFunction(initial => document.querySelector('.span-item[data-kind="tool"] .span-duration')?.textContent !== initial, initial);
+      assert.ok((await running.locator('.span-bar').boundingBox()).width > 0);
     }
   }
   const recordPath = join(home, '.thirdshift/logs/acme/widgets/commands/issue/10-fixture.command.json');
@@ -115,9 +136,10 @@ test('Waterfall draws overlapping Session-trace spans and running start records'
   for (const width of [1200, 390]) {
     await page.setViewportSize({ width, height: 844 });
     await page.goto(`${origin}/waterfall?command=widgets%2310`);
-    assert.match(await page.locator('.waterfall-run h3').textContent(), /died/);
+    await page.getByRole('button', { name: 'Every call', exact: true }).click();
+    assert.match(await page.locator('.command-chips [aria-current]').textContent(), /died/);
     for (const index of [0, 1]) {
-      assert.ok((await page.locator('.waterfall-tool .timeline rect').nth(index).boundingBox()).width > 0);
+      assert.ok((await page.locator('.span-item[data-kind="tool"] .span-bar').nth(index).boundingBox()).width > 0);
     }
   }
 });
@@ -142,24 +164,26 @@ test('Waterfall chips, nested scale and unknown tools work at desktop and 390 px
     assert.match(await chips.textContent(), /acme\/widgets#8 · died/);
     if (process.platform === 'linux') assert.match(await chips.textContent(), /acme\/widgets#9 · live/);
     await chips.getByRole('link', { name: 'acme/widgets#7 · merged' }).click();
-    assert.equal(await page.locator('.waterfall-run').count(), 2);
-    const child = page.locator('.waterfall-run[data-depth="1"]');
-    assert.equal(await child.locator('.waterfall-tool').count(), 3);
-    assert.match(await child.locator('.waterfall-tool').nth(1).textContent(), /Time unknown/);
-    const track = await child.locator(':scope > .timeline').boundingBox();
-    const run = await child.locator(':scope > .timeline rect').boundingBox();
-    const stageTrack = await child.locator('.waterfall-stage > .timeline').boundingBox();
-    const toolTrack = await child.locator('.waterfall-tool .timeline').first().boundingBox();
-    const first = await child.locator('.waterfall-tool .timeline rect').first().boundingBox();
+    await page.getByRole('button', { name: 'Every call', exact: true }).click();
+    assert.equal(await page.locator('.span-item[data-kind="run"]').count(), 2);
+    const child = page.locator('.span-item[data-kind="run"]').nth(1);
+    assert.equal(await child.locator('.span-item[data-kind="tool"]').count(), 3);
+    assert.match(await child.locator('.span-item[data-kind="tool"]').last().textContent(), /Time unknown/);
+    const track = await child.locator(':scope > .span-row > .span-track').boundingBox();
+    const run = await child.locator(':scope > .span-row .span-bar').boundingBox();
+    const stageTrack = await child.locator('.span-item[data-kind="stage"] > .span-row > .span-track').boundingBox();
+    const toolTrack = await child.locator('.span-item[data-kind="tool"] .span-track').first().boundingBox();
+    const first = await child.locator('.span-item[data-kind="tool"] .span-bar').first().boundingBox();
     assert.ok(Math.abs(run.width - track.width / 2) <= 1.01);
     assert.ok(Math.abs(first.width - track.width / 4) <= 1.01);
     assert.ok(Math.abs((first.x - track.x) / track.width - 0.25) < 0.002);
     assert.equal(track.x, stageTrack.x);
     assert.equal(track.x, toolTrack.x);
     assert.equal(track.width, toolTrack.width);
-    assert.equal(await page.locator('main script, main unsafe').count(), 0);
+    assert.equal(await page.locator('main script:not([type="application/json"]), main unsafe').count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-    await child.locator('.peek-link').click();
+    await child.locator(':scope > .span-row').click();
+    await page.getByRole('button', { name: 'Command details', exact: true }).click();
     await page.locator('#peek-content h2').waitFor();
     assert.match(await page.locator('#peek-content').textContent(), /ticket-99/);
     await page.keyboard.press('Escape');

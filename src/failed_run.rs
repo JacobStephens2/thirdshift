@@ -14,7 +14,7 @@ pub struct FailedRun {
     pub error: anyhow::Error,
     /// The Issue branch's open PR, if it has one.
     pub pr_url: Option<String>,
-    /// The Session log of the session the failure came from, else the most
+    /// The Session trace of the session the failure came from, else the most
     /// recent one, if a session was started.
     pub log: Option<PathBuf>,
     /// Whether the Run was interrupted, as it was when the Run failed.

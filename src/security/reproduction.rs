@@ -58,6 +58,14 @@ pub enum FixSize {
 }
 
 impl FixSize {
+    pub(crate) fn parse(name: &str) -> Option<Self> {
+        match name {
+            "single" => Some(Self::Single),
+            "spec" => Some(Self::Spec),
+            _ => None,
+        }
+    }
+
     pub(crate) fn name(&self) -> &'static str {
         match self {
             Self::Single => "single",
@@ -66,6 +74,7 @@ impl FixSize {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Outcome {
     Reproduced { severity: Severity, size: FixSize },
     NotReproduced,
@@ -88,12 +97,30 @@ pub struct Reproduction {
     pub test: String,
 }
 
+impl Outcome {
+    /// Reads back the outcome its `Display` wrote.
+    pub(crate) fn parse(text: &str) -> Option<Self> {
+        match text.split_whitespace().collect::<Vec<_>>().as_slice() {
+            ["not", "reproduced"] => Some(Self::NotReproduced),
+            ["reproduced", severity, size] => Some(Self::Reproduced {
+                severity: Severity::parse(severity)?,
+                size: FixSize::parse(size)?,
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn severity(&self) -> Option<Severity> {
+        match self {
+            Self::Reproduced { severity, .. } => Some(*severity),
+            Self::NotReproduced => None,
+        }
+    }
+}
+
 impl Reproduction {
     pub fn severity(&self) -> Option<Severity> {
-        match self.outcome {
-            Outcome::Reproduced { severity, .. } => Some(severity),
-            Outcome::NotReproduced => None,
-        }
+        self.outcome.severity()
     }
 }
 
@@ -134,11 +161,8 @@ pub fn run(
             ["Security", "reproduction:", "reproduced", severity, size] => {
                 let severity = Severity::parse(severity)
                     .context("the Security reproduction ended with an invalid severity")?;
-                let size = match *size {
-                    "single" => FixSize::Single,
-                    "spec" => FixSize::Spec,
-                    _ => bail!("the Security reproduction ended with an invalid fix size"),
-                };
+                let size = FixSize::parse(size)
+                    .context("the Security reproduction ended with an invalid fix size")?;
                 Outcome::Reproduced { severity, size }
             }
             _ => {

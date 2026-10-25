@@ -140,6 +140,10 @@ fn prompt_of(record: &Json) -> &str {
 /// The script for the session just recorded last in `records`.
 pub fn script_for(records: &[Json]) -> PathBuf {
     let script = crate::env_path("FAKE_CLAUDE_SCRIPT").display().to_string();
+    let grader = PathBuf::from(format!("{script}.grader"));
+    if std::env::var_os("THIRDSHIFT_GRADER_PACKET").is_some() && grader.is_file() {
+        return grader;
+    }
     let mut candidates = Vec::new();
     if let Some(issue) = issue_of(prompt_of(records.last().unwrap())) {
         let count = records
@@ -204,6 +208,14 @@ pub fn transported_prompt(argv: &[String]) -> Option<String> {
 }
 
 pub fn main(argv: Vec<String>) {
+    if argv == ["auth", "status"] {
+        if std::env::var_os("FAKE_CLAUDE_SIGNED_OUT").is_some() {
+            println!("{{\"loggedIn\":false}}");
+            crate::exit(1);
+        }
+        println!("{{\"loggedIn\":true}}");
+        crate::exit(0);
+    }
     let (branch, _) = git_here(&["branch", "--show-current"]);
     let (_, merging) = git_here(&["rev-parse", "-q", "--verify", "MERGE_HEAD"]);
     let text_mode = !argv.iter().any(|arg| arg == "--output-format");

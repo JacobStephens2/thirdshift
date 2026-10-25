@@ -86,7 +86,7 @@ fn help_is_a_compact_reference_with_a_link_to_the_details() {
         "help should fit in a short reference, got {} lines",
         help.lines().count()
     );
-    assert!(help.contains("https://github.com/JacobStephens2/thirdshift#readme"));
+    assert_eq!(help.lines().last(), Some("  https://thirdshift.app/docs/"));
     for detail in [
         "[harness.claude]",
         "[pickup]",
@@ -210,7 +210,7 @@ fn pickup_with_arguments_it_cant_use_prints_an_error_and_the_help_to_stderr() {
         ),
         (
             vec!["pickup", "email", "--no-email"],
-            "email and no-email can't be used together",
+            "email, email-unless-merged and no-email can't be used together",
         ),
         (
             vec!["pickup", "parallel", "0"],
@@ -444,7 +444,7 @@ fn email_with_no_email_prints_an_error_and_the_help_to_stderr() {
         assert_argument_error(
             &scenario,
             &result,
-            "email and no-email can't be used together",
+            "email, email-unless-merged and no-email can't be used together",
         );
         assert!(scenario.claude_calls().is_empty(), "{args:?} started a Run");
     }
@@ -537,6 +537,8 @@ fn help_lists_shared_options_and_the_context_needed_to_use_them() {
         "no-security-review",
         "security-fix",
         "no-security-fix",
+        "security-close",
+        "no-security-close",
         "base <branch>",
         "--plan-only",
     ] {
@@ -554,7 +556,7 @@ fn help_lists_shared_options_and_the_context_needed_to_use_them() {
         "~/.thirdshift/config.toml",
         "thirdshift setup",
         "User config",
-        "README",
+        "manual",
     ] {
         assert!(help.contains(context), "help lacks {context:?}: {help}");
     }

@@ -26,7 +26,7 @@ fn a_failing_session_pushes_a_failure_commit_with_the_uncommitted_work_saying_wh
     assert_eq!(
         scenario.origin_log("issue-7"),
         Some(vec![
-            "thirdshift: failed run (claude exited 3)".to_string(),
+            "thirdshift: failed ticket run (claude exited 3)".to_string(),
             "Add feature".to_string(),
             "Initial commit".to_string(),
         ])
@@ -48,7 +48,7 @@ fn a_failing_session_pushes_a_failure_commit_with_the_uncommitted_work_saying_wh
 }
 
 /// What every Failed run shares: a non-zero exit, `stdout` (empty unless a PR
-/// exists), the session log path on stderr, and nothing left behind.
+/// exists), the session trace path on stderr, and nothing left behind.
 fn assert_failed(scenario: &Scenario, result: &RunResult, stdout: &str) {
     assert_eq!(result.code, Some(1), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, stdout);
@@ -96,7 +96,9 @@ fn ownership_refusal_warns_without_replacing_the_failed_run_cause_or_changing_pr
             .stderr
             .lines()
             .find(|line| {
-                line.contains("could not push the failed run's work, so it may exist only locally")
+                line.contains(
+                    "could not push the failed ticket run's work, so it may exist only locally",
+                )
             })
             .expect(&result.stderr);
         for detail in [
@@ -138,7 +140,7 @@ fn a_pr_against_the_wrong_base_is_sent_back_to_draft() {
     );
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[0],
-        "thirdshift: failed run (PR targets develop, not main)"
+        "thirdshift: failed ticket run (PR targets develop, not main)"
     );
     assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], true);
 }
@@ -177,7 +179,7 @@ fn an_unfinished_merge_is_aborted_before_the_failure_commit() {
     assert_eq!(
         scenario.origin_log("issue-7"),
         Some(vec![
-            "thirdshift: failed run (claude exited 1)".to_string(),
+            "thirdshift: failed ticket run (claude exited 1)".to_string(),
             "Ours".to_string(),
             "Initial commit".to_string(),
         ])
@@ -205,7 +207,7 @@ fn sigint_while_the_session_runs_stops_it_and_fails_the_run() {
     assert_failed(&scenario, &result, "");
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[0],
-        "thirdshift: failed run (interrupted)"
+        "thirdshift: failed ticket run (interrupted)"
     );
     assert_eq!(
         scenario.origin_file("issue-7", "wip.txt"),
@@ -224,7 +226,7 @@ fn a_rejecting_pre_push_hook_in_the_target_repo_does_not_block_the_failure_push(
     assert_failed(&scenario, &result, "");
     assert_eq!(
         scenario.origin_log("issue-7").unwrap()[0],
-        "thirdshift: failed run (claude exited 3)"
+        "thirdshift: failed ticket run (claude exited 3)"
     );
 }
 
@@ -310,7 +312,7 @@ fn assert_kept(scenario: &Scenario, result: &RunResult, reason: &str) {
         scenario
             .launch_git(&["log", "-1", "--format=%s", head])
             .trim(),
-        format!("thirdshift: failed run ({reason})")
+        format!("thirdshift: failed ticket run ({reason})")
     );
     let kept = result
         .stderr

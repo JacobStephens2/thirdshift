@@ -16,6 +16,26 @@ gh pr create --base main --head issue-7 --title "Add feature" --body "Closes #7"
 "#;
 
 #[test]
+fn ordinary_runs_keep_working_after_claude_and_codex_quota_warnings() {
+    for (harness, event) in [
+        (
+            "claude",
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning"}}"#,
+        ),
+        (
+            "codex",
+            r#"{"type":"token_count","rate_limits":{"primary":{"used_percent":95}}}"#,
+        ),
+    ] {
+        let scenario = Scenario::new();
+        scenario.agent_does(&format!("echo '{event}'\n{AGENT_COMMITS_AND_OPENS_PR}"));
+        let result = scenario.run(&[&scenario.issue_url(7), "--harness", harness]);
+        assert_eq!(result.code, Some(0), "{harness}: {}", result.stderr);
+        assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    }
+}
+
+#[test]
 fn prints_only_the_pr_url_and_exits_zero() {
     let scenario = Scenario::new();
     scenario.agent_does(AGENT_COMMITS_AND_OPENS_PR);
@@ -218,7 +238,9 @@ fn gives_the_agent_the_fresh_prompt() {
          A passing run counts only when it exercises that finding; a green suite does not. \
          Address the Standards and Spec findings you agree with.\n\
          Write the reviewers' reports, with each axis's final files-read list, \
-         to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec).\n\
+         to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec). \
+         Write `<review reports directory>/summary.json` beside them with the finding counts, \
+         following the `thirdshift-code-review` skill's summary format.\n\
          Push branch issue-7 and create a pull request against main using the `thirdshift-pr` skill, marked ready for review.\n\
          In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, \
          with the line of code, plan decision, ADR or run that refutes each finding. \
@@ -234,7 +256,7 @@ fn gives_the_agent_the_fresh_prompt() {
          \n\
          Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.\n\
          \n\
-         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on.\n"
+         You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on. thirdshift records this session as a Session trace, with Model evidence and any review reports beside it.\n"
     );
 }
 
@@ -389,15 +411,14 @@ fn logs_the_session_stream_under_the_home_directory() {
     assert_eq!(logs.len(), 1, "logs: {logs:?}");
     let name = &logs[0];
     assert!(
-        name.starts_with("7-") && name.ends_with("-implement.jsonl"),
+        name.starts_with("7-") && name.ends_with("-implement.logs.jsonl"),
         "log: {name}"
     );
-    let log = std::fs::read_to_string(
+    let log = support::session_trace::events(
         scenario
             .path("home/.thirdshift/logs/acme/widgets/commands/issue")
             .join(name),
-    )
-    .unwrap();
+    );
     assert!(
         log.contains(r#""type": "system""#) && log.contains(r#""type": "result""#),
         "log: {log}"

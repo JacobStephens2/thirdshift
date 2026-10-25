@@ -39,7 +39,7 @@ impl Runs {
         if self.running.contains_key(&number)
             || self.endings.iter().any(|(queued, _)| *queued == number)
         {
-            bail!("the Run for #{number} is already outstanding");
+            bail!("the Ticket run for #{number} is already outstanding");
         }
         let child = launch()?;
         self.running.insert(number, child);

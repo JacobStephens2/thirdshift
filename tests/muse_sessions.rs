@@ -170,7 +170,7 @@ fn the_user_config_selects_muse_and_its_cached_model_and_effort_are_settled() {
         scenario.gh_state()["prs"][0]["body"]
             .as_str()
             .unwrap()
-            .contains("Built with muse · muse-spark-1.3 · max")
+            .contains("Built with muse 9.8.7 · muse-spark-1.3 · max")
     );
 }
 
@@ -292,15 +292,16 @@ fn setup_checks_muses_proposed_model_with_the_same_flags_and_environment() {
         &["setup"],
         &[],
         &[
-            ("Harness for every Run", "muse"),
+            ("Harness for every Ticket run", "muse"),
             ("Model for muse", ""),
             ("Effort for muse", "low"),
-            ("Every Run a Merge run", ""),
-            ("Every Run may start a Base fix", ""),
-            ("Every Run first fast-forwards", ""),
+            ("Every Ticket run Self-merges", ""),
+            ("Every Ticket run may start a Base fix", ""),
+            ("Every Ticket run first fast-forwards", ""),
             ("Security runs may fix reproduced findings?", ""),
-            ("Runs review their change for Security findings?", ""),
+            ("Ticket runs review their change for Security findings?", ""),
             ("Run notifications", ""),
+            ("Claude setup token", ""),
             ("Run the Console?", ""),
         ],
     );

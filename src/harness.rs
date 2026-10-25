@@ -6,13 +6,13 @@
 //! `security.harness`, when set (ADR-0021).
 
 use std::fmt;
-use std::path::Path;
-use std::process::Output;
+use std::process::{Command, Output};
 
 use anyhow::{Context, Result, bail};
 
 mod adapter;
 pub(crate) mod agy;
+pub(crate) mod built_with;
 pub(crate) mod claude;
 pub(crate) mod codex;
 pub(crate) mod grok;
@@ -55,6 +55,11 @@ impl Harness {
     /// Its name, which is also its CLI's.
     pub fn name(self) -> &'static str {
         self.adapter().name()
+    }
+
+    /// Messages protocols report uncached input separately from cache usage.
+    pub(crate) fn input_excludes_cache(self) -> bool {
+        matches!(self, Self::Claude | Self::Grok)
     }
 
     /// Select the adapter once; session callers retain it for their lifetime.
@@ -221,9 +226,9 @@ impl Choice {
     }
 
     /// The line thirdshift writes in a pull request's body and a Run
-    /// notification, as in `Built with claude · claude-opus-5-5 · high`.
-    pub fn built_with(&self) -> String {
-        format!("Built with {self}")
+    /// notification, given the owning Command's detected Harness version.
+    pub fn built_with(&self, version: &str) -> String {
+        built_with::BuiltWith::new(self, version).to_string()
     }
 
     // Compatibility for the existing argument tests; production callers
@@ -253,22 +258,50 @@ impl Choice {
         adapter.check(self)
     }
 
-    /// [`Choice::check`] this, a Command's, then `security_review`, what its
-    /// Security review runs on where that differs: a failure of the second
-    /// says it is the Security review's, and what chose it.
+    /// Check the Command and review before work. An unusable non-default
+    /// review choice is replaced by the configured default, after checking it.
     pub fn check_with_security_review(
         &mut self,
-        security_review: Option<&mut Choice>,
+        security_review: &mut Option<Choice>,
+        default: Option<&mut Choice>,
     ) -> Result<()> {
         self.check()?;
-        let Some(review) = security_review else {
+        let Some(default) = default else {
             return Ok(());
         };
-        let (harness, chosen_by) = (review.harness.name(), review.chosen_by);
-        review.check().with_context(|| {
-            format!("the Security review's Harness {harness}, chosen by {chosen_by}, can't run")
-        })
+        let Some(review) = security_review else {
+            return Ok(()); // The review shares the checked Command's choice.
+        };
+        if let Err(error) = review.check() {
+            crate::interrupt::check()?;
+            if review.harness == default.harness {
+                return Err(error).with_context(|| {
+                    format!(
+                        "the Security review's default Harness {} can't run",
+                        review.harness.name()
+                    )
+                });
+            }
+            warn_review_fallback(review.harness, default.harness, &format!("{error:#}"));
+            if default.runs_as(self) {
+                *default = self.clone();
+            } else {
+                default.check()?;
+            }
+            *review = default.clone();
+        }
+        Ok(())
     }
+}
+
+/// Both preflight and a startup failure report the same single-line warning.
+pub fn warn_review_fallback(from: Harness, to: Harness, reason: &str) {
+    let reason = reason.split_whitespace().collect::<Vec<_>>().join(" ");
+    crate::progress::step(format!(
+        "warning: Security review on {} can't be used ({reason}); reviewing on {}, the default Harness",
+        from.name(),
+        to.name()
+    ));
 }
 
 /// What a CLI said on stderr and stdout, trimmed, each on its own lines.
@@ -281,18 +314,23 @@ fn said(output: &Output) -> String {
         .join("\n")
 }
 
+/// A CLI's non-billed sign-in status, before any Model test call.
+fn check_sign_in(adapter: &dyn Adapter, args: &[&str]) -> Result<()> {
+    let cli = adapter.name();
+    let output = process::output(adapter, Command::new(cli).args(args), None)
+        .with_context(|| format!("could not check whether {cli} is signed in"))?;
+    if !output.status.success() {
+        bail!("{cli} is not signed in: {}", said(&output));
+    }
+    Ok(())
+}
+
 impl fmt::Display for Choice {
     /// `<harness> · <model> · <effort>`, as in `claude · claude-opus-5-5 ·
     /// high`, saying `default model` or `default effort` for one left to the
     /// Harness.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "{} · {} · {}",
-            self.harness.name(),
-            self.model.as_deref().unwrap_or("default model"),
-            self.effort.as_deref().unwrap_or("default effort")
-        )
+        built_with::describe(self, f)
     }
 }
 
@@ -313,16 +351,7 @@ impl fmt::Display for ChosenBy {
 
 /// Whether an executable file named `cli` is in a directory on `PATH`.
 fn on_path(cli: &str) -> bool {
-    use std::os::unix::fs::PermissionsExt;
-    let Some(path) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&path).any(|dir| {
-        Path::new(&dir)
-            .join(cli)
-            .metadata()
-            .is_ok_and(|file| file.is_file() && file.permissions().mode() & 0o111 != 0)
-    })
+    crate::process::find_executable(cli).is_some()
 }
 
 #[cfg(test)]
@@ -454,7 +483,7 @@ mod tests {
 
     #[test]
     fn the_built_with_line_names_the_harness_model_and_effort_or_the_harnesss_default() {
-        for (chosen, line) in [
+        for (chosen, version, line) in [
             (
                 choice(
                     Harness::Claude,
@@ -462,18 +491,21 @@ mod tests {
                     "high",
                     ChosenBy::Command,
                 ),
-                "Built with claude · claude-opus-5-5 · high",
+                "2.1.11",
+                "Built with claude 2.1.11 · claude-opus-5-5 · high",
             ),
             (
                 Choice::default(),
-                "Built with claude · default model · default effort",
+                "unknown",
+                "Built with claude unknown · default model · default effort",
             ),
             (
                 choice(Harness::Codex, "", "max", ChosenBy::UserConfig),
-                "Built with codex · default model · max",
+                "codex-cli 0.160.0",
+                "Built with codex codex-cli 0.160.0 · default model · max",
             ),
         ] {
-            assert_eq!(chosen.built_with(), line);
+            assert_eq!(chosen.built_with(version), line);
         }
     }
 

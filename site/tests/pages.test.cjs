@@ -40,6 +40,8 @@ async function pageForTest(t, options) {
 
 // Nothing in the selected containers, or the page, scrolls sideways.
 async function assertFits(page, selector, message) {
+  // Font loading can finish after navigation; measure the rendered typeface.
+  await page.evaluate(() => document.fonts.ready);
   const overflow = await page.locator(selector).evaluateAll(nodes =>
     nodes.filter(node => node.scrollWidth > node.clientWidth + 1).map(node => node.textContent.trim().slice(0, 80)));
   assert.deepEqual(overflow, [], message);
@@ -77,7 +79,7 @@ test("the manual starts folded and readers can unfold nested sections without Ja
   assert.equal(await page.locator("main details[open]").count(), 0);
   assert.equal(await page.locator("main details").count(), await page.locator("main :is(h2,h3,h4)").count());
   await checkSectionToggles(page, ":scope > .manual-content", "Enter");
-  await page.getByRole("heading", { name: "What a Run does", exact: true }).click();
+  await page.getByRole("heading", { name: "What a Ticket run does", exact: true }).click();
   const claim = page.getByRole("heading", { name: "The Claim", exact: true });
   assert.equal(await claim.isVisible(), true);
   const ends = page.getByRole("heading", { name: "When the Claim ends", exact: true });
@@ -127,6 +129,18 @@ test("every public page identifies its canonical URL, purpose and share metadata
   assert.equal(descriptions.size, publicPaths.length, "each page has its own search description");
   await page.goto(`${origin}/`);
   assert.match(await page.title(), /GitHub issues.*pull requests/);
+});
+
+test("hand-written pages describe the current share card in both alt tags", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  for (const path of ["/", "/how-it-works/", "/architecture/"]) {
+    await page.goto(`${origin}${path}`);
+    for (const selector of ['meta[property="og:image:alt"]', 'meta[name="twitter:image:alt"]']) {
+      const alt = await page.locator(selector).getAttribute("content");
+      assert.match(alt, /Your issues become pull requests overnight\./, `${path}: ${selector}`);
+      assert.doesNotMatch(alt, /go to press|FEEDER|DELIVERY PILE|units [1-4]/i, `${path}: ${selector}`);
+    }
+  }
 });
 
 test("robots advertises a valid sitemap of reachable canonical pages", async (t) => {
@@ -187,6 +201,78 @@ test("the homepage links to the shared Markdown manual without JavaScript", asyn
   }
 });
 
+test("hand-written pages link directly to unique manual sections", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  const fragments = new Set();
+  for (const path of ["/", "/how-it-works/", "/architecture/"]) {
+    await page.goto(`${origin}${path}`);
+    for (const href of await page.locator("a[href]").evaluateAll(nodes => nodes.map(node => node.getAttribute("href")))) {
+      const link = new URL(href, page.url());
+      assert.equal(link.hostname === "github.com" &&
+        /^\/JacobStephens2\/thirdshift\/?$/.test(link.pathname) && Boolean(link.hash), false,
+      `${path}: README section link ${href}`);
+      if (link.origin === origin && link.pathname === "/docs/" && link.hash) {
+        fragments.add(decodeURIComponent(link.hash.slice(1)));
+      }
+    }
+  }
+  assert.ok(fragments.size > 0, "pages link to manual sections");
+  await page.goto(`${origin}/docs/`);
+  for (const fragment of fragments) {
+    assert.equal(await page.locator("[id]").evaluateAll((nodes, id) =>
+      nodes.filter(node => node.id === id).length, fragment), 1, fragment);
+  }
+});
+
+test("homepage accessible names use steps in place of press units", async (t) => {
+  const page = await pageForTest(t);
+  await page.goto(`${origin}/`);
+  assert.equal(await page.getByRole("group", { name: "Ticket run steps", exact: true }).count(), 1);
+  for (const number of [1, 2, 3, 4]) {
+    assert.equal(await page.locator(`.unit-col .stderr-lines[aria-label="stderr lines from step ${number}"]`).count(), 1);
+  }
+  assert.equal(await page.getByRole("log", { name: "Terminal replay of the selected step's stderr lines", exact: true }).count(), 1);
+});
+
+test("the homepage explains Ticket runs and five workflows in plain words", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  await page.goto(`${origin}/`);
+  assert.equal(await page.locator("h1").textContent(), "Your issues become pull requests overnight.");
+  for (const phrase of ["You plan by day. Agents work at night.", "How a Ticket run works",
+    "When a Ticket run fails", "Results", "What you get back", "Workflows", "Five workflows",
+    "Examples", "Real pull requests", "About the name"]) {
+    assert.ok((await page.locator("body").textContent()).includes(phrase), phrase);
+  }
+  const opening = await page.locator(".framing").textContent();
+  assert.match(opening, /coding agents you already use, logged in as you/);
+  assert.match(opening, /each agent's plan or account/);
+  assert.match(opening, /Claude Code.*subscription.*usage allowance/);
+  assert.match(opening, /free and open source/);
+  assert.deepEqual(await page.locator(".floor .line-label").allTextContents(), [
+    "1 · TICKET RUN", "2 · SPEC RUN", "3 · ARCHITECT RUN", "4 · PICKUP RUN", "5 · SECURITY RUN",
+  ]);
+  assert.doesNotMatch(await page.locator(".floor").textContent(), /INSTALLED|MERGE RUN/);
+  assert.doesNotMatch(await page.locator(".press-svg").textContent(), /FEEDER|DELIVERY PILE|UNIT [1-4]/);
+});
+
+test("hand-written pages use the five workflow names outside the recorded replay", async (t) => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  for (const path of ["/", "/how-it-works/", "/architecture/"]) {
+    await page.goto(`${origin}${path}`);
+    const prose = await page.locator("body").evaluate(node => {
+      const copy = node.cloneNode(true);
+      copy.querySelectorAll(".unit-col .stderr-lines").forEach(replay => replay.remove());
+      return copy.textContent;
+    });
+    assert.doesNotMatch(prose, /\bMerge runs?\b|\bFailed runs?\b|\bWeeding\b|\bFencing\b/, path);
+    // Run remains a verb and part of Run notification / Run metrics.
+    assert.doesNotMatch(prose, /\bRun\b(?! notification| metrics| from)/, path);
+    assert.match(prose, /Ticket run/, path);
+    assert.match(prose, /Failed ticket run/, path);
+  }
+  assert.equal(await page.locator("#merge-run-title").textContent(), "A Ticket run that Self-merges");
+});
+
 test("the homepage leads to a guide that teaches the process in order", async (t) => {
   const page = await pageForTest(t);
   await page.goto(`${origin}/`);
@@ -195,11 +281,11 @@ test("the homepage leads to a guide that teaches the process in order", async (t
   assert.equal(await page.getByRole("heading", { name: "How thirdshift works", level: 1 }).isVisible(), true);
   assert.deepEqual(await page.locator("main h2").allTextContents(), [
     "Start with work you can describe",
-    "Give the Run its own checkout",
+    "Give the Ticket run its own checkout",
     "Let the agent implement and review",
     "Deliver against the latest Base branch",
     "Know what comes back",
-    "Scale one Run into a Spec run",
+    "Scale one Ticket run into a Spec run",
     "Choose how the next work starts",
   ]);
 });
@@ -307,7 +393,8 @@ test("the architecture page shows six captioned, described figures, each reachab
     assert.match(await figure.locator("figcaption").textContent(), new RegExp(`^Figure ${index + 1} `));
     // Each drawing names its own description, so a screen reader hears the figure in words.
     const svg = figure.locator("svg");
-    const description = await svg.evaluate(node => document.getElementById(node.getAttribute("aria-labelledby"))?.textContent ?? "");
+    const description = await svg.evaluate(node => document.getElementById(
+      node.getAttribute("aria-describedby") ?? node.getAttribute("aria-labelledby"))?.textContent ?? "");
     assert.ok(description.length > 100, `figure ${index + 1} has a description`);
   }
   const ids = await page.locator("svg [id]").evaluateAll(nodes => nodes.map(node => node.id));
@@ -334,6 +421,25 @@ for (const width of [320, 390, 768, 1280]) {
     const svgWidth = await page.locator("main svg").first().evaluate(node => node.getBoundingClientRect().width);
     assert.ok(svgWidth >= Math.min(720, width - 80), `figure is ${svgWidth}px wide`);
   });
+}
+
+for (const width of [320, 390, 1280]) {
+  for (const javaScriptEnabled of [false, true]) {
+    test(`hand-written pages fit ${width}px (JavaScript: ${javaScriptEnabled})`, async (t) => {
+      const page = await pageForTest(t, {
+        javaScriptEnabled,
+        reducedMotion: "reduce",
+        viewport: { width, height: 900 },
+      });
+      for (const path of ["/", "/how-it-works/", "/architecture/"]) {
+        await page.goto(`${origin}${path}`);
+        if (path === "/how-it-works/") {
+          for (const heading of await page.locator("main h2").all()) await heading.click();
+        }
+        await assertFits(page, "main, pre, .misprint, .guide-node, .arch-fig, .arch-layers", path);
+      }
+    });
+  }
 }
 
 // The videos page's entries, in order.

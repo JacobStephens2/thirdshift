@@ -135,7 +135,7 @@ impl TicketBoard {
             .collect()
     }
 
-    /// The Session log of the one Ticket not done whose Run failed, if just
+    /// The Session trace of the one Ticket not done whose Run failed, if just
     /// one did and it named its log: the session the Spec run's failure came
     /// from. With several, no single session caused it.
     pub(super) fn failed_log(&self) -> Option<String> {
@@ -177,7 +177,7 @@ impl TicketBoard {
             let standing = self.standing(ticket);
             lines.push(match self.standings.get(&identity) {
                 Some(Standing::Ended(Ended::Failed { log: Some(log), .. })) if ticket.is_open => {
-                    format!("{reference} {standing} (session log: {log})")
+                    format!("{reference} {standing} (session trace: {log})")
                 }
                 _ => format!("{reference} {standing}"),
             });

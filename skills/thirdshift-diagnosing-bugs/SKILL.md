@@ -1,6 +1,6 @@
 ---
 name: thirdshift-diagnosing-bugs
-description: "Reproduce a Run's reported bug before changing code. Use when the Session prompt routes a bug issue to diagnosis."
+description: "Reproduce a Ticket run's reported bug before changing code. Use when the Session prompt routes a bug issue to diagnosis."
 ---
 
 # Diagnose a bug
@@ -45,4 +45,4 @@ Write the comment to a temporary file and publish with `gh issue comment <issue 
 
 Once the comment and label change both succeed, end without committing, pushing, opening a PR or merging. Override the Session prompt's remaining implementation and PR steps. End the final message with the Session prompt's not reproduced completion line, using this issue's actual comment URL.
 
-If publishing the comment or changing the labels fails, report that operational failure and omit the final line. The Run must not claim a successful handoff without both.
+If publishing the comment or changing the labels fails, report that operational failure and omit the final line. The Ticket run must not claim a successful handoff without both.

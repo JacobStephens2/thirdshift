@@ -152,7 +152,11 @@ fn append_record(path: &Path, entry: Json) -> Json {
         Array(Vec::new())
     };
     records.items_mut().push(entry);
-    fs::write(path, records.dump()).unwrap();
+    // Replace the file whole: tests read it without the lock, and a Run
+    // stopped mid-write must not leave it truncated.
+    let partial = format!("{}.partial.{}", path.display(), std::process::id());
+    fs::write(&partial, records.dump()).unwrap();
+    fs::rename(&partial, path).unwrap();
     records
 }
 

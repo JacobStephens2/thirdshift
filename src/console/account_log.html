@@ -1,5 +1,6 @@
 {% extends "console/account_base.html" %}
 {% block title %}Console log{% endblock %}
+{% block notifications %}{% include "console/notifications.html" %}{% endblock %}
 {% block content %}
 <div class="page-title"><h1>Console log</h1><code>thirdshift console log</code></div>
 <ul class="log-list">{% for event in events %}<li>{{ event.time }} · {{ event.email }} · {{ event.event }}</li>{% endfor %}</ul>

@@ -67,15 +67,8 @@ fn require_live(record: &CommandRecord) -> Result<()> {
 }
 
 pub fn stop(input: &str, requeue: bool, json: bool) -> Result<()> {
-    let user = std::process::Command::new("id")
-        .arg("-un")
-        .output()
-        .context("could not identify the Unix user asking for Stop")?;
-    if !user.status.success() {
-        bail!("could not identify the Unix user asking for Stop");
-    }
     let request = Request {
-        who: String::from_utf8(user.stdout)?.trim().to_owned(),
+        who: super::unix_user("Stop")?,
         requeue,
         from_console: false,
     };
@@ -116,6 +109,7 @@ pub(crate) fn request_stop(input: &str, request: Request) -> Result<PathBuf> {
 
 pub(crate) struct Inspection {
     pub details: serde_json::Value,
+    pub dismissal: Option<super::dismiss::Action>,
     pub can_stop: bool,
     pub stopping: bool,
     pub branches: Vec<String>,
@@ -124,7 +118,7 @@ pub(crate) struct Inspection {
 
 /// Availability follows the CLI's child refusal and captured process identity.
 pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
-    let snapshot = Snapshot::load_with_silence(
+    let snapshot = Snapshot::load_metrics_with_silence(
         &config.logs_dir,
         chrono::Local::now(),
         config.silent_interval,
@@ -133,7 +127,7 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
     let pending = selected
         .owner
         .is_some_and(|owner| requested(&owner.record_path).is_some());
-    let details = serde_json::to_value(selected.observation.details()?)?;
+    let details = super::metrics::details(&snapshot, selected.observation)?;
     let stopping = pending && !selected.process_exited() && details["outcome"].is_null();
     let work = if selected.process_exited() || !details["outcome"].is_null() {
         selected
@@ -144,7 +138,9 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
     } else {
         reading::RetainedWork::default()
     };
+    let github = super::github::load(&config.logs_dir);
     Ok(Inspection {
+        dismissal: super::dismiss::action(&snapshot, &github, input, config.inbox_days),
         details,
         can_stop: selected.stop_target(input).is_ok() && !pending,
         stopping,

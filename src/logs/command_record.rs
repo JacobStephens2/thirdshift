@@ -1,21 +1,30 @@
 //! Durable Command facts shared by the recorder and status reader.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
+use anyhow::{Result, ensure};
 use chrono::{DateTime, FixedOffset};
 use serde::{Deserialize, Serialize};
 
 use super::Work;
+use super::effects::{OnMachine, Outside};
 use crate::harness::Choice;
 use crate::issue::IssueUrl;
 
 /// A Pass owns its dispatched work in the same process and atomic record.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct CommandTree {
-    #[serde(flatten)]
+    #[serde(flatten, deserialize_with = "read_command")]
     pub command: CommandRecord,
     #[serde(default)]
     pub dispatched: Vec<CommandRecord>,
+}
+
+fn read_command<'de, D: serde::Deserializer<'de>>(reader: D) -> Result<CommandRecord, D::Error> {
+    // With arbitrary_precision, Serde's flattened buffer represents fractional
+    // numbers as maps. Value restores them before typed metrics read their f64s.
+    let value = serde_json::Value::deserialize(reader)?;
+    serde_json::from_value(value).map_err(serde::de::Error::custom)
 }
 
 impl CommandTree {
@@ -27,7 +36,31 @@ impl CommandTree {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+/// A human recheck changes the Verdict, without changing when the Command ran.
+/// The Experiment's exclusive lock serializes this with completion and rechecks.
+pub(crate) fn experiment_rechecked(log: &Path, id: &str, outcome: &str) -> Result<()> {
+    let path = log.with_extension("command.json");
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut tree: CommandTree = serde_json::from_slice(&bytes)?;
+    ensure!(
+        tree.command.kind == "Experiment"
+            && tree
+                .command
+                .experiment
+                .as_ref()
+                .is_some_and(|experiment| experiment.id == id)
+            && tree.command.outcome.is_some(),
+        "Command record does not belong to the completed Experiment"
+    );
+    tree.command.outcome = Some(outcome.into());
+    OnMachine.replace_record(&path, &serde_json::to_vec_pretty(&tree)?)
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct CommandRecord {
     pub version: u32,
     pub kind: String,
@@ -44,9 +77,14 @@ pub(super) struct CommandRecord {
     pub started_at: String,
     #[serde(default)]
     pub ended_at: Option<String>,
+    /// Reader-only provenance: legacy retention estimates are not recorded finishes.
+    #[serde(skip)]
+    pub end_time_estimated: bool,
     pub stages: Vec<Stage>,
     pub session_log: Option<PathBuf>,
     pub outcome: Option<String>,
+    #[serde(default)]
+    pub run_metrics: Option<super::run_metrics::RunMetrics>,
     pub cause: Option<String>,
     pub issue_branch: Option<String>,
     pub pull_request: Option<String>,
@@ -56,11 +94,13 @@ pub(super) struct CommandRecord {
     pub parent_dispatch: Option<String>,
     #[serde(default)]
     pub tickets: Vec<TicketRecord>,
-    /// Local knowledge at completion; status never refreshes findings from GitHub.
+    /// Local knowledge at completion; the Inbox overlays its kept GitHub answer.
     #[serde(default)]
     pub security_findings_waiting: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub security_findings: Vec<crate::security::RecordedFinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub experiment: Option<crate::evals::experiment::Description>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -80,14 +120,14 @@ impl From<&IssueUrl> for Issue {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(crate) struct TicketRecord {
     pub issue: Issue,
     pub state: TicketState,
     pub blockers: Vec<Issue>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum TicketState {
     Running,
@@ -98,7 +138,7 @@ pub(crate) enum TicketState {
     NotStarted,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct Stage {
     pub name: String,
     pub began_at: String,
@@ -120,51 +160,64 @@ impl StageTime<'_> {
     }
 }
 
-/// Internal transitions are typed; persisted names stay tolerant of new stages.
-#[derive(Clone, Copy)]
-pub enum StageName {
-    Implement,
-    Resume,
-    SecurityReview,
-    PullRequest,
-    CiWatch,
-    Repair,
-    SelfMerge,
-    Cleanup,
-    ArchitectureReview,
-    Tickets,
-    SpecReview,
-    SecurityAudit,
-    SecurityReproduction,
-    SecurityFixPublishing,
+// Keep typed stages, persisted names and display order in one declaration.
+macro_rules! stage_names {
+    ($($(#[$meta:meta])* $stage:ident => $name:literal,)*) => {
+        /// Internal transitions are typed; persisted names stay tolerant of new stages.
+        #[derive(Clone, Copy)]
+        pub enum StageName {
+            $($(#[$meta])* $stage,)*
+        }
+
+        impl StageName {
+            pub fn name(self) -> &'static str {
+                match self {
+                    $(Self::$stage => $name,)*
+                }
+            }
+
+            /// Declaration order, with unfamiliar persisted names after every known stage.
+            pub(super) fn order(name: &str) -> usize {
+                match name {
+                    $($name => Self::$stage as usize,)*
+                    _ => usize::MAX,
+                }
+            }
+        }
+    };
+}
+
+stage_names! {
+    Implement => "implement",
+    CodeReview => "Code review",
+    Resume => "Resume",
+    SecurityReview => "Security review",
+    PullRequest => "pull request",
+    CiWatch => "CI watch",
+    Repair => "Repair",
+    SelfMerge => "Self-merge",
+    Cleanup => "cleanup",
+    ArchitectureReview => "Architecture review",
+    Tickets => "Tickets",
+    SpecReview => "Spec review",
+    SecurityAudit => "Security audit",
+    SecurityReproduction => "Security reproduction",
+    SecurityFixPublishing => "Security fix publishing",
+    /// A fixed finding's proof-of-concept recheck against the merged Base
+    /// branch, before its private record is closed.
+    SecurityCloseCheck => "Security close check",
+    ArmBuilds => "Arm builds",
+    EvalTasks => "Eval tasks",
+    Trials => "Trials",
+    Sampling => "sampling",
+    Grading => "grading",
     /// A Pickup run or Security run waiting on the Run it dispatched.
-    DispatchedRun,
+    DispatchedRun => "dispatched Run",
     /// A Pickup run or Security run waiting on the Spec run it dispatched.
-    DispatchedSpecRun,
+    DispatchedSpecRun => "dispatched Spec run",
 }
 
 impl StageName {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Implement => "implement",
-            Self::Resume => "Resume",
-            Self::SecurityReview => "Security review",
-            Self::PullRequest => "pull request",
-            Self::CiWatch => "CI watch",
-            Self::Repair => "Repair",
-            Self::SelfMerge => "Self-merge",
-            Self::Cleanup => "cleanup",
-            Self::ArchitectureReview => "Architecture review",
-            Self::Tickets => "Tickets",
-            Self::SpecReview => "Spec review",
-            Self::SecurityAudit => "Security audit",
-            Self::SecurityReproduction => "Security reproduction",
-            Self::SecurityFixPublishing => "Security fix publishing",
-            Self::DispatchedRun => "dispatched Run",
-            Self::DispatchedSpecRun => "dispatched Spec run",
-        }
-    }
-
     /// The stage a pass enters while `work`, the Command it dispatched, runs.
     pub(super) fn dispatched(work: Work<'_>) -> Self {
         match work {
@@ -173,7 +226,9 @@ impl StageName {
             | Work::BaseFix(_)
             | Work::PickupRun(_)
             | Work::ArchitectRun(_)
-            | Work::SecurityRun(_) => Self::DispatchedRun,
+            | Work::SecurityRun(_)
+            | Work::ScoringRun(_)
+            | Work::Experiment(_) => Self::DispatchedRun,
         }
     }
 
@@ -186,27 +241,25 @@ impl StageName {
             .any(|stage| stage.name() == name)
     }
 
-    pub(super) fn known(name: &str) -> bool {
+    /// Stages entered by Sessions, as distinct from delivery or dispatch work.
+    pub(super) fn is_session(name: &str) -> bool {
         [
             Self::Implement,
             Self::Resume,
-            Self::SecurityReview,
-            Self::PullRequest,
-            Self::CiWatch,
             Self::Repair,
-            Self::SelfMerge,
-            Self::Cleanup,
-            Self::ArchitectureReview,
-            Self::Tickets,
             Self::SpecReview,
+            Self::SecurityReview,
+            Self::ArchitectureReview,
             Self::SecurityAudit,
             Self::SecurityReproduction,
             Self::SecurityFixPublishing,
-            Self::DispatchedRun,
-            Self::DispatchedSpecRun,
         ]
         .into_iter()
         .any(|stage| stage.name() == name)
+    }
+
+    pub(super) fn known(name: &str) -> bool {
+        Self::order(name) != usize::MAX
     }
 }
 
@@ -244,8 +297,14 @@ impl CommandRecord {
             .chain(self.session_log.as_ref())
     }
 
-    pub fn finish(&mut self, account: &crate::run_ending::Account<'_>, now: DateTime<FixedOffset>) {
-        self.ended_at = Some(now.to_rfc3339());
+    pub fn finish(
+        &mut self,
+        account: &crate::run_ending::Account<'_>,
+        outside: &mut impl super::effects::Outside,
+        ranges: &super::usual_range::UsualRanges,
+        unaddressed_findings: Option<crate::pull_request::UnaddressedFindings>,
+    ) {
+        self.ended_at = Some(outside.now().to_rfc3339());
         self.outcome = Some(account.outcome.into());
         self.cause = account
             .ended
@@ -255,6 +314,14 @@ impl CommandRecord {
         self.pull_request = account.pr_url.map(String::from);
         self.security_findings_waiting = account.security_findings_waiting;
         self.security_findings = account.security_findings.unwrap_or_default().to_vec();
+        if matches!(self.kind.as_str(), "Run" | "Spec run" | "Base fix") {
+            self.run_metrics = Some(super::run_metrics::RunMetrics::of(
+                self,
+                ranges,
+                outside,
+                unaddressed_findings,
+            ));
+        }
     }
 
     pub fn live(&self, outside: &mut impl super::effects::Outside) -> bool {
@@ -276,13 +343,15 @@ impl CommandRecord {
         let name = match work {
             Work::ArchitectRun(_) => format!("architect-{stamp}"),
             Work::SecurityRun(_) => format!("secure-{stamp}"),
+            Work::ScoringRun(_) => format!("scoring-{stamp}"),
             Work::PickupRun(_) => format!("pickup-{stamp}"),
+            Work::Experiment(_) => format!("experiment-{stamp}"),
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => {
                 format!("{}#{}", issue.repo_slug(), issue.number)
             }
         };
         Self {
-            version: 1,
+            version: 2,
             kind: if matches!(work, Work::BaseFix(_)) {
                 "Base fix".into()
             } else {
@@ -299,9 +368,11 @@ impl CommandRecord {
             effort: harness.effort.clone(),
             started_at: now.to_rfc3339(),
             ended_at: None,
+            end_time_estimated: false,
             stages: Vec::new(),
             session_log: None,
             outcome: None,
+            run_metrics: None,
             cause: None,
             issue_branch: None,
             pull_request: None,
@@ -310,6 +381,7 @@ impl CommandRecord {
             tickets: Vec::new(),
             security_findings_waiting: false,
             security_findings: Vec::new(),
+            experiment: None,
         }
     }
 

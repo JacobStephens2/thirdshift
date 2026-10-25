@@ -1,14 +1,13 @@
 //! Failed run preservation through Worktree, with real local Git and origin.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use super::*;
 use crate::interrupt;
-use crate::test_support::{git_fault, with_recorded_signal};
+use crate::test_support::{git_fault, with_recorded_signal, write_executable};
 
 const BRANCH: &str = "issue-7";
 
@@ -19,8 +18,7 @@ fn fixture() -> (tempfile::TempDir, Git, Worktree) {
 }
 
 fn rejecting_hook(path: &Path) {
-    fs::write(path, "#!/bin/sh\necho 'hook says no' >&2\nexit 1\n").unwrap();
-    fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(path, "#!/bin/sh\necho 'hook says no' >&2\nexit 1\n");
 }
 
 fn unfinished_merge(git: &Git) {
@@ -165,7 +163,7 @@ fn assert_preservation_refuses_retry(name: &str, mutation: &str) {
             assert_eq!(git.run(&["rev-parse", "issue-7^"]).unwrap(), head);
             assert_eq!(
                 git.run(&["log", "-1", "--format=%s", BRANCH]).unwrap(),
-                "thirdshift: failed run (session failed)"
+                "thirdshift: failed ticket run (session failed)"
             );
             assert_eq!(git.run(&["show", "issue-7:wip.txt"]).unwrap(), "half done");
             assert!(
@@ -271,7 +269,7 @@ fn retryable_preservation_failures_with_valid_ownership_finish_and_restore_clean
         );
         assert_eq!(
             origin.run(&["log", "-1", "--format=%s", BRANCH]).unwrap(),
-            "thirdshift: failed run (session failed)"
+            "thirdshift: failed ticket run (session failed)"
         );
         drop(worktree);
         assert_cleaned_up(&launch, &path);
@@ -649,7 +647,7 @@ fi
         if gate == "push" {
             assert_eq!(
                 git.run(&["log", "-1", "--format=%s", BRANCH]).unwrap(),
-                "thirdshift: failed run (session failed)"
+                "thirdshift: failed ticket run (session failed)"
             );
             assert_eq!(git.run(&["show", "issue-7:wip.txt"]).unwrap(), "half done");
         } else {
@@ -832,7 +830,7 @@ fn preservation_pushes_committed_and_uncommitted_work_with_failure_metadata_then
     );
     assert_eq!(
         origin.run(&["log", "-2", "--format=%s", BRANCH]).unwrap(),
-        "thirdshift: failed run (session failed)\nAdd feature"
+        "thirdshift: failed ticket run (session failed)\nAdd feature"
     );
     let body = origin.run(&["log", "-1", "--format=%b", BRANCH]).unwrap();
     let (timestamp, rest) = body.split_once(", host ").expect(&body);
@@ -915,7 +913,7 @@ fn committed_work_gets_an_empty_failure_marker_despite_rejecting_local_hooks() {
     let origin = Git::new(temp.path().join("origin.git"));
     assert_eq!(
         origin.run(&["log", "-1", "--format=%s", BRANCH]).unwrap(),
-        "thirdshift: failed run (session failed)"
+        "thirdshift: failed ticket run (session failed)"
     );
     assert_eq!(origin.run(&["rev-parse", "issue-7^"]).unwrap(), feature);
     assert!(
@@ -956,7 +954,7 @@ fn an_unfinished_merge_is_aborted_before_preserving_the_issue_branch() {
     );
     assert_eq!(
         origin.run(&["log", "-3", "--format=%s", BRANCH]).unwrap(),
-        "thirdshift: failed run (session failed)\nOurs\nShared files"
+        "thirdshift: failed ticket run (session failed)\nOurs\nShared files"
     );
     assert_cleaned_up(&launch, &path);
 }
@@ -1060,7 +1058,7 @@ fn rejected_or_unreachable_origin_retains_the_failure_commit_and_work_after_drop
         );
         assert_eq!(
             launch.run(&["log", "-1", "--format=%s", BRANCH]).unwrap(),
-            "thirdshift: failed run (session failed)"
+            "thirdshift: failed ticket run (session failed)"
         );
         let origin = Git::new(temp.path().join("origin.git"));
         assert!(
@@ -1096,7 +1094,7 @@ fn recorded_interruption_allows_preservation_and_cleanup_but_still_blocks_ordina
             );
             assert_eq!(
                 origin.run(&["log", "-1", "--format=%s", BRANCH]).unwrap(),
-                "thirdshift: failed run (interrupted)"
+                "thirdshift: failed ticket run (interrupted)"
             );
             assert_cleaned_up(&launch.completion(), &path);
             assert!(interrupt::requested());
@@ -1247,7 +1245,7 @@ fn a_completed_nonzero_cached_diff_probe_still_makes_and_pushes_the_failure_mark
     let origin = Git::new(temp.path().join("origin.git"));
     assert_eq!(
         origin.run(&["log", "-2", "--format=%s", BRANCH]).unwrap(),
-        "thirdshift: failed run (session failed)\nInitial"
+        "thirdshift: failed ticket run (session failed)\nInitial"
     );
     assert!(
         origin
@@ -1287,7 +1285,7 @@ fi
     assert_eq!(origin.run(&["rev-parse", "issue-7^"]).unwrap(), head);
     assert_eq!(
         origin.run(&["log", "-1", "--format=%s", BRANCH]).unwrap(),
-        "thirdshift: failed run (session failed)"
+        "thirdshift: failed ticket run (session failed)"
     );
     assert!(
         origin

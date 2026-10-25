@@ -16,7 +16,7 @@ use anyhow::{Context, Result, anyhow};
 pub(crate) use crate::harness::claude::claude_args;
 #[cfg(test)]
 pub(crate) use crate::harness::codex::{codex_args, codex_prompt};
-use crate::harness::interpretation::Ended;
+use crate::harness::interpretation::{Ended, SafeguardRefusal, SessionFailure};
 use crate::harness::{Adapter, Choice};
 use crate::issue::{IssueUrl, Repo};
 use crate::logs;
@@ -25,9 +25,12 @@ use crate::prompt;
 use crate::skills;
 
 pub mod kind;
+pub(crate) mod limits;
+pub(crate) mod private;
 pub mod recording;
 mod review_reports;
 pub(crate) mod trace;
+pub(crate) mod usage;
 use review_reports::ReviewReports;
 
 pub use kind::{Kind, Logged};
@@ -49,7 +52,7 @@ pub enum Purpose {
     SecurityReview,
 }
 
-/// Where Session logs go: beside the owning Command log in
+/// Where Session traces go: beside the owning Command log in
 /// `commands/<command>/` under the repository's logs, under the User config's `logs.dir` or
 /// `~/.thirdshift/logs`, each named for what is run and stamped with the
 /// command's start stamp, which its Command log shares. Only once the logs
@@ -63,6 +66,15 @@ pub struct Logs {
 }
 
 impl Logs {
+    /// An isolated Trial's artifacts, with no Command owner or factory logs.
+    pub fn of_trial(dir: &Path) -> Self {
+        Logs {
+            name: "trial".to_string(),
+            dir: dir.to_path_buf(),
+            recording: recording::Recording::for_trial().into(),
+        }
+    }
+
     /// The logs of the Run on `issue`.
     pub fn of_run(issue: &IssueUrl) -> Self {
         Logs {
@@ -91,7 +103,7 @@ impl Logs {
     }
 
     /// Where a session's stream is logged:
-    /// `<root>/commands/<command>/<name>-<stamp>~<token>-<kind>.jsonl`.
+    /// `<root>/commands/<command>/<name>-<stamp>~<token>-<kind>.logs.jsonl`.
     pub fn path(&self, session: Logged) -> Result<PathBuf> {
         self.recording()
             .session_path(&self.dir, &self.name, &session.token())
@@ -116,7 +128,7 @@ pub struct Sessions<'a> {
     outside: RefCell<Box<dyn Outside>>,
     /// What must still hold before each session starts, a Resume included:
     /// a session it fails is not started, and the step fails with it.
-    before_each: &'a dyn Fn() -> Result<()>,
+    before_each: Box<dyn Fn() -> Result<()> + 'a>,
     /// The session started last, a Resume included, and its log.
     last_log: RefCell<Option<(Logged, PathBuf)>>,
     /// How each session ended whose last ending, its Resume's if it got one,
@@ -140,7 +152,42 @@ impl<'a> Sessions<'a> {
         harness: &'a Choice,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
-        Self::checked_within(logs, worktree, harness, None, &|| Ok(()), steps)
+        Self::checked_within(logs, worktree, harness, None, None, &|| Ok(()), steps)
+    }
+
+    /// [`Sessions::within`], with every session run in `sandbox`: the
+    /// Trial's bwrap sandbox, prepared before its output directory's home.
+    /// The Factory skills are linked as usual; the sandbox binds them in.
+    pub fn within_sandboxed<T>(
+        logs: &'a Logs,
+        worktree: &'a Path,
+        harness: &'a Choice,
+        sandbox: &crate::sandbox::Prepared,
+        steps: impl FnOnce(&Self) -> Result<T>,
+    ) -> (Result<T>, Option<PathBuf>) {
+        let adapter = harness.harness.adapter();
+        if let Err(error) = skills::link_into(worktree, adapter)
+            .and_then(|()| adapter.link_instruction_fallback(worktree))
+        {
+            return (Err(error), None);
+        }
+        let on_machine = OnMachine {
+            worktree: worktree.to_path_buf(),
+            harness: harness.clone(),
+            adapter,
+            security_review: None,
+            security_review_default: None,
+            recording: logs.recording().clone(),
+            sandbox: Some(sandbox.launch()),
+        };
+        let (taken, log) = Sessions::taking(
+            logs,
+            worktree,
+            Box::new(on_machine),
+            crate::resources::wait,
+            steps,
+        );
+        (taken, log.filter(|log| log.exists()))
     }
 
     /// [`Sessions::within`], checking `before_each` before each session
@@ -152,6 +199,7 @@ impl<'a> Sessions<'a> {
         worktree: &'a Path,
         harness: &'a Choice,
         security_review: Option<&'a Choice>,
+        security_review_default: Option<&'a Choice>,
         before_each: &'a dyn Fn() -> Result<()>,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
@@ -172,10 +220,20 @@ impl<'a> Sessions<'a> {
             harness: harness.clone(),
             adapter,
             security_review,
+            security_review_default: security_review_default.cloned(),
             recording: logs.recording().clone(),
+            sandbox: None,
         };
-        let (taken, log) =
-            Sessions::taking(logs, worktree, Box::new(on_machine), before_each, steps);
+        let (taken, log) = Sessions::taking(
+            logs,
+            worktree,
+            Box::new(on_machine),
+            move || {
+                crate::resources::wait()?;
+                before_each()
+            },
+            steps,
+        );
         (taken, log.filter(|log| log.exists()))
     }
 
@@ -186,14 +244,14 @@ impl<'a> Sessions<'a> {
         logs: &'a Logs,
         worktree: &'a Path,
         outside: Box<dyn Outside>,
-        before_each: &'a dyn Fn() -> Result<()>,
+        before_each: impl Fn() -> Result<()> + 'a,
         steps: impl FnOnce(&Self) -> Result<T>,
     ) -> (Result<T>, Option<PathBuf>) {
         let sessions = Sessions {
             logs,
             worktree,
             outside: RefCell::new(outside),
-            before_each,
+            before_each: Box::new(before_each),
             last_log: RefCell::default(),
             endings_with_killed_work: RefCell::default(),
         };
@@ -238,6 +296,13 @@ impl<'a> Sessions<'a> {
         kind: Kind,
         prompt: &str,
     ) -> Result<Option<String>> {
+        self.run_to_end(purpose, kind, prompt)
+            .map(|ended| ended.final_message)
+    }
+
+    /// The same session and Resume policy, retaining the Harness session ID
+    /// for a Trial's result as well as its final message.
+    pub fn run_to_end(&self, purpose: Purpose, kind: Kind, prompt: &str) -> Result<Ended> {
         // Progress lines name the session by its kind's token.
         let label = kind.token();
         let reports = if prompt.contains(prompt::REVIEW_REPORTS_DIRECTORY) {
@@ -253,7 +318,21 @@ impl<'a> Sessions<'a> {
         } else {
             None
         };
-        let mut ended = self.start(purpose, Logged::of(kind), None, prompt, reports.as_ref())?;
+        let first = self.start(purpose, Logged::of(kind), None, prompt, reports.as_ref());
+        let kind = if let Err(error) = &first
+            && kind == Kind::SecurityReview
+            && matches!(purpose, Purpose::SecurityReview)
+            && self.outside.borrow_mut().fallback_review(error)?
+        {
+            Kind::SecurityReviewFallback
+        } else {
+            kind
+        };
+        let mut ended = if kind == Kind::SecurityReviewFallback {
+            self.start(purpose, Logged::of(kind), None, prompt, reports.as_ref())?
+        } else {
+            first?
+        };
         // What ended last, as the progress line on its killed work calls it.
         let mut ended_last = "session";
         if let (false, Some(session_id)) = (ended.killed.is_empty(), &ended.session_id) {
@@ -264,13 +343,22 @@ impl<'a> Sessions<'a> {
             self.step(format!(
                 "{label}: background work was killed as the session ended; resuming it once"
             ));
-            ended = self.start(
-                purpose,
-                Logged::resume_of(kind),
-                Some(session_id),
-                &resume_prompt,
-                reports.as_ref(),
-            )?;
+            ended = self
+                .start(
+                    purpose,
+                    Logged::resume_of(kind),
+                    Some(session_id),
+                    &resume_prompt,
+                    reports.as_ref(),
+                )
+                .map_err(|mut error| {
+                    // Work was observed before this Resume, even if its first
+                    // turn fails.
+                    if let Some(failure) = error.downcast_mut::<SessionFailure>() {
+                        failure.before_first_turn = false;
+                    }
+                    error
+                })?;
             ended_last = "Resume";
         }
         if !ended.killed.is_empty() {
@@ -290,7 +378,7 @@ impl<'a> Sessions<'a> {
                 .borrow_mut()
                 .push(format!("{label} session {ending}"));
         }
-        Ok(ended.final_message)
+        Ok(ended)
     }
 
     /// Run `session`, logged under its own path, which becomes the last log,
@@ -332,7 +420,12 @@ impl<'a> Sessions<'a> {
         self.last_log
             .borrow()
             .as_ref()
-            .filter(|(session, log)| session.kind == kind && log.exists())
+            .filter(|(session, log)| {
+                (session.kind == kind
+                    || (kind == Kind::SecurityReview
+                        && session.kind == Kind::SecurityReviewFallback))
+                    && log.exists()
+            })
             .map(|(_, log)| log.clone())
     }
 
@@ -344,6 +437,10 @@ impl<'a> Sessions<'a> {
 
 /// How the Resume rules run a session, and where their progress lines go.
 trait Outside {
+    /// Switch only a review that failed before any work to the default Harness.
+    fn fallback_review(&mut self, _error: &anyhow::Error) -> Result<bool> {
+        Ok(false)
+    }
     /// Run a session given `prompt`, labelled by its kind's token `label`,
     /// continuing the session with id `resume`, if any, its stream logged to
     /// `log`. Returns what it ended with once it has exited cleanly, its turn
@@ -368,10 +465,45 @@ struct OnMachine {
     harness: Choice,
     adapter: &'static dyn Adapter,
     security_review: Option<(Choice, &'static dyn Adapter)>,
+    security_review_default: Option<Choice>,
     recording: recording::Recording,
+    sandbox: Option<crate::sandbox::Launch>,
 }
 
 impl Outside for OnMachine {
+    fn fallback_review(&mut self, error: &anyhow::Error) -> Result<bool> {
+        crate::interrupt::check()?;
+        let Some(failure) = error.downcast_ref::<SessionFailure>() else {
+            return Ok(false);
+        };
+        let Some(reason) = failure
+            .diagnostic
+            .as_deref()
+            .filter(|text| !text.trim().is_empty())
+        else {
+            return Ok(false);
+        };
+        let Some(default) = &mut self.security_review_default else {
+            return Ok(false);
+        };
+        let review = self
+            .security_review
+            .as_ref()
+            .map_or(&self.harness, |(choice, _)| choice);
+        if !failure.before_first_turn
+            || error.is::<SafeguardRefusal>()
+            || review.harness == default.harness
+        {
+            return Ok(false);
+        }
+        crate::harness::warn_review_fallback(review.harness, default.harness, reason);
+        default.check()?;
+        let adapter = default.harness.adapter();
+        skills::link_into(&self.worktree, adapter)?;
+        adapter.link_instruction_fallback(&self.worktree)?;
+        self.security_review = Some((default.clone(), adapter));
+        Ok(true)
+    }
     fn run_session(
         &mut self,
         purpose: Purpose,
@@ -390,8 +522,7 @@ impl Outside for OnMachine {
             }
             _ => (&self.harness, self.adapter),
         };
-        let interpretation = adapter.interpretation(&self.worktree, prompt);
-        let (invocation, interpretation) = match purpose {
+        let (mut invocation, policy) = match purpose {
             Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview => (
                 adapter.security_session(
                     harness,
@@ -399,16 +530,34 @@ impl Outside for OnMachine {
                     prompt,
                     matches!(purpose, Purpose::Security | Purpose::SecurityPublishing),
                 ),
-                interpretation.for_security(harness.model.as_deref()),
+                recording::Policy::Security,
             ),
-            Purpose::Ordinary => (adapter.session(harness, resume, prompt), interpretation),
+            Purpose::Ordinary => (
+                adapter.session(harness, resume, prompt),
+                recording::Policy::Ordinary,
+            ),
             Purpose::CodeReview => (
                 adapter.code_review_session(harness, resume, prompt),
-                interpretation,
+                recording::Policy::Ordinary,
             ),
         };
-        let mut command = Command::new(adapter.name());
-        command.args(&invocation.args).current_dir(&self.worktree);
+        // A sandboxed session is always a Trial's: it runs with the Harness's
+        // web search switched off, behind the sandbox's allowlisting proxy.
+        if self.sandbox.is_some() && matches!(purpose, Purpose::CodeReview) {
+            invocation = adapter.trial_session(harness, resume, prompt);
+        }
+        let mut command = match &self.sandbox {
+            Some(launch) => {
+                let mut command = launch.command(&invocation.args)?;
+                command.current_dir(&self.worktree);
+                command
+            }
+            None => {
+                let mut command = Command::new(adapter.name());
+                command.args(&invocation.args).current_dir(&self.worktree);
+                command
+            }
+        };
         // Keep the empty config alive until the process and descendants
         // finish. A fresh one on each launch also fences the Resume.
         let github_config = if matches!(purpose, Purpose::SecurityPublishing) {
@@ -437,10 +586,11 @@ impl Outside for OnMachine {
             &mut command,
             recording::Input {
                 prompt,
+                policy,
                 stdin: invocation.stdin.as_deref(),
+                ..Default::default()
             },
             log,
-            interpretation,
         );
         drop(github_config);
         ended
@@ -482,7 +632,7 @@ mod tests {
             std::os::unix::fs::symlink(outside.path(), &dir).unwrap();
             let logs = Logs {
                 name: "670".into(),
-                dir: worktree.path().join("session-logs"),
+                dir: worktree.path().join("session-traces"),
                 recording: OnceCell::new(),
             };
             let choice = Choice {
@@ -592,8 +742,7 @@ mod tests {
                 "implement", &Choice::default(),
                 Command::new("/bin/sh").args(["-c", &format!(
                     "echo '{{\"type\":\"assistant\",\"message\":{{\"model\":\"{marker}-model\",\"content\":[]}}}}'"
-                )]), recording::Input::default(), &log,
-                crate::harness::Harness::Claude.adapter().interpretation(root.path(), ""),
+                )]).current_dir(root.path()), recording::Input::default(), &log,
             ).unwrap();
             let reports = ReviewReports::new(root.path()).unwrap();
             for axis in ["standards", "spec"] {
@@ -616,7 +765,7 @@ mod tests {
             );
             for axis in ["standards", "spec"] {
                 assert_eq!(
-                    fs::read_to_string(log.with_extension(axis)).unwrap(),
+                    fs::read_to_string(logs::session::original(&log).with_extension(axis)).unwrap(),
                     format!("{marker} {axis}")
                 );
             }
@@ -645,7 +794,7 @@ mod tests {
             &logs,
             Path::new("/unused"),
             Box::new(scripted),
-            &|| Ok(()),
+            || Ok(()),
             steps,
         );
         let calls = calls.take();

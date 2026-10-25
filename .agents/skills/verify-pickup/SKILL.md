@@ -48,14 +48,19 @@ This skill authorizes verification edits only. Product fixes need their own task
 
 ## Coverage and sync
 
-Last confirmed source commit: `d415c182987aab23a7c749630a7d7e31d8a550ad`.
+Last confirmed source commit: `3cd68bb`.
+The merge-time sync from `4d4756b` found no change to the modeled request order.
+Pickup ordering and paginated issue listing are outside the one-issue model;
+same-second Claim history is normalized within its complete, ordered-read
+assumption. The known pre-Claim counterexample and both sensitivity mutations
+remain reachable. No model or property was changed.
 The model describes these functions, including their ordering:
 
 | Source | Covered functions / requests |
 | --- | --- |
 | `src/pickup.rs` | `run`, `run_through`: reserve → refresh → dispatch; reservation lifetime |
 | `src/pickup/reservation.rs` | `Reservation::take`, `Drop::drop`: empty create lease, owner-token release |
-| `src/ready.rs` | `first`, `Search::first_ready`, `standing_of`, `refresh`: Ready reads and Claim-count comparison |
+| `src/ready.rs` | `first`, `Search::first_priority`, `standing_of`, `refresh`: Ready reads and Claim-count comparison; Pickup keeps the settling wait |
 | `src/claim.rs` | `make`, `Claimed::label_in_progress`, `Claimed::end`, `put_labels_back_unless_on_origin`, `release_labels`, `Claim::needs_info` |
 | `src/github.rs` | `open_issues_labelled`, `issue`, `candidate`, `ClaimHistory::after`, `issue_labels`, `set_labels` |
 | `src/labels.rs` | `Edit::apply`, `request`: whole-label PUT; existing Claim is accepted |

@@ -202,6 +202,10 @@ impl Accounts {
         });
         if let Some(email) = &email
             && touch
+            && self.accounts[email]
+                .sessions
+                .get(&hash)
+                .is_some_and(|last_use| self.now.saturating_sub(*last_use) >= 60)
         {
             self.accounts
                 .get_mut(email)

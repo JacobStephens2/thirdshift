@@ -31,6 +31,7 @@ use crate::skills;
 
 /// How a command that did factory work, or was skipped before any, ended.
 pub enum Ending {
+    Scoring(Result<usize, FailedRun>),
     /// A Run or a Spec run ended: started by hand, or dispatched by a Pickup
     /// run.
     Run(Ended),
@@ -43,9 +44,14 @@ pub enum Ending {
     },
     /// A Security run completed its audit, or failed.
     Security(crate::security::Ended),
+    /// A Security run dispatched a fix: how the fix's Run ended, the
+    /// Security finding it was dispatched for, and the audit before it, if
+    /// the Security run audited.
     SecurityFix {
         ended: Ended,
-        findings: Vec<crate::security::RecordedFinding>,
+        finding: crate::security::RecordedFinding,
+        audit: Option<Box<crate::security::Ended>>,
+        close: crate::security::CloseOutcome,
     },
     /// A Pass was skipped before any work.
     Skipped(Skip),

@@ -4,9 +4,41 @@
 
 pub(crate) mod guidance;
 
+mod executable;
+pub(crate) use executable::write_executable;
+
 use std::process::Command;
 
 use crate::interrupt;
+
+/// A child that announces Session s1 after writing a native Codex quota record.
+/// The record may deliberately name another Session/directory or a stale time;
+/// `current` writes a fresh timestamp. HOME is set only on the child Command.
+pub(crate) fn native_codex_command(
+    root: &std::path::Path,
+    id: &str,
+    directory: &std::path::Path,
+    timestamp: &str,
+) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command
+        .env("HOME", root.join("home"))
+        .env("NATIVE_ID", id)
+        .env("NATIVE_CWD", directory)
+        .env("QUOTA_TIME", timestamp)
+        .args(["-c", r#"
+mkdir -p "$HOME/.codex/sessions/2026/10/23"
+native="$HOME/.codex/sessions/2026/10/23/rollout-fixture-$NATIVE_ID.jsonl"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$NATIVE_ID" "$NATIVE_CWD" > "$native"
+sleep 1.1
+if [ "$QUOTA_TIME" = current ]; then QUOTA_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ); fi
+printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","rate_limits":{"secondary":{"used_percent":85}}}}\n' "$QUOTA_TIME" >> "$native"
+echo '{"type":"thread.started","thread_id":"s1"}'
+sleep 1
+touch "$HOME/../continued"
+"#]);
+    command
+}
 
 /// A scratch worktree in a fresh local Git repository.
 pub(crate) fn scratch_worktree() -> tempfile::TempDir {
@@ -44,30 +76,6 @@ pub(crate) fn with_recorded_signal(test_name: &str, exercise: impl FnOnce(libc::
             "{test_name}, signal {signal}: {result:?}"
         );
     }
-}
-
-/// Write `contents` to `path` as an executable. A child process writes it,
-/// not this one: a file this process held open for writing would be
-/// inherited by whatever another test spawns meanwhile, and couldn't be run
-/// until that let go of it ("Text file busy").
-pub(crate) fn write_executable(path: &std::path::Path, contents: &str) {
-    use std::io::Write;
-    use std::process::Stdio;
-
-    let mut child = Command::new("sh")
-        .args(["-c", "cat > \"$1\" && chmod 755 \"$1\"", "sh"])
-        .arg(path)
-        .stdin(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(contents.as_bytes())
-        .unwrap();
-    let status = child.wait().unwrap();
-    assert!(status.success(), "could not write {}", path.display());
 }
 
 /// Run a single test with a Git shim in an isolated child. The parent receives

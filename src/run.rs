@@ -191,8 +191,10 @@ fn run(
                 issue.number
             )),
         }
-        asks.harness
-            .check_with_security_review(asks.security_review_harness.as_mut())?;
+        asks.harness.check_with_security_review(
+            &mut asks.security_review_harness,
+            asks.security_review_default.as_mut(),
+        )?;
     }
     let asks = &*asks;
     let child_asks = ChildAsks::of(asks);
@@ -200,7 +202,7 @@ fn run(
         directory: &directory,
         issue,
         goal: asks.goal,
-        security_review: child_asks.runs_security_review(started_by.child()),
+        security_review: child_asks.security_review,
         child_asks: &child_asks,
         base_fix,
         logs: Logs::of_run(issue),
@@ -311,6 +313,12 @@ fn start<O: Outside>(
             },
             matches!(selection, Selection::Continuation { .. }),
         );
+        if let Some(review) = &asks.security_review_harness
+            && review.chosen_by == crate::harness::ChosenBy::SecurityConfig
+            && review.harness != asks.harness.harness
+        {
+            recovery.add_security_review_harness(review.harness);
+        }
     }
     if claims {
         outside.end_claim(outcome.as_ref().ok().map(|reached| &reached.resolution));
@@ -697,7 +705,11 @@ mod tests {
             let spec_run = match work {
                 Work::Run(_) | Work::BaseFix(_) => false,
                 Work::SpecRun(_) => true,
-                Work::PickupRun(_) | Work::ArchitectRun(_) | Work::SecurityRun(_) => {
+                Work::PickupRun(_)
+                | Work::ArchitectRun(_)
+                | Work::SecurityRun(_)
+                | Work::ScoringRun(_)
+                | Work::Experiment(_) => {
                     panic!("not a Run's work")
                 }
             };
@@ -832,6 +844,7 @@ mod tests {
     fn asks() -> Asks {
         Asks {
             security_review_harness: None,
+            security_review_default: None,
             security_fix: false,
             security_review: false,
             goal: Goal::ReadyForReview,

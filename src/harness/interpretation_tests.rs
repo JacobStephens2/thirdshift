@@ -1,5 +1,131 @@
 use super::*;
 use std::os::unix::process::ExitStatusExt;
+use std::path::Path;
+
+#[test]
+fn plan_limit_stream_evidence_is_live_and_does_not_fail_ordinary_sessions() {
+    for (harness, raw, expected) in [
+        (
+            Harness::Claude,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day","utilization":0.85}}"#,
+            true,
+        ),
+        (
+            Harness::Claude,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","rateLimitType":"five_hour"}}"#,
+            true,
+        ),
+        (
+            Harness::Claude,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}"#,
+            false,
+        ),
+        (
+            Harness::Claude,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"rate_limit_event allowed_warning"}]}}"#,
+            false,
+        ),
+        (
+            Harness::Grok,
+            r#"{"type":"rate_limit_event","rate_limit_info":{"status":"rejected"}}"#,
+            false,
+        ),
+        (
+            Harness::Codex,
+            r#"{"type":"token_count","rate_limits":{"primary":{"used_percent":85}}}"#,
+            true,
+        ),
+        (
+            Harness::Codex,
+            r#"{"type":"token_count","rate_limits":{"primary":{"used_percent":84.9}}}"#,
+            false,
+        ),
+        (
+            Harness::Codex,
+            r#"{"type":"event_msg","payload":{"type":"token_count","rate_limits":{"secondary":{"used_percent":91}}}}"#,
+            true,
+        ),
+        (
+            Harness::Codex,
+            r#"{"type":"token_count","rate_limits":{"rate_limit_reached_type":"weekly"}}"#,
+            true,
+        ),
+        (
+            Harness::Codex,
+            r#"{"type":"token_count","rate_limits":{"primary":{"used_percent":"85"}}}"#,
+            false,
+        ),
+        (
+            Harness::Codex,
+            r#"{"type":"token_count","rate_limits":null}"#,
+            false,
+        ),
+    ] {
+        let mut interpretation = stream(harness, "");
+        interpretation.decode(raw);
+        assert_eq!(interpretation.plan_limit_reached(), expected, "{raw}");
+        // A later healthy report cannot erase a warning already seen.
+        interpretation
+            .decode(r#"{"type":"token_count","rate_limits":{"primary":{"used_percent":0}}}"#);
+        assert_eq!(interpretation.plan_limit_reached(), expected, "{raw}");
+        assert!(finish(interpretation).outcome.is_ok(), "{raw}");
+    }
+}
+
+#[test]
+fn review_agy_failure_after_a_reported_turn_is_not_a_startup_failure() {
+    let mut interpretation = stream(Harness::Agy, "");
+    interpretation.condense(r#"{"event":"result","result":{"conversation_id":"s","status":"ERROR","response":"","error":"Harness failed.","num_turns":1,"usage":{"input_tokens":0,"output_tokens":0,"cache_read_tokens":0,"thinking_tokens":0,"total_tokens":0}}}"#);
+    let error = finish(interpretation).outcome.unwrap_err();
+    let failure = error
+        .downcast_ref::<interpretation::SessionFailure>()
+        .unwrap();
+    assert!(
+        !failure.before_first_turn,
+        "Agy already reported a completed turn"
+    );
+}
+
+#[test]
+fn a_failed_harness_result_distinguishes_startup_errors_from_observed_work() {
+    for harness in [Harness::Claude, Harness::Grok] {
+        for (prefix, startup) in [
+            (
+                r#"{"type":"system","subtype":"init","session_id":"s"}"#,
+                true,
+            ),
+            (
+                r#"{"type":"result","subtype":"success","num_turns":1}"#,
+                false,
+            ),
+            (
+                r#"{"type":"result","subtype":"success","usage":{"input_tokens":1}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"result","subtype":"success","usage":{"cache_read_input_tokens":1}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Checking."}]}}"#,
+                false,
+            ),
+            (
+                r#"{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t","name":"Bash","input":{"command":"true"}}]}}"#,
+                false,
+            ),
+        ] {
+            let mut interpretation = stream(harness, "");
+            interpretation.condense(prefix);
+            interpretation.condense(r#"{"type":"result","subtype":"error_during_execution","num_turns":0,"usage":{"input_tokens":0,"output_tokens":0},"errors":["Harness failed."]}"#);
+            let error = finish(interpretation).outcome.unwrap_err();
+            let failure = error
+                .downcast_ref::<interpretation::SessionFailure>()
+                .unwrap();
+            assert_eq!(failure.before_first_turn, startup, "{harness:?}: {prefix}");
+        }
+    }
+}
 
 #[test]
 fn review_completion_preserves_distinct_claude_child_messages() {
@@ -297,11 +423,11 @@ fn a_transport_failure_preserves_recovered_usage_and_warnings_ahead_of_turn_fail
                 .interpretation(Path::new("/work"), "/thirdshift-implement issue-url");
             interpretation.condense(r#"{"stream":{"kind":"session","id":"s1"},"payload_type":"run.terminal.failed","payload":{"reason":"quota exceeded"}}"#);
             let completion = interpretation.finish(Err(anyhow::anyhow!(
-                "could not write the session log: Broken pipe"
+                "could not write the session trace: Broken pipe"
             )));
             assert_eq!(
                 completion.outcome.unwrap_err().to_string(),
-                "could not write the session log: Broken pipe"
+                "could not write the session trace: Broken pipe"
             );
             let report = completion.report.unwrap();
             assert_eq!(
