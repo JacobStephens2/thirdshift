@@ -21,6 +21,7 @@ pub(crate) mod origins;
 mod sample;
 pub(crate) use sample::PullRequest;
 pub(crate) mod packet;
+pub(crate) use grader::{Criterion, Score};
 
 pub fn lock() -> Result<Option<File>> {
     let dir = config::home()?.join(".thirdshift");
@@ -34,12 +35,12 @@ pub fn lock() -> Result<Option<File>> {
 }
 
 #[derive(Serialize, Deserialize)]
-struct Week {
-    week: String,
-    window_start: DateTime<Utc>,
-    window_end: DateTime<Utc>,
+pub(crate) struct Week {
+    pub week: String,
+    pub window_start: DateTime<Utc>,
+    pub window_end: DateTime<Utc>,
     seed: u64,
-    sample: Vec<PullRequest>,
+    pub sample: Vec<PullRequest>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     packets: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -258,51 +259,76 @@ fn grade_at(
 }
 
 pub fn show(pull_request: Option<&str>, mine: bool, json: bool) -> Result<String> {
-    let dir = directory()?;
-    let _lock = if mine {
+    if mine {
         interrupt::install()?;
-        Some(lock()?.context("another Scoring run or human scoring session is running")?)
-    } else {
-        None
-    };
-    let mut weeks = read(&dir)?;
+        write_mine(
+            pull_request.context("human scoring requires a pull request")?,
+            calibration::enter,
+        )?;
+    }
+    let view = view(pull_request)?;
+    display(&view.weeks, &view.calibration, json)
+}
+
+pub(crate) struct View {
+    pub weeks: Vec<Week>,
+    pub calibration: calibration::Calibration,
+}
+
+pub(crate) fn view(pull_request: Option<&str>) -> Result<View> {
+    let mut weeks = read(&directory()?)?;
+    // Calibration always uses the full history, even for a single PR's view.
+    let calibration = calibration::measure(&weeks);
     if let Some(target) = pull_request {
-        let matches: Vec<_> = weeks
-            .iter()
-            .flat_map(|week| &week.sample)
-            .filter(|pr| {
-                pr.url.trim_end_matches('/') == target.trim_end_matches('/')
-                    || target.parse::<u64>().ok() == Some(pr.number)
-            })
-            .map(|pr| pr.url.clone())
-            .collect();
-        let urls: std::collections::BTreeSet<_> = matches.iter().collect();
-        if urls.len() != 1 {
-            bail!("pull request is unknown or ambiguous in the Scoring samples: {target}");
-        }
-        let url = matches[0].clone();
-        if mine {
-            let scores = calibration::enter()?;
-            for week in &mut weeks {
-                if let Some(pr) = week.sample.iter_mut().find(|pr| pr.url == url) {
-                    pr.mine = Some(scores);
-                    config::replace(
-                        &checkpoint(&dir, week)?,
-                        &serde_json::to_string_pretty(week)?,
-                    )?;
-                    break;
-                }
-            }
-        }
-        // Compute calibration over the full history before filtering the view.
-        let calibration = calibration::measure(&weeks);
+        let url = resolve(&weeks, target)?;
         for week in &mut weeks {
             week.sample.retain(|pr| pr.url == url);
         }
         weeks.retain(|week| !week.sample.is_empty());
-        return display(&weeks, &calibration, json);
     }
-    display(&weeks, &calibration::measure(&weeks), json)
+    Ok(View { weeks, calibration })
+}
+
+fn resolve(weeks: &[Week], target: &str) -> Result<String> {
+    let urls: std::collections::BTreeSet<_> = weeks
+        .iter()
+        .flat_map(|week| &week.sample)
+        .filter(|pr| {
+            pr.url.trim_end_matches('/') == target.trim_end_matches('/')
+                || target.parse::<u64>().ok() == Some(pr.number)
+        })
+        .map(|pr| pr.url.clone())
+        .collect();
+    if urls.len() != 1 {
+        bail!("pull request is unknown or ambiguous in the Scoring samples: {target}");
+    }
+    Ok(urls.into_iter().next().unwrap())
+}
+
+pub(crate) fn save_mine(target: &str, scores: Vec<Score>) -> Result<()> {
+    write_mine(target, || calibration::HumanScores::new(scores))
+}
+
+fn write_mine(
+    target: &str,
+    enter: impl FnOnce() -> Result<calibration::HumanScores>,
+) -> Result<()> {
+    let _lock = lock()?.context("another Scoring run or human scoring session is running")?;
+    let dir = directory()?;
+    let mut weeks = read(&dir)?;
+    let url = resolve(&weeks, target)?;
+    let scores = enter()?;
+    for week in &mut weeks {
+        if let Some(pr) = week.sample.iter_mut().find(|pr| pr.url == url) {
+            pr.mine = Some(scores);
+            config::replace(
+                &checkpoint(&dir, week)?,
+                &serde_json::to_string_pretty(week)?,
+            )?;
+            break;
+        }
+    }
+    Ok(())
 }
 
 fn display(weeks: &[Week], calibration: &calibration::Calibration, json: bool) -> Result<String> {

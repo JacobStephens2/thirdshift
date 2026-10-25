@@ -2,6 +2,7 @@
 mod account_commands;
 mod accounts;
 mod auth;
+mod bug_origins;
 pub(crate) mod conversation;
 mod cronjobs;
 mod experiments;
@@ -19,6 +20,7 @@ mod dismiss;
 mod peek;
 mod resources;
 mod restart;
+mod scoring;
 mod stop;
 mod subscription;
 mod time;
@@ -70,6 +72,10 @@ struct PageRoute {
 }
 
 enum View {
+    BugOrigins,
+    SettleBugOrigin,
+    Scores,
+    HumanScores,
     Experiments,
     Experiment,
     ExperimentSession,
@@ -105,6 +111,34 @@ enum View {
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/bug-origins",
+        cli: &["thirdshift bug-origins --json"],
+        method: Method::GET,
+        view: View::BugOrigins,
+    },
+    PageRoute {
+        path: "/bug-origins/settle",
+        cli: &[
+            "thirdshift bug-origins 8 --confirm --json",
+            "thirdshift bug-origins 8 --correct 24 --json",
+            "thirdshift bug-origins 8 --none --json",
+        ],
+        method: Method::POST,
+        view: View::SettleBugOrigin,
+    },
+    PageRoute {
+        path: "/scores",
+        cli: &["thirdshift scores --json", "thirdshift scores 23 --json"],
+        method: Method::GET,
+        view: View::Scores,
+    },
+    PageRoute {
+        path: "/scores/mine",
+        cli: &["thirdshift scores 23 --mine"],
+        method: Method::POST,
+        view: View::HumanScores,
+    },
     PageRoute {
         path: "/experiments/proposals/{suite}/{task}/approve",
         cli: &["thirdshift evals approve suite task --json"],
@@ -435,6 +469,10 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::ExperimentSession, Method::GET) => get(experiments::session),
             (View::ApproveEvalTask, Method::POST) => post(experiments::approve),
             (View::CronJobs, Method::GET) => get(cronjobs::show),
+            (View::Scores, Method::GET) => get(scoring::show),
+            (View::HumanScores, Method::POST) => post(scoring::submit),
+            (View::BugOrigins, Method::GET) => get(bug_origins::show),
+            (View::SettleBugOrigin, Method::POST) => post(bug_origins::submit),
             (View::Resources, Method::GET) => get(resources::show),
             (View::Inbox, Method::GET) => get(move |query| inbox(cli, path, query)),
             (View::Inspect, Method::GET) => get(inspect),

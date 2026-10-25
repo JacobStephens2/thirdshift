@@ -53,6 +53,10 @@ aside { font-size: 12px; }
 button, select { font: inherit; background: var(--panel); color: var(--text); border: 1px solid var(--rule); border-radius: var(--radius); padding: 5px 8px; }
 form { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
 form label { min-width: 0; }
+.judgment-form { display: block; max-width: 520px; }
+.judgment-form fieldset { min-width: 0; margin: 12px 0; border: 1px solid var(--rule); border-radius: var(--radius); }
+.judgment-form label { display: block; margin: 8px 0; }
+.judgment-form textarea, .judgment-form input:not([type="hidden"]) { display: block; width: 100%; max-width: 100%; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--rule); border-radius: var(--radius); padding: 8px; }
 select { max-width: 100%; }
 .archive .commands { max-height: none; }
 body.peek-open { max-width: 1500px; display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); column-gap: 24px; }

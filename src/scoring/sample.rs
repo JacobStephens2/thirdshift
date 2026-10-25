@@ -19,13 +19,13 @@ pub(crate) struct PullRequest {
     pub model: String,
     pub effort: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) assessment: Option<super::grader::Assessment>,
+    pub assessment: Option<super::grader::Assessment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command_record: Option<std::path::PathBuf>,
     #[serde(default)]
     pub for_you: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub(super) mine: Option<super::calibration::HumanScores>,
+    pub mine: Option<super::calibration::HumanScores>,
 }
 
 impl PullRequest {
