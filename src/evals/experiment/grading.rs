@@ -1,16 +1,14 @@
 //! Combined Scores and paired suite Verdicts, kept with private Trial data.
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::workers::{Arm, TrialResult};
-use super::{Bar, Task};
-use crate::process::{self, Control, Interruption};
+use super::{Arm, Bar, Task, TrialResult};
+use crate::sandbox::code_grader::{self, Check};
 use crate::trial::{Outcome, Output};
 use crate::verdict::{self, Decision, TaskScores};
 
@@ -46,14 +44,12 @@ impl Score {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-pub(crate) struct Check {
-    pub command: Option<Vec<String>>,
-    pub passed: bool,
-    pub reason: String,
-}
-
-pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) -> Result<Score> {
+pub(super) fn score(
+    task: &Task,
+    repository: &Path,
+    output: &Output,
+    timeout: Duration,
+) -> Result<Score> {
     let mut checks = vec![
         Check {
             command: None,
@@ -72,67 +68,13 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
     ];
     if output.outcome != Outcome::Void && !task.manifest.checks.is_empty() {
         let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
-        let packet = tempfile::Builder::new().prefix("grader-").tempdir()?;
-        // Bind sources remain visible in /proc/self/mountinfo. A neutral
-        // destination alone cannot hide the original Trial's Arm pathname.
-        let snapshot = packet.path().join("repository");
-        copy_repository(repository, &snapshot)?;
-        for (source, name) in [
-            (&output.reports.standards, "standards.md"),
-            (&output.reports.spec, "spec.md"),
-        ] {
-            if let Some(source) = source {
-                fs::write(
-                    packet.path().join(name),
-                    super::model_grader::blind(&fs::read_to_string(source)?),
-                )?;
-            }
-        }
-        for command in &task.manifest.checks {
-            let mut child =
-                crate::sandbox::code_grader(&snapshot, packet.path(), command, Some(&caps))?;
-            let (launched, scope) = child.command_and_scope();
-            let result = process::output_until(
-                launched,
-                None,
-                Control {
-                    name: "code Grader",
-                    interruption: Interruption::Ordinary,
-                    stop: &|child| process::stop(child, &[libc::SIGTERM, libc::SIGKILL]),
-                },
-                Instant::now() + Duration::from_secs(bar.timeout_seconds),
-                &|| {
-                    if let Some(scope) = scope {
-                        scope.sample();
-                    }
-                    Ok(())
-                },
-            );
-            crate::interrupt::check()?;
-            if !result.as_ref().is_ok_and(|result| result.status.success())
-                && scope.is_some_and(crate::scope::Scope::oom_killed)
-            {
-                bail!("code Grader hit its memory cap; raise trial.memory_max to retry");
-            }
-            child.check_started(&result)?;
-            let (passed, reason) = match result {
-                Ok(result) => (
-                    result.status.success(),
-                    format!(
-                        "{}\n{}{}",
-                        result.status,
-                        String::from_utf8_lossy(&result.stdout),
-                        String::from_utf8_lossy(&result.stderr)
-                    ),
-                ),
-                Err(error) => (false, format!("{error:#}")),
-            };
-            checks.push(Check {
-                command: Some(command.clone()),
-                passed,
-                reason,
-            });
-        }
+        checks.extend(code_grader::execute(
+            repository,
+            &output.reports,
+            &task.manifest.checks,
+            timeout,
+            &caps,
+        )?);
     }
     Ok(Score {
         passed: checks.iter().all(|check| check.passed),
@@ -144,51 +86,6 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
         checks,
         rechecks: Vec::new(),
     })
-}
-
-fn copy_repository(source: &Path, destination: &Path) -> Result<()> {
-    fs::create_dir(destination)?;
-    for entry in fs::read_dir(source)? {
-        let entry = entry?;
-        let target = destination.join(entry.file_name());
-        let kind = entry.file_type()?;
-        if kind.is_dir() {
-            copy_repository(&entry.path(), &target)?;
-        } else if kind.is_symlink() {
-            std::os::unix::fs::symlink(fs::read_link(entry.path())?, &target)?;
-        } else if kind.is_file() {
-            fs::copy(entry.path(), target)?;
-        }
-        // Skip sockets, FIFOs, devices and other special files: Trial
-        // sessions leave them behind, and no check can use them once the
-        // Trial's servers are gone. Copying them would fail the whole
-        // Experiment over one Trial's ordinary leftovers.
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// Trial sessions leave sockets and FIFOs behind (dev servers, shell
-    /// fixtures). Copying one into the Grader snapshot must not fail the
-    /// whole Experiment over files no check can use once the Trial is gone.
-    #[test]
-    fn grader_snapshot_skips_special_files() {
-        let root = tempfile::TempDir::new().unwrap();
-        let source = root.path().join("repository");
-        fs::create_dir(&source).unwrap();
-        fs::write(source.join("main.rs"), "ok\n").unwrap();
-        let _socket = std::os::unix::net::UnixListener::bind(source.join("server.sock")).unwrap();
-        let destination = root.path().join("snapshot");
-        copy_repository(&source, &destination).unwrap();
-        assert_eq!(
-            fs::read_to_string(destination.join("main.rs")).unwrap(),
-            "ok\n"
-        );
-        assert!(!destination.join("server.sock").exists());
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]

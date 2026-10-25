@@ -2,15 +2,18 @@
 //! recording stays in the ordinary logs; private Eval data stays here.
 
 mod evidence;
+mod execution;
 mod grading;
 mod integrity;
-mod limits;
 mod model_grader;
 mod options;
+mod reading;
 mod rechecks;
 mod release;
 mod store;
 mod trace;
+mod trial_results;
+mod trial_sessions;
 mod usage;
 mod workers;
 
@@ -35,7 +38,7 @@ pub use options::{Options, parse};
 pub(crate) use rechecks::record as recheck;
 pub(crate) use rechecks::{Flip, Pending};
 pub(crate) use store::{State, View, read};
-pub(crate) use workers::{Arm, TrialResult, trial_key};
+pub(crate) use trial_results::{Arm, TrialResult, trial_key};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Bar {

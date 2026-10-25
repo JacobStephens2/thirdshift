@@ -56,24 +56,18 @@ pub(crate) fn run(request: Request<'_>) -> Result<()> {
         Some(launch) => launch.scoped_command(&invocation.args, workspace, caps)?,
         None => crate::scope::grader_command(binary, &invocation.args, workspace, caps)?,
     };
-    let mut interpretation = adapter.interpretation(workspace, prompt);
-    if let Some(launch) = &launch
-        && let Some((_, home)) = launch.env.iter().find(|(name, _)| name == "HOME")
-    {
-        interpretation.set_home(Path::new(home));
-    }
     launched
-        .command
+        .command()
         .stderr(fs::File::create(artifacts.join("stderr"))?);
     for (name, path) in environment {
-        launched.command.env(name, path);
+        launched.command().env(name, path);
     }
-    let scope = launched.scope;
-    fs::write(artifacts.join("scope"), scope.unit())?;
-    let ended = Recording::for_trial().run(
+    fs::write(artifacts.join("scope"), launched.unit())?;
+    let ended = record_session(
         kind,
+        &mut launched,
         choice,
-        &mut launched.command,
+        artifacts,
         Input {
             prompt,
             stdin: invocation.stdin.as_deref(),
@@ -81,26 +75,41 @@ pub(crate) fn run(request: Request<'_>) -> Result<()> {
             private: true,
             ..Default::default()
         },
-        &artifacts.join("stdout.jsonl"),
-        interpretation,
-    );
-    crate::interrupt::check()?;
-    let ended = ended.map_err(|error| {
-        // Preserve the shared stop signal so Scoring and Experiments apply
-        // their own pause policy. Other diagnostics stay in private artifacts.
-        if error.is::<super::limits::Reached>() {
-            error
-        } else if scope.oom_killed() {
-            anyhow::anyhow!("{kind} hit its memory cap ({}); see private Grader artifacts, and raise the trial.memory_max User config to retry", crate::scope::OOM_KILL_CAUSE)
-        } else {
-            anyhow::anyhow!("{kind} session failed; see private Grader artifacts")
-        }
-    })?;
+    )?;
     ensure!(
         ended.killed.is_empty(),
         "{kind} left unfinished background work"
     );
     Ok(())
+}
+
+/// Record the intact invocation and diagnose only suspicious completions.
+pub(crate) fn record_session(
+    kind: &str,
+    launched: &mut crate::scope::Launch,
+    choice: &Choice,
+    artifacts: &Path,
+    input: Input<'_>,
+) -> Result<crate::harness::interpretation::Ended> {
+    let ended = Recording::for_trial().run(
+        kind,
+        choice,
+        launched,
+        input,
+        &artifacts.join("stdout.jsonl"),
+    );
+    crate::interrupt::check()?;
+    ended.map_err(|error| {
+        // Preserve the shared stop signal so Scoring and Experiments apply
+        // their own pause policy. Other diagnostics stay in private artifacts.
+        if error.is::<super::limits::Reached>() {
+            error
+        } else if launched.oom_killed() {
+            anyhow::anyhow!("{kind} hit its memory cap ({}); see private Grader artifacts, and raise the trial.memory_max User config to retry", crate::scope::OOM_KILL_CAUSE)
+        } else {
+            anyhow::anyhow!("{kind} session failed; see private Grader artifacts")
+        }
+    })
 }
 
 /// Read a file the session was asked to write. Open it without following a

@@ -943,6 +943,26 @@ fn an_unlaunchable_passthrough_harness_is_a_void_trial() {
 }
 
 #[test]
+fn a_harness_the_shell_cannot_run_is_a_void_trial() {
+    // macOS runs a file it can't execute through /bin/sh, which exits 127.
+    use std::os::unix::fs::PermissionsExt;
+    let scenario = Scenario::new();
+    let request = request(&scenario);
+    let claude = scenario.path("bin/claude");
+    fs::remove_file(&claude).unwrap();
+    fs::write(&claude, "#!/bin/sh\nexit 127\n").unwrap();
+    fs::set_permissions(&claude, fs::Permissions::from_mode(0o755)).unwrap();
+    let result = scenario.run_with_env(
+        &["--trial", request.to_str().unwrap()],
+        &[("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(output["outcome"], "void", "{output}");
+    assert_eq!(output["void_cause"], "session_unavailable", "{output}");
+}
+
+#[test]
 fn an_unstartable_passthrough_harness_makes_a_trial_void() {
     use std::os::unix::fs::PermissionsExt;
     let scenario = Scenario::new();

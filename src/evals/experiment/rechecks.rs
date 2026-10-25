@@ -8,8 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use super::grading::{self, Conclusion, Verdict};
 use super::store::{State, Stored};
-use super::workers::{Arm, TrialResult};
-use super::{Bar, Task};
+use super::{Arm, Bar, Task, TrialResult};
 use crate::trial::Outcome;
 
 pub(super) type History = BTreeMap<String, Vec<Recheck>>;

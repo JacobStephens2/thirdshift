@@ -11,7 +11,7 @@ use super::PullRequest;
 use crate::config::scoring::Settings;
 use crate::harness::Choice;
 use crate::sandbox;
-use crate::session::recording::{Input, Recording};
+use crate::session::recording::{Input, Policy, Recording};
 use crate::{logs, prompt};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -126,23 +126,19 @@ pub(super) fn run(
     logs::session(crate::session::Logged::of(kind), &log);
     // Retained exports may consult the host's production history or launch
     // another CLI outside the sandbox. Scores need only the sandbox stream.
-    let mut interpretation = adapter.interpretation(packet, &prompt).without_retained();
-    if sandbox.is_some() {
-        interpretation.set_home(&output.path().join("home"));
-    }
     let ended = recording.run(
         &kind.token(),
         &choice,
         &mut command,
         Input {
             prompt: &prompt,
+            policy: Policy::StreamOnly,
             stdin: invocation.stdin.as_deref(),
             stop_at_limit: true,
             private: true,
             ..Default::default()
         },
         &log,
-        interpretation,
     );
     let ended = ended.map_err(|error| match &sandbox {
         Some(sandbox) => sandbox

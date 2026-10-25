@@ -520,13 +520,7 @@ impl Outside for OnMachine {
             }
             _ => (&self.harness, self.adapter),
         };
-        let mut interpretation = adapter.interpretation(&self.worktree, prompt);
-        if let Some(launch) = &self.sandbox
-            && let Some((_, home)) = launch.env.iter().find(|(name, _)| name == "HOME")
-        {
-            interpretation.set_home(Path::new(home));
-        }
-        let (mut invocation, interpretation) = match purpose {
+        let (mut invocation, policy) = match purpose {
             Purpose::Security | Purpose::SecurityPublishing | Purpose::SecurityReview => (
                 adapter.security_session(
                     harness,
@@ -534,12 +528,15 @@ impl Outside for OnMachine {
                     prompt,
                     matches!(purpose, Purpose::Security | Purpose::SecurityPublishing),
                 ),
-                interpretation.for_security(harness.model.as_deref()),
+                recording::Policy::Security,
             ),
-            Purpose::Ordinary => (adapter.session(harness, resume, prompt), interpretation),
+            Purpose::Ordinary => (
+                adapter.session(harness, resume, prompt),
+                recording::Policy::Ordinary,
+            ),
             Purpose::CodeReview => (
                 adapter.code_review_session(harness, resume, prompt),
-                interpretation,
+                recording::Policy::Ordinary,
             ),
         };
         // A sandboxed session is always a Trial's: it runs with the Harness's
@@ -587,11 +584,11 @@ impl Outside for OnMachine {
             &mut command,
             recording::Input {
                 prompt,
+                policy,
                 stdin: invocation.stdin.as_deref(),
                 ..Default::default()
             },
             log,
-            interpretation,
         );
         drop(github_config);
         ended
@@ -743,8 +740,7 @@ mod tests {
                 "implement", &Choice::default(),
                 Command::new("/bin/sh").args(["-c", &format!(
                     "echo '{{\"type\":\"assistant\",\"message\":{{\"model\":\"{marker}-model\",\"content\":[]}}}}'"
-                )]), recording::Input::default(), &log,
-                crate::harness::Harness::Claude.adapter().interpretation(root.path(), ""),
+                )]).current_dir(root.path()), recording::Input::default(), &log,
             ).unwrap();
             let reports = ReviewReports::new(root.path()).unwrap();
             for axis in ["standards", "spec"] {

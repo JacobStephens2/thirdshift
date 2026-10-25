@@ -16,6 +16,95 @@ fn shell(script: &str) -> Command {
 }
 
 #[test]
+fn captured_scope_retains_live_kernel_evidence_after_events_disappear() {
+    for counter in ["oom_kill", "oom_group_kill"] {
+        let fixture = crate::scope::testing::Fixture::new();
+        let mut invocation = fixture.launch(shell(&format!(
+            "echo '{counter} 1' > \"$EVENTS\"; {}",
+            crate::scope::testing::REMOVE_OBSERVED_EVENTS
+        )));
+        let result = output(
+            &mut invocation,
+            None,
+            Control {
+                name: "scoped fixture",
+                interruption: Interruption::Ordinary,
+                stop: &stop_fixture,
+            },
+        )
+        .unwrap();
+        assert_eq!(result.status.code(), Some(137), "{result:?}");
+        assert!(!fixture.path("events").exists());
+        assert!(invocation.oom_killed());
+        assert_eq!(fixture.journal_reads(), 0);
+    }
+}
+
+#[test]
+fn scoped_spawn_failure_preserves_the_error_without_observing_an_unstarted_scope() {
+    let fixture = crate::scope::testing::Fixture::new();
+    fs::write(fixture.path("events"), "oom_kill 1").unwrap();
+    let mut invocation = fixture.launch(Command::new("/thirdshift-no-such-command-fixture"));
+    let error = output(
+        &mut invocation,
+        None,
+        Control {
+            name: "missing scoped fixture",
+            interruption: Interruption::Ordinary,
+            stop: &stop_fixture,
+        },
+    )
+    .unwrap_err();
+    assert!(error.is::<NotStarted>());
+    assert_eq!(error.to_string(), "could not run missing scoped fixture");
+    assert!(!fixture.path("observed").exists());
+    assert_eq!(fixture.journal_reads(), 0);
+}
+
+#[test]
+fn scoped_timeout_and_check_failure_keep_final_evidence_and_original_errors() {
+    for timeout in [true, false] {
+        let fixture = crate::scope::testing::Fixture::new();
+        // An unreadable observation must neither abort execution nor mask the
+        // deadline/check error. Cleanup replaces it with kernel evidence.
+        fs::create_dir(fixture.path("events")).unwrap();
+        let mut invocation = fixture.launch(shell("exec sleep 5"));
+        let calls = std::cell::Cell::new(0);
+        let stop = |child: &mut Child| {
+            stop_fixture(child);
+            fs::remove_dir(fixture.path("events")).unwrap();
+            fs::write(fixture.path("events"), "oom_kill 1").unwrap();
+        };
+        let result = output_until(
+            &mut invocation,
+            None,
+            Control {
+                name: "scoped fixture",
+                interruption: Interruption::Ordinary,
+                stop: &stop,
+            },
+            Instant::now() + Duration::from_millis(100),
+            &|| {
+                calls.set(calls.get() + 1);
+                if !timeout && calls.get() == 2 {
+                    bail!("plan limit reached");
+                }
+                Ok(())
+            },
+        );
+        let error = result.unwrap_err();
+        if timeout {
+            assert!(error.is::<TimedOut>(), "{error:#}");
+        } else {
+            assert_eq!(error.to_string(), "plan limit reached");
+            assert_eq!(calls.get(), 2, "cleanup reran the fallible check");
+        }
+        assert!(invocation.oom_killed());
+        assert_eq!(fixture.journal_reads(), 0);
+    }
+}
+
+#[test]
 fn captured_completion_preserves_both_byte_streams_and_nonzero_status() {
     let result = output(
         &mut shell("printf '\\377out\\000\\n'; printf '\\376err\\000\\n' >&2; exit 7"),
@@ -210,8 +299,12 @@ fn consumer_log_failure_cleans_up_even_with_a_blocked_prompt_writer() {
 #[test]
 fn prompt_failure_retains_state_and_precedes_a_consumer_failure_during_cleanup() {
     let child = RecordedProcess::new();
+    let scope = crate::scope::testing::Fixture::new();
+    let events = scope.path("events");
+    let mut invocation = scope
+        .launch(child.command("echo $$ > \"$PID_FILE\"; printf ready; exec 0<&-; exec sleep 5"));
     let result = streaming(
-        &mut child.command("echo $$ > \"$PID_FILE\"; printf ready; exec 0<&-; exec sleep 5"),
+        &mut invocation,
         Some("p".repeat(1024 * 1024).as_bytes()),
         Control {
             name: "fixture",
@@ -220,8 +313,11 @@ fn prompt_failure_retains_state_and_precedes_a_consumer_failure_during_cleanup()
         },
         None,
         b"initial".to_vec(),
-        |mut pipe, state| {
+        move |mut pipe, state| {
             pipe.read_to_end(state)?;
+            // EOF arrives during cleanup: the final observation must wait
+            // for this consumer to finish, retaining its normal recovery.
+            fs::write(events, "oom_kill 1")?;
             bail!("later consumer failure")
         },
     )
@@ -235,6 +331,8 @@ fn prompt_failure_retains_state_and_precedes_a_consumer_failure_during_cleanup()
         std::io::ErrorKind::BrokenPipe
     );
     child.assert_stopped();
+    assert!(invocation.oom_killed());
+    assert_eq!(scope.journal_reads(), 0);
 }
 
 #[test]
@@ -438,26 +536,32 @@ fn assert_unread_prompt_interruptible(test_name: &str, captured: bool) {
         let mut command =
             owned.command("echo $$ > \"$PID_FILE\"; touch \"$READY_FILE\"; exec sleep 5");
         command.env("READY_FILE", Path::new(&dir).join("ready"));
+        let scope = crate::scope::testing::Fixture::new();
+        let mut invocation = scope.launch(command);
+        let stop = |child: &mut Child| {
+            stop_fixture(child);
+            fs::write(scope.path("events"), "oom_kill 1").unwrap();
+        };
         let prompt = "p".repeat(1024 * 1024);
         let result = if captured {
             output(
-                &mut command,
+                &mut invocation,
                 Some(prompt.as_bytes()),
                 Control {
                     name: "fixture",
                     interruption: Interruption::Ordinary,
-                    stop: &stop_fixture,
+                    stop: &stop,
                 },
             )
             .map(|_| ())
         } else {
             streaming(
-                &mut command,
+                &mut invocation,
                 Some(prompt.as_bytes()),
                 Control {
                     name: "fixture",
                     interruption: Interruption::Ordinary,
-                    stop: &stop_fixture,
+                    stop: &stop,
                 },
                 None,
                 Vec::new(),
@@ -470,6 +574,8 @@ fn assert_unread_prompt_interruptible(test_name: &str, captured: bool) {
         };
         assert_eq!(format!("{:#}", result.unwrap_err()), "interrupted");
         owned.assert_stopped();
+        assert!(invocation.oom_killed());
+        assert_eq!(scope.journal_reads(), 0);
         return;
     }
 
@@ -809,15 +915,18 @@ fn captured_setup_and_worker_faults_stop_reap_and_join_before_return() {
         "wait-panic",
     ] {
         let owned = RecordedProcess::new();
+        let scope = crate::scope::testing::Fixture::new();
         let mut command = shell("exec sleep 0.2");
         command.env("THIRDSHIFT_EXECUTION_TEST_FAULT", fault);
+        let mut invocation = scope.launch(command);
         let stop = |child: &mut Child| {
             fs::write(owned.0.path().join("pid"), child.id().to_string()).unwrap();
             stop_fixture(child);
+            fs::write(scope.path("events"), "oom_group_kill 1").unwrap();
         };
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             output(
-                &mut command,
+                &mut invocation,
                 Some(b"prompt"),
                 Control {
                     name: "fixture",
@@ -831,6 +940,11 @@ fn captured_setup_and_worker_faults_stop_reap_and_join_before_return() {
             "{fault} returned success"
         );
         owned.assert_stopped();
+        assert!(
+            invocation.oom_killed(),
+            "{fault} lost the final observation"
+        );
+        assert_eq!(scope.journal_reads(), 0);
     }
 }
 

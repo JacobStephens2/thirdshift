@@ -1,4 +1,4 @@
-//! The current Experiment watches version-1 Trial logs itself, including
+//! Trial execution watches version-1 Trial logs itself, including
 //! when an Arm build predates live limit detection.
 
 use std::fs::File;

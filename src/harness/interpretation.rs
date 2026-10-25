@@ -203,6 +203,16 @@ impl fmt::Display for SessionFailure {
 
 impl std::error::Error for SessionFailure {}
 
+impl SessionFailure {
+    /// The Harness never ran: before any turn, it exited with the shell's
+    /// "cannot execute" (126) or "not found" (127). macOS runs a file it can't
+    /// execute through `/bin/sh`, which reports either, where Linux refuses to
+    /// spawn it at all.
+    pub fn never_launched(&self) -> bool {
+        self.before_first_turn && matches!(self.status.code(), Some(126 | 127))
+    }
+}
+
 impl Failure {
     fn session_error(self, cli: &'static str) -> anyhow::Error {
         match self {

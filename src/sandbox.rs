@@ -31,9 +31,6 @@
 
 use std::ffi::OsString;
 use std::fs;
-use std::io::{Read, Seek};
-use std::os::fd::AsRawFd;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
@@ -44,6 +41,8 @@ use crate::harness::Harness;
 use crate::proxy;
 use crate::resend_key::Credentials;
 use crate::{config, interrupt};
+
+pub(crate) mod code_grader;
 
 /// The environment variable carrying an OpenCode Trial's provider key.
 pub(crate) const OPENCODE_API_KEY_ENV: &str = "THIRDSHIFT_OPENCODE_API_KEY";
@@ -197,187 +196,6 @@ pub(crate) fn disabled() -> bool {
     std::env::var_os("THIRDSHIFT_TRIAL_NO_SANDBOX").is_some_and(|flag| !flag.is_empty())
 }
 
-/// Code Graders need no login or provider. Bind only their report packet and
-/// prepared repository, at neutral paths, and leave their network offline.
-/// Production Graders supply their caps; standalone sandbox tests omit them.
-pub(crate) fn code_grader(
-    repository: &Path,
-    packet: &Path,
-    args: &[String],
-    caps: Option<&crate::scope::Caps>,
-) -> Result<CodeGrader> {
-    let packet_path = if disabled() {
-        packet
-    } else {
-        Path::new("/sandbox/packet")
-    };
-    let mut packet_env = vec![(OsString::from("THIRDSHIFT_TRIAL_LOG"), OsString::new())];
-    for (name, file) in [
-        ("THIRDSHIFT_TRIAL_STANDARDS_REPORT", "standards.md"),
-        ("THIRDSHIFT_TRIAL_SPEC_REPORT", "spec.md"),
-    ] {
-        packet_env.push((
-            name.into(),
-            if packet.join(file).is_file() {
-                packet_path.join(file).into_os_string()
-            } else {
-                OsString::new()
-            },
-        ));
-    }
-    // An unlinked status file stays outside the packet and the sandbox. Only
-    // bwrap writes it; the check's stdout and stderr cannot claim startup.
-    let status = (!disabled()).then(tempfile::tempfile).transpose()?;
-    let (mut command, scope) = if disabled() {
-        if let Some(caps) = caps {
-            let launched =
-                crate::scope::grader_command(Path::new(&args[0]), &args[1..], repository, caps)?;
-            (launched.command, Some(launched.scope))
-        } else {
-            let mut command = Command::new(&args[0]);
-            command.args(&args[1..]);
-            (command, None)
-        }
-    } else {
-        if find_bwrap().is_none() {
-            return Err(anyhow::Error::new(Unavailable {
-                diagnostic: "bwrap is not on PATH".into(),
-            }));
-        }
-        let mut binds = Binds::default();
-        binds.read_write(repository, Path::new("/sandbox/repository"));
-        binds.read_write(packet, Path::new("/sandbox/packet"));
-        // Spec-review repositories have a local origin whose absolute host
-        // path identifies the Arm. Keep Git usable without exposing that path.
-        // The snapshot holds Trial-controlled contents: a symlinked `.git`
-        // or config would redirect this host-side rewrite outside it, so
-        // only touch a real directory holding a real (or missing) config.
-        let git_dir = repository.join(".git");
-        let git_config = git_dir.join("config");
-        let confined = fs::symlink_metadata(&git_dir).is_ok_and(|kind| kind.is_dir())
-            && match fs::symlink_metadata(&git_config) {
-                Ok(kind) => kind.is_file(),
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
-                Err(_) => false,
-            };
-        if confined && git_dir.join("eval-origin.git").is_dir() {
-            crate::git::Git::new(repository).run(&[
-                "config",
-                "--file",
-                git_config.to_str().context("invalid Grader config path")?,
-                "remote.origin.url",
-                "/sandbox/repository/.git/eval-origin.git",
-            ])?;
-        }
-        let mut environment = Environment::default();
-        toolchains_into(&config::home()?, &mut binds, &mut environment);
-        environment.set_str("HOME", "/sandbox/home");
-        let environment = environment.finish(&[]);
-        let mut argv = base_argv();
-        // Clear only the sandbox's environment. The outer memory scope
-        // still needs its host environment to reach the systemd user bus.
-        argv.push("--clearenv".into());
-        for (name, value) in environment.iter().chain(&packet_env) {
-            argv.extend([OsString::from("--setenv"), name.clone(), value.clone()]);
-        }
-        binds.argv(&mut argv);
-        let status_fd = status
-            .as_ref()
-            .expect("sandbox has a status file")
-            .as_raw_fd();
-        argv.extend([
-            OsString::from("--json-status-fd"),
-            status_fd.to_string().into(),
-        ]);
-        argv.extend(
-            ["--tmpfs", "/sandbox/home", "--chdir", "/sandbox/repository"].map(OsString::from),
-        );
-        let program = Path::new(&args[0]);
-        let program = program
-            .strip_prefix(repository)
-            .map(|relative| Path::new("/sandbox/repository").join(relative))
-            .unwrap_or_else(|_| program.to_owned());
-        // The shell distinguishes a bad check command from a bwrap startup
-        // error: exec failure here is an ordinary failed mechanical check.
-        let launch = Launch {
-            argv,
-            env: Vec::new(),
-            program,
-            prefix: [SHELL, "-c", "exec \"$0\" \"$@\""]
-                .map(OsString::from)
-                .to_vec(),
-            stderr: None,
-        };
-        let (mut command, scope) = if let Some(caps) = caps {
-            let launched = launch.scoped_command(&args[1..], repository, caps)?;
-            (launched.command, Some(launched.scope))
-        } else {
-            (launch.command(&args[1..])?, None)
-        };
-        // SAFETY: fcntl is async-signal-safe. The status file remains owned
-        // by CodeGrader until its child has ended; no allocation occurs here.
-        unsafe {
-            command.pre_exec(move || {
-                if libc::fcntl(status_fd, libc::F_SETFD, 0) == -1 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
-        (command, scope)
-    };
-    if disabled() {
-        command.envs(packet_env);
-    }
-    command.current_dir(repository);
-    Ok(CodeGrader {
-        command,
-        status,
-        scope,
-    })
-}
-
-/// A Code Grader's command and launcher-owned startup evidence travel together.
-pub(crate) struct CodeGrader {
-    command: Command,
-    status: Option<fs::File>,
-    scope: Option<crate::scope::Scope>,
-}
-
-impl CodeGrader {
-    pub(crate) fn command_and_scope(&mut self) -> (&mut Command, Option<&crate::scope::Scope>) {
-        (&mut self.command, self.scope.as_ref())
-    }
-
-    /// Only the launcher's status decides whether a check started. A check
-    /// can fail normally even when its own diagnostic mentions bwrap.
-    pub(crate) fn check_started(&self, result: &Result<std::process::Output>) -> Result<()> {
-        let Some(status) = &self.status else {
-            return Ok(());
-        };
-        let diagnostic = match result {
-            Err(error) if error.is::<crate::process::NotStarted>() => format!("{error:#}"),
-            Ok(output) => {
-                let mut status = status.try_clone()?;
-                status.rewind()?;
-                let mut records = String::new();
-                status.read_to_string(&mut records)?;
-                let started = records.lines().any(|line| {
-                    serde_json::from_str::<serde_json::Value>(line)
-                        .ok()
-                        .is_some_and(|record| record["child-pid"].as_u64().is_some())
-                });
-                if started {
-                    return Ok(());
-                }
-                String::from_utf8_lossy(&output.stderr).into_owned()
-            }
-            _ => return Ok(()),
-        };
-        Err(anyhow::Error::new(Unavailable { diagnostic }))
-    }
-}
-
 impl Prepared {
     /// What a session runner holds to launch inside the sandbox. The guards
     /// stay with the `Prepared` they came from, which outlives the sessions.
@@ -456,7 +274,7 @@ impl Launch {
     ) -> Result<crate::scope::Launch> {
         let program = find_bwrap().unwrap_or_else(|| PathBuf::from("bwrap"));
         let mut launched = crate::scope::grader_command(&program, &[], directory, caps)?;
-        self.configure_command(&mut launched.command, args)?;
+        self.configure_command(launched.command(), args)?;
         Ok(launched)
     }
 
@@ -1306,39 +1124,6 @@ mod tests {
         }
     }
 
-    /// A Trial-controlled `.git` symlink must not redirect the Grader's
-    /// origin-URL rewrite to a git config outside its snapshot.
-    #[test]
-    fn code_grader_git_rewrite_stays_inside_its_snapshot() {
-        if !bwrap_or_skip("Grader git confinement") {
-            return;
-        }
-        let root = tempfile::TempDir::new().unwrap();
-        // An outside directory shaped like a prepared repository's `.git`.
-        let outside = root.path().join("outside.git");
-        fs::create_dir_all(outside.join("eval-origin.git")).unwrap();
-        let config = outside.join("config");
-        fs::write(&config, "[remote \"origin\"]\n\turl = /experiments/real\n").unwrap();
-        // The snapshot's `.git` is a symlink planted in Trial-controlled content.
-        let snapshot = root.path().join("snapshot");
-        fs::create_dir_all(&snapshot).unwrap();
-        std::os::unix::fs::symlink(&outside, snapshot.join(".git")).unwrap();
-        let packet = root.path().join("packet");
-        fs::create_dir_all(&packet).unwrap();
-        code_grader(
-            &snapshot,
-            &packet,
-            &["sh".into(), "-c".into(), "true".into()],
-            None,
-        )
-        .unwrap();
-        assert_eq!(
-            fs::read_to_string(&config).unwrap(),
-            "[remote \"origin\"]\n\turl = /experiments/real\n",
-            "grader rewrote a git config outside its snapshot",
-        );
-    }
-
     /// Run the sandbox's Harness with `script` as its body, in the bound
     /// repository, and return what the script printed.
     fn run_script(prepared: &Prepared, repository: &Path) -> std::process::Output {
@@ -2041,7 +1826,9 @@ mod tests {
     #[test]
     fn tool_bin_dirs_names_only_bound_roots() {
         let root = tempfile::TempDir::new().unwrap();
-        let toolchain = root.path().join("toolchain");
+        // Tools are matched by canonical path; macOS temp dirs sit behind
+        // the /var -> /private/var symlink.
+        let toolchain = root.path().canonicalize().unwrap().join("toolchain");
         let deep = toolchain.join("toolchains/stable/bin");
         fs::create_dir_all(&deep).unwrap();
         let tool = deep.join("cargo");
