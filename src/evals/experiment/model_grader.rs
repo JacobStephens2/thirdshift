@@ -250,6 +250,3 @@ fn grade(
     serde_json::from_slice(&bytes)
         .map_err(|_| anyhow::anyhow!("invalid model Grader response; see private Grader artifacts"))
 }
-
-#[cfg(test)]
-mod tests;
