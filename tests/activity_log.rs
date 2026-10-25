@@ -222,7 +222,7 @@ fn an_unchanged_skip_updates_last_fired_without_adding_activity_lines() {
     let mut previous = None;
     for _ in 0..2 {
         let before = Utc::now();
-        let skipped = scenario.run(&["pickup"]);
+        let skipped = run_in_zone(&scenario, &["pickup"]);
         let after = Utc::now();
         assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
         assert!(skipped.stderr.is_empty());
