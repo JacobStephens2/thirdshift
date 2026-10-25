@@ -44,7 +44,12 @@ impl Score {
     }
 }
 
-pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) -> Result<Score> {
+pub(super) fn score(
+    task: &Task,
+    repository: &Path,
+    output: &Output,
+    timeout: Duration,
+) -> Result<Score> {
     let mut checks = vec![
         Check {
             command: None,
@@ -67,7 +72,7 @@ pub(super) fn score(task: &Task, repository: &Path, output: &Output, bar: &Bar) 
             repository,
             &output.reports,
             &task.manifest.checks,
-            Duration::from_secs(bar.timeout_seconds),
+            timeout,
             &caps,
         )?);
     }
