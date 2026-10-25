@@ -1,6 +1,9 @@
 //! The Console's public seam: the binary, fixture records and HTTP.
 mod support;
 
+#[path = "console/resources.rs"]
+mod resources;
+
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -18,6 +21,12 @@ mod accounts;
 #[path = "console/look.rs"]
 mod look;
 
+#[path = "console/inbox.rs"]
+mod inbox;
+
+#[path = "console/github.rs"]
+mod github;
+
 #[path = "console/codex_patches.rs"]
 mod codex_patches;
 
@@ -30,9 +39,23 @@ mod spans;
 #[path = "console/metrics.rs"]
 mod metrics;
 
+#[cfg(target_os = "linux")]
+#[path = "console/idle.rs"]
+mod idle;
+
+#[cfg(unix)]
+#[path = "console/watching.rs"]
+mod watching;
+
 #[cfg(unix)]
 #[path = "console/cronjobs.rs"]
 mod cronjobs;
+
+#[path = "console/experiments.rs"]
+mod experiments;
+
+#[path = "console/scoring.rs"]
+mod scoring;
 
 struct Console {
     child: Child,
@@ -135,6 +158,18 @@ impl Drop for Console {
         let _ = self.child.kill();
         let _ = self.child.wait();
         self.reader.take().unwrap().join().unwrap();
+    }
+}
+
+fn sse_event(stream: &mut impl BufRead) -> String {
+    let mut message = String::new();
+    loop {
+        let mut line = String::new();
+        assert!(stream.read_line(&mut line).unwrap() > 0, "stream closed");
+        if line.trim().is_empty() && !message.is_empty() {
+            return message;
+        }
+        message.push_str(&line);
     }
 }
 
@@ -373,7 +408,7 @@ fn time_pages_name_the_command_kind_without_repeating_it_for_commands_without_is
         let html = console.get(page).text().unwrap();
         for heading in [
             "Pickup run · acme/widgets#7",
-            "Run · acme/widgets#7",
+            "Ticket run · acme/widgets#7",
             "Security run on acme/widgets",
             "Spec run · acme/widgets#9",
         ] {
@@ -384,6 +419,90 @@ fn time_pages_name_the_command_kind_without_repeating_it_for_commands_without_is
         }
         assert!(!html.contains("Security run · Security run"));
     }
+}
+
+#[test]
+fn stages_groups_exact_spec_attempts_by_owner_start_and_keeps_dispatches() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    for (number, kind, started, parent) in [
+        (1, "Spec run", "2026-01-01T01:00:00Z", None),
+        (2, "Run", "2026-01-01T05:00:00Z", Some(1)),
+        (3, "Run", "2026-01-01T03:00:00Z", Some(1)),
+        (4, "Spec run", "2026-01-01T02:00:00Z", None),
+        (5, "Run", "2026-01-01T04:00:00Z", Some(4)),
+        (6, "Run", "unknown", None),
+        (8, "Run", "2026-01-01T03:30:00Z", Some(4)),
+        (9, "Run", "unknown", Some(4)),
+        (10, "Run", "2026-01-01T04:00:00Z", Some(4)),
+        (12, "Run", "2026-01-01T05:30:00Z", Some(11)),
+        (13, "Run", "2026-01-01T06:00:00Z", Some(11)),
+    ] {
+        let mut value = record(home.path(), number, Some("merged"), 0);
+        value["kind"] = json!(kind);
+        value["started_at"] = json!(started);
+        if kind == "Spec run" {
+            value["issue"]["number"] = json!(99);
+        }
+        if let Some(parent) = parent {
+            value["parent_record"] = json!(home.path().join(format!(
+                ".thirdshift/logs/acme/widgets/commands/issue/{parent}-fixture.command.json"
+            )));
+            if parent == 11 {
+                value["parent_dispatch"] = json!("https://github.com/acme/widgets/issues/99");
+            }
+        }
+        write_record(home.path(), number, &value);
+    }
+    let mut pickup = record(home.path(), 11, Some("merged"), 0);
+    let mut dispatched = pickup.clone();
+    dispatched["name"] = json!("dispatched-spec");
+    dispatched["issue"]["number"] = json!(99);
+    dispatched["issue"]["url"] = json!("https://github.com/acme/widgets/issues/99");
+    dispatched["started_at"] = json!("2026-01-01T00:10:00Z");
+    pickup["kind"] = json!("Pickup run");
+    pickup["issue"] = Value::Null;
+    pickup["started_at"] = json!("2026-01-01T00:00:00Z");
+    pickup["dispatched"] = json!([dispatched]);
+    write_record(home.path(), 11, &pickup);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/stages").text().unwrap();
+    assert_eq!(html.matches("class=\"stage-grid\"").count(), 1, "{html}");
+    assert_eq!(html.matches("scope=\"colgroup\"").count(), 5, "{html}");
+    let columns: Vec<_> = html
+        .match_indices("data-command=\"")
+        .map(|(index, _)| html[index..].split('"').nth(1).unwrap().to_owned())
+        .collect();
+    let numbers: Vec<_> = columns
+        .iter()
+        .map(|column| {
+            column
+                .rsplit('/')
+                .next()
+                .unwrap()
+                .split('-')
+                .next()
+                .unwrap()
+        })
+        .collect();
+    assert_eq!(
+        numbers,
+        [
+            "4", "10", "5", "8", "9", "1", "2", "3", "11", "13", "12", "11", "6"
+        ]
+    );
+    assert_eq!(
+        columns
+            .iter()
+            .collect::<std::collections::BTreeSet<_>>()
+            .len(),
+        13
+    );
+    assert!(html.contains("Dispatched by Pickup run on acme/widgets"));
+    assert!(
+        html.contains("Ticket of Spec run · acme/widgets#99"),
+        "{html}"
+    );
 }
 
 #[test]
@@ -447,6 +566,86 @@ fn time_pages_pair_with_all_status_stages_and_repository_usual_ranges() {
 }
 
 #[test]
+fn stages_orders_known_rows_by_run_progression_then_unknown_names() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    for (index, names) in [
+        vec!["z legacy stage", "A future stage"],
+        vec![
+            "Security audit",
+            "Security reproduction",
+            "Security fix publishing",
+            "Security close check",
+            "dispatched Run",
+            "dispatched Spec run",
+        ],
+        vec!["Architecture review", "Tickets", "Spec review"],
+        vec![
+            "implement",
+            "Resume",
+            "Security review",
+            "pull request",
+            "CI watch",
+            "Repair",
+            "CI watch",
+            "Self-merge",
+            "cleanup",
+        ],
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let number = index as u64 + 1;
+        let mut value = record(home.path(), number, Some("merged"), 0);
+        value["stages"] = names
+            .into_iter()
+            .map(|name| json!({"name": name, "began_at": value["started_at"], "session_log": null}))
+            .collect();
+        write_record(home.path(), number, &value);
+    }
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    for page in ["/stages", "/?page=stages"] {
+        let html = console.get(page).text().unwrap();
+        assert_eq!(html.matches("<tbody>").count(), 1, "{html}");
+        for table in html.split("<tbody>").skip(1) {
+            let names: Vec<_> = table
+                .split("</tbody>")
+                .next()
+                .unwrap()
+                .split("<th scope=\"row\">")
+                .skip(1)
+                .map(|row| row.split("<br>").next().unwrap())
+                .collect();
+            assert_eq!(
+                names,
+                [
+                    "implement",
+                    "Resume",
+                    "Security review",
+                    "pull request",
+                    "CI watch",
+                    "Repair",
+                    "Self-merge",
+                    "cleanup",
+                    "Architecture review",
+                    "Tickets",
+                    "Spec review",
+                    "Security audit",
+                    "Security reproduction",
+                    "Security fix publishing",
+                    "Security close check",
+                    "dispatched Ticket run",
+                    "dispatched Spec run",
+                    "A future stage",
+                    "z legacy stage",
+                ],
+                "{page}"
+            );
+        }
+    }
+}
+
+#[test]
 #[cfg(target_os = "linux")]
 fn stages_distinguishes_dispatch_from_insufficient_usual_range_samples() {
     let home = tempfile::tempdir().unwrap();
@@ -480,19 +679,17 @@ fn stages_distinguishes_dispatch_from_insufficient_usual_range_samples() {
     }
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get("/?page=stages").text().unwrap();
-    for name in ["dispatched Run", "dispatched Spec run"] {
+    for name in ["dispatched Ticket run", "dispatched Spec run"] {
         let row = html
             .split("<tr>")
             .find(|row| row.starts_with(&format!("<th scope=\"row\">{name}<br>")))
             .unwrap();
         assert!(row.contains("Usual range: —</span>"), "{row}");
-        assert!(row.contains("class=\"running-stage\""), "{row}");
+        assert!(row.contains("class=\"running-stage "), "{row}");
         assert!(row.contains("Running · 1 min"), "{row}");
         assert!(row.contains("Not reached · —"), "{row}");
     }
-    assert!(
-        html.contains("implement<br><span class=\"usual\">Usual range: Not enough samples</span>")
-    );
+    assert!(html.contains("Usual range: Not enough samples</span>"));
 }
 
 #[test]
@@ -618,6 +815,79 @@ fn peek_and_full_logs_use_the_exact_selected_command_and_share_show_details() {
     let html = console.get("/?page=history").text().unwrap();
     assert!(html.contains("id=\"peek\" hidden"));
     assert!(html.contains("7-old.command.json"));
+}
+
+#[test]
+fn ready_dispatches_leave_ready_for_review_and_are_shown_at_most_once() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    // Pickup run 1 dispatched a ready Run on issue 7, replaced by record 2;
+    // Pickup run 3 dispatched a ready Run on issue 9, older than inbox.days.
+    for (file, issue, hours) in [(1, 7, 2), (3, 9, 8 * 24 + 1)] {
+        let ended = (chrono::Local::now() - chrono::Duration::hours(hours)).to_rfc3339();
+        let mut outer = record(home.path(), file, Some("ready for review"), 0);
+        outer["kind"] = json!("Pickup run");
+        outer["name"] = json!("pickup-fixture");
+        outer["issue"] = Value::Null;
+        outer["pull_request"] = Value::Null;
+        outer["started_at"] = json!(ended);
+        outer["ended_at"] = json!(ended);
+        let mut dispatched = record(home.path(), file, Some("ready for review"), 0);
+        dispatched["kind"] = json!("Run");
+        dispatched["name"] = json!(format!("acme/widgets#{issue}"));
+        dispatched["issue"]["number"] = json!(issue);
+        dispatched["started_at"] = json!(ended);
+        dispatched["ended_at"] = json!(ended);
+        outer["dispatched"] = json!([dispatched]);
+        write_record(home.path(), file, &outer);
+    }
+    let mut later = record(home.path(), 2, Some("merged"), 0);
+    later["issue"]["number"] = json!(7);
+    write_record(home.path(), 2, &later);
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let groups = |flags: &[&str]| {
+        let status = Command::new(binary)
+            .args(flags)
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+        status["commands"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| {
+                (
+                    row["kind"].as_str().unwrap().to_owned(),
+                    row["issue"]["number"].as_u64(),
+                    row["group"].as_str().unwrap().to_owned(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let row = |kind: &str, issue: Option<u64>, group: &str| (kind.into(), issue, group.into());
+    let current = [
+        row("Spec run", Some(7), "done"),
+        row("Pickup run", None, "done"),
+        row("Run", Some(7), "done"),
+    ];
+    assert_eq!(groups(&["status", "--json"]), current);
+    let mut all = current.to_vec();
+    all.extend([
+        row("Pickup run", None, "history"),
+        row("Run", Some(9), "history"),
+    ]);
+    assert_eq!(groups(&["status", "--all", "--json"]), all);
+    let console = Console::start(binary, home.path());
+    let html = console.get("/").text().unwrap();
+    let folder = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    for (file, issue, shown) in [(1, 7, 1), (3, 9, 0)] {
+        let path = folder.join(format!("{file}-fixture.command.json"));
+        let row = format!("data-command=\"{}::acme/widgets#{issue}\"", path.display());
+        assert_eq!(html.matches(&row).count(), shown, "{html}");
+    }
 }
 
 #[test]
@@ -901,6 +1171,67 @@ fn log_stream_starts_at_the_byte_offset_and_sends_only_appended_html() {
         "{events}"
     );
     assert!(events.contains("\"done\":true"));
+}
+
+#[test]
+fn a_log_buffered_across_several_batches_streams_every_byte_without_another_change() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 81, Some("merged"), 0);
+    // More than three 256 KiB batch budgets, all written before the reader opens.
+    let log: String = (0..40_000)
+        .map(|line| format!("buffered line {line:06}\n"))
+        .collect();
+    assert!(log.len() > 3 * 256 * 1024);
+    fs::write(
+        home.path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue/81-fixture.log"),
+        &log,
+    )
+    .unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let link = console.log_link("81-fixture.log");
+    let events = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .unwrap()
+        .get(format!("{}{link}/stream/0", console.address))
+        .send()
+        .unwrap()
+        .text()
+        .expect("the stream ends after its final batch without another change");
+    let batches: Vec<Value> = events
+        .split("\n\n")
+        .filter_map(|event| event.lines().find_map(|line| line.strip_prefix("data: ")))
+        .map(|data| serde_json::from_str(data).unwrap())
+        .collect();
+    assert!(batches.len() > 3, "{} batches", batches.len());
+    let offsets: Vec<u64> = batches
+        .iter()
+        .map(|batch| batch["offset"].as_u64().unwrap())
+        .collect();
+    assert!(
+        offsets.windows(2).all(|pair| pair[0] < pair[1]),
+        "{offsets:?}"
+    );
+    assert_eq!(*offsets.last().unwrap(), log.len() as u64);
+    let done: Vec<bool> = batches
+        .iter()
+        .map(|batch| batch["done"].as_bool().unwrap())
+        .collect();
+    assert_eq!(done.iter().filter(|done| **done).count(), 1);
+    assert!(done.last().unwrap());
+    let html: String = batches
+        .iter()
+        .map(|batch| batch["html"].as_str().unwrap())
+        .collect();
+    let mut from = 0;
+    for line in 0..40_000 {
+        let marker = format!("buffered line {line:06}");
+        from += html[from..]
+            .find(&marker)
+            .unwrap_or_else(|| panic!("{marker} missing or out of order"));
+    }
 }
 
 #[test]
@@ -1331,18 +1662,10 @@ fn console_requires_explicit_no_sign_in_and_rejects_invalid_settings() {
 #[cfg(unix)]
 #[test]
 fn replacing_the_binary_executes_the_replacement_with_the_original_arguments() {
-    use std::os::unix::fs::PermissionsExt;
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
     let binary = home.path().join("thirdshift");
-    // A child forked by another test can inherit fs::copy's writer and keep
-    // the executable "Text file busy". Only the copying process opens it here.
-    let copied = Command::new("cp")
-        .arg(env!("CARGO_BIN_EXE_thirdshift"))
-        .arg(&binary)
-        .status()
-        .unwrap();
-    assert!(copied.success());
+    support::copy_executable(Path::new(env!("CARGO_BIN_EXE_thirdshift")), &binary);
     let console = Console::start(&binary, home.path());
     assert_eq!(console.get("/").status(), 200);
     let _open_stream = console.get("/events");
@@ -1378,8 +1701,10 @@ fn replacing_the_binary_executes_the_replacement_with_the_original_arguments() {
         console.get(&format!("{link}/stream/0"))
     };
     let replacement = home.path().join("replacement");
-    fs::write(&replacement, "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/reexec-args\"\nprintf 'replacement executed\\n'\n").unwrap();
-    fs::set_permissions(&replacement, fs::Permissions::from_mode(0o755)).unwrap();
+    support::write_executable(
+        &replacement,
+        "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/reexec-args\"\nprintf 'replacement executed\\n'\n",
+    );
     fs::rename(&replacement, &binary).unwrap();
     assert_eq!(
         console.lines.recv_timeout(Duration::from_secs(10)).unwrap(),
@@ -1430,4 +1755,32 @@ fn urls_in_inbox_and_peek_text_are_links_and_other_text_stays_escaped() {
     ] {
         assert!(peek.contains(expected), "missing {expected}: {peek}");
     }
+}
+
+#[test]
+fn stages_and_command_details_link_the_github_issue() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 7, Some("merged"), 0);
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    let stages = console.get("/?page=stages").text().unwrap();
+    assert!(
+        stages.contains("<a href=\"https://github.com/acme/widgets/issues/7\">Issue #7</a>"),
+        "stages page links the Issue URL: {stages}"
+    );
+    let selector = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture.command.json");
+    let mut url = reqwest::Url::parse("http://localhost/peek").unwrap();
+    url.query_pairs_mut()
+        .append_pair("command", selector.to_str().unwrap());
+    let peek = console
+        .get(&format!("/peek?{}", url.query().unwrap()))
+        .text()
+        .unwrap();
+    assert!(
+        peek.contains("<a href=\"https://github.com/acme/widgets/issues/7\">Issue #7</a>"),
+        "Command details links the Issue URL: {peek}"
+    );
 }

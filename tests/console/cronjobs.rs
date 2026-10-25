@@ -1,5 +1,4 @@
 use super::*;
-use std::os::unix::fs::PermissionsExt;
 
 fn command(home: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_thirdshift"));
@@ -19,8 +18,10 @@ fn fixture() -> tempfile::TempDir {
     configure(home.path());
     fs::create_dir(home.path().join("bin")).unwrap();
     let fake = home.path().join("bin/crontab");
-    fs::write(&fake, "#!/bin/sh\n[ \"$#\" = 1 ] && [ \"$1\" = -l ] || exit 99\nif [ -f \"$HOME/cron-error\" ]; then cat \"$HOME/cron-error\" >&2; exit 1; fi\ncat \"$HOME/crontab\"\n").unwrap();
-    fs::set_permissions(fake, fs::Permissions::from_mode(0o755)).unwrap();
+    support::write_executable(
+        &fake,
+        "#!/bin/sh\n[ \"$#\" = 1 ] && [ \"$1\" = -l ] || exit 99\nif [ -f \"$HOME/cron-error\" ]; then cat \"$HOME/cron-error\" >&2; exit 1; fi\ncat \"$HOME/crontab\"\n",
+    );
     home
 }
 

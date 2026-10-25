@@ -8,7 +8,7 @@
 mod support;
 
 use support::resend::{ResendStandIn, assert_one_issue_line, assert_saved_notification};
-use support::{Scenario, WAIT_BOUND, leaves_running};
+use support::{Scenario, WAIT_BOUND, leaves_running, write_executable};
 
 const SPEC: u32 = 20;
 const SPEC_TITLE: &str = "Widgets, all of them";
@@ -798,15 +798,12 @@ const REPLACEMENT_RAN: &str = "replacement-ran";
 /// update` and `cargo install` each put a new binary in place.
 #[cfg(target_os = "linux")]
 fn rename_a_replacement_over(scenario: &Scenario, installed: &std::path::Path) {
-    use std::os::unix::fs::PermissionsExt;
-
     let script = format!(
         "#!/bin/sh\ntouch {}\nexit 1\n",
         scenario.path(REPLACEMENT_RAN).display()
     );
     let new = installed.with_extension("new");
-    std::fs::write(&new, script).unwrap();
-    std::fs::set_permissions(&new, std::fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&new, &script);
     std::fs::rename(&new, installed).unwrap();
 }
 
@@ -1066,6 +1063,15 @@ fn checks_on_head(checks: &str) -> String {
     format!("gh fake checks \"$(git rev-parse HEAD)\" '{checks}'\n")
 }
 
+/// Bash that records workflow run 900 of its own workflow on the worktree's
+/// HEAD, so checks of that run count as belonging to the commit.
+fn scoped_run_on_head() -> String {
+    "gh fake run \"{\\\"databaseId\\\":900,\\\"workflow_id\\\":900,\
+     \\\"created_at\\\":\\\"2026-10-19T12:00:00Z\\\",\
+     \\\"headSha\\\":\\\"$(git rev-parse HEAD)\\\"}\"\n"
+        .to_string()
+}
+
 /// Bash that commits a fix, `fix-<n>.txt`, as a CI-fix Repair would.
 fn commits_fix(n: usize) -> String {
     format!("echo fix > fix-{n}.txt\ngit add fix-{n}.txt\ngit commit -q -m \"Fix CI {n}\"\n")
@@ -1146,10 +1152,14 @@ fn a_ci_fix_repair_on_the_spec_pr_that_makes_no_commit_gets_a_check_re_run() {
     scenario.agent_does_for_in_session(
         SPEC,
         1,
-        &checks_on_head(
-            r#"[{"name": "test", "conclusion": "failure",
-                 "url": "https://github.com/acme/widgets/actions/runs/900/job/1",
-                 "rerun": {"conclusion": "success"}}]"#,
+        &format!(
+            "{}{}",
+            checks_on_head(
+                r#"[{"name": "test", "conclusion": "failure",
+                     "url": "https://github.com/acme/widgets/actions/runs/900/job/1",
+                     "rerun": {"conclusion": "success"}}]"#,
+            ),
+            scoped_run_on_head()
         ),
     );
     scenario.agent_does_for_in_session(SPEC, 2, "true\n");
@@ -1393,7 +1403,7 @@ fn a_tickets_run_offers_the_spec_runs_command_with_a_base_fix_and_the_spec_run_r
              thirdshift: #21: Base check: test\n\
              thirdshift: #21: Retry with: thirdshift {spec_url} --email me@example.com parallel 1 base-fix\n\
              thirdshift: #21: Or set: base.fix = true in ~/.thirdshift/config.toml, \
-             to allow a Base fix for every Run on this machine\n\
+             to allow a Base fix for every Ticket run on this machine\n\
              thirdshift: #21: session trace: "
         ),
     );
@@ -1473,7 +1483,7 @@ fn two_tickets_with_the_same_inherited_failure() -> Scenario {
 /// issue, so neither meets a Spec branch already fixed.
 const BOTH_TICKETS_HAVE_LOOKED: &str = r#"
 for _ in $(seq 200); do
-    looked="$(grep -A1 '"issue",' "$FAKE_GH_RECORD" | grep -c '"list",' || true)"
+    looked="$(grep -Fc 'repos/acme/widgets/issues?state=open&labels=base-fix&' "$FAKE_GH_RECORD" || true)"
     [ "$looked" -ge 2 ] && break
     sleep 0.05
 done
@@ -1702,7 +1712,7 @@ fn the_spec_pr_is_a_draft_during_the_spec_review_and_marked_ready_after_it() {
 /// The line thirdshift writes in the Spec PR's body once the Spec review has
 /// written it, when nothing chose the Harness, Model or Effort.
 const BUILT_WITH: &str =
-    "Built with claude · default model · default effort <!-- thirdshift:built-with -->";
+    "Built with claude 9.8.7 · default model · default effort <!-- thirdshift:built-with -->";
 
 /// The linear Spec's Tickets checklist once every Ticket is done.
 const DONE_CHECKLIST: &str = "<!-- thirdshift:tickets -->
@@ -2327,7 +2337,7 @@ fn a_signal_to_the_spec_run_alone_fails_the_ticket_run_then_ends_the_spec_run_as
     assert_eq!(sessions_by_issue(&scenario), ["21"]);
     assert_eq!(
         scenario.origin_log("issue-21").unwrap()[0],
-        "thirdshift: failed run (interrupted)"
+        "thirdshift: failed ticket run (interrupted)"
     );
     assert_eq!(
         scenario.origin_file("issue-21", "wip.txt").as_deref(),
@@ -2435,7 +2445,7 @@ fn an_existing_spec_pr_accounts_for_every_drained_ticket_after_interruption() {
         );
         assert_eq!(
             scenario.origin_log(&format!("issue-{ticket}")).unwrap()[0],
-            "thirdshift: failed run (interrupted)"
+            "thirdshift: failed ticket run (interrupted)"
         );
         scenario.assert_cleaned_up(&format!("issue-{ticket}"));
     }
@@ -2507,7 +2517,7 @@ done
         );
         assert_eq!(
             scenario.origin_log(&format!("issue-{ticket}")).unwrap()[0],
-            "thirdshift: failed run (interrupted)"
+            "thirdshift: failed ticket run (interrupted)"
         );
         assert_contains(
             &result.stderr,
@@ -3182,7 +3192,6 @@ fn failed_ticket_reports_execution_progress_and_retains_the_child_cause() {
 
 #[test]
 fn issue_588_spec_existing_remote_survives_initial_push_failure() {
-    use std::os::unix::fs::PermissionsExt;
     let scenario = linear_spec();
     scenario.agent_does_for(SPEC, "exit 1\n");
     let first = scenario.run(&[&spec_url(&scenario)]);
@@ -3194,11 +3203,10 @@ fn issue_588_spec_existing_remote_survives_initial_push_failure() {
     assert_eq!(spec_pr(&scenario)["state"], "OPEN");
 
     let shim = scenario.path("bin/git");
-    std::fs::write(
+    write_executable(
         &shim,
         "#!/bin/sh\ncase \" $* \" in *\" push \"*) echo 'fatal: simulated push transport failure' >&2; exit 1;; esac\nPATH=\"${PATH#*:}\" exec git \"$@\"\n",
-    ).unwrap();
-    std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+    );
 
     let resend = ResendStandIn::replying(200, r#"{"id":"sent"}"#);
     let result = run_emailing(

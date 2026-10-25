@@ -8,7 +8,7 @@ use std::num::NonZeroUsize;
 use crate::args;
 use crate::base_fix::BaseFixAsk;
 use crate::child_run::Given;
-use crate::config::UserConfig;
+use crate::config::{EmailSettings, UserConfig};
 use crate::harness::{self, Choice};
 use crate::issue::IssueUrl;
 use crate::notification::NotificationAsk;
@@ -20,7 +20,7 @@ use crate::run::Goal;
 pub struct Flags {
     /// The goal `merge` or `no-merge` asked for.
     pub goal: Option<Goal>,
-    /// What `email` or `no-email` asked for.
+    /// What `email`, `email-unless-merged` or `no-email` asked for.
     pub email: Option<NotificationAsk>,
     /// How many Tickets a Spec run runs at once, as `parallel <n>` gave it.
     pub parallel: Option<NonZeroUsize>,
@@ -28,6 +28,8 @@ pub struct Flags {
     pub base_fix: Option<BaseFixAsk>,
     /// What `security-fix` or `no-security-fix` asked for.
     pub security_fix: Option<crate::security::FixAsk>,
+    /// What `security-close` or `no-security-close` asked for.
+    pub security_close: Option<crate::security::CloseAsk>,
     /// What security-review or no-security-review asked for.
     pub security_review: Option<crate::security::review::Ask>,
     /// What `harness <name>`, `model <name>` and `effort <level>` asked for.
@@ -199,8 +201,22 @@ impl Flags {
             None => config.security_fix.unwrap_or(false),
         }
     }
+
+    /// Whether a Security run whose fix merged may close the finding it
+    /// fixed: as `security-close` or `no-security-close` asked, else as
+    /// `config` says, and only when fixing is also allowed.
+    pub fn security_close_allowed(&self, config: &UserConfig) -> bool {
+        if !self.security_fix_allowed(config) {
+            return false;
+        }
+        match self.security_close {
+            Some(crate::security::CloseAsk::Allow) => true,
+            Some(crate::security::CloseAsk::Forbid) => false,
+            None => config.security_close.unwrap_or(false),
+        }
+    }
     /// Whether any flag here is for the Spec run or Run that a Pass
-    /// dispatches: every one but `email` and `no-email`,
+    /// dispatches: every one but `email`, `email-unless-merged` and `no-email`,
     /// which ask that run for its own Run notification.
     pub fn any_for_dispatched_run(&self) -> bool {
         let for_dispatched_run = Flags {
@@ -211,15 +227,23 @@ impl Flags {
     }
 
     /// What a run with these flags is asked about its own Run notification:
-    /// what `email` or `no-email` asked for, else what `config` says. It is
-    /// a Run's ask, and a Pass's for the one
-    /// notification it sends itself.
+    /// what `email`, `email-unless-merged` or `no-email` asked for, else what
+    /// `config` says, `email.unless_merged` with or without `email.always`
+    /// asking as `email-unless-merged` does. It is a Run's ask, and a Pass's
+    /// for the one notification it sends itself.
     pub fn notification(&self, config: &UserConfig) -> NotificationAsk {
-        self.email.clone().unwrap_or(if config.email.always {
-            NotificationAsk::Send(None)
-        } else {
-            NotificationAsk::Skip
-        })
+        match (&self.email, &config.email) {
+            (Some(asked), _) => asked.clone(),
+            (
+                None,
+                EmailSettings {
+                    unless_merged: true,
+                    ..
+                },
+            ) => NotificationAsk::SendUnlessMerged(None),
+            (None, EmailSettings { always: true, .. }) => NotificationAsk::Send(None),
+            (None, _) => NotificationAsk::Skip,
+        }
     }
 
     /// The Harness, Model and Effort a command with these flags runs its
@@ -272,6 +296,8 @@ mod tests {
     /// default.
     fn no_settings() -> UserConfig {
         UserConfig {
+            scoring: crate::config::scoring::Settings::default(),
+            resources: crate::resources::Limits::default(),
             console: crate::config::ConsoleSettings::default(),
             merge_always: false,
             base_fix: false,
@@ -286,10 +312,13 @@ mod tests {
             spec_parallel: n(3),
             pickup_limit: n(3),
             pickup_wait: chrono::TimeDelta::minutes(30),
+            pickup_order: crate::ready::PickupOrder::LowestFirst,
             harness: harness::Settings::default(),
             security_harness: None,
             security_fix: None,
+            security_close: None,
             security_review: false,
+            trial_caps: crate::scope::Caps::default(),
         }
     }
 
@@ -301,6 +330,7 @@ mod tests {
             launch_pull: true,
             email: EmailSettings {
                 always: true,
+                unless_merged: false,
                 to: Some("config@example.com".to_string()),
                 from: None,
             },
@@ -410,6 +440,7 @@ mod tests {
     fn each_flag_decides_its_ask_whatever_the_user_config_says() {
         let against = Flags {
             security_fix: None,
+            security_close: None,
             security_review: None,
             goal: Some(Goal::ReadyForReview),
             email: Some(NotificationAsk::Skip),
@@ -438,6 +469,7 @@ mod tests {
 
         let for_it = Flags {
             security_fix: None,
+            security_close: None,
             security_review: None,
             goal: Some(Goal::Merged),
             email: Some(to("flag@example.com")),
@@ -531,11 +563,64 @@ mod tests {
         }
     }
 
+    #[test]
+    fn security_close_needs_fixing_and_follows_word_then_setting() {
+        use crate::security::{CloseAsk, FixAsk};
+        for (fix_word, fix_setting, close_word, close_setting, expected) in [
+            (Some(FixAsk::Allow), None, Some(CloseAsk::Allow), None, true),
+            (Some(FixAsk::Allow), None, None, Some(true), true),
+            (Some(FixAsk::Allow), None, None, None, false),
+            (
+                Some(FixAsk::Allow),
+                None,
+                Some(CloseAsk::Forbid),
+                Some(true),
+                false,
+            ),
+            (None, Some(true), None, Some(true), true),
+            (None, Some(true), None, None, false),
+            (None, Some(true), Some(CloseAsk::Forbid), Some(true), false),
+            // Closing never takes effect when fixing is not allowed.
+            (
+                Some(FixAsk::Allow),
+                Some(false),
+                Some(CloseAsk::Allow),
+                Some(true),
+                true,
+            ),
+            (None, Some(false), Some(CloseAsk::Allow), Some(true), false),
+            (None, Some(false), None, Some(true), false),
+            (
+                Some(FixAsk::Forbid),
+                Some(true),
+                Some(CloseAsk::Allow),
+                Some(true),
+                false,
+            ),
+            (Some(FixAsk::Forbid), Some(true), None, Some(true), false),
+        ] {
+            let flags = Flags {
+                security_fix: fix_word,
+                security_close: close_word,
+                ..Flags::default()
+            };
+            let mut config = no_settings();
+            config.security_fix = fix_setting;
+            config.security_close = close_setting;
+            assert_eq!(
+                flags.security_close_allowed(&config),
+                expected,
+                "fix {fix_word:?}/{fix_setting:?} close {close_word:?}/{close_setting:?}"
+            );
+        }
+    }
+
     /// Every flag a Pass takes for the run it
     /// dispatches, with `email` for its own Run notification.
     fn dispatch_flags() -> Flags {
         Flags {
             security_fix: None,
+            security_close: None,
             security_review: None,
             goal: Some(Goal::Merged),
             email: Some(to("flag@example.com")),
@@ -725,6 +810,31 @@ mod tests {
                 every_setting(),
                 to("flag@example.com"),
             ),
+            (
+                Some(NotificationAsk::SendUnlessMerged(None)),
+                no_settings(),
+                NotificationAsk::SendUnlessMerged(None),
+            ),
+            (
+                None,
+                unless_merged_with_always(true),
+                NotificationAsk::SendUnlessMerged(None),
+            ),
+            (
+                None,
+                unless_merged_with_always(false),
+                NotificationAsk::SendUnlessMerged(None),
+            ),
+            (
+                Some(NotificationAsk::Send(None)),
+                unless_merged_with_always(true),
+                NotificationAsk::Send(None),
+            ),
+            (
+                Some(NotificationAsk::Skip),
+                unless_merged_with_always(false),
+                NotificationAsk::Skip,
+            ),
         ] {
             let flags = Flags {
                 email,
@@ -732,6 +842,19 @@ mod tests {
             };
 
             assert_eq!(flags.notification(&config), asked, "{flags:?}");
+        }
+    }
+
+    /// A User config with `email.unless_merged` set, and `email.always` as
+    /// `always` says.
+    fn unless_merged_with_always(always: bool) -> UserConfig {
+        UserConfig {
+            email: EmailSettings {
+                always,
+                unless_merged: true,
+                ..EmailSettings::default()
+            },
+            ..no_settings()
         }
     }
 

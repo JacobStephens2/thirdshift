@@ -40,6 +40,10 @@
 #[path = "../../src/test_support/guidance.rs"]
 pub mod guidance;
 
+#[path = "../../src/test_support/executable.rs"]
+mod executable;
+pub use executable::write_executable;
+
 pub mod fakes;
 pub mod resend;
 pub mod session_trace;
@@ -52,6 +56,12 @@ use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use tempfile::TempDir;
+
+/// Copy an executable through a child process, as with [`write_executable`].
+pub fn copy_executable(source: &Path, path: &Path) {
+    let status = Command::new("cp").arg(source).arg(path).status().unwrap();
+    assert!(status.success(), "could not copy {}", source.display());
+}
 
 fn terminal_attributes(fd: &impl std::os::fd::AsRawFd) -> libc::termios {
     // SAFETY: tcgetattr fills a valid termios using the open terminal descriptor.
@@ -316,6 +326,19 @@ impl HeldRun {
     }
 }
 
+/// Whether Trial scopes can run here: systemd-run plus a reachable user
+/// manager, which logged-out launchers need lingering for.
+pub fn scope_available() -> bool {
+    std::process::Command::new("systemd-run")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+        && std::process::Command::new("systemctl")
+            .args(["--user", "show", "-p", "SystemState", "--value"])
+            .output()
+            .is_ok_and(|output| output.status.success())
+}
+
 /// A script in which the agent starts a background task described as
 /// `description`, then ends its turn with it still running, so the task is
 /// killed after the session's last `result`.
@@ -577,15 +600,7 @@ impl Scenario {
     ) -> RunResult {
         let copy = self.path("installed/thirdshift");
         fs::create_dir_all(copy.parent().unwrap()).unwrap();
-        // Copied by `cp`, not by this process: a file open for writing here
-        // would be inherited by whatever another test starts meanwhile, and
-        // can't be run until that has let go of it ("Text file busy").
-        let copied = Command::new("cp")
-            .arg(env!("CARGO_BIN_EXE_thirdshift"))
-            .arg(&copy)
-            .status()
-            .unwrap();
-        assert!(copied.success());
+        copy_executable(Path::new(env!("CARGO_BIN_EXE_thirdshift")), &copy);
         let held = self.spawn_until_started(self.command_running(&copy, args), COPY_IN_USE);
         replace(&copy);
         fs::write(self.path(COPY_REPLACED), "").unwrap();
@@ -881,6 +896,9 @@ test -f {root}/{COPY_REPLACED}
             // enough for the absent state.
             .env("THIRDSHIFT_CI_GRACE_MS", "300")
             .env("THIRDSHIFT_POLL_MS", "100");
+        if args.first() == Some(&"score") {
+            command.env("THIRDSHIFT_TRIAL_NO_SANDBOX", "1");
+        }
         command
     }
 
@@ -1066,6 +1084,15 @@ test -f {root}/{COPY_REPLACED}
         serde_json::from_str(&fs::read_to_string(self.path("gh-state.json")).unwrap()).unwrap()
     }
 
+    pub fn waiting_security_finding(&self) {
+        let mut gh = self.gh_state();
+        gh["advisories"] = json!([{
+            "html_url":"https://github.com/acme/widgets/security/advisories/GHSA-waiting",
+            "state":"draft", "severity":null
+        }]);
+        self.write_gh_state(&gh);
+    }
+
     pub fn write_gh_state(&self, state: &Value) {
         fs::write(
             self.path("gh-state.json"),
@@ -1169,6 +1196,10 @@ test -f {root}/{COPY_REPLACED}
 
     /// The argv of every `gh` call, in order.
     pub fn gh_calls(&self) -> Vec<Vec<String>> {
+        // The fake records calls while holding its state lock. Background
+        // Console reads can otherwise expose the truncate/write interval.
+        let lock = fs::File::create(self.path("gh-state.json.lock")).unwrap();
+        lock.lock().unwrap();
         match fs::read_to_string(self.path("gh-calls.json")) {
             Ok(text) => serde_json::from_str(&text).unwrap(),
             Err(_) => Vec::new(),
@@ -1295,8 +1326,7 @@ test -f {root}/{COPY_REPLACED}
         };
         fs::create_dir_all(&hooks).unwrap();
         let hook = hooks.join(name);
-        fs::write(&hook, script).unwrap();
-        fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).unwrap();
+        write_executable(&hook, script);
     }
 
     /// Give the launch clone a `pre-push` hook that says "hook says no" and

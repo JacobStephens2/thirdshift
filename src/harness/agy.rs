@@ -154,6 +154,23 @@ mod tests {
     use super::*;
     use crate::harness::ChosenBy;
 
+    /// A Trial uses the Adapter's default: agy has no web-search switch,
+    /// and its grounding tool runs at Google, past any proxy. Whether agy
+    /// Trials should run without such a switch remains open in #1215.
+    #[test]
+    fn trials_keep_the_code_review_session_unchanged() {
+        let chosen = Choice {
+            harness: Harness::Agy,
+            model: None,
+            effort: None,
+            chosen_by: ChosenBy::Command,
+        };
+        assert_eq!(
+            Agy.trial_session(&chosen, None, "review").args,
+            Agy.code_review_session(&chosen, None, "review").args
+        );
+    }
+
     /// Resume uses the same public invocation interface as a new session.
     #[test]
     fn a_resume_reuses_every_flag_and_environment_and_the_conversation_id() {

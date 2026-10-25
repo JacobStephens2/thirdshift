@@ -38,7 +38,7 @@ pub(crate) struct SessionSignals {
     pub signals: Signals,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub(super) struct Summary {
     pub observed_sessions: usize,
     pub missing_sessions: usize,
@@ -162,14 +162,27 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
         .is_some_and(crate::harness::Harness::input_excludes_cache);
     let mut turns = BTreeMap::new();
     let mut session_usage = None;
+    let mut lifecycle =
+        crate::session::trace::Calls::new(crate::otlp_jsonl::Id([0; 8]), excludes_cache, []);
     let mut calls = BTreeMap::new();
     let mut reported_models = BTreeMap::new();
     let mut killed = HashSet::new();
     for event in events {
-        if let Some(call) = crate::session::trace::Call::of(&event) {
-            let key = call.key();
+        if let Some(applied) = lifecycle.apply(&event, None) {
+            let key = serde_json::to_string(&(
+                applied.call.kind,
+                &applied.call.parent_id,
+                &applied.call.id,
+            ))?;
             // An end refines its start, and a retained end amends the same call.
-            if call.completion.is_some() || !calls.contains_key(&key) {
+            if matches!(
+                event,
+                Event::ModelCallEnded { .. }
+                    | Event::ToolCallEnded { .. }
+                    | Event::TurnEnded { .. }
+                    | Event::SubagentEnded { .. }
+            ) || !calls.contains_key(&key)
+            {
                 calls.insert(key, event.clone());
             }
         }

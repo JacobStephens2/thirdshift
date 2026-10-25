@@ -275,11 +275,10 @@ impl Route<'_> {
     /// warning if that fails, as the work is done without it. Nothing if
     /// there is no pull request: marking it ready says so.
     fn write_built_with(&self, outside: &mut impl Outside) {
-        let built_with = self.harness.built_with();
         if let Err(error) = outside.write_built_with(self.harness) {
             outside.warn(
                 &error,
-                format!("could not write \"{built_with}\" in the pull request's body"),
+                "could not write the Built-with line in the pull request's body".into(),
             );
         }
     }
@@ -303,7 +302,7 @@ impl Route<'_> {
             );
         }
         let comment = format!(
-            "Closed by #{}, merged into {} by a thirdshift Merge run.",
+            "Closed by #{}, merged into {} by a thirdshift Ticket run with Self-merge.",
             pr.number, self.base
         );
         if let Err(error) = retry_if_interrupted(outside, |outside| {
@@ -387,7 +386,7 @@ fn fail(
             Ok(Preserved::NoChanges) => Preservation::None,
             Err(problem) => {
                 outside.step(format!(
-                    "could not push the failed run's work, so it may exist only locally: {problem:#}"
+                    "could not push the failed ticket run's work, so it may exist only locally: {problem:#}"
                 ));
                 Preservation::Local
             }
@@ -511,7 +510,7 @@ impl std::fmt::Display for UntrustedEdit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "#{} {} edited since the Run started by an account that is not a Trusted account; starting no further session",
+            "#{} {} edited since the Ticket run started by an account that is not a Trusted account; starting no further session",
             self.number, self.text
         )
     }
@@ -685,6 +684,21 @@ struct RunOutside<'a> {
     ci_watch: ci::Watch<'a>,
 }
 
+impl RunOutside<'_> {
+    /// A Repair or Base fix may have reported a new Harness version. Refresh
+    /// attribution while the PR is still actionable, before any Self-merge.
+    fn refresh_built_with(&mut self) -> Result<()> {
+        self.pull_request.ensure_actionable(true)?;
+        if let Err(error) = self.pull_request.write_built_with(&self.child_asks.harness) {
+            progress::warn(
+                &error,
+                format_args!("could not write the Built-with line in the pull request's body"),
+            );
+        }
+        Ok(())
+    }
+}
+
 impl repair_loop::Outside for RunOutside<'_> {
     type Pending = PendingMerge;
 
@@ -755,8 +769,9 @@ impl repair_loop::Outside for RunOutside<'_> {
             Repair::Review { from } => prompt::review_repair(issue, branch, pr_url, from),
         };
         self.pull_request.ensure_actionable(true)?;
-        self.sessions.run(kind, &prompt)?;
-        self.pull_request.ensure_actionable(true)
+        let result = self.sessions.run(kind, &prompt);
+        let refreshed = self.refresh_built_with();
+        result.and(refreshed)
     }
 
     fn sees_inherited_failures(&mut self) -> bool {
@@ -769,8 +784,11 @@ impl repair_loop::Outside for RunOutside<'_> {
             issue: self.issue,
             asks: self.child_asks,
         };
-        self.base_fix
-            .fix(outside, self.pr_url, self.base, base_commit, failed)
+        let result = self
+            .base_fix
+            .fix(outside, self.pr_url, self.base, base_commit, failed);
+        let refreshed = self.refresh_built_with();
+        result.and(refreshed)
     }
 
     fn pr_mergeable(&mut self) -> Result<bool> {
@@ -1062,9 +1080,12 @@ mod tests {
         let mut outside = Scripted::default();
         assert!(deliver(&mut outside, Goal::Merged, false).is_ok());
         assert!(outside.calls.contains(&Call::Delete));
-        assert!(outside.calls.contains(&Call::Close(
-            "Closed by #12, merged into main by a thirdshift Merge run.".to_string()
-        )));
+        assert!(
+            outside.calls.contains(&Call::Close(
+                "Closed by #12, merged into main by a thirdshift Ticket run with Self-merge."
+                    .to_string()
+            ))
+        );
     }
 
     #[test]

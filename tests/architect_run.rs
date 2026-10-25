@@ -1383,7 +1383,7 @@ fn a_transient_github_read_recovers_without_a_failure_notification() {
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
     let mut github = scenario.gh_state();
     github["fail_next"] = serde_json::json!({
-        "call": "issue list",
+        "call": "api --paginate",
         "times": 1,
         "error": "HTTP 504: Gateway Timeout (https://api.github.com/graphql)",
     });
@@ -1398,10 +1398,10 @@ fn a_transient_github_read_recovers_without_a_failure_notification() {
 
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, format!("{PLAN_URL}\n"));
-    let retry = "gh issue list failed (attempt 1/3)";
+    let retry = "gh api repos/acme/widgets/issues?state=open&labels=architect-plan&sort=created&direction=desc&per_page=100 failed (attempt 1/3)";
     assert_eq!(result.stderr.matches(retry).count(), 1, "{}", result.stderr);
     assert!(result.stderr.contains("HTTP 504"));
-    let calls = scenario.gh_calls_of("issue", "list");
+    let calls = scenario.gh_calls_of("api", "--paginate");
     assert_eq!(
         calls[0], calls[1],
         "the failed observation was not repeated"
@@ -1947,8 +1947,10 @@ fn status_nests_the_architect_plans_run_or_spec_run_under_its_pass() {
             assert_eq!(dispatched["children"][0]["stage"]["name"], "implement");
             assert_eq!(dispatched["children"][0]["state"], "live");
         }
+        let display_kind = if kind == "Run" { "Ticket run" } else { kind };
         assert!(
-            text.stdout.contains(&format!("\n  {kind} acme/widgets#8")),
+            text.stdout
+                .contains(&format!("\n  {display_kind} acme/widgets#8")),
             "{}",
             text.stdout
         );
@@ -2201,6 +2203,26 @@ fn still_open(scenario: &Scenario, number: u32, title: &str) -> String {
         "Architect plan #{number} \"{title}\" is still open: pick it up with thirdshift {}",
         scenario.issue_url(number)
     )
+}
+
+#[test]
+fn an_open_architect_plan_skips_even_when_search_is_unavailable() {
+    let scenario = scenario();
+    open_architect_plan(&scenario, 7, "Deepen the session module");
+    scenario.gh_fails("issue list");
+
+    let result = scenario.run(&["architect", "--plan-only"]);
+
+    assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
+    assert_eq!(result.stdout, format!("{}\n", scenario.issue_url(7)));
+    assert!(
+        result
+            .stderr
+            .contains(&still_open(&scenario, 7, "Deepen the session module")),
+        "stderr: {}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty(), "a review was started");
 }
 
 #[test]
@@ -2557,7 +2579,7 @@ fn a_ready_issue_skips_the_architect_run_before_any_review() {
 fn an_issue_still_settling_skips_the_architect_run_but_not_pickup() {
     let scenario = scenario();
     ready_issue(&scenario, 7, "Fix the login page", &[]);
-    scenario.issue_timeline(7, &[(TimelineEvent::Labelled("ready-for-agent"), 9)]);
+    scenario.issue_timeline(7, &[(TimelineEvent::Labelled("ready-for-agent"), 4)]);
     scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
     let github = scenario.gh_state();
 
@@ -2591,7 +2613,7 @@ fn an_issue_still_settling_skips_the_architect_run_but_not_pickup() {
     assert!(
         pickup
             .stderr
-            .contains("#7 not settled: labelled ready-for-agent less than 30 minutes ago"),
+            .contains("#7 not settled: labelled ready-for-agent less than 5 minutes ago"),
         "{}",
         pickup.stderr
     );
@@ -2611,7 +2633,7 @@ fn the_lowest_numbered_ready_or_settling_issue_goes_first() {
         ready_issue(&scenario, 2, "Claimed work", &[IN_PROGRESS]);
         ready_issue(&scenario, 3, "Earlier work", &[]);
         ready_issue(&scenario, 5, "Later work", &[]);
-        scenario.issue_timeline(settling, &[(TimelineEvent::Labelled("ready-for-agent"), 9)]);
+        scenario.issue_timeline(settling, &[(TimelineEvent::Labelled("ready-for-agent"), 4)]);
 
         let result = scenario.run(&["architect"]);
 
@@ -2642,7 +2664,7 @@ fn a_settling_spec_goes_first_only_with_a_startable_ticket() {
         if !startable {
             scenario.issue_labelled(9, &["needs-info"]);
         }
-        scenario.issue_timeline(7, &[(TimelineEvent::SubIssueAdded, 9)]);
+        scenario.issue_timeline(7, &[(TimelineEvent::SubIssueAdded, 4)]);
         scenario.agent_does(AGENT_PUBLISHES_A_TICKET);
 
         let result = scenario.run(&["architect", "--plan-only"]);
@@ -2769,7 +2791,7 @@ fn an_issue_with_any_other_ready_exclusion_does_not_skip_the_architect_run_even_
             let scenario = scenario();
             ready_issue(&scenario, 7, "Fix the login page", &[]);
             if settling {
-                scenario.issue_timeline(7, &[(TimelineEvent::Labelled("ready-for-agent"), 9)]);
+                scenario.issue_timeline(7, &[(TimelineEvent::Labelled("ready-for-agent"), 4)]);
             }
             not_ready(&scenario);
             scenario.agent_does(AGENT_PUBLISHES_A_TICKET);

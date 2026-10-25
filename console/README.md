@@ -15,6 +15,11 @@ npm test
 home folder and a free localhost port, and closes its own server and browser.
 Node and npm are test tools only; the release build embeds its assets.
 
+The **Resources** page (`9`, or `g e`) shows a host snapshot and the configured
+session admission decision, also available with `thirdshift resources --json`.
+Reload to refresh it. Set `[resources] min_available_memory_mb` and
+`max_load_per_cpu_percent` in User config; zero disables each limit.
+
 The Themes picker offers **Make a Theme from this**, starting from any built-in
 or custom Theme. Edit its JSON name and tokens, then **Save / import JSON**.
 Choose the saved name in the picker to apply it. **Export JSON** gives a document
@@ -75,8 +80,8 @@ other_consoles = ["https://console.example.test"]
 theme = "focus-auto" # also focus-light or focus-dark
 ```
 
-For a persistent service behind Caddy, Apache or nginx, see the root README's
-[server installation instructions](../README.md#console-on-a-server).
+For a persistent service behind Caddy, Apache or nginx, see the manual's
+[server installation instructions](../docs/guide.md#console-on-a-server).
 
 Each allowed address must contain exactly one `@`, a nonempty local part,
 and a domain containing a dot, with no leading or trailing dot. Whitespace
@@ -127,7 +132,39 @@ after a change notice, preserving the selected row, folds and scroll. If the
 stream drops or is unavailable, the page polls every five seconds until it
 reconnects. The heartbeat only beats for observed log growth, stays flat while
 Silent and respects reduced motion. The tab counts Needs you and its favicon
-marks urgent items (Slow alone is not urgent).
+marks urgent items (Slow alone is not urgent). Each row shows the same state
+word as `thirdshift status`: Landing and Ready rows take their Theme's Landing
+and Ready tag colours, Landing keeps Working's live-activity marker, and a live
+row given a Stop shows Stopping with a drifting stripe until it ends. Pause
+motion and reduced motion hold the stripe still.
+
+Dismiss and Undo in Command details immediately show “Dismissing…” or
+“Taking back dismissal…” while the request is pending. The button stays disabled
+through live updates to prevent duplicate submissions. A failed request shows
+the error and enables the button for another try.
+
+Ended rows show their recorded finish date and time in UTC, followed by an
+explicit relative age, such as “Ended Oct 23, 2026 at 23:03:17 UTC · 52 min ago”.
+That age is time since finish, not run duration. Each nested Ticket run uses its
+own finish time, including in History. Refreshing recomputes the relative age
+and keeps the recorded instant. The information is rendered by the server and
+remains visible without JavaScript. Missing or invalid finish times say “End
+time unknown”; file modification times are not presented as recorded finishes.
+
+Above its sections, the Inbox shows how many runs are active, such as
+`2 active runs`, the same `active_runs` total as `thirdshift status --json`.
+Each Command with live work anywhere in it counts once, whatever its group or
+whether that section is folded or hidden: a Spec run's Tickets, and the Spec run
+or Ticket run a Pass dispatched, are part of that one. The live update refreshes
+it as Commands start and end.
+
+When no Commands are live on this machine, the Inbox explains that above its
+sections. It points to ended problems in Needs you and pull requests in Ready
+for review, and shows the last recorded skipped Pass reasons from Activity logs.
+These reasons are retained observations, not a check that the scheduler still
+runs. With none recorded, it says so. Cron jobs and the scheduler's output help
+diagnose launch failures; the Console never starts work. A live Command in
+Needs you, or in a hidden section, still counts as running.
 
 Choose **Turn notifications on** in the Console header and allow the browser's
 permission prompt. This browser remembers the choice for this Console address;
@@ -168,19 +205,47 @@ No matching entries or no crontab shows an empty view; an unavailable `crontab`
 command or a read failure reports an error. This view never changes the crontab
 or starts a Command.
 
+Scores (`/scores`, or `g q`) lists the sample by week and each criterion's
+calibration, from the same retained records as `thirdshift scores --json`.
+Enter five pass/fail Scores and reasons in a sample's form. The model's Scores
+are withheld from the response until all five of yours are saved, using the
+same lock and atomic write as `thirdshift scores <pull request> --mine --json`.
+Score again opens another blind entry. Reload to see changes from other clients.
+
+Bug origins (`/bug-origins`, or `g u`) lists proposed, confirmed and rejected
+origins with their evidence, pull requests, Ticket-run attribution and settled
+Eval task. Confirm, Correct (a pull request URL or number) and Reject use exactly
+the operations behind `thirdshift bug-origins <issue> --confirm`,
+`--correct <pull request>` and `--none`, including their refusal of concurrent
+Scoring writers. Every form requires CSRF; both pages require sign-in unless
+the Console runs with `--no-sign-in`. Confirmation proposes an Eval task and
+starts no work. `node --test console/tests/scoring.test.cjs` checks navigation,
+all four actions, escaping and 390 px after a build.
+
 Lanes shows each Command and its child Runs on a shared time axis, over the last
 3.5, 12 or 24 hours. The window is kept in `hours=`; bars clip to that window,
 while their text retains the whole stage's time. Older Commands are on History.
-Stages keeps live Runs first across repositories, then finished Runs newest first.
-Tables continue when the repository changes or three columns are filled, so
-each stage's Usual range belongs to that table's repository. On phones each
-stage stacks its labelled cells. Historical Runs without stage metadata show
+Stages defaults to **All runs**, one grid across repositories. **By repository**
+shows one grid per repository; the browser remembers an explicit view choice.
+Each Spec run stays with its exact Ticket runs, including repeated attempts on
+the same issue. Groups are newest-started first by their owning run, and Ticket
+runs are newest-started first within each Spec group. Live state and finish
+times do not change that order. Dispatch ancestry stays visible.
+Rows follow the Command record's stage order: implement through cleanup, then
+the stages of other Command kinds. Unrecognised stage names follow all known
+stages in alphabetical order.
+Stages fills the window's width, beside the peek when one is open. More runs
+extend the grid to the right on desktop and phones, with stage names fixed at
+the left. Each cell's Usual range belongs to that run's repository.
+Live updates keep the visible run, selection and focus; **Newest runs** returns
+the relevant grid to its left edge. Historical Runs without stage metadata show
 an unknown time, distinct from a stage that was not reached. Choose
 a column's Run link to open its exact peek. Repeated stages retain every visit;
 missing end timestamps say “time unknown” rather than inventing a duration.
 Both pages use the observations from `status --all --json`. The Rust parity
 test checks their stage times and Usual ranges against the CLI; the Playwright
-time tests check scale in all windows, child selection, live ordering and 390 px.
+time tests check scale in all windows, grouping, both views, preferences, live
+insertions, keyboard access, Themes, 390 px and Stages at 1920 px.
 
 Waterfall chooses one retained Command with live, died and ended chips, keeping
 its exact selection in `command=`. A span tree replaces the old Run sections:
@@ -211,8 +276,11 @@ input/output and attributes, plus a conversation link and Copy CLI. Conversation
 links open the Session because that reader does not yet anchor individual
 records. Command details opens the existing Peek with Stop, logs and the PR.
 Its Run metrics come from the same details as `thirdshift show <command> --json`,
-including nested Runs. Recorded zeroes stay zero; unavailable signals say
-Missing, including older Runs without retained metrics.
+including nested Ticket runs. Recorded zeroes stay zero; unavailable signals say
+Missing, including older Ticket runs without retained metrics.
+That Peek's Copy CLI copies its `thirdshift show '<command>' --json` line; if
+the browser refuses the clipboard, the line is selected to copy by keyboard,
+and stays selected through live refresh.
 
 Zoom fits a parent span or a padded window around a call. The sticky axis keeps
 the zoom notice and Zoom out control visible; the slowest calls re-rank within
@@ -232,6 +300,24 @@ escaping and 390 px. Retained timing checks also run with
 `python3 console/reproductions/waterfall-stage.py`, and
 `python3 console/reproductions/waterfall-trace-axis.py` after a build.
 
+Experiments (`/experiments`, or `g` then `x`) uses Running, Needs you and Done
+groups. Its Experiment page shows the live Trial grid, per-suite Verdict
+intervals, pending rechecks, Arm comparison and folded Bar. A Trial or Eval task
+opens the Peek; each retained attempt links to its Session log or Session trace.
+Both pages use the same view as `thirdshift experiments [<id>] --json`, including
+the saved refs/title, end time, resume command, active Trials and session IDs.
+`thirdshift experiments <id> --session <session-id> [--json]` reads a listed
+session; JSON returns its `id`, `trace` flag and `contents`.
+These pages poll every two seconds independently of Command-record events, and
+retain folds, filters and the open Peek. Rechecks stay in the CLI; Copy command
+copies the current Trial's command. `node --test console/tests/experiments.test.cjs`
+checks live updates and interaction at 390 px after a build.
+The Experiments list also shows proposed Eval tasks; each Experiment page shows
+proposals for its suites. Approve one there or with
+`thirdshift evals approve <suite> <task> [--json]`. Both change only the manifest's
+state and start no work. Approval affects future Experiments; an existing
+Experiment keeps its fixed Eval tasks on resume.
+
 `j` / `k` select headings and visible rows, wrapping at either end. `Space`
 folds a heading or toggles a row's peek; `Enter` opens that row's full Command
 log. `z` folds the current section. `Escape` closes help, jumps or the peek,
@@ -245,7 +331,7 @@ For an exact older Command, `show` and `logs` also accept the absolute record
 or Command-log path. The Console adds `::name` to a record path to distinguish
 a dispatched Run from its enclosing Command. A retained Session-trace path can
 select a historical Command without a record; `logs --session` accepts an exact
-path from that Command's Session inventory as well as a session kind.
+path from that Command's Session traces as well as a session kind.
 Page 6, `/logs`, lists every Command log and Session trace in the current
 `commands/` layout, including Security logs, and marks the live ones. Every
 Command row links to its Command logs and Session traces, including child Ticket Runs.

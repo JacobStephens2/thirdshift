@@ -1,6 +1,7 @@
 import { activity, loadLook, motionAllowed } from './look.js';
 import { watchCommands } from './changes.js';
 import { initSpanTree } from './spans.js';
+import { initStages } from './stages.js';
 let spanTree;
 
 // Browser preferences are conveniences; malformed or unavailable storage hides nothing.
@@ -101,19 +102,26 @@ function morph(html) {
 }
 
 const timePage = document.querySelector('main[data-time-page]');
+const stages = initStages(timePage, refresh);
 function morphTimePage(html) {
   const next = new DOMParser().parseFromString(html, 'text/html');
   const replacement = next.querySelector('main[data-time-page]');
   if (!replacement) throw new Error('Missing time page');
+  if (stages && !stages.accepts(replacement)) return;
   const selection = selected?.dataset.command;
   const focused = timePage.contains(document.activeElement);
   const position = [scrollX, scrollY];
+  const hours = timePage.querySelector('[name="hours"]')?.value;
+  const reading = stages?.capture();
   Idiomorph.morph(timePage, replacement);
+  // A push refreshes the rows while the person may still be editing this form.
+  if (hours !== undefined) timePage.querySelector('[name="hours"]').value = hours;
   if (selection) {
     const row = [...timePage.querySelectorAll('.command')].find(row => row.dataset.command === selection);
     select(row, { scroll: false });
-    if (focused) row?.focus({ preventScroll: true });
+    if (focused && !stages) row?.focus({ preventScroll: true });
   }
+  if (reading) stages.restore(reading);
   window.scrollTo(...position);
   activity();
   loadLook();
@@ -133,7 +141,7 @@ async function refresh() {
       activity();
       loadLook();
     } else {
-      const response = await fetch(timePage ? location.href : '/', { cache: "no-store" });
+      const response = await fetch(stages?.url() ?? (timePage ? location.href : '/'), { cache: "no-store" });
       if (!response.ok) throw new Error("Inbox unavailable");
       const html = await response.text();
       if (timePage) morphTimePage(html);
@@ -162,6 +170,17 @@ const jumps = document.querySelector('#jumps');
 let selected = null;
 let peekCommand = null;
 let pendingPeek = null;
+// Details can be replaced or reopened while a dismissal request is in flight.
+const dismissals = new Map();
+
+function showDismissal() {
+  const form = content.querySelector('form[data-dismiss]');
+  if (!form) return;
+  const state = dismissals.get(form.elements.command.value);
+  form.querySelector('button').disabled = state?.pending ?? false;
+  form.querySelector('[role="status"]').textContent = state && (state.pending || state.action === form.action)
+    ? state.message : '';
+}
 
 function initializeSpanTree() { return initSpanTree({
   openDetails() {
@@ -212,6 +231,21 @@ async function refreshPeek() {
   }
 }
 
+// A live refresh replaces the pane; keep a copy's status and its by-hand selection.
+function keepCopy() {
+  const old = content.querySelector('.peek-cli');
+  if (!old) return () => {};
+  const status = old.querySelector('[role="status"]').textContent;
+  const selection = getSelection();
+  const selected = old.contains(selection.anchorNode) && selection.toString() === old.querySelector('code').textContent;
+  return () => {
+    const fresh = content.querySelector('.peek-cli');
+    if (!fresh) return;
+    fresh.querySelector('[role="status"]').textContent = status;
+    if (selected) selection.selectAllChildren(fresh.querySelector('code'));
+  };
+}
+
 async function loadPeek(url) {
   pendingPeek?.abort();
   const request = new AbortController();
@@ -221,8 +255,11 @@ async function loadPeek(url) {
     if (!response.ok) throw new Error('Details unavailable');
     const html = await response.text();
     if (request.signal.aborted) return;
+    const restoreCopy = keepCopy();
     // Only the server's escaped show template is inserted, never a log.
     content.replaceChildren(document.createRange().createContextualFragment(html));
+    restoreCopy();
+    showDismissal();
     if (content.querySelector('[data-live="true"]')) startUpdates();
     else stopPeekUpdates();
   } catch (error) {
@@ -266,6 +303,53 @@ for (const [letter, target] of targets) {
   jumps.append(button);
 }
 
+content.addEventListener('click', async event => {
+  const copy = event.target.closest('.peek-cli [data-copy-cli]');
+  if (!copy) return;
+  const line = copy.closest('.peek-cli');
+  const status = line.querySelector('[role="status"]');
+  try {
+    await navigator.clipboard.writeText(copy.dataset.copyCli);
+    status.textContent = 'CLI copied.';
+  } catch {
+    // An insecure origin or refused permission still leaves the text ready to copy by hand.
+    getSelection().selectAllChildren(line.querySelector('code'));
+    status.textContent = 'Selected; copy it with your keyboard.';
+  }
+});
+content.addEventListener('submit', async event => {
+  const form = event.target.closest('form[data-dismiss]');
+  if (!form) return;
+  event.preventDefault();
+  const command = form.elements.command.value;
+  if (dismissals.get(command)?.pending) return;
+  const undo = new URL(form.action).pathname === '/dismiss/undo';
+  const state = {
+    action: form.action, pending: true,
+    message: undo ? 'Taking back dismissal…' : 'Dismissing…'
+  };
+  dismissals.set(command, state);
+  showDismissal();
+  let saved = false;
+  try {
+    const response = await fetch(form.action, {
+      method: 'POST', body: new URLSearchParams(new FormData(form))
+    });
+    if (!response.ok) throw new Error(await response.text());
+    saved = true;
+    pendingPeek?.abort();
+    pendingPeek = null;
+    await refresh();
+    dismissals.delete(command);
+  } catch (error) {
+    state.message = saved
+      ? `Dismissal saved. Could not refresh details: ${error.message}`
+      : `Could not save the dismissal: ${error.message}`;
+  } finally {
+    state.pending = false;
+    showDismissal();
+  }
+});
 document.querySelector('[data-close-peek]').addEventListener('click', closePeek);
 document.querySelector('[data-close-keys]').addEventListener('click', () => help.close());
 document.querySelector('[data-open-keys]').addEventListener('click', () => help.showModal());

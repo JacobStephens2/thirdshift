@@ -11,6 +11,57 @@ fn cli(home: &Path, args: &[&str]) -> Value {
 }
 
 #[test]
+fn span_json_retains_stable_run_and_dispatch_names() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut fixture = record(home.path(), 7, Some("merged"), 0);
+    fixture["kind"] = json!("Run");
+    fixture["issue"]["title"] = json!("Widgets");
+    fixture["stages"] = json!([
+        {"name": "implement", "began_at": fixture["started_at"], "session_log": null},
+        {"name": "dispatched Run", "began_at": fixture["started_at"], "session_log": null}
+    ]);
+    write_record(home.path(), 7, &fixture);
+    let tree = cli(home.path(), &["show", "widgets#7", "--spans", "--json"]);
+    let spans = tree["spans"].as_array().unwrap();
+    for span in spans
+        .iter()
+        .filter(|span| span["kind"] == "cmd" || span["kind"] == "run")
+    {
+        assert_eq!(span["name"], "Run · acme/widgets#7 · Widgets");
+        let detail = cli(
+            home.path(),
+            &[
+                "show",
+                "widgets#7",
+                "--span",
+                span["id"].as_str().unwrap(),
+                "--json",
+            ],
+        );
+        assert_eq!(detail["name"], span["name"]);
+    }
+    assert!(
+        spans
+            .iter()
+            .any(|span| span["kind"] == "stage" && span["name"] == "dispatched Run"),
+        "{tree}"
+    );
+    let shown = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+        .args(["show", "widgets#7", "--spans"])
+        .env("HOME", home.path())
+        .output()
+        .unwrap();
+    assert!(shown.status.success(), "{shown:?}");
+    let text = String::from_utf8(shown.stdout).unwrap();
+    assert!(
+        text.contains("Ticket run · acme/widgets#7 · Widgets"),
+        "{text}"
+    );
+    assert!(text.contains("dispatched Ticket run"), "{text}");
+}
+
+#[test]
 fn span_tree_and_details_pair_cli_with_routes_and_nest_child_runs() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
@@ -93,4 +144,235 @@ fn span_tree_and_details_pair_cli_with_routes_and_nest_child_runs() {
         .unwrap();
     assert!(html.contains("id=\"span-tree\""));
     assert!(!html.contains("cargo test <unsafe>"));
+}
+
+fn export(home: &Path, selector: &str, name: &str) -> std::path::PathBuf {
+    let dir = home.join(name);
+    let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+        .args(["logs", selector, "--export", dir.to_str().unwrap()])
+        .env("HOME", home)
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    dir
+}
+
+fn exported_spans(dir: &Path) -> Vec<Value> {
+    fs::read_to_string(dir.join("spans.jsonl"))
+        .unwrap()
+        .lines()
+        .flat_map(|line| {
+            let request: Value = serde_json::from_str(line).unwrap();
+            request["resourceSpans"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .flat_map(|resource| resource["scopeSpans"].as_array().unwrap().clone())
+                .flat_map(|scope| scope["spans"].as_array().unwrap().clone())
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+fn exported<'a>(spans: &'a [Value], id: &Value) -> &'a Value {
+    spans
+        .iter()
+        .find(|span| &span["spanId"] == id)
+        .unwrap_or_else(|| panic!("{id} was not exported"))
+}
+
+#[test]
+fn waterfall_shows_a_selected_child_subtree_while_export_keeps_the_whole_owner() {
+    // Vary only the selected Ticket, so its root status is distinguishable
+    // from the merged owner's.
+    let mut states = vec![
+        (Some("ready for review"), "ready for review"),
+        (None, "died"),
+    ];
+    #[cfg(unix)]
+    states.push((None, "running"));
+    for (outcome, status) in states {
+        let home = tempfile::tempdir().unwrap();
+        configure(home.path());
+        #[cfg(unix)]
+        let work =
+            super::watching::FixtureProcess(Command::new("sleep").arg("60").spawn().unwrap());
+        let mut parent = record(home.path(), 7, Some("merged"), 0);
+        parent["stages"] = json!([{ "name": "Tickets", "began_at": parent["started_at"] }]);
+        write_record(home.path(), 7, &parent);
+        let dir = home
+            .path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue");
+        for number in [98, 99] {
+            let mut child = parent.clone();
+            child["kind"] = json!("Run");
+            child["name"] = json!(format!("ticket-{number}"));
+            child["issue"]["number"] = json!(number);
+            child["parent_record"] = json!(dir.join("7-fixture.command.json"));
+            child["stages"] = json!([{"name": "implement", "began_at": parent["started_at"]}]);
+            if number == 99 {
+                child["outcome"] = json!(outcome);
+                child["ended_at"] = outcome.map_or(Value::Null, |_| parent["ended_at"].clone());
+                #[cfg(unix)]
+                if status == "running" {
+                    child["process_id"] = json!(work.0.id());
+                    child["process_start"] = json!(super::watching::start(work.0.id()));
+                }
+            }
+            fs::write(
+                dir.join(format!("7-fixture.issue-{number}.child.json")),
+                serde_json::to_vec(&child).unwrap(),
+            )
+            .unwrap();
+        }
+        let whole = cli(home.path(), &["show", "widgets#7", "--spans", "--json"]);
+        let whole = whole["spans"].as_array().unwrap();
+        let selected = cli(home.path(), &["show", "widgets#99", "--spans", "--json"]);
+        let selected = selected["spans"].as_array().unwrap();
+        let run = |spans: &[Value], subject: &str| {
+            spans
+                .iter()
+                .find(|span| {
+                    span["kind"] == "run" && span["name"].as_str().unwrap().contains(subject)
+                })
+                .cloned()
+        };
+
+        // The selected Ticket keeps its outer Command's identity and only its subtree.
+        let kinds: Vec<_> = selected.iter().map(|span| span["kind"].clone()).collect();
+        assert_eq!(kinds, ["cmd", "run", "stage"], "{status}: {selected:?}");
+        assert_eq!(selected[0]["id"], whole[0]["id"], "{status}");
+        assert!(selected[0]["name"].as_str().unwrap().contains("#99"));
+        assert_eq!(selected[0]["status"], status);
+        assert_eq!(whole[0]["status"], "merged");
+        assert_eq!(selected[1]["id"], run(whole, "#99").unwrap()["id"]);
+        assert_eq!(selected[1]["parent_id"], selected[0]["id"]);
+        assert!(run(selected, "#98").is_none() && run(selected, "#7").is_none());
+
+        // Export through the same Ticket includes its sibling and its owner.
+        let spans = exported_spans(&export(home.path(), "widgets#99", "export"));
+        assert_eq!(spans.len(), whole.len(), "{status}");
+        for node in whole {
+            let span = exported(&spans, &node["id"]);
+            let parent = node["parent_id"].as_str().unwrap_or_default();
+            assert_eq!(span["parentSpanId"].as_str().unwrap_or_default(), parent);
+        }
+        assert_eq!(exported(&spans, &whole[0]["id"])["name"], "Command");
+    }
+}
+
+#[test]
+fn waterfall_attaches_a_reused_session_to_its_first_stage_while_export_keeps_its_parent() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut fixture = record(home.path(), 7, Some("merged"), 0);
+    let dir = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    let session = dir.join("7-20261001T120000+0000-implement.logs.jsonl");
+    fixture["kind"] = json!("Run");
+    fixture["started_at"] = json!("2026-10-01T12:00:00Z");
+    fixture["ended_at"] = json!("2026-10-01T12:01:00Z");
+    fixture["session_log"] = json!(session);
+    fixture["stages"] = json!([
+        {"name":"implement","began_at":"2026-10-01T12:00:10Z","session_log":session},
+        {"name":"pull request","began_at":"2026-10-01T12:00:50Z","session_log":session}
+    ]);
+    write_record(home.path(), 7, &fixture);
+    let spans_file = support::session_trace::artifact(&session, "spans.jsonl");
+    fs::write(&spans_file, "").unwrap();
+    fs::write(&session, "").unwrap();
+    // An empty Session exports only the records, revealing the Trace ID.
+    let records = exported_spans(&export(home.path(), "widgets#7", "records"));
+    let trace = records[0]["traceId"].as_str().unwrap();
+    let tree = cli(home.path(), &["show", "widgets#7", "--spans", "--json"]);
+    let stage = |name: &str| {
+        tree["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|span| span["name"] == name)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    };
+    let (implement, pull_request) = (stage("implement"), stage("pull request"));
+    // An older trace recorded the later stage that reused this Session.
+    let request = format!(
+        r#"{{"resourceSpans":[{{"scopeSpans":[{{"spans":[{{"traceId":"{trace}","spanId":"4444444444444444","parentSpanId":"{pull_request}","name":"invoke_agent implement","startTimeUnixNano":"1790856010000000000","endTimeUnixNano":"1790856050000000000","attributes":[{{"key":"gen_ai.operation.name","value":{{"stringValue":"invoke_agent"}}}}],"futureField":true}}]}}]}}],"futureRequest":1}}"#
+    );
+    fs::write(&spans_file, format!("{request}\n")).unwrap();
+    let log = format!(
+        r#"{{"resourceLogs":[{{"scopeLogs":[{{"logRecords":[{{"traceId":"{trace}","spanId":"4444444444444444","body":{{"stringValue":"retained"}},"futureField":true}}]}}]}}]}}"#
+    );
+    fs::write(&session, format!("{log}\n")).unwrap();
+
+    let tree = cli(home.path(), &["show", "widgets#7", "--spans", "--json"]);
+    let shown = tree["spans"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|span| span["id"] == "4444444444444444")
+        .unwrap();
+    assert_eq!(shown["kind"], "sess");
+    assert_eq!(shown["parent_id"], implement.as_str());
+
+    let dir = export(home.path(), "widgets#7", "export");
+    let spans = exported_spans(&dir);
+    assert_eq!(
+        exported(&spans, &json!("4444444444444444"))["parentSpanId"],
+        pull_request.as_str()
+    );
+    let lines = fs::read_to_string(dir.join("spans.jsonl")).unwrap();
+    assert!(lines.lines().any(|line| line == request), "{lines}");
+    assert_eq!(
+        fs::read_to_string(dir.join("logs.jsonl")).unwrap(),
+        format!("{log}\n")
+    );
+}
+
+#[test]
+fn export_reports_existing_files_before_session_inventory_errors() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let dir = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    fs::create_dir_all(&dir).unwrap();
+    let time = chrono::Local::now().to_rfc3339();
+    let record = json!({
+        "version": 1, "kind": "Spec run", "repository": "acme/widgets",
+        "name": "orphan", "issue": null,
+        "hostname": "fixture", "process_id": 0, "process_start": "gone",
+        "harness": "codex", "model": null, "effort": null,
+        "started_at": time, "ended_at": time,
+        "stages": [{"name": "implement", "began_at": time, "session_log": null}],
+        "session_log": null, "outcome": "merged", "cause": null,
+        "issue_branch": null, "pull_request": null
+    });
+    let log = dir.join("20261019T110000-0400~spec.command.json");
+    fs::write(&log, serde_json::to_vec(&record).unwrap()).unwrap();
+    let run = |out: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+            .args([
+                "logs",
+                log.to_str().unwrap(),
+                "--export",
+                out.to_str().unwrap(),
+            ])
+            .env("HOME", home.path())
+            .output()
+            .unwrap()
+    };
+    let existing = home.path().join("out");
+    fs::create_dir_all(&existing).unwrap();
+    fs::write(existing.join("spans.jsonl"), "").unwrap();
+    let output = run(&existing);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("export files already exist"), "{stderr}");
+    // The old order created the directory before reading the inventory.
+    let fresh = home.path().join("out2");
+    assert!(!run(&fresh).status.success());
+    assert!(fresh.is_dir());
 }

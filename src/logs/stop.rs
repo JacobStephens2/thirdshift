@@ -67,15 +67,8 @@ fn require_live(record: &CommandRecord) -> Result<()> {
 }
 
 pub fn stop(input: &str, requeue: bool, json: bool) -> Result<()> {
-    let user = std::process::Command::new("id")
-        .arg("-un")
-        .output()
-        .context("could not identify the Unix user asking for Stop")?;
-    if !user.status.success() {
-        bail!("could not identify the Unix user asking for Stop");
-    }
     let request = Request {
-        who: String::from_utf8(user.stdout)?.trim().to_owned(),
+        who: super::unix_user("Stop")?,
         requeue,
         from_console: false,
     };
@@ -116,6 +109,7 @@ pub(crate) fn request_stop(input: &str, request: Request) -> Result<PathBuf> {
 
 pub(crate) struct Inspection {
     pub details: serde_json::Value,
+    pub dismissal: Option<super::dismiss::Action>,
     pub can_stop: bool,
     pub stopping: bool,
     pub branches: Vec<String>,
@@ -144,7 +138,9 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
     } else {
         reading::RetainedWork::default()
     };
+    let github = super::github::load(&config.logs_dir);
     Ok(Inspection {
+        dismissal: super::dismiss::action(&snapshot, &github, input, config.inbox_days),
         details,
         can_stop: selected.stop_target(input).is_ok() && !pending,
         stopping,

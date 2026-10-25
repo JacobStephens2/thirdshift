@@ -13,13 +13,17 @@
 
 mod activity;
 mod command_record;
+pub mod dismiss;
 mod effects;
 pub mod export;
+pub(crate) mod github;
 pub mod metrics;
 pub(crate) mod owner;
 mod process_identity;
 mod reading;
+pub(crate) use reading::Framing;
 pub(crate) use reading::catalog;
+pub(crate) use reading::run_for_pull_request;
 mod recording;
 mod run_metrics;
 pub(crate) mod session;
@@ -42,9 +46,33 @@ use crate::session::Logged;
 
 use activity::Kind;
 pub use command_record::StageName as Stage;
-pub(crate) use command_record::{TicketRecord, TicketState};
+pub(crate) use command_record::{TicketRecord, TicketState, experiment_rechecked};
 use effects::OnMachine;
 use recording::Record;
+
+/// The Unix actor recorded for a CLI action, shared by Stop and Dismissal.
+fn unix_user(action: &str) -> anyhow::Result<String> {
+    use anyhow::Context;
+
+    let failure = format!("could not identify the Unix user asking for {action}");
+    let user = std::process::Command::new("id")
+        .arg("-un")
+        .output()
+        .with_context(|| failure.clone())?;
+    if !user.status.success() {
+        anyhow::bail!(failure);
+    }
+    Ok(String::from_utf8(user.stdout)?.trim().to_owned())
+}
+
+/// Human-facing names for stable stored kinds and dispatch stages (ADR 0022).
+pub(crate) fn display_name(stored: &str) -> &str {
+    match stored {
+        "Run" => "Ticket run",
+        "dispatched Run" => "dispatched Ticket run",
+        other => other,
+    }
+}
 
 /// The command typed, which owns its Session traces and all child Runs' logs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +81,8 @@ pub enum CommandKind {
     Architect,
     Pickup,
     Secure,
+    Scoring,
+    Experiment,
 }
 
 impl CommandKind {
@@ -62,6 +92,8 @@ impl CommandKind {
             Self::Architect => "architect",
             Self::Pickup => "pickup",
             Self::Secure => "secure",
+            Self::Scoring => "scoring",
+            Self::Experiment => "experiment",
         }
     }
 
@@ -71,6 +103,8 @@ impl CommandKind {
             "architect" => Some(Self::Architect),
             "pickup" => Some(Self::Pickup),
             "secure" => Some(Self::Secure),
+            "scoring" => Some(Self::Scoring),
+            "experiment" => Some(Self::Experiment),
             _ => None,
         }
     }
@@ -89,6 +123,8 @@ pub enum Begin<'a> {
     /// `thirdshift pickup`, a pass.
     PickupRun,
     SecurityRun,
+    ScoringRun,
+    Experiment,
 }
 
 /// The work a command starts.
@@ -106,6 +142,8 @@ pub enum Work<'a> {
     ArchitectRun(&'a Repo),
     /// A Security run, on its repository.
     SecurityRun(&'a Repo),
+    ScoringRun(&'a Repo),
+    Experiment(&'a Repo),
 }
 
 /// A Pass, a command that may be skipped before it starts work.
@@ -235,6 +273,14 @@ pub fn finished(account: &crate::run_ending::Account<'_>) {
     record().finished(account);
 }
 
+pub(crate) fn experiment(description: &crate::evals::experiment::Description) {
+    record().experiment(description);
+}
+
+pub(crate) fn experiment_finished(outcome: &str, cause: Option<&str>) {
+    record().experiment_finished(outcome, cause);
+}
+
 /// The Stop given to this Command, if interruption is being handled.
 pub fn stop_requested() -> Option<stop::Request> {
     if !crate::interrupt::requested() {
@@ -274,6 +320,11 @@ pub fn root(repo: &Repo) -> PathBuf {
 /// The command whose folder holds this process's Session traces.
 pub fn command_kind() -> CommandKind {
     record().command_kind()
+}
+
+/// Resolve a locally retained Run by its pull request, including child Runs.
+pub(crate) fn record_for_pull_request(root: &Path, url: &str) -> anyhow::Result<Option<PathBuf>> {
+    Ok(run_for_pull_request(root, url)?.map(|(path, _)| path))
 }
 
 /// Where this command and all its child Runs keep Session traces on `repo`.
@@ -329,7 +380,9 @@ impl<'a> Work<'a> {
             Work::Run(_) | Work::BaseFix(_) => Some(Stage::Implement),
             Work::SpecRun(_) => Some(Stage::Tickets),
             Work::ArchitectRun(_) => Some(Stage::ArchitectureReview),
+            Work::ScoringRun(_) => Some(Stage::Sampling),
             Work::PickupRun(_) | Work::SecurityRun(_) => None,
+            Work::Experiment(_) => Some(Stage::ArmBuilds),
         }
     }
 
@@ -338,7 +391,10 @@ impl<'a> Work<'a> {
         match self {
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => issue.repo(),
             Work::PickupRun(listed) => listed.issue.repo(),
-            Work::ArchitectRun(repo) | Work::SecurityRun(repo) => repo.clone(),
+            Work::ArchitectRun(repo)
+            | Work::SecurityRun(repo)
+            | Work::ScoringRun(repo)
+            | Work::Experiment(repo) => repo.clone(),
         }
     }
 
@@ -350,6 +406,8 @@ impl<'a> Work<'a> {
             Work::PickupRun(_) => Kind::Pass(Pass::Pickup),
             Work::ArchitectRun(_) => Kind::Pass(Pass::Architect),
             Work::SecurityRun(_) => Kind::Pass(Pass::Security),
+            Work::ScoringRun(_) => Kind::ScoringRun,
+            Work::Experiment(_) => Kind::Experiment,
         }
     }
 
@@ -358,7 +416,10 @@ impl<'a> Work<'a> {
         match self {
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => Some(issue),
             Work::PickupRun(listed) => Some(&listed.issue),
-            Work::ArchitectRun(_) | Work::SecurityRun(_) => None,
+            Work::ArchitectRun(_)
+            | Work::SecurityRun(_)
+            | Work::ScoringRun(_)
+            | Work::Experiment(_) => None,
         }
     }
 

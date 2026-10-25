@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use crate::failed_run::PolicyRefusal;
 use crate::github::{GitHub, Mergeable, PrSnapshot, PrState};
 use crate::harness::Choice;
+use crate::harness::built_with::MARKER as BUILT_WITH_MARKER;
 use crate::issue::IssueUrl;
 use crate::{poll, progress};
 
@@ -214,12 +215,15 @@ impl<A: Adapter> PullRequest<A> {
         };
         self.validate(&snapshot, false)?;
         let body = self.adapter.body(&self.issue, snapshot.pr.number, false)?;
-        let written = with_built_with(&body, choice);
+        let owner = crate::logs::captured_owner().ok();
+        let version = crate::harness::version::detected(
+            choice.harness,
+            owner.as_ref().and_then(|owner| owner.log_path()),
+        );
+        let line = choice.built_with(&version);
+        let written = with_built_with(&body, &line);
         if written != body {
-            progress::step(format!(
-                "writing \"{}\" in the pull request's body",
-                choice.built_with()
-            ));
+            progress::step(format!("writing \"{line}\" in the pull request's body"));
             self.adapter
                 .set_body(&self.issue, snapshot.pr.number, &written, false)?;
         }
@@ -638,11 +642,9 @@ fn with_checklist(body: &str, checklist: &str) -> String {
     format!("{}\n\n{checklist}", body.trim_end())
 }
 
-const BUILT_WITH_MARKER: &str = "<!-- thirdshift:built-with -->";
-
 /// Preserve unrelated text and replace only thirdshift's annotation line.
-fn with_built_with(body: &str, choice: &Choice) -> String {
-    let line = format!("{} {BUILT_WITH_MARKER}", choice.built_with());
+fn with_built_with(body: &str, line: &str) -> String {
+    let line = format!("{line} {BUILT_WITH_MARKER}");
     if body.contains(BUILT_WITH_MARKER) {
         return body
             .split_inclusive('\n')
@@ -1275,7 +1277,7 @@ mod tests {
         pr.write_built_with(&Choice::default()).unwrap();
         pr.write_built_with(&choice).unwrap();
         let expected =
-            "Closes #7\n\nBuilt with claude · opus · high <!-- thirdshift:built-with -->\n";
+            "Closes #7\n\nBuilt with claude unknown · opus · high <!-- thirdshift:built-with -->\n";
         assert_eq!(world.borrow().body, expected);
         assert_eq!(world.borrow().edits.len(), 2);
         assert!(world.borrow().edits.iter().all(|(number, _)| *number == 12));
@@ -1291,7 +1293,7 @@ mod tests {
         pr.write_built_with(&Choice::default()).unwrap();
         assert_eq!(
             world.borrow().body,
-            "Summary\r\nBuilt with claude · default model · default effort <!-- thirdshift:built-with -->\r\n\r\nCloses #7\r\n"
+            "Summary\r\nBuilt with claude unknown · default model · default effort <!-- thirdshift:built-with -->\r\n\r\nCloses #7\r\n"
         );
     }
 

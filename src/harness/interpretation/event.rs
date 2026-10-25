@@ -157,7 +157,7 @@ pub enum ErrorKind {
 }
 
 impl ErrorKind {
-    pub(in crate::harness) fn from_text(text: &str) -> Self {
+    pub(crate) fn from_text(text: &str) -> Self {
         let text = text.to_ascii_lowercase();
         if [
             "usage_limit",

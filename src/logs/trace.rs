@@ -1,4 +1,6 @@
 //! Deterministic Trace ancestry. No second copy of Command or stage times.
+pub(super) mod ancestry;
+
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
@@ -48,7 +50,9 @@ pub(crate) fn id<const N: usize>(parts: &[&[u8]]) -> Id<N> {
     Id(digest[..N].try_into().expect("ID fits SHA-256"))
 }
 
-#[derive(Clone)]
+pub(crate) const TRIAL_CONTEXT: &str = "THIRDSHIFT_TRIAL_TRACE_CONTEXT";
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Context {
     pub trace: TraceId,
     pub command: SpanId,
@@ -63,7 +67,7 @@ impl Context {
         Self::of_owner(owner).for_record(record)
     }
 
-    pub(super) fn for_record(&self, record: &CommandRecord) -> Self {
+    fn for_record(&self, record: &CommandRecord) -> Self {
         let mut context = self.clone();
         context.repository = record.repository.clone();
         context.run = id(&[
@@ -95,22 +99,6 @@ impl Context {
             stage.name.as_bytes(),
             stage.began_at.as_bytes(),
         ])
-    }
-
-    /// Both retained views place a child Run in the stage that dispatched it.
-    pub(super) fn child_parent(&self, record: &CommandRecord, child: &CommandRecord) -> SpanId {
-        let started = chrono::DateTime::parse_from_rfc3339(&child.started_at).ok();
-        record
-            .stages
-            .iter()
-            .rev()
-            .find(|stage| {
-                chrono::DateTime::parse_from_rfc3339(&stage.began_at)
-                    .ok()
-                    .zip(started)
-                    .is_some_and(|(began, started)| began <= started)
-            })
-            .map_or(self.run, |stage| self.stage_id(stage))
     }
 
     pub(crate) fn of_owner(owner: &Owner) -> Self {

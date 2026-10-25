@@ -140,6 +140,10 @@ fn prompt_of(record: &Json) -> &str {
 /// The script for the session just recorded last in `records`.
 pub fn script_for(records: &[Json]) -> PathBuf {
     let script = crate::env_path("FAKE_CLAUDE_SCRIPT").display().to_string();
+    let grader = PathBuf::from(format!("{script}.grader"));
+    if std::env::var_os("THIRDSHIFT_GRADER_PACKET").is_some() && grader.is_file() {
+        return grader;
+    }
     let mut candidates = Vec::new();
     if let Some(issue) = issue_of(prompt_of(records.last().unwrap())) {
         let count = records

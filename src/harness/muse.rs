@@ -57,6 +57,17 @@ impl Adapter for Muse {
         args.push(self.skill_loading().prompt(prompt));
         Invocation { args, stdin: None }
     }
+    /// A Trial runs behind the allowlisting proxy, so its web tools stay
+    /// off, as a release summary's do.
+    fn trial_session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation {
+        let mut invocation = self.code_review_session(choice, resume, prompt);
+        // Before the prompt, which always comes last.
+        let at = invocation.args.len() - 1;
+        invocation
+            .args
+            .splice(at..at, ["--disable-web-tools".to_string()]);
+        invocation
+    }
     fn check(&self, choice: &mut Choice) -> Result<()> {
         let settled = check_model_and_effort(&ModelAndEffort {
             model: choice.model.clone(),
@@ -156,6 +167,7 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<ModelAndEffort>
                 effort: settled.effort.clone(),
                 chosen_by: super::ChosenBy::UserConfig,
             };
+            crate::resources::wait()?;
             crate::progress::step(format_args!(
                 "checking the Model {model} with a test call to muse"
             ));
@@ -177,4 +189,32 @@ pub fn check_model_and_effort(chosen: &ModelAndEffort) -> Result<ModelAndEffort>
         }
     }
     Ok(settled)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trials_disable_web_tools() {
+        let choice = Choice {
+            harness: Harness::Muse,
+            model: None,
+            effort: None,
+            chosen_by: super::super::ChosenBy::Command,
+        };
+        let trial = Muse.trial_session(&choice, None, "review");
+        // Before the prompt, which always comes last.
+        assert_eq!(
+            &trial.args[trial.args.len() - 2..],
+            ["--disable-web-tools", "review"]
+        );
+        assert!(
+            !Muse
+                .session(&choice, None, "review")
+                .args
+                .iter()
+                .any(|arg| arg == "--disable-web-tools")
+        );
+    }
 }

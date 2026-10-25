@@ -2,7 +2,7 @@
 
 # Fresh
 
-Starts the implement session, which goes on to review and open the pull request, when the Run starts a new Issue branch.
+Starts the implement session, which goes on to review and open the pull request, when the Ticket run starts a new Issue branch.
 
 ```
 /thirdshift-implement <Issue URL>

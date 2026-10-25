@@ -143,7 +143,7 @@ fn with_no_flag_and_no_user_config_sessions_run_on_claude_with_no_model_and_no_t
     assert!(test_calls(&scenario).is_empty());
     assert!(
         pr_body(&scenario).ends_with(
-            "\n\nBuilt with claude · default model · default effort \
+            "\n\nBuilt with claude 9.8.7 · default model · default effort \
              <!-- thirdshift:built-with -->\n"
         ),
         "{}",
@@ -308,7 +308,7 @@ fn the_command_log_the_activity_log_and_the_pr_body_name_the_harness_model_and_e
     );
     assert!(
         pr_body(&scenario).ends_with(
-            "Closes #7\n\nBuilt with claude · opus · high <!-- thirdshift:built-with -->\n"
+            "Closes #7\n\nBuilt with claude 9.8.7 · opus · high <!-- thirdshift:built-with -->\n"
         ),
         "{}",
         pr_body(&scenario)
@@ -316,7 +316,7 @@ fn the_command_log_the_activity_log_and_the_pr_body_name_the_harness_model_and_e
 }
 
 #[test]
-fn the_run_notification_names_the_harness_model_and_effort() {
+fn the_run_notification_and_pr_name_the_same_detected_harness_version_model_and_effort() {
     let scenario = scenario();
     let resend = ResendStandIn::replying(200, r#"{"id":"49a3999c"}"#);
 
@@ -339,7 +339,14 @@ fn the_run_notification_names_the_harness_model_and_effort() {
     assert_eq!(requests.len(), 1, "{requests:?}");
     let text = requests[0].body["text"].as_str().unwrap();
     assert!(
-        text.contains("\nBuilt with claude · default model · max (configured)\nSent by:      thirdshift\nHost:"),
+        text.contains("\nBuilt with claude 9.8.7 · default model · max (configured)\nSent by:      thirdshift\nHost:"),
         "{text}"
+    );
+    assert!(
+        pr_body(&scenario).ends_with(
+            "Built with claude 9.8.7 · default model · max <!-- thirdshift:built-with -->\n"
+        ),
+        "{}",
+        pr_body(&scenario)
     );
 }

@@ -82,6 +82,19 @@ fn all_six_harnesses_record_their_version_in_session_trace_resources() {
         let result = scenario.run(&["harness", harness, &scenario.issue_url(7)]);
         assert_eq!(result.code, Some(0), "{harness}: {}", result.stderr);
         assert_harness_version(&scenario, "9.8.7");
+        assert!(
+            scenario.gh_state()["prs"][0]["body"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("Built with {harness} 9.8.7 · ")),
+            "{}",
+            scenario.gh_state()
+        );
+        let (_, notification) = support::resend::saved_notification(&scenario, "issue");
+        assert!(
+            notification.contains(&format!("Built with {harness} 9.8.7 · ")),
+            "{notification}"
+        );
         assert_eq!(
             version_queries(&scenario, harness),
             usize::from(harness != "claude")
@@ -100,6 +113,18 @@ fn parallel_ticket_sessions_share_one_version_query_but_a_new_command_reads_agai
     assert_eq!(scenario.codex_calls().len(), 3);
     assert_harness_version(&scenario, "9.8.7");
     assert_eq!(version_queries(&scenario, "codex"), 1);
+    let state = scenario.gh_state();
+    let prs = state["prs"].as_array().unwrap();
+    assert_eq!(prs.len(), 3, "{state}");
+    for pr in prs {
+        assert!(
+            pr["body"]
+                .as_str()
+                .unwrap()
+                .contains("Built with codex 9.8.7 · "),
+            "{pr}"
+        );
+    }
 
     scenario.agent_does_for(7, &opens_pr(7, "main"));
     let result = scenario.run(&["harness", "codex", &scenario.issue_url(7)]);
@@ -122,7 +147,63 @@ fn missing_or_failed_version_lookups_record_unknown_without_failing_the_session(
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert_harness_version(&scenario, "unknown");
         assert_eq!(version_queries(&scenario, "claude"), 1);
+        assert!(
+            scenario.gh_state()["prs"][0]["body"]
+                .as_str()
+                .unwrap()
+                .contains("Built with claude unknown · "),
+            "{}",
+            scenario.gh_state()
+        );
+        let (_, notification) = support::resend::saved_notification(&scenario, "issue");
+        assert!(
+            notification.contains("Built with claude unknown · "),
+            "{notification}"
+        );
     }
+}
+
+#[test]
+fn notification_keeps_the_pull_requests_version_after_a_repair_changes_it() {
+    let scenario = support::Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        r#"
+echo feature > feature.txt
+git add feature.txt
+git commit -qm 'Add feature'
+gh pr create --base main --head issue-7 --title Work --body 'Closes #7'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"failure"}]'
+"#,
+    );
+    scenario.agent_does_in_session(2, r#"
+printf '%s\n' '{"type":"system","subtype":"init","claude_code_version":"10.0.0","session_id":"fake-session-2"}'
+echo fixed > fix.txt
+git add fix.txt
+git commit -qm 'Fix CI'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]'
+"#);
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2);
+    let state = scenario.gh_state();
+    let pr_line = state["prs"][0]["body"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .find(|line| line.starts_with("Built with "))
+        .unwrap()
+        .strip_suffix(" <!-- thirdshift:built-with -->")
+        .unwrap();
+    let (_, notification) = support::resend::saved_notification(&scenario, "issue");
+    let notification_line = notification
+        .lines()
+        .find(|line| line.starts_with("Built with "))
+        .unwrap()
+        .strip_suffix(" (configured)")
+        .unwrap();
+    println!("PR: {pr_line}\nNotification: {notification_line}");
+    assert_eq!(pr_line, notification_line);
 }
 
 #[test]
@@ -311,4 +392,82 @@ while ! test -f "$HOME/release"; do sleep 0.01; done
             );
         }
     }
+}
+
+#[test]
+fn a_live_call_keeps_its_id_through_completion_amendment_and_a_retained_custom_id() {
+    let scenario = Scenario::new();
+    scenario.agent_does(&format!(
+        r#"
+echo '{{"type":"assistant","message":{{"id":"m1","content":[{{"type":"tool_use","id":"deny","name":"Bash","input":{{"command":"git push"}}}}]}}}}'
+touch "$HOME/started"
+while ! test -f "$HOME/complete"; do sleep 0.01; done
+echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"deny","content":"opaque failure","is_error":true}}]}}}}'
+touch "$HOME/completed"
+while ! test -f "$HOME/amend"; do sleep 0.01; done
+echo '{{"type":"result","subtype":"success","permission_denials":[{{"tool_use_id":"deny","tool_name":"Bash","tool_input":{{"command":"git push"}}}}]}}'
+touch "$HOME/amended"
+while ! test -f "$HOME/finish"; do sleep 0.01; done
+{}"#,
+        opens_pr(7, "main")
+    ));
+    let tool = || {
+        let shown = scenario.run(&["show", "widgets#7", "--spans", "--json"]);
+        assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+        let tree: Value = serde_json::from_str(&shown.stdout).unwrap();
+        let tools: Vec<_> = tree["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|span| span["kind"] == "tool")
+            .cloned()
+            .collect();
+        assert_eq!(tools.len(), 1, "{tree}");
+        tools[0].clone()
+    };
+    let step = |release: &str, reached: &str| {
+        fs::write(scenario.path(&format!("home/{release}")), "").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !scenario.path(&format!("home/{reached}")).exists() {
+            assert!(std::time::Instant::now() < deadline, "{reached} never came");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    };
+    let run = scenario.run_until(&[&scenario.issue_url(7)], &[], "home/started");
+    let live = tool();
+    assert_eq!(live["status"], "running", "{live}");
+    step("complete", "completed");
+    let completed = tool();
+    assert_eq!(completed["id"], live["id"]);
+    assert_eq!(completed["start"], live["start"]);
+    assert_eq!(completed["error"], "Failed", "{completed}");
+    step("amend", "amended");
+    // Until Session finish rewrites it, the flushed span outranks replay.
+    let amended = tool();
+    assert_eq!(amended["id"], live["id"]);
+    assert_eq!(amended["error"], "Failed", "{amended}");
+    fs::write(scenario.path("home/finish"), "").unwrap();
+    let result = run.finish();
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let finished = tool();
+    assert_eq!(finished["id"], live["id"]);
+    assert_eq!(finished["start"], live["start"]);
+    assert_eq!(finished["end"], completed["end"]);
+    assert_eq!(finished["error"], "Denied", "{finished}");
+    assert_eq!(finished["attributes"]["thirdshift.outcome"], "denied");
+
+    // A retained custom ID, as a migration writes, replaces replay's identity.
+    let path = scenario
+        .entries(LOGS)
+        .into_iter()
+        .find(|name| name.ends_with(".spans.jsonl"))
+        .map(|name| scenario.path(LOGS).join(name))
+        .unwrap();
+    let live_id = live["id"].as_str().unwrap();
+    let retained = fs::read_to_string(&path).unwrap();
+    assert!(retained.contains(live_id));
+    fs::write(&path, retained.replace(live_id, "00000000000000ff")).unwrap();
+    let custom = tool();
+    assert_eq!(custom["id"], "00000000000000ff");
+    assert_eq!(custom["error"], "Denied", "{custom}");
 }

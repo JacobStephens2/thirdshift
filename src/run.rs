@@ -666,7 +666,11 @@ mod tests {
             let spec_run = match work {
                 Work::Run(_) | Work::BaseFix(_) => false,
                 Work::SpecRun(_) => true,
-                Work::PickupRun(_) | Work::ArchitectRun(_) | Work::SecurityRun(_) => {
+                Work::PickupRun(_)
+                | Work::ArchitectRun(_)
+                | Work::SecurityRun(_)
+                | Work::ScoringRun(_)
+                | Work::Experiment(_) => {
                     panic!("not a Run's work")
                 }
             };

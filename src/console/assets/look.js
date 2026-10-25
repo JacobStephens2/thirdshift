@@ -11,14 +11,35 @@ let saving = false;
 let paused = false;
 let themeInventory = '';
 let themeRevision = '';
+let styleRequest = 0;
 async function refreshThemeStyles() {
-  const previous = document.querySelector('#user-theme-styles');
+  const requestedStyle = ++styleRequest;
+  const requestedRevision = revision;
   const link = document.createElement('link');
   link.rel = 'stylesheet';
+  // Load without applying: a stale response must never replace current fonts.
+  link.media = 'not all';
   link.href = `/assets/user-themes.css?revision=${Date.now()}`;
   const loaded = new Promise((resolve, reject) => { link.onload = resolve; link.onerror = reject; });
   document.head.append(link);
-  try { await loaded; previous?.remove(); link.id = 'user-theme-styles'; }
+  try {
+    await loaded;
+    if (requestedStyle !== styleRequest || requestedRevision !== revision) {
+      link.remove();
+      return;
+    }
+    const previous = document.querySelector('#user-theme-styles');
+    const rules = sheet => [...sheet.cssRules].map(rule => rule.cssText).join('\n');
+    // Selecting a Theme changes /look's revision without changing its CSS.
+    // Preserve the loaded font faces when the stylesheet is already current.
+    if (previous?.sheet && rules(previous.sheet) === rules(link.sheet)) {
+      link.remove();
+      return;
+    }
+    link.media = '';
+    previous?.remove();
+    link.id = 'user-theme-styles';
+  }
   catch (error) { link.remove(); throw error; }
 }
 try { paused = localStorage.getItem('thirdshift:console:pause-motion') === 'true'; } catch { /* optional storage */ }

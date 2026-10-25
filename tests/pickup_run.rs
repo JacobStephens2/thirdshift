@@ -16,10 +16,11 @@
 mod support;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 
 use support::resend::{ResendStandIn, assert_one_issue_line, assert_saved_notification};
-use support::{HeldRun, REPO, RunResult, Scenario, TimelineEvent, before_command_log};
+use support::{
+    HeldRun, REPO, RunResult, Scenario, TimelineEvent, before_command_log, write_executable,
+};
 
 /// The label of an issue a Pickup run may take.
 const READY_FOR_AGENT: &str = "ready-for-agent";
@@ -56,8 +57,7 @@ fn install_git_wrapper(scenario: &Scenario, script: impl FnOnce(&str) -> String)
         .unwrap();
     assert!(git.status.success());
     let git = String::from_utf8(git.stdout).unwrap();
-    fs::write(scenario.path("bin/git"), script(git.trim())).unwrap();
-    fs::set_permissions(scenario.path("bin/git"), fs::Permissions::from_mode(0o755)).unwrap();
+    write_executable(&scenario.path("bin/git"), &script(git.trim()));
 }
 
 /// The newest pull request from `head` on the fake GitHub.
@@ -124,6 +124,119 @@ fn the_lower_numbered_of_two_ready_issues_is_run_and_the_other_left_untouched() 
         scenario.origin_git(&["for-each-ref", "refs/heads/thirdshift/pickup"]),
         ""
     );
+}
+
+/// With Ready issues #7 and #9, `pickup` with `extra` takes `taken` and
+/// leaves `left` labelled `ready-for-agent` with no branch on origin.
+fn pickup_takes(extra: &[&str], taken: u32, left: u32) {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 9, &["bug"]);
+    ready_issue(&scenario, 7, &["bug"]);
+    scenario.agent_does_for(taken, &agent_opens_pr(taken, "main"));
+
+    let mut command = vec!["pickup"];
+    command.extend(extra);
+    let result = scenario.run(&command);
+
+    let pr = pr_from(&scenario, &format!("issue-{taken}"));
+    assert_ended_with_pr(&result, &pr, "ready for review");
+    assert_eq!(
+        scenario.issue_labels(left),
+        [READY_FOR_AGENT, "bug"],
+        "extra: {extra:?}"
+    );
+    assert!(scenario.origin_log(&format!("issue-{left}")).is_none());
+    assert_eq!(
+        scenario.claude_calls().len(),
+        1,
+        "sessions: {:?}",
+        scenario.claude_calls()
+    );
+}
+
+#[test]
+fn the_higher_numbered_of_two_ready_issues_is_run_with_highest_first() {
+    pickup_takes(&["highest-first"], 9, 7);
+}
+
+#[test]
+fn the_lower_numbered_of_two_ready_issues_is_run_with_lowest_first() {
+    pickup_takes(&["lowest-first"], 7, 9);
+}
+
+#[test]
+fn pickup_order_in_the_user_config_sets_which_ready_issue_is_run() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 9, &["bug"]);
+    ready_issue(&scenario, 7, &["bug"]);
+    scenario.agent_does_for(9, &agent_opens_pr(9, "main"));
+    scenario.user_config_is("[pickup]\norder = \"highest-first\"\n");
+
+    let result = scenario.run(&["pickup"]);
+
+    let pr = pr_from(&scenario, "issue-9");
+    assert_ended_with_pr(&result, &pr, "ready for review");
+    assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT, "bug"]);
+}
+
+#[test]
+fn a_pickup_order_flag_beats_pickup_order_in_the_user_config() {
+    for (configured, flag, taken, left) in [
+        ("lowest-first", "highest-first", 9, 7),
+        ("highest-first", "lowest-first", 7, 9),
+    ] {
+        let scenario = Scenario::new();
+        ready_issue(&scenario, 9, &["bug"]);
+        ready_issue(&scenario, 7, &["bug"]);
+        scenario.agent_does_for(taken, &agent_opens_pr(taken, "main"));
+        scenario.user_config_is(&format!("[pickup]\norder = \"{configured}\"\n"));
+
+        let result = scenario.run(&["pickup", flag]);
+
+        let pr = pr_from(&scenario, &format!("issue-{taken}"));
+        assert_ended_with_pr(&result, &pr, "ready for review");
+        assert_eq!(
+            scenario.issue_labels(left),
+            [READY_FOR_AGENT, "bug"],
+            "configured {configured}, flag {flag}"
+        );
+    }
+}
+
+#[test]
+fn an_invalid_pickup_order_stops_the_pass_naming_the_file_and_key() {
+    for order in ["\"lowest\"", "\"highest\"", "\"\"", "\"Lowest-First\""] {
+        let scenario = ready_ticket();
+        let path = scenario.user_config_is(&format!("[pickup]\norder = {order}\n"));
+
+        let result = scenario.run(&["pickup"]);
+
+        scenario.assert_rejected_before_any_work(
+            &result,
+            &format!(
+                "thirdshift: pickup.order must be lowest-first or highest-first, not {order}, in the User config {}\n",
+                path.display()
+            ),
+        );
+        assert_eq!(result.code, Some(1), "{order}: {}", result.stderr);
+        assert_eq!(scenario.gh_calls(), Vec::<Vec<String>>::new());
+    }
+    for order in ["true", "3"] {
+        let scenario = ready_ticket();
+        let path = scenario.user_config_is(&format!("[pickup]\norder = {order}\n"));
+
+        let result = scenario.run(&["pickup"]);
+
+        scenario.assert_rejected_before_any_work(
+            &result,
+            &format!(
+                "thirdshift: pickup.order must be a quoted order in the User config {}\n",
+                path.display()
+            ),
+        );
+        assert_eq!(result.code, Some(1), "{order}: {}", result.stderr);
+        assert_eq!(scenario.gh_calls(), Vec::<Vec<String>>::new());
+    }
 }
 
 #[test]
@@ -240,12 +353,12 @@ exec "{git}" "$@"
         // correct search reject that history before any Issue branch read.
         fs::create_dir_all(scenario.path("bin/real")).unwrap();
         fs::rename(scenario.path("bin/gh"), scenario.path("bin/real/gh")).unwrap();
-        fs::write(
-            scenario.path("bin/gh"),
+        write_executable(
+            &scenario.path("bin/gh"),
             r#"#!/bin/sh
 if [ "$HOLD_READY_READ" = 1 ]; then
     case "$1 $2 $*" in
-    'issue list '*ready-for-agent*)
+    'api --paginate '*ready-for-agent*)
         if [ ! -f "$TMPDIR/listing-read" ]; then
             "$(dirname "$0")/real/gh" "$@" > "$TMPDIR/listing-answer" || exit $?
             touch "$TMPDIR/listing-read"
@@ -267,9 +380,7 @@ if [ "$HOLD_READY_READ" = 1 ]; then
 fi
 exec "$(dirname "$0")/real/gh" "$@"
 "#,
-        )
-        .unwrap();
-        fs::set_permissions(scenario.path("bin/gh"), fs::Permissions::from_mode(0o755)).unwrap();
+        );
     }
     let started = if active_history {
         "tmp/listing-read"
@@ -424,12 +535,10 @@ fn a_reservation_push_rejection_fails_before_any_claim_or_session() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7, &[]);
     let hook = scenario.origin_dir().join("hooks/pre-receive");
-    fs::write(
+    write_executable(
         &hook,
         "#!/bin/sh\necho 'reservations forbidden' >&2\nexit 1\n",
-    )
-    .unwrap();
-    fs::set_permissions(hook, fs::Permissions::from_mode(0o755)).unwrap();
+    );
     let before = scenario.origin_git(&["show-ref"]);
     let github = scenario.gh_state();
 
@@ -695,10 +804,10 @@ fn an_issue_with_an_open_blocker_is_not_taken_and_with_that_blocker_closed_it_is
 /// What a Pickup run says of #7 when it was labelled `ready-for-agent` too
 /// recently to have settled.
 const LABELLED_TOO_RECENTLY: &str =
-    "#7 not settled: labelled ready-for-agent less than 30 minutes ago";
+    "#7 not settled: labelled ready-for-agent less than 5 minutes ago";
 
 #[test]
-fn an_issue_labelled_ready_for_agent_less_than_thirty_minutes_ago_is_not_taken() {
+fn an_issue_labelled_ready_for_agent_less_than_five_minutes_ago_is_not_taken() {
     let scenario = ready_ticket();
     // Its other labels, however recent, and an earlier `ready-for-agent`
     // don't count: only the last time `ready-for-agent` was applied does.
@@ -706,7 +815,7 @@ fn an_issue_labelled_ready_for_agent_less_than_thirty_minutes_ago_is_not_taken()
         7,
         &[
             (TimelineEvent::Labelled(READY_FOR_AGENT), 60),
-            (TimelineEvent::Labelled(READY_FOR_AGENT), 29),
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 4),
             (TimelineEvent::Labelled("bug"), 1),
         ],
     );
@@ -719,12 +828,12 @@ fn an_issue_labelled_ready_for_agent_less_than_thirty_minutes_ago_is_not_taken()
 }
 
 #[test]
-fn an_issue_labelled_ready_for_agent_more_than_thirty_minutes_ago_is_taken() {
+fn an_issue_labelled_ready_for_agent_more_than_five_minutes_ago_is_taken() {
     let scenario = ready_ticket();
     scenario.issue_timeline(
         7,
         &[
-            (TimelineEvent::Labelled(READY_FOR_AGENT), 31),
+            (TimelineEvent::Labelled(READY_FOR_AGENT), 6),
             (TimelineEvent::Labelled("bug"), 1),
         ],
     );
@@ -736,7 +845,7 @@ fn an_issue_labelled_ready_for_agent_more_than_thirty_minutes_ago_is_taken() {
 
 #[test]
 fn pickup_wait_in_the_user_config_shortens_lengthens_or_disables_settling() {
-    for (wait, ago, taken) in [(5, 6, true), (60, 31, false), (0, 0, true)] {
+    for (wait, ago, taken) in [(1, 2, true), (30, 6, false), (0, 0, true)] {
         for (event, shaped) in [
             (
                 TimelineEvent::Labelled(READY_FOR_AGENT),
@@ -797,7 +906,7 @@ fn zero_pickup_wait_ignores_server_timestamps_ahead_of_local_clock() {
 }
 
 #[test]
-fn a_spec_labelled_long_ago_whose_sub_issues_or_blockers_changed_less_than_thirty_minutes_ago_is_not_taken()
+fn a_spec_labelled_long_ago_whose_sub_issues_or_blockers_changed_less_than_five_minutes_ago_is_not_taken()
  {
     for (event, changed) in [
         (TimelineEvent::SubIssueAdded, "a sub-issue"),
@@ -811,13 +920,13 @@ fn a_spec_labelled_long_ago_whose_sub_issues_or_blockers_changed_less_than_thirt
             &[
                 (TimelineEvent::Labelled(READY_FOR_AGENT), 600),
                 (TimelineEvent::SubIssueAdded, 590),
-                (event, 29),
+                (event, 4),
             ],
         );
 
         let result = scenario.run(&["pickup"]);
 
-        let line = format!("#7 not settled: {changed} added or removed less than 30 minutes ago");
+        let line = format!("#7 not settled: {changed} added or removed less than 5 minutes ago");
         assert_skipped(&scenario, &result, &no_ready_issue_after(&[&line]));
         assert_eq!(scenario.issue_labels(7), [READY_FOR_AGENT]);
     }
@@ -1488,11 +1597,11 @@ fn the_notification_of_a_run_left_ready_for_review_is_that_runs() {
             "Result:       ready for review\n\
              Issue:        https://github.com/acme/widgets/issues/7\n\
              Title:        Sharpen the widgets\n\
-             Command:      Pickup run, which dispatched a Run\n\
+             Command:      Pickup run, which dispatched a Ticket run\n\
              Pull request: {}\n\
              Session trace:  {}\n\
              Command log:  {}\n\
-             Built with claude · default model · default effort (configured)\n\
+             Built with claude 9.8.7 · default model · default effort (configured)\n\
              Sent by:      thirdshift\n\
              Host:         ",
             pr["url"].as_str().unwrap(),
@@ -1520,7 +1629,7 @@ fn the_notification_of_a_merge_run_says_it_merged() {
         "[thirdshift] acme/widgets#7 Sharpen the widgets: merged"
     );
     let pull_request = format!(
-        "Result:       merged\nIssue:        https://github.com/acme/widgets/issues/7\nTitle:        Sharpen the widgets\nCommand:      Pickup run, which dispatched a Run\nPull request: {}\n",
+        "Result:       merged\nIssue:        https://github.com/acme/widgets/issues/7\nTitle:        Sharpen the widgets\nCommand:      Pickup run, which dispatched a Ticket run\nPull request: {}\n",
         pr["url"].as_str().unwrap()
     );
     assert!(text.starts_with(&pull_request), "{text}");
@@ -1545,7 +1654,7 @@ fn the_notification_of_a_failed_run_has_its_pull_request_and_its_cause() {
             "Result:       failed\n\
              Issue:        https://github.com/acme/widgets/issues/7\n\
              Title:        Sharpen the widgets\n\
-             Command:      Pickup run, which dispatched a Run\n\
+             Command:      Pickup run, which dispatched a Ticket run\n\
              Pull request: {}\n\
              Cause:        claude exited 3\n\
              Session trace:  ",
@@ -1638,6 +1747,44 @@ fn the_notification_of_a_failed_spec_run_has_each_tickets_outcome() {
     let landed = format!("#8 landed with {}\n", landed["url"].as_str().unwrap());
     assert!(tickets.contains(&landed), "expected {landed:?} in: {text}");
     assert!(tickets.contains("#9 failed: "), "{text}");
+}
+
+#[test]
+fn a_spec_notification_promotes_exhausted_usage_and_keeps_other_failures() {
+    let scenario = ready_spec(
+        "echo 'API error 429: Subscription quota exhausted. Your usage window resets at 2026-10-24T03:28:16Z.' > \"$FAKE_MUSE_ERROR\"\nexit 1",
+    );
+    scenario.spec_has_tickets(7, &[(8, &[]), (9, &[]), (10, &[9]), (11, &[])]);
+    scenario.agent_does_for(
+        11,
+        "echo 'stream protocol error' > \"$FAKE_MUSE_ERROR\"\nexit 1",
+    );
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = run_with_resend(
+        &scenario,
+        &resend,
+        &["pickup", "harness", "muse", "email", "me@example.com"],
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let (subject, text) = the_one_notification(&resend);
+    assert!(subject.ends_with(": failed"), "{subject}");
+    let (summary, tickets) = text.split_once("\nTickets:\n").expect(&text);
+    assert!(
+        summary.contains("Usage limit:  Harness usage allowance exhausted in Tickets #9. Retry when usage is available.\n"),
+        "{text}"
+    );
+    for detail in [
+        "#8 landed with ",
+        "#9 failed: muse exited 1: API error 429: Subscription quota exhausted.",
+        "Your usage window resets at 2026-10-24T03:28:16Z.",
+        "#10 blocked by #9",
+        "#11 failed: muse exited 1: stream protocol error",
+    ] {
+        assert!(tickets.contains(detail), "{text}");
+    }
+    assert_saved_notification(&scenario, "pickup", &resend.requests()[0]);
 }
 
 #[test]
@@ -1827,18 +1974,11 @@ fn a_claim_limit_skip_names_every_holder_lowest_first_without_extra_github_reque
     assert_eq!(
         scenario.gh_calls(),
         ["closed", "open"].map(|state| vec![
-            "issue",
-            "list",
-            "--state",
-            state,
-            "--repo",
-            "acme/widgets",
-            "--label",
-            "in-progress",
-            "--json",
-            "url,title,labels",
-            "--limit",
-            "1000",
+            "api".to_string(),
+            "--paginate".into(),
+            "--jq".into(),
+            ".[]".into(),
+            format!("repos/acme/widgets/issues?state={state}&labels=in-progress&sort=created&direction=desc&per_page=100"),
         ])
     );
     assert_skipped(
@@ -2270,6 +2410,28 @@ fn a_handed_back_branch_is_continued_without_losing_interrupted_work() {
 }
 
 #[test]
+fn a_same_second_hand_back_across_history_pages_continues_the_branch() {
+    let scenario = Scenario::new();
+    ready_issue(&scenario, 7, &[]);
+    scenario.origin_has_branch("issue-7", "main", &["Interrupted work"]);
+    let mut events = vec![(TimelineEvent::Labelled(IN_PROGRESS), 90)];
+    events.extend((0..98).map(|_| (TimelineEvent::Labelled("bug"), 65)));
+    // The ready label ends one page; the Claim removal starts the next.
+    events.extend([
+        (TimelineEvent::Labelled(READY_FOR_AGENT), 60),
+        (TimelineEvent::Unlabelled(IN_PROGRESS), 60),
+    ]);
+    scenario.issue_timeline(7, &events);
+    scenario.agent_does_for(7, &agent_opens_pr(7, "main"));
+
+    let result = scenario.run(&["pickup"]);
+
+    assert_ended_with_pr(&result, &pr_from(&scenario, "issue-7"), "ready for review");
+    assert_eq!(scenario.claude_calls()[0]["branch"], "issue-7");
+    assert!(scenario.first_prompt().contains("You are continuing work"));
+}
+
+#[test]
 fn a_handed_back_open_pr_is_continued_using_its_base() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7, &[]);
@@ -2390,7 +2552,13 @@ fn started_work_requires_a_hand_back_after_the_last_claim_ended() {
         let scenario = Scenario::new();
         ready_issue(&scenario, 7, &[]);
         scenario.origin_has_branch("issue-7", "main", &["Human or interrupted work"]);
-        let events: Vec<_> = history.into_iter().map(|event| (event, 60)).collect();
+        // These histories require a ready label strictly before the Claim
+        // ends; a same-second swap is now a valid hand-back.
+        let events: Vec<_> = history
+            .into_iter()
+            .enumerate()
+            .map(|(index, event)| (event, 90 - index as i64))
+            .collect();
         scenario.issue_timeline(7, &events);
 
         let result = scenario.run(&["pickup"]);

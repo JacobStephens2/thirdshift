@@ -37,6 +37,22 @@
     </details>
     {% when None %}
     {% match inbox.warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning }}</p>{% when None %}{% endmatch %}
+    {% match inbox.github_warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning }}</p>{% when None %}{% endmatch %}
+    <p class="active-runs" role="status"><strong>{{ self.active_runs() }}</strong> <span>Each outer Command counts once, in any section: a Spec run's Tickets, and the run a Pass dispatched, are part of its run.</span></p>
+    {% if self.idle() %}
+    <section class="idle-notice" aria-label="No running Commands">
+      <h3>No Commands are running on this machine.</h3>
+      {% if self.needs_you() > 0 %}<p>Ended problems need attention in {% if self.hidden("needs you") %}Needs you (hidden; show it with Sections or <code>thirdshift console sections --show needs-you</code>){% else %}<a href="#group-1">Needs you</a>{% endif %}.</p>{% endif %}
+      {% if self.ready_for_review() > 0 %}<p>Pull requests are waiting in {% if self.hidden("ready for review") %}Ready for review (hidden; show it with Sections or <code>thirdshift console sections --show ready-for-review</code>){% else %}<a href="#group-2">Ready for review</a>{% endif %}.</p>{% endif %}
+      {% if inbox.idle_passes.is_empty() %}
+      <p>No Pass is currently recorded as skipped.</p>
+      {% else %}
+      <p>Last recorded skipped Passes:</p>
+      <ul>{% for pass in inbox.idle_passes %}<li>{{ pass|linkify }}</li>{% endfor %}</ul>
+      {% endif %}
+      <p>Check <a href="/cronjobs">Cron jobs</a> and the scheduler's output for launch failures. Activity logs record skipped Passes; <code>thirdshift status</code> shows their reasons. The Console does not start work.</p>
+    </section>
+    {% endif %}
     {% for section in inbox.sections %}
     <details id="group-{{ loop.index }}" class="group" data-group="{{ section.group }}" {% if self.hidden(section.group) %}hidden{% endif %} {% if section.open %}open{% endif %}>
       <summary><span>{{ section.title }}</span><span class="count">{{ section.rows.len() }}</span></summary>
@@ -46,7 +62,7 @@
       {% for reference in section.references %}<p>{{ reference|linkify }}</p>{% endfor %}
     </details>
     {% endfor %}
-    {% if !inbox.idle_passes.is_empty() %}<aside aria-label="Idle Passes">{% for pass in inbox.idle_passes %}<p>{{ pass|linkify }}</p>{% endfor %}</aside>{% endif %}
+    {% if !self.idle() && !inbox.idle_passes.is_empty() %}<aside aria-label="Idle Passes">{% for pass in inbox.idle_passes %}<p>{{ pass|linkify }}</p>{% endfor %}</aside>{% endif %}
     {% endmatch %}
   </main>
   {% include "console/chrome.html" %}

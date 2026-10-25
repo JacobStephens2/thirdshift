@@ -2,7 +2,7 @@
 
 # Review Repair
 
-In a Merge run, starts a Repair session when Foreign commits merged into the Issue branch change the tree, to review it from the head the Run last knew as its own before they can be merged.
+In a Ticket run that Self-merges, starts a Repair session when Foreign commits merged into the Issue branch change the tree, to review it from the head the Ticket run last knew as its own before they can be merged.
 
 ```
 /thirdshift-code-review <own head>

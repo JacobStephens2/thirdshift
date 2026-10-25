@@ -19,12 +19,21 @@ pub(crate) fn render(lines: &str, kind: Kind) -> String {
     if matches!(kind, Kind::Command) {
         return format!("<pre class=\"command-output\">{}</pre>", linked(lines));
     }
+    render_parts(crate::logs::session::records(lines).flat_map(record_parts))
+}
+
+/// Experiments can run older Arms that still retain raw Session logs.
+pub(super) fn render_trial_log(lines: &str) -> String {
+    render_parts(lines.lines().flat_map(parts))
+}
+
+fn render_parts(parts: impl IntoIterator<Item = Part>) -> String {
     let mut html = String::new();
     let mut tools_open = false;
     let mut conversation = Vec::new();
     let mut edits = HashMap::new();
     let mut messages = HashMap::new();
-    for part in crate::logs::session::records(lines).flat_map(record_parts) {
+    for part in parts {
         let snapshots = match &part {
             Part::Message(_, _, Some(id)) => Some((&mut messages, id)),
             Part::CodexEdit(id, _) => Some((&mut edits, id)),

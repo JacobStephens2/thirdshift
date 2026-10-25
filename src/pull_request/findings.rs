@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub(crate) struct UnaddressedFindings {
     pub(crate) standards: Option<usize>,
     pub(crate) spec: Option<usize>,

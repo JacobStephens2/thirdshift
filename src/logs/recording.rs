@@ -100,6 +100,8 @@ impl<O: Outside> Record<O> {
             Begin::ArchitectRun => CommandKind::Architect,
             Begin::PickupRun => CommandKind::Pickup,
             Begin::SecurityRun => CommandKind::Secure,
+            Begin::ScoringRun => CommandKind::Scoring,
+            Begin::Experiment => CommandKind::Experiment,
         };
         let (starting, quiet) = match begin {
             Begin::ChildRun(stamp, _) => {
@@ -111,6 +113,8 @@ impl<O: Outside> Record<O> {
             Begin::ArchitectRun => ("Architect run starting".into(), true),
             Begin::PickupRun => ("Pickup run starting".into(), true),
             Begin::SecurityRun => ("Security run starting".into(), true),
+            Begin::ScoringRun => ("Scoring run starting".into(), false),
+            Begin::Experiment => ("Experiment starting".into(), false),
         };
         let now = self.outside.now();
         self.stamp
@@ -351,6 +355,22 @@ impl<O: Outside> Record<O> {
         }
     }
 
+    pub(super) fn experiment(&mut self, description: &crate::evals::experiment::Description) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.experiment = Some(description.clone());
+            self.write_record();
+        }
+    }
+
+    pub(super) fn experiment_finished(&mut self, outcome: &str, cause: Option<&str>) {
+        if let Some((_, tree)) = &mut self.command_record {
+            tree.command.outcome = Some(outcome.into());
+            tree.command.cause = cause.map(String::from);
+            tree.command.ended_at = Some(self.outside.now().to_rfc3339());
+            self.write_record();
+        }
+    }
+
     pub(super) fn dispatch_ended(&mut self, account: &crate::run_ending::Account<'_>) {
         let ranges = self.usual_ranges();
         if let Some((_, tree)) = &mut self.command_record
@@ -488,10 +508,10 @@ impl<O: Outside> Record<O> {
         Some(super::trace::Context::from_record(owner, active))
     }
 
-    /// Child Runs carry the owning CommandKind, so a Security run's entire
-    /// Session tree stays local even while it dispatches public fixes.
+    /// Child Runs carry the owning CommandKind, so private Security and
+    /// Scoring Session trees stay local, including public Security fixes.
     pub(super) fn otlp_endpoint(&self) -> Option<String> {
-        if self.command == CommandKind::Secure {
+        if matches!(self.command, CommandKind::Secure | CommandKind::Scoring) {
             None
         } else {
             self.otlp_endpoint.clone()

@@ -9,7 +9,7 @@ use super::command_record::{CommandRecord, StageName};
 use super::session_signals::{SessionSignals, Summary};
 use super::usual_range::{UsualRange, UsualRanges};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct RunMetrics {
     pub(super) outcome: String,
     pub(super) repairs: usize,
@@ -22,7 +22,7 @@ pub(super) struct RunMetrics {
     pub(super) session_signals: Option<std::collections::BTreeMap<String, Summary>>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct StageMetrics {
     pub(super) name: String,
     pub(super) seconds: Option<f64>,
@@ -35,7 +35,7 @@ pub(super) struct StageMetrics {
     pub(super) session_signals: Option<SessionSignals>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub(super) struct ReviewFindings {
     pub(super) standards: Option<u64>,
     pub(super) spec: Option<u64>,

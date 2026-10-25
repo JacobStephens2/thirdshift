@@ -111,6 +111,10 @@ impl Completion {
 }
 
 impl Retained for Completion {
+    fn set_home(&mut self, home: &Path) {
+        self.root = Some(home.join(".codex"));
+    }
+
     fn reconcile(self: Box<Self>, facts: &mut Facts) -> Result<()> {
         if let Some(amendments) = self.amendments(facts) {
             crate::harness::interpretation::event::reconcile(&mut facts.report.events, amendments);
@@ -121,7 +125,7 @@ impl Retained for Completion {
 
 /// Codex uses year/month/day folders. Do not follow directory symlinks or
 /// search unrelated homes; ambiguous matching files supply no evidence.
-fn find(root: &Path, id: &str, depth: usize) -> Option<PathBuf> {
+pub(super) fn find(root: &Path, id: &str, depth: usize) -> Option<PathBuf> {
     let mut found = None;
     let suffix = format!("-{id}.jsonl");
     let mut pending = vec![(root.to_owned(), depth)];

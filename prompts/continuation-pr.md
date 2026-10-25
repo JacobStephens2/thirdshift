@@ -2,7 +2,7 @@
 
 # Continuation, with an open pull request
 
-Starts the implement session when the Run is a Continuation of an Issue branch whose pull request is open.
+Starts the implement session when the Ticket run is a Continuation of an Issue branch whose pull request is open.
 
 ```
 /thirdshift-implement <Issue URL>

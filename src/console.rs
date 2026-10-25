@@ -2,9 +2,12 @@
 mod account_commands;
 mod accounts;
 mod auth;
+mod bug_origins;
 pub(crate) mod conversation;
 mod cronjobs;
+mod experiments;
 mod filters;
+mod github;
 pub use account_commands::{password, print_log, sign_out};
 mod install;
 pub use install::{install, install_to};
@@ -12,10 +15,16 @@ mod live;
 mod logs;
 mod look;
 pub use look::{export_theme, import_theme, sections, theme};
+mod changes;
+mod dismiss;
 mod peek;
+mod resources;
 mod restart;
+mod scoring;
 mod stop;
+mod subscription;
 mod time;
+mod watching;
 mod waterfall;
 
 use std::io::Write;
@@ -63,7 +72,16 @@ struct PageRoute {
 }
 
 enum View {
+    BugOrigins,
+    SettleBugOrigin,
+    Scores,
+    HumanScores,
+    Experiments,
+    Experiment,
+    ExperimentSession,
+    ApproveEvalTask,
     CronJobs,
+    Resources,
     Inbox,
     Inspect,
     Spans,
@@ -85,12 +103,90 @@ enum View {
     Sections,
     StopPage,
     Stop,
+    Dismiss,
+    UndoDismissal,
     SetPasswordPage,
     SendCode,
     SetPassword,
 }
 
 const PAGES: &[PageRoute] = &[
+    PageRoute {
+        path: "/bug-origins",
+        cli: &["thirdshift bug-origins --json"],
+        method: Method::GET,
+        view: View::BugOrigins,
+    },
+    PageRoute {
+        path: "/bug-origins/settle",
+        cli: &[
+            "thirdshift bug-origins 8 --confirm --json",
+            "thirdshift bug-origins 8 --correct 24 --json",
+            "thirdshift bug-origins 8 --none --json",
+        ],
+        method: Method::POST,
+        view: View::SettleBugOrigin,
+    },
+    PageRoute {
+        path: "/scores",
+        cli: &["thirdshift scores --json", "thirdshift scores 23 --json"],
+        method: Method::GET,
+        view: View::Scores,
+    },
+    PageRoute {
+        path: "/scores/mine",
+        cli: &["thirdshift scores 23 --mine --json"],
+        method: Method::POST,
+        view: View::HumanScores,
+    },
+    PageRoute {
+        path: "/experiments/proposals/{suite}/{task}/approve",
+        cli: &["thirdshift evals approve suite task --json"],
+        method: Method::POST,
+        view: View::ApproveEvalTask,
+    },
+    PageRoute {
+        path: "/experiments/{id}/sessions/{session}",
+        cli: &["thirdshift experiments id --session session --json"],
+        method: Method::GET,
+        view: View::ExperimentSession,
+    },
+    PageRoute {
+        path: "/experiments",
+        cli: &["thirdshift experiments --json"],
+        method: Method::GET,
+        view: View::Experiments,
+    },
+    PageRoute {
+        path: "/experiments/{id}",
+        cli: &["thirdshift experiments id --json"],
+        method: Method::GET,
+        view: View::Experiment,
+    },
+    PageRoute {
+        path: "/dismiss",
+        cli: &[
+            "thirdshift dismiss widgets#7",
+            "thirdshift dismiss widgets#7 --json",
+        ],
+        method: Method::POST,
+        view: View::Dismiss,
+    },
+    PageRoute {
+        path: "/dismiss/undo",
+        cli: &[
+            "thirdshift dismiss widgets#7 --undo",
+            "thirdshift dismiss widgets#7 --undo --json",
+        ],
+        method: Method::POST,
+        view: View::UndoDismissal,
+    },
+    PageRoute {
+        path: "/resources",
+        cli: &["thirdshift resources --json"],
+        method: Method::GET,
+        view: View::Resources,
+    },
     PageRoute {
         path: "/cronjobs",
         cli: &["thirdshift cronjobs --json"],
@@ -312,23 +408,30 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         let listener = tokio::net::TcpListener::bind((Ipv4Addr::LOCALHOST, config.console.port))
             .await
             .context("can't listen for the Console on localhost")?;
+        let watched = executable.clone();
+        let (changes, notifier, observer) = changes::observe(&config, &executable)?;
+        let github = github::follow();
+        let mut control = changes.clone();
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
-        let watched = executable.clone();
-        let (changes, observer) = live::observe(render_inbox("thirdshift status").await?);
         axum::serve(
             listener,
-            router(no_sign_in, changes).layer(axum::Extension(executable.clone())),
+            router(no_sign_in, changes).layer(axum::Extension(notifier)),
         )
         .with_graceful_shutdown(async move {
+            let mut accounts_revision = 0;
             loop {
-                tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+                if control.changed().await.is_err() {
+                    break;
+                }
                 if watched.changed() {
                     break;
                 }
                 // Revoke removed accounts even when nobody makes a request,
                 // so re-adding an address cannot revive its old sessions.
-                if !no_sign_in {
+                let revision = control.borrow_and_update().accounts;
+                if !no_sign_in && revision != accounts_revision {
+                    accounts_revision = revision;
                     match tokio::task::spawn_blocking(|| accounts::Accounts::load().map(drop)).await
                     {
                         Ok(Ok(())) => {}
@@ -340,8 +443,11 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             }
             // Dropping the sole sender closes every SSE response before
             // graceful shutdown waits for the connections to finish.
+            crate::interrupt::request();
             observer.abort();
             let _ = observer.await;
+            github.abort();
+            let _ = github.await;
         })
         .await
         .context("Console server failed")?;
@@ -352,13 +458,22 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
     executable.exec()
 }
 
-fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Router {
+fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
     let mut router = Router::new();
     for page in PAGES {
         let cli = page.cli[0];
         let path = page.path;
         let handler = match (&page.view, page.method.clone()) {
+            (View::Experiments, Method::GET) => get(experiments::index),
+            (View::Experiment, Method::GET) => get(experiments::detail),
+            (View::ExperimentSession, Method::GET) => get(experiments::session),
+            (View::ApproveEvalTask, Method::POST) => post(experiments::approve),
             (View::CronJobs, Method::GET) => get(cronjobs::show),
+            (View::Scores, Method::GET) => get(scoring::show),
+            (View::HumanScores, Method::POST) => post(scoring::submit),
+            (View::BugOrigins, Method::GET) => get(bug_origins::show),
+            (View::SettleBugOrigin, Method::POST) => post(bug_origins::submit),
+            (View::Resources, Method::GET) => get(resources::show),
             (View::Inbox, Method::GET) => get(move |query| inbox(cli, path, query)),
             (View::Inspect, Method::GET) => get(inspect),
             (View::Spans, Method::GET) => get(waterfall::data),
@@ -380,6 +495,8 @@ fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Route
             (View::Sections, Method::POST) => post(look::set_sections),
             (View::StopPage, Method::GET) => get(stop::show),
             (View::Stop, Method::POST) => post(stop::submit),
+            (View::Dismiss, Method::POST) => post(dismiss::submit),
+            (View::UndoDismissal, Method::POST) => post(dismiss::undo),
             (View::SetPasswordPage, Method::GET) => get(auth::set_password_page),
             (View::SendCode, Method::POST) => post(auth::code),
             (View::SetPassword, Method::POST) => post(auth::set_password),
@@ -390,6 +507,7 @@ fn router(no_sign_in: bool, changes: tokio::sync::watch::Receiver<u64>) -> Route
     router = router.route("/assets/{*path}", get(asset));
     let access = auth::Access::new(no_sign_in);
     router
+        .layer(axum::Extension(changes.clone()))
         .with_state(changes)
         .layer(DefaultBodyLimit::max(16 * 1024))
         .layer(middleware::from_fn_with_state(access.clone(), auth::guard))
@@ -418,6 +536,18 @@ impl InboxPage {
     }
     fn needs_you(&self) -> usize {
         self.inbox.sections[0].rows.len()
+    }
+
+    fn idle(&self) -> bool {
+        self.inbox.active_runs == 0
+    }
+
+    fn active_runs(&self) -> String {
+        status::active_runs_text(self.inbox.active_runs)
+    }
+
+    fn ready_for_review(&self) -> usize {
+        self.inbox.sections[1].rows.len()
     }
 
     fn urgent(&self) -> bool {
@@ -514,12 +644,15 @@ async fn render_page(
     .await?
 }
 
-async fn inspect(RawQuery(query): RawQuery) -> Response {
+async fn inspect(
+    axum::Extension(viewer): axum::Extension<auth::Viewer>,
+    RawQuery(query): RawQuery,
+) -> Response {
     let command = query_value(&query, "command");
     match tokio::task::spawn_blocking(move || -> Result<String> {
         let config = UserConfig::load()?;
         let details = crate::logs::stop::inspect(&config, &command)?;
-        Ok(peek::Peek::new(command, details).render()?)
+        Ok(peek::Peek::new(command, details, viewer.csrf).render()?)
     })
     .await
     {
@@ -563,10 +696,6 @@ fn page(result: std::result::Result<Result<String>, tokio::task::JoinError>) -> 
                 .into_response()
         }
     }
-}
-
-async fn render_inbox(cli: &'static str) -> Result<String> {
-    render_page(cli, None, None).await
 }
 
 async fn asset(Path(path): Path<String>) -> Response {
@@ -641,7 +770,7 @@ mod tests {
     use tower_layer::Layer;
 
     fn router() -> Router {
-        let (_, changes) = tokio::sync::watch::channel(0);
+        let (_, changes) = tokio::sync::watch::channel(super::changes::Revision::default());
         super::router(false, changes)
     }
 
