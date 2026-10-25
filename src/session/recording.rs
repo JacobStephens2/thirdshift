@@ -36,6 +36,8 @@ pub struct Input<'a> {
     pub policy: Policy,
     pub stdin: Option<&'a str>,
     pub deadline: Option<Instant>,
+    /// Scoring Graders share the Eval plan-limit policy while retaining Command ownership.
+    pub stop_at_limit: bool,
     /// Keep decoded progress and completion text out of factory Command logs.
     pub private: bool,
 }
@@ -46,6 +48,8 @@ pub enum Policy {
     #[default]
     Ordinary,
     Security,
+    /// Blind Scoring packets must not consult retained production history.
+    StreamOnly,
 }
 
 impl Recording {
@@ -149,9 +153,11 @@ impl Recording {
         {
             stream.set_home(Path::new(home));
         }
-        if matches!(input.policy, Policy::Security) {
-            stream = stream.for_security(choice.model.as_deref());
-        }
+        stream = match input.policy {
+            Policy::Ordinary => stream,
+            Policy::Security => stream.for_security(choice.model.as_deref()),
+            Policy::StreamOnly => stream.without_retained(),
+        };
         command.env_remove(logs::trace::TRIAL_CONTEXT);
         if matches!(self.owner, Ok(None)) {
             // A Trial must not lend a caller's stale Command identity to
@@ -183,7 +189,7 @@ impl Recording {
         let choice_owned = choice.clone();
         let recording = self.clone();
         let private = input.private;
-        let stop_at_limit = matches!(self.owner, Ok(None));
+        let stop_at_limit = input.stop_at_limit || matches!(self.owner, Ok(None));
         let executed = process::streaming(
             adapter,
             invocation,

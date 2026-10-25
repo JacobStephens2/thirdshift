@@ -23,6 +23,13 @@ pub enum Command {
     Version,
     Update,
     Setup,
+    Score,
+    Scores {
+        pull_request: Option<String>,
+        mine: bool,
+        json: bool,
+    },
+    BugOrigins(crate::scoring::origins::Options),
     Evals(crate::evals::Action),
     Experiment(crate::evals::experiment::Options),
     Experiments(Vec<String>),
@@ -336,6 +343,9 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("version" | "--version" | "-V") => return Ok(Command::Version),
         Some("update") => return Ok(Command::Update),
         Some("evals") => return crate::evals::parse(&args[1..]).map(Command::Evals),
+        Some("bug-origins") => {
+            return crate::scoring::origins::parse(&args[1..]).map(Command::BugOrigins);
+        }
         Some("experiment") => {
             return crate::evals::experiment::parse(&args[1..]).map(Command::Experiment);
         }
@@ -613,6 +623,35 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 [flag] if flag == "--json" => Ok(Command::CronJobs { json: true }),
                 _ => bail!("usage: thirdshift cronjobs [--json]"),
             };
+        }
+        Some("score") => {
+            return match &args[1..] {
+                [] => Ok(Command::Score),
+                _ => bail!("usage: thirdshift score"),
+            };
+        }
+        Some("scores") => {
+            let mut pull_request = None;
+            let mut mine = false;
+            let mut json = false;
+            for argument in &args[1..] {
+                match argument.as_str() {
+                    "--mine" if !mine => mine = true,
+                    "--json" if !json => json = true,
+                    value if !value.starts_with('-') && pull_request.is_none() => {
+                        pull_request = Some(value.to_owned());
+                    }
+                    _ => bail!("usage: thirdshift scores [<pull request>] [--mine] [--json]"),
+                }
+            }
+            if mine && pull_request.is_none() {
+                bail!("usage: thirdshift scores <pull request> --mine [--json]");
+            }
+            return Ok(Command::Scores {
+                pull_request,
+                mine,
+                json,
+            });
         }
         Some("resources") => {
             return match &args[1..] {

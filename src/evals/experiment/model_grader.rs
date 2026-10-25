@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{Context, Result, ensure};
 use rand::{SeedableRng, seq::SliceRandom};
@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 
 use super::{Task, arms, store, trial_results};
 use crate::harness::{Asked, Choice, ChosenBy, Harness, Settings};
-use crate::session::recording::{Input, Recording};
+use crate::session::private;
 use crate::{interrupt, progress, prompt};
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -215,7 +215,6 @@ fn grade(
     timeout: u64,
     caps: &crate::scope::Caps,
 ) -> Result<Response> {
-    crate::resources::wait()?;
     let workspace = tempfile::Builder::new()
         .prefix("session-")
         .tempdir_in(directory)?
@@ -226,73 +225,30 @@ fn grade(
     let prompt = prompt::grader();
     fs::write(workspace.join("prompt.md"), &prompt)?;
     let choice = grader.choice();
-    let adapter = choice.harness.adapter();
-    let invocation = adapter.trial_session(&choice, None, &prompt);
-    let sandbox =
-        crate::sandbox::for_session(&choice, &grader.harness.path, &workspace, &workspace)?;
-    // The scope surrounds the sandbox, so the Harness and all its tools
-    // share the Grader's cap and inherit its raised OOM score.
-    let mut launched = match &sandbox {
-        Some(prepared) => prepared
-            .launch()
-            .scoped_command(&invocation.args, &workspace, caps)?,
-        None => {
-            crate::scope::grader_command(&grader.harness.path, &invocation.args, &workspace, caps)?
-        }
-    };
-    launched
-        .command()
-        .stderr(fs::File::create(workspace.join("stderr"))?)
-        .env("THIRDSHIFT_GRADER_PACKET", &input)
-        .env("THIRDSHIFT_GRADER_SCORES", &scores);
-    // The unit name stays in the workspace for `journalctl --user -u` after.
-    fs::write(workspace.join("scope"), launched.unit())?;
-    let ended = record_session(
-        &mut launched,
-        &choice,
-        &workspace,
-        Input {
-            prompt: &prompt,
-            stdin: invocation.stdin.as_deref(),
-            deadline: Some(Instant::now() + Duration::from_secs(timeout)),
-            private: true,
-            ..Input::default()
-        },
-    )?;
-    ensure!(
-        ended.killed.is_empty(),
-        "model Grader left unfinished background work"
-    );
-    serde_json::from_slice(&fs::read(scores).context("model Grader left no Scores")?)
+    private::run(private::Request {
+        kind: "model Grader",
+        choice: &choice,
+        binary: &grader.harness.path,
+        workspace: &workspace,
+        artifacts: &workspace,
+        prompt: &prompt,
+        timeout: Duration::from_secs(timeout),
+        caps,
+        environment: &[
+            ("THIRDSHIFT_GRADER_PACKET", &input),
+            ("THIRDSHIFT_GRADER_SCORES", &scores),
+        ],
+    })?;
+    let bytes =
+        private::read_session_file(&scores, private::SESSION_OUTPUT_MAX).map_err(|error| {
+            if private::is_missing_file(&error) {
+                anyhow::anyhow!("model Grader left no Scores")
+            } else {
+                error
+            }
+        })?;
+    serde_json::from_slice(&bytes)
         .map_err(|_| anyhow::anyhow!("invalid model Grader response; see private Grader artifacts"))
-}
-
-/// Record the intact invocation and diagnose only suspicious completions.
-fn record_session(
-    launched: &mut crate::scope::Launch,
-    choice: &Choice,
-    workspace: &Path,
-    input: Input<'_>,
-) -> Result<crate::harness::interpretation::Ended> {
-    let ended = Recording::for_trial().run(
-        "model Grader",
-        choice,
-        launched,
-        input,
-        &workspace.join("stdout.jsonl"),
-    );
-    interrupt::check()?;
-    ended.map_err(|_| {
-        if launched.oom_killed() {
-            anyhow::anyhow!(
-                "model Grader hit its memory cap ({}); see private Grader artifacts, \
-                 and raise the trial.memory_max User config to retry",
-                crate::scope::OOM_KILL_CAUSE
-            )
-        } else {
-            anyhow::anyhow!("model Grader session failed; see private Grader artifacts")
-        }
-    })
 }
 
 #[cfg(test)]

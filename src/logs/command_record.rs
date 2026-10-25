@@ -200,6 +200,8 @@ stage_names! {
     ArmBuilds => "Arm builds",
     EvalTasks => "Eval tasks",
     Trials => "Trials",
+    Sampling => "sampling",
+    Grading => "grading",
     /// A Pickup run or Security run waiting on the Run it dispatched.
     DispatchedRun => "dispatched Run",
     /// A Pickup run or Security run waiting on the Spec run it dispatched.
@@ -216,6 +218,7 @@ impl StageName {
             | Work::PickupRun(_)
             | Work::ArchitectRun(_)
             | Work::SecurityRun(_)
+            | Work::ScoringRun(_)
             | Work::Experiment(_) => Self::DispatchedRun,
         }
     }
@@ -300,6 +303,7 @@ impl CommandRecord {
         let name = match work {
             Work::ArchitectRun(_) => format!("architect-{stamp}"),
             Work::SecurityRun(_) => format!("secure-{stamp}"),
+            Work::ScoringRun(_) => format!("scoring-{stamp}"),
             Work::PickupRun(_) => format!("pickup-{stamp}"),
             Work::Experiment(_) => format!("experiment-{stamp}"),
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => {

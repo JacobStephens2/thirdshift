@@ -254,6 +254,9 @@ use std::sync::Mutex;
 use crate::json::{self, Array, Bool, Json, Null, number, object, string};
 use crate::{die, git, python_list};
 
+#[path = "gh/scoring.rs"]
+mod scoring;
+
 static LOCK: Mutex<Option<File>> = Mutex::new(None);
 
 /// Wait for the state's lock and hold it until `unlock` or exit.
@@ -330,6 +333,17 @@ fn check_repo_is(state: &Json, repo: Option<&str>) {
         && repo != "{owner}/{repo}"
         && Path::new(repo) != origin_repo()
         && repo.to_lowercase() != state.at("repo").str().to_lowercase()
+        && !state
+            .get("scoring_prs")
+            .map(Json::items)
+            .unwrap_or_default()
+            .iter()
+            .any(|pr| {
+                pr.at("repository")
+                    .at("nameWithOwner")
+                    .str()
+                    .eq_ignore_ascii_case(repo)
+            })
     {
         die(&format!("fake gh: unknown repo {repo}"), 1);
     }
@@ -1527,6 +1541,12 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
             return;
         }
         Endpoint::Pulls => {
+            if jq == Some(".[]") {
+                for pr in listed(state, "origin_prs", sha) {
+                    println!("{pr}");
+                }
+                return;
+            }
             if jq != Some(COMMIT_PR_LINES) {
                 unsupported_jq(jq);
             }
@@ -2036,6 +2056,13 @@ fn record_run(state: &mut Json, mut run: Json) {
 fn graphql(state: &Json, args: &[&str]) {
     let mut variables = api_fields(args);
     let query = variables.remove("query").unwrap_or_default();
+    if scoring::packet(state, &query, &variables) {
+        return;
+    }
+    if query.contains("ScoringPullRequests") {
+        scoring_search(state, &variables);
+        return;
+    }
     if (query.contains("pullRequest(number:") || query.contains("issue(number:"))
         && query.contains("rateLimit")
     {
@@ -2099,6 +2126,75 @@ fn graphql(state: &Json, args: &[&str]) {
     };
     let answer = object([("data", object([("repository", object([("issue", issue)]))]))]);
     println!("{answer}");
+}
+
+/// Owner-scoped merged PR search, paginated like GitHub. Tests supply
+/// GraphQL-shaped nodes in `scoring_prs`, independently of live Run PRs.
+fn scoring_search(state: &Json, variables: &BTreeMap<String, String>) {
+    if let Some(script) = state.get("on_scoring_search").and_then(Json::as_str) {
+        // Like the other hooks, release the fake's state lock while held.
+        // Call readers take this lock too, so a test must still be able to
+        // inspect calls and Stop a Scoring command during its search.
+        unlock();
+        let status = Command::new("bash")
+            .args(["-e", "-c", script])
+            .status()
+            .unwrap();
+        lock();
+        if !status.success() {
+            die("scoring search hook failed", 1);
+        }
+    }
+    let search = &variables["search"];
+    let owner = search
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("user:"))
+        .unwrap();
+    let range = search
+        .split_whitespace()
+        .find_map(|word| word.strip_prefix("merged:"))
+        .unwrap();
+    let (start, end) = range.split_once("..").unwrap();
+    let nodes: Vec<Json> = state
+        .get("scoring_prs")
+        .map(Json::items)
+        .unwrap_or(&[])
+        .iter()
+        .filter(|pr| {
+            let repo = pr.at("repository").at("nameWithOwner").str();
+            let merged = pr.at("mergedAt").str();
+            repo.split('/').next().unwrap().eq_ignore_ascii_case(owner)
+                && merged >= start
+                && merged <= end
+                && pr.at("body").str().contains("thirdshift:built-with")
+        })
+        .cloned()
+        .collect();
+    let offset: usize = variables
+        .get("after")
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0);
+    let end = (offset + 50).min(nodes.len());
+    println!(
+        "{}",
+        object([(
+            "data",
+            object([(
+                "search",
+                object([
+                    ("issueCount", number(nodes.len())),
+                    ("nodes", Array(nodes[offset..end].to_vec())),
+                    (
+                        "pageInfo",
+                        object([
+                            ("hasNextPage", Bool(end < nodes.len())),
+                            ("endCursor", string(end.to_string())),
+                        ])
+                    ),
+                ])
+            )])
+        )])
+    );
 }
 
 /// The Inbox's batched query: one `alias:

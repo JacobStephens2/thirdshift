@@ -233,6 +233,7 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
             "[harness.muse]",
             "[harness.opencode]",
             "[security]",
+            "[scoring]",
             "[trial]"
         ],
         "{text}"
@@ -271,6 +272,15 @@ fn with_no_terminal_and_no_user_config_setup_writes_the_defaults() {
     assert_eq!(config["pickup"]["wait_minutes"].as_integer(), Some(5));
     assert_eq!(config["security"]["fix"].as_bool(), Some(false));
     assert_eq!(config["security"]["harness"].as_str(), Some(""));
+    assert!(config["scoring"]["owners"].as_array().unwrap().is_empty());
+    assert_eq!(config["scoring"]["sample_size"].as_integer(), Some(10));
+    assert_eq!(config["scoring"]["harness"].as_str(), Some("claude"));
+    assert_eq!(config["scoring"]["model"].as_str(), Some(""));
+    assert_eq!(
+        config["scoring"]["fallback_harness"].as_str(),
+        Some("codex")
+    );
+    assert_eq!(config["scoring"]["fallback_model"].as_str(), Some(""));
     assert_eq!(config["trial"]["memory_high"].as_str(), Some("1G"));
     assert_eq!(config["trial"]["memory_max"].as_str(), Some("2G"));
     assert_eq!(config["trial"]["memory_swap_max"].as_str(), Some("1G"));
@@ -344,6 +354,7 @@ effort = 'high' # my Effort
             "[harness.muse]",
             "[harness.opencode]",
             "[security]",
+            "[scoring]",
             "[trial]",
         ],
         "{text}"

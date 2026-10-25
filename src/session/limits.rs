@@ -12,7 +12,7 @@ pub(crate) struct Reached;
 
 impl std::fmt::Display for Reached {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str("Experiment paused at a plan-limit warning; run the Experiment again to resume")
+        f.write_str("Command paused at a plan-limit warning; run the Command again to resume")
     }
 }
 

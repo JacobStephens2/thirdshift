@@ -30,6 +30,7 @@ pub use advisories::{
 
 #[cfg(test)]
 mod execution_tests;
+pub(crate) mod scoring;
 
 /// A failed gh command keeps its diagnostic locally; notifications use only
 /// its fixed operational category.

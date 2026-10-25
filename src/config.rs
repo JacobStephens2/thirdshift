@@ -18,12 +18,14 @@ use crate::harness::{self, Harness, ModelAndEffort};
 use crate::ready::PickupOrder;
 
 pub mod console;
+pub mod scoring;
 pub use console::{ConsoleAccess, ConsoleSettings};
 
 /// The settings a User config can hold. Each is what a Run does when its
 /// command says nothing about it.
 #[derive(Debug, PartialEq, Eq)]
 pub struct UserConfig {
+    pub scoring: scoring::Settings,
     pub console: ConsoleSettings,
     pub resources: crate::resources::Limits,
     /// `merge.always`: every Run is a Merge run unless told `no-merge`.
@@ -124,6 +126,7 @@ impl UserConfig {
     /// What a Run does with no User config under `home`.
     fn defaults(home: &Path) -> Self {
         UserConfig {
+            scoring: scoring::Settings::default(),
             resources: crate::resources::Limits::default(),
             console: ConsoleSettings::default(),
             merge_always: false,
@@ -160,6 +163,17 @@ impl UserConfig {
             .with_context(|| format!("can't parse {file}"))?;
         let mut config = UserConfig::defaults(home);
         for (section, value) in &table {
+            if section == "scoring" {
+                config.scoring = value
+                    .clone()
+                    .try_into()
+                    .with_context(|| format!("invalid [scoring] in {file}"))?;
+                config
+                    .scoring
+                    .validate()
+                    .with_context(|| format!("invalid [scoring] in {file}"))?;
+                continue;
+            }
             if section == "resources" {
                 config.resources = value
                     .clone()
@@ -992,6 +1006,14 @@ close = false   # Security runs may close a finding their fix merged, when fixin
 review = false   # Ticket runs review their change for Security findings; default false
 harness = ""   # the Harness for Security runs, unless the command names one, and for every Security review; default blank; blank or missing leaves Security runs on harness.default, or Claude Code if that is missing, and Security reviews on their Command's Harness
 
+[scoring]
+owners = []   # GitHub owners whose repositories Scoring runs search; default [] (configure before score)
+sample_size = 10   # maximum pull requests per sample, spread across Harness and Model pairs; default 10
+harness = "claude"   # the Grader's Harness; default claude
+model = ""   # the Grader's Model; default blank, for the Harness's own
+fallback_harness = "codex"   # the second Grader's Harness when the first matches the Run's Model; default codex
+fallback_model = ""   # the second Grader's Model; default blank, for the second Harness's own
+
 [trial]
 memory_high = "1G"   # throttle each Trial and Grader scope past this; default 1G
 memory_max = "2G"   # kill each Trial and Grader scope past this, voiding the Trial; default 2G
@@ -1187,6 +1209,12 @@ mod tests {
                 "security.close",
                 "security.review",
                 "security.harness",
+                "scoring.owners",
+                "scoring.sample_size",
+                "scoring.harness",
+                "scoring.model",
+                "scoring.fallback_harness",
+                "scoring.fallback_model",
                 "trial.memory_high",
                 "trial.memory_max",
                 "trial.memory_swap_max",

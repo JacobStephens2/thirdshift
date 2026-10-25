@@ -205,6 +205,23 @@ No matching entries or no crontab shows an empty view; an unavailable `crontab`
 command or a read failure reports an error. This view never changes the crontab
 or starts a Command.
 
+Scores (`/scores`, or `g q`) lists the sample by week and each criterion's
+calibration, from the same retained records as `thirdshift scores --json`.
+Enter five pass/fail Scores and reasons in a sample's form. The model's Scores
+are withheld from the response until all five of yours are saved, using the
+same lock and atomic write as `thirdshift scores <pull request> --mine --json`.
+Score again opens another blind entry. Reload to see changes from other clients.
+
+Bug origins (`/bug-origins`, or `g u`) lists proposed, confirmed and rejected
+origins with their evidence, pull requests, Ticket-run attribution and settled
+Eval task. Confirm, Correct (a pull request URL or number) and Reject use exactly
+the operations behind `thirdshift bug-origins <issue> --confirm`,
+`--correct <pull request>` and `--none`, including their refusal of concurrent
+Scoring writers. Every form requires CSRF; both pages require sign-in unless
+the Console runs with `--no-sign-in`. Confirmation proposes an Eval task and
+starts no work. `node --test console/tests/scoring.test.cjs` checks navigation,
+all four actions, escaping and 390 px after a build.
+
 Lanes shows each Command and its child Runs on a shared time axis, over the last
 3.5, 12 or 24 hours. The window is kept in `hours=`; bars clip to that window,
 while their text retains the whole stage's time. Older Commands are on History.

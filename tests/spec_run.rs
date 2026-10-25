@@ -1712,7 +1712,7 @@ fn the_spec_pr_is_a_draft_during_the_spec_review_and_marked_ready_after_it() {
 /// The line thirdshift writes in the Spec PR's body once the Spec review has
 /// written it, when nothing chose the Harness, Model or Effort.
 const BUILT_WITH: &str =
-    "Built with claude · default model · default effort <!-- thirdshift:built-with -->";
+    "Built with claude 9.8.7 · default model · default effort <!-- thirdshift:built-with -->";
 
 /// The linear Spec's Tickets checklist once every Ticket is done.
 const DONE_CHECKLIST: &str = "<!-- thirdshift:tickets -->

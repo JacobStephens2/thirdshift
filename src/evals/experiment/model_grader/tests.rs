@@ -1,6 +1,9 @@
 use super::*;
 use crate::scope::testing::{Fixture, REMOVE_OBSERVED_EVENTS};
+use crate::session::private::record_session;
+use crate::session::recording::Input;
 use std::process::Command;
+use std::time::Instant;
 
 #[test]
 fn recorded_model_grader_reads_native_codex_quota_from_its_launch_home() {
@@ -14,6 +17,7 @@ fn recorded_model_grader_reads_native_codex_quota_from_its_launch_home() {
     command.current_dir(fixture.directory.path());
     let mut launched = fixture.launch(command);
     let error = record_session(
+        "model Grader",
         &mut launched,
         &Choice {
             harness: crate::harness::Harness::Codex,
@@ -27,10 +31,7 @@ fn recorded_model_grader_reads_native_codex_quota_from_its_launch_home() {
         },
     )
     .unwrap_err();
-    assert_eq!(
-        error.to_string(),
-        "model Grader session failed; see private Grader artifacts"
-    );
+    assert!(error.is::<crate::session::limits::Reached>(), "{error:#}");
     assert!(!fixture.path("continued").exists());
     let trace = fs::read_to_string(fixture.path("stdout.logs.jsonl")).unwrap();
     assert!(trace.contains("used_percent"), "{trace}");
@@ -50,6 +51,7 @@ fn recorded_model_grader_retains_live_kill_and_its_private_diagnostic() {
     ]);
     let mut launched = fixture.launch(command);
     let result = record_session(
+        "model Grader",
         &mut launched,
         &Choice::default(),
         fixture.directory.path(),
@@ -106,6 +108,7 @@ fn recorded_model_grader_uses_only_kernel_evidence_and_keeps_journal_lazy() {
         ]);
         let mut launched = fixture.launch(command);
         let result = record_session(
+            "model Grader",
             &mut launched,
             &Choice::default(),
             fixture.directory.path(),

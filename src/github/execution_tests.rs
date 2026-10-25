@@ -1,4 +1,56 @@
 use super::*;
+#[test]
+fn first_bug_backfill_keeps_closures_in_the_cutoffs_second() {
+    with_recorded_signal(
+        "github::execution_tests::first_bug_backfill_keeps_closures_in_the_cutoffs_second",
+        |_| {
+            let fixture = Fixture::new("");
+            // Emulate GitHub's strict '<' and inclusive '..' date operators.
+            // The bug closed at 15:00:00, before the exact 15:00:00.500 cutoff.
+            fixture.script(
+                r#"exec python3 - "$@" <<'PY'
+import datetime, json, sys
+search = next(arg[7:] for arg in sys.argv[1:] if arg.startswith('search='))
+window = next(word[7:] for word in search.split() if word.startswith('closed:'))
+parse = lambda value: datetime.datetime.fromisoformat(value.replace('Z', '+00:00'))
+closed = '2026-10-24T15:00:00Z'
+at = parse(closed)
+if window.startswith('<='):
+    visible = at <= parse(window[2:])
+elif window.startswith('<'):
+    visible = at < parse(window[1:])
+else:
+    lower, upper = window.split('..')
+    visible = parse(lower) <= at <= parse(upper)
+bug = {
+    'url': 'https://github.com/acme/widgets/issues/8',
+    'title': 'Wrong answer', 'body': 'The answer should be 42.',
+    'closedAt': closed, 'repository': {'nameWithOwner': 'acme/widgets'},
+    'labels': {'nodes': [{'name': 'bug'}], 'pageInfo': {'hasNextPage': False}},
+    'timelineItems': {'nodes': [{'closer': None}]}
+}
+nodes = [bug] if visible else []
+print(json.dumps({'data': {'search': {
+    'issueCount': len(nodes), 'nodes': nodes,
+    'pageInfo': {'hasNextPage': False, 'endCursor': None}
+}}}))
+PY"#,
+            );
+            let end = chrono::DateTime::parse_from_rfc3339("2026-10-24T15:00:00.500Z")
+                .unwrap()
+                .with_timezone(&chrono::Utc);
+            let bugs = GitHub::new()
+                .closed_bugs(&["acme".into()], None, end)
+                .unwrap();
+            assert_eq!(
+                bugs.len(),
+                1,
+                "the first proposal window omitted its final second"
+            );
+        },
+    );
+}
+
 use crate::interrupt;
 use crate::test_support::with_recorded_signal;
 use std::fs;

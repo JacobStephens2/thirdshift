@@ -270,7 +270,7 @@
                 <li class="cut"><span aria-hidden="true">···</span> 28 lines cut: the review reading and checking the change</li>
                 <li><span class="prefix">thirdshift: 00:49:54</span> security-review: session ended after 2m 41s: 981609 input tokens (882304 cached), 5030 output tokens</li>
                 <li><span class="prefix">thirdshift: 00:49:54</span> pushing issue-663</li>
-                <li><span class="prefix">thirdshift: 00:49:56</span> writing "Built with codex · gpt-6.1-sol · high" in the pull request's body</li>
+                <li><span class="prefix">thirdshift: 00:49:56</span> writing "Built with codex 0.160.0 · gpt-6.1-sol · high" in the pull request's body</li>
                 <li><span class="prefix">thirdshift: 00:49:57</span> checking the PR</li>
                 <li><span class="prefix">thirdshift: 00:50:01</span> merging origin/main into issue-663</li>
                 <li><span class="prefix">thirdshift: 00:50:03</span> pushing issue-663</li>
@@ -347,7 +347,7 @@
     <div class="wrap grows">
       <div class="grows-text">
         <p class="eyebrow">Workflows</p>
-        <h2 id="grows-title">Five workflows</h2>
+        <h2 id="grows-title">Six workflows</h2>
         <p>A <a href="/docs/#what-a-ticket-run-does">Ticket run</a> takes one Issue URL and delivers one pull request, ready for review. A Ticket run that Self-merges merges its own reviewed, green pull request when you ask.</p>
         <p>A <a href="/docs/#spec-runs">Spec run</a> works through Tickets in dependency order, up to three at once by default. They merge into a Spec branch, then one Spec PR gets reviewed against the whole Spec.</p>
         <p>An <a href="/docs/#architect-runs">Architect run</a> looks for architecture improvements and builds its top Strong plan. Without a Strong recommendation, it leaves an Architect idea for the Day shift. Use <code>--plan-only</code> to publish a plan and stop.</p>
@@ -362,6 +362,10 @@
         <p>Each Trial and each Grader has its own memory cap. A Trial its cap kills is void; repeated cap kills are reported for its Arm. The <a href="/docs/#user-config">User config</a> sets the caps, with defaults of 1 GiB for throttling, 2 GiB for killing and 1 GiB of swap.</p>
         <p>The Verdict waits for your rechecks of borderline and decisive Scores. <code>thirdshift experiments <wbr>&lt;id&gt; --json</code> lists those waiting; <code>thirdshift recheck <wbr>&lt;id&gt; &lt;trial&gt; pass --reason '…'</code> records your decision beside the Grader's Score and keeps its history.</p>
         <p><code>thirdshift experiment <wbr>--release <wbr>&lt;commit&gt;</code> compares touched suites with the last release tag. The release script waits for rechecks before pushing and asks whether to release on a fail or inconclusive Verdict. Reruns reuse the Experiment, including before opening a pushed branch’s PR. If main gains different content, the script refuses to publish it under the old Candidate's Experiment; choose a fresh release version. No touched suite or a last release with no Trial flag carries on with a note. <a href="/docs/#releasing">Release checks</a>.</p>
+
+        <p>A <a href="/docs/#scoring-runs">Scoring run</a>, started with <code>thirdshift score</code>, samples merged factory pull requests across configured GitHub owners, leaving out Security fixes. Each gets a blind packet with its issue and repository at merge time, its diff, pull request and CI conclusions. <code>thirdshift scores --json</code> lists the private samples by week. An independent Model grades each packet on Correct, Scoped, Tested, Honest and Standards, with a pass or fail and a reason for each. Completed Scores are kept; the next Scoring run finishes pending packets after a plan-limit stop. It also proposes Bug origins for closed bugs, excluding Security fixes, using a sandboxed session and history ending at the fix. The first proposal run covers all closed bugs; later runs cover their window. Use <code>thirdshift bug-origins [issue] --json</code> to read them; <code>--confirm</code>, <code>--correct &lt;pull request&gt;</code> or <code>--none</code> settles one. Confirmed origins count against their retained Ticket run in <code>show --json</code> and create proposed code-review Eval tasks with pinned PR diffs and draft catch criteria. Rejected and unsettled origins count for nothing. Eval tasks stay out of Experiments until approved.</p>
+        <p>The first run marks 20 past pull requests for you, spread across Harnesses and Models; later runs mark two a week. <code>thirdshift scores &lt;pull request&gt; --mine</code> records your five Scores before revealing the model's; add <code>--json</code> to return the saved result as JSON. Ordinary text and JSON views also keep model Scores hidden until yours are saved. Each criterion shows its own calibration: at least 18 agreements among the last 20 pull requests you both scored.</p>
+        <p>The Console's Scores page lists samples by week and each criterion's calibration, and saves all five of your Scores before revealing the model's. Its Bug origins page shows proposals and settled decisions with Confirm, Correct and Reject actions. Both use the same operations as their CLI commands.</p>
       </div>
       <figure class="floor grid-bg">
         <!-- Static plan: visible names, statuses and hints also work without JavaScript.
