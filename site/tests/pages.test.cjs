@@ -48,10 +48,13 @@ async function assertFits(page, selector, message) {
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, "no horizontal page scrolling");
 }
 
-// Polls a reading no locator state expresses, such as a scroll position, for Playwright's default 30 seconds.
+// Playwright's default timeout, which the suite never changes, so its own polls give up when Playwright's waits do.
+const DEFAULT_TIMEOUT_MS = 30000;
+
+// Polls a reading no locator state expresses, such as a scroll position.
 // page.waitForFunction polls inside the page, so on a page without JavaScript it never checks again.
 async function waitUntil(read, message) {
-  const deadline = Date.now() + 30000;
+  const deadline = Date.now() + DEFAULT_TIMEOUT_MS;
   while (!await read()) {
     assert.ok(Date.now() < deadline, message);
     await new Promise(resolve => setTimeout(resolve, 100));
@@ -59,7 +62,7 @@ async function waitUntil(read, message) {
 }
 
 // Waits for the element to reach the top of the viewport, as following a link to its fragment scrolls it.
-function scrolledIntoView(page, selector) {
+function waitForScrolledIntoView(page, selector) {
   return waitUntil(() => page.locator(selector).evaluate(node => Math.abs(node.getBoundingClientRect().top) < 40),
     `${selector} scrolls into view`);
 }
@@ -327,7 +330,7 @@ test("guide navigation and Repair loop links reach visible explanations without 
     await link.click();
     await page.waitForURL(url => url.hash === href);
     await page.locator(href).waitFor({ state: "visible" });
-    await scrolledIntoView(page, href);
+    await waitForScrolledIntoView(page, href);
   }
   await page.getByRole("link", { name: "Then return to merging the Base branch" }).click();
   await page.waitForURL(url => url.hash === "#delivery-sync");
@@ -387,7 +390,7 @@ for (const javaScriptEnabled of [false, true]) {
       const target = page.locator(`#${fragment}`);
       await target.waitFor({ state: "visible" });
       assert.match(await target.textContent(), new RegExp(text));
-      await scrolledIntoView(page, `#${fragment}`);
+      await waitForScrolledIntoView(page, `#${fragment}`);
     }
     await page.goto(`${origin}/docs/`);
     const installLink = page.getByRole("navigation", { name: "Manual sections" }).getByRole("link", { name: "Install", exact: true });
@@ -434,7 +437,7 @@ test("the architecture page shows six captioned, described figures, each reachab
     const href = await link.getAttribute("href");
     await link.click();
     await page.waitForURL(url => url.hash === href);
-    await scrolledIntoView(page, href);
+    await waitForScrolledIntoView(page, href);
   }
   for (const path of await page.locator('a[href^="/"], link[href^="/"]').evaluateAll(nodes => [...new Set(nodes.map(node => node.getAttribute("href").split("#")[0]))])) {
     assert.equal((await page.request.get(`${origin}${path}`)).status(), 200, path);
