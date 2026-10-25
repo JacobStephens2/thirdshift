@@ -114,9 +114,19 @@ impl TicketBoard {
                     _ => TicketState::NotStarted,
                 };
                 TicketRecord {
-                    issue: (&ticket.issue).into(),
+                    issue: crate::logs::Issue {
+                        title: ticket.title.clone(),
+                        ..(&ticket.issue).into()
+                    },
                     state,
-                    blockers: ticket.open_blockers.iter().map(Into::into).collect(),
+                    blockers: ticket
+                        .open_blockers
+                        .iter()
+                        .map(|blocker| crate::logs::Issue {
+                            title: blocker.title.clone(),
+                            ..(&blocker.issue).into()
+                        })
+                        .collect(),
                 }
             })
             .collect()
@@ -263,38 +273,63 @@ impl TicketBoard {
             }
             _ => {}
         }
-        if !self.spec.in_same_repo(&ticket.issue) {
-            return "unready: outside the Spec's repository".to_string();
+        let unready = if !self.spec.in_same_repo(&ticket.issue) {
+            Some("unready: outside the Spec's repository".to_string())
+        } else if landed.is_some() {
+            None
+        } else if let Some(label) = ticket.labels.unready() {
+            Some(format!("unready: labelled {label}"))
+        } else if ticket.has_sub_issues {
+            Some("unready: has sub-issues".to_string())
+        } else {
+            None
+        };
+        if let Some(unready) = unready {
+            return match self.blocked_by(ticket) {
+                Some(blockers) => format!("{unready}; {blockers}"),
+                None => unready,
+            };
         }
         if let Some(landed) = landed {
             format!("{landed}, but is still open")
-        } else if let Some(label) = ticket.labels.unready() {
-            format!("unready: labelled {label}")
-        } else if ticket.has_sub_issues {
-            "unready: has sub-issues".to_string()
         } else if let Some(cycle) = cycle_through(&ticket.issue, &self.tickets) {
             let cycle: Vec<String> = cycle.iter().map(|issue| self.name(issue)).collect();
             format!("in a cycle: {}", cycle.join(" blocked by "))
-        } else if ticket.open_blockers.is_empty() {
+        } else {
             // Ready, but not started yet, or the Spec run ended before it could.
-            "not started".to_string()
+            self.blocked_by(ticket)
+                .unwrap_or_else(|| "not started".to_string())
+        }
+    }
+
+    fn blocked_by(&self, ticket: &Ticket) -> Option<String> {
+        if ticket.open_blockers.is_empty() {
+            None
         } else {
             let blockers: Vec<String> = ticket
                 .open_blockers
                 .iter()
                 .map(|blocker| {
-                    if self
+                    let mut details = Vec::new();
+                    if !self
                         .tickets
                         .iter()
-                        .any(|ticket| ticket.issue.identity() == blocker.identity())
+                        .any(|ticket| ticket.issue.identity() == blocker.issue.identity())
                     {
-                        self.name(blocker)
+                        details.push("outside the Spec");
+                    }
+                    if blocker.labels.has(crate::labels::READY_FOR_AGENT) {
+                        details.push("ready-for-agent");
+                    }
+                    let name = self.name(&blocker.issue);
+                    if details.is_empty() {
+                        name
                     } else {
-                        format!("{} (outside the Spec)", self.name(blocker))
+                        format!("{name} ({})", details.join("; "))
                     }
                 })
                 .collect();
-            format!("blocked by {}", blockers.join(", "))
+            Some(format!("blocked by {}", blockers.join(", ")))
         }
     }
 }
@@ -306,7 +341,8 @@ fn cycle_through<'a>(start: &'a IssueUrl, tickets: &'a [Ticket]) -> Option<Vec<&
         tickets
             .iter()
             .find(|ticket| ticket.issue.identity() == issue.identity())
-            .map_or(&[][..], |ticket| &ticket.open_blockers[..])
+            .into_iter()
+            .flat_map(|ticket| ticket.open_blockers.iter().map(|blocker| &blocker.issue))
     };
     let mut reached_from = HashMap::new();
     let mut queue = VecDeque::from([start]);
@@ -344,11 +380,17 @@ mod tests {
     fn ticket(number: u64, is_open: bool, blockers: &[u64], open_blockers: &[u64]) -> Ticket {
         Ticket {
             issue: issue(number),
+            title: None,
             is_open,
             labels: Labels::default(),
             has_sub_issues: false,
             blockers: blockers.iter().copied().map(issue).collect(),
-            open_blockers: open_blockers.iter().copied().map(issue).collect(),
+            open_blockers: open_blockers
+                .iter()
+                .copied()
+                .map(issue)
+                .map(Into::into)
+                .collect(),
         }
     }
 
@@ -400,13 +442,27 @@ mod tests {
         let mut blocked = ticket(21, true, &[], &[]);
         let foreign = IssueUrl::parse("https://github.com/other/widgets/issues/21").unwrap();
         blocked.blockers = vec![foreign.clone()];
-        blocked.open_blockers = vec![foreign];
+        blocked.open_blockers = vec![foreign.into()];
         let board = board(vec![blocked], 1);
         assert_eq!(board.next_to_start(), None);
         assert_eq!(
             board.lines(),
             ["#21 blocked by https://github.com/other/widgets/issues/21 (outside the Spec)"]
         );
+    }
+
+    #[test]
+    fn an_unready_ticket_reports_its_open_blockers_inside_and_outside_the_spec() {
+        for label in UNREADY {
+            let mut unready = ticket(21, true, &[22, 98, 99], &[22, 99]);
+            unready.labels = [label.name()].into_iter().collect();
+            let board = board(vec![unready, ticket(22, true, &[], &[])], 1);
+            let line =
+                format!("#21 unready: labelled {label}; blocked by #22, #99 (outside the Spec)");
+            assert_eq!(board.lines()[0], line);
+            assert!(board.checklist().contains(&format!("- [ ] {line}\n")));
+            assert_eq!(board.next_to_start(), Some(issue(22)));
+        }
     }
 
     #[test]
