@@ -166,6 +166,164 @@ report.write_text('Review complete.\n')
 print(json.dumps(dict(version=1, outcome='succeeded', timings=dict(total_ms=12, session_ms=10), reports=dict(standards=str(report), spec=None), void_cause=None, cause=None, session_id=None, log=None, model_evidence=None)))
 "#;
 
+const GIT: &str = r#"
+import subprocess
+def git(*args):
+    return subprocess.check_output(['git', '-C', str(repository), *args], text=True).strip()
+"#;
+
+#[test]
+fn review_commits_and_repository_reports_are_graded_for_both_sessions() {
+    if isolated(&[]) {
+        return;
+    }
+    for session in ["spec-review", "code-review"] {
+        let mut fixture = Fixture::new(&format!(
+            r#"
+{GIT}
+(repository / 'change.txt').write_text('Fixed by review\n')
+git('add', 'change.txt')
+git('-c', 'user.name=Review', '-c', 'user.email=review@example.invalid', 'commit', '-m', 'Review fix')
+if request['session_kind'] == 'spec-review':
+    git('push', 'origin', 'HEAD')
+output = repository / '.thirdshift-review'
+output.mkdir()
+(repository / '.gitignore').write_text('ignored-output\n')
+(repository / 'ignored-output').write_text('Session artifact')
+spec = output / 'spec.md'
+spec.write_text('Spec review complete.\n')
+{success}
+"#,
+            success = SUCCESS.replace("spec=None", "spec=str(spec)")
+        ));
+        fixture.task.manifest.session = serde_json::from_value(json!(session)).unwrap();
+        fixture.task.manifest.checks.clear();
+        fixture
+            .execution(5)
+            .run(fixture.request(), |_, output, score| {
+                assert!(
+                    output.outcome == Outcome::Succeeded,
+                    "{session}: {:?}",
+                    output.cause
+                );
+                assert!(score.passed, "{session}");
+                assert_eq!(
+                    output.reports.read_and_blind()?.standards.as_deref(),
+                    Some("Review complete.\n")
+                );
+                assert_eq!(
+                    output.reports.read_and_blind()?.spec.as_deref(),
+                    Some("Spec review complete.\n")
+                );
+                Ok(())
+            })
+            .unwrap();
+    }
+}
+
+#[test]
+fn session_edits_cannot_pass_checks_on_the_prepared_repository() {
+    if isolated(&[]) {
+        return;
+    }
+    let mut fixture = Fixture::new(&format!(
+        r#"
+(repository / 'change.txt').write_text('Fixed by review\n')
+(repository / 'session-artifact').write_text('Untracked file')
+{SUCCESS}
+"#
+    ));
+    fixture.task.manifest.checks = vec![
+        vec!["sh".into(), "-c".into(), "grep -q 'Fixed by review' change.txt".into()],
+        vec!["sh".into(), "-c".into(), "grep -qx 'Reviewed change' change.txt && test ! -e session-artifact && grep -q 'Review complete' \"$THIRDSHIFT_TRIAL_STANDARDS_REPORT\"".into()],
+    ];
+    fixture
+        .execution(5)
+        .run(fixture.request(), |_, output, score| {
+            assert!(output.outcome == Outcome::Succeeded);
+            assert!(!score.passed);
+            assert!(!score.checks[2].passed, "session edits passed a code check");
+            assert!(
+                score.checks[3].passed,
+                "checks must see prepared code and the session's report"
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn session_cannot_pass_checks_by_editing_the_grader_snapshot() {
+    if isolated(&[]) {
+        return;
+    }
+    let mut fixture = Fixture::new(&format!(
+        r#"
+import tempfile
+for path in pathlib.Path(tempfile.gettempdir()).glob('prepared-grader-*/repository/change.txt'):
+    path.write_text('Fixed by review\n')
+{SUCCESS}
+"#
+    ));
+    let tmp = fixture.root.join("grader-tmp");
+    fs::create_dir(&tmp).unwrap();
+    // SAFETY: the test process is single-threaded until the Arm is spawned,
+    // and this env is the snapshot directory both sides must share.
+    unsafe { std::env::set_var("TMPDIR", &tmp) };
+    fixture.task.manifest.checks = vec![vec![
+        "sh".into(),
+        "-c".into(),
+        "grep -qx 'Fixed by review' change.txt".into(),
+    ]];
+    fixture
+        .execution(5)
+        .run(fixture.request(), |_, output, score| {
+            assert!(
+                !score.passed,
+                "session made mechanical checks pass by editing the grader snapshot ({})",
+                output.outcome
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn input_symlink_to_a_fifo_voids_without_blocking_the_supervisor() {
+    if isolated(&[]) {
+        return;
+    }
+    let fixture = Fixture::new(&format!(
+        r#"
+import os
+os.mkfifo(repository / 'block.fifo')
+(repository / '.thirdshift-issue.md').symlink_to('block.fifo')
+{SUCCESS}
+"#
+    ));
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = fixture
+            .execution(5)
+            .run(fixture.request(), |_, output, score| {
+                assert_eq!(output.void_cause, Some(VoidCause::RepositoryChanged));
+                assert!(!score.passed);
+                Ok(())
+            });
+        sender.send(result).ok();
+    });
+    match receiver.recv_timeout(Duration::from_secs(20)) {
+        Ok(result) => result.expect("Trial execution failed"),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            eprintln!("integrity check blocked on an input symlink to a FIFO");
+            std::process::exit(1);
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("Trial thread ended without a result");
+        }
+    }
+}
+
 #[test]
 fn trial_preparation_ignores_caller_checkout_and_push_hooks() {
     if isolated(&[]) {
@@ -268,21 +426,90 @@ fn completed_score_and_evidence_live_through_publication() {
 }
 
 #[test]
-fn changed_instructions_void_an_otherwise_successful_execution() {
+fn edited_or_deleted_task_inputs_void_an_otherwise_successful_execution() {
     if isolated(&[]) {
         return;
     }
-    let fixture = Fixture::new(&format!(
-        "{SUCCESS}\n(repository / 'AGENTS.md').write_text('Edited instructions')"
+    for input in [crate::prompt::ISSUE_FILE, "context/input.md", "CLAUDE.md"] {
+        for mutation in ["write_text('Edited input')", "unlink()"] {
+            let mut fixture =
+                Fixture::new(&format!("{SUCCESS}\n(repository / '{input}').{mutation}"));
+            fs::write(fixture.root.join("input.md"), "Review the change.\n").unwrap();
+            fixture
+                .task
+                .manifest
+                .inputs
+                .insert(input.into(), "input.md".into());
+            fixture
+                .execution(5)
+                .run(fixture.request(), |attempt, output, score| {
+                    assert!(output.outcome == Outcome::Void, "{input}: {mutation}");
+                    assert_eq!(output.void_cause, Some(VoidCause::RepositoryChanged));
+                    assert!(!score.passed);
+                    assert_eq!(score.checks.len(), 2, "Void Trials skip code checks");
+                    assert!(attempt.parent().unwrap().join("active.json").is_file());
+                    Ok(())
+                })
+                .unwrap();
+        }
+    }
+}
+
+#[test]
+fn changes_to_reviewed_commits_void_an_otherwise_successful_execution() {
+    if isolated(&[]) {
+        return;
+    }
+    for mutation in [
+        "git('update-ref', 'refs/heads/base', 'HEAD')",
+        "git('replace', 'HEAD', 'base')",
+        "git('replace', 'base', 'HEAD')",
+        "(repository / '.git/info/grafts').write_text(git('rev-parse', 'HEAD') + '\\n')",
+        "(repository / '.git/shallow').write_text(git('rev-parse', 'HEAD') + '\\n')",
+        "oid = git('rev-parse', 'HEAD'); (repository / '.git/objects' / oid[:2] / oid[2:]).unlink()",
+    ] {
+        let fixture = Fixture::new(&format!(
+            r#"
+{GIT}
+{SUCCESS}
+{mutation}
+"#
+        ));
+        fixture
+            .execution(5)
+            .run(fixture.request(), |_, output, score| {
+                assert!(output.outcome == Outcome::Void, "{mutation}");
+                assert_eq!(output.void_cause, Some(VoidCause::RepositoryChanged));
+                assert!(!score.passed);
+                Ok(())
+            })
+            .unwrap();
+    }
+}
+
+#[test]
+fn issue_symlink_target_edits_are_repository_changes() {
+    if isolated(&[]) {
+        return;
+    }
+    let mut fixture = Fixture::new(&format!(
+        "{SUCCESS}\n(repository / 'CLAUDE.md').write_text('Altered issue text')"
     ));
+    fixture.task.manifest.checks.clear();
+    let source = fixture.root.join("source");
+    std::os::unix::fs::symlink("CLAUDE.md", source.join(crate::prompt::ISSUE_FILE)).unwrap();
+    let git = crate::git::Git::new(&source);
+    git.run(&["add", crate::prompt::ISSUE_FILE]).unwrap();
+    git.run(&["commit", "-m", "Issue input symlink"]).unwrap();
+    fixture.task.manifest.change = git.run(&["rev-parse", "HEAD"]).unwrap();
     fixture
         .execution(5)
-        .run(fixture.request(), |attempt, output, score| {
-            assert!(output.outcome == Outcome::Void);
-            assert_eq!(output.void_cause, Some(VoidCause::RepositoryChanged));
-            assert!(!score.passed);
-            assert_eq!(score.checks.len(), 2, "Void Trials skip code checks");
-            assert!(attempt.parent().unwrap().join("active.json").is_file());
+        .run(fixture.request(), |_, output, _| {
+            assert_eq!(
+                output.void_cause,
+                Some(VoidCause::RepositoryChanged),
+                "Editing the text read from .thirdshift-issue.md must void the Trial"
+            );
             Ok(())
         })
         .unwrap();

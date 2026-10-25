@@ -613,8 +613,14 @@ Two workers take alternating Baseline and Candidate Trials, each in a fresh
 prepared repository. Trial artifacts and one result per finished Trial live
 privately in `~/.thirdshift/evals/experiments/<id>/`. Trials run in a bwrap
 sandbox with a fresh home and provider-only network. Code Graders then score each Trial:
-a changed repository makes it void, a review with no reports fails, and the
-Eval task's mechanical checks must pass. Scores retain each check and its reason.
+editing or deleting `.thirdshift-issue.md` or a declared input, moving the Base
+branch, or altering or removing the base or prepared change commit makes an
+otherwise successful Trial void with `repository_changed`. Issue branch commits,
+pushes to the local origin, reports and other working-tree files are allowed.
+A review with no reports fails, and the Eval task's mechanical checks must pass.
+Those checks run on a private copy of the prepared repository captured before
+the session, so the session cannot change the code they grade. Checks share
+their own build artifacts. Scores retain each check and its reason.
 Then a fresh model Grader scores one blind packet per Eval task against its
 written success criteria. Each packet holds every Trial's review reports with
 shuffled neutral labels and identifying Harness, Model, Effort and Arm lines
