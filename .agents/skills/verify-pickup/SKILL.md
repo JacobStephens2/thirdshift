@@ -48,12 +48,17 @@ This skill authorizes verification edits only. Product fixes need their own task
 
 ## Coverage and sync
 
-Last confirmed source commit: `3cd68bb`.
-The merge-time sync from `4d4756b` found no change to the modeled request order.
+Last confirmed source commit: `fec2d4876314df07300d476a98b6a113c61f3749`.
+The merge-time sync combines main's `3cd68bb` mapping with the bug diagnosis
+ending: `Claim::needs_info` reads labels, then removes Ready and Claim while
+adding needs-info. The model retains those as separate requests and does not
+restore Ready until a later Day shift hand-back.
 Pickup ordering and paginated issue listing are outside the one-issue model;
 same-second Claim history is normalized within its complete, ordered-read
 assumption. The known pre-Claim counterexample and both sensitivity mutations
-remain reachable. No model or property was changed.
+remain reachable. Claimed-dispatch safety passes; the explicit literal-property
+assertion and both mutation commands still fail with their expected traces.
+The merge requires no further model or property change.
 The model describes these functions, including their ordering:
 
 | Source | Covered functions / requests |
