@@ -2335,6 +2335,10 @@ fn numbered_issue(state: &Json, n: &Json) -> Json {
     object([
         ("number", n.clone()),
         (
+            "title",
+            state.at("titles").get(&n.python()).cloned().unwrap_or(Null),
+        ),
+        (
             "url",
             state
                 .get("issue_urls")
@@ -2361,7 +2365,15 @@ fn sub_issue_count(state: &Json, key: &str) -> Json {
 fn blockers(state: &Json, key: &str) -> Json {
     let blockers = listed(state, "blocked_by", key)
         .iter()
-        .map(|blocker| numbered_issue(state, blocker))
+        .map(|blocker| {
+            let mut node = numbered_issue(state, blocker);
+            let labels = listed(state, "labels", &blocker.python())
+                .into_iter()
+                .map(|label| object([("name", label)]))
+                .collect();
+            node.set("labels", object([("nodes", Array(labels))]));
+            node
+        })
         .collect();
     object([("nodes", Array(blockers))])
 }

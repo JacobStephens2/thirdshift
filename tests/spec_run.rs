@@ -2256,6 +2256,48 @@ fn an_unready_label_keeps_a_ticket_from_running() {
 }
 
 #[test]
+fn an_unready_tickets_outside_blockers_are_reported_in_the_checklist_log_and_record() {
+    let scenario = spec_of(&[(21, &[98, 99]), (22, &[21]), (23, &[])]);
+    scenario.issue_labelled(21, &["ready-for-human"]);
+    scenario.issue_labelled(99, &["ready-for-agent"]);
+    scenario.issue_is(98, "CLOSED");
+    scenario.issue_titled(21, "Release the migration");
+    scenario.issue_titled(22, "Remove the old reader");
+    scenario.issue_titled(23, "Independent work");
+    scenario.issue_titled(99, "Fix the migration");
+
+    let result = scenario.run(&[&spec_url(&scenario)]);
+
+    let line =
+        "#21 unready: labelled ready-for-human; blocked by #99 (outside the Spec; ready-for-agent)";
+    assert_failed_spec_run(
+        &scenario,
+        &result,
+        &format!(
+            "- [ ] {line}\n- [ ] #22 blocked by #21\n- [x] #23 landed with https://github.com/acme/widgets/pull/1\n"
+        ),
+    );
+    assert_eq!(sessions_by_issue(&scenario), ["23"]);
+    assert_contains(&result.stderr, &format!("thirdshift: {line}\n"));
+    let folder = "home/.thirdshift/logs/acme/widgets/commands/issue";
+    let logs = scenario.log_files(folder, "log");
+    assert_eq!(logs.len(), 1);
+    let log = std::fs::read_to_string(scenario.path(folder).join(&logs[0])).unwrap();
+    assert_contains(&log, line);
+
+    let shown = scenario.run(&["show", "widgets#20", "--json"]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let shown: serde_json::Value = serde_json::from_str(&shown.stdout).unwrap();
+    let tickets = &shown["command"]["tickets"];
+    assert_eq!(tickets[0]["issue"]["title"], "Release the migration");
+    assert_eq!(tickets[1]["issue"]["title"], "Remove the old reader");
+    assert_eq!(tickets[2]["issue"]["title"], "Independent work");
+    assert_eq!(tickets[0]["blockers"].as_array().unwrap().len(), 1);
+    assert_eq!(tickets[0]["blockers"][0]["title"], "Fix the migration");
+    assert_eq!(tickets[1]["blockers"][0]["title"], "Release the migration");
+}
+
+#[test]
 fn a_failed_ticket_stops_only_its_dependents_and_is_not_started_again() {
     let scenario = spec_of(&[(21, &[]), (22, &[21]), (23, &[]), (24, &[])]);
     scenario.agent_does_for(21, "exit 1");

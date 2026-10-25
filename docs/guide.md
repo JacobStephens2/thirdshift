@@ -1289,6 +1289,8 @@ A Spec run makes the [Claim](#the-claim) on the Spec, as a Ticket run does on it
 
 The Spec PR opens as a draft as soon as the first Ticket lands, titled from the Spec, with `Closes #<spec>` and a Tickets checklist: one line per Ticket, ticked once it is done, with its pull request, or saying it is running, failed, blocked or unready. thirdshift rewrites the checklist between its `<!-- thirdshift:tickets -->` markers as each Ticket starts and ends, leaving the rest of the body as it is. Once every Ticket is done, the **Spec review** rewrites the body, and thirdshift puts the checklist back, appending it if the markers are gone, before marking the Spec PR ready.
 
+An Unready Ticket's checklist and Command log line also name its open blockers, marking those outside the Spec and those labelled `ready-for-agent`. For example: `#24 unready: labelled ready-for-human; blocked by #99 (outside the Spec; ready-for-agent)`. The Spec run reports outside blockers but never starts them. Its Command record retains the Ticket and open blocker titles read with the graph, visible in `thirdshift show <command> --json`. Titles are best effort: `null` means no title was captured, including in older records; `show` does not fetch missing titles from GitHub.
+
 The Spec review session reviews the whole Spec branch against the Base branch and the Spec. Once it is marked ready, the Spec PR goes through the same step 6 as a Ticket run's pull request, with the Spec as the issue and the Spec branch as the Issue branch: the Base branch is merged in (never rebased), CI watched, and a conflict or red CI handed to a Repair, within the same budgets, with the same Check re-run after a CI-fix Repair that leaves the head unchanged. Inherited failures are told apart the same way everywhere: the Spec PR's against the Base branch, and a Ticket's against the Spec branch, its Base branch, with the cause shown on the Ticket's line of the checklist.
 
 Tickets always merge into the Spec branch, whatever the command or the User config says. `merge` (or `--merge`, or `merge.always = true` without `no-merge`) applies to the Spec PR alone: the Spec run ends with the Self-merge of the Spec PR into the Base branch, then deletes the Spec branch on `origin` and closes the Spec if the merge did not. Without it, the Spec run ends with the Spec PR ready for review. A Spec PR that fails from the Spec review on follows the [Failed ticket run](#failed-ticket-runs) rules for its pull request, back to draft unless only the Self-merge could not happen (a policy refusal), and the Spec run exits `1`.
@@ -1312,8 +1314,8 @@ When nothing is left to run and any Ticket is not done, the Spec run is a **Fail
 thirdshift: 03:12:40 #21 failed: claude exited 1 (session trace: ~/.thirdshift/logs/acme/widgets/commands/issue/21-….logs.jsonl)
 thirdshift: 03:12:40 #22 blocked by #21
 thirdshift: 03:12:40 #23 landed with https://github.com/acme/widgets/pull/1
-thirdshift: 03:12:40 #24 unready: labelled needs-info
-thirdshift: 03:12:40 #25 blocked by #99 (outside the Spec)
+thirdshift: 03:12:40 #24 unready: labelled needs-info; blocked by #99 (outside the Spec; ready-for-agent)
+thirdshift: 03:12:40 #25 blocked by #99 (outside the Spec; ready-for-agent)
 thirdshift: 03:12:40 #26 in a cycle: #26 blocked by #27 blocked by #26
 thirdshift: 03:12:40 #27 in a cycle: #27 blocked by #26 blocked by #27
 thirdshift: 03:12:40 Tickets not done: #21, #22, #24, #25, #26, #27

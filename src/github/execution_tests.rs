@@ -1191,9 +1191,9 @@ fn tickets_keep_the_urls_of_sub_issues_and_their_open_and_closed_blockers() {
             let _fixture = Fixture::new(
                 r#"
 case "$*" in
-  *'nodes { url state }'*)
+  *'nodes { url title state labels(first: 100) { nodes { name } } }'*)
     cat <<'JSON'
-{"data":{"repository":{"issue":{"subIssues":{"nodes":[{"url":"https://github.com/other/widgets/issues/21","state":"OPEN","labels":{"nodes":[]},"subIssues":{"totalCount":0},"blockedBy":{"nodes":[{"url":"https://github.com/acme/widgets/issues/21","state":"OPEN"},{"url":"https://github.com/another/widgets/issues/21","state":"CLOSED"}]}}]}}}}}
+{"data":{"repository":{"issue":{"subIssues":{"nodes":[{"url":"https://github.com/other/widgets/issues/21","title":"A foreign Ticket","state":"OPEN","labels":{"nodes":[]},"subIssues":{"totalCount":0},"blockedBy":{"nodes":[{"url":"https://github.com/acme/widgets/issues/21","title":"A local blocker","state":"OPEN","labels":{"nodes":[{"name":"Ready-For-Agent"}]}},{"url":"https://github.com/another/widgets/issues/21","state":"CLOSED"}]}}]}}}}}
 JSON
     ;;
   *) echo '{}' ;;
@@ -1202,6 +1202,16 @@ esac
             );
             let tickets = GitHub::new().tickets(&issue()).unwrap();
             assert_eq!(tickets.len(), 1);
+            assert_eq!(tickets[0].title.as_deref(), Some("A foreign Ticket"));
+            assert_eq!(
+                tickets[0].open_blockers[0].title.as_deref(),
+                Some("A local blocker")
+            );
+            assert!(
+                tickets[0].open_blockers[0]
+                    .labels
+                    .has(crate::labels::READY_FOR_AGENT)
+            );
             assert_eq!(
                 tickets[0].issue.url,
                 "https://github.com/other/widgets/issues/21"
@@ -1221,7 +1231,7 @@ esac
                 tickets[0]
                     .open_blockers
                     .iter()
-                    .map(|issue| issue.url.as_str())
+                    .map(|blocker| blocker.issue.url.as_str())
                     .collect::<Vec<_>>(),
                 ["https://github.com/acme/widgets/issues/21"]
             );
