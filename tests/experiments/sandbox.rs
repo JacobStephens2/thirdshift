@@ -56,15 +56,49 @@ fn fixture_with_passthrough_trials() -> Fixture {
 }
 
 fn set_check(fixture: &Fixture, command: &[&str]) {
-    let task = fixture
-        .scenario
-        .path("home/.thirdshift/evals/suites/spec-review/tasks/fixture/task.toml");
-    let manifest = fs::read_to_string(&task).unwrap();
-    let checks = format!(
-        "checks = [{}]\n[inputs]",
-        serde_json::to_string(command).unwrap()
-    );
-    fs::write(task, manifest.replace("[inputs]", &checks)).unwrap();
+    super::code_graders::set_checks(fixture, &[command]);
+}
+
+#[test]
+fn code_grader_git_rewrite_stays_inside_its_snapshot() {
+    if !std::process::Command::new("bwrap")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
+        println!("SKIPPED (Grader git confinement): bwrap is not on PATH");
+        return;
+    }
+    for symlinked in ["directory", "config"] {
+        let fixture = fixture_with_passthrough_trials();
+        let outside = fixture.scenario.path("outside.git");
+        fs::create_dir_all(outside.join("eval-origin.git")).unwrap();
+        let config = outside.join("config");
+        let original = "[remote \"origin\"]\n\turl = /experiments/private-arm\n";
+        fs::write(&config, original).unwrap();
+        let change = if symlinked == "directory" {
+            format!("rm -rf .git; ln -s {outside:?} .git")
+        } else {
+            format!("rm .git/config; ln -s {config:?} .git/config")
+        };
+        fixture
+            .scenario
+            .agent_does(&format!("{}\n{change}\nexit 1\n", review_reports_prelude(),));
+        set_check(&fixture, &["true"]);
+        let _run = fixture.scenario.run(&["experiment", "candidate", "--json"]);
+        let experiment = fixture.experiment();
+        let results = experiment["results"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        for result in results {
+            assert_eq!(result["outcome"], "failed", "{result}");
+            assert_eq!(result["score"]["checks"][2]["passed"], true, "{result}");
+        }
+        assert_eq!(
+            fs::read_to_string(&config).unwrap(),
+            original,
+            "symlinked {symlinked} redirected the Grader rewrite outside its snapshot",
+        );
+    }
 }
 
 #[test]

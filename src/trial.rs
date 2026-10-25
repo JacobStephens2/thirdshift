@@ -16,6 +16,9 @@ use crate::issue::IssueUrl;
 use crate::session::{Kind, Logs, Purpose, Sessions};
 use crate::{config::UserConfig, git::Git, interrupt, prompt, skills};
 
+mod reports;
+pub(crate) use reports::Reports;
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Request {
@@ -108,12 +111,6 @@ impl std::fmt::Display for VoidCause {
 pub(crate) struct Timings {
     pub total_ms: u128,
     pub session_ms: u128,
-}
-
-#[derive(Serialize, Deserialize)]
-pub(crate) struct Reports {
-    pub standards: Option<PathBuf>,
-    pub spec: Option<PathBuf>,
 }
 
 impl Output {
