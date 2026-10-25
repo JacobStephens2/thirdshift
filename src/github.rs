@@ -409,10 +409,9 @@ impl GitHub {
     }
 
     /// Every issue in the repository `repo`, an `owner/repo`, created at or
-    /// after `since`, open or closed. The security-fix publishing session
-    /// must not create public issues outside the staged path, so anything
-    /// dating from its own window is a side-effect leak. Compared at whole
-    /// seconds, as the `created` check on a fix Ticket is.
+    /// after `since`, open or closed, regardless of author. Security fix
+    /// publication checks their text before deciding which are leaks.
+    /// Compared at whole seconds, as the `created` check on a fix Ticket is.
     pub fn issues_created_since(&self, repo: &str, since: DateTime<Utc>) -> Result<Vec<IssueUrl>> {
         let mut found = Vec::new();
         for state in ["open", "closed"] {
