@@ -3,24 +3,6 @@ use super::*;
 const PR: &str = "https://github.com/acme/widgets/pull/23";
 const CRITERIA: [&str; 5] = ["Correct", "Scoped", "Tested", "Honest", "Standards"];
 
-fn fixture(home: &Path) {
-    configure(home);
-    let directory = home.join(".thirdshift/evals/scoring");
-    fs::create_dir_all(&directory).unwrap();
-    let scores: Vec<_> = CRITERIA.iter().map(|criterion| json!({
-        "criterion": criterion, "passed": true, "reason": "Model secret <script>unsafe()</script>"
-    })).collect();
-    fs::write(directory.join("2026-W43.json"), serde_json::to_vec(&json!({
-        "week": "2026-W43", "window_start": "2026-10-17T00:00:00Z",
-        "window_end": "2026-10-24T00:00:00Z", "seed": 7,
-        "sample": [{"repository": "acme/widgets", "number": 23, "url": PR,
-            "merged_at": "2026-10-20T00:00:00Z", "harness": "codex", "model": "builder",
-            "harness_version": null, "effort": "high", "for_you": true,
-            "assessment": {"grader": {"harness": "claude", "model": "grader"}, "scores": scores}}],
-        "bug_origins": []
-    })).unwrap()).unwrap();
-}
-
 fn cli(home: &Path, args: &[&str]) -> Value {
     let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
         .env("HOME", home)
@@ -44,7 +26,7 @@ fn csrf(html: &str) -> &str {
         .unwrap()
 }
 
-fn origins_fixture(home: &Path) {
+fn fixture(home: &Path) {
     let output = Command::new("python3")
         .arg(concat!(
             env!("CARGO_MANIFEST_DIR"),
@@ -77,7 +59,7 @@ fn origin_command(home: &Path) -> Command {
 fn scoring_actions_leave_console_terminable() {
     for path in ["/scores/mine", "/bug-origins/settle"] {
         let home = tempfile::tempdir().unwrap();
-        origins_fixture(home.path());
+        fixture(home.path());
         let mut start = origin_command(home.path());
         start.args(["console", "--no-sign-in"]);
         let mut console = Console::start_command(start);
@@ -129,8 +111,8 @@ fn scoring_actions_leave_console_terminable() {
 fn bug_origin_actions_match_cli_settlements_and_require_csrf() {
     let home = tempfile::tempdir().unwrap();
     let cli_home = tempfile::tempdir().unwrap();
-    origins_fixture(home.path());
-    origins_fixture(cli_home.path());
+    fixture(home.path());
+    fixture(cli_home.path());
     let mut start = origin_command(home.path());
     start.args(["console", "--no-sign-in"]);
     let console = Console::start_command(start);
