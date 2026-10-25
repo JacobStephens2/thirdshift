@@ -123,14 +123,10 @@ pub(super) fn publish(
     // session-created issue path: its issues stay private with the
     // repository.
     let issue = if record.private_issue_number().is_none() {
-        // The session has no independent public-issue path: anything
-        // created during its window is a side-effect leak outside the
-        // validated staged path. Close it to stop further interaction,
-        // then fail loudly so the Day shift triages the exposure.
-        let leaked = github.issues_created_since(&repo.slug(), started)?;
-        if !leaked.is_empty() {
-            return fail_on_side_effects(github, &leaked);
-        }
+        // Window issues may belong to concurrent work. Apply the staged
+        // path's public-text check before treating one as a leak.
+        let window = github.issues_created_since(&repo.slug(), started)?;
+        fail_on_side_effects(github, record, url, &window)?;
         if size == FixSize::Single {
             let Some((title, body)) = message.and_then(parse_staged_proposal) else {
                 bail!(
@@ -373,25 +369,19 @@ fn publish_staged_spec(
             github.add_blocked_by(ticket, &tickets[*edge])?;
         }
     }
-    // The session has no independent public-issue path, so anything in its
-    // window that is neither the staged spec nor one of its Tickets is a
-    // side-effect leak outside the validated staged path. The pre-creation
-    // sweep runs before any staged issue exists; this one runs after
-    // linking, so the staged issues themselves must not count.
+    // This sweep runs after linking, so skip the validated staged issues
+    // and check the remaining window issues just as before creation.
     let unlinked = unlinked_issues(
         github.issues_created_since(&repo.slug(), started)?,
         &spec,
         &tickets,
     );
-    if !unlinked.is_empty() {
-        return fail_on_side_effects(github, &unlinked);
-    }
+    fail_on_side_effects(github, record, url, &unlinked)?;
     Ok(spec)
 }
 
 /// The issues in the publishing session's `window` that are neither the
-/// staged `spec` nor one of its `tickets`: side-effect leaks outside the
-/// validated staged path.
+/// staged `spec` nor one of its `tickets`, still needing a public-text check.
 fn unlinked_issues(window: Vec<IssueUrl>, spec: &IssueUrl, tickets: &[IssueUrl]) -> Vec<IssueUrl> {
     window
         .into_iter()
@@ -402,12 +392,29 @@ fn unlinked_issues(window: Vec<IssueUrl>, spec: &IssueUrl, tickets: &[IssueUrl])
         .collect()
 }
 
-/// Close `leaks`, public issues a Security fix publishing session created
-/// outside the validated staged path, then fail loudly so the Day shift
-/// triages the exposure.
-fn fail_on_side_effects(github: &mut impl Outside, leaks: &[IssueUrl]) -> Result<IssueUrl> {
-    for leak in leaks {
-        github.close_issue(leak, "Closed by thirdshift: the Security fix publishing session created this public issue outside the validated staged path.")?;
+/// Check window issues against the staged path's public-text rule. Close
+/// only rejected issues, then fail so the Day shift triages the exposure.
+fn fail_on_side_effects(
+    github: &mut impl Outside,
+    record: &SecurityRecord,
+    url: &str,
+    window: &[IssueUrl],
+) -> Result<()> {
+    let mut leaks = Vec::new();
+    for issue in window {
+        let text = github.issue_text(issue)?;
+        if record.check_public_fix_text(&text, url).is_err() {
+            github.close_issue(issue, "Closed by thirdshift: the Security fix publishing session created this public issue outside the validated staged path.")?;
+            leaks.push(issue);
+        } else {
+            crate::logs::activity(format_args!(
+                "Security fix publication left {} open: public-text check passed",
+                issue.url
+            ));
+        }
+    }
+    if leaks.is_empty() {
+        return Ok(());
     }
     let numbers = leaks
         .iter()

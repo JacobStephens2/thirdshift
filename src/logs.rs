@@ -252,6 +252,11 @@ pub fn skipped(pass: Pass, repo: &Repo, reason: impl Display) {
     record().skipped(pass, repo, reason);
 }
 
+/// Add an observation to the running command's repository Activity log.
+pub(crate) fn activity(message: impl Display) {
+    record().activity(message);
+}
+
 /// Record how the command ended, `outcome` in short: show any lines held
 /// from the terminal, then write the Activity log's end line, if it started
 /// work. A skipped pass never calls it, so that under

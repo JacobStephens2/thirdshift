@@ -879,14 +879,60 @@ fn interruption_keeps_child_tags_and_leaves_parent_readiness_untouched() {
 }
 
 #[test]
+fn public_text_passing_window_issues_stay_open_in_both_sweeps() {
+    for (size, postlinking) in [
+        (FixSize::Single, false),
+        (FixSize::Spec, false),
+        (FixSize::Spec, true),
+    ] {
+        let mut github = InMemory::new();
+        github.insert(issue(20), &[], &format!("Other work. {ADVISORY}"));
+        if postlinking {
+            github.windows.push_back(Vec::new());
+        }
+        github.windows.push_back(vec![issue(20)]);
+        let message = match size {
+            FixSize::Single => format!("{SINGLE}{ADVISORY}"),
+            FixSize::Spec => staged_spec(),
+        };
+        assert_eq!(
+            github.session(false, size, Some(&message)).unwrap(),
+            issue(8)
+        );
+        assert!(github.get(&issue(20)).view.is_open);
+        assert!(github.has(8, READY_FOR_AGENT));
+    }
+}
+
+#[test]
+fn rejected_window_issue_is_closed_before_a_later_text_read_fails() {
+    let mut github = InMemory::new();
+    github.insert(issue(20), &[], &format!("{SECRET} {ADVISORY}"));
+    github.insert(issue(21), &[], &format!("Other work. {ADVISORY}"));
+    github.windows.push_back(vec![issue(20), issue(21)]);
+    github.fail = Some("text 21".into());
+
+    let error = github
+        .session(false, FixSize::Single, Some(&format!("{SINGLE}{ADVISORY}")))
+        .unwrap_err();
+
+    assert_eq!(error.to_string(), "failed text 21");
+    assert!(
+        !github.get(&issue(20)).view.is_open,
+        "already rejected public leak #20 remained open after #21 could not be read"
+    );
+}
+
+#[test]
 fn side_effect_sweeps_close_in_window_order_and_stop_at_the_first_close_failure() {
     for postlinking in [false, true] {
         for failed_close in [None, Some(20)] {
             let mut github = InMemory::new();
             for number in [20, 21, 22] {
-                github.insert(issue(number), &[], "Side effect");
+                github.insert(issue(number), &[], &format!("{SECRET} {ADVISORY}"));
             }
-            let mut window = vec![issue(22), issue(20), issue(21)];
+            github.insert(issue(23), &[], &format!("Separate change. {ADVISORY}"));
+            let mut window = vec![issue(22), issue(23), issue(20), issue(21)];
             if postlinking {
                 github.windows.push_back(Vec::new());
                 window.extend([issue(8), issue(9), issue(10)]);
@@ -922,6 +968,7 @@ fn side_effect_sweeps_close_in_window_order_and_stop_at_the_first_close_failure(
             assert!(!github.get(&issue(22)).view.is_open);
             assert_eq!(github.get(&issue(20)).view.is_open, failed_close.is_some());
             assert_eq!(github.get(&issue(21)).view.is_open, failed_close.is_some());
+            assert!(github.get(&issue(23)).view.is_open);
             assert!(!github.events.iter().any(|event| event.starts_with("edit")));
             if postlinking {
                 assert_eq!(github.get(&issue(8)).children, [issue(9), issue(10)]);
