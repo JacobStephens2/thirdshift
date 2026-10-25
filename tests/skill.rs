@@ -3,6 +3,7 @@
 mod support;
 
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use support::{Scenario, leaves_running};
@@ -477,5 +478,72 @@ fn child_activity_and_completed_root_resumes_preserve_the_final_result() {
 
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert_eq!(result.stdout, expected);
+    }
+}
+
+/// A repository skill whose directory resolves outside the worktree is not a
+/// committed skill. Exact-name lookup must not prefer it over the Factory
+/// shorthand, and invoking it by its own name must not start a session.
+#[test]
+fn a_repository_skill_that_resolves_outside_the_worktree_is_not_used() {
+    // `to-spec` is a directory symlink, which would shadow the Factory
+    // shorthand. `escaped-skill` is a real directory whose SKILL.md is a
+    // symlink. Neither target stays in the worktree.
+    for (name, factory, link_directory) in
+        [("to-spec", true, true), ("escaped-skill", false, false)]
+    {
+        let scenario = Scenario::new();
+        let outside = scenario.path(&format!("outside-{name}"));
+        fs::create_dir_all(&outside).unwrap();
+        fs::write(
+            outside.join("SKILL.md"),
+            "instructions from outside the worktree\n",
+        )
+        .unwrap();
+        let skills = scenario.launch_dir().join(".claude/skills");
+        fs::create_dir_all(&skills).unwrap();
+        let recorded = if link_directory {
+            symlink(&outside, skills.join(name)).unwrap();
+            scenario.launch_git(&["add", ".claude/skills"]);
+            scenario.launch_git(&["commit", "-qm", "Add a skill symlink"]);
+            scenario.launch_git(&["ls-files", "-s", &format!(".claude/skills/{name}")])
+        } else {
+            fs::create_dir_all(skills.join(name)).unwrap();
+            symlink(outside.join("SKILL.md"), skills.join(name).join("SKILL.md")).unwrap();
+            scenario.launch_git(&["add", ".claude/skills"]);
+            scenario.launch_git(&["commit", "-qm", "Add a skill symlink"]);
+            scenario.launch_git(&["ls-files", "-s", &format!(".claude/skills/{name}/SKILL.md")])
+        };
+        assert!(
+            recorded.starts_with("120000"),
+            "fixture must be a symlink, got {recorded:?}"
+        );
+        scenario.agent_does("printf 'session ran' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+
+        let result = scenario.run(&["skill", name]);
+
+        let calls = scenario.claude_calls();
+        if factory {
+            assert_eq!(result.code, Some(0), "{}", result.stderr);
+            assert_eq!(calls.len(), 1, "{}", result.stderr);
+            let prompt = calls[0]["prompt"].as_str().unwrap();
+            assert!(
+                prompt.contains("thirdshift-to-spec"),
+                "outside skill shadowed the Factory shorthand: {prompt}"
+            );
+            assert!(
+                !prompt.contains(outside.to_str().unwrap()),
+                "prompt names a path outside the worktree: {prompt}"
+            );
+        } else {
+            assert_ne!(result.code, Some(0), "{}", result.stderr);
+            assert!(result.stdout.is_empty(), "{}", result.stdout);
+            assert!(
+                calls.is_empty(),
+                "session started for an outside skill: {calls:?}"
+            );
+            assert!(result.stderr.contains("unknown skill"), "{}", result.stderr);
+        }
+        assert_eq!(scenario.launch_git(&["status", "--porcelain"]), "");
     }
 }

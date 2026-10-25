@@ -37,30 +37,40 @@ enum Source {
 }
 
 /// Resolve exact names across Factory and repository skills before trying
-/// a Factory shorthand. Only the committed worktree is searched.
+/// a Factory shorthand. Only skill files that resolve inside the committed
+/// worktree are searched, so a symlink cannot select instructions outside it.
 pub fn find(worktree: &Path, name: &str) -> Result<Skill> {
     let mut available = BTreeMap::new();
     for dir in SKILLS.dirs() {
         available.insert(dir.path().to_string_lossy().into_owned(), Source::Factory);
     }
+    let root = fs::canonicalize(worktree)
+        .with_context(|| format!("could not resolve {}", worktree.display()))?;
     for folder in [".agents/skills", ".claude/skills"] {
-        let entries = match fs::read_dir(worktree.join(folder)) {
-            Ok(entries) => entries,
+        let folder_path = worktree.join(folder);
+        match fs::symlink_metadata(&folder_path) {
+            Ok(_) => {}
             Err(error) if error.kind() == ErrorKind::NotFound => continue,
             Err(error) => return Err(error).with_context(|| format!("could not list {folder}")),
-        };
+        }
+        if !resolved_inside(&root, &folder_path) {
+            continue;
+        }
+        let entries =
+            fs::read_dir(&folder_path).with_context(|| format!("could not list {folder}"))?;
         for entry in entries {
             let entry = entry?;
             let path = entry.path().join("SKILL.md");
-            if path.is_file() {
-                let name = entry.file_name().into_string().map_err(|_| {
-                    anyhow::anyhow!(
-                        "skill directory name is not UTF-8: {}",
-                        entry.path().display()
-                    )
-                })?;
-                available.entry(name).or_insert(Source::Repository(path));
+            if !resolved_inside(&root, &path) || !path.is_file() {
+                continue;
             }
+            let name = entry.file_name().into_string().map_err(|_| {
+                anyhow::anyhow!(
+                    "skill directory name is not UTF-8: {}",
+                    entry.path().display()
+                )
+            })?;
+            available.entry(name).or_insert(Source::Repository(path));
         }
     }
     let selected = available.get_key_value(name).or_else(|| {
@@ -81,6 +91,12 @@ pub fn find(worktree: &Path, name: &str) -> Result<Skill> {
         "unknown skill {name:?}; available skills: {}",
         available.keys().cloned().collect::<Vec<_>>().join(", ")
     )
+}
+
+/// `candidate` resolves to a file or directory inside `root`. Symlinks are
+/// followed, so a skill that points outside the worktree is not a match.
+fn resolved_inside(root: &Path, candidate: &Path) -> bool {
+    fs::canonicalize(candidate).is_ok_and(|target| target.starts_with(root))
 }
 
 /// The temp directory the Command wrote the Factory skills out to, once it

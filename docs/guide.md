@@ -419,7 +419,8 @@ thirdshift skill my-repository-skill
 The command uses the User config's default Harness, Model and Effort. It first
 looks for the exact name among the Factory skills and the repository's committed
 `.agents/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md` files. If none
-matches, it tries the Factory skill `thirdshift-<name>`. An unknown name lists the
+matches, it tries the Factory skill `thirdshift-<name>`. A skill file that
+resolves outside the worktree is not a match. An unknown name lists the
 available skills and starts no session. The optional issue is an Issue URL or a
 positive number resolved from `origin`.
 
