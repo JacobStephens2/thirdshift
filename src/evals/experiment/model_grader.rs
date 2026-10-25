@@ -256,6 +256,7 @@ fn grade(
             stdin: invocation.stdin.as_deref(),
             deadline: Some(Instant::now() + Duration::from_secs(timeout)),
             private: true,
+            ..Input::default()
         },
     )?;
     ensure!(
@@ -273,17 +274,12 @@ fn record_session(
     workspace: &Path,
     input: Input<'_>,
 ) -> Result<crate::harness::interpretation::Ended> {
-    let stream = choice
-        .harness
-        .adapter()
-        .interpretation(workspace, input.prompt);
     let ended = Recording::for_trial().run(
         "model Grader",
         choice,
         launched,
         input,
         &workspace.join("stdout.jsonl"),
-        stream,
     );
     interrupt::check()?;
     ended.map_err(|_| {

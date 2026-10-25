@@ -1,5 +1,6 @@
 use super::*;
 use crate::harness::Harness;
+use crate::test_support::native_codex_command;
 use std::fs::File;
 
 const PARENT_OWNER: &str = "THIRDSHIFT_LOG_OWNER";
@@ -30,13 +31,11 @@ impl Fixture {
         self.recording.run(
             name,
             choice,
-            Command::new("/bin/sh").args(["-c", script]),
+            Command::new("/bin/sh")
+                .args(["-c", script])
+                .current_dir(self.root.path()),
             Input::default(),
             &self.log(name),
-            choice
-                .harness
-                .adapter()
-                .interpretation(self.root.path(), ""),
         )
     }
 }
@@ -44,10 +43,216 @@ impl Fixture {
 const MODEL: &str = r#"{"type":"assistant","message":{"model":"reported-model","content":[]}}"#;
 
 #[test]
+fn explicit_launch_home_stops_private_execution_on_native_codex_quota() {
+    for scoped in [false, true] {
+        let fixture = Fixture::new();
+        let scope = crate::scope::testing::Fixture::new();
+        let mut command =
+            native_codex_command(fixture.root.path(), "s1", fixture.root.path(), "current");
+        command.current_dir(fixture.root.path());
+        let mut invocation: Box<dyn crate::process::Invocation> = if scoped {
+            Box::new(scope.launch(command))
+        } else {
+            Box::new(command)
+        };
+        let choice = Choice {
+            harness: Harness::Codex,
+            ..Choice::default()
+        };
+        let result = Recording::for_trial().run(
+            "trial",
+            &choice,
+            invocation.as_mut(),
+            Input {
+                private: true,
+                deadline: Some(Instant::now() + Duration::from_secs(5)),
+                ..Input::default()
+            },
+            &fixture.log("trial"),
+        );
+        assert!(
+            result.is_err(),
+            "native warning must stop private execution (scoped: {scoped})"
+        );
+        assert!(!fixture.root.path().join("continued").exists());
+        let trace = fs::read_to_string(fixture.log("trial").with_extension("logs.jsonl")).unwrap();
+        assert!(trace.contains("used_percent"), "{trace}");
+    }
+}
+
+#[test]
+fn stale_or_unrelated_native_quotas_do_not_stop_private_execution() {
+    for scoped in [false, true] {
+        for (id, foreign_directory, timestamp) in [
+            ("s1", false, "2000-01-01T00:00:00Z"),
+            ("another-session", false, "current"),
+            ("s1", true, "current"),
+        ] {
+            let fixture = Fixture::new();
+            let scope = crate::scope::testing::Fixture::new();
+            let directory = if foreign_directory {
+                fixture.root.path().join("other")
+            } else {
+                fixture.root.path().to_path_buf()
+            };
+            let mut command = native_codex_command(fixture.root.path(), id, &directory, timestamp);
+            command.current_dir(fixture.root.path());
+            let mut invocation: Box<dyn crate::process::Invocation> = if scoped {
+                Box::new(scope.launch(command))
+            } else {
+                Box::new(command)
+            };
+            Recording::for_trial()
+                .run(
+                    "trial",
+                    &Choice {
+                        harness: Harness::Codex,
+                        ..Choice::default()
+                    },
+                    invocation.as_mut(),
+                    Input {
+                        private: true,
+                        deadline: Some(Instant::now() + Duration::from_secs(5)),
+                        ..Input::default()
+                    },
+                    &fixture.log("trial"),
+                )
+                .unwrap();
+            assert!(fixture.root.path().join("continued").exists());
+            let trace =
+                fs::read_to_string(fixture.log("trial").with_extension("logs.jsonl")).unwrap();
+            assert!(!trace.contains("used_percent"), "{trace}");
+        }
+    }
+}
+
+#[test]
+fn launch_directory_is_resolved_without_canonicalizing_its_spelling() {
+    let parent = std::env::current_dir().unwrap();
+    let relative = Path::new("..").join(parent.file_name().unwrap()).join(".");
+    for directory in [None, Some(relative), Some(parent.join("."))] {
+        let fixture = Fixture::new();
+        let expected = directory
+            .as_ref()
+            .map_or_else(|| parent.clone(), |dir| parent.join(dir));
+        let mut launched = native_codex_command(fixture.root.path(), "s1", &expected, "current");
+        if let Some(directory) = directory {
+            launched.current_dir(directory);
+        }
+        let result = Recording::for_trial().run(
+            "trial",
+            &Choice {
+                harness: Harness::Codex,
+                ..Choice::default()
+            },
+            &mut launched,
+            Input {
+                private: true,
+                deadline: Some(Instant::now() + Duration::from_secs(5)),
+                ..Input::default()
+            },
+            &fixture.log("trial"),
+        );
+        assert!(
+            result.is_err(),
+            "launch directory did not match native evidence"
+        );
+        assert!(!fixture.root.path().join("continued").exists());
+        let trace = fs::read_to_string(fixture.log("trial").with_extension("logs.jsonl")).unwrap();
+        assert!(trace.contains("used_percent"), "{trace}");
+    }
+}
+
+#[test]
+fn ordinary_and_security_policies_use_the_chosen_harness_refusal_rules() {
+    let fixture = Fixture::new();
+    for (harness, refusal) in [
+        (
+            Harness::Claude,
+            r#"{"type":"system","subtype":"model_refusal_no_fallback","api_refusal_category":"cyber"}"#,
+        ),
+        (
+            Harness::Codex,
+            r#"{"type":"turn.failed","error":{"message":"Blocked by CYBERSECURITY safeguard"}}"#,
+        ),
+    ] {
+        for policy in [Policy::Ordinary, Policy::Security] {
+            let result = fixture.recording.run(
+                "arbitrary label",
+                &Choice {
+                    harness,
+                    model: Some("selected-model".into()),
+                    ..Choice::default()
+                },
+                Command::new("/bin/sh")
+                    .args(["-c", &format!("echo '{refusal}'")])
+                    .current_dir(fixture.root.path()),
+                Input {
+                    policy,
+                    ..Input::default()
+                },
+                &fixture.log(harness.name()),
+            );
+            if matches!(policy, Policy::Security) || harness == Harness::Codex {
+                assert_eq!(
+                    result
+                        .unwrap_err()
+                        .downcast_ref::<crate::harness::interpretation::SafeguardRefusal>()
+                        .is_some(),
+                    matches!(policy, Policy::Security)
+                );
+            } else {
+                result.unwrap();
+            }
+        }
+    }
+}
+
+#[test]
+fn recording_uses_the_input_session_prompt_for_skill_warnings() {
+    const CHILD: &str = "THIRDSHIFT_RECORDING_PROMPT";
+    if std::env::var_os(CHILD).is_some() {
+        let fixture = Fixture::new();
+        fixture
+            .recording
+            .run(
+                "prompt",
+                &Choice {
+                    harness: Harness::OpenCode,
+                    ..Choice::default()
+                },
+                Command::new("/bin/true").current_dir(fixture.root.path()),
+                Input {
+                    prompt: "/thirdshift-implement issue",
+                    ..Input::default()
+                },
+                &fixture.log("prompt"),
+            )
+            .unwrap();
+        return;
+    }
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "session::recording::tests::recording_uses_the_input_session_prompt_for_skill_warnings",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        String::from_utf8_lossy(&output.stderr).contains("never loaded thirdshift-implement"),
+        "{output:?}"
+    );
+}
+
+#[test]
 fn private_recording_retains_live_scope_evidence_after_events_disappear() {
     let fixture = Fixture::new();
     let scope = crate::scope::testing::Fixture::new();
     let mut command = Command::new("/bin/sh");
+    command.current_dir(fixture.root.path());
     command.args([
         "-c",
         &format!(
@@ -66,10 +271,6 @@ fn private_recording_retains_live_scope_evidence_after_events_disappear() {
             ..Input::default()
         },
         &fixture.log("grader"),
-        choice
-            .harness
-            .adapter()
-            .interpretation(fixture.root.path(), ""),
     );
     assert!(result.is_err());
     assert!(!scope.path("events").exists());
@@ -100,15 +301,14 @@ fn all_harnesses_preserve_raw_events_only_in_otlp_session_traces() {
         let _ = fixture.recording.run(
             "implement",
             &choice,
-            Command::new("cat").arg(&protocol),
+            Command::new("cat")
+                .arg(&protocol)
+                .current_dir(fixture.root.path()),
             Input {
                 prompt: "session prompt",
                 ..Default::default()
             },
             &log,
-            harness
-                .adapter()
-                .interpretation(fixture.root.path(), "session prompt"),
         );
         assert!(!log.exists());
         let logs = fs::read_to_string(log.with_extension("logs.jsonl")).unwrap();
@@ -188,7 +388,35 @@ fn execution_failure_keeps_observed_models_for_the_owning_command() {
     );
 }
 
-const INIT: &str = r#"{"type":"system","subtype":"init","session_id":"s1"}"#;
+const MUSE_INIT: &str = r#"{"stream":{"kind":"session","id":"s1"},"payload_type":"run.lifecycle.started","payload":{}}"#;
+const MUSE_MODEL: &str = r#"{"stream":{"kind":"session","id":"s1"},"payload_type":"run.model.configured","payload":{"command_id":"r","model_id":"reported-model"}}"#;
+const OPENCODE_INIT: &str = r#"{"type":"step_start","sessionID":"s1","part":{"messageID":"m1"}}"#;
+
+fn with_muse_data(test: &str, check: impl FnOnce(&Path)) {
+    const ROOT: &str = "THIRDSHIFT_RECORDING_MUSE";
+    if let Some(root) = std::env::var_os(ROOT) {
+        check(Path::new(&root));
+        return;
+    }
+    let root = tempfile::tempdir().unwrap();
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            &format!("session::recording::tests::{test}"),
+            "--nocapture",
+        ])
+        .env(ROOT, root.path())
+        .env("XDG_DATA_HOME", root.path())
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+fn muse_log(root: &Path, text: &str) {
+    let dir = root.join("muse/sessions/s1");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(dir.join("session.jsonl"), text).unwrap();
+}
 
 #[test]
 fn late_permission_metadata_refines_one_ended_span() {
@@ -219,58 +447,63 @@ echo '{"type":"result","subtype":"success","permission_denials":[{"tool_use_id":
 
 #[test]
 fn retained_models_replace_stream_evidence_including_an_empty_authoritative_set() {
-    for (retained, expected) in [
-        (
-            r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"retained-model"}}}"#,
-            "retained-model (reported)",
-        ),
-        (
-            r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"assistant_message_committed","text":"retained reply"}}}"#,
-            "requested-model (requested; actual model not reported)",
-        ),
-    ] {
-        let fixture = Fixture::new();
-        let dir = fixture.root.path().join("sessions/s1");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("session.jsonl"), retained).unwrap();
-        let choice = Choice {
-            model: Some("requested-model".into()),
-            ..Choice::default()
-        };
-        let ended = fixture
-            .recording
-            .run(
-                "implement",
-                &choice,
-                Command::new("/bin/sh").args(["-c", &format!("echo '{INIT}'; echo '{MODEL}'")]),
-                Input::default(),
-                &fixture.log("implement"),
-                crate::harness::interpretation_tests::recording_interpretation(
-                    fixture.root.path(),
-                    Harness::Muse,
+    with_muse_data(
+        "retained_models_replace_stream_evidence_including_an_empty_authoritative_set",
+        |root| {
+            for (retained, expected) in [
+                (
+                    r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"retained-model"}}}"#,
+                    "retained-model (reported)",
                 ),
-            )
-            .unwrap();
-        assert!(ended.killed.is_empty());
-        let trace =
-            fs::read_to_string(fixture.log("implement").with_extension("logs.jsonl")).unwrap();
-        assert!(
-            crate::otlp_jsonl::Reader::<_, crate::otlp_jsonl::Logs>::new(trace.as_bytes())
-                .map(
-                    |request| request.unwrap().resource_logs[0].scope_logs[0].log_records[0]
-                        .body
-                        .clone()
-                )
-                .any(|body| body == Some(crate::otlp_jsonl::AnyValue::String(retained.into()))),
-            "retained Harness event must survive as a raw body"
-        );
-        assert_eq!(
-            fixture.recording.notification_lines(),
-            [format!(
-                "- implement: claude · {expected} · session effort: default effort"
-            )]
-        );
-    }
+                (
+                    r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"assistant_message_committed","text":"retained reply"}}}"#,
+                    "requested-model (requested; actual model not reported)",
+                ),
+            ] {
+                let fixture = Fixture::new();
+                muse_log(root, retained);
+                let choice = Choice {
+                    harness: Harness::Muse,
+                    model: Some("requested-model".into()),
+                    ..Choice::default()
+                };
+                let ended = fixture
+                    .recording
+                    .run(
+                        "implement",
+                        &choice,
+                        Command::new("/bin/sh")
+                            .args(["-c", &format!("echo '{MUSE_INIT}'; echo '{MUSE_MODEL}'")])
+                            .current_dir(fixture.root.path()),
+                        Input::default(),
+                        &fixture.log("implement"),
+                    )
+                    .unwrap();
+                assert!(ended.killed.is_empty());
+                let trace =
+                    fs::read_to_string(fixture.log("implement").with_extension("logs.jsonl"))
+                        .unwrap();
+                assert!(
+                    crate::otlp_jsonl::Reader::<_, crate::otlp_jsonl::Logs>::new(trace.as_bytes())
+                        .map(
+                            |request| request.unwrap().resource_logs[0].scope_logs[0].log_records
+                                [0]
+                            .body
+                            .clone()
+                        )
+                        .any(|body| body
+                            == Some(crate::otlp_jsonl::AnyValue::String(retained.into()))),
+                    "retained Harness event must survive as a raw body"
+                );
+                assert_eq!(
+                    fixture.recording.notification_lines(),
+                    [format!(
+                        "- implement: muse · {expected} · session effort: default effort"
+                    )]
+                );
+            }
+        },
+    );
 }
 
 /// Optional export uses PATH; run just this test in a process whose PATH
@@ -309,6 +542,7 @@ fn absent_completion_report_preserves_the_stream_checkpoint() {
         r#"#!/bin/sh
 cp "$THIRDSHIFT_RECORDING_EXPORT/7-20261003T120000-0400-implement.models.json" "$THIRDSHIFT_RECORDING_EXPORT/checkpoint.json"
 kill -INT "$PPID"
+echo '{"info":{"outcome":"completed"},"messages":[{"type":"assistant","model":{"id":"retained-model"},"content":[]}]}'
 sleep 1
 "#,
         |root| {
@@ -322,14 +556,15 @@ sleep 1
             let error = recording
                 .run(
                     "implement",
-                    &Choice::default(),
-                    Command::new("/bin/sh").args(["-c", &format!("echo '{INIT}'; echo '{MODEL}'")]),
+                    &Choice {
+                        harness: Harness::OpenCode,
+                        ..Choice::default()
+                    },
+                    Command::new("/bin/sh")
+                        .args(["-c", &format!("echo '{OPENCODE_INIT}'")])
+                        .current_dir(root),
                     Input::default(),
                     &log,
-                    crate::harness::interpretation_tests::recording_interpretation(
-                        root,
-                        Harness::OpenCode,
-                    ),
                 )
                 .unwrap_err();
             assert_eq!(error.to_string(), "interrupted");
@@ -340,7 +575,7 @@ sleep 1
             assert_eq!(
                 recording.notification_lines(),
                 [
-                    "- implement: claude · reported-model (reported) · session effort: default effort"
+                    "- implement: opencode · Harness default (actual model not reported) · session effort: default effort"
                 ]
             );
         },
@@ -366,14 +601,15 @@ echo '{"info":{"outcome":"completed"},"messages":[{"type":"assistant","model":{"
             recording
                 .run(
                     "implement",
-                    &Choice::default(),
-                    Command::new("/bin/sh").args(["-c", &format!("echo '{INIT}'; echo '{MODEL}'")]),
+                    &Choice {
+                        harness: Harness::OpenCode,
+                        ..Choice::default()
+                    },
+                    Command::new("/bin/sh")
+                        .args(["-c", &format!("echo '{OPENCODE_INIT}'")])
+                        .current_dir(root),
                     Input::default(),
                     &log,
-                    crate::harness::interpretation_tests::recording_interpretation(
-                        root,
-                        Harness::OpenCode,
-                    ),
                 )
                 .unwrap();
             // Persisted identity is part of the existing record compatibility contract.
@@ -388,7 +624,7 @@ echo '{"info":{"outcome":"completed"},"messages":[{"type":"assistant","model":{"
             assert_eq!(
                 recording.notification_lines(),
                 [
-                    "- implement: claude · provider/retained-model (reported) · session effort: default effort"
+                    "- implement: opencode · provider/retained-model (reported) · session effort: default effort"
                 ]
             );
         },
@@ -431,12 +667,11 @@ fn reader_failure_keeps_models_consumed_before_the_log_failed() {
         .run(
             "implement",
             &Choice::default(),
-            Command::new("/bin/sh").args(["-c", &script]),
+            Command::new("/bin/sh")
+                .args(["-c", &script])
+                .current_dir(fixture.root.path()),
             Input::default(),
             &log,
-            Harness::Claude
-                .adapter()
-                .interpretation(fixture.root.path(), ""),
         )
         .unwrap_err();
     reader.join().unwrap();
@@ -555,12 +790,11 @@ fn absent_ownership_removes_stale_child_environment_and_records_no_other_command
         .run(
             "implement",
             &Choice::default(),
-            Command::new("/bin/sh").args(["-c", &format!("echo '{MODEL}'")]),
+            Command::new("/bin/sh")
+                .args(["-c", &format!("echo '{MODEL}'")])
+                .current_dir(fixture.root.path()),
             Input::default(),
             &fixture.log("implement"),
-            Harness::Claude
-                .adapter()
-                .interpretation(fixture.root.path(), ""),
         )
         .unwrap();
     assert!(unowned.notification_lines().is_empty());
@@ -585,12 +819,13 @@ fn nested_children_keep_the_exact_owning_command() {
             .run(
                 "implement",
                 &Choice::default(),
-                Command::new("/bin/sh").args(["-c", &format!("echo '{MODEL}'")]),
+                Command::new("/bin/sh")
+                    .args(["-c", &format!("echo '{MODEL}'")])
+                    .current_dir(root),
                 Input::default(),
                 &recording
                     .session_path(root, &depth.to_string(), "implement")
                     .unwrap(),
-                Harness::Claude.adapter().interpretation(root, ""),
             )
             .unwrap();
         if depth < 9 {
@@ -655,13 +890,14 @@ fn interrupted_stream_survives_process_owners_suppression_of_recovered_state() {
                 .run(
                     "implement",
                     &Choice::default(),
-                    Command::new("/bin/sh").args([
-                        "-c",
-                        &format!("echo '{MODEL}'; kill -INT \"$PPID\"; sleep 5"),
-                    ]),
+                    Command::new("/bin/sh")
+                        .args([
+                            "-c",
+                            &format!("echo '{MODEL}'; kill -INT \"$PPID\"; sleep 5"),
+                        ])
+                        .current_dir(root),
                     Input::default(),
                     &root.join("7-20261003T120000-0400-implement.jsonl"),
-                    Harness::Claude.adapter().interpretation(root, ""),
                 )
                 .unwrap_err();
             assert_eq!(error.to_string(), "interrupted");
@@ -683,12 +919,9 @@ fn startup_failure_keeps_its_cause_without_writing_evidence() {
         .run(
             "implement",
             &Choice::default(),
-            &mut Command::new(fixture.root.path().join("missing-cli")),
+            Command::new(fixture.root.path().join("missing-cli")).current_dir(fixture.root.path()),
             Input::default(),
             &fixture.log("implement"),
-            Harness::Claude
-                .adapter()
-                .interpretation(fixture.root.path(), ""),
         )
         .unwrap_err();
     assert_eq!(error.to_string(), "could not run claude");
@@ -705,41 +938,39 @@ fn completion_progress_comes_from_interpretation_without_duplicate_live_lines() 
     const CHILD: &str = "THIRDSHIFT_RECORDING_PROGRESS";
     if std::env::var_os(CHILD).is_some() {
         let fixture = Fixture::new();
-        let dir = fixture.root.path().join("sessions/s1");
-        fs::create_dir_all(&dir).unwrap();
-        fs::write(dir.join("session.jsonl"), [
+        let data = PathBuf::from(std::env::var_os("XDG_DATA_HOME").unwrap());
+        muse_log(&data, &[
             r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"first"}}}"#,
             r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"second"}}}"#,
             r#"{"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"first"}}}"#,
-        ].join("\n")).unwrap();
-        // Choice controls execution and metadata; Interpretation supplies reporting.
+        ].join("\n"));
+        let choice = Choice {
+            harness: Harness::Muse,
+            ..Choice::default()
+        };
         fixture
             .recording
             .run(
                 "retained",
-                &Choice::default(),
-                Command::new("/bin/sh").args(["-c", &format!("echo '{INIT}'; echo '{MODEL}'")]),
+                &choice,
+                Command::new("/bin/sh")
+                    .args(["-c", &format!("echo '{MUSE_INIT}'; echo '{MUSE_MODEL}'")])
+                    .current_dir(fixture.root.path()),
                 Input::default(),
                 &fixture.log("retained"),
-                crate::harness::interpretation_tests::recording_interpretation(
-                    fixture.root.path(),
-                    Harness::Muse,
-                ),
             )
             .unwrap();
-        fs::write(dir.join("session.jsonl"), "").unwrap();
+        muse_log(&data, "");
         fixture
             .recording
             .run(
                 "empty",
-                &Choice::default(),
-                Command::new("/bin/sh").args(["-c", &format!("echo '{INIT}'; echo '{MODEL}'")]),
+                &choice,
+                Command::new("/bin/sh")
+                    .args(["-c", &format!("echo '{MUSE_INIT}'; echo '{MUSE_MODEL}'")])
+                    .current_dir(fixture.root.path()),
                 Input::default(),
                 &fixture.log("empty"),
-                crate::harness::interpretation_tests::recording_interpretation(
-                    fixture.root.path(),
-                    Harness::Muse,
-                ),
             )
             .unwrap();
         fixture
@@ -747,20 +978,22 @@ fn completion_progress_comes_from_interpretation_without_duplicate_live_lines() 
             .run(
                 "live",
                 &Choice::default(),
-                Command::new("/bin/sh").args(["-c", &format!("echo '{MODEL}'; echo '{MODEL}'")]),
-                Input::default(),
+                Command::new("/bin/sh")
+                    .args(["-c", &format!("echo '{MODEL}'; echo '{MODEL}'")])
+                    .current_dir(fixture.root.path()),
+                Input {
+                    policy: Policy::Security,
+                    ..Input::default()
+                },
                 &fixture.log("live"),
-                Harness::Claude
-                    .adapter()
-                    .interpretation(fixture.root.path(), "")
-                    .for_security(None),
             )
             .unwrap();
         return;
     }
+    let data = tempfile::tempdir().unwrap();
     let output = Command::new(std::env::current_exe().unwrap())
         .args(["--exact", "session::recording::tests::completion_progress_comes_from_interpretation_without_duplicate_live_lines", "--nocapture"])
-        .env(CHILD, "1").output().unwrap();
+        .env(CHILD, "1").env("XDG_DATA_HOME", data.path()).output().unwrap();
     assert!(output.status.success(), "{output:?}");
     let stderr = String::from_utf8_lossy(&output.stderr);
     let models: Vec<_> = stderr
@@ -870,49 +1103,53 @@ echo '{"type":"result","subtype":"success","result":"Hello."}'
 
 #[test]
 fn review_retained_raw_model_record_has_call_context_and_attributes() {
-    let fixture = Fixture::new();
-    let retained = r#"{"recorded_at":1000,"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"retained-model","usage":{"input_tokens":8,"output_tokens":4}}}}"#;
-    let dir = fixture.root.path().join("sessions/s1");
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(dir.join("session.jsonl"), retained).unwrap();
-    fixture
-        .recording
-        .run(
-            "implement",
-            &Choice::default(),
-            Command::new("/bin/sh").args(["-c", &format!("echo '{INIT}'")]),
-            Input::default(),
-            &fixture.log("implement"),
-            crate::harness::interpretation_tests::recording_interpretation(
-                fixture.root.path(),
-                Harness::Muse,
-            ),
-        )
-        .unwrap();
-    let spans = review_trace_records(
-        &fixture.log("implement").with_extension("spans.jsonl"),
-        "resourceSpans",
-        "scopeSpans",
-        "spans",
+    with_muse_data(
+        "review_retained_raw_model_record_has_call_context_and_attributes",
+        |root| {
+            let fixture = Fixture::new();
+            let retained = r#"{"recorded_at":1000,"stream":{"id":"s1"},"payload":{"kind":"run","event":{"kind":"model_completed","model":"retained-model","usage":{"input_tokens":8,"output_tokens":4}}}}"#;
+            muse_log(root, retained);
+            fixture
+                .recording
+                .run(
+                    "implement",
+                    &Choice {
+                        harness: Harness::Muse,
+                        ..Choice::default()
+                    },
+                    Command::new("/bin/sh")
+                        .args(["-c", &format!("echo '{MUSE_INIT}'")])
+                        .current_dir(fixture.root.path()),
+                    Input::default(),
+                    &fixture.log("implement"),
+                )
+                .unwrap();
+            let spans = review_trace_records(
+                &fixture.log("implement").with_extension("spans.jsonl"),
+                "resourceSpans",
+                "scopeSpans",
+                "spans",
+            );
+            let model = spans
+                .iter()
+                .find(|span| span["name"].as_str().unwrap().starts_with("model "))
+                .unwrap();
+            let logs = review_trace_records(
+                &fixture.log("implement").with_extension("logs.jsonl"),
+                "resourceLogs",
+                "scopeLogs",
+                "logRecords",
+            );
+            let raw = logs
+                .iter()
+                .find(|record| record["body"]["stringValue"] == retained)
+                .unwrap();
+            assert_eq!(raw["spanId"], model["spanId"]);
+            assert!(raw["attributes"].as_array().unwrap().iter().any(|attr| {
+                attr["key"] == "gen_ai.operation.name" && attr["value"]["stringValue"] == "chat"
+            }));
+        },
     );
-    let model = spans
-        .iter()
-        .find(|span| span["name"].as_str().unwrap().starts_with("model "))
-        .unwrap();
-    let logs = review_trace_records(
-        &fixture.log("implement").with_extension("logs.jsonl"),
-        "resourceLogs",
-        "scopeLogs",
-        "logRecords",
-    );
-    let raw = logs
-        .iter()
-        .find(|record| record["body"]["stringValue"] == retained)
-        .unwrap();
-    assert_eq!(raw["spanId"], model["spanId"]);
-    assert!(raw["attributes"].as_array().unwrap().iter().any(|attr| {
-        attr["key"] == "gen_ai.operation.name" && attr["value"]["stringValue"] == "chat"
-    }));
 }
 
 #[test]

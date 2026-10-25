@@ -11,6 +11,35 @@ use std::process::Command;
 
 use crate::interrupt;
 
+/// A child that announces Session s1 after writing a native Codex quota record.
+/// The record may deliberately name another Session/directory or a stale time;
+/// `current` writes a fresh timestamp. HOME is set only on the child Command.
+pub(crate) fn native_codex_command(
+    root: &std::path::Path,
+    id: &str,
+    directory: &std::path::Path,
+    timestamp: &str,
+) -> Command {
+    let mut command = Command::new("/bin/sh");
+    command
+        .env("HOME", root.join("home"))
+        .env("NATIVE_ID", id)
+        .env("NATIVE_CWD", directory)
+        .env("QUOTA_TIME", timestamp)
+        .args(["-c", r#"
+mkdir -p "$HOME/.codex/sessions/2026/10/23"
+native="$HOME/.codex/sessions/2026/10/23/rollout-fixture-$NATIVE_ID.jsonl"
+printf '{"type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$NATIVE_ID" "$NATIVE_CWD" > "$native"
+sleep 1.1
+if [ "$QUOTA_TIME" = current ]; then QUOTA_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ); fi
+printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","rate_limits":{"secondary":{"used_percent":85}}}}\n' "$QUOTA_TIME" >> "$native"
+echo '{"type":"thread.started","thread_id":"s1"}'
+sleep 1
+touch "$HOME/../continued"
+"#]);
+    command
+}
+
 /// A scratch worktree in a fresh local Git repository.
 pub(crate) fn scratch_worktree() -> tempfile::TempDir {
     let worktree = tempfile::tempdir().unwrap();
