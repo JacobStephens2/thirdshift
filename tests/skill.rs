@@ -547,3 +547,24 @@ fn a_repository_skill_that_resolves_outside_the_worktree_is_not_used() {
         assert_eq!(scenario.launch_git(&["status", "--porcelain"]), "");
     }
 }
+
+#[test]
+fn an_issue_url_from_another_repository_is_an_origin_mismatch_before_any_work() {
+    let scenario = Scenario::new();
+    scenario.issue_is(7, "OPEN");
+    scenario.agent_does("printf 'started' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+
+    let result = scenario.run(&[
+        "skill",
+        "to-spec",
+        "issue",
+        "https://github.com/other/widgets/issues/7",
+    ]);
+
+    scenario.assert_rejected_before_any_work(&result, "origin mismatch");
+    assert!(
+        scenario.gh_calls().is_empty(),
+        "foreign issue was fetched: {:?}",
+        scenario.gh_calls()
+    );
+}

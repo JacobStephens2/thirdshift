@@ -3,7 +3,7 @@
 use std::io::{BufRead, BufReader};
 use std::process::Command;
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use crate::config::UserConfig;
 use crate::git::Git;
@@ -16,6 +16,16 @@ pub fn run(name: &str, issue: Option<IssueInput>) -> Result<String> {
     interrupt::install()?;
     let config = UserConfig::load()?;
     let issue = issue.map(launch::resolve_issue).transpose()?;
+    if let Some(issue) = &issue {
+        // Same rule as a Run: a foreign Issue URL must not start a session.
+        let origin = Git::new(std::env::current_dir()?).run(&["config", "remote.origin.url"])?;
+        if !issue.matches_origin(&origin) {
+            bail!(
+                "origin mismatch: {} is not in the repository at origin {origin}",
+                issue.url
+            );
+        }
+    }
     let worktree = SkillWorktree::create(&Git::new(std::env::current_dir()?))?;
     let result = (|| {
         let skill = skills::find(worktree.path(), name)?;

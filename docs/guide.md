@@ -422,7 +422,8 @@ looks for the exact name among the Factory skills and the repository's committed
 matches, it tries the Factory skill `thirdshift-<name>`. A skill file that
 resolves outside the worktree is not a match. An unknown name lists the
 available skills and starts no session. The optional issue is an Issue URL or a
-positive number resolved from `origin`.
+positive number resolved from `origin`. An Issue URL from another repository
+is an origin mismatch and stops the command before any work.
 
 The session runs in a temporary worktree at the head of the checked-out branch,
 with the Factory skills available. Uncommitted changes in your checkout stay out
