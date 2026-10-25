@@ -541,7 +541,7 @@ fn arm_usage_sums_void_retries_and_both_sessions_of_each_resume() {
     fixture.scenario.agent_does(&format!(r#"
 echo '{{"type":"assistant","message":{{"id":"m1","model":"observed","usage":{{"input_tokens":7,"output_tokens":2}},"content":[]}}}}'
 echo '{{"type":"result","subtype":"success","total_cost_usd":0.05}}' >> "$FAKE_CLAUDE_AFTER_RESULT"
-printf changed > changed.txt
+printf changed >> .thirdshift-issue.md
 {}
 "#, support::leaves_running("cargo test")));
     let run = fixture.run(&[]);
@@ -612,7 +612,7 @@ fn spec_review_generated_instruction_fallbacks_do_not_void_trials() {
 }
 
 #[test]
-fn spec_review_ignored_repository_changes_are_void() {
+fn spec_review_ignored_repository_artifacts_are_allowed() {
     let fixture = Fixture::new();
     let directory = fixture
         .scenario
@@ -635,8 +635,8 @@ fn spec_review_ignored_repository_changes_are_void() {
     let experiment = fixture.experiment();
     for result in experiment["results"].as_array().unwrap() {
         assert_eq!(
-            result["outcome"], "void",
-            "creating an ignored repository file must invalidate the Trial"
+            result["outcome"], "succeeded",
+            "creating an ignored repository file is ordinary session work"
         );
     }
 }
@@ -1104,11 +1104,47 @@ esac
 }
 
 #[test]
+fn review_fixes_and_repository_reports_reach_model_grading_in_both_suites() {
+    for session in ["spec-review", "code-review"] {
+        let fixture = Fixture::with_session(session, 1);
+        fixture.scenario.agent_does(&format!(
+            r#"
+printf fixed > review-fix.txt
+git add review-fix.txt
+git -c user.name=Review -c user.email=review@example.invalid commit -m 'Review fix'
+if git remote get-url origin >/dev/null 2>&1; then
+    git push origin HEAD
+fi
+{reports}
+printf 'Spec report\n' > "$reports/spec.md"
+printf '{{"standards":0,"spec":0}}\n' > "$reports/summary.json"
+"#,
+            reports = review_reports_prelude()
+        ));
+        let run = fixture.run(&[]);
+        assert_eq!(run.code, Some(0), "{session}: {}", run.stderr);
+        let experiment = fixture.experiment();
+        for result in experiment["results"].as_array().unwrap() {
+            assert_eq!(result["outcome"], "succeeded", "{session}: {result}");
+            assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
+            assert_eq!(result["score"]["passed"], true);
+            assert_eq!(result["score"]["model"]["reason"], "Written criteria met.");
+        }
+        let packet = fixture.grader_packet();
+        assert_eq!(packet["trials"].as_array().unwrap().len(), 2);
+        for trial in packet["trials"].as_array().unwrap() {
+            assert_eq!(trial["standards"], "Standards report\n");
+            assert_eq!(trial["spec"], "Spec report\n");
+        }
+    }
+}
+
+#[test]
 fn changed_repositories_are_void_retried_and_excluded_from_the_verdict() {
     for mutation in [
         "printf changed >> .thirdshift-issue.md",
-        "printf changed > invented-untracked.txt",
-        "git -c user.name=Fixture -c user.email=fixture@example.invalid commit --allow-empty -m changed",
+        "rm .thirdshift-issue.md",
+        "git update-ref refs/heads/main HEAD",
     ] {
         let fixture = Fixture::new();
         fixture.scenario.agent_does(mutation);
