@@ -102,7 +102,9 @@ fn last_fired_times_pair_both_cli_views_with_the_console_per_repository() {
             String::from_utf8_lossy(&output.stderr)
         );
         let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-        let starts = value["pass_starts"].as_array().expect(&value.to_string());
+        let starts = value["pass_starts"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{value}"));
         assert_eq!(starts.len(), 3, "{value}");
         let mut identities = Vec::new();
         for start in starts {
