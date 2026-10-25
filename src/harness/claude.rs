@@ -53,13 +53,11 @@ impl Adapter for Claude {
     fn trial_session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation {
         let mut invocation = self.code_review_session(choice, resume, prompt);
         let at = invocation.args.len() - 1;
-        invocation.args.splice(
-            at..at,
-            [
-                "--disallowedTools".to_string(),
-                "WebSearch,WebFetch".to_string(),
-            ],
-        );
+        // One argument: the flag takes every following word as a tool name,
+        // so a separate value would also take the prompt after it.
+        invocation
+            .args
+            .insert(at, "--disallowedTools=WebSearch,WebFetch".to_string());
         invocation
     }
     fn check(&self, choice: &mut Choice) -> Result<()> {
@@ -236,19 +234,24 @@ mod tests {
         let choice = Choice::default();
         for resume in [None, Some("session-id")] {
             let trial = Claude.trial_session(&choice, resume, "review");
-            let at = trial
-                .args
-                .iter()
-                .position(|arg| arg == "--disallowedTools")
-                .expect("a Trial must deny web tools");
-            assert_eq!(trial.args[at + 1], "WebSearch,WebFetch");
+            // One argument: the flag takes every following word as a tool,
+            // so a separate value would swallow the prompt after it.
+            assert!(
+                trial
+                    .args
+                    .iter()
+                    .any(|arg| arg == "--disallowedTools=WebSearch,WebFetch"),
+                "a Trial must deny web tools: {:?}",
+                trial.args
+            );
+            assert!(!trial.args.iter().any(|arg| arg == "--disallowedTools"));
             assert_eq!(trial.args.last().unwrap(), "review");
             assert!(
                 !Claude
                     .session(&choice, resume, "review")
                     .args
                     .iter()
-                    .any(|arg| arg == "--disallowedTools")
+                    .any(|arg| arg.starts_with("--disallowedTools"))
             );
         }
     }
