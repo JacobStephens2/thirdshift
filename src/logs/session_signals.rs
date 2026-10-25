@@ -188,14 +188,12 @@ pub(crate) fn read(log: &Path) -> anyhow::Result<Option<SessionSignals>> {
                 calls.insert(key, event.clone());
             }
         }
-        match event {
-            Event::WorkEnded {
-                id,
-                outcome: Outcome::Killed,
-            } => {
-                killed.insert(work_aliases.get(&id).cloned().unwrap_or(id));
-            }
-            _ => {}
+        if let Event::WorkEnded {
+            id,
+            outcome: Outcome::Killed,
+        } = event
+        {
+            killed.insert(work_aliases.get(&id).cloned().unwrap_or(id));
         }
     }
     let mut destructive_commands = Vec::new();
