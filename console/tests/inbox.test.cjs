@@ -8,7 +8,7 @@ const { join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const { chromium } = require("playwright");
 const { record: traceRecord } = require("./session-trace.cjs");
-const { replace } = require("./records.cjs");
+const { replaceRecord } = require("./records.cjs");
 
 let home, server, exited, browser, origin;
 before(async () => {
@@ -113,7 +113,7 @@ test('Dismiss and Undo show pending feedback through live refresh and prevent du
         assert.equal(await form.locator('button').isDisabled(), true);
         const updated = JSON.parse(original);
         updated.cause = `Live refresh while ${label} is pending`;
-        await replace(recordPath, JSON.stringify(updated));
+        await replaceRecord(recordPath, JSON.stringify(updated));
         await page.locator('#peek-content').getByText(updated.cause, { exact: true }).waitFor();
         assert.equal(await form.getByRole('status').textContent(), pending);
         assert.equal(await form.locator('button').isDisabled(), true);
@@ -128,7 +128,7 @@ test('Dismiss and Undo show pending feedback through live refresh and prevent du
         await page.unrouteAll({ behavior: 'wait' });
       }
     }
-  } finally { await replace(recordPath, original); }
+  } finally { await replaceRecord(recordPath, original); }
 });
 
 test('A failed Dismiss shows the error through live refresh and allows retry', async t => {
@@ -147,7 +147,7 @@ test('A failed Dismiss shows the error through live refresh and allows retry', a
     assert.equal(await form.locator('button').isEnabled(), true);
     const updated = JSON.parse(original);
     updated.cause = 'Live refresh after failed dismissal';
-    await replace(recordPath, JSON.stringify(updated));
+    await replaceRecord(recordPath, JSON.stringify(updated));
     await page.locator('#peek-content').getByText(updated.cause, { exact: true }).waitFor();
     assert.equal(await form.getByRole('status').textContent(), error);
     await page.unrouteAll({ behavior: 'wait' });
@@ -159,7 +159,7 @@ test('A failed Dismiss shows the error through live refresh and allows retry', a
     await page.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   } finally {
     await page.unrouteAll({ behavior: 'wait' });
-    await replace(recordPath, original);
+    await replaceRecord(recordPath, original);
   }
 });
 
@@ -306,7 +306,7 @@ test("existing refresh advances finish age while keeping its recorded instant", 
   fixture.started_at = new Date(Date.parse(end) - 140 * 60000).toISOString();
   fixture.ended_at = end;
   fixture.cause = 'finish refresh fixture';
-  await replace(path, JSON.stringify(fixture));
+  await replaceRecord(path, JSON.stringify(fixture));
   t.after(() => rm(path, { force: true }));
   const page = await pageFor(t);
   await page.goto(origin);
@@ -366,7 +366,7 @@ test("Run metrics show present and missing signals in details, including at 390 
           fixture.outcome = null;
           fixture.ended_at = null;
         }
-        await replace(path, JSON.stringify(fixture));
+        await replaceRecord(path, JSON.stringify(fixture));
         await page.goto(origin);
         const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#1$/ }) });
         await row.locator('.peek-link').click();
@@ -411,7 +411,7 @@ test("Run metrics show present and missing signals in details, including at 390 
       }
       await page.close();
     }
-  } finally { await replace(path, original); }
+  } finally { await replaceRecord(path, original); }
 });
 
 test("the Inbox works without JavaScript and Focus auto follows system light and dark", async t => {
@@ -432,7 +432,7 @@ test("idle explanations stay visible with hidden sections, on phones and without
   const fixture = JSON.parse(await readFile(join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json'), 'utf8'));
   Object.assign(fixture, { outcome: 'ready for review', pull_request: 'https://github.com/acme/widgets/pull/203' });
   fixture.issue.number = 203;
-  await replace(ready, JSON.stringify(fixture));
+  await replaceRecord(ready, JSON.stringify(fixture));
   await writeFile(config, '[console]\nport = 0\nhidden_sections = ["needs-you", "ready-for-review", "landing", "working", "done", "resolved"]\n');
   await writeFile(activity, '2026-01-01 12:00:00 Pickup run skipped: no Ready issue on acme/widgets <script>unsafe</script>\n');
   try {
@@ -490,7 +490,7 @@ test("push morphs keep the selected row, folds and scroll without a reload", asy
   const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
   const fixture = JSON.parse(await readFile(path, 'utf8'));
   fixture.issue.title = 'Advanced while you watched';
-  await replace(path, JSON.stringify(fixture));
+  await replaceRecord(path, JSON.stringify(fixture));
   await page.getByText('Advanced while you watched', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => document.activeElement === window.selectedRow && document.activeElement.matches('.command')), true);
   assert.equal(await page.evaluate(() => window.visitMarker), "same document");
@@ -515,7 +515,7 @@ test("keyboard selection and the open peek survive an Inbox push", async t => {
     await page.locator('#peek dt').first().waitFor();
     const fixture = JSON.parse(original);
     fixture.issue.title = 'Keyboard-selected Command after push';
-    await replace(path, JSON.stringify(fixture));
+    await replaceRecord(path, JSON.stringify(fixture));
     await row.locator('.issue-title').filter({ hasText: fixture.issue.title }).waitFor();
     await page.locator('#peek').getByText(fixture.issue.title, { exact: true }).waitFor();
     assert.equal(await row.getAttribute('id'), id);
@@ -526,7 +526,7 @@ test("keyboard selection and the open peek survive an Inbox push", async t => {
     await page.keyboard.press('g');
     await page.keyboard.press('w');
     assert.equal(await page.locator('.is-selected').evaluate(el => el.parentElement.dataset.group), 'working');
-  } finally { await replace(path, original); }
+  } finally { await replaceRecord(path, original); }
 });
 
 test("tab title and favicon follow Needs you through pushes", async t => {
@@ -543,11 +543,11 @@ test("tab title and favicon follow Needs you through pushes", async t => {
       fixtures.push([path, original]);
       const fixture = JSON.parse(original);
       fixture.outcome = 'merged';
-      await replace(path, JSON.stringify(fixture));
+      await replaceRecord(path, JSON.stringify(fixture));
     }
     await page.waitForFunction(() => document.title === '0 need you · thirdshift Console');
     assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/assets/favicon.svg');
-  } finally { for (const [path, original] of fixtures) await replace(path, original); }
+  } finally { for (const [path, original] of fixtures) await replaceRecord(path, original); }
 });
 
 test("new since the last visit survives browser storage and clears after looking", async t => {
@@ -562,7 +562,7 @@ test("new since the last visit survives browser storage and clears after looking
     fixture.issue.number = 201;
     fixture.started_at = fixture.ended_at = new Date().toISOString();
     fixture.cause = 'New problem after the last visit';
-    await replace(path, JSON.stringify(fixture));
+    await replaceRecord(path, JSON.stringify(fixture));
     await page.goto(origin);
     const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#201$/ }) });
     await row.locator('.new').waitFor();
@@ -591,10 +591,10 @@ test("cutting the open stream falls back to polling and catches up", async t => 
   try {
     const fixture = JSON.parse(original);
     fixture.issue.title = 'Caught up by polling';
-    await replace(path, JSON.stringify(fixture));
+    await replaceRecord(path, JSON.stringify(fixture));
     await page.getByText('Caught up by polling', { exact: true }).waitFor({ timeout: 12000 });
     assert.equal(await page.evaluate(() => window.inboxStream.readyState), 2);
-  } finally { await replace(path, original); }
+  } finally { await replaceRecord(path, original); }
 });
 
 for (const storage of ['blocked', 'malformed']) {
@@ -615,11 +615,11 @@ for (const storage of ['blocked', 'malformed']) {
     try {
       const fixture = JSON.parse(original);
       fixture.issue.title = `Still live with ${storage} storage`;
-      await replace(path, JSON.stringify(fixture));
+      await replaceRecord(path, JSON.stringify(fixture));
       await page.getByText(fixture.issue.title, { exact: true }).waitFor();
       assert.equal(await page.locator('[data-group="needs you"][open]').count(), 1);
       assert.deepEqual(errors, []);
-    } finally { await replace(path, original); }
+    } finally { await replaceRecord(path, original); }
   });
 }
 
@@ -639,7 +639,7 @@ for (const storage of ['blocked', 'malformed']) {
     fixture.issue.number = 202;
     const began = new Date(Date.now() - 20 * 60 * 1000).toISOString();
     fixture.stages = [{ name: 'implement', began_at: began, session_log: session }];
-    await replace(path, JSON.stringify(fixture));
+    await replaceRecord(path, JSON.stringify(fixture));
     await writeFile(log, 'command');
     await writeFile(session, event('session'));
     try {
@@ -688,7 +688,7 @@ for (const storage of ['blocked', 'malformed']) {
       await page.waitForFunction(id => document.getElementById(id).dataset.logging === 'true', id);
       assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
       fixture.outcome = 'merged'; fixture.ended_at = new Date().toISOString();
-      await replace(path, JSON.stringify(fixture));
+      await replaceRecord(path, JSON.stringify(fixture));
       await page.waitForFunction(() => document.documentElement.dataset.live === 'false');
       await page.getByRole('region', { name: 'No running Commands' }).waitFor();
       await page.emulateMedia({ reducedMotion: 'no-preference' });
@@ -718,7 +718,7 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
   for (const [number, change] of Object.entries(fixtures)) {
     const path = join(dir, `${number}-fixture.command.json`);
     paths.push(path, join(dir, `${number}-fixture.log`));
-    await replace(path, JSON.stringify({ ...base, ...change, issue: { ...base.issue, number: Number(number), url: `https://github.com/acme/widgets/issues/${number}` } }));
+    await replaceRecord(path, JSON.stringify({ ...base, ...change, issue: { ...base.issue, number: Number(number), url: `https://github.com/acme/widgets/issues/${number}` } }));
     await writeFile(join(dir, `${number}-fixture.log`), 'command\n');
   }
   try {
@@ -754,7 +754,7 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
       assert.deepEqual([working.state, working.word, working.background, working.spin], ['live', 'live', working.bg, 'working']);
     }
     // A Stop request reaches the open Inbox through its live update.
-    await replace(stop, JSON.stringify({ who: 'fixture', requeue: false }));
+    await replaceRecord(stop, JSON.stringify({ who: 'fixture', requeue: false }));
     await page.waitForFunction(() => document.querySelector('.command:has(> .row-head > .subject a[href$="/issues/213"])')?.dataset.state === 'Stopping');
     assert.equal(await row(213).evaluate(node => node.closest('[data-group]').dataset.group), 'working');
     const stripe = () => row(213).evaluate(node => ({ word: node.querySelector(':scope > .row-head > .state').textContent, height: getComputedStyle(node, '::after').height, motion: getComputedStyle(node, '::after').animationName, running: node.getAnimations({ subtree: true }).length }));
@@ -783,14 +783,14 @@ test("a push keeps a Pass dispatch selected instead of its parent", async t => {
     started_at: now, ended_at: now, stages: [], session_log: null, outcome: 'failed', cause: 'Pass failure', issue_branch: null, pull_request: null
   };
   fixture.dispatched = [{ ...fixture, kind: 'Run', name: 'issue-303', issue: { number: 303, url: 'https://github.com/acme/widgets/issues/303', title: 'Dispatch before push' } }];
-  await replace(path, JSON.stringify(fixture));
+  await replaceRecord(path, JSON.stringify(fixture));
   try {
     const page = await pageFor(t);
     await page.goto(origin);
     const child = page.locator('.command').filter({ has: page.locator(':scope > .row-head > .subject', { hasText: /^acme\/widgets#303$/ }) });
     await child.click();
     fixture.dispatched[0].issue.title = 'Dispatch after push';
-    await replace(path, JSON.stringify(fixture));
+    await replaceRecord(path, JSON.stringify(fixture));
     await page.getByText('Dispatch after push', { exact: true }).waitFor();
     assert.equal(await page.evaluate(() => document.activeElement.querySelector(':scope > .row-head > .subject')?.textContent), 'acme/widgets#303');
     const ids = await page.locator('.command').evaluateAll(rows => rows.map(row => row.id));
@@ -809,24 +809,28 @@ test("selection survives a move into folded Done and regains focus when opened",
     const id = await row.getAttribute('id');
     const fixture = JSON.parse(original);
     fixture.outcome = 'merged';
-    await replace(path, JSON.stringify(fixture));
+    await replaceRecord(path, JSON.stringify(fixture));
     await page.waitForFunction(id => document.getElementById(id)?.closest('details').dataset.group === 'done', id);
     assert.equal(await page.evaluate(() => document.querySelector('.command[aria-current="true"]')?.id ?? document.activeElement.id), id);
     assert.equal(await page.locator('[data-group="done"][open]').count(), 0);
     await page.locator('[data-group="done"] > summary').click();
     await page.waitForFunction(id => document.activeElement.id === id, id);
-  } finally { await replace(path, original); }
+  } finally { await replaceRecord(path, original); }
 });
 
-test("replacing the selected row's record keeps it selected and focused through every push", async t => {
-  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/2-fixture.command.json');
-  const original = await readFile(path, 'utf8');
+test("a push during a record replacement keeps the selected row selected and focused", async t => {
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const path = join(dir, '2-fixture.command.json');
+  const otherLog = join(dir, '3-fixture.log');
+  const [original, originalLog] = await Promise.all([readFile(path, 'utf8'), readFile(otherLog, 'utf8')]);
   try {
     const page = await pageFor(t);
     await page.goto(origin);
-    const row = page.locator('.command').filter({ has: page.locator(':scope > .row-head > .subject', { hasText: /^acme\/widgets#2$/ }) });
+    const rowFor = number => page.locator('.command').filter({ has: page.locator(':scope > .row-head > .subject', { hasText: new RegExp(`^acme/widgets#${number}$`) }) });
+    const row = rowFor(2);
     await row.click();
     const id = await row.getAttribute('id');
+    const other = await rowFor(3).getAttribute('id');
     // Each morph restores selection before its mutations are delivered here.
     await page.evaluate(id => {
       window.unselected = [];
@@ -835,17 +839,25 @@ test("replacing the selected row's record keeps it selected and focused through 
         if (node?.getAttribute('aria-current') !== 'true' || document.activeElement !== node) {
           window.unselected.push(node ? `${document.activeElement.tagName} focused` : 'row missing');
         }
-      }).observe(document.getElementById('inbox'), { subtree: true, childList: true, characterData: true });
+      }).observe(document.getElementById('inbox'), { subtree: true, childList: true, characterData: true, attributes: true });
     }, id);
     const fixture = JSON.parse(original);
-    for (let push = 1; push <= 5; push++) {
-      fixture.issue.title = `Replacement ${push} while selected`;
-      await replace(path, JSON.stringify(fixture));
-      await row.locator('.issue-title').filter({ hasText: fixture.issue.title }).waitFor();
-    }
+    fixture.issue.title = 'Replaced while a push arrived';
+    await replaceRecord(path, JSON.stringify(fixture), {
+      // Another row's log growth pushes the page while the record is replaced.
+      async midway() {
+        const growth = await page.locator(`[id="${other}"]`).getAttribute('data-log-growth');
+        await appendFile(otherLog, 'Growth during a replacement\n');
+        await page.waitForFunction(([other, growth]) => document.getElementById(other).dataset.logGrowth !== growth, [other, growth]);
+      }
+    });
+    await row.locator('.issue-title').filter({ hasText: fixture.issue.title }).waitFor();
     assert.deepEqual(await page.evaluate(() => window.unselected), []);
     assert.equal(await page.evaluate(() => document.activeElement.id), id);
-  } finally { await replace(path, original); }
+  } finally {
+    await replaceRecord(path, original);
+    await writeFile(otherLog, originalLog);
+  }
 });
 
 test("every keyboard action preserves list nodes and Escape closes one layer at a time", async t => {
@@ -1052,7 +1064,7 @@ test('Command details keeps its fallback selection across a live refresh', { ski
   Object.assign(fixture, { kind: 'Run', process_id: server.pid, process_start: start, outcome: null, ended_at: null, session_log: session });
   fixture.issue.number = 203;
   fixture.stages = [{ name: 'implement', began_at: new Date().toISOString(), session_log: session }];
-  await replace(path, JSON.stringify(fixture));
+  await replaceRecord(path, JSON.stringify(fixture));
   await writeFile(join(dir, '203-fixture.log'), 'command');
   await writeFile(session, traceRecord('session'));
   try {
@@ -1105,7 +1117,7 @@ test('the active-run total follows live trees, stays visible and fits every Them
   const spec = join(dir, '221-fixture.command.json');
   const tickets = [222, 223].map(number => join(dir, `221-fixture.command.issue-${number}.child.json`));
   const separate = join(dir, '224-fixture.command.json');
-  const write = (path, number, change = {}) => replace(path, JSON.stringify({ ...base, ...live, issue: issue(number), ...change }));
+  const write = (path, number, change = {}) => replaceRecord(path, JSON.stringify({ ...base, ...live, issue: issue(number), ...change }));
   const ended = { outcome: 'merged', ended_at: now };
   try {
     const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
