@@ -2341,7 +2341,11 @@ fn numbered_issue(state: &Json, n: &Json) -> Json {
         ("number", n.clone()),
         (
             "title",
-            state.at("titles").get(&n.python()).cloned().unwrap_or(Null),
+            state
+                .get("titles")
+                .and_then(|titles| titles.get(&n.python()))
+                .cloned()
+                .unwrap_or(Null),
         ),
         (
             "url",
