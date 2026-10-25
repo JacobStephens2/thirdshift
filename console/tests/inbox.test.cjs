@@ -842,15 +842,22 @@ test("a push during a record replacement keeps the selected row selected and foc
       }).observe(document.getElementById('inbox'), { subtree: true, childList: true, characterData: true, attributes: true });
     }, id);
     const fixture = JSON.parse(original);
+    const title = fixture.issue.title;
     fixture.issue.title = 'Replaced while a push arrived';
+    let pushedMidway = false;
     await replaceRecord(path, JSON.stringify(fixture), {
       // Another row's log growth pushes the page while the record is replaced.
       async midway() {
         const growth = await page.locator(`[id="${other}"]`).getAttribute('data-log-growth');
         await appendFile(otherLog, 'Growth during a replacement\n');
         await page.waitForFunction(([other, growth]) => document.getElementById(other).dataset.logGrowth !== growth, [other, growth]);
+        // That push still read the whole earlier record.
+        assert.deepEqual(await page.evaluate(() => window.unselected), []);
+        assert.equal(await row.locator('.issue-title').textContent(), title);
+        pushedMidway = true;
       }
     });
+    assert.equal(pushedMidway, true);
     await row.locator('.issue-title').filter({ hasText: fixture.issue.title }).waitFor();
     assert.deepEqual(await page.evaluate(() => window.unselected), []);
     assert.equal(await page.evaluate(() => document.activeElement.id), id);
