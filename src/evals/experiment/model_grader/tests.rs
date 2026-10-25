@@ -3,9 +3,51 @@ use crate::scope::testing::{Fixture, REMOVE_OBSERVED_EVENTS};
 use std::process::Command;
 
 #[test]
+fn recorded_model_grader_reads_native_codex_quota_from_its_launch_home() {
+    let fixture = Fixture::new();
+    let mut command = Command::new("/bin/sh");
+    command.current_dir(fixture.directory.path())
+        .env("HOME", fixture.path("home"))
+        .args(["-c", r#"
+mkdir -p "$HOME/.codex/sessions/2026/10/23"
+native="$HOME/.codex/sessions/2026/10/23/rollout-fixture-grader.jsonl"
+printf '{"type":"session_meta","payload":{"id":"grader","cwd":"%s"}}\n' "$PWD" > "$native"
+sleep 1.1
+timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","rate_limits":{"secondary":{"used_percent":85}}}}\n' "$timestamp" >> "$native"
+echo '{"type":"thread.started","thread_id":"grader"}'
+sleep 1
+touch continued
+"#]);
+    let mut launched = fixture.launch(command);
+    let error = record_session(
+        &mut launched,
+        &Choice {
+            harness: crate::harness::Harness::Codex,
+            ..Choice::default()
+        },
+        fixture.directory.path(),
+        Input {
+            private: true,
+            deadline: Some(Instant::now() + Duration::from_secs(5)),
+            ..Input::default()
+        },
+    )
+    .unwrap_err();
+    assert_eq!(
+        error.to_string(),
+        "model Grader session failed; see private Grader artifacts"
+    );
+    assert!(!fixture.path("continued").exists());
+    let trace = fs::read_to_string(fixture.path("stdout.logs.jsonl")).unwrap();
+    assert!(trace.contains("used_percent"), "{trace}");
+}
+
+#[test]
 fn recorded_model_grader_retains_live_kill_and_its_private_diagnostic() {
     let fixture = Fixture::new();
     let mut command = Command::new("/bin/sh");
+    command.current_dir(fixture.directory.path());
     command.args([
         "-c",
         &format!(
@@ -60,6 +102,7 @@ fn recorded_model_grader_uses_only_kernel_evidence_and_keeps_journal_lazy() {
             fs::write(fixture.path("events"), events).unwrap();
         }
         let mut command = Command::new("/bin/sh");
+        command.current_dir(fixture.directory.path());
         command.args([
             "-c",
             if success {
