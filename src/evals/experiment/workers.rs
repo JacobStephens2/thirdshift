@@ -14,56 +14,13 @@ use std::sync::{
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail, ensure};
-use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sha2::{Digest, Sha256};
 
-use super::{Task, arms, grading, integrity, store};
+use super::{Arm, Task, arms, grading, integrity, store, trial_results};
 use crate::process::{self, Control, Interruption};
 use crate::session::limits;
 use crate::trial::{Outcome, Output, VoidCause};
 use crate::{interrupt, logs, progress};
-
-#[derive(Clone, Copy, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub(crate) enum Arm {
-    Baseline,
-    Candidate,
-}
-
-impl Arm {
-    pub fn name(self) -> &'static str {
-        match self {
-            Self::Baseline => "baseline",
-            Self::Candidate => "candidate",
-        }
-    }
-
-    pub fn from_trial_key(key: &str) -> Option<Self> {
-        let name = key.split("--").nth(1)?;
-        [Self::Baseline, Self::Candidate]
-            .into_iter()
-            .find(|arm| arm.name() == name)
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-pub(crate) struct TrialResult {
-    pub suite: String,
-    pub task: String,
-    pub arm: Arm,
-    pub trial: usize,
-    pub outcome: Outcome,
-    #[serde(default)]
-    pub score: Option<grading::Score>,
-    pub attempts: Vec<Output>,
-}
-
-impl TrialResult {
-    pub fn key(&self) -> String {
-        trial_key(&self.suite, &self.task, self.arm, self.trial)
-    }
-}
 
 struct Trial<'a> {
     task: &'a Task,
@@ -73,19 +30,17 @@ struct Trial<'a> {
 
 impl Trial<'_> {
     fn key(&self) -> String {
-        trial_key(&self.task.suite, &self.task.name, self.arm, self.index)
+        self.identity().key()
     }
-}
 
-pub(crate) fn trial_key(suite: &str, name: &str, arm: Arm, index: usize) -> String {
-    // Names cannot contain NUL. Hash the delimited tuple so names with
-    // `--` stay distinct and long names cannot exceed a filename limit.
-    let task = Sha256::new()
-        .chain_update(suite.as_bytes())
-        .chain_update([0])
-        .chain_update(name.as_bytes())
-        .finalize();
-    format!("{task:x}--{}--{}", arm.name(), index)
+    fn identity(&self) -> trial_results::Identity<'_> {
+        trial_results::Identity {
+            suite: &self.task.suite,
+            task: &self.task.name,
+            arm: self.arm,
+            trial: self.index,
+        }
+    }
 }
 
 fn pauses(output: &Output) -> bool {
@@ -119,18 +74,12 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
             symlink(&arm.harness.path, link)?;
         }
     }
-    fs::create_dir_all(experiment.directory.join("results"))?;
     let mut queue = VecDeque::new();
     for task in &experiment.tasks {
         for index in 0..experiment.description.bar.trials_per_task[&task.suite] {
             for arm in [Arm::Baseline, Arm::Candidate] {
                 let trial = Trial { task, arm, index };
-                if !experiment
-                    .directory
-                    .join("results")
-                    .join(format!("{}.json", trial.key()))
-                    .exists()
-                {
+                if !trial_results::finished(&experiment.directory, &trial.identity()) {
                     queue.push_back(trial);
                 }
             }
@@ -192,27 +141,11 @@ fn run_trial(
         Arm::Candidate => (&prepared.candidate, &experiment.description.candidate),
     };
     let directory = experiment.directory.join("trials").join(trial.key());
-    fs::create_dir_all(&directory)?;
-    let pending = directory.join("pending.json");
-    let terminal = experiment
-        .directory
-        .join("results")
-        .join(format!("{}.json", trial.key()));
-    let mut result = if pending.exists() {
-        serde_json::from_slice(&fs::read(&pending)?)?
-    } else {
-        TrialResult {
-            suite: trial.task.suite.clone(),
-            task: trial.task.name.clone(),
-            arm: trial.arm,
-            trial: trial.index,
-            outcome: Outcome::Void,
-            score: None,
-            attempts: Vec::new(),
-        }
-    };
+    let mut writer = trial_results::Writer::resume(&experiment.directory, trial.identity())?;
     let bar = &experiment.description.bar;
-    while result.outcome == Outcome::Void && result.attempts.len() <= bar.void_rules.retries {
+    while writer.progress().outcome == Outcome::Void
+        && writer.progress().attempts.len() <= bar.void_rules.retries
+    {
         interrupt::check()?;
         limits::check(signal)?;
         let attempt = tempfile::Builder::new()
@@ -258,7 +191,8 @@ fn run_trial(
             .open(experiment.directory.join("started"))?;
         limits::check(signal)?;
         progress::step(format!("Trial {} starting", trial.key()));
-        let _active = super::evidence::Active::start(&directory, &attempt, result.attempts.len())?;
+        let _active =
+            super::evidence::Active::start(&directory, &attempt, writer.progress().attempts.len())?;
         let monitor = RefCell::new(super::limits::Monitor::new(
             &attempt.join("session"),
             &prepared_repo.repository,
@@ -277,7 +211,7 @@ fn run_trial(
                 request: &request,
                 signal,
                 trial: &trial.key(),
-                attempt: result.attempts.len(),
+                attempt: writer.progress().attempts.len(),
             },
             &caps,
         )?;
@@ -382,24 +316,20 @@ fn run_trial(
                 score => score,
             }
         })?;
-        store::write(&attempt.join("result.json"), &protocol)?;
         let outcome = protocol.outcome;
         let void_cause = protocol.void_cause;
         let paused = pauses(&protocol);
-        result.outcome = outcome;
-        result.score = Some(score);
         trace.outcome(outcome);
         let retry = outcome == Outcome::Void
             && void_cause.is_some_and(|cause| bar.void_rules.causes.contains(&cause));
-        result.attempts.push(protocol);
         // Preserve completed void attempts even if Stop cuts the next retry
         // short. A resume keeps the original Bar's remaining retry budget.
-        store::write(&pending, &result)?;
+        writer.record_attempt(&attempt, protocol, score)?;
         if paused {
             // A provider limit still stops scheduling, including on the last
             // attempt. Publish exhaustion so resume cannot grant more retries.
-            if result.attempts.len() > bar.void_rules.retries {
-                store::write(&terminal, &result)?;
+            if writer.progress().attempts.len() > bar.void_rules.retries {
+                writer.finish()?;
             }
             bail!(
                 "Trial {} paused: {:?}; run the Experiment again to resume",
@@ -411,8 +341,12 @@ fn run_trial(
             break;
         }
     }
-    store::write(&terminal, &result)?;
-    progress::step(format!("Trial {} {}", trial.key(), result.outcome));
+    writer.finish()?;
+    progress::step(format!(
+        "Trial {} {}",
+        trial.key(),
+        writer.progress().outcome
+    ));
     Ok(())
 }
 

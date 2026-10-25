@@ -7,8 +7,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::workers::{Arm, TrialResult};
-use super::{Bar, Task};
+use super::{Arm, Bar, Task, TrialResult};
 use crate::sandbox::code_grader::{self, Check};
 use crate::trial::{Outcome, Output};
 use crate::verdict::{self, Decision, TaskScores};

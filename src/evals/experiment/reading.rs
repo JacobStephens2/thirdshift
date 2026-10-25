@@ -1,81 +1,15 @@
 //! One captured observation supplies every retained Experiment projection.
 
 use std::collections::BTreeSet;
-use std::fs::{self, File};
-use std::io::{self, BufReader};
-use std::path::{Path, PathBuf};
+use std::io::BufReader;
 
-use anyhow::{Context, Result};
-use serde::de::DeserializeOwned;
+use anyhow::Result;
 use sha2::{Digest, Sha256};
 
 use super::evidence::{RunningTrial, SessionLog, Started};
 use super::store::{Minutes, State, Stored, TaskName, View, Voids};
-use super::{Arm, TrialResult, usage};
-
-// Private I/O seam: production callers only request the existing View. Tests
-// can count sampling and publish files between a sample and its projection.
-trait Files {
-    fn entries(&self, path: &Path) -> io::Result<Vec<Entry>>;
-    fn read(&self, path: &Path) -> io::Result<Vec<u8>>;
-    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf>;
-    fn open(&self, path: &Path) -> io::Result<File>;
-}
-
-struct Entry {
-    path: PathBuf,
-    kind: fs::FileType,
-}
-
-struct Native;
-
-impl Files for Native {
-    fn entries(&self, path: &Path) -> io::Result<Vec<Entry>> {
-        fs::read_dir(path)?
-            .map(|entry| {
-                let entry = entry?;
-                Ok(Entry {
-                    path: entry.path(),
-                    kind: entry.file_type()?,
-                })
-            })
-            .collect()
-    }
-
-    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
-        fs::read(path)
-    }
-
-    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
-        path.canonicalize()
-    }
-
-    fn open(&self, path: &Path) -> io::Result<File> {
-        File::open(path)
-    }
-}
-
-fn optional<T>(result: io::Result<T>) -> io::Result<Option<T>> {
-    match result {
-        Ok(value) => Ok(Some(value)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
-fn metadata<T: DeserializeOwned>(files: &impl Files, path: &Path) -> Result<Option<T>> {
-    optional(files.read(path))?
-        .map(|bytes| {
-            serde_json::from_slice(&bytes).with_context(|| format!("can't read {}", path.display()))
-        })
-        .transpose()
-}
-
-fn directory(files: &impl Files, path: &Path) -> Result<Vec<Entry>> {
-    let mut entries = optional(files.entries(path))?.unwrap_or_default();
-    entries.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(entries)
-}
+use super::trial_results::files::{Files, Native, directory, metadata, optional};
+use super::{Arm, TrialResult, trial_results, usage};
 
 #[derive(Default)]
 struct Observation {
@@ -94,29 +28,14 @@ pub(super) fn read(stored: &Stored) -> Result<View> {
 
 impl Observation {
     fn capture(files: &impl Files, stored: &Stored) -> Result<Self> {
+        let capture = trial_results::capture(files, &stored.directory)?;
         let mut observation = Self::default();
-        // Capture terminal membership first. Nothing below probes terminal
-        // paths again, even if a worker finishes while we sample a Trial.
-        for entry in directory(files, &stored.directory.join("results"))? {
-            if !entry.kind.is_file() || !entry.path.extension().is_some_and(|ext| ext == "json") {
-                continue;
-            }
-            let mut result: TrialResult = serde_json::from_slice(&files.read(&entry.path)?)?;
-            stored.apply_rechecks(&mut result);
-            observation.results.push(result);
-        }
-        let terminal: BTreeSet<_> = observation.results.iter().map(TrialResult::key).collect();
         let root = files.canonicalize(&stored.directory)?;
-        for trial in directory(files, &stored.directory.join("trials"))? {
-            let id = trial
-                .path
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-                .into_owned();
-            let pending: Option<TrialResult> = metadata(files, &trial.path.join("pending.json"))?;
+        for trial in capture.trials() {
+            let id = &trial.id;
+            let pending = &trial.pending;
             if stored.state == State::Running
-                && !terminal.contains(&id)
+                && trial.active_eligible()
                 && let Some(started) = metadata::<Started>(files, &trial.path.join("active.json"))?
             {
                 observation.running_trials.push(RunningTrial {
@@ -153,7 +72,7 @@ impl Observation {
                 let entries = directory(files, &folder)?;
                 // Usage is independent of readable evidence: a spans-only
                 // Session still contributes, as do retries and Resumes.
-                if let Some(arm) = Arm::from_trial_key(&id) {
+                if let Some(arm) = Arm::from_trial_key(id) {
                     for entry in &entries {
                         if entry
                             .path
@@ -222,14 +141,12 @@ impl Observation {
                     });
                 }
             }
-            if let Some(result) = pending {
-                observation.minutes.include(&result);
-                observation.voids.include(&result);
-                if !terminal.contains(&result.key()) {
-                    observation.unfinished_trials.push(result);
-                }
-            }
         }
+        let progress = capture.into_progress(&stored.rechecks);
+        observation.results = progress.results;
+        observation.unfinished_trials = progress.unfinished_trials;
+        observation.minutes = progress.minutes;
+        observation.voids = progress.voids;
         observation.running_trials.sort_by(|a, b| a.id.cmp(&b.id));
         observation
             .sessions

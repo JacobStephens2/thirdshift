@@ -12,6 +12,7 @@ mod rechecks;
 mod release;
 mod store;
 mod trace;
+mod trial_results;
 mod usage;
 mod workers;
 
@@ -36,7 +37,7 @@ pub use options::{Options, parse};
 pub(crate) use rechecks::record as recheck;
 pub(crate) use rechecks::{Flip, Pending};
 pub(crate) use store::{State, View, read};
-pub(crate) use workers::{Arm, TrialResult, trial_key};
+pub(crate) use trial_results::{Arm, TrialResult, trial_key};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Bar {

@@ -8,8 +8,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::workers::{Arm, TrialResult};
-use super::{Description, Task};
+use super::{Arm, Description, Task, TrialResult, trial_results};
 use crate::trial::{Outcome, VoidCause};
 
 #[derive(Serialize, Deserialize)]
@@ -240,20 +239,10 @@ impl Stored {
     }
 
     pub fn results(&self) -> Result<Vec<TrialResult>> {
-        let mut results = Vec::new();
-        for path in result_paths(&self.directory)? {
-            let mut result: TrialResult = serde_json::from_slice(&fs::read(path)?)?;
-            self.apply_rechecks(&mut result);
-            results.push(result);
-        }
-        Ok(results)
-    }
-
-    pub(super) fn apply_rechecks(&self, result: &mut TrialResult) {
-        let key = result.key();
-        if let Some(score) = &mut result.score {
-            score.rechecks = self.rechecks.get(&key).cloned().unwrap_or_default();
-        }
+        Ok(trial_results::effective(
+            trial_results::terminal(&self.directory)?,
+            &self.rechecks,
+        ))
     }
 
     pub fn refresh_verdict(&mut self) -> Result<()> {
@@ -352,23 +341,6 @@ pub(super) fn write(path: &Path, value: &impl Serialize) -> Result<()> {
     temporary.flush()?;
     temporary.persist(path)?;
     Ok(())
-}
-
-pub(super) fn result_paths(directory: &Path) -> Result<Vec<PathBuf>> {
-    let mut paths = Vec::new();
-    let root = directory.join("results");
-    if !root.exists() {
-        return Ok(paths);
-    }
-    for entry in fs::read_dir(root)? {
-        let entry = entry?;
-        if entry.file_type()?.is_file() && entry.path().extension().is_some_and(|ext| ext == "json")
-        {
-            paths.push(entry.path());
-        }
-    }
-    paths.sort();
-    Ok(paths)
 }
 
 pub(super) fn list(root: &Path) -> Result<Vec<Stored>> {
