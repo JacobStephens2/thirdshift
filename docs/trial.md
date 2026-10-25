@@ -189,6 +189,15 @@ The result version is independently identified by `version: 1`.
   Arm and drops an exhausted task from both Arms. More than a tenth dropped
   makes the Verdict inconclusive. Repeated `memory_cap` stops produce an Arm
   finding in `thirdshift experiments <id>`.
+  Fresh execution and recovery use the saved Bar's cause list and retry count:
+  only a latest Void result with an allowed cause and remaining budget retries.
+  A retained success, failure, missing or excluded Void cause, or exhausted
+  history finishes without another attempt, including after failed terminal
+  publication. Completed usage-limit, rate-limit and interrupted Void results
+  checkpoint before pausing; if terminal, they publish before returning the
+  pause. Recovery never re-emits a retained pause. Attempt results, pending
+  history and terminal results publish in that order while execution evidence
+  remains live; publication errors leave only the successfully saved prefix.
 - `cause`: failure diagnostic, or `null` on success.
 - `session_id`: the last session's Harness ID if available, otherwise `null`.
 - `log`: absolute path to the last session's `.logs.jsonl` Session trace, otherwise `null`.

@@ -1,9 +1,8 @@
-//! Trial identity, retained progress and terminal result publication.
+//! Trial identity, retained result decoding, captures and Model Score updates.
 
 pub(super) mod files;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, ensure};
@@ -249,62 +248,6 @@ pub(super) fn finished(directory: &Path, identity: &Identity<'_>) -> bool {
         .join("results")
         .join(format!("{}.json", identity.key()))
         .exists()
-}
-
-pub(super) struct Writer {
-    pending: PathBuf,
-    terminal: PathBuf,
-    progress: TrialResult,
-}
-
-impl Writer {
-    pub fn resume(directory: &Path, identity: Identity<'_>) -> Result<Self> {
-        let key = identity.key();
-        let trial = directory.join("trials").join(&key);
-        fs::create_dir_all(&trial)?;
-        fs::create_dir_all(directory.join("results"))?;
-        let pending = trial.join("pending.json");
-        let progress = if pending.exists() {
-            serde_json::from_slice(&fs::read(&pending)?)?
-        } else {
-            TrialResult {
-                suite: identity.suite.into(),
-                task: identity.task.into(),
-                arm: identity.arm,
-                trial: identity.trial,
-                outcome: Outcome::Void,
-                score: None,
-                attempts: Vec::new(),
-            }
-        };
-        Ok(Self {
-            pending,
-            terminal: directory.join("results").join(format!("{key}.json")),
-            progress,
-        })
-    }
-
-    pub fn progress(&self) -> &TrialResult {
-        &self.progress
-    }
-
-    pub fn record_attempt(
-        &mut self,
-        attempt: &Path,
-        output: Output,
-        score: grading::Score,
-    ) -> Result<()> {
-        store::write(&attempt.join("result.json"), &output)?;
-        self.progress.outcome = output.outcome;
-        self.progress.score = Some(score);
-        self.progress.attempts.push(output);
-        // A completed prefix survives Stop or a failed later publication.
-        store::write(&self.pending, &self.progress)
-    }
-
-    pub fn finish(&self) -> Result<()> {
-        store::write(&self.terminal, &self.progress)
-    }
 }
 
 #[cfg(test)]

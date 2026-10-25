@@ -638,6 +638,11 @@ Provider usage/rate limits pause scheduling until the same Experiment is
 started again, consuming the same fresh-retry budget across resumes. Completed
 attempts count toward minutes and per-Arm Void totals even while paused or
 after resume. Stop preserves completed attempts and the remaining budget.
+Recovery applies the saved Bar's Void cause list as well as its retry count,
+including older saved lists. Pending history that is already terminal publishes
+without another attempt after a publication failure. A newly completed limit
+or interrupted Void checkpoints before pausing, even on the last attempt;
+resuming exhausted history finishes without replaying its old pause.
 
 The same Arms and suite names identify the same Experiment. Running it again
 skips finished Trials and re-runs interrupted ones; a completed Experiment only

@@ -1880,6 +1880,54 @@ echo '{"type":"result","subtype":"error_during_execution","is_error":true,"error
 }
 
 #[test]
+fn retained_pending_history_obeys_the_saved_void_cause_list() {
+    let fixture = Fixture::new();
+    let started = fixture.scenario.path("limited-trials-started");
+    fs::create_dir(&started).unwrap();
+    fixture.scenario.agent_does(&format!(
+        r#"
+case "$PWD" in *--baseline--*) arm=baseline ;; *) arm=candidate ;; esac
+touch '{started}'/"$arm"
+while [ ! -f '{started}/baseline' ] || [ ! -f '{started}/candidate' ]; do sleep 0.01; done
+echo '{{"type":"rate_limit_event","rate_limit_info":{{"status":"allowed_warning"}}}}'
+sleep 0.2
+"#,
+        started = started.display()
+    ));
+    let paused = fixture.run(&[]);
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    assert_eq!(fixture.trial_calls().len(), 2);
+    let experiment = fixture.experiment();
+    let directory = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{}",
+        experiment["id"].as_str().unwrap()
+    ));
+    let metadata = directory.join("experiment.json");
+    let mut saved: Value = serde_json::from_slice(&fs::read(&metadata).unwrap()).unwrap();
+    // Retained history from an older Bar, before host_killed became retryable.
+    saved["bar"]["void_rules"]["causes"] = json!(["session_unavailable", "usage_limit"]);
+    fs::write(&metadata, serde_json::to_vec(&saved).unwrap()).unwrap();
+    for trial in fs::read_dir(directory.join("trials")).unwrap() {
+        let pending = trial.unwrap().path().join("pending.json");
+        let mut history: Value = serde_json::from_slice(&fs::read(&pending).unwrap()).unwrap();
+        history["attempts"][0]["void_cause"] = json!("host_killed");
+        fs::write(pending, serde_json::to_vec(&history).unwrap()).unwrap();
+    }
+    fixture.scenario.agent_does("true");
+    let resumed = fixture.run(&[]);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    assert_eq!(
+        fixture.trial_calls().len(),
+        2,
+        "a retained Void cause excluded by the saved Bar must not get another attempt"
+    );
+    for result in fixture.experiment()["results"].as_array().unwrap() {
+        assert_eq!(result["outcome"], "void");
+        assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
+    }
+}
+
+#[test]
 fn externally_reported_host_kills_retry_fresh_and_keep_the_cause() {
     let fixture = Fixture::new();
     let output = json!({
