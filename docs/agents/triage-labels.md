@@ -32,13 +32,13 @@ Factory skills named `thirdshift-to-spec` and `thirdshift-to-tickets` follow the
 
 A Spec's work reaches the **Base branch** only through its **Spec PR**, once every Ticket is done, so no release, deployment or host install can contain an earlier Ticket's work while the Spec is still running. A Ticket that needs one, to run, verify or migrate anything, blocks its own Spec from the start. When shaping the scope with `to-spec` and again before publishing Tickets with `to-tickets`, check for such a Ticket. Where one would need a release of earlier Tickets in the same Spec, split the Spec at that point instead:
 
-1. **Spec A**: the work that has to ship first, published with its Tickets as above.
-2. **Release step**: a standalone `ready-for-human` issue for the release, deployment or install and any Day shift step after it, blocked by Spec A.
-3. **Spec B**: the work that comes after, blocked by the release step, published with its Tickets as above. A **Pickup run** does not take it while the release step is open.
+1. Spec A: the work that has to ship first, published with its Tickets as above.
+2. Release step: a standalone `ready-for-human` issue for the release, deployment or host install and any Day shift step after it, blocked by Spec A.
+3. Spec B: the work that comes after, blocked by the release step, published with its Tickets as above. A **Pickup run** does not take it while the release step is open.
 
-#700 shows why. Its Ticket #994 (`ready-for-human`) said to run a conversion "once a release with #993 is installed on each host", and #997 was blocked by #994. #993 had landed on the Spec branch, so only merging the Spec PR could release it, and the Spec PR was waiting on #994. The Pickup run failed after 7h 37m with `Tickets not done: #994, #995, #996, #997`, and PR #1049 broke the deadlock by hand, landing the first 12 Tickets early without the Spec review. Split at #994, Spec A would have held Session traces and the conversion, the release step #994's install and conversion, and Spec B the switch and the span tree.
+#700 shows why. Its Ticket #994 (`ready-for-human`) said to run a conversion "once a release with #993 is installed on each host", and #997 was blocked by #994. #993 had landed on the **Spec branch**, so only merging the Spec PR could release it, and the Spec PR was waiting on #994. The **Spec run** a Pickup run started failed after 7h 37m with `Tickets not done: #994, #995, #996, #997`, and PR #1049 broke the deadlock by hand, landing the first 12 Tickets early without the **Spec review**. Split at #994, Spec A would have held Session traces and the conversion's code, the release step installing the release and running the conversion, and Spec B the switch and the span tree.
 
-The Factory `thirdshift-to-tickets` skill creates and modifies no parent issue, so it publishes only Spec A's Tickets and reports the rest as needing a separate Spec, for the Day shift to split.
+The Factory `thirdshift-to-tickets` skill creates and modifies no Spec, so it publishes only Spec A's Tickets and reports the rest in its final message as needing a separate Spec, for the Day shift to split.
 
 ## `in-progress` is not a triage role
 
