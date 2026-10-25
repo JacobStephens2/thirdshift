@@ -253,6 +253,42 @@ fn session_edits_cannot_pass_checks_on_the_prepared_repository() {
 }
 
 #[test]
+fn input_symlink_to_a_fifo_voids_without_blocking_the_supervisor() {
+    if isolated(&[]) {
+        return;
+    }
+    let fixture = Fixture::new(&format!(
+        r#"
+import os
+os.mkfifo(repository / 'block.fifo')
+(repository / '.thirdshift-issue.md').symlink_to('block.fifo')
+{SUCCESS}
+"#
+    ));
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = fixture
+            .execution(5)
+            .run(fixture.request(), |_, output, score| {
+                assert_eq!(output.void_cause, Some(VoidCause::RepositoryChanged));
+                assert!(!score.passed);
+                Ok(())
+            });
+        sender.send(result).ok();
+    });
+    match receiver.recv_timeout(Duration::from_secs(20)) {
+        Ok(result) => result.expect("Trial execution failed"),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+            eprintln!("integrity check blocked on an input symlink to a FIFO");
+            std::process::exit(1);
+        }
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            panic!("Trial thread ended without a result");
+        }
+    }
+}
+
+#[test]
 fn trial_preparation_ignores_caller_checkout_and_push_hooks() {
     if isolated(&[]) {
         return;

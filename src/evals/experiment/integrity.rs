@@ -2,7 +2,8 @@
 
 use std::collections::BTreeSet;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::io::Read;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -117,8 +118,14 @@ fn hash_input(digest: &mut Sha256, repo: &Path, name: &str) -> Result<()> {
             }
             // The implicit issue input may be a tracked symlink. Protect
             // the text the session reads as well as the link itself.
+            // Follow only a regular file: a FIFO blocks, and a device such
+            // as /dev/zero never ends. Either would hit this supervisor,
+            // outside the Trial's memory cap and timeout.
             if metadata.is_file() || metadata.is_symlink() {
-                hash(digest, &fs::read(path)?);
+                match read_regular(&path)? {
+                    Some(bytes) => hash(digest, &bytes),
+                    None => hash(digest, b"not-regular"),
+                }
             }
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
@@ -128,6 +135,19 @@ fn hash_input(digest: &mut Sha256, repo: &Path, name: &str) -> Result<()> {
         Err(error) => return Err(error.into()),
     }
     Ok(())
+}
+
+fn read_regular(path: &Path) -> Result<Option<Vec<u8>>> {
+    let mut file = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NONBLOCK | libc::O_NOCTTY | libc::O_CLOEXEC)
+        .open(path)?;
+    if !file.metadata()?.file_type().is_file() {
+        return Ok(None);
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)?;
+    Ok(Some(bytes))
 }
 
 fn hash(digest: &mut Sha256, bytes: &[u8]) {
