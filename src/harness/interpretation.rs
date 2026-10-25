@@ -72,6 +72,8 @@ pub struct Ended {
     pub session_id: Option<String>,
     pub killed: Vec<String>,
     pub final_message: Option<String>,
+    /// The protocol supplied a terminal result, independently of its text.
+    pub completed: bool,
 }
 
 impl Ended {
@@ -86,6 +88,9 @@ impl Ended {
                 "{label} ended with unfinished background work: {}",
                 self.killed.join("; ")
             );
+        }
+        if !self.completed {
+            bail!("{label} ended before completing its turn");
         }
         self.final_message
             .filter(|text| !text.trim().is_empty())

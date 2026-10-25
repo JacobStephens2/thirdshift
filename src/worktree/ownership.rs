@@ -161,19 +161,7 @@ impl Checkout {
     pub(super) fn cleanup_skill(&self, launch: &Git) {
         self.cleanup_checked(launch, false, &|| {
             let git = Git::new(self.path()).completion();
-            let entries = git.run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?;
-            if super::index_hides_tracked_work(&entries)
-                || !git
-                    .run(&[
-                        "-c",
-                        "core.fsmonitor=false",
-                        "status",
-                        "--porcelain",
-                        "--untracked-files=all",
-                        "--ignore-submodules=none",
-                    ])?
-                    .is_empty()
-            {
+            if super::uncommitted_changes(|args| git.run(args))? {
                 bail!("the skill worktree has uncommitted changes");
             }
             if !git

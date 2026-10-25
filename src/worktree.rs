@@ -241,19 +241,7 @@ impl Worktree {
     /// checkout under the synchronization lock, without staging or committing.
     pub fn fully_landed_at(&self, head: &str) -> Result<bool> {
         self.checkout.ordinary(&self.launch, |operation| {
-            let entries = operation.run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?;
-            Ok(!index_hides_tracked_work(&entries)
-                && operation.head()? == head
-                && operation
-                    .run(&[
-                        "-c",
-                        "core.fsmonitor=false",
-                        "status",
-                        "--porcelain",
-                        "--untracked-files=all",
-                        "--ignore-submodules=none",
-                    ])?
-                    .is_empty())
+            Ok(!uncommitted_changes(|args| operation.run(args))? && operation.head()? == head)
         })
     }
 
@@ -371,6 +359,22 @@ impl Worktree {
             Ok(!operation.merged(&origin.commit)?)
         })
     }
+}
+
+/// Use each caller's checked Git execution and interruption policy while
+/// sharing the evidence required to establish absence of uncommitted work.
+fn uncommitted_changes(run: impl Fn(&[&str]) -> Result<String>) -> Result<bool> {
+    let entries = run(&["-c", "core.fsmonitor=false", "ls-files", "-v", "-z"])?;
+    Ok(index_hides_tracked_work(&entries)
+        || !run(&[
+            "-c",
+            "core.fsmonitor=false",
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--ignore-submodules=none",
+        ])?
+        .is_empty())
 }
 
 /// Lowercase tags mark assume-unchanged entries; S marks skip-worktree.

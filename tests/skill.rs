@@ -357,3 +357,74 @@ fn muse_and_opencode_run_the_skill_without_model_probe_sessions() {
         );
     }
 }
+
+#[test]
+fn a_codex_stream_ending_before_turn_completion_is_not_success() {
+    use std::os::unix::fs::PermissionsExt;
+    let scenario = Scenario::new();
+    scenario.user_config_is("[harness]\ndefault = 'codex'\n");
+    let codex = scenario.path("bin/codex");
+    fs::remove_file(&codex).unwrap();
+    fs::write(&codex, r##"#!/bin/sh
+cat <<'JSON'
+{"type":"thread.started","thread_id":"early-end"}
+{"type":"turn.started"}
+{"type":"item.completed","item":{"id":"m","type":"agent_message","text":"I will run validation now."}}
+{"type":"item.started","item":{"id":"c","type":"command_execution","command":"cargo test","status":"in_progress"}}
+JSON
+exit 0
+"##).unwrap();
+    fs::set_permissions(&codex, fs::Permissions::from_mode(0o755)).unwrap();
+    let result = scenario.run(&["skill", "to-spec"]);
+    assert_ne!(
+        result.code,
+        Some(0),
+        "early-ended session was accepted: stdout={:?}, stderr={}",
+        result.stdout,
+        result.stderr
+    );
+    assert!(result.stdout.is_empty(), "{}", result.stdout);
+    assert!(
+        result.stderr.contains("ended")
+            || result.stderr.contains("incomplete")
+            || result.stderr.contains("unfinished"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn partial_muse_and_opencode_messages_are_not_success() {
+    use std::os::unix::fs::PermissionsExt;
+    for (harness, event) in [
+        (
+            "muse",
+            r#"{"stream":{"kind":"session","id":"early-end"},"payload_type":"run.output.delta","payload":{"text":"Still working."}}"#,
+        ),
+        (
+            "opencode",
+            r#"{"type":"text","sessionID":"early-end","part":{"text":"Still working."}}"#,
+        ),
+    ] {
+        let scenario = Scenario::new();
+        scenario.user_config_is(&format!("[harness]\ndefault = '{harness}'\n"));
+        let executable = scenario.path(&format!("bin/{harness}"));
+        fs::remove_file(&executable).unwrap();
+        fs::write(
+            &executable,
+            format!("#!/bin/sh\ncat <<'JSON'\n{event}\nJSON\nexit 0\n"),
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let result = scenario.run(&["skill", "to-spec"]);
+
+        assert_eq!(result.code, Some(1), "{harness}: {}", result.stderr);
+        assert!(result.stdout.is_empty(), "{harness}: {}", result.stdout);
+        assert!(
+            result.stderr.contains("ended before completing its turn"),
+            "{harness}: {}",
+            result.stderr
+        );
+    }
+}
