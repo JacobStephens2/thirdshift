@@ -92,22 +92,25 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
 
 pub fn show(input: &str, json: bool) -> Result<()> {
     let config = UserConfig::load()?;
-    let snapshot =
-        Snapshot::load_with_silence(&config.logs_dir, Local::now(), config.silent_interval)?;
+    let snapshot = Snapshot::load_metrics_with_silence(
+        &config.logs_dir,
+        Local::now(),
+        config.silent_interval,
+    )?;
     let command = snapshot.resolve(input)?.observation;
     if json {
         #[derive(Serialize)]
-        struct Show<'a> {
+        struct Show {
             version: u32,
             hostname: String,
-            command: crate::logs::reading::Detailed<'a>,
+            command: serde_json::Value,
         }
         println!(
             "{}",
             serde_json::to_string_pretty(&Show {
                 version: 1,
                 hostname: crate::host::name().unwrap_or_else(|| "unknown".into()),
-                command: command.details()?,
+                command: crate::logs::metrics::details(&snapshot, command)?,
             })?
         );
     } else {

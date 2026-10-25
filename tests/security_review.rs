@@ -833,7 +833,7 @@ fn run_metrics_include_the_security_reviews_count_even_if_its_body_write_fails()
 }
 
 #[test]
-fn spec_review_known_security_count_survives_an_unreadable_pr_body() {
+fn known_security_count_survives_an_unreadable_pr_body() {
     let scenario = Scenario::new();
     scenario.agent_does_in_session(1, OPENS_PR);
     scenario.agent_does_in_session(

@@ -124,7 +124,7 @@ pub(crate) struct Inspection {
 
 /// Availability follows the CLI's child refusal and captured process identity.
 pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
-    let snapshot = Snapshot::load_with_silence(
+    let snapshot = Snapshot::load_metrics_with_silence(
         &config.logs_dir,
         chrono::Local::now(),
         config.silent_interval,
@@ -133,7 +133,7 @@ pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
     let pending = selected
         .owner
         .is_some_and(|owner| requested(&owner.record_path).is_some());
-    let details = serde_json::to_value(selected.observation.details()?)?;
+    let details = super::metrics::details(&snapshot, selected.observation)?;
     let stopping = pending && !selected.process_exited() && details["outcome"].is_null();
     let work = if selected.process_exited() || !details["outcome"].is_null() {
         selected

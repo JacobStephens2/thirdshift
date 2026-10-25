@@ -24,7 +24,7 @@ use super::{Pass, activity};
 pub(super) use health::Health;
 pub(super) use history::Command as HistoricalCommand;
 pub(super) use inbox::{Group, InboxItem};
-pub(super) use selection::{Detailed, Observation};
+pub(super) use selection::Observation;
 
 pub(super) struct Snapshot {
     commands: Vec<Entry>,
@@ -50,7 +50,15 @@ impl Snapshot {
     }
 
     pub(super) fn load_metrics(root: &Path, now: DateTime<Local>) -> Result<Self> {
-        Self::load_records(root, now, std::time::Duration::from_secs(600), true)
+        Self::load_metrics_with_silence(root, now, std::time::Duration::from_secs(600))
+    }
+
+    pub(super) fn load_metrics_with_silence(
+        root: &Path,
+        now: DateTime<Local>,
+        silent: std::time::Duration,
+    ) -> Result<Self> {
+        Self::load_records(root, now, silent, true)
     }
 
     fn load_records(
@@ -249,8 +257,7 @@ fn read_records(folder: &Path, past_metrics: bool) -> Result<BTreeMap<PathBuf, C
         let Ok(mut tree) = serde_json::from_slice::<CommandTree>(&bytes) else {
             continue;
         };
-        let record = &mut tree.command;
-        if !matches!(record.version, 1 | 2) {
+        if !matches!(tree.command.version, 1 | 2) {
             continue;
         }
         if past_metrics {
@@ -265,11 +272,11 @@ fn read_records(folder: &Path, past_metrics: bool) -> Result<BTreeMap<PathBuf, C
                     record.run_metrics = Some(metrics);
                 }
             }
-            records.insert(path, tree);
-            continue;
         }
+        let record = &mut tree.command;
         // Records written before completion times existed were last
-        // replaced when their outcome was recorded.
+        // replaced when their outcome was recorded. Keep that health fallback
+        // after metric reconstruction so it cannot invent recorded durations.
         if record.outcome.is_some() && record.ended_at.is_none() {
             record.ended_at = entry
                 .metadata()?

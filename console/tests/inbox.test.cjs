@@ -218,10 +218,14 @@ test("Run metrics show present and missing signals in details, including at 390 
   try {
     for (const width of [1440, 390]) {
       const page = await pageFor(t, { viewport: { width, height: 844 } });
-      for (const [name, metrics] of [['complete', complete], ['partial', partial], ['older', undefined]]) {
+      for (const [name, metrics] of [['complete', complete], ['partial', partial], ['older', undefined], ['unfinished', undefined]]) {
         const fixture = JSON.parse(original);
         fixture.kind = 'Run';
         fixture.run_metrics = metrics;
+        if (name === 'unfinished') {
+          fixture.outcome = null;
+          fixture.ended_at = null;
+        }
         await writeFile(path, JSON.stringify(fixture));
         await page.goto(origin);
         const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#1$/ }) });
@@ -229,8 +233,14 @@ test("Run metrics show present and missing signals in details, including at 390 
         const details = page.locator('#peek');
         const shown = fact(details, 'run metrics');
         await shown.waitFor();
-        if (name === 'older') {
+        if (name === 'unfinished') {
           assert.equal(await shown.textContent(), 'Missing');
+        } else if (name === 'older') {
+          assert.equal(await fact(shown, 'outcome').textContent(), 'failed');
+          assert.equal(await fact(shown, 'repairs').textContent(), '0');
+          assert.equal(await fact(shown, 'ci rounds').textContent(), '0');
+          assert.equal(await fact(shown, 'total minutes').textContent(), '0.0');
+          assert.equal(await fact(shown, 'unaddressed findings').textContent(), 'Missing');
         } else {
           assert.equal(await fact(shown, 'outcome').textContent(), 'merged');
           assert.equal(await fact(shown, 'repairs').textContent(), '0');
@@ -254,6 +264,7 @@ test("Run metrics show present and missing signals in details, including at 390 
           assert.equal(await fact(review, 'standards').textContent(), '3');
           assert.equal(await fact(review, 'spec').textContent(), name === 'partial' ? 'Missing' : '4');
         }
+        if (name !== 'unfinished') assert.equal(await fact(shown, 'confirmed bug origins').textContent(), '0');
         assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${name} at ${width}px`);
         assert.equal(await details.evaluate(el => el.scrollWidth <= el.clientWidth), true, `${name} details at ${width}px`);
         await page.keyboard.press('Escape');

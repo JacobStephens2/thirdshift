@@ -22,6 +22,15 @@ struct Metrics<'a> {
     confirmed_bug_origins: usize,
 }
 
+impl<'a> Metrics<'a> {
+    fn of(command: &'a Command, origins: &ConfirmedCounts) -> Option<Self> {
+        command.record.run_metrics.as_ref().map(|completion| Self {
+            completion,
+            confirmed_bug_origins: origins.for_run(command),
+        })
+    }
+}
+
 #[derive(Serialize)]
 struct Run<'a> {
     name: &'a str,
@@ -46,10 +55,7 @@ impl<'a> Run<'a> {
             model: record.model.as_deref(),
             effort: record.effort.as_deref(),
             started_at: &record.started_at,
-            metrics: record.run_metrics.as_ref().map(|completion| Metrics {
-                completion,
-                confirmed_bug_origins: origins.for_run(command),
-            }),
+            metrics: Metrics::of(command, origins),
             children: command
                 .dispatched
                 .iter()
@@ -58,6 +64,30 @@ impl<'a> Run<'a> {
                 .collect(),
         }
     }
+}
+
+/// CLI and Console details use the same read-time metrics as `metrics`.
+/// Late Bug-origin decisions belong to this view, never the durable record.
+pub(super) fn details(snapshot: &Snapshot, observation: Observation<'_>) -> Result<Value> {
+    let mut details = serde_json::to_value(observation.details()?)?;
+    if let Observation::Record(command) = observation {
+        let origins = ConfirmedCounts::read(snapshot)?;
+        add_details(&mut details, command, &origins)?;
+    }
+    Ok(details)
+}
+
+fn add_details(details: &mut Value, command: &Command, origins: &ConfirmedCounts) -> Result<()> {
+    details["run_metrics"] = serde_json::to_value(Metrics::of(command, origins))?;
+    for (field, children) in [
+        ("children", &command.children),
+        ("dispatched", &command.dispatched),
+    ] {
+        for (index, child) in children.iter().enumerate() {
+            add_details(&mut details[field][index], child, origins)?;
+        }
+    }
+    Ok(())
 }
 
 pub fn show(asked: &MetricsArgs) -> Result<()> {

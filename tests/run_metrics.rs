@@ -118,7 +118,7 @@ gh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7
 }
 
 #[test]
-fn spec_review_nested_evidence_heading_preserves_the_findings_axis() {
+fn nested_evidence_heading_preserves_the_unaddressed_findings_axis() {
     let scenario = Scenario::new();
     scenario.agent_does(
         r#"
@@ -348,7 +348,9 @@ gh api --method PATCH repos/acme/widgets/pulls/1 -f body='Closes #7
     let shown = scenario.run(&["show", "widgets#7", "--json"]);
     assert_eq!(shown.code, Some(0), "{}", shown.stderr);
     let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
-    assert_eq!(shown["command"]["run_metrics"], *metrics, "{shown}");
+    let mut expected = metrics.clone();
+    expected["confirmed_bug_origins"] = serde_json::json!(0);
+    assert_eq!(shown["command"]["run_metrics"], expected, "{shown}");
 }
 
 #[test]
@@ -397,12 +399,16 @@ fn a_spec_run_and_each_ticket_keep_their_own_completion_metrics() {
         ]);
         assert_eq!(shown.code, Some(0), "{}", shown.stderr);
         let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
-        assert_eq!(shown["command"]["run_metrics"], child["run_metrics"]);
+        let mut expected = child["run_metrics"].clone();
+        expected["confirmed_bug_origins"] = serde_json::json!(0);
+        assert_eq!(shown["command"]["run_metrics"], expected);
     }
     let shown = scenario.run(&["show", "widgets#20", "--json"]);
     assert_eq!(shown.code, Some(0), "{}", shown.stderr);
     let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
-    assert_eq!(shown["command"]["run_metrics"], spec["run_metrics"]);
+    let mut expected = spec["run_metrics"].clone();
+    expected["confirmed_bug_origins"] = serde_json::json!(0);
+    assert_eq!(shown["command"]["run_metrics"], expected);
     assert_eq!(shown["command"]["children"].as_array().unwrap().len(), 2);
 }
 
@@ -449,7 +455,11 @@ fn readers_accept_older_command_records_without_metrics() {
     let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
     assert_eq!(shown["command"]["source"], "command_record");
     assert_eq!(shown["command"]["outcome"], "failed");
-    assert_eq!(shown["command"]["run_metrics"], Value::Null);
+    assert_eq!(shown["command"]["run_metrics"]["outcome"], "failed");
+    assert_eq!(
+        shown["command"]["run_metrics"]["unaddressed_findings"],
+        Value::Null
+    );
     assert_eq!(
         fs::read(&path).unwrap(),
         original,
