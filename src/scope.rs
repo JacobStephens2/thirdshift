@@ -418,6 +418,10 @@ pub fn grader_command(
     directory: &Path,
     caps: &Caps,
 ) -> Result<Launch> {
+    #[cfg(test)]
+    if let Some(launched) = testing::grader_command(program, args, directory) {
+        return Ok(launched);
+    }
     let unit = unit_name("grader", "check");
     let mut launched = launch(program, args, unit, caps)?;
     launched.command.current_dir(directory);

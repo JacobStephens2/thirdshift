@@ -75,6 +75,82 @@ pub(super) fn grader(scenario: &Scenario) {
 }
 
 #[test]
+fn unfinished_grader_work_keeps_scores_pending_without_a_resume() {
+    let scenario = scenario();
+    scenario.agent_does(&format!(
+        "cat > scores.json <<'SCORES'\n{RESPONSE}\nSCORES\n{}",
+        support::leaves_running("private grading work"),
+    ));
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "codex", "gpt", false)]);
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert!(
+        run.stderr
+            .contains("Grader left unfinished background work"),
+        "{}",
+        run.stderr
+    );
+    assert!(saved_weeks(&scenario)[0]["sample"][0]["assessment"].is_null());
+    assert_eq!(
+        scenario.claude_calls().len(),
+        1,
+        "private Sessions have no Resume"
+    );
+    grader(&scenario);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(saved_weeks(&scenario)[0]["sample"][0]["assessment"].is_object());
+}
+
+#[test]
+fn a_failed_graders_scores_are_cleared_before_retry() {
+    let scenario = scenario();
+    scenario.agent_does(&format!(
+        "cat > scores.json <<'SCORES'\n{RESPONSE}\nSCORES\nexit 1\n"
+    ));
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "codex", "gpt", false)]);
+    scenario.write_gh_state(&state);
+    let failed = scenario.run(&["score"]);
+    assert_eq!(failed.code, Some(1), "{}", failed.stderr);
+    assert!(saved_weeks(&scenario)[0]["sample"][0]["assessment"].is_null());
+    scenario.agent_does("test ! -e scores.json\n");
+    let stale = scenario.run(&["score"]);
+    assert_eq!(stale.code, Some(1), "{}", stale.stderr);
+    assert!(
+        stale.stderr.contains("Grader left no regular scores.json"),
+        "{}",
+        stale.stderr
+    );
+    assert!(saved_weeks(&scenario)[0]["sample"][0]["assessment"].is_null());
+    grader(&scenario);
+    let retried = scenario.run(&["score"]);
+    assert_eq!(retried.code, Some(0), "{}", retried.stderr);
+    assert!(saved_weeks(&scenario)[0]["sample"][0]["assessment"].is_object());
+}
+
+#[test]
+fn an_interrupted_grader_cannot_publish_its_written_scores() {
+    let scenario = scenario();
+    scenario.agent_does(&format!(
+        "cat > scores.json <<'SCORES'\n{RESPONSE}\nSCORES\ntouch {:?}\nsleep 30\n",
+        scenario.path("grader-started")
+    ));
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "codex", "gpt", false)]);
+    scenario.write_gh_state(&state);
+    let mut running = scenario.run_until(&["score"], &[], "grader-started");
+    running.signal("TERM");
+    let stopped = running.finish();
+    assert_eq!(stopped.code, Some(1), "{}", stopped.stderr);
+    assert!(stopped.stderr.contains("interrupted"), "{}", stopped.stderr);
+    assert!(saved_weeks(&scenario)[0]["sample"][0]["assessment"].is_null());
+    assert_eq!(scenario.claude_calls().len(), 1);
+}
+
+#[test]
 fn bug_origins_survive_a_grader_limit_stop_and_scores_resume_without_repeating_analysis() {
     let scenario = scenario();
     let harness = scenario.path("bin/claude");
