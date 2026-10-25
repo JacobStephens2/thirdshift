@@ -1511,7 +1511,9 @@ keeps the same Eval task, including edits and approval. Rejecting or correcting
 an already confirmed origin withdraws its old unapproved proposal, including
 prior occurrences of a reopened and reclosed bug; a task the
 Day shift independently approved stays in the suite. Security fixes cannot be
-selected as origins. All these files stay in private Eval storage on this host.</p>
+selected as origins. Confirmation checks the bug&#39;s current labels and refuses
+<code>security-fix</code>, including a proposal saved before that label. All these files
+stay in private Eval storage on this host.</p>
 <p>The Command record and Command log live under
 <code>&lt;logs.dir&gt;/JacobStephens2/thirdshift/commands/scoring/</code>, with start and end lines
 in that repository&#39;s Activity log. The Command appears in the Inbox, can be

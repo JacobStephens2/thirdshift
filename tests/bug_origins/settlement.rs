@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn confirming_a_security_fix_bug_writes_no_eval_task() {
+    let output = std::process::Command::new("python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/bug_origins/security_fix_confirm.py"
+        ))
+        .arg(env!("CARGO_BIN_EXE_thirdshift"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn historical_review_and_reclosed_origin_regressions() {
     for mode in ["merged-base", "no-issue", "reclosed", "dotted-repo"] {
         let output = std::process::Command::new("python3")
@@ -54,6 +71,7 @@ fn proposed_origin() -> (Scenario, String, String) {
             "pageInfo": {"hasNextPage": false}}
     }});
     scenario.write_gh_state(&state);
+    scenario.issue_is(8, "CLOSED");
     scenario.agent_does(&format!("printf '%s' '{{\"commit\":\"{head}\",\"reason\":\"The introducing change writes 41 where the answer must be 42.\"}}' > proposal.json"));
     let run = score(&scenario);
     assert_eq!(run.code, Some(0), "{}", run.stderr);

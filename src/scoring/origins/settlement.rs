@@ -6,6 +6,7 @@ use super::{Proposal, PullRequest, Run, Settlement, State};
 use crate::config::UserConfig;
 use crate::github::GitHub;
 use crate::issue::IssueUrl;
+use crate::security::fixing::SECURITY_FIX;
 use crate::{config, evals, scoring};
 
 enum Action {
@@ -218,6 +219,11 @@ fn settle(origin: &mut Proposal, action: Action) -> Result<()> {
         return Ok(());
     }
     let github = GitHub::new();
+    // A proposal saved before the label still must not become an Eval task.
+    ensure!(
+        !github.issue_labels(&bug)?.has(SECURITY_FIX),
+        "Security fixes cannot become Bug-origin Eval tasks"
+    );
     let review = github.bug_origin_review(&pr)?;
     ensure!(
         review.merged_at <= origin.closed_at,

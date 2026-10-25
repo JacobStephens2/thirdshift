@@ -79,6 +79,9 @@ with tempfile.TemporaryDirectory(prefix="thirdshift-spec-") as temporary:
     fake = bins / "gh"
     fake.write_text('''#!/usr/bin/env python3
 import json, os, sys
+if len(sys.argv) >= 3 and sys.argv[1] == "issue" and sys.argv[2] == "view":
+    print(json.dumps({"labels": []}))
+    raise SystemExit(0)
 query = next((a for a in sys.argv if a.startswith("query=")), "")
 if "BugOriginReview" in query:
     field, node = "pullRequest", json.load(open(os.environ["REVIEW_FIXTURE"]))
