@@ -21,6 +21,7 @@ pub struct Stream {
     /// Cumulative totals survive later results without a complete pair.
     turns_and_cost: Option<(u64, f64)>,
     final_message: Option<String>,
+    completed: bool,
     dialect: Dialect,
 }
 
@@ -186,6 +187,7 @@ impl Stream {
             init: None,
             turns_and_cost: None,
             final_message: None,
+            completed: false,
             dialect,
         }
     }
@@ -259,6 +261,9 @@ impl Stream {
                 vec!["session started".to_string()]
             }
             Some("assistant") => {
+                if event["parent_tool_use_id"].is_null() {
+                    self.completed = false;
+                }
                 if let Dialect::Claude(claude) = &mut self.dialect {
                     claude.assistant(event);
                 }
@@ -285,6 +290,7 @@ impl Stream {
                     return Vec::new();
                 }
                 self.final_message = event["result"].as_str().map(String::from);
+                self.completed = true;
                 if let (Some(turns), Some(cost)) = (
                     event["num_turns"].as_u64(),
                     event["total_cost_usd"].as_f64(),
@@ -343,6 +349,7 @@ impl Decoder for Stream {
             session_id: self.init.and_then(|init| init.session_id),
             killed: Vec::new(),
             final_message: self.final_message,
+            completed: self.completed,
         };
         let (failed, diagnostic) = match self.dialect {
             Dialect::Claude(claude) => {

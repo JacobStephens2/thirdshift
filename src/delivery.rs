@@ -532,7 +532,7 @@ fn no_untrusted_edit_since(issue: &IssueUrl, started: DateTime<Utc>) -> Result<(
 /// for the session about to start to work from: its title, its body and only
 /// the comments of Trusted accounts, as [`GitHub::issue_for_session`] gives
 /// them. Written again before each session, so each has the latest.
-fn hand_over_issue(issue: &IssueUrl, worktree: &Path) -> Result<()> {
+pub(crate) fn hand_over_issue(issue: &IssueUrl, worktree: &Path) -> Result<()> {
     skills::exclude(&Git::new(worktree), &format!("/{}", prompt::ISSUE_FILE))?;
     let text = GitHub::new().issue_for_session(issue)?;
     let path = worktree.join(prompt::ISSUE_FILE);

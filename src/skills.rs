@@ -2,12 +2,13 @@
 //! per Command and linked into each worktree its sessions run in, where the
 //! Harness finds project skills (ADR-0012).
 
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use include_dir::{Dir, include_dir};
 use tempfile::TempDir;
 
@@ -23,6 +24,80 @@ mod tests;
 /// The Factory skills, as they are written out and the Prompts and skills
 /// page shows them, each in its `thirdshift-<skill>` directory.
 pub static SKILLS: Dir = include_dir!("$CARGO_MANIFEST_DIR/skills");
+
+/// A skill resolved by name, with the instructions the session must read.
+pub struct Skill {
+    pub name: String,
+    pub path: PathBuf,
+}
+
+enum Source {
+    Factory,
+    Repository(PathBuf),
+}
+
+/// Resolve exact names across Factory and repository skills before trying
+/// a Factory shorthand. Only skill files that resolve inside the committed
+/// worktree are searched, so a symlink cannot select instructions outside it.
+pub fn find(worktree: &Path, name: &str) -> Result<Skill> {
+    let mut available = BTreeMap::new();
+    for dir in SKILLS.dirs() {
+        available.insert(dir.path().to_string_lossy().into_owned(), Source::Factory);
+    }
+    let root = fs::canonicalize(worktree)
+        .with_context(|| format!("could not resolve {}", worktree.display()))?;
+    for folder in [".agents/skills", ".claude/skills"] {
+        let folder_path = worktree.join(folder);
+        match fs::symlink_metadata(&folder_path) {
+            Ok(_) => {}
+            Err(error) if error.kind() == ErrorKind::NotFound => continue,
+            Err(error) => return Err(error).with_context(|| format!("could not list {folder}")),
+        }
+        if !resolved_inside(&root, &folder_path) {
+            continue;
+        }
+        let entries =
+            fs::read_dir(&folder_path).with_context(|| format!("could not list {folder}"))?;
+        for entry in entries {
+            let entry = entry?;
+            let path = entry.path().join("SKILL.md");
+            if !resolved_inside(&root, &path) || !path.is_file() {
+                continue;
+            }
+            let name = entry.file_name().into_string().map_err(|_| {
+                anyhow::anyhow!(
+                    "skill directory name is not UTF-8: {}",
+                    entry.path().display()
+                )
+            })?;
+            available.entry(name).or_insert(Source::Repository(path));
+        }
+    }
+    let selected = available.get_key_value(name).or_else(|| {
+        available
+            .get_key_value(&format!("thirdshift-{name}"))
+            .filter(|(_, source)| matches!(source, Source::Factory))
+    });
+    if let Some((name, source)) = selected {
+        return Ok(Skill {
+            path: match source {
+                Source::Factory => written_out()?.join(name).join("SKILL.md"),
+                Source::Repository(path) => path.clone(),
+            },
+            name: name.clone(),
+        });
+    }
+    bail!(
+        "unknown skill {name:?}; available skills: {}",
+        available.keys().cloned().collect::<Vec<_>>().join(", ")
+    )
+}
+
+/// `candidate` resolves to a file or directory inside `root`. Symlinks are
+/// followed, so a skill that points outside the worktree is not a match.
+fn resolved_inside(root: &Path, candidate: &Path) -> bool {
+    fs::canonicalize(candidate).is_ok_and(|target| target.starts_with(root))
+}
 
 /// The temp directory the Command wrote the Factory skills out to, once it
 /// has.

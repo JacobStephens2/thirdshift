@@ -79,6 +79,26 @@ fn issue_file_instruction(issue: &IssueUrl) -> String {
     )
 }
 
+/// A standalone skill, optionally working on the issue handed to it.
+pub fn skill(name: &str, path: &std::path::Path, issue: Option<&IssueUrl>) -> String {
+    let invocation = if name.starts_with("thirdshift-") {
+        format!("/{name}\n")
+    } else {
+        String::new()
+    };
+    let task = issue.map_or_else(String::new, |issue| {
+        format!(
+            "Run the skill on issue {}.\n{}",
+            issue.url,
+            issue_file_instruction(issue)
+        )
+    });
+    format!(
+        "{invocation}Use the {name} skill. Read and follow `{path}`.\n{task}{SOURCE_EDITS}{HEADLESS}",
+        path = path.display(),
+    )
+}
+
 /// Sessions replaces this placeholder with its git-ignored report directory.
 pub const REVIEW_REPORTS_DIRECTORY: &str = "<review reports directory>";
 
