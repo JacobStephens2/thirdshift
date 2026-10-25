@@ -76,7 +76,7 @@ impl Adapter for Grok {
             .splice(at..at, ["--disable-web-search".to_string()]);
         invocation
     }
-    fn check(&self, choice: &mut Choice) -> Result<()> {
+    fn check(&self, choice: &mut Choice, _probe: super::Probe) -> Result<()> {
         crate::progress::step("checking the Model and Effort against grok models");
         let settled = Catalog::read()?.settle(choice.model.as_deref(), choice.effort.as_deref())?;
         choice.model = settled.model;

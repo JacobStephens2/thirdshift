@@ -64,6 +64,32 @@ fn new_sessions_wait_for_resources_and_can_recover_after_a_config_change() {
 }
 
 #[test]
+fn a_standalone_skill_waits_for_resources_before_its_only_session() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(BLOCKED);
+    scenario.agent_does("printf 'Done.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let release = |_: u32| {
+        assert!(
+            scenario.claude_calls().is_empty(),
+            "skill session started while resources were blocked"
+        );
+        scenario.user_config_is("");
+    };
+    let result = scenario.run_terminal(
+        &["skill", "to-spec"],
+        &[],
+        &[support::TerminalStep::inspect(
+            "waiting for host resources:",
+            &release,
+        )],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1);
+    assert!(result.stdout.contains("Done."), "{}", result.stdout);
+    assert!(result.stderr.contains("host resources available"));
+}
+
+#[test]
 fn a_resume_checks_resources_again_before_starting() {
     let scenario = Scenario::new();
     scenario.user_config_is("");
