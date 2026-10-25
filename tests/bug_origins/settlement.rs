@@ -19,7 +19,13 @@ fn confirming_a_security_fix_bug_writes_no_eval_task() {
 
 #[test]
 fn historical_review_and_reclosed_origin_regressions() {
-    for mode in ["merged-base", "no-issue", "reclosed", "dotted-repo"] {
+    for mode in [
+        "merged-base",
+        "no-issue",
+        "reclosed",
+        "dotted-repo",
+        "save-failure",
+    ] {
         let output = std::process::Command::new("python3")
             .arg(concat!(
                 env!("CARGO_MANIFEST_DIR"),
@@ -181,6 +187,17 @@ fn rejecting_an_origin_is_visible_and_proposes_no_eval_task() {
 #[test]
 fn correcting_an_origin_counts_only_against_its_run_and_rejection_removes_the_count() {
     let (scenario, _, _) = proposed_origin();
+    let directory = scenario.path("home/.thirdshift/evals/scoring");
+    let original = std::fs::read_dir(&directory)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .unwrap();
+    let checkpoint = directory.join("noncanonical-bug-origins.json");
+    std::fs::rename(original, &checkpoint).unwrap();
     scenario.agent_does("echo 41 > answer\ngit add answer\ngit commit -q -m 'Wrong answer'\ngh pr create --base main --head issue-7 --title 'Answer' --body 'Closes #7'");
     let run = scenario.run(&[&scenario.issue_url(7)]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
@@ -205,6 +222,8 @@ fn correcting_an_origin_counts_only_against_its_run_and_rejection_removes_the_co
     ]);
     assert_eq!(corrected.code, Some(0), "{}", corrected.stderr);
     let corrected: Value = serde_json::from_str(&corrected.stdout).unwrap();
+    let saved: Value = serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
+    assert_eq!(saved["bug_origins"][0], corrected[0]);
     assert_eq!(corrected[0]["state"], "confirmed");
     assert_eq!(corrected[0]["settlement"]["corrected"], true);
     assert_eq!(
@@ -222,6 +241,8 @@ fn correcting_an_origin_counts_only_against_its_run_and_rejection_removes_the_co
     let rejected = scenario.run(&["bug-origins", "8", "--none"]);
     assert_eq!(rejected.code, Some(0), "{}", rejected.stderr);
     assert!(rejected.stdout.contains("rejected"));
+    let saved: Value = serde_json::from_slice(&std::fs::read(checkpoint).unwrap()).unwrap();
+    assert_eq!(saved["bug_origins"][0]["state"], "rejected");
     assert_eq!(
         details()["command"]["run_metrics"]["confirmed_bug_origins"],
         0

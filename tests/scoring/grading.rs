@@ -260,6 +260,7 @@ sleep 30
             }
         };
         assert_eq!(calls().len(), 2);
+        let checkpoint = rename_sample(&scenario);
         let result = scenario.run(&["score"]);
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert_eq!(calls().len(), 4, "completed Scores must not be repeated");
@@ -273,6 +274,12 @@ sleep 30
                 .all(|pr| pr["assessment"]["scores"].as_array().unwrap().len() == 5)
         );
         assert_eq!(retained[0]["seed"], first[0]["seed"]);
+        let resumed: Value = serde_json::from_slice(&std::fs::read(checkpoint).unwrap()).unwrap();
+        assert_eq!(
+            resumed, retained[0],
+            "resumed Scores must update the renamed file"
+        );
+        assert_eq!(retained[1]["window_start"], first[0]["window_end"]);
         assert!(retained[1]["sample"].as_array().unwrap().is_empty());
     }
 }

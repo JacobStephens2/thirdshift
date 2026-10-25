@@ -1,9 +1,6 @@
 //! The weekly Scoring sample. A single machine-wide lock protects window
 //! advancement; an atomic private sample file is the successful checkpoint.
 use std::fs::{self, File, TryLockError};
-use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -19,6 +16,7 @@ mod calibration;
 mod grader;
 pub(crate) mod origins;
 mod sample;
+mod store;
 pub(crate) use sample::PullRequest;
 pub(crate) mod packet;
 pub(crate) use grader::{Criterion, Score};
@@ -49,33 +47,6 @@ pub(crate) struct Week {
     initial_calibration: bool,
 }
 
-fn directory() -> Result<PathBuf> {
-    Ok(config::home()?.join(".thirdshift/evals/scoring"))
-}
-
-fn read(dir: &Path) -> Result<Vec<Week>> {
-    let entries = match fs::read_dir(dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(error) => return Err(error.into()),
-    };
-    let mut weeks: Vec<Week> = Vec::new();
-    for entry in entries {
-        let path = entry?.path();
-        if path
-            .extension()
-            .is_some_and(|extension| extension == "json")
-        {
-            weeks.push(
-                serde_json::from_slice(&fs::read(&path)?)
-                    .with_context(|| format!("can't read Scoring sample {}", path.display()))?,
-            );
-        }
-    }
-    weeks.sort_by_key(|week| week.window_end);
-    Ok(weeks)
-}
-
 pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
     let repo = Repo {
         owner: "JacobStephens2".into(),
@@ -85,17 +56,17 @@ pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
     if config.scoring.owners.is_empty() {
         bail!("configure scoring.owners in the User config before starting a Scoring run");
     }
-    let dir = directory()?;
-    let mut previous = read(&dir)?;
+    let store = store::Store::open()?;
+    let mut previous = store.load()?;
     let mut ordinal = 0;
-    for week in &mut previous {
-        if !grade(config, &dir, week, &mut ordinal)? {
+    for retained in &mut previous {
+        if !grade(config, retained, &mut ordinal)? {
             return Ok(0);
         }
     }
     let start = previous
         .last()
-        .map(|week| week.window_end)
+        .map(|sample| sample.week.window_end)
         .unwrap_or(end - TimeDelta::days(7));
     if start > end {
         bail!("the previous Scoring window ends in the future");
@@ -122,6 +93,7 @@ pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
         let week = end.format("%G-W%V").to_string();
         let marked = previous
             .iter()
+            .map(|sample| &sample.week)
             .filter(|saved| saved.week == week && !saved.initial_calibration)
             .flat_map(|saved| &saved.sample)
             .filter(|pr| pr.for_you)
@@ -140,14 +112,7 @@ pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
         bug_origins: None,
         initial_calibration,
     };
-    fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&dir)?;
-    let packets = tempfile::Builder::new()
-        .prefix("packets-")
-        .permissions(fs::Permissions::from_mode(0o700))
-        .tempdir_in(&dir)?;
+    let packets = store.stage_packets()?;
     for (index, pr) in week.sample.iter().enumerate() {
         packet::write(&GitHub::new(), pr, &packets.path().join(index.to_string()))
             .with_context(|| format!("can't build Scoring packet for {}", pr.url))?;
@@ -155,6 +120,7 @@ pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
     let origin_start = previous
         .iter()
         .rev()
+        .map(|sample| &sample.week)
         .find(|week| week.bug_origins.is_some())
         .map(|week| week.window_end);
     week.bug_origins = Some(origins::propose(
@@ -166,79 +132,23 @@ pub fn sample(config: &UserConfig, end: DateTime<Utc>) -> Result<usize> {
     for pr in &mut week.sample {
         pr.command_record = logs::record_for_pull_request(&config.logs_dir, &pr.url)?;
     }
-    week.packets = Some(
-        packets
-            .path()
-            .file_name()
-            .context("packet directory has no name")?
-            .to_string_lossy()
-            .into_owned(),
-    );
-    let mut file = tempfile::NamedTempFile::new_in(&dir)?;
-    serde_json::to_writer_pretty(&mut file, &week)?;
-    file.flush()?;
-    file.as_file().sync_all()?;
-    interrupt::check()?;
-    let path = dir.join(format!("{}.json", end.format("%Y%m%dT%H%M%SZ")));
-    // Runs in the same second share a display stamp. Replacing the first
-    // would discard its sample, so keep distinct storage ownership.
-    let path = if path.exists() {
-        dir.join(format!(
-            "{}-{}.json",
-            end.format("%Y%m%dT%H%M%SZ"),
-            week.seed
-        ))
-    } else {
-        path
-    };
-    file.persist_noclobber(&path)?;
-    let _ = packets.keep();
-    grade_at(config, &dir, &mut week, &path, &mut ordinal)?;
-    Ok(week.sample.len())
+    let mut retained = packets.publish(week)?;
+    grade(config, &mut retained, &mut ordinal)?;
+    Ok(retained.week.sample.len())
 }
 
-fn grade(config: &UserConfig, dir: &Path, week: &mut Week, ordinal: &mut usize) -> Result<bool> {
-    // Older samples have no Scores yet. Find their retained file by its
-    // immutable seed and window, including same-second checkpoint names.
-    let path = checkpoint(dir, week)?;
-    grade_at(config, dir, week, &path, ordinal)
-}
-
-fn checkpoint(dir: &Path, week: &Week) -> Result<PathBuf> {
-    fs::read_dir(dir)?
-        .filter_map(|entry| entry.ok())
-        .map(|entry| entry.path())
-        .filter(|path| path.extension().is_some_and(|ext| ext == "json"))
-        .find(|path| {
-            fs::read(path)
-                .ok()
-                .and_then(|bytes| serde_json::from_slice::<Week>(&bytes).ok())
-                .is_some_and(|saved| saved.seed == week.seed && saved.window_end == week.window_end)
-        })
-        .context("Scoring sample checkpoint disappeared")
-}
-
-fn grade_at(
-    config: &UserConfig,
-    dir: &Path,
-    week: &mut Week,
-    path: &Path,
-    ordinal: &mut usize,
-) -> Result<bool> {
-    for index in 0..week.sample.len() {
-        if week.sample[index].assessment.is_some() {
+fn grade(config: &UserConfig, retained: &mut store::Retained, ordinal: &mut usize) -> Result<bool> {
+    for index in 0..retained.week.sample.len() {
+        if retained.week.sample[index].assessment.is_some() {
             continue;
         }
         interrupt::check()?;
-        let packets = week
-            .packets
-            .as_ref()
-            .context("unscored sample has no retained packets")?;
+        let packet = retained.packet(index)?;
         *ordinal += 1;
         let assessment = match grader::run(
             &config.scoring,
-            &week.sample[index],
-            &dir.join(packets).join(index.to_string()),
+            &retained.week.sample[index],
+            &packet,
             *ordinal,
         ) {
             Ok(assessment) => assessment,
@@ -248,12 +158,13 @@ fn grade_at(
             }
             Err(error) => return Err(error),
         };
+        let week = &mut retained.week;
         week.sample[index].assessment = Some(assessment);
         if week.sample[index].command_record.is_none() {
             week.sample[index].command_record =
                 logs::record_for_pull_request(&config.logs_dir, &week.sample[index].url)?;
         }
-        config::replace(path, &serde_json::to_string_pretty(week)?)?;
+        retained.commit()?;
     }
     Ok(true)
 }
@@ -276,7 +187,11 @@ pub(crate) struct View {
 }
 
 pub(crate) fn view(pull_request: Option<&str>) -> Result<View> {
-    let mut weeks = read(&directory()?)?;
+    let mut weeks: Vec<_> = store::Store::open()?
+        .load()?
+        .into_iter()
+        .map(store::Retained::into_week)
+        .collect();
     // Calibration always uses the full history, even for a single PR's view.
     let calibration = calibration::measure(&weeks);
     if let Some(target) = pull_request {
@@ -296,9 +211,9 @@ pub(crate) fn view(pull_request: Option<&str>) -> Result<View> {
     Ok(View { weeks, calibration })
 }
 
-fn resolve(weeks: &[Week], target: &str) -> Result<String> {
+fn resolve<'a>(weeks: impl IntoIterator<Item = &'a Week>, target: &str) -> Result<String> {
     let urls: std::collections::BTreeSet<_> = weeks
-        .iter()
+        .into_iter()
         .flat_map(|week| &week.sample)
         .filter(|pr| {
             pr.url.trim_end_matches('/') == target.trim_end_matches('/')
@@ -321,17 +236,13 @@ fn write_mine(
     enter: impl FnOnce() -> Result<calibration::HumanScores>,
 ) -> Result<()> {
     let _lock = lock()?.context("another Scoring run or human scoring session is running")?;
-    let dir = directory()?;
-    let mut weeks = read(&dir)?;
-    let url = resolve(&weeks, target)?;
+    let mut weeks = store::Store::open()?.load()?;
+    let url = resolve(weeks.iter().map(|sample| &sample.week), target)?;
     let scores = enter()?;
-    for week in &mut weeks {
-        if let Some(pr) = week.sample.iter_mut().find(|pr| pr.url == url) {
+    for retained in &mut weeks {
+        if let Some(pr) = retained.week.sample.iter_mut().find(|pr| pr.url == url) {
             pr.mine = Some(scores);
-            config::replace(
-                &checkpoint(&dir, week)?,
-                &serde_json::to_string_pretty(week)?,
-            )?;
+            retained.commit()?;
             break;
         }
     }

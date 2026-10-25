@@ -174,6 +174,7 @@ fn mine_requires_all_five_scores_before_revealing_the_model() {
     state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "codex", "gpt", false)]);
     scenario.write_gh_state(&state);
     assert_eq!(scenario.run(&["score"]).code, Some(0));
+    let checkpoint = rename_sample(&scenario);
     let url = "https://github.com/acme/widgets/pull/1";
     let partial = scenario.run_terminal(
         &["scores", url, "--mine"],
@@ -187,6 +188,8 @@ fn mine_requires_all_five_scores_before_revealing_the_model() {
     assert_eq!(partial.code, Some(1), "{}", partial.stderr);
     assert!(!partial.stdout.contains("Implements the requested feature."));
     assert!(weeks(&scenario)[0]["sample"][0]["mine"].is_null());
+    let before: Value = serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
+    assert!(before["sample"][0]["mine"].is_null());
     let complete = scenario.run_on_terminal(
         &["scores", url, "--mine"],
         &[],
@@ -220,6 +223,8 @@ fn mine_requires_all_five_scores_before_revealing_the_model() {
             .len(),
         5
     );
+    let saved: Value = serde_json::from_slice(&std::fs::read(checkpoint).unwrap()).unwrap();
+    assert_eq!(saved["sample"][0]["mine"], shown[0]["sample"][0]["mine"]);
 }
 
 #[test]
