@@ -21,6 +21,7 @@ pub(crate) use check_read::is_transient as check_read_is_transient;
 pub(crate) use quota::{Quota, Quotas};
 
 mod advisories;
+mod base_ci;
 mod session_issue;
 mod trust;
 pub use advisories::{

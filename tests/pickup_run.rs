@@ -13,6 +13,8 @@
 //! Asked for a Run notification, a pass that took an issue sends one naming
 //! the Pickup run and the kind of run it dispatched; a skipped one sends none.
 
+#[path = "pickup_run/base_ci.rs"]
+mod base_ci;
 mod support;
 
 use std::fs;
@@ -2014,16 +2016,18 @@ fn a_claim_limit_skip_names_every_holder_lowest_first_without_extra_github_reque
 
     let result = scenario.run(&["pickup"]);
 
-    assert_eq!(
-        scenario.gh_calls(),
-        ["closed", "open"].map(|state| vec![
+    let mut expected = vec![vec![
+        "api".to_string(),
+        "repos/acme/widgets/actions/runs?branch=main&event=push&per_page=1".into(),
+    ]];
+    expected.extend(["closed", "open"].map(|state| vec![
             "api".to_string(),
             "--paginate".into(),
             "--jq".into(),
             ".[]".into(),
             format!("repos/acme/widgets/issues?state={state}&labels=in-progress&sort=created&direction=desc&per_page=100"),
-        ])
-    );
+        ]));
+    assert_eq!(scenario.gh_calls(), expected);
     assert_skipped(
         &scenario,
         &result,
