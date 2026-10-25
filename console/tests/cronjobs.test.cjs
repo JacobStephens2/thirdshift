@@ -71,10 +71,10 @@ test('last-fired ages advance on a quiet Inbox and Cron jobs page without anothe
   for (const path of ['/', '/cronjobs']) {
     await page.goto(`${origin}${path}`);
     const lastFired = page.locator('li').filter({ hasText: /^Pickup last fired/ });
-    const before = await lastFired.textContent();
+    const before = (await lastFired.textContent()).trim();
     assert.match(before, /^Pickup last fired \d+ sec ago on acme\/widgets$/);
     await page.waitForTimeout(3000);
-    const after = await lastFired.textContent();
+    const after = (await lastFired.textContent()).trim();
     assert.notEqual(after, before, 'The open page must advance elapsed last-fired age without another Pass');
   }
 });
