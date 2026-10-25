@@ -89,7 +89,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift score                               Sample merged factory work and propose Bug origins
-       thirdshift scores [<pull request>] [--json|--mine]  Show Scores; --mine enters yours
+       thirdshift scores [<pull request>] [--mine] [--json]  Show Scores; --mine enters yours
        thirdshift bug-origins [<issue>] [--json]       Show origins; --confirm / --correct <pr> / --none settles one
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config

@@ -286,6 +286,13 @@ pub(crate) fn view(pull_request: Option<&str>) -> Result<View> {
         }
         weeks.retain(|week| !week.sample.is_empty());
     }
+    // CLI and Console reads share the same blind view. Stored assessments
+    // remain available for calibration and are revealed after human entry.
+    for pr in weeks.iter_mut().flat_map(|week| &mut week.sample) {
+        if pr.mine.is_none() {
+            pr.assessment = None;
+        }
+    }
     Ok(View { weeks, calibration })
 }
 
@@ -371,7 +378,9 @@ fn display(weeks: &[Week], calibration: &calibration::Calibration, json: bool) -
                     ));
                 }
             }
-            if let Some(assessment) = &pr.assessment {
+            if pr.mine.is_none() {
+                text.push_str("    Model Scores hidden until all five of yours are saved.\n");
+            } else if let Some(assessment) = &pr.assessment {
                 text.push_str(&format!(
                     "    Grader: {} · {}\n",
                     assessment.grader.harness, assessment.grader.model

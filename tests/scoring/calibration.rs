@@ -43,7 +43,7 @@ fn first_run_marks_twenty_historical_prs_across_models_then_two_per_week() {
     scenario.write_gh_state(&state);
     let run = scenario.run(&["score"]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
-    let first = weeks(&scenario).remove(0);
+    let first = saved_weeks(&scenario).remove(0);
     let marked: Vec<_> = first["sample"]
         .as_array()
         .unwrap()
@@ -104,6 +104,66 @@ fn first_run_marks_twenty_historical_prs_across_models_then_two_per_week() {
             .filter(|pr| pr["for_you"] == true)
             .count(),
         2
+    );
+}
+
+#[test]
+fn ordinary_scores_views_remain_blind_before_human_entry() {
+    let scenario = scenario();
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "codex", "gpt", false)]);
+    scenario.write_gh_state(&state);
+    assert_eq!(scenario.run(&["score"]).code, Some(0));
+    for args in [
+        vec!["scores"],
+        vec!["scores", "--json"],
+        vec!["scores", "1"],
+        vec!["scores", "1", "--json"],
+    ] {
+        let shown = scenario.run(&args);
+        assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+        assert!(
+            !shown.stdout.contains("Implements the requested feature."),
+            "{args:?} revealed model Scores before human entry: {}",
+            shown.stdout
+        );
+        if args.contains(&"--json") {
+            let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
+            assert!(shown[0]["sample"][0]["assessment"].is_null());
+        } else {
+            assert!(shown.stdout.contains("Model Scores hidden"));
+        }
+    }
+}
+
+#[test]
+fn human_scores_can_return_json_after_blind_entry() {
+    let scenario = scenario();
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(1, "acme/widgets", "codex", "gpt", false)]);
+    scenario.write_gh_state(&state);
+    assert_eq!(scenario.run(&["score"]).code, Some(0));
+    let result = scenario.run_on_terminal(
+        &["scores", "1", "--mine", "--json"],
+        &[],
+        &[(
+            "Correct (pass/fail):",
+            "pass\nMy Correct reason\npass\nMy Scoped reason\nfail\nMy Tested reason\npass\nMy Honest reason\npass\nMy Standards reason",
+        )],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let shown: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(
+        shown[0]["sample"][0]["mine"]["scores"][0]["reason"],
+        "My Correct reason"
+    );
+    assert_eq!(
+        shown[0]["sample"][0]["assessment"]["scores"][0]["reason"],
+        "Implements the requested feature."
+    );
+    assert_eq!(
+        shown[0]["sample"][0]["assessment"]["scores"][0]["calibration"],
+        serde_json::json!({"calibrated": false, "matches": 1, "compared": 1})
     );
 }
 

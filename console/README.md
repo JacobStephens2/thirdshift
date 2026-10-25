@@ -209,7 +209,7 @@ Scores (`/scores`, or `g q`) lists the sample by week and each criterion's
 calibration, from the same retained records as `thirdshift scores --json`.
 Enter five pass/fail Scores and reasons in a sample's form. The model's Scores
 are withheld from the response until all five of yours are saved, using the
-same lock and atomic write as `thirdshift scores <pull request> --mine`.
+same lock and atomic write as `thirdshift scores <pull request> --mine --json`.
 Score again opens another blind entry. Reload to see changes from other clients.
 
 Bug origins (`/bug-origins`, or `g u`) lists proposed, confirmed and rejected

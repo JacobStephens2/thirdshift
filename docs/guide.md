@@ -463,7 +463,7 @@ thirdshift secure                   # audit the Base branch and record findings 
 thirdshift secure base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
 thirdshift scores [<pull request>] [--json] # show Scores and calibration
-thirdshift scores <pull request> --mine    # enter your five Scores
+thirdshift scores <pull request> --mine [--json] # enter your five Scores
 thirdshift bug-origins [<issue>] [--json]  # list Bug origins or show one
 thirdshift bug-origins <issue> --confirm   # confirm the proposed pull request
 thirdshift bug-origins <issue> --correct <pull request> # confirm a different pull request
@@ -1686,7 +1686,8 @@ read-only. It gives five independent pass/fail Scores with reasons: Correct,
 Scoped, Tested, Honest and Standards. Honest checks only the pull request's
 claims against its diff and CI. Scores are retained on each sampled pull request,
 with the Grader's Harness and Model; local work also links to its Run's Command
-record. Both `scores` formats include these Scores and each criterion's
+record. Both `scores` formats withhold model Scores until all five human Scores
+are saved for that pull request. Revealed Scores include each criterion's
 calibration: `calibrated`, `matches` and `compared` in JSON.
 
 The first Scoring run also draws 20 past pull requests across Harness and Model
@@ -1695,11 +1696,12 @@ and graded too. They can predate the weekly window; overlaps with that week's
 draw are graded once. Later runs mark two from each ISO week's samples for you
 (or as many as available); reruns in the same week do not add another two.
 
-Use `thirdshift scores <pull request> --mine` with a sampled pull request URL,
+Use `thirdshift scores <pull request> --mine [--json]` with a sampled pull request URL,
 or a number that identifies only one sampled repository's pull request. It asks
 for pass or fail and a nonempty reason for Correct, Scoped, Tested, Honest and
-Standards. The model's Scores stay hidden during entry. All five of yours are
-saved together before the model's appear beside them; EOF or interruption
+Standards. The model's Scores stay hidden in ordinary views and during entry.
+All five of yours are saved together before the model's appear beside them;
+`--json` returns that saved result as JSON. EOF or interruption
 leaves any previous Scores unchanged. Only one Scoring run or human scoring
 session can write at once. `thirdshift scores <pull request> [--json]` shows
 that pull request; omit it to list samples by week.

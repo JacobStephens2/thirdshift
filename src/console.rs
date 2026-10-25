@@ -135,7 +135,7 @@ const PAGES: &[PageRoute] = &[
     },
     PageRoute {
         path: "/scores/mine",
-        cli: &["thirdshift scores 23 --mine"],
+        cli: &["thirdshift scores 23 --mine --json"],
         method: Method::POST,
         view: View::HumanScores,
     },

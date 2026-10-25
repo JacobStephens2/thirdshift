@@ -254,6 +254,24 @@ fn weeks(scenario: &Scenario) -> Vec<Value> {
     serde_json::from_str(&result.stdout).unwrap()
 }
 
+// Grading assertions inspect the private checkpoint; public views withhold
+// assessments until human Scores exist.
+fn saved_weeks(scenario: &Scenario) -> Vec<Value> {
+    let mut saved: Vec<Value> = std::fs::read_dir(scenario.path("home/.thirdshift/evals/scoring"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "json")
+        })
+        .map(|path| serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap())
+        .collect();
+    saved.sort_by_key(|week| {
+        DateTime::parse_from_rfc3339(week["window_end"].as_str().unwrap()).unwrap()
+    });
+    saved
+}
+
 fn pr(number: u64, repo: &str, harness: &str, model: &str, security: bool) -> Value {
     let merged = Utc::now() - chrono::TimeDelta::days(1);
     serde_json::json!({

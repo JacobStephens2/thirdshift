@@ -641,11 +641,11 @@ pub fn parse(args: &[String]) -> Result<Command> {
                     value if !value.starts_with('-') && pull_request.is_none() => {
                         pull_request = Some(value.to_owned());
                     }
-                    _ => bail!("usage: thirdshift scores [<pull request>] [--mine | --json]"),
+                    _ => bail!("usage: thirdshift scores [<pull request>] [--mine] [--json]"),
                 }
             }
-            if mine && (pull_request.is_none() || json) {
-                bail!("usage: thirdshift scores <pull request> --mine");
+            if mine && pull_request.is_none() {
+                bail!("usage: thirdshift scores <pull request> --mine [--json]");
             }
             return Ok(Command::Scores {
                 pull_request,

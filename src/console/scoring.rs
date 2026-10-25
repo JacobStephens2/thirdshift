@@ -31,11 +31,9 @@ pub(super) async fn show(
             let mine = super::query_value(&query, "mine");
             let mut view = scoring::view((!mine.is_empty()).then_some(mine.as_str()))?;
             // Starting another entry is blind too, even when replacing saved Scores.
-            for pr in view.weeks.iter_mut().flat_map(|week| &mut week.sample) {
-                if !mine.is_empty() {
+            if !mine.is_empty() {
+                for pr in view.weeks.iter_mut().flat_map(|week| &mut week.sample) {
                     pr.mine = None;
-                }
-                if pr.mine.is_none() {
                     pr.assessment = None;
                 }
             }

@@ -119,14 +119,14 @@ fn bug_origins_survive_a_grader_limit_stop_and_scores_resume_without_repeating_a
     let stopped = scenario.run(&["score"]);
     assert_eq!(stopped.code, Some(0), "{}", stopped.stderr);
     assert!(stopped.stderr.contains("plan-limit warning"));
-    let pending = weeks(&scenario).remove(0);
+    let pending = saved_weeks(&scenario).remove(0);
     assert_eq!(pending["bug_origins"][0]["state"], "proposed");
     assert!(pending["sample"][0]["assessment"].is_null());
     assert_eq!(scenario.claude_calls().len(), 2);
 
     let resumed = scenario.run(&["score"]);
     assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
-    let saved = weeks(&scenario);
+    let saved = saved_weeks(&scenario);
     assert_eq!(saved[0]["bug_origins"], pending["bug_origins"]);
     assert_eq!(
         saved[0]["sample"][0]["assessment"]["scores"]
@@ -150,24 +150,12 @@ fn every_sampled_pull_request_gets_five_scores_and_keeps_attribution() {
     scenario.write_gh_state(&state);
     let result = scenario.run_with_env(&["score"], &[("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
-    let retained = weeks(&scenario);
+    let retained = saved_weeks(&scenario);
     for pr in retained[0]["sample"].as_array().unwrap() {
         let assessment = &pr["assessment"];
         assert_eq!(assessment["grader"]["harness"], "claude");
-        let mut scores = assessment["scores"].clone();
-        for score in scores.as_array_mut().unwrap() {
-            let calibration = score
-                .as_object_mut()
-                .unwrap()
-                .remove("calibration")
-                .unwrap();
-            assert_eq!(
-                calibration,
-                serde_json::json!({"calibrated": false, "matches": 0, "compared": 0})
-            );
-        }
         assert_eq!(
-            scores,
+            assessment["scores"],
             serde_json::from_str::<Value>(RESPONSE).unwrap()["scores"]
         );
         assert_eq!(pr["effort"], "high");
@@ -198,7 +186,7 @@ fn matching_models_use_the_second_pair_and_two_matches_start_no_grader() {
                     .windows(2)
                     .any(|pair| pair == ["-m", "independent"])
             );
-            let retained = weeks(&scenario);
+            let retained = saved_weeks(&scenario);
             assert_eq!(
                 retained[0]["sample"][0]["assessment"]["grader"],
                 serde_json::json!({"harness":"codex","model":"independent"})
@@ -211,7 +199,7 @@ fn matching_models_use_the_second_pair_and_two_matches_start_no_grader() {
                 result.stderr
             );
             assert!(scenario.codex_calls().is_empty());
-            assert!(weeks(&scenario)[0]["sample"][0]["assessment"].is_null());
+            assert!(saved_weeks(&scenario)[0]["sample"][0]["assessment"].is_null());
         }
     }
 }
@@ -254,7 +242,7 @@ sleep 30
             "{}",
             result.stderr
         );
-        let first = weeks(&scenario);
+        let first = saved_weeks(&scenario);
         assert_eq!(
             first[0]["sample"]
                 .as_array()
@@ -275,7 +263,7 @@ sleep 30
         let result = scenario.run(&["score"]);
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert_eq!(calls().len(), 4, "completed Scores must not be repeated");
-        let retained = weeks(&scenario);
+        let retained = saved_weeks(&scenario);
         assert_eq!(retained.len(), 2);
         assert!(
             retained[0]["sample"]
@@ -329,12 +317,12 @@ fn invalid_scores_remain_pending_and_can_be_retried() {
         scenario.write_gh_state(&state);
         let result = scenario.run(&["score"]);
         assert_eq!(result.code, Some(1), "{}", result.stderr);
-        assert!(weeks(&scenario)[0]["sample"][0]["assessment"].is_null());
+        assert!(saved_weeks(&scenario)[0]["sample"][0]["assessment"].is_null());
         grader(&scenario);
         let result = scenario.run(&["score"]);
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert_eq!(
-            weeks(&scenario)[0]["sample"][0]["assessment"]["scores"]
+            saved_weeks(&scenario)[0]["sample"][0]["assessment"]["scores"]
                 .as_array()
                 .unwrap()
                 .len(),
@@ -406,7 +394,7 @@ printf '%s\n' '{{"type":"result","subtype":"success","is_error":false}}'
     let result = scenario.run_with_env(&["score"], &[("THIRDSHIFT_TRIAL_NO_SANDBOX", "")]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert!(
-        weeks(&scenario)[0]["sample"]
+        saved_weeks(&scenario)[0]["sample"]
             .as_array()
             .unwrap()
             .iter()
