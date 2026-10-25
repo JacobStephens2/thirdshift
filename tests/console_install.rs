@@ -103,11 +103,20 @@ impl Machine {
             "a2ensite",
             "certbot",
             "curl",
-            "sleep",
             "journalctl",
         ] {
             self.tool(tool, "printf '%s\\n' \"$0 $*\" >> actions");
         }
+        // Advance fake time without waiting. A runaway poll must fail the test
+        // rather than hang the suite, even if the script loses its retry bound.
+        self.tool(
+            "sleep",
+            r#"n=0
+[ ! -f waits ] || read -r n < waits
+n=$((n + 1))
+printf '%s\n' "$n" > waits
+[ "$n" -lt 30 ]"#,
+        );
         for (name, body) in tools {
             self.tool(name, body);
         }
@@ -131,9 +140,10 @@ fn inactive_console_fails_installation_with_its_journal_before_proxy_changes() {
         &script,
         &[
             ("systemctl", "[ \"$1\" != is-active ]"),
-            ("journalctl", "printf 'Console failed: permission denied\\n'"),
-            // A runaway wait must fail the test rather than hang the suite.
-            ("sleep", "n=0; [ ! -f waits ] || read -r n < waits\nn=$((n + 1))\nprintf '%s\\n' \"$n\" > waits\n[ \"$n\" -lt 30 ]"),
+            (
+                "journalctl",
+                "printf 'Console failed: permission denied\\n'",
+            ),
         ],
     );
 
@@ -170,7 +180,6 @@ fn active_console_must_answer_on_its_configured_port_to_finish_installation() {
             &[
                 ("curl", probe),
                 ("journalctl", "printf 'Console has not bound its port\\n'"),
-                ("sleep", "n=0; [ ! -f waits ] || read -r n < waits\nn=$((n + 1))\nprintf '%s\\n' \"$n\" > waits\n[ \"$n\" -lt 30 ]"),
             ],
         );
 
