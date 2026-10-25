@@ -74,7 +74,9 @@ fn destructive_flags_preserve_success_and_failure_and_survive_trace_removal() {
             let shown = scenario.run(&["metrics", "widgets#7", "--json"]);
             assert_eq!(shown.code, Some(0), "{}", shown.stderr);
             let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
-            assert_eq!(shown["command"]["metrics"], saved["run_metrics"]);
+            let mut expected = saved["run_metrics"].clone();
+            expected["confirmed_bug_origins"] = serde_json::json!(0);
+            assert_eq!(shown["command"]["metrics"], expected);
         }
     }
 }
@@ -110,7 +112,9 @@ gh pr create --base main --head issue-7 --title 'Make widgets' --body 'Closes #7
     let shown = scenario.run(&["metrics", "widgets#7", "--json"]);
     assert_eq!(shown.code, Some(0), "{}", shown.stderr);
     let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
-    assert_eq!(shown["command"]["metrics"], saved["run_metrics"]);
+    let mut expected = saved["run_metrics"].clone();
+    expected["confirmed_bug_origins"] = serde_json::json!(0);
+    assert_eq!(shown["command"]["metrics"], expected);
 }
 
 #[test]

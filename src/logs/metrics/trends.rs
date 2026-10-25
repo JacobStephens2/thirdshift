@@ -9,6 +9,7 @@ use super::super::command_record::StageName;
 use super::super::reading::{Command, Entry, Snapshot};
 use super::super::run_metrics::{Position, StageMetrics};
 use super::super::session_signals::{ModelTokens, SessionSignals};
+use super::bug_origins::ConfirmedCounts;
 use crate::args::MetricsArgs;
 use crate::session::recording::SessionModels;
 
@@ -34,6 +35,7 @@ pub(super) struct Week {
     repairs: Signal,
     ci_rounds: Signal,
     total_minutes: Signal,
+    confirmed_bug_origins: Signal,
     unaddressed_findings: UnaddressedFindings,
     stages: BTreeMap<String, Stage>,
     session_signals: TraceSignals,
@@ -190,11 +192,15 @@ impl Stage {
     }
 }
 
-pub(super) fn weekly(snapshot: &Snapshot, asked: &MetricsArgs) -> Vec<Week> {
+pub(super) fn weekly(
+    snapshot: &Snapshot,
+    asked: &MetricsArgs,
+    origins: &ConfirmedCounts,
+) -> Vec<Week> {
     let mut weeks = BTreeMap::new();
     for entry in snapshot.entries() {
         if let Entry::Record(command) = entry {
-            collect(command, asked, &mut weeks);
+            collect(command, asked, origins, &mut weeks);
         }
     }
     weeks
@@ -206,10 +212,15 @@ pub(super) fn weekly(snapshot: &Snapshot, asked: &MetricsArgs) -> Vec<Week> {
         .collect()
 }
 
-fn collect(command: &Command, asked: &MetricsArgs, weeks: &mut BTreeMap<Group, Week>) {
+fn collect(
+    command: &Command,
+    asked: &MetricsArgs,
+    origins: &ConfirmedCounts,
+    weeks: &mut BTreeMap<Group, Week>,
+) {
     // Traverse ownership once, even when the parent falls outside the filters.
     for child in command.dispatched.iter().chain(&command.children) {
-        collect(child, asked, weeks);
+        collect(child, asked, origins, weeks);
     }
     let record = &command.record;
     let Ok(start) = DateTime::parse_from_rfc3339(&record.started_at) else {
@@ -250,6 +261,8 @@ fn collect(command: &Command, asked: &MetricsArgs, weeks: &mut BTreeMap<Group, W
         .add(metrics.map(|metrics| metrics.ci_rounds as f64));
     row.total_minutes
         .add(metrics.and_then(|metrics| metrics.total_minutes));
+    row.confirmed_bug_origins
+        .add(Some(origins.for_run(command) as f64));
     let unaddressed = metrics.and_then(|metrics| metrics.unaddressed_findings.as_ref());
     row.unaddressed_findings.standards.add(
         unaddressed
