@@ -436,7 +436,7 @@ echo '{"type":"result","subtype":"success","result":"private completion"}'
             )
             .unwrap();
             let request: serde_json::Value = serde_json::from_str(
-                &fs::read_to_string(fixture.path("stdout.spans.jsonl"))
+                fs::read_to_string(fixture.path("stdout.spans.jsonl"))
                     .unwrap()
                     .lines()
                     .next()
