@@ -464,6 +464,10 @@ thirdshift secure base <branch>     # do that with <branch> as the Base branch, 
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
 thirdshift scores [<pull request>] [--json] # show Scores and calibration
 thirdshift scores <pull request> --mine    # enter your five Scores
+thirdshift bug-origins [<issue>] [--json]  # list Bug origins or show one
+thirdshift bug-origins <issue> --confirm   # confirm the proposed pull request
+thirdshift bug-origins <issue> --correct <pull request> # confirm a different pull request
+thirdshift bug-origins <issue> --none      # reject the origin
 thirdshift email-test [<address>]   # send a test email through Resend (see Email)
 thirdshift setup                    # choose your defaults and write the User config with every setting (see User config)
 thirdshift evals list               # list private Eval suites and approved/proposed Eval tasks
@@ -1738,9 +1742,44 @@ PR associations are retained without choosing between them.
 The saved window's `bug_origins` list contains these proposals and their
 evidence; `thirdshift scores --json` includes it. Session artifacts stay in
 the window's private `packets/origins/` directory. Proposals count for nothing
-until the Day shift settles them (#1029). A plan-limit warning stops Scoring
+until the Day shift settles them. A plan-limit warning stops Scoring
 before another proposal starts and advances no window; retry `thirdshift score`
 to analyze that window again. A session or search failure also advances no window.
+
+`thirdshift bug-origins [<issue>] [--json]` lists origins and their state:
+`proposed`, `confirmed` or `rejected`. Use an issue URL, or a number when it
+identifies exactly one bug across the retained repositories. A settlement
+changes the latest proposal for that bug and retains its original evidence.
+`--confirm` needs exactly one proposed pull request; `--correct <pull request>`
+confirms a different merged pull request in the bug's repository, given its
+URL or number. Corrections have `state: "confirmed"` and `settlement.corrected:
+true`. `--none` rejects it. Each action also accepts `--json`. Unknown or
+ambiguous origins and incomplete GitHub evidence fail without settling anything.
+Settlement uses the same machine-wide writer lock as Scoring and human Scores.
+
+A confirmed origin retains its chosen pull request and Run, when known. Each
+local Run's `thirdshift show <command> --json` includes
+`command.run_metrics.confirmed_bug_origins`, derived from the latest decisions;
+rejected and unsettled origins contribute zero. Correcting an origin moves
+its attribution to the chosen Run, without rewriting old Command records.
+
+Confirmation also creates a private `proposed` Eval task in the `code-review`
+suite, creating the suite with its usual dependencies when absent. Its local
+repository pins the PR head and its historical merge-base, separately from
+the merge tree and later fix. The target's parent at merge time excludes
+upstream changes already merged into the PR branch; preserved linear heads
+use the first PR commit's parent. It carries the originating issue at merge
+time, or the PR body when no issue was linked, and a draft catch criterion
+based on the proposal's evidence. Review and
+refine that criterion before `thirdshift evals approve code-review <task>`.
+Until approval, preparation and Experiments exclude it. Repeated confirmation
+keeps the same Eval task, including edits and approval. Rejecting or correcting
+an already confirmed origin withdraws its old unapproved proposal, including
+prior occurrences of a reopened and reclosed bug; a task the
+Day shift independently approved stays in the suite. Security fixes cannot be
+selected as origins. Confirmation checks the bug's current labels and refuses
+`security-fix`, including a proposal saved before that label. All these files
+stay in private Eval storage on this host.
 
 The Command record and Command log live under
 `<logs.dir>/JacobStephens2/thirdshift/commands/scoring/`, with start and end lines

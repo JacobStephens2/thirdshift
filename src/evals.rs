@@ -6,6 +6,7 @@ use anyhow::{Result, bail};
 
 pub(crate) mod approval;
 mod arms;
+pub(crate) mod bug_origin;
 pub(crate) mod experiment;
 mod format;
 mod import;

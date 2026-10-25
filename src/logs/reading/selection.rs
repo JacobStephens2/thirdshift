@@ -399,12 +399,21 @@ pub(in crate::logs) struct Details<'a> {
     session_logs: Vec<PathBuf>,
     #[serde(skip_serializing_if = "Option::is_none")]
     latest_event: Option<String>,
+    run_metrics: RunMetrics,
     children: Vec<Details<'a>>,
     dispatched: Vec<Details<'a>>,
 }
 
+#[derive(Serialize)]
+struct RunMetrics {
+    confirmed_bug_origins: usize,
+}
+
 impl<'a> Details<'a> {
-    fn new(command: &'a Command) -> Result<Self> {
+    fn new(
+        command: &'a Command,
+        origins: &std::collections::BTreeMap<PathBuf, usize>,
+    ) -> Result<Self> {
         Ok(Self {
             record: &command.record,
             state: command.state,
@@ -415,15 +424,18 @@ impl<'a> Details<'a> {
             command_log: &command.command_log,
             session_logs: Observation::Record(command).sessions()?,
             latest_event: latest_event(command),
+            run_metrics: RunMetrics {
+                confirmed_bug_origins: origins.get(&command.record_path).copied().unwrap_or(0),
+            },
             children: command
                 .children
                 .iter()
-                .map(Self::new)
+                .map(|child| Self::new(child, origins))
                 .collect::<Result<_>>()?,
             dispatched: command
                 .dispatched
                 .iter()
-                .map(Self::new)
+                .map(|child| Self::new(child, origins))
                 .collect::<Result<_>>()?,
         })
     }
@@ -432,7 +444,10 @@ impl<'a> Details<'a> {
 impl<'a> Observation<'a> {
     pub(in crate::logs) fn details(self) -> Result<Detailed<'a>> {
         Ok(match self {
-            Self::Record(command) => Detailed::Record(Box::new(Details::new(command)?)),
+            Self::Record(command) => Detailed::Record(Box::new(Details::new(
+                command,
+                &crate::scoring::origins::confirmed_counts()?,
+            )?)),
             Self::History(command) => {
                 let mut details = command.clone();
                 details.session_logs = self.sessions()?;

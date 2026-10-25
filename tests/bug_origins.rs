@@ -5,6 +5,9 @@ use chrono::{TimeDelta, Utc};
 use serde_json::{Value, json};
 use support::Scenario;
 
+#[path = "bug_origins/settlement.rs"]
+mod settlement;
+
 #[test]
 fn sandboxed_bug_origin_stops_at_codex_native_plan_limit() {
     if !std::process::Command::new("bwrap")

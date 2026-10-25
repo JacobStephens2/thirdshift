@@ -9,6 +9,9 @@ use super::{Connection, GitHub, Label, Repository};
 use crate::issue::IssueUrl;
 use crate::security::fixing::SECURITY_FIX;
 
+mod review;
+pub(crate) use review::ReviewedPullRequest;
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct ClosedBug {

@@ -9,7 +9,9 @@ pub(super) fn packet(state: &Json, query: &str, variables: &BTreeMap<String, Str
         return true;
     }
     let n = variables.get("number").map(String::as_str).unwrap_or("");
-    let (field, node) = if query.contains("ScoringPacket") {
+    let (field, node) = if query.contains("BugOriginReview") {
+        ("pullRequest", state.at("origin_review_prs").at(n).clone())
+    } else if query.contains("ScoringPacket") {
         let pr = state
             .at("scoring_prs")
             .items()
