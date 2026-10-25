@@ -1787,7 +1787,9 @@ mod tests {
     #[test]
     fn tool_bin_dirs_names_only_bound_roots() {
         let root = tempfile::TempDir::new().unwrap();
-        let toolchain = root.path().join("toolchain");
+        // Tools are matched by canonical path; macOS temp dirs sit behind
+        // the /var -> /private/var symlink.
+        let toolchain = root.path().canonicalize().unwrap().join("toolchain");
         let deep = toolchain.join("toolchains/stable/bin");
         fs::create_dir_all(&deep).unwrap();
         let tool = deep.join("cargo");

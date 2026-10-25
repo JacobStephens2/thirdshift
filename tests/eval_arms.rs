@@ -45,9 +45,12 @@ struct Fixture {
 impl Fixture {
     fn new() -> Self {
         let root = tempfile::tempdir().unwrap();
-        let home = root.path().join("home");
-        let source = root.path().join("source");
-        let bin = root.path().join("bin");
+        // macOS temp dirs sit behind the /var -> /private/var symlink, and the
+        // command records canonical binary paths.
+        let real = root.path().canonicalize().unwrap();
+        let home = real.join("home");
+        let source = real.join("source");
+        let bin = real.join("bin");
         fs::create_dir_all(&source).unwrap();
         fs::create_dir_all(&bin).unwrap();
         git(&source, &["init", "-q"]);

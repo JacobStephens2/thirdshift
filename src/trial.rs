@@ -323,6 +323,9 @@ fn void_cause(error: &anyhow::Error) -> Option<VoidCause> {
             .is::<std::io::Error>()
             .then_some(VoidCause::SessionUnavailable);
     };
+    if failure.never_launched() {
+        return Some(VoidCause::SessionUnavailable);
+    }
     match failure.diagnostic.as_deref().map(ErrorKind::from_text) {
         Some(ErrorKind::UsageLimit) => Some(VoidCause::UsageLimit),
         Some(ErrorKind::RateLimit) => Some(VoidCause::RateLimit),
