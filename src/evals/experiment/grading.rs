@@ -1,4 +1,5 @@
-//! Combined Scores and paired suite Verdicts, kept with private Trial data.
+//! Read-only Experiment assessment: effective paired Scores, suite Verdicts and
+//! whole-Experiment decisive rechecks, kept with private Trial data.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -128,21 +129,100 @@ impl Verdict {
     }
 }
 
-pub(super) fn judge(tasks: &[Task], results: &[TrialResult], bar: &Bar) -> Result<Verdict> {
-    evaluate(tasks, results, bar, true)
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Pending {
+    pub id: String,
+    pub suite: String,
+    pub task: String,
+    pub arm: Arm,
+    pub trial: usize,
+    pub borderline: bool,
+    pub decisive: bool,
+    #[serde(default)]
+    pub decisive_flips: Vec<Flip>,
 }
 
-pub(super) fn decision(tasks: &[Task], results: &[TrialResult], bar: &Bar) -> Result<Decision> {
-    Ok(evaluate(tasks, results, bar, false)?
-        .provisional_verdict
-        .expect("a computed Verdict has a provisional decision"))
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Flip {
+    Passed,
+    WrongFinding,
+}
+
+impl std::fmt::Display for Pending {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "{}: {}/{} {} Trial {} ({})",
+            self.id,
+            self.suite,
+            self.task,
+            self.arm.name(),
+            self.trial,
+            match (self.borderline, self.decisive) {
+                (true, true) => "borderline, decisive",
+                (true, false) => "borderline",
+                _ => "decisive",
+            }
+        )
+    }
+}
+
+pub(super) fn task_is_void(result: &TrialResult, results: &[TrialResult]) -> bool {
+    results.iter().any(|other| {
+        other.suite == result.suite && other.task == result.task && other.outcome == Outcome::Void
+    })
+}
+
+pub(super) fn assess(
+    tasks: &[Task],
+    results: &[TrialResult],
+    bar: &Bar,
+) -> Result<(Verdict, Vec<Pending>)> {
+    let mut verdict = evaluate(tasks, results, bar, None)?;
+    let original = verdict.provisional_verdict.expect("computed Verdict");
+    let mut pending = Vec::new();
+    for (index, result) in results.iter().enumerate() {
+        // A Void Trial drops the whole paired task, including the other Arm.
+        if task_is_void(result, results) {
+            continue;
+        }
+        let score = result.score.as_ref().context("Trial has no Score")?;
+        if !score.rechecks.is_empty() {
+            continue;
+        }
+        let mut decisive_flips = Vec::new();
+        for flip in [Flip::Passed, Flip::WrongFinding] {
+            let flipped = evaluate(tasks, results, bar, Some((index, flip)))?;
+            if flipped.provisional_verdict != Some(original) {
+                decisive_flips.push(flip);
+            }
+        }
+        let decisive = !decisive_flips.is_empty();
+        if score.borderline || decisive {
+            pending.push(Pending {
+                id: result.key(),
+                suite: result.suite.clone(),
+                task: result.task.clone(),
+                arm: result.arm,
+                trial: result.trial,
+                borderline: score.borderline,
+                decisive,
+                decisive_flips,
+            });
+        }
+    }
+    if !pending.is_empty() {
+        verdict.verdict = Conclusion::WaitingOnRechecks;
+    }
+    Ok((verdict, pending))
 }
 
 fn evaluate(
     tasks: &[Task],
     results: &[TrialResult],
     bar: &Bar,
-    predictions: bool,
+    flip: Option<(usize, Flip)>,
 ) -> Result<Verdict> {
     let mut suites = BTreeMap::new();
     let mut total = 0;
@@ -164,20 +244,30 @@ fn evaluate(
                 candidate: Vec::new(),
                 dropped_as_void: false,
             };
-            for result in results
+            for (index, result) in results
                 .iter()
-                .filter(|result| result.suite == task.suite && result.task == task.name)
+                .enumerate()
+                .filter(|(_, result)| result.suite == task.suite && result.task == task.name)
             {
                 paired.dropped_as_void |= result.outcome == Outcome::Void;
-                let score = result
+                let mut score = result
                     .score
                     .as_ref()
-                    .context("Trial has no mechanical Score")?;
+                    .context("Trial has no mechanical Score")?
+                    .effective();
+                if let Some((selected, field)) = flip
+                    && selected == index
+                {
+                    match field {
+                        Flip::Passed => score.passed = !score.passed,
+                        Flip::WrongFinding => score.wrong_finding = !score.wrong_finding,
+                    }
+                }
                 let arm = match result.arm {
                     Arm::Baseline => &mut paired.baseline,
                     Arm::Candidate => &mut paired.candidate,
                 };
-                arm.push(score.effective());
+                arm.push(score);
             }
             ensure!(
                 paired.baseline.len() == trials && paired.candidate.len() == trials,
@@ -188,7 +278,7 @@ fn evaluate(
             scores.push(paired);
         }
         // Counterfactuals need the seeded interval decision, never forecasts.
-        let assessment = if predictions {
+        let assessment = if flip.is_none() {
             verdict::judge(&scores, &statistics)?
         } else {
             verdict::judge_without_predictions(&scores, &statistics)?
@@ -218,3 +308,6 @@ fn evaluate(
         borderline_trials,
     })
 }
+
+#[cfg(test)]
+mod tests;

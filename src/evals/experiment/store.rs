@@ -27,7 +27,7 @@ pub(super) struct Stored {
     #[serde(default)]
     pub rechecks: super::rechecks::History,
     #[serde(default)]
-    pub pending_rechecks: Vec<super::rechecks::Pending>,
+    pub pending_rechecks: Vec<super::grading::Pending>,
     #[serde(skip)]
     pub directory: PathBuf,
     #[serde(skip)]
@@ -48,7 +48,7 @@ pub(crate) struct View {
     pub results: Vec<TrialResult>,
     pub unfinished_trials: Vec<TrialResult>,
     pub verdict: Option<super::grading::Verdict>,
-    pub pending_rechecks: Vec<super::rechecks::Pending>,
+    pub pending_rechecks: Vec<super::grading::Pending>,
     pub minutes: Minutes,
     pub usage: super::usage::Arms,
     pub voids: Voids,
@@ -248,7 +248,7 @@ impl Stored {
 
     pub fn refresh_verdict(&mut self) -> Result<()> {
         let (verdict, pending) =
-            super::rechecks::assess(&self.tasks, &mut self.results()?, &self.description.bar)?;
+            super::grading::assess(&self.tasks, &self.results()?, &self.description.bar)?;
         self.verdict = Some(verdict);
         self.pending_rechecks = pending;
         Ok(())
