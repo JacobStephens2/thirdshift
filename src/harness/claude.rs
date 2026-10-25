@@ -172,6 +172,13 @@ const TEST_PROMPT: &str = "Reply with OK.";
 /// checked with a test call, as a Ticket run checks it, and on a refusal the Model
 /// and Effort are asked again.
 fn ask_claude(outside: &mut dyn Terminal, current: &ModelAndEffort) -> Result<ModelAndEffort> {
+    // Suggested settings from https://code.claude.com/docs/en/model-config#model-aliases.
+    // Reviewed 2026-10-25; refresh from that page when updating Claude Setup.
+    // Claude resolves alias versions; these suggestions never restrict Model IDs.
+    outside.say(
+        "Claude's Model suggestions: default, best, fable, opus, sonnet, haiku, opusplan, sonnet[1m], opus[1m]. Type any Model ID, or press Enter to keep the default shown."
+            .into(),
+    );
     loop {
         let chosen = ModelAndEffort {
             model: ask_setting(outside, "Model", Harness::Claude, current.model.as_deref())?,
