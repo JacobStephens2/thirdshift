@@ -34,10 +34,9 @@ use crate::trial::VoidCause;
 use crate::{interrupt, logs, progress};
 
 pub(crate) use evidence::RunningTrial;
-pub(crate) use grading::Conclusion;
+pub(crate) use grading::{Conclusion, Flip, Pending};
 pub use options::{Options, parse};
 pub(crate) use rechecks::record as recheck;
-pub(crate) use rechecks::{Flip, Pending};
 pub(crate) use session_evidence::{SessionLog, read as read_session};
 pub(crate) use store::{State, View, read};
 pub(crate) use trial_results::{Arm, TrialResult, trial_key};

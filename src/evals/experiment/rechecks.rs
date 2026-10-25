@@ -6,10 +6,8 @@ use std::collections::BTreeMap;
 use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 
-use super::grading::{self, Conclusion, Verdict};
+use super::grading::task_is_void;
 use super::store::{State, Stored};
-use super::{Arm, Bar, Task, TrialResult};
-use crate::trial::Outcome;
 
 pub(super) type History = BTreeMap<String, Vec<Recheck>>;
 
@@ -19,122 +17,6 @@ pub(crate) struct Recheck {
     pub reason: String,
     pub wrong_finding: Option<bool>,
     pub recorded_at: String,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-pub(crate) struct Pending {
-    pub id: String,
-    pub suite: String,
-    pub task: String,
-    pub arm: Arm,
-    pub trial: usize,
-    pub borderline: bool,
-    pub decisive: bool,
-    #[serde(default)]
-    pub decisive_flips: Vec<Flip>,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub(crate) enum Flip {
-    Passed,
-    WrongFinding,
-}
-
-impl std::fmt::Display for Pending {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            formatter,
-            "{}: {}/{} {} Trial {} ({})",
-            self.id,
-            self.suite,
-            self.task,
-            self.arm.name(),
-            self.trial,
-            match (self.borderline, self.decisive) {
-                (true, true) => "borderline, decisive",
-                (true, false) => "borderline",
-                _ => "decisive",
-            }
-        )
-    }
-}
-
-fn task_is_void(result: &TrialResult, results: &[TrialResult]) -> bool {
-    results.iter().any(|other| {
-        other.suite == result.suite && other.task == result.task && other.outcome == Outcome::Void
-    })
-}
-
-fn flip(score: &mut grading::Score, wrong_finding: bool) {
-    let value = if wrong_finding {
-        &mut score.wrong_finding
-    } else {
-        &mut score.passed
-    };
-    *value = !*value;
-}
-
-pub(super) fn assess(
-    tasks: &[Task],
-    results: &mut [TrialResult],
-    bar: &Bar,
-) -> Result<(Verdict, Vec<Pending>)> {
-    let mut verdict = grading::judge(tasks, results, bar)?;
-    let original = verdict.provisional_verdict.expect("computed Verdict");
-    let mut pending = Vec::new();
-    for index in 0..results.len() {
-        let result = &results[index];
-        // A Void Trial drops the whole paired task, including the other Arm.
-        if task_is_void(result, results) {
-            continue;
-        }
-        let score = result.score.as_ref().context("Trial has no Score")?;
-        if !score.rechecks.is_empty() {
-            continue;
-        }
-        let borderline = score.borderline;
-        let mut decisive = false;
-        let mut decisive_flips = Vec::new();
-        for wrong_finding in [false, true] {
-            let score = results[index]
-                .score
-                .as_mut()
-                .context("Trial has no Score")?;
-            flip(score, wrong_finding);
-            let flipped = grading::decision(tasks, results, bar);
-            let score = results[index]
-                .score
-                .as_mut()
-                .context("Trial has no Score")?;
-            flip(score, wrong_finding);
-            if flipped? != original {
-                decisive = true;
-                decisive_flips.push(if wrong_finding {
-                    Flip::WrongFinding
-                } else {
-                    Flip::Passed
-                });
-            }
-        }
-        if borderline || decisive {
-            let result = &results[index];
-            pending.push(Pending {
-                id: result.key(),
-                suite: result.suite.clone(),
-                task: result.task.clone(),
-                arm: result.arm,
-                trial: result.trial,
-                borderline,
-                decisive,
-                decisive_flips,
-            });
-        }
-    }
-    if !pending.is_empty() {
-        verdict.verdict = Conclusion::WaitingOnRechecks;
-    }
-    Ok((verdict, pending))
 }
 
 pub(crate) fn record(args: &[String]) -> Result<String> {
