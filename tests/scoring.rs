@@ -667,6 +667,75 @@ fn setup_completes_scoring_defaults_and_preserves_configured_choices() {
 }
 
 #[test]
+fn scoring_samples_and_metrics_agree_on_normalized_chronological_attribution() {
+    let scenario = scenario();
+    scenario.origin_has_commit("main", "feature", "work\n", "Feature");
+    let folder = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");
+    std::fs::create_dir_all(&folder).unwrap();
+    let mut records = Vec::new();
+    for (filename, started_at) in [
+        ("older.command.json", "2026-10-19T01:00:00+02:00"),
+        ("newer.command.json", "2026-10-19T00:30:00Z"),
+    ] {
+        let record = serde_json::json!({
+            "version":1, "kind":"Run", "repository":"acme/widgets", "name":"acme/widgets#7",
+            "issue":{"number":7,"url":scenario.issue_url(7)}, "hostname":"factory",
+            "process_id":0, "process_start":"gone", "harness":"codex", "model":"model", "effort":"high",
+            "started_at":started_at, "ended_at":"2026-10-19T02:00:00Z", "stages":[],
+            "outcome":"ready for review", "session_log":null, "cause":null, "issue_branch":"issue-7",
+            "pull_request":"https://github.com/ACME/WIDGETS/pull/23/"
+        });
+        let path = folder.join(filename);
+        let bytes = serde_json::to_vec(&record).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        records.push((path, bytes));
+    }
+    let mut state = scenario.gh_state();
+    state["scoring_prs"] = serde_json::json!([pr(23, "acme/widgets", "codex", "model", false)]);
+    scenario.write_gh_state(&state);
+    let run = scenario.run(&["score"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let mut week = saved_weeks(&scenario).remove(0);
+    assert_eq!(
+        week["sample"][0]["command_record"],
+        records[1].0.to_str().unwrap()
+    );
+    // The read-only metrics decoder needs only settlement identities from this checkpoint.
+    week["bug_origins"] = serde_json::json!([{
+        "issue":scenario.issue_url(99), "state":"confirmed", "settlement":{
+            "pull_request":{"url":"https://github.com/acme/widgets/pull/23", "run":null}
+        }
+    }]);
+    std::fs::write(rename_sample(&scenario), serde_json::to_vec(&week).unwrap()).unwrap();
+    let calls = scenario.gh_calls();
+    let run = scenario.run(&["metrics", "--json"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let metrics: Value = serde_json::from_str(&run.stdout).unwrap();
+    let rows: Vec<_> = metrics["weeks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|row| row["session_kind"].is_null())
+        .collect();
+    assert_eq!(
+        rows.iter()
+            .map(|row| row["confirmed_bug_origins"]["sum"].as_f64().unwrap())
+            .sum::<f64>(),
+        1.0
+    );
+    assert_eq!(
+        rows.iter()
+            .find(|row| row["confirmed_bug_origins"]["sum"] == 1.0)
+            .unwrap()["week"],
+        "2026-10-19"
+    );
+    assert_eq!(scenario.gh_calls(), calls);
+    for (path, bytes) in records {
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+}
+
+#[test]
 fn scoring_reads_the_built_with_line_written_by_a_factory_run() {
     let scenario = scenario();
     scenario.agent_does(

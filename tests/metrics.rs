@@ -819,6 +819,74 @@ fn one_confirmed_bug_origin_counts_once_across_continuations_sharing_a_pull_requ
 }
 
 #[test]
+fn saved_bug_origin_pins_distinguish_dispatched_names_and_refuse_mismatches() {
+    let scenario = Scenario::new();
+    let mut pass = record(1);
+    pass["kind"] = "Security run".into();
+    let mut first = record(7);
+    first["pull_request"] = "https://github.com/acme/widgets/pull/23".into();
+    let mut second = record(8);
+    second["pull_request"] = "https://github.com/ACME/WIDGETS/pull/23/".into();
+    second["started_at"] = "2026-10-19T11:00:00Z".into();
+    pass["dispatched"] = json!([first, second]);
+    let path = write(&scenario, "outer.command.json", &pass);
+    let mut other = record(9);
+    other["pull_request"] = "https://github.com/acme/widgets/pull/24".into();
+    let other_path = write(&scenario, "other.command.json", &other);
+    let original = fs::read(&path).unwrap();
+    let other_bytes = fs::read(&other_path).unwrap();
+    let calls = scenario.gh_calls();
+    for (attribution, expected) in [
+        (
+            json!({"source":"local", "command_record":path, "name":"acme/widgets#7"}),
+            [1, 0],
+        ),
+        (
+            json!({"source":"local", "command_record":path, "name":"acme/widgets#8"}),
+            [0, 1],
+        ),
+        (
+            json!({"source":"local", "command_record":path, "name":"acme/widgets#9"}),
+            [0, 0],
+        ),
+        (
+            json!({"source":"local", "command_record":other_path, "name":"acme/widgets#9"}),
+            [0, 0],
+        ),
+        (
+            json!({"source":"local", "command_record":path.with_file_name("missing.command.json"), "name":"acme/widgets#7"}),
+            [0, 0],
+        ),
+        (Value::Null, [0, 1]),
+        (json!({"source":"built_with", "harness":"codex"}), [0, 1]),
+    ] {
+        let mut origin = bug_origin(99, "confirmed", 23);
+        origin["settlement"]["pull_request"]["url"] =
+            "https://github.com/Acme/Widgets/pull/23///".into();
+        origin["settlement"]["pull_request"]["run"] = attribution.clone();
+        scoring_week(
+            &scenario,
+            "week.json",
+            "2026-10-26T00:00:00Z",
+            json!([origin]),
+        );
+        let shown = metrics(&scenario, &["metrics", "widgets#1", "--json"]);
+        let children = shown["command"]["children"].as_array().unwrap();
+        assert_eq!(
+            children[0]["metrics"]["confirmed_bug_origins"], expected[0],
+            "{attribution}"
+        );
+        assert_eq!(
+            children[1]["metrics"]["confirmed_bug_origins"], expected[1],
+            "{attribution}"
+        );
+    }
+    assert_eq!(scenario.gh_calls(), calls);
+    assert_eq!(fs::read(path).unwrap(), original);
+    assert_eq!(fs::read(other_path).unwrap(), other_bytes);
+}
+
+#[test]
 fn malformed_scoring_data_is_reported_instead_of_showing_zero_bug_origins() {
     let scenario = Scenario::new();
     write(&scenario, "7-fixture.command.json", &record(7));

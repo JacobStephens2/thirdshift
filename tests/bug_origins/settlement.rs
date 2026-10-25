@@ -44,6 +44,13 @@ fn historical_review_and_reclosed_origin_regressions() {
 }
 
 fn proposed_origin() -> (Scenario, String, String) {
+    let (scenario, base, head) = origin_scenario();
+    let run = score(&scenario);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    (scenario, base, head)
+}
+
+fn origin_scenario() -> (Scenario, String, String) {
     let scenario = scenario();
     let base = scenario
         .origin_git(&["rev-parse", "main"])
@@ -79,9 +86,60 @@ fn proposed_origin() -> (Scenario, String, String) {
     scenario.write_gh_state(&state);
     scenario.issue_is(8, "CLOSED");
     scenario.agent_does(&format!("printf '%s' '{{\"commit\":\"{head}\",\"reason\":\"The introducing change writes 41 where the answer must be 42.\"}}' > proposal.json"));
+    (scenario, base, head)
+}
+
+#[test]
+fn proposals_settlements_and_metrics_keep_one_exact_continuation() {
+    let (scenario, _, _) = origin_scenario();
+    let folder = scenario.path("home/.thirdshift/logs/acme/widgets/commands/issue");
+    std::fs::create_dir_all(&folder).unwrap();
+    let mut records = Vec::new();
+    for (filename, started_at) in [
+        ("older.command.json", "2026-10-19T12:00:00+02:00"),
+        ("newer.command.json", "2026-10-19T11:00:00Z"),
+    ] {
+        let record = json!({
+            "version":1, "kind":"Run", "repository":"acme/widgets", "name":"acme/widgets#7",
+            "issue":{"number":7,"url":scenario.issue_url(7)}, "hostname":"factory",
+            "process_id":0, "process_start":"gone", "harness":"codex", "model":"model", "effort":"high",
+            "started_at":started_at, "ended_at":"2026-10-19T13:00:00Z", "stages":[],
+            "outcome":"ready for review", "session_log":null, "cause":null, "issue_branch":"issue-7",
+            "pull_request":"https://github.com/ACME/WIDGETS/pull/23/"
+        });
+        let path = folder.join(filename);
+        let bytes = serde_json::to_vec(&record).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        records.push((path, bytes));
+    }
     let run = score(&scenario);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
-    (scenario, base, head)
+    let proposal = weeks(&scenario).remove(0)["bug_origins"][0]["pull_requests"][0]["run"].clone();
+    assert_eq!(proposal["source"], "local");
+    assert_eq!(proposal["command_record"], json!(records[1].0));
+    assert_eq!(proposal["name"], "acme/widgets#7");
+    let run = scenario.run(&["bug-origins", "8", "--confirm", "--json"]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let confirmed: Value = serde_json::from_str(&run.stdout).unwrap();
+    assert_eq!(confirmed[0]["settlement"]["pull_request"]["run"], proposal);
+    let calls = scenario.gh_calls();
+    let counts = || {
+        let run = scenario.run(&["metrics", "widgets#7", "--json"]);
+        assert_eq!(run.code, Some(0), "{}", run.stderr);
+        serde_json::from_str::<Value>(&run.stdout).unwrap()["command"]["metrics"]["confirmed_bug_origins"].clone()
+    };
+    assert_eq!(counts(), 1);
+    for (path, bytes) in &records {
+        assert_eq!(std::fs::read(path).unwrap(), *bytes);
+    }
+    std::fs::remove_file(&records[1].0).unwrap();
+    assert_eq!(
+        counts(),
+        0,
+        "an unavailable saved pin must not move to the older Continuation"
+    );
+    assert_eq!(scenario.gh_calls(), calls);
+    assert_eq!(std::fs::read(&records[0].0).unwrap(), records[0].1);
 }
 
 #[test]
