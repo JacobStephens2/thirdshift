@@ -471,6 +471,30 @@ exec "$(dirname "$0")/real/gh" "$@"
 }
 
 #[test]
+fn pickup_reservation_records_the_host_holding_it() {
+    let scenario = Scenario::new();
+    let hostname = std::process::Command::new("hostname").output().unwrap();
+    assert!(hostname.status.success());
+    let hostname = String::from_utf8(hostname.stdout).unwrap();
+    let held = pickup_run_held_on_issue_7(&scenario);
+    let message = scenario.origin_git(&[
+        "show",
+        "-s",
+        "--format=%B",
+        "refs/heads/thirdshift/pickup/7",
+    ]);
+    release(&scenario);
+    held.finish();
+
+    assert!(
+        message
+            .lines()
+            .any(|line| line == format!("Host: {}", hostname.trim())),
+        "reservation did not identify its host: {message}"
+    );
+}
+
+#[test]
 fn pickup_reservation_does_not_publish_unrelated_local_head() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7, &[]);
@@ -492,10 +516,21 @@ fn pickup_reservation_does_not_publish_unrelated_local_head() {
 }
 
 #[test]
-fn a_reservation_left_by_a_crashed_host_is_not_stolen() {
+fn a_legacy_reservation_without_a_host_is_not_stolen() {
     let scenario = Scenario::new();
     ready_issue(&scenario, 7, &[]);
-    scenario.origin_has_branch("thirdshift/pickup/7", "main", &[]);
+    let tree = scenario.launch_git(&["mktree"]);
+    let token = scenario.launch_git(&[
+        "commit-tree",
+        tree.trim(),
+        "-m",
+        "thirdshift Pickup reservation for https://github.com/acme/widgets/issues/7\n\nToken: old-token\nLaunch: /old/widgets\nProcess: 123\nStarted: 2026-10-01 00:00:00 UTC",
+    ]);
+    scenario.launch_git(&[
+        "push",
+        "origin",
+        &format!("{}:refs/heads/thirdshift/pickup/7", token.trim()),
+    ]);
     let before = scenario.origin_git(&["show-ref"]);
     let github = scenario.gh_state();
 
