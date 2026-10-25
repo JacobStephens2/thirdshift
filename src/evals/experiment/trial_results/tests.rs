@@ -32,6 +32,18 @@ fn score() -> grading::Score {
     .unwrap()
 }
 
+fn published_trial() -> (tempfile::TempDir, String) {
+    let root = tempfile::tempdir().unwrap();
+    let attempt = root.path().join("attempt");
+    fs::create_dir_all(&attempt).unwrap();
+    let mut writer = Writer::resume(root.path(), identity()).unwrap();
+    writer
+        .record_attempt(&attempt, output(false), score())
+        .unwrap();
+    writer.finish().unwrap();
+    (root, writer.progress().key())
+}
+
 #[test]
 fn completed_attempts_resume_and_finish_without_losing_pending_history() {
     let root = tempfile::tempdir().unwrap();
@@ -79,14 +91,7 @@ fn completed_attempts_resume_and_finish_without_losing_pending_history() {
 
 #[test]
 fn terminal_only_reads_ignore_unrelated_corrupt_pending_history() {
-    let root = tempfile::tempdir().unwrap();
-    let attempt = root.path().join("attempt");
-    fs::create_dir_all(&attempt).unwrap();
-    let mut writer = Writer::resume(root.path(), identity()).unwrap();
-    writer
-        .record_attempt(&attempt, output(false), score())
-        .unwrap();
-    writer.finish().unwrap();
+    let (root, _) = published_trial();
     let unrelated = root.path().join("trials/unrelated");
     fs::create_dir_all(&unrelated).unwrap();
     fs::write(unrelated.join("pending.json"), "malformed").unwrap();
@@ -290,18 +295,8 @@ fn failed_publication_keeps_only_the_already_written_prefix_for_resume() {
 
 #[test]
 fn saved_score_targets_resolve_only_selected_filenames_in_lexical_order() {
-    let root = tempfile::tempdir().unwrap();
-    let attempt = root.path().join("attempt");
-    fs::create_dir_all(&attempt).unwrap();
-    let mut writer = Writer::resume(root.path(), identity()).unwrap();
-    writer
-        .record_attempt(&attempt, output(false), score())
-        .unwrap();
-    writer.finish().unwrap();
-    let original = root
-        .path()
-        .join("results")
-        .join(format!("{}.json", writer.progress().key()));
+    let (root, key) = published_trial();
+    let original = root.path().join("results").join(format!("{key}.json"));
     fs::copy(&original, root.path().join("results/zzz-selected.json")).unwrap();
     fs::rename(original, root.path().join("results/000-selected.json")).unwrap();
     let mut entries = terminal(root.path()).unwrap();
@@ -347,18 +342,8 @@ fn saved_score_targets_resolve_only_selected_filenames_in_lexical_order() {
 
 #[test]
 fn a_saved_assessment_replays_after_partial_terminal_application() {
-    let root = tempfile::tempdir().unwrap();
-    let attempt = root.path().join("attempt");
-    fs::create_dir_all(&attempt).unwrap();
-    let mut writer = Writer::resume(root.path(), identity()).unwrap();
-    writer
-        .record_attempt(&attempt, output(false), score())
-        .unwrap();
-    writer.finish().unwrap();
-    let original = root
-        .path()
-        .join("results")
-        .join(format!("{}.json", writer.progress().key()));
+    let (root, key) = published_trial();
+    let original = root.path().join("results").join(format!("{key}.json"));
     let first = root.path().join("results/first.json");
     let second = root.path().join("results/second.json");
     fs::copy(&original, &second).unwrap();
