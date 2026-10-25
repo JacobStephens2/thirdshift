@@ -6,7 +6,7 @@ use std::io::BufRead;
 use anyhow::Result;
 use serde::Serialize;
 
-use super::workers;
+use super::Arm as TrialArm;
 use crate::otlp_jsonl::{AnyValue, KeyValue, Reader, Span, Spans};
 
 #[derive(Default, Serialize)]
@@ -31,10 +31,10 @@ struct Measurement {
 }
 
 impl Arms {
-    pub(super) fn include(&mut self, arm: workers::Arm, spans: impl BufRead) -> Result<()> {
+    pub(super) fn include(&mut self, arm: TrialArm, spans: impl BufRead) -> Result<()> {
         let arm = match arm {
-            workers::Arm::Baseline => &mut self.baseline,
-            workers::Arm::Candidate => &mut self.candidate,
+            TrialArm::Baseline => &mut self.baseline,
+            TrialArm::Candidate => &mut self.candidate,
         };
         arm.include(Arm::session(spans)?);
         Ok(())

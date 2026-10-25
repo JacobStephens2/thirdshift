@@ -12,7 +12,7 @@ use rand_pcg::Pcg64;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::{Task, arms, store, workers::TrialResult};
+use super::{Task, arms, store, trial_results};
 use crate::harness::{Asked, Choice, ChosenBy, Harness, Settings};
 use crate::session::recording::{Input, Recording};
 use crate::{interrupt, progress, prompt};
@@ -115,6 +115,13 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
         serde_json::from_slice(&fs::read(experiment.directory.join("grader.json"))?)?;
     // Machine caps are read live, not fixed with the Bar.
     let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
+    let mut by_task: BTreeMap<_, Vec<_>> = BTreeMap::new();
+    for entry in trial_results::terminal(&experiment.directory)? {
+        by_task
+            .entry((entry.result().suite.clone(), entry.result().task.clone()))
+            .or_default()
+            .push(entry);
+    }
     for task in &experiment.tasks {
         interrupt::check()?;
         let key = Sha256::new()
@@ -127,17 +134,13 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
             .join("graders")
             .join(format!("{key:x}"));
         fs::create_dir_all(&directory)?;
-        let mut results = Vec::new();
-        for path in store::result_paths(&experiment.directory)? {
-            let result: TrialResult = serde_json::from_slice(&fs::read(&path)?)?;
-            if result.suite == task.suite && result.task == task.name {
-                results.push((path, result));
-            }
-        }
+        let mut results = by_task
+            .remove(&(task.suite.clone(), task.name.clone()))
+            .unwrap_or_default();
         let expected = experiment.description.bar.trials_per_task[&task.suite] * 2;
         ensure!(results.len() == expected, "missing Trials for model Grader");
         let saved = directory.join("assessment.json");
-        let scores: BTreeMap<String, Score> = if saved.exists() {
+        let scores: BTreeMap<trial_results::ScoreTarget, Score> = if saved.exists() {
             serde_json::from_slice(&fs::read(&saved)?)?
         } else {
             let seed = experiment.description.bar.seed ^ u64::from_le_bytes(key[..8].try_into()?);
@@ -167,20 +170,13 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
             let scores: BTreeMap<_, _> = results
                 .iter()
                 .zip(&packet.trials)
-                .map(|((path, _), trial)| {
+                .map(|(entry, trial)| {
                     let score = response
                         .scores
                         .iter()
                         .find(|score| score.label == trial.label)
                         .unwrap();
-                    Ok((
-                        path.file_name()
-                            .context("missing Trial filename")?
-                            .to_str()
-                            .context("invalid Trial filename")?
-                            .to_owned(),
-                        score.clone(),
-                    ))
+                    Ok((entry.target()?, score.clone()))
                 })
                 .collect::<Result<_>>()?;
             // Publish only a complete, validated response. On resume it can
@@ -188,27 +184,15 @@ pub(super) fn run(experiment: &store::Stored) -> Result<()> {
             store::write(&saved, &scores)?;
             scores
         };
-        ensure!(
-            scores.len() == results.len(),
-            "saved Grader Scores do not cover Trials"
-        );
-        for (path, mut result) in results {
-            let name = path.file_name().unwrap().to_str().unwrap();
-            let score = scores.get(name).context("saved Grader Score missing")?;
-            result
-                .score
-                .as_mut()
-                .context("Trial has no mechanical Score")?
-                .with_model(score.clone());
-            store::write(&path, &result)?;
-        }
+        trial_results::apply_scores(&mut results, &scores)?;
     }
     Ok(())
 }
 
-fn packet(task: &Task, results: &[(std::path::PathBuf, TrialResult)]) -> Result<Packet> {
+fn packet(task: &Task, results: &[trial_results::Terminal]) -> Result<Packet> {
     let mut trials = Vec::new();
-    for (_, result) in results {
+    for entry in results {
+        let result = entry.result();
         let output = result.attempts.last().context("Trial has no attempts")?;
         let reports = output.reports.read_and_blind()?;
         trials.push(Trial {

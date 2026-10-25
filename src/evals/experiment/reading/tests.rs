@@ -1,58 +1,12 @@
-use std::cell::RefCell;
-use std::collections::BTreeMap;
-use std::fs::{self, File};
+use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use serde_json::{Value, json};
 
 use super::*;
+use crate::evals::experiment::trial_results::files::observed::Observed;
 use crate::evals::experiment::{Arm, Bar, trial_key};
-
-type OnSample = Box<dyn FnMut(&str, &Path)>;
-
-#[derive(Default)]
-struct Observed {
-    counts: RefCell<BTreeMap<(&'static str, PathBuf), usize>>,
-    after: RefCell<Option<OnSample>>,
-    read_error: Option<(PathBuf, io::ErrorKind)>,
-}
-
-impl Observed {
-    fn sampled<T>(&self, operation: &'static str, path: &Path, result: T) -> T {
-        *self
-            .counts
-            .borrow_mut()
-            .entry((operation, path.into()))
-            .or_default() += 1;
-        if let Some(after) = self.after.borrow_mut().as_mut() {
-            after(operation, path);
-        }
-        result
-    }
-}
-
-impl Files for Observed {
-    fn entries(&self, path: &Path) -> io::Result<Vec<Entry>> {
-        self.sampled("entries", path, Native.entries(path))
-    }
-
-    fn read(&self, path: &Path) -> io::Result<Vec<u8>> {
-        let result = match &self.read_error {
-            Some((failed, kind)) if failed == path => Err(io::Error::from(*kind)),
-            _ => Native.read(path),
-        };
-        self.sampled("read", path, result)
-    }
-
-    fn canonicalize(&self, path: &Path) -> io::Result<PathBuf> {
-        self.sampled("canonicalize", path, Native.canonicalize(path))
-    }
-
-    fn open(&self, path: &Path) -> io::Result<File> {
-        self.sampled("open", path, Native.open(path))
-    }
-}
 
 fn write(path: &Path, value: &Value) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
