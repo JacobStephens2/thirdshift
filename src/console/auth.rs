@@ -14,7 +14,9 @@ use super::accounts::{self, Accounts, SignIn};
 use crate::config::UserConfig;
 
 mod password;
+mod reply;
 pub(super) use password::{code, set_password, set_password_page};
+use reply::Reply;
 
 const SESSION: &str = "__Host-thirdshift-session";
 const SIGN_IN: &str = "__Host-thirdshift-sign-in";
@@ -260,19 +262,8 @@ pub(super) async fn sign_in(
             set_cookie(&mut response, SESSION, &token, accounts::LIFETIME);
             response
         }
-        Ok(Ok(SignIn::Refused)) => (
-            StatusCode::UNAUTHORIZED,
-            axum::response::Html("Sign-in failed. <a href=\"/sign-in\">Try again</a>."),
-        )
-            .into_response(),
-        Ok(Ok(SignIn::Slowdown)) => (
-            StatusCode::TOO_MANY_REQUESTS,
-            [(header::RETRY_AFTER, "60")],
-            axum::response::Html(
-                "Sign-in failed. Wait one minute, then <a href=\"/sign-in\">try again</a>.",
-            ),
-        )
-            .into_response(),
+        Ok(Ok(SignIn::Refused)) => Reply::SignInRefused.response().await,
+        Ok(Ok(SignIn::Slowdown)) => Reply::SignInSlowdown.response().await,
         Ok(Err(error)) => failed(error),
         Err(error) => failed(error),
     }
