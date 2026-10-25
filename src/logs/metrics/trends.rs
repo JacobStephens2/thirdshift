@@ -261,9 +261,8 @@ fn collect(
         .add(metrics.map(|metrics| metrics.ci_rounds as f64));
     row.total_minutes
         .add(metrics.and_then(|metrics| metrics.total_minutes));
-    row.confirmed_bug_origins.add(Some(
-        origins.for_pull_request(record.pull_request.as_deref()) as f64,
-    ));
+    row.confirmed_bug_origins
+        .add(Some(origins.for_run(command) as f64));
     let unaddressed = metrics.and_then(|metrics| metrics.unaddressed_findings.as_ref());
     row.unaddressed_findings.standards.add(
         unaddressed

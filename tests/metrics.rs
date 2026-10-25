@@ -765,6 +765,60 @@ fn confirmed_bug_origins_join_saved_child_metrics_without_rewriting_them() {
 }
 
 #[test]
+fn one_confirmed_bug_origin_counts_once_across_continuations_sharing_a_pull_request() {
+    let scenario = Scenario::new();
+    let mut paths = Vec::new();
+    for day in [18, 19] {
+        let mut past = record(7);
+        past["started_at"] = json!(format!("2026-10-{day}T12:00:00Z"));
+        past["ended_at"] = json!(format!("2026-10-{day}T13:00:00Z"));
+        past["stages"] = json!([]);
+        past["pull_request"] = json!("https://github.com/acme/widgets/pull/23");
+        paths.push(write(
+            &scenario,
+            &format!("7-202610{day}T120000.command.json"),
+            &past,
+        ));
+    }
+    for (attribution, expected_week) in [
+        (
+            json!({"source":"local", "command_record":paths[1], "name":"acme/widgets#7"}),
+            "2026-10-19",
+        ),
+        (
+            json!({"source":"local", "command_record":paths[0], "name":"acme/widgets#7"}),
+            "2026-10-12",
+        ),
+        (
+            json!({"source":"built_with", "harness":"codex", "version":"1.0", "model":"sol", "effort":"high"}),
+            "2026-10-19",
+        ),
+    ] {
+        let mut origin = bug_origin(99, "confirmed", 23);
+        origin["settlement"]["pull_request"]["run"] = attribution;
+        scoring_week(
+            &scenario,
+            "week.json",
+            "2026-10-26T00:00:00Z",
+            json!([origin]),
+        );
+        let report = metrics(&scenario, &["metrics", "--json"]);
+        let rows = report["weeks"].as_array().unwrap();
+        let count: f64 = rows
+            .iter()
+            .filter(|row| row["session_kind"].is_null())
+            .map(|row| row["confirmed_bug_origins"]["sum"].as_f64().unwrap())
+            .sum();
+        assert_eq!(count, 1.0, "{report}");
+        let attributed = rows
+            .iter()
+            .find(|row| row["confirmed_bug_origins"]["sum"] == 1.0)
+            .unwrap();
+        assert_eq!(attributed["week"], expected_week);
+    }
+}
+
+#[test]
 fn malformed_scoring_data_is_reported_instead_of_showing_zero_bug_origins() {
     let scenario = Scenario::new();
     write(&scenario, "7-fixture.command.json", &record(7));

@@ -48,7 +48,7 @@ impl<'a> Run<'a> {
             started_at: &record.started_at,
             metrics: record.run_metrics.as_ref().map(|completion| Metrics {
                 completion,
-                confirmed_bug_origins: origins.for_pull_request(record.pull_request.as_deref()),
+                confirmed_bug_origins: origins.for_run(command),
             }),
             children: command
                 .dispatched
@@ -63,7 +63,7 @@ impl<'a> Run<'a> {
 pub fn show(asked: &MetricsArgs) -> Result<()> {
     let config = UserConfig::load()?;
     let snapshot = Snapshot::load_metrics(&config.logs_dir, Local::now())?;
-    let origins = ConfirmedCounts::read()?;
+    let origins = ConfirmedCounts::read(&snapshot)?;
     let mut report = serde_json::json!({
         "version": 1,
         "hostname": crate::host::name().unwrap_or_else(|| "unknown".into())
