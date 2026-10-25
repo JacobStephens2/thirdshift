@@ -65,7 +65,7 @@ pub trait Adapter: Sync {
     ) -> Invocation {
         self.session(choice, resume, prompt)
     }
-    fn check(&self, choice: &mut Choice) -> Result<()>;
+    fn check(&self, choice: &mut Choice, probe: Probe) -> Result<()>;
     fn ask_settings(
         &self,
         outside: &mut dyn Terminal,
@@ -100,6 +100,14 @@ pub trait Adapter: Sync {
     fn link_instruction_fallback(&self, _worktree: &Path) -> Result<()> {
         Ok(())
     }
+}
+
+/// Whether Model validation may start a trial session. A standalone skill
+/// defers that validation to its only session; catalog checks still run.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Probe {
+    Allow,
+    Skip,
 }
 
 /// `args` without the first run of `flags`, in order: a session's

@@ -47,6 +47,7 @@ mod scoring;
 mod security;
 mod session;
 mod setup;
+mod skill;
 mod skills;
 mod spec_run;
 mod terminal;
@@ -88,6 +89,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift pickup base <branch>                Use <branch> as the Base branch
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
+       thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift score                               Sample merged factory work and propose Bug origins
        thirdshift scores [<pull request>] [--mine] [--json]  Show Scores; --mine enters yours
        thirdshift bug-origins [<issue>] [--json]       Show origins; --confirm / --correct <pr> / --none settles one
@@ -119,8 +121,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift update                              Update to the latest release
        thirdshift version                             Print the version
        thirdshift help                                Print this reference
-Start from the issue's repository clone. The Base branch is the branch checked out.
-Positive issue numbers use origin's GitHub repository, including from nested directories.
+Start from the issue's clone. The Base branch is the branch checked out; positive issue numbers use origin, even in nested directories.
 An issue with sub-issues starts a Spec run: its Tickets merge into a Spec branch.
 merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
 Shared options (before or after the Issue URL or number, or after a Pass command):
@@ -297,6 +298,7 @@ fn main() -> ExitCode {
             };
         }
         Ok(Command::ReleaseSummary) => return release_summary(),
+        Ok(Command::Skill { name, issue }) => return printed(skill::run(&name, issue)),
         Ok(Command::Trial(request)) => return printed(trial::run(&request)),
         Ok(Command::OomExec { program, args }) => match scope::oom_exec(&program, &args) {
             // Unreachable on success: `exec` replaces this process.

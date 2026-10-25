@@ -811,6 +811,7 @@ mod tests {
         Ticket {
             issue: IssueUrl::parse(&format!("https://github.com/acme/widgets/issues/{number}"))
                 .unwrap(),
+            title: None,
             is_open,
             labels: Labels::default(),
             has_sub_issues: false,

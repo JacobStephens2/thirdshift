@@ -108,6 +108,10 @@ pub enum Command {
     },
     /// Internal interface for scripts/release.sh: prompt on stdin.
     ReleaseSummary,
+    Skill {
+        name: String,
+        issue: Option<IssueInput>,
+    },
     /// Internal versioned session protocol for Evals.
     Trial(std::path::PathBuf),
     /// Internal scope wrapper for Evals: raise this scope's own `oom_score_adj`,
@@ -700,6 +704,19 @@ pub fn parse(args: &[String]) -> Result<Command> {
             return match &args[1..] {
                 [] => Ok(Command::ReleaseSummary),
                 [extra, ..] => bail!("unexpected argument after --release-summary: {extra}"),
+            };
+        }
+        Some("skill") => {
+            return match &args[1..] {
+                [name] => Ok(Command::Skill {
+                    name: name.clone(),
+                    issue: None,
+                }),
+                [name, keyword, issue] if keyword == "issue" => Ok(Command::Skill {
+                    name: name.clone(),
+                    issue: Some(IssueInput::parse(issue)?),
+                }),
+                _ => bail!("usage: thirdshift skill <skill> [issue <issue>]"),
             };
         }
         Some("setup") => {

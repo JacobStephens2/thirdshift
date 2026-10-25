@@ -462,6 +462,7 @@ thirdshift pickup highest-first   # take the highest-numbered Ready issue instea
 thirdshift pickup base &lt;branch&gt;     # do that with &lt;branch&gt; as the Base branch, from a clone on any branch
 thirdshift secure                   # audit the Base branch and record findings privately (see Security runs)
 thirdshift secure base &lt;branch&gt;     # do that with &lt;branch&gt; as the Base branch, from a clone on any branch
+thirdshift skill &lt;skill&gt; [issue &lt;issue&gt;]   # run one skill headlessly and print its final message
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
 thirdshift scores [&lt;pull request&gt;] [--json] # show Scores and calibration
 thirdshift scores &lt;pull request&gt; --mine [--json] # enter your five Scores
@@ -699,6 +700,30 @@ max_load_per_cpu_percent = 100
 <p>Both settings default to <code>0</code>, disabling that limit. Values are nonnegative whole numbers; <code>max_load_per_cpu_percent</code> is at most 4,294,967,295. A load limit of 100 permits a one-minute load of 8 on eight logical CPUs. Load includes runnable work and, on Linux, tasks waiting for IO; it is not instantaneous CPU usage.</p>
 <p>Before every session, including a Resume, Repair, Security review or a preflight Model test call, thirdshift checks the host. If available RAM is below the minimum or load per CPU exceeds the maximum, it reports why and waits, rechecking every ten seconds. Running sessions continue. Limits are read again on every check, so editing the config can release a waiting Command. Stop or Ctrl-C interrupts the wait through normal cleanup. A failed resource read with limits enabled fails the Command rather than starting a session without a measurement.</p>
 <p>These are host snapshots, not resource reservations or per-session budgets: simultaneous Commands may both pass a check, and container quotas are not measured. <code>spec.parallel</code> still sets the upper bound on parallel Ticket runs. Limits apply to sessions; they do not prevent worktree preparation or Claims.</p>
+</div></details>
+<details class="fold"><summary><h3>Standalone skills</h3></summary>
+<div class="manual-content" id="standalone-skills">
+<p>Run one skill without starting a Run:</p>
+<pre><code class="language-sh">thirdshift skill to-spec issue 42
+thirdshift skill thirdshift-code-review
+thirdshift skill my-repository-skill
+</code></pre>
+<p>The command uses the User config&#39;s default Harness, Model and Effort. It first
+looks for the exact name among the Factory skills and the repository&#39;s committed
+<code>.agents/skills/&lt;name&gt;/SKILL.md</code> and <code>.claude/skills/&lt;name&gt;/SKILL.md</code> files. If none
+matches, it tries the Factory skill <code>thirdshift-&lt;name&gt;</code>. A skill file that
+resolves outside the worktree is not a match. An unknown name lists the
+available skills and starts no session. The optional issue is an Issue URL or a
+positive number resolved from <code>origin</code>. An Issue URL from another repository
+is an origin mismatch and stops the command before any work.</p>
+<p>The session runs in a temporary worktree at the head of the checked-out branch,
+with the Factory skills available. Uncommitted changes in your checkout stay out
+of it. Your checkout stays untouched. The final message goes to stdout; progress,
+failure causes and the path of any retained worktree go to stderr. A completed
+session exits <code>0</code>; a failed or incomplete session exits non-zero.</p>
+<p>The worktree is kept when it has uncommitted changes, commits absent from all
+remote-tracking branches, or uncertain ownership. Otherwise it is removed. No
+Command record, Console entry or Session log is created for a standalone skill.</p>
 </div></details>
 <details class="fold"><summary><h3>User config</h3></summary>
 <div class="manual-content" id="user-config">
@@ -1127,6 +1152,7 @@ thirdshift: 03:12:40 command log: ~/.thirdshift/logs/acme/widgets/commands/issue
 <p>A <strong>Spec</strong> is an issue with sub-issues, its <strong>Tickets</strong>. <code>thirdshift &lt;Issue URL&gt;</code> on a Spec is a <strong>Spec run</strong>: it works through the Tickets in the order their GitHub &quot;blocked by&quot; links allow, each <strong>Ticket run</strong> Self-merging into the <strong>Spec branch</strong>, then leaves one <strong>Spec PR</strong> from the Spec branch into the Base branch ready for review (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0006-spec-runs-merge-tickets-into-a-spec-branch.md">ADR-0006</a>). An issue with no sub-issues is an ordinary Ticket run.</p>
 <p>A Spec run makes the <a href="#the-claim">Claim</a> on the Spec, as a Ticket run does on its issue: the Spec is labelled <code>in-progress</code>, in place of <code>ready-for-agent</code>. Its Tickets&#39; runs change no label on their Tickets. The Claim <a href="#when-the-claim-ends">ends</a> as a Ticket run&#39;s does: it is released if the Spec run fails with no Spec branch on <code>origin</code> and no Spec PR, except for a failed Security fix, removed once a Self-merge of the Spec PR has left the Spec closed, and kept otherwise. The Spec branch is pushed before the first Ticket starts, so a Spec run that got as far as its Tickets keeps its Claim.</p>
 <p>The Spec PR opens as a draft as soon as the first Ticket lands, titled from the Spec, with <code>Closes #&lt;spec&gt;</code> and a Tickets checklist: one line per Ticket, ticked once it is done, with its pull request, or saying it is running, failed, blocked or unready. thirdshift rewrites the checklist between its <code>&lt;!-- thirdshift:tickets --&gt;</code> markers as each Ticket starts and ends, leaving the rest of the body as it is. Once every Ticket is done, the <strong>Spec review</strong> rewrites the body, and thirdshift puts the checklist back, appending it if the markers are gone, before marking the Spec PR ready.</p>
+<p>An Unready Ticket&#39;s checklist and Command log line also name its open blockers, marking those outside the Spec and those labelled <code>ready-for-agent</code>. For example: <code>#24 unready: labelled ready-for-human; blocked by #99 (outside the Spec; ready-for-agent)</code>. The Spec run reports outside blockers but never starts them. Its Command record retains the Ticket and open blocker titles read with the graph, visible in <code>thirdshift show &lt;command&gt; --json</code>. Titles are best effort: <code>null</code> means no title was captured, including in older records; <code>show</code> does not fetch missing titles from GitHub.</p>
 <p>The Spec review session reviews the whole Spec branch against the Base branch and the Spec. Once it is marked ready, the Spec PR goes through the same step 6 as a Ticket run&#39;s pull request, with the Spec as the issue and the Spec branch as the Issue branch: the Base branch is merged in (never rebased), CI watched, and a conflict or red CI handed to a Repair, within the same budgets, with the same Check re-run after a CI-fix Repair that leaves the head unchanged. Inherited failures are told apart the same way everywhere: the Spec PR&#39;s against the Base branch, and a Ticket&#39;s against the Spec branch, its Base branch, with the cause shown on the Ticket&#39;s line of the checklist.</p>
 <p>Tickets always merge into the Spec branch, whatever the command or the User config says. <code>merge</code> (or <code>--merge</code>, or <code>merge.always = true</code> without <code>no-merge</code>) applies to the Spec PR alone: the Spec run ends with the Self-merge of the Spec PR into the Base branch, then deletes the Spec branch on <code>origin</code> and closes the Spec if the merge did not. Without it, the Spec run ends with the Spec PR ready for review. A Spec PR that fails from the Spec review on follows the <a href="#failed-ticket-runs">Failed ticket run</a> rules for its pull request, back to draft unless only the Self-merge could not happen (a policy refusal), and the Spec run exits <code>1</code>.</p>
 <p>A Spec run takes every Ticket it can reach. A Ticket runs once it is open, has every blocker closed, and is not an <strong>Unready Ticket</strong>: an open Ticket labelled <code>ready-for-human</code>, <code>needs-info</code>, <code>wontfix</code> or <code>needs-triage</code>. An open Ticket with no triage label is taken. A Ticket with sub-issues of its own is never run either, and is reported as unready. A blocker outside the Spec counts once it is closed. The graph is read again from GitHub whenever a Ticket run ends, so removing a label, adding a Ticket or closing one by hand takes effect in the same Spec run.</p>
@@ -1140,8 +1166,8 @@ thirdshift --parallel 1 https://github.com/acme/widgets/issues/20 # one at a tim
 <pre><code>thirdshift: 03:12:40 #21 failed: claude exited 1 (session trace: ~/.thirdshift/logs/acme/widgets/commands/issue/21-….logs.jsonl)
 thirdshift: 03:12:40 #22 blocked by #21
 thirdshift: 03:12:40 #23 landed with https://github.com/acme/widgets/pull/1
-thirdshift: 03:12:40 #24 unready: labelled needs-info
-thirdshift: 03:12:40 #25 blocked by #99 (outside the Spec)
+thirdshift: 03:12:40 #24 unready: labelled needs-info; blocked by #99 (outside the Spec; ready-for-agent)
+thirdshift: 03:12:40 #25 blocked by #99 (outside the Spec; ready-for-agent)
 thirdshift: 03:12:40 #26 in a cycle: #26 blocked by #27 blocked by #26
 thirdshift: 03:12:40 #27 in a cycle: #27 blocked by #26 blocked by #27
 thirdshift: 03:12:40 Tickets not done: #21, #22, #24, #25, #26, #27

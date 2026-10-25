@@ -157,6 +157,7 @@ impl Outside for InMemory {
                 let stored = self.get(child);
                 Ticket {
                     issue: child.clone(),
+                    title: stored.view.title.clone(),
                     is_open: stored.view.is_open,
                     labels: stored.view.labels.clone(),
                     has_sub_issues: !stored.children.is_empty(),
@@ -166,6 +167,7 @@ impl Outside for InMemory {
                         .iter()
                         .filter(|url| self.get(url).view.is_open)
                         .cloned()
+                        .map(Into::into)
                         .collect(),
                 }
             })
