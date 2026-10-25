@@ -73,10 +73,10 @@ impl<'a> Execution<'a> {
         complete: impl FnOnce(PathBuf, Output, grading::Score) -> Result<T>,
     ) -> Result<T> {
         let task = request.task;
-        let setup = self.setups[match request.identity.arm {
-            Arm::Baseline => 0,
-            Arm::Candidate => 1,
-        }];
+        let (arm, setup) = match request.identity.arm {
+            Arm::Baseline => (&self.prepared.baseline, self.setups[0]),
+            Arm::Candidate => (&self.prepared.candidate, self.setups[1]),
+        };
         let key = request.identity.key();
         let directory = self.directory.join("trials").join(&key);
         fs::create_dir_all(&directory)?;
@@ -133,7 +133,7 @@ impl<'a> Execution<'a> {
         // Machine caps are read live per attempt, not fixed with the Bar: an
         // operator edit between attempts applies to the next one.
         let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;
-        let launched = self.command(&request, &request_path, &caps)?;
+        let launched = self.command(arm, &request, &request_path, &caps)?;
         // The unit name stays in the attempt for `journalctl --user -u` after.
         fs::write(attempt.join("scope"), launched.scope.unit())?;
         let mut command = launched.command;
@@ -241,14 +241,11 @@ impl<'a> Execution<'a> {
 
     fn command(
         &self,
+        arm: &arms::Arm,
         request: &Request<'_>,
         path: &Path,
         caps: &crate::scope::Caps,
     ) -> Result<crate::scope::Launch> {
-        let arm = match request.identity.arm {
-            Arm::Baseline => &self.prepared.baseline,
-            Arm::Candidate => &self.prepared.candidate,
-        };
         let directory = self
             .directory
             .join("harnesses")
