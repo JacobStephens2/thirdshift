@@ -1,14 +1,35 @@
 //! Prefer a Harness's stream metadata; otherwise read its CLI version once
 //! per owning Command. The locked cache is shared by parallel child Runs.
 
-use std::fs::OpenOptions;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use serde_json::Value;
 
-use super::{Adapter, process};
+use super::{Adapter, Harness, process};
+
+/// Reuse detection from the owning Command, without querying the CLI again.
+/// Missing or unreadable evidence costs attribution, never Delivery.
+pub(crate) fn detected(harness: Harness, command_log: Option<&Path>) -> String {
+    let read = || -> io::Result<String> {
+        let path = cache_path(command_log.ok_or(io::ErrorKind::NotFound)?, harness.name());
+        let mut file = File::open(path)?;
+        file.lock_shared()?;
+        let mut version = String::new();
+        file.read_to_string(&mut version)?;
+        Ok(version)
+    };
+    read()
+        .ok()
+        .and_then(|version| nonempty(&version).map(str::to_owned))
+        .unwrap_or_else(|| "unknown".into())
+}
+
+fn cache_path(command_log: &Path, harness: &str) -> PathBuf {
+    command_log.with_extension(format!("harness-{harness}.version"))
+}
 
 pub(crate) struct Version {
     adapter: &'static dyn Adapter,
@@ -37,8 +58,7 @@ impl Version {
         }
         Self {
             adapter,
-            cache: command_log
-                .map(|log| log.with_extension(format!("harness-{}.version", adapter.name()))),
+            cache: command_log.map(|log| cache_path(log, adapter.name())),
             command,
             current: None,
         }

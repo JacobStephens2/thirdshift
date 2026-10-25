@@ -98,6 +98,7 @@ impl<O: Outside> Record<O> {
             Begin::ArchitectRun => CommandKind::Architect,
             Begin::PickupRun => CommandKind::Pickup,
             Begin::SecurityRun => CommandKind::Secure,
+            Begin::ScoringRun => CommandKind::Scoring,
             Begin::Experiment => CommandKind::Experiment,
         };
         let (starting, quiet) = match begin {
@@ -110,6 +111,7 @@ impl<O: Outside> Record<O> {
             Begin::ArchitectRun => ("Architect run starting".into(), true),
             Begin::PickupRun => ("Pickup run starting".into(), true),
             Begin::SecurityRun => ("Security run starting".into(), true),
+            Begin::ScoringRun => ("Scoring run starting".into(), false),
             Begin::Experiment => ("Experiment starting".into(), false),
         };
         let now = self.outside.now();
@@ -461,10 +463,10 @@ impl<O: Outside> Record<O> {
         Some(super::trace::Context::from_record(owner, active))
     }
 
-    /// Child Runs carry the owning CommandKind, so a Security run's entire
-    /// Session tree stays local even while it dispatches public fixes.
+    /// Child Runs carry the owning CommandKind, so private Security and
+    /// Scoring Session trees stay local, including public Security fixes.
     pub(super) fn otlp_endpoint(&self) -> Option<String> {
-        if self.command == CommandKind::Secure {
+        if matches!(self.command, CommandKind::Secure | CommandKind::Scoring) {
             None
         } else {
             self.otlp_endpoint.clone()

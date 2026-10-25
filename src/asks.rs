@@ -296,6 +296,7 @@ mod tests {
     /// default.
     fn no_settings() -> UserConfig {
         UserConfig {
+            scoring: crate::config::scoring::Settings::default(),
             resources: crate::resources::Limits::default(),
             console: crate::config::ConsoleSettings::default(),
             merge_always: false,

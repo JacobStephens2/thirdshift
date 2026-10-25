@@ -536,6 +536,45 @@ fn with_export(test: &str, script: &str, check: impl FnOnce(&Path)) {
 }
 
 #[test]
+fn stream_only_recording_never_launches_a_retained_export() {
+    with_export(
+        "stream_only_recording_never_launches_a_retained_export",
+        r#"#!/bin/sh
+touch "$THIRDSHIFT_RECORDING_EXPORT/exported"
+echo '{"info":{"outcome":"completed"},"messages":[{"type":"assistant","model":{"id":"retained-model"},"content":[]}]}'
+"#,
+        |root| {
+            let fixture = Fixture::new();
+            fixture
+                .recording
+                .run(
+                    "scoring-grader",
+                    &Choice {
+                        harness: Harness::OpenCode,
+                        ..Choice::default()
+                    },
+                    Command::new("/bin/sh")
+                        .args(["-c", &format!("echo '{OPENCODE_INIT}'")])
+                        .current_dir(fixture.root.path()),
+                    Input {
+                        policy: Policy::StreamOnly,
+                        private: true,
+                        ..Input::default()
+                    },
+                    &fixture.log("scoring-grader"),
+                )
+                .unwrap();
+            assert!(!root.join("exported").exists());
+            let trace =
+                fs::read_to_string(fixture.log("scoring-grader").with_extension("logs.jsonl"))
+                    .unwrap();
+            assert!(trace.contains("step_start"), "{trace}");
+            assert!(!trace.contains("retained-model"), "{trace}");
+        },
+    );
+}
+
+#[test]
 fn absent_completion_report_preserves_the_stream_checkpoint() {
     with_export(
         "absent_completion_report_preserves_the_stream_checkpoint",

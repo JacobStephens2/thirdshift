@@ -358,7 +358,7 @@ fn json<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
         .with_context(|| format!("invalid replay data {}", path.display()))
 }
 
-fn suite_manifest(trials: usize) -> String {
+pub(super) fn suite_manifest(trials: usize) -> String {
     format!(
         r#"format = 1
 trials_per_arm = {trials}

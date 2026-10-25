@@ -31,6 +31,7 @@ use crate::skills;
 
 /// How a command that did factory work, or was skipped before any, ended.
 pub enum Ending {
+    Scoring(Result<usize, FailedRun>),
     /// A Run or a Spec run ended: started by hand, or dispatched by a Pickup
     /// run.
     Run(Ended),

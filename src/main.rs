@@ -43,6 +43,7 @@ mod run;
 mod run_ending;
 mod sandbox;
 mod scope;
+mod scoring;
 mod security;
 mod session;
 mod setup;
@@ -87,6 +88,9 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift pickup base <branch>                Use <branch> as the Base branch
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
+       thirdshift score                               Sample merged factory work and propose Bug origins
+       thirdshift scores [<pull request>] [--mine] [--json]  Show Scores; --mine enters yours
+       thirdshift bug-origins [<issue>] [--json]       Show origins; --confirm / --correct <pr> / --none settles one
        thirdshift email-test [<address>]              Send a test email through Resend
        thirdshift setup                               Choose defaults and write the User config
        thirdshift evals <action>                      Manage Eval data and Arms, including import-replays; see the manual
@@ -114,13 +118,10 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift update                              Update to the latest release
        thirdshift version                             Print the version
        thirdshift help                                Print this reference
-
 Start from the issue's repository clone. The Base branch is the branch checked out.
-Use a positive decimal number anywhere an Issue URL is accepted, e.g. thirdshift merge 106.
-Numbers use origin's GitHub repository, including from nested directories in the clone.
+Positive issue numbers use origin's GitHub repository, including from nested directories.
 An issue with sub-issues starts a Spec run: its Tickets merge into a Spec branch.
 merge on a Spec merges the Spec PR. <focus> is one quoted free-text argument.
-
 Shared options (before or after the Issue URL or number, or after a Pass command):
   merge / no-merge                    Merge the pull request / leave it for review
   email [<address>] / no-email        Send a Run notification / skip it (email-unless-merged [<address>]: unless merged)
@@ -160,6 +161,15 @@ fn main() -> ExitCode {
         }
         Ok(Command::Update) => return outcome(update::update()),
         Ok(Command::Setup) => return outcome(setup::setup()),
+        Ok(Command::Score) => return score(),
+        Ok(Command::BugOrigins(options)) => return printed(scoring::origins::execute(options)),
+        Ok(Command::Scores {
+            pull_request,
+            mine,
+            json,
+        }) => {
+            return printed(scoring::show(pull_request.as_deref(), mine, json));
+        }
         Ok(Command::Evals(action)) => return printed(evals::execute(action)),
         Ok(Command::Experiment(options)) => {
             return match evals::experiment::run(options) {
@@ -447,6 +457,29 @@ fn secure(args: PassArgs) -> ExitCode {
             close,
         },
     })
+}
+
+fn score() -> ExitCode {
+    let _lock = match scoring::lock() {
+        Ok(Some(lock)) => lock,
+        Ok(None) => {
+            progress::step("Scoring run skipped: another Scoring run is running on this machine");
+            return ExitCode::SUCCESS;
+        }
+        Err(error) => return failure(&error),
+    };
+    let started_at = chrono::Utc::now();
+    let (config, started) = match command::start(
+        Begin::ScoringRun,
+        |_| notification::NotificationAsk::Skip,
+        About::ScoringRun,
+    ) {
+        Ok(started) => started,
+        Err(failure) => return failure,
+    };
+    started.finish(Ending::Scoring(
+        scoring::sample(&config, started_at).map_err(Into::into),
+    ))
 }
 
 /// The release script's internal interface: the prompt on stdin, only the

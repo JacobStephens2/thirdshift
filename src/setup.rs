@@ -1268,6 +1268,13 @@ effort = \"\"
 model = \"\"
 effort = \"\"
 
+[scoring]
+owners = []
+sample_size = 10
+harness = \"claude\"
+model = \"\"
+fallback_harness = \"codex\"
+fallback_model = \"\"
 [trial]
 memory_high = \"1G\"
 memory_max = \"2G\"

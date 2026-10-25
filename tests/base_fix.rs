@@ -87,7 +87,9 @@ fn prompts(scenario: &Scenario) -> Vec<String> {
 fn with_base_fix_an_inherited_failure_gets_an_issue_a_merged_fix_and_the_run_finishes_green() {
     let scenario = Scenario::new();
     scenario.agent_does(RUN_OPENS_PR_WITH_INHERITED_FAILURE);
-    scenario.agent_does_for(8, &format!("{BASE_FIX_OPENS_PR}{GREEN_ON_HEAD}"));
+    scenario.agent_does_for(8, &format!(
+        "printf '%s\\n' '{{\"type\":\"system\",\"subtype\":\"init\",\"claude_code_version\":\"10.0.0\"}}'\n{BASE_FIX_OPENS_PR}{GREEN_ON_HEAD}"
+    ));
     let red_base = scenario.origin_git(&["rev-parse", "main"]);
 
     let result = scenario.run(&[&scenario.issue_url(7), "base-fix"]);
@@ -95,6 +97,20 @@ fn with_base_fix_an_inherited_failure_gets_an_issue_a_merged_fix_and_the_run_fin
     assert_eq!(result.code, Some(0), "stderr: {}", result.stderr);
     assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
     let gh = scenario.gh_state();
+    for pr in gh["prs"].as_array().unwrap() {
+        assert!(
+            pr["body"]
+                .as_str()
+                .unwrap()
+                .contains("Built with claude 10.0.0 · "),
+            "{pr}"
+        );
+    }
+    let (_, notification) = support::resend::saved_notification(&scenario, "issue");
+    assert!(
+        notification.contains("Built with claude 10.0.0 · "),
+        "{notification}"
+    );
     assert_eq!(gh["titles"]["8"], "CI red on main: test");
     assert_eq!(
         gh["bodies"]["8"],

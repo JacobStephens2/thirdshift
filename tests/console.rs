@@ -51,6 +51,9 @@ mod cronjobs;
 #[path = "console/experiments.rs"]
 mod experiments;
 
+#[path = "console/scoring.rs"]
+mod scoring;
+
 struct Console {
     child: Child,
     address: String,

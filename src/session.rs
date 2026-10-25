@@ -26,6 +26,7 @@ use crate::skills;
 
 pub mod kind;
 pub(crate) mod limits;
+pub(crate) mod private;
 pub mod recording;
 mod review_reports;
 pub(crate) mod trace;

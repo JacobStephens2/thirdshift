@@ -82,6 +82,19 @@ fn all_six_harnesses_record_their_version_in_session_trace_resources() {
         let result = scenario.run(&["harness", harness, &scenario.issue_url(7)]);
         assert_eq!(result.code, Some(0), "{harness}: {}", result.stderr);
         assert_harness_version(&scenario, "9.8.7");
+        assert!(
+            scenario.gh_state()["prs"][0]["body"]
+                .as_str()
+                .unwrap()
+                .contains(&format!("Built with {harness} 9.8.7 · ")),
+            "{}",
+            scenario.gh_state()
+        );
+        let (_, notification) = support::resend::saved_notification(&scenario, "issue");
+        assert!(
+            notification.contains(&format!("Built with {harness} 9.8.7 · ")),
+            "{notification}"
+        );
         assert_eq!(
             version_queries(&scenario, harness),
             usize::from(harness != "claude")
@@ -100,6 +113,18 @@ fn parallel_ticket_sessions_share_one_version_query_but_a_new_command_reads_agai
     assert_eq!(scenario.codex_calls().len(), 3);
     assert_harness_version(&scenario, "9.8.7");
     assert_eq!(version_queries(&scenario, "codex"), 1);
+    let state = scenario.gh_state();
+    let prs = state["prs"].as_array().unwrap();
+    assert_eq!(prs.len(), 3, "{state}");
+    for pr in prs {
+        assert!(
+            pr["body"]
+                .as_str()
+                .unwrap()
+                .contains("Built with codex 9.8.7 · "),
+            "{pr}"
+        );
+    }
 
     scenario.agent_does_for(7, &opens_pr(7, "main"));
     let result = scenario.run(&["harness", "codex", &scenario.issue_url(7)]);
@@ -122,7 +147,63 @@ fn missing_or_failed_version_lookups_record_unknown_without_failing_the_session(
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert_harness_version(&scenario, "unknown");
         assert_eq!(version_queries(&scenario, "claude"), 1);
+        assert!(
+            scenario.gh_state()["prs"][0]["body"]
+                .as_str()
+                .unwrap()
+                .contains("Built with claude unknown · "),
+            "{}",
+            scenario.gh_state()
+        );
+        let (_, notification) = support::resend::saved_notification(&scenario, "issue");
+        assert!(
+            notification.contains("Built with claude unknown · "),
+            "{notification}"
+        );
     }
+}
+
+#[test]
+fn notification_keeps_the_pull_requests_version_after_a_repair_changes_it() {
+    let scenario = support::Scenario::new();
+    scenario.agent_does_in_session(
+        1,
+        r#"
+echo feature > feature.txt
+git add feature.txt
+git commit -qm 'Add feature'
+gh pr create --base main --head issue-7 --title Work --body 'Closes #7'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"failure"}]'
+"#,
+    );
+    scenario.agent_does_in_session(2, r#"
+printf '%s\n' '{"type":"system","subtype":"init","claude_code_version":"10.0.0","session_id":"fake-session-2"}'
+echo fixed > fix.txt
+git add fix.txt
+git commit -qm 'Fix CI'
+gh fake checks "$(git rev-parse HEAD)" '[{"name":"test","conclusion":"success"}]'
+"#);
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2);
+    let state = scenario.gh_state();
+    let pr_line = state["prs"][0]["body"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .find(|line| line.starts_with("Built with "))
+        .unwrap()
+        .strip_suffix(" <!-- thirdshift:built-with -->")
+        .unwrap();
+    let (_, notification) = support::resend::saved_notification(&scenario, "issue");
+    let notification_line = notification
+        .lines()
+        .find(|line| line.starts_with("Built with "))
+        .unwrap()
+        .strip_suffix(" (configured)")
+        .unwrap();
+    println!("PR: {pr_line}\nNotification: {notification_line}");
+    assert_eq!(pr_line, notification_line);
 }
 
 #[test]
