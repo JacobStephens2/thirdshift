@@ -1809,7 +1809,12 @@ evidence; `thirdshift scores --json` includes it. Session artifacts stay in
 the window's private `packets/origins/` directory. Proposals count for nothing
 until the Day shift settles them. A plan-limit warning stops Scoring
 before another proposal starts and advances no window; retry `thirdshift score`
-to analyze that window again. A session or search failure also advances no window.
+to analyze that window again. A search failure also advances no window. A
+Bug-origin session that fails, times out or leaves no proposal records that
+bug with no commit and says why; the window keeps every other proposal and
+publishes the failed session's artifacts with them, and the Day shift settles
+that bug by hand. A proposal that points outside the session's workspace or
+names a commit outside the fix's history still advances no window.
 
 `thirdshift bug-origins [<issue>] [--json]` lists origins and their state:
 `proposed`, `confirmed` or `rejected`. Use an issue URL, or a number when it

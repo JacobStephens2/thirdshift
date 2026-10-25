@@ -1200,7 +1200,9 @@ fn a_merge_refused_with_nothing_left_to_fix_leaves_the_pr_ready_for_review() {
 fn a_merge_run_ends_with_the_issue_closed_and_its_claim_removed() {
     let scenario = Scenario::new();
     scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
-    scenario.agent_does(AGENT_OPENS_PR);
+    scenario.agent_does(&format!(
+        "{AGENT_OPENS_PR}echo 'Bug reproduced: fixed' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n"
+    ));
 
     let result = scenario.run(&["merge", &scenario.issue_url(7)]);
 
