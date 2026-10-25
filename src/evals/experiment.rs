@@ -7,6 +7,7 @@ mod integrity;
 mod limits;
 mod model_grader;
 mod options;
+mod reading;
 mod rechecks;
 mod release;
 mod store;
