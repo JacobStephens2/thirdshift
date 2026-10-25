@@ -6,8 +6,9 @@ use super::{Proposal, PullRequest, Run, Settlement, State};
 use crate::config::UserConfig;
 use crate::github::GitHub;
 use crate::issue::IssueUrl;
+use crate::scoring::store::{Retained, Store};
 use crate::security::fixing::SECURITY_FIX;
-use crate::{config, evals, scoring};
+use crate::{evals, scoring};
 
 enum Action {
     Confirm,
@@ -70,15 +71,14 @@ pub(crate) fn apply(options: Options) -> Result<String> {
     } else {
         None
     };
-    let directory = scoring::directory()?;
-    let mut weeks = scoring::read(&directory)?;
+    let mut weeks = Store::open()?.load()?;
     let issue = options
         .issue
         .as_deref()
         .map(|target| {
             let matches: BTreeSet<_> = weeks
                 .iter()
-                .flat_map(|week| week.bug_origins.iter().flatten())
+                .flat_map(|sample| sample.week.bug_origins.iter().flatten())
                 .filter(|origin| {
                     origin
                         .issue
@@ -98,7 +98,7 @@ pub(crate) fn apply(options: Options) -> Result<String> {
     if let Some(action) = options.action {
         let previous: Vec<_> = weeks
             .iter()
-            .flat_map(|week| week.bug_origins.iter().flatten())
+            .flat_map(|sample| sample.week.bug_origins.iter().flatten())
             .filter(|origin| Some(&origin.issue) == issue.as_ref())
             .filter_map(|origin| {
                 origin
@@ -107,18 +107,19 @@ pub(crate) fn apply(options: Options) -> Result<String> {
                     .map(|settlement| settlement.eval_task.clone())
             })
             .collect();
-        let week = weeks
+        let retained = weeks
             .iter_mut()
             .rev()
-            .find(|week| {
-                week.bug_origins.as_ref().is_some_and(|origins| {
+            .find(|sample| {
+                sample.week.bug_origins.as_ref().is_some_and(|origins| {
                     origins
                         .iter()
                         .any(|origin| Some(&origin.issue) == issue.as_ref())
                 })
             })
             .unwrap();
-        let origin = week
+        let origin = retained
+            .week
             .bug_origins
             .as_mut()
             .unwrap()
@@ -130,10 +131,7 @@ pub(crate) fn apply(options: Options) -> Result<String> {
             .settlement
             .as_ref()
             .map(|settlement| settlement.eval_task.clone());
-        config::replace(
-            &scoring::checkpoint(&directory, week)?,
-            &serde_json::to_string_pretty(week)?,
-        )?;
+        retained.commit()?;
         // Reopened and reclosed bugs can have several retained occurrences.
         // The latest decision supersedes all their pending proposals.
         for reference in previous {
@@ -178,21 +176,19 @@ pub(crate) fn apply(options: Options) -> Result<String> {
 }
 
 pub(crate) fn view() -> Result<Vec<Proposal>> {
-    Ok(listed(scoring::read(&scoring::directory()?)?))
+    Ok(listed(Store::open()?.load()?))
 }
 
-fn listed(weeks: Vec<scoring::Week>) -> Vec<Proposal> {
+fn listed(weeks: Vec<Retained>) -> Vec<Proposal> {
     weeks
         .into_iter()
+        .map(Retained::into_week)
         .flat_map(|week| week.bug_origins.unwrap_or_default())
         .collect()
 }
 
 fn settle(origin: &mut Proposal, action: Action) -> Result<()> {
     if matches!(action, Action::Reject) {
-        if let Some(settlement) = &origin.settlement {
-            evals::bug_origin::withdraw(&settlement.eval_task)?;
-        }
         origin.state = State::Rejected;
         origin.settlement = None;
         return Ok(());
@@ -244,9 +240,6 @@ fn settle(origin: &mut Proposal, action: Action) -> Result<()> {
     );
     let pull_request = PullRequest::attributed(&UserConfig::load()?.logs_dir, url, &review.body)?;
     let eval_task = evals::bug_origin::propose(&bug, &pr, review, &origin.reason)?;
-    if let Some(previous) = &origin.settlement {
-        evals::bug_origin::withdraw(&previous.eval_task)?;
-    }
     origin.settlement = Some(Settlement {
         pull_request,
         corrected,
@@ -260,7 +253,8 @@ fn settle(origin: &mut Proposal, action: Action) -> Result<()> {
 /// origins cannot contribute, and no stale Command record needs rewriting.
 pub(crate) fn confirmed_counts() -> Result<BTreeMap<std::path::PathBuf, usize>> {
     let mut latest = BTreeMap::new();
-    for week in scoring::read(&scoring::directory()?)? {
+    for sample in Store::open()?.load()? {
+        let week = sample.into_week();
         for origin in week.bug_origins.into_iter().flatten() {
             latest.insert(origin.issue.clone(), origin);
         }
