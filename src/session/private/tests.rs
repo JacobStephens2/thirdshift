@@ -291,7 +291,9 @@ fn scoring_stream_only_never_launches_a_retained_export() {
             write_executable(
                 &root.join("bin/opencode"),
                 r#"#!/bin/sh
+if [ "${1-}" = --version ]; then echo fixture; exit 0; fi
 if [ "$1" = export ]; then touch exported; exit 99; fi
+cat > /dev/null
 echo '{"type":"step_start","sessionID":"s1","part":{"messageID":"m1"}}'
 "#,
             );
