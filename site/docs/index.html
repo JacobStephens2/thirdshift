@@ -563,8 +563,14 @@ an Arm&#39;s build predates warning detection.</p>
 prepared repository. Trial artifacts and one result per finished Trial live
 privately in <code>~/.thirdshift/evals/experiments/&lt;id&gt;/</code>. Trials run in a bwrap
 sandbox with a fresh home and provider-only network. Code Graders then score each Trial:
-a changed repository makes it void, a review with no reports fails, and the
-Eval task&#39;s mechanical checks must pass. Scores retain each check and its reason.
+editing or deleting <code>.thirdshift-issue.md</code> or a declared input, moving the Base
+branch, or altering or removing the base or prepared change commit makes an
+otherwise successful Trial void with <code>repository_changed</code>. Issue branch commits,
+pushes to the local origin, reports and other working-tree files are allowed.
+A review with no reports fails, and the Eval task&#39;s mechanical checks must pass.
+Those checks run on a private copy of the prepared repository captured before
+the session, so the session cannot change the code they grade. Checks share
+their own build artifacts. Scores retain each check and its reason.
 Then a fresh model Grader scores one blind packet per Eval task against its
 written success criteria. Each packet holds every Trial&#39;s review reports with
 shuffled neutral labels and identifying Harness, Model, Effort and Arm lines

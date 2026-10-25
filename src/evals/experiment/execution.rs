@@ -90,13 +90,31 @@ impl<'a> Execution<'a> {
             &attempt.join("repository"),
         )?;
         // Establish the Harness's idempotent instruction fallback before the
-        // comparison. The session may read it, but editing it still voids a Trial.
+        // comparison and the private repository captured for mechanical checks.
         setup
             .choice()
             .harness
             .adapter()
             .link_instruction_fallback(&prepared_repo.repository)?;
-        let before = integrity::snapshot(&prepared_repo.repository)?;
+        let before = integrity::Snapshot::capture(&prepared_repo.repository, &task.manifest)?;
+        // This directory is outside the Trial's sandbox. Graders must see
+        // the prepared state even when the review fixes and commits code.
+        let grading_snapshot = if task.manifest.checks.is_empty() {
+            None
+        } else {
+            let snapshot = tempfile::Builder::new()
+                .prefix("prepared-grader-")
+                .tempdir()?;
+            crate::sandbox::code_grader::copy_repository(
+                &prepared_repo.repository,
+                &snapshot.path().join("repository"),
+            )?;
+            Some(snapshot)
+        };
+        let grading_repository = grading_snapshot.as_ref().map_or_else(
+            || prepared_repo.repository.clone(),
+            |snapshot| snapshot.path().join("repository"),
+        );
         let inputs = task
             .manifest
             .trial
@@ -203,24 +221,22 @@ impl<'a> Execution<'a> {
             protocol.void_cause = Some(VoidCause::MemoryCap);
             protocol.cause = Some(crate::scope::OOM_KILL_CAUSE.into());
         }
-        let after = integrity::snapshot(&prepared_repo.repository);
+        let unchanged = before.unchanged(&prepared_repo.repository);
         interrupt::check()?;
         // Keep known failures and external Void causes, including limit
         // stops. Repository changes invalidate an otherwise successful Trial.
-        if protocol.outcome == Outcome::Succeeded
-            && !after.as_ref().is_ok_and(|after| after == &before)
-        {
+        if protocol.outcome == Outcome::Succeeded && !unchanged.is_ok_and(|unchanged| unchanged) {
             protocol.outcome = Outcome::Void;
             protocol.void_cause = Some(VoidCause::RepositoryChanged);
             protocol.cause = Some("Trial repository changed during its session".into());
         }
         let score = trace.grade(|| {
-            match grading::score(task, &prepared_repo.repository, &protocol, self.timeout) {
+            match grading::score(task, &grading_repository, &protocol, self.timeout) {
                 Err(error) if error.is::<crate::sandbox::Unavailable>() => {
                     protocol.outcome = Outcome::Void;
                     protocol.void_cause = Some(VoidCause::SandboxUnavailable);
                     protocol.cause = Some(format!("{error:#}"));
-                    grading::score(task, &prepared_repo.repository, &protocol, self.timeout)
+                    grading::score(task, &grading_repository, &protocol, self.timeout)
                 }
                 score => score,
             }
