@@ -97,7 +97,7 @@ impl Peek {
             issue_label,
             command,
             cli,
-            facts: Fact::children(value),
+            facts: Fact::children(value, false),
             logs,
         }
     }
@@ -107,8 +107,10 @@ impl Peek {
 }
 
 impl Fact {
-    fn new(label: String, value: Value) -> Self {
+    fn new(label: String, value: Value, in_metrics: bool) -> Self {
+        let in_metrics = in_metrics || label == "run_metrics";
         let text = match &value {
+            Value::Null if in_metrics => "Missing".into(),
             Value::Null => "None".into(),
             Value::String(text) if label == "kind" || label == "name" => {
                 crate::logs::display_name(text).to_owned()
@@ -122,19 +124,19 @@ impl Fact {
         Self {
             label: label.replace('_', " "),
             value: text,
-            children: Self::children(value),
+            children: Self::children(value, in_metrics),
         }
     }
-    fn children(value: Value) -> Vec<Self> {
+    fn children(value: Value, in_metrics: bool) -> Vec<Self> {
         match value {
             Value::Object(fields) => fields
                 .into_iter()
-                .map(|(label, value)| Self::new(label, value))
+                .map(|(label, value)| Self::new(label, value, in_metrics))
                 .collect(),
             Value::Array(items) => items
                 .into_iter()
                 .enumerate()
-                .map(|(index, value)| Self::new((index + 1).to_string(), value))
+                .map(|(index, value)| Self::new((index + 1).to_string(), value, in_metrics))
                 .collect(),
             _ => Vec::new(),
         }

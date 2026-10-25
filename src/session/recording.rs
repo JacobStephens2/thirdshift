@@ -354,13 +354,22 @@ impl Recording {
 }
 
 #[derive(Serialize, Deserialize)]
-struct SessionModels {
+pub(crate) struct SessionModels {
     command_log: Option<PathBuf>,
     kind: String,
-    harness: String,
-    requested: Option<String>,
-    effort: Option<String>,
+    pub(crate) harness: String,
+    pub(crate) requested: Option<String>,
+    pub(crate) effort: Option<String>,
     observed: Vec<String>,
+}
+
+impl SessionModels {
+    /// Read only the exact Session's evidence belonging to this Command.
+    pub(crate) fn for_session(log: &Path, command_log: &Path) -> Option<Self> {
+        let path = logs::session::original(log).with_extension("models.json");
+        let evidence: Self = serde_json::from_slice(&fs::read(path).ok()?).ok()?;
+        (evidence.command_log.as_deref() == Some(command_log)).then_some(evidence)
+    }
 }
 
 struct StreamPolicy {

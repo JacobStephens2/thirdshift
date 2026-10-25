@@ -59,10 +59,7 @@ impl Trace {
             b"session",
             log.as_os_str().as_encoded_bytes(),
         ]);
-        let input_excludes_cache = matches!(
-            choice.harness,
-            crate::harness::Harness::Claude | crate::harness::Harness::Grok
-        );
+        let input_excludes_cache = choice.harness.input_excludes_cache();
         let mut attrs = vec![
             attribute("service.name", "thirdshift"),
             attribute("service.version", env!("CARGO_PKG_VERSION")),
@@ -77,6 +74,9 @@ impl Trace {
         }
         if let Some(effort) = &choice.effort {
             attrs.push(attribute("thirdshift.request.effort", effort));
+        }
+        if let Some(dir) = command.get_current_dir() {
+            attrs.push(attribute("thirdshift.harness.directory", dir.display()));
         }
         Ok(Self {
             logs: Writer::new(File::create(log.with_extension("logs.jsonl"))?),
@@ -105,9 +105,6 @@ impl Trace {
                         "thirdshift.harness.arguments",
                         serde_json::to_string(&recorded_arguments(command)).unwrap(),
                     ));
-                    if let Some(dir) = command.get_current_dir() {
-                        attrs.push(attribute("thirdshift.harness.directory", dir.display()));
-                    }
                     attrs
                 },
                 ..Default::default()

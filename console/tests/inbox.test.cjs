@@ -337,6 +337,82 @@ test("all section headings fit above the fold on a 14 inch laptop with a busy Ne
   }
 });
 
+test("Run metrics show present and missing signals in details, including at 390 px", async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const complete = {
+    outcome: 'merged', repairs: 0, ci_rounds: 2, total_minutes: 12.5,
+    unaddressed_findings: { standards: 1, spec: 0, security: 2 },
+    stages: [{ name: 'implement', seconds: 750, minutes: 12.5,
+      usual_range: { lower_seconds: 600, upper_seconds: 900 }, position: 'within',
+      review_findings: { standards: 3, spec: 4 } }]
+  };
+  const partial = structuredClone(complete);
+  partial.total_minutes = null;
+  partial.unaddressed_findings.security = null;
+  partial.stages[0].usual_range = null;
+  partial.stages[0].position = 'too_few_runs';
+  partial.stages[0].review_findings.spec = null;
+  const fact = (scope, label) => scope.locator('dt').filter({ hasText: new RegExp(`^${label}$`) }).locator('xpath=following-sibling::dd[1]');
+  try {
+    for (const width of [1440, 390]) {
+      const page = await pageFor(t, { viewport: { width, height: 844 } });
+      for (const [name, metrics] of [['complete', complete], ['partial', partial], ['older', undefined], ['unfinished', undefined]]) {
+        const fixture = JSON.parse(original);
+        fixture.kind = 'Run';
+        fixture.run_metrics = metrics;
+        if (name === 'unfinished') {
+          fixture.outcome = null;
+          fixture.ended_at = null;
+        }
+        await writeFile(path, JSON.stringify(fixture));
+        await page.goto(origin);
+        const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#1$/ }) });
+        await row.locator('.peek-link').click();
+        const details = page.locator('#peek');
+        const shown = fact(details, 'run metrics');
+        await shown.waitFor();
+        if (name === 'unfinished') {
+          assert.equal(await shown.textContent(), 'Missing');
+        } else if (name === 'older') {
+          assert.equal(await fact(shown, 'outcome').textContent(), 'failed');
+          assert.equal(await fact(shown, 'repairs').textContent(), '0');
+          assert.equal(await fact(shown, 'ci rounds').textContent(), '0');
+          assert.equal(await fact(shown, 'total minutes').textContent(), '0.0');
+          assert.equal(await fact(shown, 'unaddressed findings').textContent(), 'Missing');
+        } else {
+          assert.equal(await fact(shown, 'outcome').textContent(), 'merged');
+          assert.equal(await fact(shown, 'repairs').textContent(), '0');
+          assert.equal(await fact(shown, 'ci rounds').textContent(), '2');
+          assert.equal(await fact(shown, 'total minutes').textContent(), name === 'partial' ? 'Missing' : '12.5');
+          const unaddressed = fact(shown, 'unaddressed findings');
+          assert.equal(await fact(unaddressed, 'standards').textContent(), '1');
+          assert.equal(await fact(unaddressed, 'spec').textContent(), '0');
+          assert.equal(await fact(unaddressed, 'security').textContent(), name === 'partial' ? 'Missing' : '2');
+          const stages = fact(shown, 'stages');
+          assert.equal(await fact(stages, 'name').textContent(), 'implement');
+          assert.equal(await fact(stages, 'seconds').textContent(), '750.0');
+          assert.equal(await fact(stages, 'minutes').textContent(), '12.5');
+          assert.equal(await fact(stages, 'position').textContent(), name === 'partial' ? 'too_few_runs' : 'within');
+          if (name === 'partial') assert.equal(await fact(stages, 'usual range').textContent(), 'Missing');
+          else {
+            assert.equal(await fact(stages, 'lower seconds').textContent(), '600.0');
+            assert.equal(await fact(stages, 'upper seconds').textContent(), '900.0');
+          }
+          const review = fact(stages, 'review findings');
+          assert.equal(await fact(review, 'standards').textContent(), '3');
+          assert.equal(await fact(review, 'spec').textContent(), name === 'partial' ? 'Missing' : '4');
+        }
+        if (name !== 'unfinished') assert.equal(await fact(shown, 'confirmed bug origins').textContent(), '0');
+        assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true, `${name} at ${width}px`);
+        assert.equal(await details.evaluate(el => el.scrollWidth <= el.clientWidth), true, `${name} details at ${width}px`);
+        await page.keyboard.press('Escape');
+      }
+      await page.close();
+    }
+  } finally { await writeFile(path, original); }
+});
+
 test("the Inbox works without JavaScript and Focus auto follows system light and dark", async t => {
   const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 }, colorScheme: "light" });
   await page.goto(origin);

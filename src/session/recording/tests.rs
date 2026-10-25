@@ -43,6 +43,131 @@ impl Fixture {
 const MODEL: &str = r#"{"type":"assistant","message":{"model":"reported-model","content":[]}}"#;
 
 #[test]
+fn claude_stopped_background_agent_is_one_killed_work_item() {
+    let fixture = Fixture::new();
+    let _ = fixture.run(
+        "implement",
+        r#"
+echo '{"type":"assistant","message":{"id":"m1","content":[{"type":"tool_use","id":"agent-tool","name":"Agent","input":{"description":"Review","run_in_background":true}}]}}'
+echo '{"type":"system","subtype":"task_started","task_id":"background-task","tool_use_id":"agent-tool","task_type":"local_agent"}'
+echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"agent-tool","content":"Async agent launched"}]}}'
+echo '{"type":"system","subtype":"task_notification","task_id":"background-task","status":"stopped","summary":"Terminated"}'
+echo '{"type":"result","subtype":"success","result":"Done"}'
+"#,
+        &Choice::default(),
+    );
+    let measured = crate::logs::session_signals::read(&fixture.log("implement"))
+        .unwrap()
+        .unwrap();
+    let measured = serde_json::to_value(measured).unwrap();
+    assert_eq!(measured["signals"]["killed_work"], 1, "{measured:#}");
+}
+
+#[test]
+fn session_signals_count_calls_once_after_late_permission_metadata() {
+    let fixture = Fixture::new();
+    fixture.run("implement", r#"
+echo '{"type":"assistant","message":{"id":"m1","model":"model-a","content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"false","timeout":1}},{"type":"tool_use","id":"b","name":"Bash","input":{"timeout":1,"command":"false"}},{"type":"tool_use","id":"c","name":"Read","input":{"command":"false","timeout":1}}]}}'
+echo '{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"a","is_error":true,"content":"failed"},{"type":"tool_result","tool_use_id":"b","is_error":true,"content":"opaque failure"},{"type":"tool_result","tool_use_id":"c","is_error":false,"content":"ok"}]}}'
+echo '{"type":"result","subtype":"success","permission_denials":[{"tool_use_id":"b","tool_name":"Bash"}],"usage":{"input_tokens":30,"output_tokens":8},"total_cost_usd":0.5,"modelUsage":{"model-a":{"inputTokens":10,"outputTokens":3,"cacheReadInputTokens":2,"cacheCreationInputTokens":1},"model-b":{"inputTokens":20,"outputTokens":5}}}'
+"#, &Choice::default()).unwrap();
+    let measured = crate::logs::session_signals::read(&fixture.log("implement"))
+        .unwrap()
+        .unwrap();
+    let signals = serde_json::to_value(measured).unwrap()["signals"].clone();
+    assert_eq!(signals["tool_errors"], 1);
+    assert_eq!(signals["permission_denials"], 1);
+    assert_eq!(signals["repeated_tool_calls"], 1);
+    assert_eq!(signals["cost_usd"], 0.5);
+    assert_eq!(
+        signals["tokens_by_model"],
+        serde_json::json!([
+            {"model":"model-a","input_tokens":13,"output_tokens":3,"cache_read_tokens":2,"cache_write_tokens":1},
+            {"model":"model-b","input_tokens":20,"output_tokens":5,"cache_read_tokens":null,"cache_write_tokens":null}
+        ])
+    );
+}
+
+#[test]
+fn session_signals_from_each_harness_fixture_keep_reported_usage_and_cost() {
+    use serde_json::json;
+    for (harness, expected) in [
+        (
+            Harness::Claude,
+            json!({"tokens_by_model":[{"model":"claude-opus-4-8",
+            "input_tokens":13,"output_tokens":4,"cache_read_tokens":2,"cache_write_tokens":3}],
+            "cost_usd":0.0,"killed_work":0}),
+        ),
+        (
+            Harness::Codex,
+            json!({"tokens_by_model":[{"model":null,
+            "input_tokens":100,"output_tokens":7,"cache_read_tokens":20,"cache_write_tokens":null}],
+            "cost_usd":null,"killed_work":2}),
+        ),
+        (
+            Harness::Agy,
+            json!({"tokens_by_model":[{"model":"gemini-test",
+            "input_tokens":8,"output_tokens":4,"cache_read_tokens":null,"cache_write_tokens":null}],
+            "cost_usd":null,"killed_work":0}),
+        ),
+        (
+            Harness::Grok,
+            json!({"tokens_by_model":[{"model":"grok-4.7",
+            "input_tokens":25,"output_tokens":6,"cache_read_tokens":2,"cache_write_tokens":3}],
+            "cost_usd":null,"killed_work":0}),
+        ),
+        (
+            Harness::Muse,
+            json!({"tokens_by_model":[],"cost_usd":null,"killed_work":0}),
+        ),
+        (
+            Harness::OpenCode,
+            json!({"tokens_by_model":[{"model":null,
+            "input_tokens":7515,"output_tokens":23,"cache_read_tokens":7424,"cache_write_tokens":0}],
+            "cost_usd":0.02,"killed_work":0}),
+        ),
+    ] {
+        let fixture = Fixture::new();
+        let protocol = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "tests/fixtures/normalized-{}.jsonl",
+            harness.name()
+        ));
+        let choice = Choice {
+            harness,
+            ..Choice::default()
+        };
+        let log = fixture.log("implement");
+        let _ = fixture.recording.run(
+            "implement",
+            &choice,
+            Command::new("cat")
+                .arg(protocol)
+                .current_dir(fixture.root.path()),
+            Input::default(),
+            &log,
+        );
+        let measured = crate::logs::session_signals::read(&log).unwrap().unwrap();
+        let measured = serde_json::to_value(measured).unwrap();
+        for field in ["tokens_by_model", "cost_usd", "killed_work"] {
+            assert_eq!(
+                measured["signals"][field],
+                expected[field],
+                "{}: {field}",
+                harness.name()
+            );
+        }
+        for counter in ["tool_errors", "permission_denials", "repeated_tool_calls"] {
+            assert_eq!(
+                measured["signals"][counter],
+                0,
+                "{}: {counter}",
+                harness.name()
+            );
+        }
+    }
+}
+
+#[test]
 fn explicit_launch_home_stops_private_execution_on_native_codex_quota() {
     for scoped in [false, true] {
         let fixture = Fixture::new();

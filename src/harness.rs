@@ -57,6 +57,11 @@ impl Harness {
         self.adapter().name()
     }
 
+    /// Messages protocols report uncached input separately from cache usage.
+    pub(crate) fn input_excludes_cache(self) -> bool {
+        matches!(self, Self::Claude | Self::Grok)
+    }
+
     /// Select the adapter once; session callers retain it for their lifetime.
     pub fn adapter(self) -> &'static dyn Adapter {
         adapter::REGISTERED

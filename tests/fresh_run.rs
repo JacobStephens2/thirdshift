@@ -238,7 +238,9 @@ fn gives_the_agent_the_fresh_prompt() {
          A passing run counts only when it exercises that finding; a green suite does not. \
          Address the Standards and Spec findings you agree with.\n\
          Write the reviewers' reports, with each axis's final files-read list, \
-         to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec).\n\
+         to `<review reports directory>/standards.md` (Standards) and `<review reports directory>/spec.md` (Spec). \
+         Write `<review reports directory>/summary.json` beside them with the finding counts, \
+         following the `thirdshift-code-review` skill's summary format.\n\
          Push branch issue-7 and create a pull request against main using the `thirdshift-pr` skill, marked ready for review.\n\
          In the PR body, add an \"Unaddressed findings\" section listing each skipped finding under Standards or Spec, \
          with the line of code, plan decision, ADR or run that refutes each finding. \

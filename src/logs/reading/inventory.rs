@@ -182,7 +182,7 @@ impl Inventory {
         }
     }
 
-    fn directories(&self, path: &Path) -> Result<Vec<PathBuf>> {
+    pub(super) fn directories(&self, path: &Path) -> Result<Vec<PathBuf>> {
         Ok(self
             .list(path)?
             .into_iter()

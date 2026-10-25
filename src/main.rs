@@ -110,6 +110,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console theme export <name>        Export a Theme as JSON
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
+       thirdshift metrics [<command>] [--json]         Show Run metrics or weekly trends
        thirdshift stop <command> [--requeue] [--json]  Stop a live Command and wait for cleanup
        thirdshift dismiss <command> [--undo] [--json]  Dismiss an Inbox row, or take it back
        thirdshift logs [--command <id>] [--json]      List this machine's logs
@@ -128,8 +129,7 @@ Shared options (before or after the Issue URL or number, or after a Pass command
   base-fix / no-base-fix              Allow / forbid fixing inherited CI failures
   parallel <n>                       Run up to <n> Tickets at once (Spec runs; default 3)
   harness <name>                     Choose claude, codex, agy, grok, muse, opencode
-  model <name>                       Choose the Harness's Model
-  effort <level>                     Choose the Harness's Effort
+  model <name>, effort <level>       Choose the Harness's Model and Effort
   security-review / no-security-review  Enable / disable a Ticket run's Security review
   security-fix / no-security-fix     Allow / forbid fixing reproduced Security findings, or closing a finding its fix merged (security-close / no-security-close)
 Options accept -- prefixes, once each, without opposites; commands override User config defaults.
@@ -246,6 +246,12 @@ fn main() -> ExitCode {
             json,
         }) => {
             return match logs::spans::show(&command, span.as_deref(), json) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(error) => failure(&error),
+            };
+        }
+        Ok(Command::Metrics(asked)) => {
+            return match logs::metrics::show(&asked) {
                 Ok(()) => ExitCode::SUCCESS,
                 Err(error) => failure(&error),
             };

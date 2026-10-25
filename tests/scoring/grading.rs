@@ -85,7 +85,7 @@ fn bug_origins_survive_a_grader_limit_stop_and_scores_resume_without_repeating_a
         ("systemctl", "echo running"),
         (
             "systemd-run",
-            "while [ \"$1\" != -- ]; do shift; done\nshift\nexec \"$@\"",
+            "while [ \"$#\" -gt 0 ] && [ \"$1\" != -- ]; do shift; done\n[ \"$#\" -gt 0 ] || exit 1\nshift\nexec \"$@\"",
         ),
         ("journalctl", "exit 0"),
     ] {
