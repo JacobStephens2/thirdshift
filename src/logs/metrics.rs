@@ -1,5 +1,6 @@
 //! Local, read-only metrics views; every signal retains its own units.
 
+mod bug_origins;
 mod trends;
 
 use anyhow::{Result, bail};
@@ -12,6 +13,15 @@ use super::run_metrics::RunMetrics;
 use crate::args::MetricsArgs;
 use crate::config::UserConfig;
 
+use bug_origins::ConfirmedCounts;
+
+#[derive(Serialize)]
+struct Metrics<'a> {
+    #[serde(flatten)]
+    completion: &'a RunMetrics,
+    confirmed_bug_origins: usize,
+}
+
 #[derive(Serialize)]
 struct Run<'a> {
     name: &'a str,
@@ -21,12 +31,12 @@ struct Run<'a> {
     model: Option<&'a str>,
     effort: Option<&'a str>,
     started_at: &'a str,
-    metrics: Option<&'a RunMetrics>,
+    metrics: Option<Metrics<'a>>,
     children: Vec<Run<'a>>,
 }
 
 impl<'a> Run<'a> {
-    fn of(command: &'a Command) -> Self {
+    fn of(command: &'a Command, origins: &ConfirmedCounts) -> Self {
         let record = &command.record;
         Self {
             name: &record.name,
@@ -36,12 +46,15 @@ impl<'a> Run<'a> {
             model: record.model.as_deref(),
             effort: record.effort.as_deref(),
             started_at: &record.started_at,
-            metrics: record.run_metrics.as_ref(),
+            metrics: record.run_metrics.as_ref().map(|completion| Metrics {
+                completion,
+                confirmed_bug_origins: origins.for_pull_request(record.pull_request.as_deref()),
+            }),
             children: command
                 .dispatched
                 .iter()
                 .chain(&command.children)
-                .map(Self::of)
+                .map(|child| Self::of(child, origins))
                 .collect(),
         }
     }
@@ -50,6 +63,7 @@ impl<'a> Run<'a> {
 pub fn show(asked: &MetricsArgs) -> Result<()> {
     let config = UserConfig::load()?;
     let snapshot = Snapshot::load_metrics(&config.logs_dir, Local::now())?;
+    let origins = ConfirmedCounts::read()?;
     let mut report = serde_json::json!({
         "version": 1,
         "hostname": crate::host::name().unwrap_or_else(|| "unknown".into())
@@ -58,9 +72,9 @@ pub fn show(asked: &MetricsArgs) -> Result<()> {
         let Observation::Record(command) = snapshot.resolve(input)?.observation else {
             bail!("metrics need a Command record; this Command has only logs");
         };
-        report["command"] = serde_json::to_value(Run::of(command))?;
+        report["command"] = serde_json::to_value(Run::of(command, &origins))?;
     } else {
-        report["weeks"] = serde_json::to_value(trends::weekly(&snapshot, asked))?;
+        report["weeks"] = serde_json::to_value(trends::weekly(&snapshot, asked, &origins))?;
     }
     if asked.json {
         println!("{}", serde_json::to_string_pretty(&report)?);

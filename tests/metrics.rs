@@ -583,6 +583,205 @@ fn metrics(scenario: &Scenario, args: &[&str]) -> Value {
 }
 
 #[test]
+fn confirmed_bug_origins_count_at_read_time_against_the_run_and_its_week() {
+    let scenario = Scenario::new();
+    let pr = "https://github.com/acme/widgets/pull/23";
+    let mut past = record(7);
+    past["pull_request"] = json!(pr);
+    let path = write(&scenario, "7-fixture.command.json", &past);
+    let original = fs::read(&path).unwrap();
+    let folder = scenario.path("home/.thirdshift/evals/scoring");
+    fs::create_dir_all(&folder).unwrap();
+    // The Scoring host knows this other host's Run only by its Built-with line.
+    let origin = json!({
+        "issue": "https://github.com/acme/widgets/issues/99",
+        "closed_at": "2026-10-25T00:00:00Z", "state": "proposed",
+        "commit": null, "reason": "The change introduced the bug.",
+        "pull_requests": [{"url": pr, "run": {"source": "built_with",
+            "harness": "codex", "version": "1.0", "model": "sol", "effort": "high"}}]
+    });
+    let mut week = json!({
+        "week": "2026-10-19", "window_start": "2026-10-19T00:00:00Z",
+        "window_end": "2026-10-26T00:00:00Z", "seed": 1, "sample": [],
+        "bug_origins": [origin]
+    });
+    let checkpoint = folder.join("week.json");
+    fs::write(&checkpoint, serde_json::to_vec(&week).unwrap()).unwrap();
+    let shown = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert_eq!(shown["command"]["metrics"]["confirmed_bug_origins"], 0);
+
+    week["bug_origins"][0]["state"] = json!("confirmed");
+    week["bug_origins"][0]["settlement"] = json!({
+        "pull_request": week["bug_origins"][0]["pull_requests"][0],
+        "corrected": false, "eval_task": {"suite": "code-review", "task": "bug-99"}
+    });
+    fs::write(&checkpoint, serde_json::to_vec(&week).unwrap()).unwrap();
+    let shown = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert_eq!(shown["command"]["metrics"]["confirmed_bug_origins"], 1);
+    let trends = metrics(&scenario, &["metrics", "--json"]);
+    let rows = trends["weeks"].as_array().unwrap();
+    let run = rows
+        .iter()
+        .find(|row| row["session_kind"].is_null())
+        .unwrap();
+    assert_eq!(run["week"], "2026-10-19");
+    assert_eq!(
+        run["confirmed_bug_origins"],
+        json!({"observed":1, "missing":0, "sum":1.0, "mean":1.0})
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+    let text = scenario.run(&["metrics", "widgets#7"]);
+    assert!(
+        text.stdout.contains("confirmed_bug_origins: 1"),
+        "{}",
+        text.stdout
+    );
+    assert!(scenario.gh_calls().is_empty());
+    assert!(scenario.codex_calls().is_empty());
+}
+
+fn scoring_week(scenario: &Scenario, name: &str, window_end: &str, origins: Value) {
+    let folder = scenario.path("home/.thirdshift/evals/scoring");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(
+        folder.join(name),
+        serde_json::to_vec(&json!({
+            "week": "2026-10-19", "window_start": "2026-10-19T00:00:00Z",
+            "window_end": window_end, "seed": 1, "sample": [], "bug_origins": origins
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+}
+
+fn bug_origin(issue: u32, state: &str, pr: u32) -> Value {
+    json!({
+        "issue": format!("https://github.com/acme/widgets/issues/{issue}"),
+        "closed_at": "2026-10-25T00:00:00Z", "state": state,
+        "commit": null, "reason": "The change introduced the bug.",
+        "pull_requests": [{"url": "https://github.com/acme/widgets/pull/23", "run": null}],
+        "settlement": {"pull_request": {
+            "url": format!("https://github.com/acme/widgets/pull/{pr}"), "run": null
+        }, "corrected": true, "eval_task": {"suite": "code-review", "task": "bug"}}
+    })
+}
+
+#[test]
+fn latest_bug_origin_settlements_replace_old_decisions_and_count_only_local_runs() {
+    let scenario = Scenario::new();
+    for (issue, pr) in [(7, 23), (8, 24)] {
+        let mut past = record(issue);
+        past["pull_request"] = json!(format!("https://github.com/acme/widgets/pull/{pr}"));
+        write(&scenario, &format!("{issue}-fixture.command.json"), &past);
+    }
+    // Filesystem/name order must not choose which decision wins.
+    scoring_week(
+        &scenario,
+        "z-old.json",
+        "2026-10-26T00:00:00Z",
+        json!([bug_origin(99, "confirmed", 23)]),
+    );
+    for (state, expected) in [("rejected", 1), ("proposed", 1), ("confirmed", 2)] {
+        let mut reclosed = bug_origin(99, state, 24);
+        reclosed["issue"] = json!("https://github.com/ACME/WIDGETS/issues/99/");
+        scoring_week(
+            &scenario,
+            "a-new.json",
+            "2026-11-02T00:00:00Z",
+            json!([
+                reclosed,
+                bug_origin(100, "proposed", 24),
+                bug_origin(101, "confirmed", 24),
+                bug_origin(102, "confirmed", 99)
+            ]),
+        );
+        let old = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+        let corrected = metrics(&scenario, &["metrics", "widgets#8", "--json"]);
+        assert_eq!(
+            old["command"]["metrics"]["confirmed_bug_origins"], 0,
+            "{state}"
+        );
+        assert_eq!(
+            corrected["command"]["metrics"]["confirmed_bug_origins"], expected,
+            "{state}"
+        );
+        let trends = metrics(&scenario, &["metrics", "--json"]);
+        let rows = trends["weeks"].as_array().unwrap();
+        let run = rows
+            .iter()
+            .find(|row| row["session_kind"].is_null())
+            .unwrap();
+        assert_eq!(run["runs"], 2);
+        assert_eq!(run["confirmed_bug_origins"]["sum"], expected as f64);
+        assert_eq!(run["confirmed_bug_origins"]["observed"], 2);
+        for session in rows.iter().filter(|row| !row["session_kind"].is_null()) {
+            assert_eq!(session["confirmed_bug_origins"]["observed"], 0);
+        }
+    }
+    assert!(scenario.gh_calls().is_empty());
+}
+
+#[test]
+fn confirmed_bug_origins_join_saved_child_metrics_without_rewriting_them() {
+    let scenario = Scenario::new();
+    let parent_path = write(&scenario, "7-fixture.command.json", &record(7));
+    let mut child = record(8);
+    child["parent_record"] = json!(parent_path);
+    child["pull_request"] = json!("https://github.com/ACME/widgets/pull/24/");
+    write(&scenario, "8-fixture.command.json", &child);
+    let before = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    child["version"] = json!(2);
+    child["run_metrics"] = before["command"]["children"][0]["metrics"].clone();
+    let path = write(&scenario, "8-fixture.command.json", &child);
+    let original = fs::read(&path).unwrap();
+    scoring_week(
+        &scenario,
+        "old-without-origins.json",
+        "2026-10-19T00:00:00Z",
+        Value::Null,
+    );
+    scoring_week(
+        &scenario,
+        "confirmed.json",
+        "2026-10-26T00:00:00Z",
+        json!([bug_origin(99, "confirmed", 24)]),
+    );
+    let shown = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert_eq!(shown["command"]["metrics"]["confirmed_bug_origins"], 0);
+    assert_eq!(
+        shown["command"]["children"][0]["metrics"]["confirmed_bug_origins"],
+        1
+    );
+    let trends = metrics(&scenario, &["metrics", "--json"]);
+    let run = trends["weeks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["session_kind"].is_null())
+        .unwrap();
+    assert_eq!(run["runs"], 2);
+    assert_eq!(run["confirmed_bug_origins"]["sum"], 1.0);
+    assert_eq!(fs::read(&path).unwrap(), original);
+}
+
+#[test]
+fn malformed_scoring_data_is_reported_instead_of_showing_zero_bug_origins() {
+    let scenario = Scenario::new();
+    write(&scenario, "7-fixture.command.json", &record(7));
+    let folder = scenario.path("home/.thirdshift/evals/scoring");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(folder.join("broken.json"), "{").unwrap();
+    let result = scenario.run(&["metrics", "widgets#7", "--json"]);
+    assert_ne!(result.code, Some(0));
+    assert!(
+        result.stderr.contains("can't read Scoring sample"),
+        "{}",
+        result.stderr
+    );
+    assert!(result.stderr.contains("broken.json"), "{}", result.stderr);
+}
+
+#[test]
 fn past_run_metrics_are_computed_without_writing_or_inventing_review_counts() {
     let scenario = Scenario::new();
     let path = write(&scenario, "7-fixture.command.json", &record(7));
@@ -725,6 +924,7 @@ fn a_spec_includes_ticket_runs_and_base_fixes_once_and_retains_saved_metrics() {
         "implement": {"observed_sessions":0, "missing_sessions":1, "signals":null}
     });
     ticket["run_metrics"]["stages"][0]["session_signals"] = Value::Null;
+    ticket["run_metrics"]["confirmed_bug_origins"] = json!(0);
     assert_eq!(ticket_view["metrics"], ticket["run_metrics"]);
     assert_eq!(ticket_view["children"][0]["kind"], "Base fix");
     let selected = metrics(&scenario, &["metrics", "widgets#21", "--json"]);
