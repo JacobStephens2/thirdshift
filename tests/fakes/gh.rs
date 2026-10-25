@@ -2107,6 +2107,11 @@ fn graphql(state: &Json, args: &[&str]) {
     } else if is_candidate {
         candidate(state, n, after)
     } else {
+        let blocker_label_limit = query
+            .split("blockedBy(first: ")
+            .nth(1)
+            .and_then(|rest| rest.split("labels(first: ").nth(1))
+            .map(|rest| rest.split(')').next().unwrap().parse::<usize>().unwrap());
         let nodes = listed(state, "sub_issues", n)
             .iter()
             .map(|ticket| {
@@ -2118,7 +2123,7 @@ fn graphql(state: &Json, args: &[&str]) {
                 let mut node = numbered_issue(state, ticket);
                 node.set("labels", object([("nodes", Array(labels))]));
                 node.set("subIssues", sub_issue_count(state, &key));
-                node.set("blockedBy", blockers(state, &key));
+                node.set("blockedBy", blockers(state, &key, blocker_label_limit));
                 node
             })
             .collect();
@@ -2362,16 +2367,26 @@ fn sub_issue_count(state: &Json, key: &str) -> Json {
 }
 
 /// The issues issue `key` is blocked by, as GraphQL's `blockedBy`.
-fn blockers(state: &Json, key: &str) -> Json {
+fn blockers(state: &Json, key: &str, label_limit: Option<usize>) -> Json {
     let blockers = listed(state, "blocked_by", key)
         .iter()
         .map(|blocker| {
             let mut node = numbered_issue(state, blocker);
-            let labels = listed(state, "labels", &blocker.python())
+            let all_labels = listed(state, "labels", &blocker.python());
+            let limit = label_limit.unwrap_or(usize::MAX);
+            let more_labels = all_labels.len() > limit;
+            let labels = all_labels
                 .into_iter()
+                .take(limit)
                 .map(|label| object([("name", label)]))
                 .collect();
-            node.set("labels", object([("nodes", Array(labels))]));
+            node.set(
+                "labels",
+                object([
+                    ("nodes", Array(labels)),
+                    ("pageInfo", object([("hasNextPage", Bool(more_labels))])),
+                ]),
+            );
             node
         })
         .collect();
@@ -2521,7 +2536,7 @@ fn candidate(state: &Json, n: &str, after: Option<&str>) -> Json {
     object([
         ("parent", parent),
         ("subIssues", object([("nodes", Array(sub_issues))])),
-        ("blockedBy", blockers(state, n)),
+        ("blockedBy", blockers(state, n, None)),
         (
             "labelled",
             object([("nodes", Array(labelled)), ("pageInfo", page_info)]),

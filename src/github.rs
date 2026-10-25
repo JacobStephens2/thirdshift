@@ -204,10 +204,21 @@ impl GitHub {
             for blocker in nodes(&node["blockedBy"], "blockedBy")? {
                 blockers.push(node_issue(blocker)?);
                 if node_is_open(blocker)? {
+                    let issue = node_issue(blocker)?;
+                    let labels = &blocker["labels"];
+                    let more_labels = labels["pageInfo"]["hasNextPage"].as_bool().context(
+                        CommandFailure::InvalidResponse(
+                            "blocker labels have no hasNextPage".into(),
+                        ),
+                    )?;
                     open_blockers.push(TicketBlocker {
-                        issue: node_issue(blocker)?,
+                        labels: if more_labels {
+                            self.issue_labels(&issue)?
+                        } else {
+                            named(nodes(labels, "labels")?)
+                        },
+                        issue,
                         title: blocker["title"].as_str().map(String::from),
-                        labels: named(nodes(&blocker["labels"], "labels")?),
                     });
                 }
             }
@@ -1281,6 +1292,8 @@ impl From<IssueUrl> for TicketBlocker {
 /// Every sub-issue of `issue`, open or closed, with its labels, whether it
 /// has sub-issues of its own and the issues it is blocked by: its GitHub
 /// "blocked by" links, never the text of its body.
+/// Forty labels per blocker keep the nested query at 420,100 possible nodes,
+/// below GitHub's 500,000-node limit; overflowing labels are read separately.
 const TICKETS_QUERY: &str = "\
 query($owner: String!, $repo: String!, $number: Int!) {
   repository(owner: $owner, name: $repo) {
@@ -1292,7 +1305,7 @@ query($owner: String!, $repo: String!, $number: Int!) {
           state
           labels(first: 100) { nodes { name } }
           subIssues { totalCount }
-          blockedBy(first: 100) { nodes { url title state labels(first: 100) { nodes { name } } } }
+          blockedBy(first: 100) { nodes { url title state labels(first: 40) { nodes { name } pageInfo { hasNextPage } } } }
         }
       }
     }

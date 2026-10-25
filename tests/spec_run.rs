@@ -2259,7 +2259,10 @@ fn an_unready_label_keeps_a_ticket_from_running() {
 fn an_unready_tickets_outside_blockers_are_reported_in_the_checklist_log_and_record() {
     let scenario = spec_of(&[(21, &[98, 99]), (22, &[21]), (23, &[])]);
     scenario.issue_labelled(21, &["ready-for-human"]);
-    scenario.issue_labelled(99, &["ready-for-agent"]);
+    // The triage label is beyond the graph query's first label page.
+    let mut labels: Vec<_> = (0..40).map(|n| format!("other-{n}")).collect();
+    labels.push("Ready-For-Agent".to_string());
+    scenario.issue_labelled(99, &labels.iter().map(String::as_str).collect::<Vec<_>>());
     scenario.issue_is(98, "CLOSED");
     scenario.issue_titled(21, "Release the migration");
     scenario.issue_titled(22, "Remove the old reader");
