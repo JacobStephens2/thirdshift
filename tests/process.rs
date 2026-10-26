@@ -968,27 +968,29 @@ skill = \"house-style\"
 ",
     );
     // The Trial sandbox binds the repository, the Factory skills folder and a
-    // fresh home. /usr, /lib, /lib64 and /bin are here only so /usr/bin/test
-    // can run; the skill binds are those three. The link used to point at
-    // ~/.thirdshift/skills, which that sandbox does not mount.
+    // fresh home. It does not mount ~/.thirdshift/skills. The worktree link
+    // has to name a plain copy in that folder: a symlink back to the home
+    // directory is readable in this session and absent in the sandbox.
     scenario.agent_does(
         "test \"$(cat .claude/skills/house-style/SKILL.md)\" = '# House style'\n\
          test \"$(cat .claude/skills/house-style/notes.md)\" = '# Notes'\n\
          test ! -e .claude/skills/house-style/secret.md\n\
          factory=$(dirname \"$(readlink .claude/skills/thirdshift-implement)\")\n\
-         case \"$(readlink .claude/skills/house-style)\" in\n\
+         published=$(readlink .claude/skills/house-style)\n\
+         case \"$published\" in\n\
            \"$factory\"/*) ;;\n\
            *) printf 'home skill link is outside the Factory skills folder\n' >&2; exit 1 ;;\n\
          esac\n\
-         case \"$(readlink .claude/skills/house-style)\" in\n\
+         case \"$published\" in\n\
            *.thirdshift/skills/*) printf 'home skill link points at the home directory\n' >&2; exit 1 ;;\n\
          esac\n\
-         fresh=$(mktemp -d)\n\
-         bwrap --bind \"$PWD\" \"$PWD\" \\\n\
-           --ro-bind \"$factory\" \"$factory\" \\\n\
-           --bind \"$fresh\" \"$fresh\" \\\n\
-           --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 --ro-bind /bin /bin \\\n\
-           -- /usr/bin/test -f \"$PWD/.claude/skills/house-style/SKILL.md\"\n\
+         test -f \"$published/SKILL.md\"\n\
+         test ! -L \"$published/SKILL.md\"\n\
+         test \"$(cat \"$published/SKILL.md\")\" = '# House style'\n\
+         test -f \"$published/notes.md\"\n\
+         test ! -L \"$published/notes.md\"\n\
+         test \"$(cat \"$published/notes.md\")\" = '# Notes'\n\
+         test ! -e \"$published/secret.md\"\n\
          test -z \"$(git status --porcelain --untracked-files=all)\"\n\
          printf 'readable' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
     );
