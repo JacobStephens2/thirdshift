@@ -308,8 +308,9 @@ test('Stages handles invalid or unavailable preferences and preserves selector f
       const selector = page.getByLabel('View', { exact: true });
       assert.equal(await selector.inputValue(), 'all');
       await selector.focus();
-      await page.keyboard.press('ArrowDown');
-      await page.keyboard.press('Enter');
+      // Not ArrowDown: a closed <select> ignores it in Chromium on macOS (#1395).
+      await selector.selectOption('repository');
+      assert.equal(await page.evaluate(() => document.activeElement.id), 'stages-view');
       await page.waitForFunction(() => document.querySelectorAll('.stage-grid').length === 2);
       const fixture = JSON.parse(before);
       fixture.issue.title = `Focus during ${storage} preference storage`;
