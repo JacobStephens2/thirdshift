@@ -160,10 +160,15 @@ test('Waterfall chips, nested scale and unknown tools work at desktop and 390 px
   for (const width of [1200, 390]) {
     await page.setViewportSize({ width, height: 844 });
     await page.goto(`${origin}/?page=waterfall`);
+    const runs = page.locator('details.command-choices');
+    assert.equal(await runs.evaluate(node => node.open), false, 'runs start folded');
+    assert.match(await runs.locator('summary').textContent(), /^Runs \d+ · acme\/widgets#\d+ · \w+$/);
+    await runs.locator('summary').click();
     const chips = page.getByRole('navigation', { name: 'Choose a Command' });
     assert.match(await chips.textContent(), /acme\/widgets#8 · died/);
     if (process.platform === 'linux') assert.match(await chips.textContent(), /acme\/widgets#9 · live/);
     await chips.getByRole('link', { name: 'acme/widgets#7 · merged' }).click();
+    await runs.locator('summary', { hasText: / · acme\/widgets#7 · merged$/ }).waitFor({ state: 'attached' });
     await page.getByRole('button', { name: 'Every call', exact: true }).click();
     assert.equal(await page.locator('.span-item[data-kind="run"]').count(), 2);
     const child = page.locator('.span-item[data-kind="run"]').nth(1);

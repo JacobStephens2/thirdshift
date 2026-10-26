@@ -158,6 +158,10 @@ header::after { content: ""; display: block; height: 4px; background: var(--acti
 .command-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
 .command-chips a { border: 1px solid var(--rule); border-radius: var(--radius); padding: 6px; overflow-wrap: anywhere; }
 .command-chips [aria-current] { outline: 2px solid var(--head); }
+/* Waterfall folds its runs to one line naming the run shown. */
+.command-choices { margin: 16px 0; }
+.command-choices > summary { cursor: pointer; }
+.command-choices .command-chips { margin: 12px 0 0; }
 .stage-section { min-width: 0; margin: 20px 0; }
 .stage-section h3 { display: inline; margin-right: 16px; }
 .stage-scroll { overflow-x: auto; max-width: 100%; margin-top: 10px; overflow-anchor: none; }
