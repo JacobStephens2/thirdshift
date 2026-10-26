@@ -664,7 +664,11 @@ fn idle_inbox_folds_last_fired_passes_closed_on_load() {
     configure(home.path());
     let root = home.path().join(".thirdshift/logs/acme/widgets");
     fs::create_dir_all(&root).unwrap();
-    fs::write(root.join("pickup.last-fired"), chrono::Utc::now().to_rfc3339()).unwrap();
+    fs::write(
+        root.join("pickup.last-fired"),
+        chrono::Utc::now().to_rfc3339(),
+    )
+    .unwrap();
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get("/").text().unwrap();
     let notice = html
@@ -683,4 +687,57 @@ fn idle_inbox_folds_last_fired_passes_closed_on_load() {
         .unwrap();
     assert!(starts.contains("Pickup last fired"), "{starts}");
     assert!(starts.contains("on acme/widgets"), "{starts}");
+}
+
+#[test]
+fn one_line_rows_carry_a_gist_of_outcome_and_what_a_title_less_pass_did() {
+    use super::write_record;
+    use serde_json::json;
+
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut pass = record(home.path(), 1, Some("failed"), 0);
+    pass["kind"] = json!("Pickup run");
+    pass["name"] = json!("pickup-fixture");
+    pass["issue"] = Value::Null;
+    let mut dispatched = record(home.path(), 1, Some("failed"), 0);
+    dispatched["kind"] = json!("Run");
+    dispatched["name"] = json!("acme/widgets#48");
+    dispatched["issue"]["number"] = json!(48);
+    dispatched["issue"]["title"] = json!("Finish a readback");
+    pass["dispatched"] = json!([dispatched]);
+    write_record(home.path(), 1, &pass);
+    let mut quiet = record(home.path(), 2, Some("failed"), 0);
+    quiet["kind"] = json!("Pickup run");
+    quiet["name"] = json!("pickup-quiet");
+    quiet["issue"] = Value::Null;
+    quiet["cause"] = json!("codex exited 1");
+    write_record(home.path(), 2, &quiet);
+    record(home.path(), 3, Some("failed"), 0);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/").text().unwrap();
+    let heads: Vec<&str> = section(&html, "needs you")
+        .split("<div class=\"row-head\">")
+        .skip(1)
+        .map(|head| head.split("</div>").next().unwrap())
+        .collect();
+    let head = |subject: &str| {
+        *heads
+            .iter()
+            .find(|head| head.contains(subject))
+            .unwrap_or_else(|| panic!("{subject}: {heads:#?}"))
+    };
+    assert!(
+        head("pickup-fixture on")
+            .contains("<span class=\"gist\" title=\"failed · #48 Finish a readback\">failed · #48 Finish a readback</span>"),
+        "{heads:#?}"
+    );
+    assert!(
+        head("pickup-quiet on").contains(">failed · codex exited 1</span>"),
+        "{heads:#?}"
+    );
+    assert!(
+        head("acme/widgets#3").contains("<span class=\"gist\" title=\"failed\">failed</span>"),
+        "{heads:#?}"
+    );
 }

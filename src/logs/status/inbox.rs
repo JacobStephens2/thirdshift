@@ -93,6 +93,26 @@ impl Timing {
 }
 
 impl Row {
+    /// The one-line row's summary: where the Command stands and, for a
+    /// Command without an issue title, the first thing it did or hit.
+    pub fn gist(&self) -> String {
+        let detail = if !self.title.is_empty() {
+            None
+        } else if let Some(child) = self.children.first() {
+            Some(match child.subject.rsplit_once('#') {
+                Some((_, number)) => format!("#{number} {}", child.title),
+                None => child.subject.clone(),
+            })
+        } else if let Some(finding) = self.findings.first() {
+            Some(finding.title.clone())
+        } else {
+            Some(self.cause.split_whitespace().collect::<Vec<_>>().join(" "))
+        };
+        match detail.filter(|detail| !detail.trim().is_empty() && *detail != self.now_line) {
+            Some(detail) => format!("{} · {detail}", self.now_line),
+            None => self.now_line.clone(),
+        }
+    }
     pub fn peek_url(&self) -> String {
         super::inspect::url("/peek", &self.selector, None)
     }

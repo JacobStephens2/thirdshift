@@ -162,22 +162,26 @@ body.mailbox.peek-open { max-width: 1600px; grid-template-columns: minmax(0, 1fr
 .folders a[data-group="needs you"]:not([data-empty]) .count { color: var(--urgent-text); font-weight: var(--head-weight); }
 #inbox > .group { border: 1px solid var(--rule); border-radius: var(--radius); margin-top: 12px; }
 #inbox > .group > .empty, #inbox > .group > p { margin: 0; padding: 10px; }
+.row-head > .gist { display: none; }
 #inbox .command { margin: 0; border-radius: 0; border-bottom: 1px solid var(--rule); }
 #inbox .command:last-child { border-bottom: 0; }
 @media (scripting: enabled) {
   #inbox .command { position: relative; padding: 0; cursor: pointer; }
   #inbox .command > :not(.row-head) { display: none; }
   #inbox .command:hover { background: var(--sel-bg); }
-  #inbox .row-head { display: grid; grid-template-columns: 6.5em minmax(8em, 16em) minmax(0, 1fr) fit-content(4em) fit-content(10em); gap: 12px; padding: 7px 10px; }
+  #inbox .row-head { display: grid; grid-template-columns: 6.5em minmax(8em, 16em) fit-content(60%) minmax(0, 1fr) fit-content(4em) fit-content(10em); gap: 12px; padding: 7px 10px; }
   #inbox .row-head > * { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #inbox .row-head > .heartbeat { position: absolute; left: 2px; top: 50%; margin-top: -3px; }
   #inbox .row-head > .state { grid-column: 1; justify-self: start; max-width: 100%; }
   #inbox .row-head > .subject { grid-column: 2; }
   #inbox .row-head > .issue-title { grid-column: 3; color: var(--text); }
+  #inbox .row-head > .issue-title:empty { display: none; }
+  #inbox .row-head > .gist { display: block; grid-column: 4; }
+  #inbox .row-head > .issue-title:empty + .gist { grid-column: 3 / 5; }
   /* The full words stay for screen readers; the line shows a short badge. */
-  #inbox .row-head > .new { grid-column: 4; font-size: 0; }
+  #inbox .row-head > .new { grid-column: 5; font-size: 0; }
   #inbox .row-head > .new::before { content: "New"; font-size: 12px; color: var(--head); font-weight: var(--head-weight); }
-  #inbox .row-head > .age { grid-column: 5; margin: 0; font-size: 12px; }
+  #inbox .row-head > .age { grid-column: 6; margin: 0; font-size: 12px; }
   #inbox .row-head .finish { display: none; }
 }
 @media (max-width: 760px) {
@@ -189,6 +193,7 @@ body.mailbox.peek-open { max-width: 1600px; grid-template-columns: minmax(0, 1fr
     #inbox .row-head > .new { display: none; }
     #inbox .row-head > .age { grid-column: 3; grid-row: 1; }
     #inbox .row-head > .issue-title { grid-column: 1 / -1; grid-row: 2; }
-    #inbox .row-head > .issue-title:empty { display: none; }
+    #inbox .row-head > .gist { display: none; }
+    #inbox .row-head > .issue-title:empty + .gist { display: block; grid-column: 1 / -1; grid-row: 2; }
   }
 }
