@@ -55,7 +55,7 @@ Use `thirdshift help` for the command reference, or read [Ticket run behavior](d
 | A security audit | `thirdshift secure` | A [Security run](docs/guide.md#security-runs) records findings privately; fixing a reproduced finding is optional. |
 | Merged factory work | `thirdshift score` | A [Scoring run](docs/guide.md#scoring-runs) samples and grades it, and proposes Bug origins; `thirdshift scores --json` lists samples, five criterion Scores, calibration and proposals by week; `thirdshift scores <pull request> --mine` records yours before revealing the model's. |
 | One skill | `thirdshift skill <skill> [issue <issue>]` | A [standalone skill](docs/guide.md#standalone-skills) runs headlessly and prints its final message. |
-| A Custom process | `thirdshift process <name>` | An experimental [Custom process](docs/guide.md#custom-processes) runs sequential skill Steps from `~/.thirdshift/processes/<name>.toml`. |
+| A Custom process | `thirdshift process <name>` | An experimental [Custom process](docs/guide.md#custom-processes) runs sequential skill or command Steps from `~/.thirdshift/processes/<name>.toml`. An optional Step can fail without stopping the process. |
 
 Each Architect, Pickup or Security run makes one pass. Use cron or another operating system scheduler to repeat it. See [scheduling](docs/guide.md#on-a-schedule), [Architect runs every few minutes](docs/guide.md#architect-runs-every-few-minutes) and [Security runs on a schedule](docs/guide.md#security-runs-on-a-schedule-with-fixing-allowed).
 
