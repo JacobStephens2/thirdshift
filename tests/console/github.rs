@@ -384,13 +384,14 @@ fn failure_warning_wakes_open_inbox_and_recovers() {
     }
     let output = scenario.run(&["status", "--json"]);
     let status: Value = serde_json::from_str(&output.stdout).unwrap();
-    assert!(
-        console
-            .get("/")
-            .text()
+    let answered =
+        chrono::DateTime::parse_from_rfc3339(status["github_last_answered_at"].as_str().unwrap())
             .unwrap()
-            .contains(status["github_last_answered_at"].as_str().unwrap())
-    );
+            .with_timezone(&chrono::Local)
+            .format("GitHub last answered at %Y-%m-%d %H:%M ")
+            .to_string();
+    let page = console.get("/").text().unwrap();
+    assert!(page.contains(&answered), "{answered} not in {page}");
     gh["failing"] = json!([]);
     scenario.write_gh_state(&gh);
     pr_is(&scenario, "MERGED");
