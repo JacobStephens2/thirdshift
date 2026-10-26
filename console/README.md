@@ -233,6 +233,15 @@ keep the page in `?page=`. History includes every ended Command, including old
 logs, and filters by outcome and repository. Security shows retained findings
 and Session traces. Older records without finding metadata still show their logs.
 
+Pages give the high-level view first and open on demand. History and Security
+list one line per Command, like the Inbox; a click opens its Command details
+beside the list, and without JavaScript rows show in full. The Experiments
+list shows each Experiment's headline and status line, and a click opens its
+page. An Experiment page folds each suite's Verdict to its intervals, each
+suite's Trial grid to its task count, and What was compared and the Bar to
+their headings. Stages by repository folds each repository to its run count.
+Folds stay as left through live updates.
+
 Cron jobs (`/cronjobs`, or `g` then `j`) shows schedules and commands from the
 Unix account running the Console's `crontab -l`. The same inventory is available
 with `thirdshift cronjobs [--json]`. It selects active entries containing a
@@ -267,7 +276,8 @@ Lanes shows each Command and its child Runs on a shared time axis, over the last
 3.5, 12 or 24 hours. The window is kept in `hours=`; bars clip to that window,
 while their text retains the whole stage's time. Older Commands are on History.
 Stages defaults to **All runs**, one grid across repositories. **By repository**
-shows one grid per repository; the browser remembers an explicit view choice.
+shows one grid per repository, each folded to its name and run count; the
+browser remembers an explicit view choice.
 Each Spec run stays with its exact Ticket runs, including repeated attempts on
 the same issue. Groups are newest-started first by their owning run, and Ticket
 runs are newest-started first within each Spec group. Live state and finish

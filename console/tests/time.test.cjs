@@ -249,6 +249,7 @@ test('Stages live insertions preserve the visible Ticket, link focus and selecte
       await page.goto(`${origin}/?page=stages`);
       await page.getByLabel('View', { exact: true }).selectOption(view);
       await page.waitForFunction(count => document.querySelectorAll('.stage-grid').length === count, view === 'all' ? 1 : 2);
+      for (const summary of await page.locator('details.stage-section > summary').all()) if (!await summary.evaluate(node => node.parentElement.open)) await summary.click();
       const ticket = page.locator('thead .command').filter({ has: page.getByRole('link', { name: `Ticket run · acme/widgets#${position === 'left' ? 5 : 6}`, exact: true }) });
       const link = ticket.locator('.peek-link');
       await link.focus();
@@ -272,7 +273,7 @@ test('Stages live insertions preserve the visible Ticket, link focus and selecte
         assert.equal(await page.locator('.command[aria-current="true"]').getAttribute('data-command'), selector);
         assert.equal(await page.getByLabel('View', { exact: true }).inputValue(), view);
       }
-      const section = ticket.locator('xpath=ancestor::section');
+      const section = ticket.locator('xpath=ancestor::details[contains(@class, "stage-section")]');
       await section.getByRole('button', { name: 'Newest runs' }).focus();
       await page.keyboard.press('Space');
       assert.equal(await section.locator('.stage-scroll').evaluate(node => node.scrollLeft), 0);

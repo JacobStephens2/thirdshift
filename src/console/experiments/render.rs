@@ -451,11 +451,17 @@ fn verdict(view: &View) -> String {
     let mut html =
         String::from("<section class=\"experiment-verdict\" aria-label=\"Verdict by suite\">");
     for (name, suite) in &verdict.suites {
+        // Folded to its verdict and intervals; open it for the figures and why.
         html.push_str(&format!(
-            "<h2>{} <span class=\"experiment-tag\" data-tone=\"{}\">{}</span></h2>",
+            "<details class=\"experiment-suite\" data-suite=\"{}\"><summary><h2>{} <span class=\"experiment-tag\" data-tone=\"{}\">{}</span></h2> <span class=\"experiment-gist\">Accuracy {} to {} · Wrong findings {} to {} points</span></summary>",
+            esc(name),
             esc(name),
             decision(suite.verdict),
-            decision(suite.verdict)
+            decision(suite.verdict),
+            points(suite.accuracy.interval.lower),
+            points(suite.accuracy.interval.upper),
+            points(suite.wrong_findings.interval.lower),
+            points(suite.wrong_findings.interval.upper)
         ));
         for (metric, assessment) in [
             ("Accuracy", &suite.accuracy),
@@ -495,6 +501,7 @@ fn verdict(view: &View) -> String {
                 pass.candidate * 100.0
             ));
         }
+        html.push_str("</details>");
     }
     html.push_str(&format!("</section><p class=\"experiment-dim\">Points of pass share, Candidate minus Baseline, at {:.0}% credibility. The axis runs from −50 to +50; the dashed line is the {}-point margin. Arrows mark intervals continuing beyond the axis. For wrong findings, plus means fewer in the Candidate.</p>", view.description.bar.credible_level*100.0, points(view.description.bar.margin)));
     html
@@ -568,7 +575,8 @@ fn grid(view: &View) -> String {
     );
     for suite in &view.description.suites {
         let n = view.description.bar.trials_per_task[suite];
-        html.push_str(&format!("<h3>{}</h3><div role=\"table\" aria-label=\"{} Trials\" class=\"trial-grid\" data-trials=\"{n}\"><div role=\"row\" class=\"trial-row\"><span role=\"columnheader\">Eval task</span><span role=\"columnheader\">Baseline</span><span role=\"columnheader\">Candidate</span><span role=\"columnheader\">Diff.</span></div>", esc(suite), esc(suite)));
+        let tasks = view.tasks.iter().filter(|task| &task.suite == suite).count();
+        html.push_str(&format!("<details class=\"trial-suite\" data-suite=\"{}\"><summary><h3>{}</h3> <span class=\"experiment-gist\">{tasks} Eval tasks · {n} {} per Arm each</span></summary><div role=\"table\" aria-label=\"{} Trials\" class=\"trial-grid\" data-trials=\"{n}\"><div role=\"row\" class=\"trial-row\"><span role=\"columnheader\">Eval task</span><span role=\"columnheader\">Baseline</span><span role=\"columnheader\">Candidate</span><span role=\"columnheader\">Diff.</span></div>", esc(suite), esc(suite), if n == 1 { "Trial" } else { "Trials" }, esc(suite)));
         for task in view.tasks.iter().filter(|task| &task.suite == suite) {
             let cells: Vec<_> = Cell::for_task(view, suite, &task.name).collect();
             let dropped = cells.iter().any(|cell| {
@@ -626,7 +634,7 @@ fn grid(view: &View) -> String {
                 ));
             }
         }
-        html.push_str("</div>");
+        html.push_str("</div></details>");
     }
     html.push_str("</section>");
     html
@@ -952,7 +960,7 @@ impl ArmStats {
 fn arms(view: &View) -> String {
     let d = &view.description;
     let mut html = String::from(
-        "<section id=\"experiment-arms\"><h2>What was compared</h2><table class=\"experiment-arms\"><thead><tr><td></td><th scope=\"col\">Baseline</th><th scope=\"col\">Candidate</th></tr></thead><tbody>",
+        "<section id=\"experiment-arms\"><details><summary><h2>What was compared</h2></summary><table class=\"experiment-arms\"><thead><tr><td></td><th scope=\"col\">Baseline</th><th scope=\"col\">Candidate</th></tr></thead><tbody>",
     );
     for (label, b, c) in [
         (
@@ -1108,7 +1116,7 @@ fn arms(view: &View) -> String {
         &view.voids.baseline.to_string(),
         &view.voids.candidate.to_string(),
     ));
-    html.push_str("</tbody></table><p>Efficiency stays outside the Bar. Unknown usage was not reported by the Harness.</p></section>");
+    html.push_str("</tbody></table><p>Efficiency stays outside the Bar. Unknown usage was not reported by the Harness.</p></details></section>");
     html
 }
 

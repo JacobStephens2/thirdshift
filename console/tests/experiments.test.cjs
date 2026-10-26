@@ -8,6 +8,10 @@ const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
 const fixture = require('./fixtures/experiments.cjs');
+// Trial suites open folded; a reader opens each one to see its Trials.
+async function openSuites(page) {
+  for (const summary of await page.locator('details.trial-suite > summary').all()) if (!await summary.evaluate(node => node.parentElement.open)) await summary.click();
+}
 let home, server, exited, browser, origin;
 before(async () => {
   home = await mkdtemp(join(tmpdir(), 'thirdshift-experiments-'));
@@ -61,6 +65,7 @@ test('Experiments update live through Trials, Verdict and rechecks and fit a 390
   await page.getByRole('link', { name: 'Experiments', exact: true }).click();
   await page.locator(`a[href="/experiments/${fixture.id}"]`).first().click();
   await page.getByRole('heading', { name: 'Trials', exact: true }).waitFor();
+  await openSuites(page);
   const layout = await page.locator('.trial-row').first().evaluate(row => ({
     columns: getComputedStyle(row).gridTemplateColumns,
     tops: [...row.children].map(cell => Math.round(cell.getBoundingClientRect().top))
@@ -135,6 +140,7 @@ test('Paused, dropped, ungraded and rechecked Trials retain their details across
   assert.match(await page.locator('#experiment-group-1').textContent(), /Paused/);
   await page.locator(`a[href="/experiments/${fixture.id}"]`).first().click();
   assert.match(await page.locator('main').textContent(), /thirdshift experiment issue-1020 --baseline v1.0 --suite code-review/);
+  await openSuites(page);
   await page.locator('#experiment-bar > summary').click();
   await page.getByRole('button', { name: 'alpha', exact: true }).click();
   assert.match(await page.locator('#peek-content').textContent(), /Baseline/);

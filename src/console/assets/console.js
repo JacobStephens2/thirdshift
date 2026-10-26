@@ -492,7 +492,8 @@ document.addEventListener('click', event => {
   else if (link) { event.preventDefault(); select(row); togglePeek(row); }
   else if (row && !event.target.closest('a, button, input, select, textarea')) {
     select(row);
-    if (mailbox && row.closest('#inbox')) showPeek(row);
+    // One-line rows, in the Inbox, History and Security, open their Details.
+    if (row.closest('.one-line')) showPeek(row);
   }
   else if (event.target.closest('main .group > summary')) {
     const summary = event.target.closest('summary');
@@ -534,7 +535,7 @@ document.addEventListener('keydown', event => {
     const next = index < 0 ? (event.key === 'j' ? 0 : visible.length - 1)
       : (index + (event.key === 'j' ? 1 : -1) + visible.length) % visible.length;
     select(visible[next] ?? null);
-    if (mailbox && !peek.hidden && selected?.matches('#inbox .command')) showPeek(selected);
+    if (!peek.hidden && selected?.matches('.one-line .command')) showPeek(selected);
   } else if (event.key === ' ' && selected) {
     event.preventDefault();
     if (selected.tagName === 'SUMMARY') selected.parentElement.open = !selected.parentElement.open;

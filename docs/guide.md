@@ -731,8 +731,9 @@ read the retained evidence. Pruning failures print a `warning:` without changing
 the Verdict or exit status.
 
 The Console's **Experiments** link opens `/experiments`, grouped into Running,
-Needs you and Done, newest first within each. Open an Experiment for its live
-Trial grid, per-suite Verdict intervals, Arm comparison and folded Bar. Select
+Needs you and Done, newest first within each, one line apiece with its accuracy.
+Open an Experiment for what it tests, then its live Trial grid, per-suite
+Verdict intervals, Arm comparison and Bar, each folded to a one-line gist. Select
 a Trial or Eval task to open its Peek, including Grader reasons, rechecks,
 Void causes and links to retained Session logs or Session traces. Both pages
 pair with `experiments --json`; its view includes task names, active Trial start

@@ -1156,7 +1156,7 @@ test('History filters and Security findings and sessions work from a phone', asy
   assert.match(await page.locator('[aria-label="Security findings"]').textContent(), /Bound <input> before storage.*high/);
   assert.equal(await page.locator('.command input').count(), 0);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-  await page.locator('.peek-link').click();
+  await page.locator('.command .state').first().click();
   await page.locator('#peek dt').first().waitFor();
   assert.match(await page.locator('#peek').textContent(), /Bound <input> before storage/);
   assert.match(await page.title(), /^Security ·/);
@@ -1171,7 +1171,7 @@ test('History filters and Security findings and sessions work from a phone', asy
 test("Enter activates the focused Security session link", async t => {
   const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
   await page.goto(`${origin}/?page=security`);
-  await page.locator('.peek-link').click();
+  await page.locator('.command .state').first().click();
   await page.locator('#peek .peek-traces > summary').click();
   const sessionLink = page.locator('#peek a').filter({ hasText: 'Session trace:' });
   await sessionLink.waitFor();
@@ -1187,7 +1187,7 @@ test('Enter and Space activate focused peek buttons', async t => {
   const page = await pageFor(t);
   await page.goto(`${origin}/?page=security`);
   for (const key of ['Enter', 'Space']) {
-    await page.locator('.peek-link').click();
+    await page.locator('.command .state').first().click();
     await page.locator('#peek dt').first().waitFor();
     await page.locator('[data-close-peek]').focus();
     await page.keyboard.press(key);
@@ -1292,7 +1292,7 @@ test('Command details copies its show command to the clipboard', async t => {
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
   await page.goto(`${origin}/?page=security`);
   const selector = await page.locator('.command').first().getAttribute('data-command');
-  await page.locator('.peek-link').click();
+  await page.locator('.command .state').first().click();
   await page.locator('#peek dt').first().waitFor();
   const expected = `thirdshift show '${selector}' --json`;
   assert.equal(await page.locator('#peek code').filter({ hasText: 'thirdshift show' }).textContent(), expected);
@@ -1344,7 +1344,7 @@ test('Command details selects its show command when the clipboard is refused', a
   });
   await page.goto(`${origin}/?page=security`);
   const selector = await page.locator('.command').first().getAttribute('data-command');
-  await page.locator('.peek-link').click();
+  await page.locator('.command .state').first().click();
   await page.locator('#peek dt').first().waitFor();
   await page.locator('#peek').getByRole('button', { name: 'Copy CLI', exact: true }).click();
   await page.locator('#peek').getByRole('status').filter({ hasText: 'Selected; copy it with your keyboard.' }).waitFor();

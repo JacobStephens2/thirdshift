@@ -42,8 +42,9 @@
     <p>Spec runs stay with their Ticket runs. Groups and Tickets are newest-started first. Scroll right for older runs; stage names stay at the left. Each cell shows its repository's Usual range. Repeated stages list every visit.</p>
     {% if views.grids.is_empty() %}<p class="empty">No Ticket runs yet.</p>{% endif %}
     {% for grid in views.grids %}
-    <section class="stage-section" data-grid="{{ grid.repository }}">
-    <h3>{{ grid.repository }}</h3><button type="button" data-newest-runs>Newest runs<span class="cell-run"> · {{ grid.repository }}</span></button>
+    {# With several repositories each folds to its name and run count. #}
+    <details class="stage-section" data-grid="{{ grid.repository }}"{% if views.grids.len() == 1 %} open{% endif %}>
+    <summary><h3>{{ grid.repository }}</h3> <span class="count">{{ grid.runs.len() }} runs</span></summary><button type="button" data-newest-runs>Newest runs<span class="cell-run"> · {{ grid.repository }}</span></button>
     <div class="stage-scroll" tabindex="0" role="region" aria-label="{{ grid.repository }} stages, scroll right for older runs">
     <table class="stage-grid">
       <caption>{{ grid.repository }} · stage times</caption>
@@ -54,7 +55,7 @@
     </table>
     </div>
     {% if grid.rows.is_empty() %}<p>No stage times retained.</p>{% endif %}
-    </section>
+    </details>
     {% endfor %}
     {% endif %}
   </main>
