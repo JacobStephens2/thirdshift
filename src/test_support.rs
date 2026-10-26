@@ -16,10 +16,15 @@ use crate::interrupt;
 /// environment and new Git views of a fixture inherit the same isolation.
 pub(crate) fn git_command() -> Command {
     let mut command = Command::new("git");
+    isolate_git_config(&mut command);
+    command
+}
+
+/// Also cover Git invoked by shell scripts in a fixture subprocess.
+pub(crate) fn isolate_git_config(command: &mut Command) {
     command
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_NOSYSTEM", "1");
-    command
 }
 
 /// A child that announces Session s1 after writing a native Codex quota record.

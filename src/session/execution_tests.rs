@@ -63,10 +63,8 @@ echo '{{"type":"step_start","sessionID":"s1","part":{{}}}}'
         command
             .args(["--exact", test, "--nocapture"])
             .env(FIXTURE, self.0.path())
-            // Fake Harness scripts also invoke Git directly.
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("PATH", path);
+        crate::test_support::isolate_git_config(&mut command);
         command
     }
 
