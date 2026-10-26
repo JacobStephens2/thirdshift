@@ -69,13 +69,14 @@ for (const requeue of [false, true]) {
         await page.goto(`${origin}/?page=waterfall`);
       }
       if (route === '/') {
-        await page.locator('[data-group="working"] > summary').click();
+        await page.locator('#inbox .folders a[data-group="working"]').click();
         if (!requeue) await page.getByRole('button', { name: 'Pause motion', exact: true }).click();
       }
       if (await page.locator('#span-tree').count()) {
         await page.locator('.span-row').first().click();
         await page.getByRole('button', { name: 'Command details', exact: true }).click();
-      } else await page.locator('.peek-link').first().click();
+      } else if (route === '/') await page.locator('#inbox > .group:not([hidden]) .command .state').first().click();
+      else await page.locator('.peek-link').first().click();
       await page.getByRole('button', { name: 'Stop', exact: true }).waitFor();
     }
     await page.getByRole('button', { name: 'Stop', exact: true }).click();

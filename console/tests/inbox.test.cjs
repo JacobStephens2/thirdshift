@@ -763,7 +763,7 @@ for (const storage of ['blocked', 'malformed']) {
       const page = await pageFor(t);
       await page.goto(origin);
       assert.equal(await page.getByRole('region', { name: 'No running Commands' }).count(), 0);
-      await page.locator('[data-group="working"] > summary').click();
+      await folder(page, 'working').click();
       const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#202$/ }) });
       const id = await row.getAttribute('id');
       await page.waitForFunction(id => document.getElementById(id).querySelector('.state').getAnimations({ subtree: true }).some(a => a.playState === 'running'), id, { timeout: 2000 });
@@ -841,7 +841,7 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
   try {
     const page = await pageFor(t);
     await page.goto(origin);
-    for (const group of ['ready for review', 'landing', 'working']) await page.locator(`[data-group="${group}"] > summary`).click();
+    for (const group of ['ready for review', 'landing', 'working']) await folder(page, group).click();
     const row = number => page.locator(`[data-group] > .commands > .command:has(> .row-head > .subject a[href$="/issues/${number}"])`);
     const look = (number, tag) => row(number).evaluate((node, tag) => {
       const probe = document.createElement('span');
@@ -1370,9 +1370,9 @@ test('Command details keeps its fallback selection across a live refresh', { ski
       navigator.clipboard.writeText = () => Promise.reject(new DOMException('refused', 'NotAllowedError'));
     });
     await page.goto(origin);
-    await page.locator('[data-group="working"] > summary').click();
+    await folder(page, 'working').click();
     const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#203$/ }) });
-    await row.locator('.peek-link').click();
+    await row.locator('.state').click();
     await page.locator('#peek [data-live="true"]').waitFor();
     await page.locator('#peek').getByRole('button', { name: 'Copy CLI', exact: true }).click();
     await page.locator('#peek').getByRole('status').filter({ hasText: 'Selected; copy it with your keyboard.' }).waitFor();
@@ -1427,10 +1427,10 @@ test('the active-run total follows live trees, stays visible and fits every Them
     assert.equal(await page.getByRole('region', { name: 'No running Commands' }).count(), 0);
     await write(separate, 224);
     await page.waitForFunction(() => document.querySelector('#inbox > .active-runs strong').textContent === '2 active runs');
-    // Opening and folding the section holding live work leaves the total alone.
-    for (const open of [1, 0]) {
-      await page.locator('[data-group="working"] > summary').click();
-      assert.equal(await page.locator('[data-group="working"][open]').count(), open);
+    // Moving between folders, into and out of the live work, leaves the total alone.
+    for (const group of ['working', 'needs you']) {
+      await folder(page, group).click();
+      assert.equal(await shownGroup(page).getAttribute('data-group'), group);
       assert.equal(await total.locator('strong').textContent(), '2 active runs');
     }
     // A Spec's Ticket ending while the Spec continues keeps its one run.
