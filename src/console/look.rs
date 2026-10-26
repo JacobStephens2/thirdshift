@@ -115,7 +115,10 @@ pub fn sections(hide: &[String], show: &[String], json_output: bool) -> Result<S
     })
 }
 
-pub(super) async fn get(Extension(viewer): Extension<Viewer>) -> Response {
+pub(super) async fn get(
+    Extension(viewer): Extension<Viewer>,
+    Extension(assets): Extension<super::assets::Development>,
+) -> Response {
     match tokio::task::spawn_blocking(|| {
         let config = UserConfig::load()?;
         let revision = super::accounts::digest(&export_theme(&config.console.theme)?);
@@ -123,14 +126,23 @@ pub(super) async fn get(Extension(viewer): Extension<Viewer>) -> Response {
     })
     .await
     {
-        Ok(Ok((config, names, revision))) => Json(json!({
-            "theme": config.console.theme,
-            "theme_revision": revision,
-            "hidden_sections": config.console.hidden_sections,
-            "themes": names, "sections": console::SECTIONS,
-            "csrf": viewer.csrf,
-        }))
-        .into_response(),
+        Ok(Ok((config, names, revision))) => {
+            let mut response = Json(json!({
+                "theme": config.console.theme,
+                "theme_revision": revision,
+                "hidden_sections": config.console.hidden_sections,
+                "themes": names, "sections": console::SECTIONS,
+                "csrf": viewer.csrf,
+            }))
+            .into_response();
+            if assets.directory().is_some() {
+                response.headers_mut().insert(
+                    "x-thirdshift-console-assets",
+                    "development".parse().unwrap(),
+                );
+            }
+            response
+        }
         error => failed(error),
     }
 }
