@@ -129,7 +129,7 @@ pub enum Begin<'a> {
     SecurityRun,
     ScoringRun,
     Experiment,
-    /// `thirdshift process <name>`, a Custom process.
+    /// `thirdshift process <name> [issue <issue>]`, a Custom process.
     Process(&'a str),
 }
 

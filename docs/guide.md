@@ -505,7 +505,7 @@ thirdshift secure                   # audit the Base branch and record findings 
 thirdshift secure base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
 thirdshift skill <skill> [issue <issue>]   # run one skill headlessly and print its final message
 thirdshift process                      # list Custom processes (experimental)
-thirdshift process <name>               # run a Custom process (experimental)
+thirdshift process <name> [issue <issue>]   # run a Custom process, optionally on an issue (experimental)
 thirdshift process check <name>         # validate one and print its plan (experimental)
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
 thirdshift scores [<pull request>] [--json] # show Scores and calibration
@@ -952,6 +952,17 @@ Step result files and `THIRDSHIFT_STEP_RESULT` to the path of that Step's own
 result file. thirdshift writes the combined output to that path when the Step
 finishes. `THIRDSHIFT_ISSUE_URL` is set to the issue's URL when the Process
 has an issue, and is unset when it does not.
+
+`thirdshift process <name> issue <issue>` gives the Process an issue.
+`<issue>` is an issue number or an Issue URL, resolved as `thirdshift skill`
+resolves it. An Issue URL from another repository is an origin mismatch and
+stops before any work. Every session Step's worktree gets `.thirdshift-issue.md`
+before the session starts, and again before a Resume: the issue's title, body
+and only the comments of Trusted accounts. The Session prompt names the issue.
+Before each of those sessions, a Resume included, the issue is checked again,
+as in a Ticket run. An edit to the title or body by an account that is not a
+Trusted account, made since a few minutes before the Process started, fails
+that Step instead of starting the session. The Command log names the cause.
 
 `check` and running refuse a missing file, a file that is not valid TOML, a
 missing or wrong `version`, an unknown key, a Step without exactly one of

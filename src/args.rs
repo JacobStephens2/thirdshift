@@ -21,7 +21,10 @@ use crate::run::Goal;
 pub enum ProcessAction {
     List,
     Check(String),
-    Run(String),
+    Run {
+        name: String,
+        issue: Option<IssueInput>,
+    },
 }
 
 /// What thirdshift was asked to do.
@@ -836,9 +839,20 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
     match args {
         [] => Ok(ProcessAction::List),
         [keyword] if keyword == "check" => bail!("usage: thirdshift process check <name>"),
-        [name] => Ok(ProcessAction::Run(process_name(name)?)),
+        [name] => Ok(ProcessAction::Run {
+            name: process_name(name)?,
+            issue: None,
+        }),
         [keyword, name] if keyword == "check" => Ok(ProcessAction::Check(process_name(name)?)),
-        _ => bail!("usage: thirdshift process [check <name> | <name>]"),
+        [name, keyword] if keyword == "issue" => {
+            process_name(name)?;
+            bail!("usage: thirdshift process <name> [issue <issue>]");
+        }
+        [name, keyword, issue] if keyword == "issue" => Ok(ProcessAction::Run {
+            name: process_name(name)?,
+            issue: Some(IssueInput::parse(issue)?),
+        }),
+        _ => bail!("usage: thirdshift process [check <name> | <name> [issue <issue>]]"),
     }
 }
 
@@ -846,7 +860,7 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
 /// file rule: the file is `~/.thirdshift/processes/<name>.toml`.
 fn process_name(name: &str) -> Result<String> {
     if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
-        bail!("usage: thirdshift process [check <name> | <name>]");
+        bail!("usage: thirdshift process [check <name> | <name> [issue <issue>]]");
     }
     Ok(name.to_string())
 }

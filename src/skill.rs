@@ -55,8 +55,21 @@ pub(crate) fn run_session(
     label: &str,
     prompt: &str,
 ) -> Result<String> {
+    let ended = run_session_ending(worktree, choice, None, prompt)?;
+    ended.require_final_message(label)
+}
+
+/// One headless session in `worktree` on `choice`, continuing `resume` when
+/// it names a session. The caller decides what an ending with killed
+/// background work means, and waits for host resources.
+pub(crate) fn run_session_ending(
+    worktree: &Path,
+    choice: &Choice,
+    resume: Option<&str>,
+    prompt: &str,
+) -> Result<crate::harness::interpretation::Ended> {
     let adapter = choice.harness.adapter();
-    let invocation = adapter.session(choice, None, prompt);
+    let invocation = adapter.session(choice, resume, prompt);
     let executed = process::streaming(
         adapter,
         Command::new(adapter.name())
@@ -74,6 +87,5 @@ pub(crate) fn run_session(
             Ok(())
         },
     )?;
-    let ended = executed.state.finish(executed.execution).outcome?;
-    ended.require_final_message(label)
+    executed.state.finish(executed.execution).outcome
 }

@@ -23,7 +23,7 @@ fn assert_help_text(text: &str) {
         "thirdshift secure base <branch>",
         "thirdshift skill <skill> [issue <issue>]",
         "thirdshift process",
-        "thirdshift process <name>",
+        "thirdshift process <name> [issue <issue>]",
         "thirdshift process check <name>",
         "thirdshift email-test [<address>]",
         "thirdshift setup",

@@ -80,7 +80,7 @@ pub struct Reached {
 /// How much earlier than its start a Run counts untrusted edits from. It
 /// covers the gap since the trust check that let it start, and GitHub's
 /// clock running behind this machine's: an edit in either is still caught.
-const STARTED_MARGIN: TimeDelta = TimeDelta::minutes(5);
+pub(crate) const STARTED_MARGIN: TimeDelta = TimeDelta::minutes(5);
 
 /// How a Run, or a Spec run, ended.
 pub struct Ended {
