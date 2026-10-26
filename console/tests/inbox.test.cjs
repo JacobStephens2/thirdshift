@@ -532,13 +532,13 @@ test("idle skipped Passes start folded and can be opened on phones with or witho
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       if (javaScriptEnabled) {
         await page.evaluate(() => { window.visitMarker = 'same idle Inbox'; });
-        await writeFile(activity, '2026-01-01 12:01:00 Pickup run skipped: Claim limit reached\n');
+        await replaceRecord(activity, '2026-01-01 12:01:00 Pickup run skipped: Claim limit reached\n');
         const updated = notice.getByText('Pickup run idle on acme/widgets: Claim limit reached', { exact: true });
         await updated.waitFor({ state: 'visible' });
         assert.equal(await page.evaluate(() => window.visitMarker), 'same idle Inbox');
         await summary.click();
         await updated.waitFor({ state: 'hidden' });
-        await writeFile(activity, '2026-01-01 12:02:00 Pickup run skipped: no Ready issue on acme/widgets\n');
+        await replaceRecord(activity, '2026-01-01 12:02:00 Pickup run skipped: no Ready issue on acme/widgets\n');
         await reason.waitFor({ state: 'attached' });
         await reason.waitFor({ state: 'hidden' });
         await summary.click();
