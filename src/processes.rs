@@ -13,17 +13,19 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
+use chrono::{DateTime, Utc};
 use toml_edit::{Document, Item, Key, Table};
 
 use crate::args::ProcessAction;
 use crate::config::UserConfig;
 use crate::git::Git;
 use crate::harness::{Asked, Choice};
+use crate::issue::{IssueInput, IssueUrl};
 use crate::logs::{self, Begin, Work};
 use crate::process::{self, Control, Interruption};
 use crate::skill;
 use crate::worktree::SkillWorktree;
-use crate::{interrupt, launch, progress, prompt, skills};
+use crate::{delivery, interrupt, launch, progress, prompt, session, skills, trust};
 
 /// The issue URL when the Process has an issue; unset otherwise.
 const ISSUE_URL: &str = "THIRDSHIFT_ISSUE_URL";
@@ -91,6 +93,17 @@ struct Prepared {
     choice: Choice,
     description: String,
     steps: Vec<ResolvedStep>,
+    issue: Option<IssueUrl>,
+    /// When untrusted edits start counting, set when a run begins.
+    started: DateTime<Utc>,
+}
+
+/// What one Step needs from the Process, shared by a parallel group.
+struct StepRun<'a> {
+    process: &'a str,
+    choice: &'a Choice,
+    issue: Option<&'a IssueUrl>,
+    started: DateTime<Utc>,
 }
 
 struct WrittenGuard;
@@ -105,7 +118,7 @@ pub fn execute(action: ProcessAction) -> Result<String> {
     match action {
         ProcessAction::List => list(),
         ProcessAction::Check(name) => check(&name),
-        ProcessAction::Run(name) => run(&name),
+        ProcessAction::Run { name, issue } => run(&name, issue),
     }
 }
 
@@ -154,10 +167,18 @@ fn check(name: &str) -> Result<String> {
     Ok(plan(name, &prepared))
 }
 
-fn run(name: &str) -> Result<String> {
+fn run(name: &str, issue: Option<IssueInput>) -> Result<String> {
     interrupt::install()?;
     let config = UserConfig::load()?;
-    let prepared = prepare(name, &config)?;
+    // Before any worktree: a foreign Issue URL is an origin mismatch, and a
+    // number that cannot be resolved stops the same way.
+    let issue = resolve_process_issue(issue)?;
+    // The same margin as a Ticket run. Edits in the gap since this moment,
+    // or dated by a slow GitHub clock, still count.
+    let started = Utc::now() - crate::run::STARTED_MARGIN;
+    let mut prepared = prepare(name, &config)?;
+    prepared.issue = issue;
+    prepared.started = started;
     let repo = launch::repo()?;
     logs::begin(Begin::Process(name));
     logs::configured(&config);
@@ -257,9 +278,17 @@ fn run_parallel(
             let process = process.to_string();
             let results = results.to_path_buf();
             let first = group_start + offset == 0;
+            let issue = prepared.issue.clone();
+            let started_at = prepared.started;
             handles.push(scope.spawn(move || {
                 let started = Instant::now();
-                let outcome = run_step_in(&process, &choice, &cwd, step, &earlier, &results, first);
+                let run = StepRun {
+                    process: &process,
+                    choice: &choice,
+                    issue: issue.as_ref(),
+                    started: started_at,
+                };
+                let outcome = run_step_in(&run, &cwd, step, &earlier, &results, first);
                 (started.elapsed(), outcome)
             }));
         }
@@ -313,9 +342,14 @@ fn run_step(
     results: &Path,
     first: bool,
 ) -> Result<String> {
-    run_step_in(
+    let run = StepRun {
         process,
-        &prepared.choice,
+        choice: &prepared.choice,
+        issue: prepared.issue.as_ref(),
+        started: prepared.started,
+    };
+    run_step_in(
+        &run,
         worktree_path(&prepared.worktrees, step.worktree.as_deref()),
         step,
         earlier,
@@ -325,8 +359,7 @@ fn run_step(
 }
 
 fn run_step_in(
-    process: &str,
-    choice: &Choice,
+    run: &StepRun<'_>,
     cwd: &Path,
     step: &ResolvedStep,
     earlier: &[(String, PathBuf)],
@@ -336,16 +369,110 @@ fn run_step_in(
     crate::resources::wait()?;
     match &step.kind {
         StepKind::Skill { name, path } => {
-            progress::step(format_args!("running step {} with {choice}", step.name));
-            let prompt = prompt::process_step(process, &step.name, name, path, earlier, first);
-            skill::run_session(cwd, choice, &format!("Step {}", step.name), &prompt)
+            progress::step(format_args!(
+                "running step {} with {choice}",
+                step.name,
+                choice = run.choice
+            ));
+            let prompt = prompt::process_step(
+                run.process,
+                &step.name,
+                name,
+                path,
+                earlier,
+                first,
+                run.issue,
+            );
+            match run.issue {
+                Some(issue) => {
+                    run_skill_on_issue(cwd, run.choice, &step.name, &prompt, issue, run.started)
+                }
+                None => {
+                    skill::run_session(cwd, run.choice, &format!("Step {}", step.name), &prompt)
+                }
+            }
         }
         StepKind::Command(command) => {
             progress::step(format_args!("running step {}", step.name));
             let result_file = results.join(format!("{}.txt", step.name));
-            run_command(cwd, command, results, &result_file, None)
+            run_command(
+                cwd,
+                command,
+                results,
+                &result_file,
+                run.issue.map(|issue| issue.url.as_str()),
+            )
         }
     }
+}
+
+/// Check the issue, then write it into the worktree for the session about
+/// to start. An untrusted edit fails the Step instead of starting it.
+fn prepare_for_session(issue: &IssueUrl, started: DateTime<Utc>, worktree: &Path) -> Result<()> {
+    match trust::untrusted_edit(&crate::github::GitHub::new(), issue, Some(started))? {
+        Some(text) => bail!(
+            "#{number} {text} edited since the Process started by an account that is not a Trusted account; starting no further session",
+            number = issue.number,
+        ),
+        None => delivery::hand_over_issue(issue, worktree),
+    }
+}
+
+/// A session Step on an issue: the trust check and issue file before the
+/// session, and again before its one Resume.
+fn run_skill_on_issue(
+    worktree: &Path,
+    choice: &Choice,
+    step: &str,
+    prompt: &str,
+    issue: &IssueUrl,
+    started: DateTime<Utc>,
+) -> Result<String> {
+    let label = format!("Step {step}");
+    prepare_for_session(issue, started, worktree)?;
+    let ended = skill::run_session_ending(worktree, choice, None, prompt)?;
+    let (ended, ended_last) = if ended.killed.is_empty() {
+        (ended, "session")
+    } else if let Some(session_id) = ended.session_id.clone() {
+        progress::step(format_args!(
+            "{label}: background work was killed as the session ended; resuming it once"
+        ));
+        prepare_for_session(issue, started, worktree)?;
+        let resume_prompt = prompt::resume(&ended.killed_work());
+        let resumed =
+            skill::run_session_ending(worktree, choice, Some(&session_id), &resume_prompt)?;
+        (resumed, "Resume")
+    } else {
+        (ended, "session")
+    };
+    if !ended.killed.is_empty()
+        && let Some(message) = ended
+            .final_message
+            .clone()
+            .filter(|text| !text.trim().is_empty())
+    {
+        let ending = session::ending_with(&ended.killed_work());
+        progress::step(format_args!(
+            "{label}: the {ended_last} {ending}; carrying on, as it may have been abandoned"
+        ));
+        return Ok(message);
+    }
+    ended.require_final_message(&label)
+}
+
+fn resolve_process_issue(issue: Option<IssueInput>) -> Result<Option<IssueUrl>> {
+    let Some(issue) = issue else {
+        return Ok(None);
+    };
+    let issue = launch::resolve_issue(issue)?;
+    let origin = Git::new(std::env::current_dir()?).run(&["config", "remote.origin.url"])?;
+    if !issue.matches_origin(&origin) {
+        bail!(
+            "origin mismatch: {} is not in the repository at origin {origin}",
+            issue.url
+        );
+    }
+    Ok(Some(issue))
 }
 
 fn run_command(
@@ -519,6 +646,8 @@ fn prepare(name: &str, config: &UserConfig) -> Result<Prepared> {
         choice,
         description: file.description,
         steps,
+        issue: None,
+        started: Utc::now(),
     })
 }
 

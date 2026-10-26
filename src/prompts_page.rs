@@ -333,6 +333,7 @@ fn prompts() -> Vec<Prompt> {
                 std::path::Path::new(SKILL_PATH),
                 &[],
                 true,
+                None,
             ),
         },
         Prompt {
@@ -350,6 +351,22 @@ fn prompts() -> Vec<Prompt> {
                     std::path::PathBuf::from(EARLIER_RESULT),
                 )],
                 false,
+                None,
+            ),
+        },
+        Prompt {
+            id: "prompt-process-step-issue",
+            title: "Custom process Step, on an issue",
+            when: "Starts the first Step of a Custom process that was given an issue. The worktree has the issue file, and the prompt names the issue.",
+            sender: Process,
+            text: prompt::process_step(
+                PROCESS,
+                STEP,
+                SKILL_NAME,
+                std::path::Path::new(SKILL_PATH),
+                &[],
+                true,
+                Some(&issue),
             ),
         },
     ];
@@ -847,6 +864,7 @@ mod tests {
                     | "prompt-ci-fix-repair-inherited"
                     | "prompt-process-step"
                     | "prompt-process-step-later"
+                    | "prompt-process-step-issue"
             );
             for instruction in [
                 "For source edits, prefer an available structured patch/edit tool",
