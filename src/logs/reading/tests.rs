@@ -14,6 +14,10 @@ mod inventory_tests;
 #[path = "reader_tests.rs"]
 mod reader_tests;
 
+#[cfg(target_os = "linux")]
+#[path = "metrics_tests.rs"]
+mod metrics_tests;
+
 fn now() -> DateTime<Local> {
     DateTime::parse_from_rfc3339("2026-10-19T12:00:00-04:00")
         .unwrap()
