@@ -281,19 +281,20 @@ pub(super) struct CurrentStage {
 }
 
 impl Command {
-    /// Enrich only the selected Command tree; all records still contribute to
-    /// Usual ranges and health. None selects every tree for weekly metrics.
+    /// Enrich this Command when `selected` is every Command (`None`), or this
+    /// Command's own record path and name. A match also enriches nested Ticket
+    /// runs and dispatches. Path alone is not enough: a dispatch shares its
+    /// parent's record path. Usual ranges and health already include every record.
     fn add_session_signals(&mut self, selected: Option<(&Path, &str)>) {
-        let selected =
-            selected.filter(|(path, name)| self.record_path != *path || self.record.name != *name);
-        if selected.is_none()
-            && let Some(mut metrics) = self.record.run_metrics.take()
-        {
+        let enrich = selected
+            .is_none_or(|(path, name)| self.record_path == path && self.record.name == name);
+        if enrich && let Some(mut metrics) = self.record.run_metrics.take() {
             metrics.add_session_signals(&self.record, cache::session_signals);
             self.record.run_metrics = Some(metrics);
         }
+        let nested = if enrich { None } else { selected };
         for child in self.dispatched.iter_mut().chain(&mut self.children) {
-            child.add_session_signals(selected);
+            child.add_session_signals(nested);
         }
     }
 

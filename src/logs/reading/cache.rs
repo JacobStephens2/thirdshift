@@ -1,5 +1,6 @@
 //! Bounded, process-local caches of retained facts. Liveness and health are
-//! sampled afresh; only file contents/parsed records survive between requests.
+//! sampled afresh; file contents, parsed records and derived Session signals
+//! survive between requests.
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -59,25 +60,22 @@ impl<T: Clone> Cache<T> {
         }
     }
 
-    fn read(
-        &mut self,
-        path: &Path,
-        load: impl FnOnce(&Path) -> Result<T>,
-        retained_bytes: impl FnOnce(&T, u64) -> u64,
-    ) -> Result<T> {
+    fn read(&mut self, path: &Path, load: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
         let identity = Identity::read(path)?;
         if let Some(value) = self.get(path, &identity) {
             return Ok(value);
         }
         let value = load(path)?;
-        let bytes = retained_bytes(&value, identity.len);
         // Don't retain a partial in-place write. A later request retries it.
         if Identity::read(path)? == identity {
+            let bytes = identity.len;
             self.insert(path, identity, value.clone(), bytes);
         }
         Ok(value)
     }
 
+    /// Return a cached value. A different identity for this path is forgotten
+    /// so the caller can load and insert the current one.
     fn get(&mut self, path: &Path, identity: &Identity) -> Option<T> {
         if let Some(retained) = self.entries.get_mut(path)
             && retained.identity == *identity
@@ -127,21 +125,19 @@ pub(super) fn record(path: &Path) -> Result<Option<CommandTree>> {
     RECORDS
         .lock()
         .unwrap()
-        .read(
-            path,
-            |path| Ok(serde_json::from_slice(&fs::read(path)?).ok()),
-            |_, source_bytes| source_bytes,
-        )
+        .read(path, |path| {
+            Ok(serde_json::from_slice(&fs::read(path)?).ok())
+        })
         .with_context(|| format!("could not read {}", path.display()))
 }
 
 pub(super) fn text(path: &Path) -> Result<Arc<str>> {
     static TEXT: LazyLock<Mutex<Cache<Arc<str>>>> = LazyLock::new(|| Mutex::new(Cache::new()));
-    match TEXT.lock().unwrap().read(
-        path,
-        |path| Ok(fs::read_to_string(path)?.into()),
-        |_, source_bytes| source_bytes,
-    ) {
+    match TEXT
+        .lock()
+        .unwrap()
+        .read(path, |path| Ok(fs::read_to_string(path)?.into()))
+    {
         Ok(text) => Ok(text),
         Err(error)
             if error
