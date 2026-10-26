@@ -59,10 +59,14 @@ struct Started {
     root: PathBuf,
     kind: Kind,
     issue: Option<u64>,
+    process: Option<String>,
 }
 
 impl Started {
     fn subject(&self) -> String {
+        if let Some(name) = &self.process {
+            return format!("Process {name}");
+        }
         match self.issue {
             Some(number) => format!("{} #{number}", self.kind),
             None => self.kind.to_string(),
@@ -102,6 +106,7 @@ impl<O: Outside> Record<O> {
             Begin::SecurityRun => CommandKind::Secure,
             Begin::ScoringRun => CommandKind::Scoring,
             Begin::Experiment => CommandKind::Experiment,
+            Begin::Process(_) => CommandKind::Process,
         };
         let (starting, quiet) = match begin {
             Begin::ChildRun(stamp, _) => {
@@ -115,6 +120,7 @@ impl<O: Outside> Record<O> {
             Begin::SecurityRun => ("Security run starting".into(), true),
             Begin::ScoringRun => ("Scoring run starting".into(), false),
             Begin::Experiment => ("Experiment starting".into(), false),
+            Begin::Process(name) => (format!("Process {name} starting"), false),
         };
         let now = self.outside.now();
         self.stamp
@@ -201,6 +207,10 @@ impl<O: Outside> Record<O> {
             root: root.clone(),
             kind: work.kind(),
             issue: work.issue(),
+            process: match work {
+                Work::Process { name, .. } => Some((*name).to_string()),
+                _ => None,
+            },
         };
         let line = format!("{} started: {command_log}, on {harness}", started.subject());
         if self.activity_started.is_none() {
@@ -388,7 +398,8 @@ impl<O: Outside> Record<O> {
         }
     }
 
-    pub(super) fn experiment_finished(&mut self, outcome: &str, cause: Option<&str>) {
+    /// How a Command ended when it has no Run account: an Experiment or a Process.
+    pub(super) fn outcome(&mut self, outcome: &str, cause: Option<&str>) {
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.outcome = Some(outcome.into());
             tree.command.cause = cause.map(String::from);

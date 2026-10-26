@@ -52,7 +52,7 @@
     <pre class="job-text" aria-label="A new session"><code>claude -p --permission-mode auto --settings '{"attribution":{"commit":"","pr":""}}' --output-format stream-json --verbose <mark class="ph">&lt;prompt&gt;</mark></code></pre>
     <p class="lede">A <a href="#prompt-resume">Resume</a> continues the session that ended:</p>
     <pre class="job-text" aria-label="A Resume"><code>claude -p --permission-mode auto --settings '{"attribution":{"commit":"","pr":""}}' --output-format stream-json --verbose --resume <mark class="ph">&lt;session id&gt;</mark> <mark class="ph">&lt;prompt&gt;</mark></code></pre>
-    <p class="lede">With <code>harness codex</code>, each session runs <code>codex exec --json --dangerously-bypass-approvals-and-sandbox -m <mark class="ph">&lt;model&gt;</mark> -c model_reasoning_effort="<mark class="ph">&lt;effort&gt;</mark>" -c project_doc_fallback_filenames=["CLAUDE.md"] <mark class="ph">&lt;prompt&gt;</mark></code> instead, without <code>-m <mark class="ph">&lt;model&gt;</mark></code> or the Effort's <code>-c</code> where they are not set, and with <code>resume <mark class="ph">&lt;session id&gt;</mark></code> before the prompt for a Resume. The Factory skills are linked into <code>.agents/skills/</code>, and a prompt's first line loads its skill as <code>$thirdshift-&lt;skill&gt;</code>.</p>
+    <p class="lede">With <code>harness codex</code>, each session runs <code>codex exec --json --dangerously-bypass-approvals-and-sandbox -m <mark class="ph">&lt;model&gt;</mark> -c model_reasoning_effort="<mark class="ph">&lt;effort&gt;</mark>" -c project_doc_fallback_filenames=["CLAUDE.md"] <mark class="ph">&lt;prompt&gt;</mark></code> instead, without <code>-m <mark class="ph">&lt;model&gt;</mark></code> or the Effort's <code>-c</code> where they are not set, and with <code>resume <mark class="ph">&lt;session id&gt;</mark></code> before the prompt for a Resume. The Factory skills are linked into <code>.agents/skills/</code>, and a prompt's first line loads its skill as <code>$thirdshift-<mark class="ph">&lt;skill&gt;</mark></code>.</p>
     </details>
   </div>
 </section>
@@ -669,6 +669,36 @@ Re-run whatever you were waiting on in the foreground, then finish your job. If 
 
 Before additional validation, each push, or any PR edit, check whether this branch's PR remains actionable, using the supplied PR URL when present. If the PR is merged or closed, stop and report its actual state; do not push, recreate its branch, or edit its body. During a Repair, if the PR has become draft, stop and report that gate; do not mark it ready again. If a Repair changes no files, create no commit, including no `--allow-empty` commit, and do not push merely to satisfy this prompt. Push when needed to publish real changes or required upstream reconciliation, after checking the PR again.
 
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on. thirdshift records this session as a Session trace, with Model evidence and any review reports beside it.
+</code></pre>
+        </div>
+        </details>
+      </article>
+      <article class="job-sheet" id="prompt-process-step" aria-labelledby="prompt-process-step-title">
+        <details class="fold">
+        <summary><h3 id="prompt-process-step-title">Custom process Step</h3></summary>
+        <div class="job-body">
+        <p>Starts the first Step of a Custom process. No earlier Step has a result.</p>
+        <p class="sent-by">Sent by a Custom process</p>
+        <pre class="job-text"><code>Use the <mark class="ph">&lt;skill&gt;</mark> skill. Read and follow `<mark class="ph">&lt;skill path&gt;</mark>`.
+This is Step <mark class="ph">&lt;step&gt;</mark> of the Custom process <mark class="ph">&lt;process&gt;</mark>.
+This is the first Step. No earlier Step has a result.
+For source edits, prefer an available structured patch/edit tool that makes the intended context and changed regions explicit (for example, `apply_patch` on Codex). Use the Harness's equivalent when available. Normal language-specific code generation and narrowly justified scripts remain appropriate; scope scripted replacements to the intended region and check the diff for unrelated changes.
+You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on. thirdshift records this session as a Session trace, with Model evidence and any review reports beside it.
+</code></pre>
+        </div>
+        </details>
+      </article>
+      <article class="job-sheet" id="prompt-process-step-later" aria-labelledby="prompt-process-step-later-title">
+        <details class="fold">
+        <summary><h3 id="prompt-process-step-later-title">Custom process Step, with an earlier result</h3></summary>
+        <div class="job-body">
+        <p>Starts a later Step of a Custom process. The prompt names the path of each earlier Step's final message.</p>
+        <p class="sent-by">Sent by a Custom process</p>
+        <pre class="job-text"><code>Use the <mark class="ph">&lt;skill&gt;</mark> skill. Read and follow `<mark class="ph">&lt;skill path&gt;</mark>`.
+This is Step <mark class="ph">&lt;step&gt;</mark> of the Custom process <mark class="ph">&lt;process&gt;</mark>.
+Earlier Step result <mark class="ph">&lt;earlier step&gt;</mark>: <mark class="ph">&lt;earlier step result&gt;</mark>
+For source edits, prefer an available structured patch/edit tool that makes the intended context and changed regions explicit (for example, `apply_patch` on Codex). Use the Harness's equivalent when available. Normal language-specific code generation and narrowly justified scripts remain appropriate; scope scripted replacements to the intended region and check the diff for unrelated changes.
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on. thirdshift records this session as a Session trace, with Model evidence and any review reports beside it.
 </code></pre>
         </div>

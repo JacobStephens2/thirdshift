@@ -387,6 +387,15 @@ pub fn repo() -> Result<Repo> {
     LaunchDirectory::open(current_dir()?, Opening::Pass)?.repo()
 }
 
+/// The Base branch a Custom process detaches at: the branch checked out in
+/// the Launch directory, at the commit sampled on origin. This does not take
+/// the Pass lock, and it does not offer `base <branch>`, which this command
+/// cannot name.
+pub fn checked_out_base() -> Result<BaseBranch> {
+    let directory = LaunchDirectory::open(current_dir()?, Opening::Run)?;
+    directory.prepare_base_branch(None)
+}
+
 /// Resolve a Run's shorthand before command startup. A full URL passes
 /// through unchanged and still undergoes Origin match when the Run opens.
 pub fn resolve_issue(input: IssueInput) -> Result<IssueUrl> {

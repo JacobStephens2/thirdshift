@@ -1,5 +1,7 @@
 //! The prompts agent sessions are started with.
 
+use std::fmt::Write;
+
 use crate::ci::{self, FailedChecks};
 use crate::issue::IssueUrl;
 use crate::labels::{NEEDS_TRIAGE, READY_FOR_AGENT};
@@ -79,13 +81,21 @@ fn issue_file_instruction(issue: &IssueUrl) -> String {
     )
 }
 
-/// A standalone skill, optionally working on the issue handed to it.
-pub fn skill(name: &str, path: &std::path::Path, issue: Option<&IssueUrl>) -> String {
+/// The Factory-skill sigil, when `name` is one, and the instruction to read it.
+fn skill_preamble(name: &str, path: &std::path::Path) -> String {
     let invocation = if name.starts_with("thirdshift-") {
         format!("/{name}\n")
     } else {
         String::new()
     };
+    format!(
+        "{invocation}Use the {name} skill. Read and follow `{path}`.\n",
+        path = path.display(),
+    )
+}
+
+/// A standalone skill, optionally working on the issue handed to it.
+pub fn skill(name: &str, path: &std::path::Path, issue: Option<&IssueUrl>) -> String {
     let task = issue.map_or_else(String::new, |issue| {
         format!(
             "Run the skill on issue {}.\n{}",
@@ -94,8 +104,36 @@ pub fn skill(name: &str, path: &std::path::Path, issue: Option<&IssueUrl>) -> St
         )
     });
     format!(
-        "{invocation}Use the {name} skill. Read and follow `{path}`.\n{task}{SOURCE_EDITS}{HEADLESS}",
-        path = path.display(),
+        "{preamble}{task}{SOURCE_EDITS}{HEADLESS}",
+        preamble = skill_preamble(name, path),
+    )
+}
+
+/// One Step of a Custom process. `earlier` is each finished Step's name and
+/// the path of its final message, outside the worktree.
+pub fn process_step(
+    process: &str,
+    step: &str,
+    skill_name: &str,
+    skill_path: &std::path::Path,
+    earlier: &[(String, std::path::PathBuf)],
+) -> String {
+    let mut earlier_text = if earlier.is_empty() {
+        "This is the first Step. No earlier Step has a result.\n".to_string()
+    } else {
+        String::new()
+    };
+    for (name, path) in earlier {
+        let _ = writeln!(
+            earlier_text,
+            "Earlier Step result {name}: {}",
+            path.display()
+        );
+    }
+    format!(
+        "{preamble}This is Step {step} of the Custom process {process}.\n\
+         {earlier_text}{SOURCE_EDITS}{HEADLESS}",
+        preamble = skill_preamble(skill_name, skill_path),
     )
 }
 

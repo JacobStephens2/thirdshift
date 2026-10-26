@@ -22,6 +22,9 @@ fn assert_help_text(text: &str) {
         "thirdshift secure",
         "thirdshift secure base <branch>",
         "thirdshift skill <skill> [issue <issue>]",
+        "thirdshift process",
+        "thirdshift process <name>",
+        "thirdshift process check <name>",
         "thirdshift email-test [<address>]",
         "thirdshift setup",
         "thirdshift update",
@@ -83,7 +86,7 @@ fn help_is_a_compact_reference_with_a_link_to_the_details() {
     let help = scenario.run(&["help"]).stdout;
 
     assert!(
-        help.lines().count() <= 65,
+        help.lines().count() <= 68,
         "help should fit in a short reference, got {} lines",
         help.lines().count()
     );

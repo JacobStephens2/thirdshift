@@ -228,7 +228,8 @@ impl StageName {
             | Work::ArchitectRun(_)
             | Work::SecurityRun(_)
             | Work::ScoringRun(_)
-            | Work::Experiment(_) => Self::DispatchedRun,
+            | Work::Experiment(_)
+            | Work::Process { .. } => Self::DispatchedRun,
         }
     }
 
@@ -346,6 +347,7 @@ impl CommandRecord {
             Work::ScoringRun(_) => format!("scoring-{stamp}"),
             Work::PickupRun(_) => format!("pickup-{stamp}"),
             Work::Experiment(_) => format!("experiment-{stamp}"),
+            Work::Process { name, .. } => format!("process-{name}-{stamp}"),
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => {
                 format!("{}#{}", issue.repo_slug(), issue.number)
             }

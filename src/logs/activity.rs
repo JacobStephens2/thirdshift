@@ -22,6 +22,7 @@ pub(super) enum Kind {
     SpecRun,
     ScoringRun,
     Experiment,
+    Process,
     Pass(Pass),
 }
 
@@ -32,6 +33,7 @@ impl Display for Kind {
             Kind::SpecRun => f.write_str("Spec run"),
             Kind::ScoringRun => f.write_str("Scoring run"),
             Kind::Experiment => f.write_str("Experiment"),
+            Kind::Process => f.write_str("Process"),
             Kind::Pass(pass) => pass.fmt(f),
         }
     }
