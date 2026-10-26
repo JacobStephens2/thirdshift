@@ -112,7 +112,8 @@ pub fn skill(name: &str, path: &std::path::Path, issue: Option<&IssueUrl>) -> St
 /// One Step of a Custom process. `earlier` is each finished Step's name and
 /// the path of its final message, outside the worktree. `first` is whether
 /// this is the Process's first Step. A later Step with no finished result
-/// does not claim to be the first.
+/// does not claim to be the first. `issue`, when the Process has one, is
+/// named for the session to work from its file.
 pub fn process_step(
     process: &str,
     step: &str,
@@ -120,6 +121,7 @@ pub fn process_step(
     skill_path: &std::path::Path,
     earlier: &[(String, std::path::PathBuf)],
     first: bool,
+    issue: Option<&IssueUrl>,
 ) -> String {
     let mut earlier_text = if earlier.is_empty() {
         if first {
@@ -137,9 +139,16 @@ pub fn process_step(
             path.display()
         );
     }
+    let issue_text = issue.map_or(String::new(), |issue| {
+        format!(
+            "Run this Step on issue {}.\n{}",
+            issue.url,
+            issue_file_instruction(issue)
+        )
+    });
     format!(
         "{preamble}This is Step {step} of the Custom process {process}.\n\
-         {earlier_text}{SOURCE_EDITS}{HEADLESS}",
+         {issue_text}{earlier_text}{SOURCE_EDITS}{HEADLESS}",
         preamble = skill_preamble(skill_name, skill_path),
     )
 }
@@ -681,6 +690,15 @@ mod tests {
             ci_fix_repair(&issue, "main", "issue-7", "<pr>", &failed),
             review_repair(&issue, "issue-7", "<pr>", "abc123"),
             security_review(&issue, "main", "issue-7"),
+            process_step(
+                "notes",
+                "gather",
+                "to-spec",
+                std::path::Path::new("skills/to-spec/SKILL.md"),
+                &[],
+                true,
+                Some(&issue),
+            ),
         ] {
             for instruction in [
                 "thirdshift has written issue https://github.com/acme/widgets/issues/7 to `.thirdshift-issue.md`",
@@ -695,6 +713,30 @@ mod tests {
                 );
             }
         }
+        let on_issue = process_step(
+            "notes",
+            "gather",
+            "to-spec",
+            std::path::Path::new("skills/to-spec/SKILL.md"),
+            &[],
+            true,
+            Some(&issue),
+        );
+        assert!(
+            on_issue.contains("Run this Step on issue https://github.com/acme/widgets/issues/7."),
+            "{on_issue}"
+        );
+        let without = process_step(
+            "notes",
+            "gather",
+            "to-spec",
+            std::path::Path::new("skills/to-spec/SKILL.md"),
+            &[],
+            true,
+            None,
+        );
+        assert!(!without.contains(".thirdshift-issue.md"), "{without}");
+        assert!(!without.contains("Run this Step on issue"), "{without}");
     }
 
     #[test]

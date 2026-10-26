@@ -464,7 +464,7 @@ thirdshift secure                   # audit the Base branch and record findings 
 thirdshift secure base &lt;branch&gt;     # do that with &lt;branch&gt; as the Base branch, from a clone on any branch
 thirdshift skill &lt;skill&gt; [issue &lt;issue&gt;]   # run one skill headlessly and print its final message
 thirdshift process                      # list Custom processes (experimental)
-thirdshift process &lt;name&gt;               # run a Custom process (experimental)
+thirdshift process &lt;name&gt; [issue &lt;issue&gt;]   # run a Custom process, optionally on an issue (experimental)
 thirdshift process check &lt;name&gt;         # validate one and print its plan (experimental)
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
 thirdshift scores [&lt;pull request&gt;] [--json] # show Scores and calibration
@@ -864,6 +864,16 @@ Step result files and <code>THIRDSHIFT_STEP_RESULT</code> to the path of that St
 result file. thirdshift writes the combined output to that path when the Step
 finishes. <code>THIRDSHIFT_ISSUE_URL</code> is set to the issue&#39;s URL when the Process
 has an issue, and is unset when it does not.</p>
+<p><code>thirdshift process &lt;name&gt; issue &lt;issue&gt;</code> gives the Process an issue.
+<code>&lt;issue&gt;</code> is an issue number or an Issue URL, resolved as <code>thirdshift skill</code>
+resolves it. An Issue URL from another repository is an origin mismatch and
+stops before any work. Every session Step&#39;s worktree gets <code>.thirdshift-issue.md</code>
+before the session starts, and again before a Resume: the issue&#39;s title, body
+and only the comments of Trusted accounts. The Session prompt names the issue.
+Before each of those sessions, a Resume included, the issue is checked again,
+as in a Ticket run. An edit to the title or body by an account that is not a
+Trusted account, made since a few minutes before the Process started, fails
+that Step instead of starting the session. The Command log names the cause.</p>
 <p><code>check</code> and running refuse a missing file, a file that is not valid TOML, a
 missing or wrong <code>version</code>, an unknown key, a Step without exactly one of
 <code>skill</code> and <code>command</code>, a command that is not a string or is empty, an

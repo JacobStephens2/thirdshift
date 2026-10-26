@@ -44,5 +44,6 @@ With `harness codex`, each session runs `codex exec --json --dangerously-bypass-
 | Resume | Continues any session, once, that ended its turn with background work still running, which was killed with it. | [resume.md](resume.md) |
 | Custom process Step | Starts the first Step of a Custom process. No earlier Step has a result. | [process-step.md](process-step.md) |
 | Custom process Step, with an earlier result | Starts a later Step of a Custom process. The prompt names the path of each earlier Step's final message. | [process-step-later.md](process-step-later.md) |
+| Custom process Step, on an issue | Starts the first Step of a Custom process that was given an issue. The worktree has the issue file, and the prompt names the issue. | [process-step-issue.md](process-step-issue.md) |
 
 The Factory skills the prompts name are in [`skills/`](../skills/), as thirdshift writes them out.
