@@ -8,6 +8,7 @@
   {% if !row.left.is_empty() %}<p class="left">{{ row.left }}</p>{% endif %}
   {% if !row.tickets.is_empty() %}<ul class="plan" aria-label="Tickets">{% for ticket in row.tickets %}<li>{{ ticket|linkify }}</li>{% endfor %}</ul>{% endif %}
   <div class="row-actions"><p><a class="peek-link" href="{{ row.peek_url() }}">Details</a> · <a href="{{ row.log_url() }}">Full log</a></p>
+  {% if can_copy %}<button type="button" data-copy-context>Copy</button><span data-copy-status role="status"></span>{% endif %}
   {% if row.can_dismiss %}<form method="post" action="/dismiss" data-dismiss><input type="hidden" name="command" value="{{ row.selector }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button id="dismiss-{{ row.id }}">Dismiss</button><span role="status"></span></form>{% endif %}</div>
   {% if !row.findings.is_empty() %}<ul aria-label="Security findings">{% for finding in row.findings %}<li>{{ finding.title }} · {% match finding.severity %}{% when Some with (severity) %}{{ severity }}{% when None %}ungraded{% endmatch %} · {{ finding.url|linkify }}</li>{% endfor %}</ul>{% endif %}
   {% if !row.sessions.is_empty() %}<ul aria-label="Session traces">{% for session in row.sessions %}<li><a href="{{ row.session_url(session) }}">{{ session.display() }}</a></li>{% endfor %}</ul>{% endif %}
