@@ -110,16 +110,23 @@ pub fn skill(name: &str, path: &std::path::Path, issue: Option<&IssueUrl>) -> St
 }
 
 /// One Step of a Custom process. `earlier` is each finished Step's name and
-/// the path of its final message, outside the worktree.
+/// the path of its final message, outside the worktree. `first` is whether
+/// this is the Process's first Step. A later Step with no finished result
+/// does not claim to be the first.
 pub fn process_step(
     process: &str,
     step: &str,
     skill_name: &str,
     skill_path: &std::path::Path,
     earlier: &[(String, std::path::PathBuf)],
+    first: bool,
 ) -> String {
     let mut earlier_text = if earlier.is_empty() {
-        "This is the first Step. No earlier Step has a result.\n".to_string()
+        if first {
+            "This is the first Step. No earlier Step has a result.\n".to_string()
+        } else {
+            "No earlier Step has a result.\n".to_string()
+        }
     } else {
         String::new()
     };

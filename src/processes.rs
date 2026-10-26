@@ -1,13 +1,15 @@
-//! Custom processes: sequential skill Steps from `~/.thirdshift/processes/<name>.toml`.
+//! Custom processes: sequential skill and command Steps from
+//! `~/.thirdshift/processes/<name>.toml`.
 
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::time::Instant;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use toml_edit::{Document, Item, Key, Table};
 
 use crate::args::ProcessAction;
@@ -15,9 +17,17 @@ use crate::config::UserConfig;
 use crate::git::Git;
 use crate::harness::{Asked, Choice};
 use crate::logs::{self, Begin, Work};
+use crate::process::{self, Control, Interruption};
 use crate::skill;
 use crate::worktree::SkillWorktree;
 use crate::{interrupt, launch, progress, prompt, skills};
+
+/// The issue URL when the Process has an issue; unset otherwise.
+const ISSUE_URL: &str = "THIRDSHIFT_ISSUE_URL";
+/// The folder of Step result files, beside the Command log.
+const RESULTS_DIR: &str = "THIRDSHIFT_RESULTS_DIR";
+/// The path thirdshift writes this Step's combined output to when it finishes.
+const STEP_RESULT: &str = "THIRDSHIFT_STEP_RESULT";
 
 const RESERVED: &[&str] = &[
     "check",
@@ -37,14 +47,24 @@ struct ProcessFile {
 struct StepDraft {
     name: String,
     name_line: usize,
-    skill: String,
-    skill_line: usize,
+    optional: bool,
+    kind: DraftKind,
+}
+
+enum DraftKind {
+    Skill { skill: String, line: usize },
+    Command { command: String },
 }
 
 struct ResolvedStep {
     name: String,
-    skill_name: String,
-    skill_path: PathBuf,
+    optional: bool,
+    kind: StepKind,
+}
+
+enum StepKind {
+    Skill { name: String, path: PathBuf },
+    Command(String),
 }
 
 struct Prepared {
@@ -143,13 +163,21 @@ fn execute_steps(process: &str, prepared: &Prepared) -> Result<String> {
         .with_context(|| format!("could not create {}", results.display()))?;
     let mut earlier = Vec::new();
     let mut last = String::new();
-    for step in &prepared.steps {
+    for (index, step) in prepared.steps.iter().enumerate() {
         let started = Instant::now();
-        match run_step(process, prepared, step, &earlier) {
+        let path = results.join(format!("{}.txt", step.name));
+        match run_step(
+            process,
+            prepared,
+            step,
+            &earlier,
+            &results,
+            &path,
+            index == 0,
+        ) {
             Ok(message) => {
                 let duration = progress::duration(started.elapsed());
                 progress::step(format_args!("step {}: {duration} succeeded", step.name));
-                let path = results.join(format!("{}.txt", step.name));
                 fs::write(&path, &message)
                     .with_context(|| format!("could not write {}", path.display()))?;
                 earlier.push((step.name.clone(), path));
@@ -163,6 +191,9 @@ fn execute_steps(process: &str, prepared: &Prepared) -> Result<String> {
                     failure_outcome(),
                     one_line(&error)
                 ));
+                if step.optional && !interrupt::requested() {
+                    continue;
+                }
                 return Err(error);
             }
         }
@@ -175,25 +206,86 @@ fn run_step(
     prepared: &Prepared,
     step: &ResolvedStep,
     earlier: &[(String, PathBuf)],
+    results: &Path,
+    result_file: &Path,
+    first: bool,
 ) -> Result<String> {
     crate::resources::wait()?;
-    progress::step(format_args!(
-        "running step {} with {}",
-        step.name, prepared.choice
-    ));
-    let prompt = prompt::process_step(
-        process,
-        &step.name,
-        &step.skill_name,
-        &step.skill_path,
-        earlier,
-    );
-    skill::run_session(
-        prepared.worktree.path(),
-        &prepared.choice,
-        &format!("Step {}", step.name),
-        &prompt,
-    )
+    match &step.kind {
+        StepKind::Skill { name, path } => {
+            progress::step(format_args!(
+                "running step {} with {}",
+                step.name, prepared.choice
+            ));
+            let prompt = prompt::process_step(process, &step.name, name, path, earlier, first);
+            skill::run_session(
+                prepared.worktree.path(),
+                &prepared.choice,
+                &format!("Step {}", step.name),
+                &prompt,
+            )
+        }
+        StepKind::Command(command) => {
+            progress::step(format_args!("running step {}", step.name));
+            run_command(
+                prepared.worktree.path(),
+                command,
+                results,
+                result_file,
+                None,
+            )
+        }
+    }
+}
+
+fn run_command(
+    worktree: &Path,
+    command: &str,
+    results: &Path,
+    result_file: &Path,
+    issue_url: Option<&str>,
+) -> Result<String> {
+    let mut child = Command::new("sh");
+    child
+        .arg("-c")
+        .arg(command)
+        .current_dir(worktree)
+        .env(RESULTS_DIR, results)
+        .env(STEP_RESULT, result_file);
+    match issue_url {
+        Some(url) => {
+            child.env(ISSUE_URL, url);
+        }
+        None => {
+            child.env_remove(ISSUE_URL);
+        }
+    }
+    let output = process::output(
+        &mut child,
+        None,
+        Control {
+            name: "command",
+            interruption: Interruption::Ordinary,
+            stop: &|child| process::stop(child, &[libc::SIGTERM]),
+        },
+    )?;
+    if !output.status.success() {
+        bail!("{}", exit_status(output.status));
+    }
+    Ok(combined(&output.stdout, &output.stderr))
+}
+
+fn combined(stdout: &[u8], stderr: &[u8]) -> String {
+    let mut text = String::from_utf8_lossy(stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(stderr));
+    text
+}
+
+fn exit_status(status: std::process::ExitStatus) -> String {
+    match status.code() {
+        Some(code) => format!("exit status {code}"),
+        None => format!("exit status {status}"),
+    }
 }
 
 fn classify(result: &Result<String>) -> (String, Option<String>) {
@@ -227,13 +319,19 @@ fn plan(name: &str, prepared: &Prepared) -> String {
         chosen = prepared.choice.chosen_by,
     );
     for step in &prepared.steps {
-        let _ = writeln!(
-            text,
-            "{}: {} {}",
-            step.name,
-            step.skill_name,
-            step.skill_path.display()
-        );
+        let mut line = match &step.kind {
+            StepKind::Skill { name, path } => {
+                format!("{}: {} {}", step.name, name, path.display())
+            }
+            StepKind::Command(command) => {
+                let shown = command.replace(['\n', '\r'], " ");
+                format!("{}: command {shown}", step.name)
+            }
+        };
+        if step.optional {
+            line.push_str(" (optional)");
+        }
+        let _ = writeln!(text, "{line}");
     }
     text.trim_end().to_string()
 }
@@ -262,19 +360,23 @@ fn prepare(name: &str, config: &UserConfig) -> Result<Prepared> {
 }
 
 fn resolve(path: &Path, step: &StepDraft, worktree: &Path) -> Result<ResolvedStep> {
-    match skills::find(worktree, &step.skill) {
-        Ok(skill) => Ok(ResolvedStep {
-            name: step.name.clone(),
-            skill_name: skill.name,
-            skill_path: skill.path,
-        }),
-        Err(error) => Err(rule(
-            path,
-            step.skill_line,
-            "skill not found",
-            format!("{error:#}"),
-        )),
-    }
+    let kind = match &step.kind {
+        DraftKind::Skill { skill, line } => match skills::find(worktree, skill) {
+            Ok(skill) => StepKind::Skill {
+                name: skill.name,
+                path: skill.path,
+            },
+            Err(error) => {
+                return Err(rule(path, *line, "skill not found", format!("{error:#}")));
+            }
+        },
+        DraftKind::Command { command } => StepKind::Command(command.clone()),
+    };
+    Ok(ResolvedStep {
+        name: step.name.clone(),
+        optional: step.optional,
+        kind,
+    })
 }
 
 fn read_process(path: &Path) -> Result<String> {
@@ -418,31 +520,52 @@ fn parse_steps(path: &Path, text: &str, line: usize, item: &Item) -> Result<Vec<
 fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Result<StepDraft> {
     let mut name = None;
     let mut skill = None;
+    let mut command = None;
+    let mut optional = false;
     for (key, item) in table.iter() {
         let line = key_line(text, table.key(key));
         match key {
             "name" => name = Some(step_name(path, line, item)?),
             "skill" => skill = Some(step_skill(path, line, item)?),
+            "command" => command = Some(step_command(path, line, item)?),
+            "optional" => optional = step_optional(path, line, item)?,
             other => return Err(rule(path, line, "unknown key", other)),
         }
     }
     let Some((name, name_line)) = name else {
         return Err(rule(path, table_line, "step name", "a step needs a name"));
     };
-    let Some((skill, skill_line)) = skill else {
-        return Err(rule(
-            path,
-            name_line,
-            "exactly one kind",
-            format!("step {name} has no kind"),
-        ));
+    let kind = match (skill, command) {
+        (Some((skill, line)), None) => DraftKind::Skill { skill, line },
+        (None, Some((command, _))) => DraftKind::Command { command },
+        (None, None) => {
+            return Err(rule(
+                path,
+                name_line,
+                "exactly one kind",
+                format!("step {name} has no kind"),
+            ));
+        }
+        (Some(_), Some((_, line))) => {
+            return Err(rule(
+                path,
+                line,
+                "exactly one kind",
+                format!("step {name} has more than one kind"),
+            ));
+        }
     };
     Ok(StepDraft {
         name,
         name_line,
-        skill,
-        skill_line,
+        optional,
+        kind,
     })
+}
+
+fn step_optional(path: &Path, line: usize, item: &Item) -> Result<bool> {
+    item.as_bool()
+        .ok_or_else(|| rule(path, line, "optional", "optional must be a boolean"))
 }
 
 fn step_name(path: &Path, line: usize, item: &Item) -> Result<(String, usize)> {
@@ -469,6 +592,26 @@ fn step_skill(path: &Path, line: usize, item: &Item) -> Result<(String, usize)> 
             "skill must be a string",
         ));
     };
+    Ok((value.to_string(), line))
+}
+
+fn step_command(path: &Path, line: usize, item: &Item) -> Result<(String, usize)> {
+    let Some(value) = item.as_str() else {
+        return Err(rule(
+            path,
+            line,
+            "exactly one kind",
+            "command must be a string",
+        ));
+    };
+    if value.is_empty() {
+        return Err(rule(
+            path,
+            line,
+            "exactly one kind",
+            "command must not be empty",
+        ));
+    }
     Ok((value.to_string(), line))
 }
 
