@@ -305,8 +305,8 @@ export function initSpanTree({ openCommand, openDetails }) {
     closeDetails() { detail = null; delete content.dataset.detailSpanId; },
     update(document) {
       const next = JSON.parse(document.getElementById('span-data').textContent);
-      const chips = document.querySelector('.command-chips');
-      tree.closest('main').querySelector('.command-chips').replaceChildren(...chips.childNodes);
+      // Keep the Runs fold as the reader left it; refresh its summary and chips.
+      for (const part of ['.command-choices > summary', '.command-chips']) tree.closest('main').querySelector(part).replaceChildren(...document.querySelector(part).childNodes);
       const changed = JSON.stringify(next.spans) !== JSON.stringify(data.spans);
       data = next;
       if (changed) { index(); render(); }

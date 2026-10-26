@@ -6,10 +6,14 @@ const { mkdtemp, mkdir, readFile, writeFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
-const { chromium } = require('playwright');
+const { chromium } = require('./playwright.cjs');
 
 let home, server, exited, browser, origin;
 const binary = process.env.THIRDSHIFT_BINARY ?? resolve(__dirname, '../../target/debug/thirdshift');
+// By repository folds each grid to its name; a reader opens each one.
+async function openSections(page) {
+  for (const summary of await page.locator('details.stage-section > summary').all()) if (!await summary.evaluate(node => node.parentElement.open)) await summary.click();
+}
 before(async () => {
   home = await mkdtemp(join(tmpdir(), 'thirdshift-time-'));
   const folder = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
@@ -183,6 +187,7 @@ test('Stages groups runs, scrolls in both views and remembers the view at phone 
     for (const mode of ['all', 'repository']) {
       await page.getByLabel('View', { exact: true }).selectOption(mode);
       await page.waitForFunction(count => document.querySelectorAll('.stage-grid').length === count, mode === 'all' ? 1 : 2);
+      await openSections(page);
       assert.deepEqual((await page.locator('thead .peek-link').allTextContents()).sort(), [...subjects].sort());
       const grid = page.locator('.stage-section').filter({ has: page.locator('thead .peek-link', { hasText: 'acme/widgets#6' }) });
       const headings = await grid.locator('thead .peek-link').allTextContents();
@@ -202,6 +207,7 @@ test('Stages groups runs, scrolls in both views and remembers the view at phone 
   }
   await page.reload();
   await page.waitForFunction(() => document.querySelectorAll('.stage-grid').length === 2);
+  await openSections(page);
   assert.equal(await page.getByLabel('View', { exact: true }).inputValue(), 'repository');
   const widgets = page.locator('.stage-grid').filter({ has: page.locator('thead .peek-link', { hasText: 'acme/widgets#6' }) });
   assert.match(await widgets.textContent(), /Running ·/);
@@ -249,6 +255,7 @@ test('Stages live insertions preserve the visible Ticket, link focus and selecte
       await page.goto(`${origin}/?page=stages`);
       await page.getByLabel('View', { exact: true }).selectOption(view);
       await page.waitForFunction(count => document.querySelectorAll('.stage-grid').length === count, view === 'all' ? 1 : 2);
+      await openSections(page);
       const ticket = page.locator('thead .command').filter({ has: page.getByRole('link', { name: `Ticket run · acme/widgets#${position === 'left' ? 5 : 6}`, exact: true }) });
       const link = ticket.locator('.peek-link');
       await link.focus();
@@ -272,7 +279,7 @@ test('Stages live insertions preserve the visible Ticket, link focus and selecte
         assert.equal(await page.locator('.command[aria-current="true"]').getAttribute('data-command'), selector);
         assert.equal(await page.getByLabel('View', { exact: true }).inputValue(), view);
       }
-      const section = ticket.locator('xpath=ancestor::section');
+      const section = ticket.locator('xpath=ancestor::details[contains(@class, "stage-section")]');
       await section.getByRole('button', { name: 'Newest runs' }).focus();
       await page.keyboard.press('Space');
       assert.equal(await section.locator('.stage-scroll').evaluate(node => node.scrollLeft), 0);
@@ -307,7 +314,7 @@ test('Stages handles invalid or unavailable preferences and preserves selector f
       const fixture = JSON.parse(before);
       fixture.issue.title = `Focus during ${storage} preference storage`;
       await writeFile(path, JSON.stringify(fixture));
-      await page.locator('thead .command', { hasText: fixture.issue.title }).waitFor();
+      await page.locator('thead .command', { hasText: fixture.issue.title }).waitFor({ state: 'attached' });
       assert.equal(await page.evaluate(() => document.activeElement.id), 'stages-view');
       assert.equal(await selector.inputValue(), 'repository');
       assert.deepEqual(errors, []);

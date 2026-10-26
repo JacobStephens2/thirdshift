@@ -15,7 +15,9 @@
   {% include "console/nav.html" %}
   <main data-time-page data-span-page>
     <div class="page-title"><h2>Waterfall</h2><code>thirdshift show &lt;command&gt; --spans --json · thirdshift logs &lt;command&gt;</code></div>
+    <details class="command-choices"><summary>Runs <span class="count">{{ view.choices.len() }}</span>{% for choice in view.choices %}{% if choice.selected %} · <span class="chosen">{{ choice.subject }} · {{ choice.state }}</span>{% endif %}{% endfor %}</summary>
     <nav class="command-chips" aria-label="Choose a Command">{% for choice in view.choices %}<a href="{{ choice.url }}" {% if choice.selected %}aria-current="true"{% endif %}>{{ choice.subject }} · {{ choice.state }}</a>{% endfor %}</nav>
+    </details>
     {% if view.tree.spans.is_empty() %}<p>No Commands yet.</p>{% else %}
     <p>One shared time axis. <span class="span-estimated">*</span> marks estimated times. Running calls extend to now.</p>
     <details id="slowest-calls" open><summary>Slowest calls</summary><ol></ol></details>
