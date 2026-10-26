@@ -372,8 +372,24 @@ fn history_keeps_every_ended_command_in_time_order_and_filters() {
     failed["ended_at"] = failed["started_at"].clone();
     write_record(home.path(), 3, &failed);
     record(home.path(), 4, None, 0);
+    record(
+        home.path(),
+        5,
+        Some("PR https://github.com/acme/widgets/pull/5 is merged"),
+        90,
+    );
+    record(home.path(), 6, Some("failed: claude exited 1"), 95);
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get("/?page=history").text().unwrap();
+    // The Outcome filter offers kinds of outcome, not each PR or error.
+    let select = &html[html.find("<select name=\"outcome\"").unwrap()..];
+    let select = &select[..select.find("</select>").unwrap()];
+    assert!(select.contains(">merged</option>"), "{select}");
+    assert!(select.contains(">failed</option>"), "{select}");
+    assert!(
+        !select.contains("pull/5") && !select.contains("claude exited"),
+        "{select}"
+    );
     assert!(html.contains("<h2>History</h2>"));
     assert!(html.find("acme/widgets#3").unwrap() < html.find("acme/widgets#2").unwrap());
     assert!(html.find("acme/widgets#2").unwrap() < html.find("acme/widgets#1").unwrap());
@@ -384,6 +400,10 @@ fn history_keeps_every_ended_command_in_time_order_and_filters() {
         .text()
         .unwrap();
     assert!(filtered.contains("acme/widgets#1"));
+    assert!(filtered.contains("acme/widgets#5"));
+    let failures = console.get("/?page=history&outcome=failed").text().unwrap();
+    assert!(failures.contains("acme/widgets#2") && failures.contains("acme/widgets#6"));
+    assert!(!failures.contains("acme/widgets#5"));
     assert!(!filtered.contains("acme/widgets#2"));
     assert!(
         !console

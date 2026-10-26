@@ -181,7 +181,7 @@ pub(crate) fn archive(
         .collect();
     let outcomes = entries
         .iter()
-        .map(|entry| facts(entry).1.to_owned())
+        .map(|entry| outcome_kind(facts(entry).1).to_owned())
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
@@ -190,7 +190,7 @@ pub(crate) fn archive(
         .filter(|entry| {
             let (repo, result, _) = facts(entry);
             (repository.is_empty() || repository == repo)
-                && (outcome.is_empty() || outcome == result)
+                && (outcome.is_empty() || outcome == outcome_kind(result) || outcome == result)
         })
         .map(|entry| {
             entry_row(
@@ -457,4 +457,64 @@ fn elapsed(time: &str, now: DateTime<Local>) -> String {
     DateTime::parse_from_rfc3339(time)
         .map(|time| age(now.signed_duration_since(time).num_seconds().max(0)))
         .unwrap_or_else(|_| "unknown age".into())
+}
+
+/// What kind of outcome `text` is, for filtering: `merged`, `ready for
+/// review`, `failed`, `plan` or `no Strong candidate`, without the PR,
+/// issue or error it names. Other outcomes, such as `interrupted`, are
+/// their own kind.
+fn outcome_kind(text: &str) -> &str {
+    if text.starts_with("failed") || text.ends_with(" failed") {
+        "failed"
+    } else if text == "merged" || (text.starts_with("PR ") && text.ends_with(" is merged")) {
+        "merged"
+    } else if text.ends_with("ready for review") {
+        "ready for review"
+    } else if text == "plan published" || text.starts_with("plan ") {
+        "plan"
+    } else if text.starts_with("no Strong candidate") {
+        "no Strong candidate"
+    } else {
+        text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::outcome_kind;
+
+    #[test]
+    fn outcome_kinds_drop_the_pr_issue_or_error_they_name() {
+        for (text, kind) in [
+            (
+                "PR https://github.com/acme/widgets/pull/5 is merged",
+                "merged",
+            ),
+            ("merged", "merged"),
+            (
+                "PR https://github.com/acme/widgets/pull/6 is ready for review",
+                "ready for review",
+            ),
+            ("ready for review", "ready for review"),
+            ("failed", "failed"),
+            ("failed: claude exited 1", "failed"),
+            (
+                "failed: PR https://github.com/acme/widgets/pull/7 is merged, not open",
+                "failed",
+            ),
+            ("review failed", "failed"),
+            (
+                "plan https://github.com/acme/widgets/issues/8 dispatched 3 Tickets",
+                "plan",
+            ),
+            ("plan published", "plan"),
+            (
+                "no Strong candidate: the Architecture review filed the idea",
+                "no Strong candidate",
+            ),
+            ("interrupted", "interrupted"),
+        ] {
+            assert_eq!(outcome_kind(text), kind, "{text}");
+        }
+    }
 }

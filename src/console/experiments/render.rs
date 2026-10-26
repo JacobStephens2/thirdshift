@@ -575,7 +575,11 @@ fn grid(view: &View) -> String {
     );
     for suite in &view.description.suites {
         let n = view.description.bar.trials_per_task[suite];
-        let tasks = view.tasks.iter().filter(|task| &task.suite == suite).count();
+        let tasks = view
+            .tasks
+            .iter()
+            .filter(|task| &task.suite == suite)
+            .count();
         html.push_str(&format!("<details class=\"trial-suite\" data-suite=\"{}\"><summary><h3>{}</h3> <span class=\"experiment-gist\">{tasks} Eval tasks · {n} {} per Arm each</span></summary><div role=\"table\" aria-label=\"{} Trials\" class=\"trial-grid\" data-trials=\"{n}\"><div role=\"row\" class=\"trial-row\"><span role=\"columnheader\">Eval task</span><span role=\"columnheader\">Baseline</span><span role=\"columnheader\">Candidate</span><span role=\"columnheader\">Diff.</span></div>", esc(suite), esc(suite), if n == 1 { "Trial" } else { "Trials" }, esc(suite)));
         for task in view.tasks.iter().filter(|task| &task.suite == suite) {
             let cells: Vec<_> = Cell::for_task(view, suite, &task.name).collect();

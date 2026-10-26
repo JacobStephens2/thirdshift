@@ -230,7 +230,8 @@ closes open streams and re-executes the Console with its original arguments.
 The available pages are Inbox (`1`), Lanes (`2`), Stages (`3`), Waterfall (`4`),
 History (`5`), Logs (`6`), Security (`7`) and Cron jobs (`8`). Inbox through Security links
 keep the page in `?page=`. History includes every ended Command, including old
-logs, and filters by outcome and repository. Security shows retained findings
+logs, and filters by repository and kind of outcome (merged, ready for review,
+failed, plan and so on), not by each PR or error. Security shows retained findings
 and Session traces. Older records without finding metadata still show their logs.
 
 Pages give the high-level view first and open on demand. History and Security
