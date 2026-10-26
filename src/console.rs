@@ -474,7 +474,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
             (View::BugOrigins, Method::GET) => get(bug_origins::show),
             (View::SettleBugOrigin, Method::POST) => post(bug_origins::submit),
             (View::Resources, Method::GET) => get(resources::show),
-            (View::Inbox, Method::GET) => get(move |query| inbox(cli, path, query)),
+            (View::Inbox, Method::GET) => get(move |viewer, query| inbox(cli, path, viewer, query)),
             (View::Inspect, Method::GET) => get(inspect),
             (View::Spans, Method::GET) => get(waterfall::data),
             (View::Log, Method::GET) => get(log),
@@ -519,6 +519,7 @@ fn router(no_sign_in: bool, changes: changes::Receiver) -> Router {
 #[template(path = "console/inbox.html")]
 struct InboxPage {
     page: PageContext,
+    csrf: String,
     hidden_sections: Vec<String>,
     cli: &'static str,
     inbox: Inbox,
@@ -557,8 +558,11 @@ impl InboxPage {
             .any(|row| row.state != "Slow")
     }
 
-    fn row<'a>(&self, row: &'a Row) -> RowTemplate<'a> {
-        RowTemplate { row }
+    fn row<'a>(&'a self, row: &'a Row) -> RowTemplate<'a> {
+        RowTemplate {
+            row,
+            csrf: &self.csrf,
+        }
     }
 }
 
@@ -566,11 +570,15 @@ impl InboxPage {
 #[template(path = "console/row.html")]
 struct RowTemplate<'a> {
     row: &'a Row,
+    csrf: &'a str,
 }
 
 impl RowTemplate<'_> {
-    fn child<'a>(&self, row: &'a Row) -> RowTemplate<'a> {
-        RowTemplate { row }
+    fn child<'a>(&'a self, row: &'a Row) -> RowTemplate<'a> {
+        RowTemplate {
+            row,
+            csrf: self.csrf,
+        }
     }
 }
 
@@ -586,7 +594,12 @@ fn query_value(query: &Option<String>, key: &str) -> String {
         .unwrap_or_default()
 }
 
-async fn inbox(cli: &'static str, path: &'static str, RawQuery(query): RawQuery) -> Response {
+async fn inbox(
+    cli: &'static str,
+    path: &'static str,
+    axum::Extension(viewer): axum::Extension<auth::Viewer>,
+    RawQuery(query): RawQuery,
+) -> Response {
     let mut requested_page = query_value(&query, "page");
     if requested_page.is_empty() {
         requested_page = path.trim_start_matches('/').into();
@@ -606,13 +619,14 @@ async fn inbox(cli: &'static str, path: &'static str, RawQuery(query): RawQuery)
         "" | "inbox" | "1" => None,
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
-    page(Ok(render_page(cli, archive_page, query).await))
+    page(Ok(render_page(cli, archive_page, query, viewer.csrf).await))
 }
 
 async fn render_page(
     cli: &'static str,
     archive_page: Option<status::ArchivePage>,
     query: Option<String>,
+    csrf: String,
 ) -> Result<String> {
     // The shared observations and templates stay blocking, off the async executor.
     tokio::task::spawn_blocking(move || -> Result<String> {
@@ -629,6 +643,7 @@ async fn render_page(
         };
         Ok(InboxPage {
             page: PageContext::new(&config),
+            csrf,
             hidden_sections: config.console.hidden_sections.clone(),
             cli,
             inbox: status::inbox(&config)?,

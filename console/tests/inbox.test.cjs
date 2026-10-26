@@ -66,6 +66,62 @@ async function pageFor(t, options) {
   return page;
 }
 
+test('Inbox row Dismiss works by keyboard without opening Command details', async t => {
+  const page = await pageFor(t);
+  const observer = await pageFor(t);
+  for (const current of [page, observer]) await current.goto(`${origin}/?page=inbox`);
+  const waiting = '[data-group="needs you"] .command';
+  const row = page.locator(waiting).first();
+  const id = await row.getAttribute('id');
+  const count = await page.locator(waiting).count();
+  await page.evaluate(() => { window.sameDocument = true; });
+  const dismiss = row.getByRole('button', { name: 'Dismiss', exact: true });
+  await dismiss.waitFor({ timeout: 2000 });
+  await dismiss.focus();
+  await page.keyboard.press('Enter');
+  for (const current of [page, observer]) {
+    await current.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count - 1, { waiting, count });
+  }
+  assert.equal(await page.locator('#peek').isVisible(), false);
+  assert.equal(await page.evaluate(() => window.sameDocument), true);
+  await page.locator('[data-group="done"]').evaluate(section => { section.open = true; });
+  await page.locator(`[id="${id}"] .peek-link`).click();
+  await page.locator('#peek-content').getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count, { waiting, count });
+});
+
+for (const [outcome, group] of [['failed', 'needs you'], ['ready for review', 'ready for review']]) {
+  test(`Inbox row Dismiss works in ${group} without JavaScript on a phone`, async t => {
+    const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+    const recordPath = join(directory, '223-fixture.command.json');
+    const fixture = JSON.parse(await readFile(join(directory, '1-fixture.command.json'), 'utf8'));
+    fixture.issue = { number: 223, url: 'https://github.com/acme/widgets/issues/223', title: 'Dismiss from the Inbox' };
+    fixture.outcome = outcome;
+    fixture.cause = null;
+    fixture.pull_request = outcome === 'ready for review' ? 'https://github.com/acme/widgets/pull/224' : null;
+    await writeFile(recordPath, JSON.stringify(fixture));
+    t.after(async () => {
+      await rm(recordPath, { force: true });
+      await rm(join(directory, '223-fixture.command.dismiss.json'), { force: true });
+    });
+    const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+    await page.goto(`${origin}/?page=inbox`);
+    const section = page.locator(`[data-group="${group}"]`);
+    if (group === 'ready for review') await section.locator('summary').click();
+    const row = section.locator('.command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
+    await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await page.waitForURL(`${origin}/`);
+    assert.equal(await section.locator('.subject a[href$="/issues/223"]').count(), 0);
+    assert.equal(await page.locator('#peek').isVisible(), false);
+    await page.locator('[data-group="done"] > summary').click();
+    const dismissed = page.locator('[data-group="done"] .command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
+    assert.equal(await dismissed.getByRole('button', { name: 'Dismiss', exact: true }).count(), 0);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await dismissed.locator('.peek-link').click();
+    await page.getByRole('button', { name: 'Undo', exact: true }).waitFor();
+  });
+}
+
 test('Dismiss keeps Undo in Command details and updates another open Inbox', async t => {
   const page = await pageFor(t);
   const observer = await pageFor(t);
@@ -73,15 +129,15 @@ test('Dismiss keeps Undo in Command details and updates another open Inbox', asy
   const waiting = '[data-group="needs you"] .command';
   const count = await page.locator(waiting).count();
   await page.locator(`${waiting} .peek-link`).first().click();
-  await page.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
+  await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   await page.evaluate(() => { window.sameDocument = true; });
-  await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
-  await page.getByRole('button', { name: 'Undo', exact: true }).waitFor({ timeout: 3000 });
+  await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await page.locator('#peek-content').getByRole('button', { name: 'Undo', exact: true }).waitFor({ timeout: 3000 });
   assert.equal(await page.evaluate(() => window.sameDocument), true);
   await observer.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count - 1, { waiting, count });
   assert.match(await page.locator('#peek-content').textContent(), /thirdshift dismiss .* --undo/);
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
-  await page.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
+  await page.locator('#peek-content').getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   await observer.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count, { waiting, count });
   assert.equal(await page.evaluate(() => window.sameDocument), true);
 });
@@ -90,7 +146,7 @@ test('Dismiss and Undo show pending feedback through live refresh and prevent du
   const page = await pageFor(t);
   await page.goto(origin);
   await page.locator('[data-group="needs you"] .peek-link').first().click();
-  const form = page.locator('form[data-dismiss]');
+  const form = page.locator('#peek-content form[data-dismiss]');
   await form.waitFor();
   const recordPath = await form.locator('[name="command"]').inputValue();
   const original = await readFile(recordPath, 'utf8');
@@ -108,8 +164,13 @@ test('Dismiss and Undo show pending feedback through live refresh and prevent du
         await route.continue();
       });
       try {
-        await page.getByRole('button', { name: label, exact: true }).click();
-        await page.waitForFunction(pending => document.querySelector('form[data-dismiss] [role="status"]').textContent === pending, pending, { timeout: 2000 });
+        if (label === 'Dismiss') {
+          const row = page.locator('.command').filter({ has: page.locator(`form[data-dismiss] input[value="${recordPath}"]`) });
+          await row.getByRole('button', { name: label, exact: true }).click();
+        } else {
+          await page.locator('#peek-content').getByRole('button', { name: label, exact: true }).click();
+        }
+        await page.waitForFunction(pending => document.querySelector('#peek-content form[data-dismiss] [role="status"]').textContent === pending, pending, { timeout: 2000 });
         assert.equal(await form.locator('button').isDisabled(), true);
         const updated = JSON.parse(original);
         updated.cause = `Live refresh while ${label} is pending`;
@@ -120,8 +181,8 @@ test('Dismiss and Undo show pending feedback through live refresh and prevent du
         // A second submit event must be ignored even if a browser dispatches it directly.
         await form.evaluate(form => form.requestSubmit());
         release();
-        await page.getByRole('button', { name: next, exact: true }).waitFor({ timeout: 3000 });
-        await page.waitForFunction(() => !document.querySelector('form[data-dismiss] button').disabled);
+        await page.locator('#peek-content').getByRole('button', { name: next, exact: true }).waitFor({ timeout: 3000 });
+        await page.waitForFunction(() => !document.querySelector('#peek-content form[data-dismiss] button').disabled);
         assert.equal(requests, 1);
       } finally {
         release();
@@ -135,13 +196,13 @@ test('A failed Dismiss shows the error through live refresh and allows retry', a
   const page = await pageFor(t);
   await page.goto(origin);
   await page.locator('[data-group="needs you"] .peek-link').first().click();
-  const form = page.locator('form[data-dismiss]');
+  const form = page.locator('#peek-content form[data-dismiss]');
   await form.waitFor();
   const recordPath = await form.locator('[name="command"]').inputValue();
   const original = await readFile(recordPath, 'utf8');
   await page.route(`${origin}/dismiss`, route => route.fulfill({ status: 409, body: 'Please try again' }));
   try {
-    await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).click();
     const error = 'Could not save the dismissal: Please try again';
     await form.getByRole('status').getByText(error, { exact: true }).waitFor();
     assert.equal(await form.locator('button').isEnabled(), true);
@@ -151,12 +212,12 @@ test('A failed Dismiss shows the error through live refresh and allows retry', a
     await page.locator('#peek-content').getByText(updated.cause, { exact: true }).waitFor();
     assert.equal(await form.getByRole('status').textContent(), error);
     await page.unrouteAll({ behavior: 'wait' });
-    await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
-    await page.getByRole('button', { name: 'Undo', exact: true }).waitFor();
-    await page.waitForFunction(() => !document.querySelector('form[data-dismiss] button').disabled);
+    await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await page.locator('#peek-content').getByRole('button', { name: 'Undo', exact: true }).waitFor();
+    await page.waitForFunction(() => !document.querySelector('#peek-content form[data-dismiss] button').disabled);
     assert.equal(await form.getByRole('status').textContent(), '');
-    await page.getByRole('button', { name: 'Undo', exact: true }).click();
-    await page.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
+    await page.locator('#peek-content').getByRole('button', { name: 'Undo', exact: true }).click();
+    await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   } finally {
     await page.unrouteAll({ behavior: 'wait' });
     await replaceRecord(recordPath, original);
