@@ -64,8 +64,12 @@ export function activity() {
 
 function apply(settings) {
   root.dataset.theme = settings.theme;
-  for (const section of document.querySelectorAll('#inbox > details[data-group]')) {
-    section.hidden = settings.hidden_sections.includes(section.dataset.group.replaceAll(' ', '-'));
+  const hide = group => settings.hidden_sections.includes(group.replaceAll(' ', '-'));
+  for (const link of document.querySelectorAll('#inbox .folders a[data-group]')) link.hidden = hide(link.dataset.group);
+  for (const section of document.querySelectorAll('#inbox > .group[data-group]')) if (hide(section.dataset.group)) section.hidden = true;
+  // Hiding the open folder opens the first one left with rows, as the server would.
+  if (document.querySelector('#inbox .folders') && !document.querySelector('#inbox > .group:not([hidden])')) {
+    (document.querySelector('#inbox .folders a:not([hidden]):not([data-empty])') ?? document.querySelector('#inbox .folders a:not([hidden])'))?.click();
   }
   if (!sections.open) for (const checkbox of document.querySelectorAll('#section-options input')) checkbox.checked = !settings.hidden_sections.includes(checkbox.value);
   if (!themes.open) document.querySelector('#theme-name').value = settings.theme;

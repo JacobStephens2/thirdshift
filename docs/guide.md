@@ -328,7 +328,7 @@ To open this machine's Inbox locally, run:
 thirdshift console --no-sign-in
 ```
 
-Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. Ended rows show their recorded finish date and time in UTC and an explicit relative age, for example **Ended Oct 23, 2026 at 23:03:17 UTC · 52 min ago**. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. The Console never starts work; start Commands from the CLI or the operating system's scheduler.
+Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. Like a mailbox, its sections are folders beside a list of one-line rows, with the selected row's Command details open alongside on a wide screen; `/?section=done` opens Done. Ended rows show their relative age, with the recorded finish date and time in UTC on hover, or in full without JavaScript, for example **Ended Oct 23, 2026 at 23:03:17 UTC · 52 min ago**. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. The Console never starts work; start Commands from the CLI or the operating system's scheduler.
 
 #### Console on a server
 
@@ -1164,8 +1164,9 @@ Command, its issue, labels, Claim and pull request stay as they are, and nothing
 is written to GitHub. The Activity log records each dismissal and each one taken
 back, naming the Unix user and the CLI. `dismiss --json` reports what it did.
 
-In the Console, any signed-in account can click **Dismiss** directly on a waiting
-Inbox row or in its Command details, beside Stop when available. One click
+In the Console, any signed-in account can click **Dismiss** in a waiting row's
+Command details, beside Stop when available, or on the row itself when
+JavaScript is off. One click
 dismisses, with no confirmation page. A dismissed row offers **Undo** in Command
 details. While either request is pending, its buttons show “Dismissing…” or
 “Taking back dismissal…” and stay disabled, including through live updates.

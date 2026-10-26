@@ -66,26 +66,33 @@ async function pageFor(t, options) {
   return page;
 }
 
-test('Inbox row Dismiss works by keyboard without opening Command details', async t => {
+// The Inbox shows one section, a folder, at a time; Details opens from a row.
+const folder = (page, group) => page.locator(`#inbox .folders a[data-group="${group}"]`);
+const shownGroup = page => page.locator('#inbox > .group:not([hidden])');
+async function showDetails(page, row) {
+  const group = await row.evaluate(node => node.closest('.group').dataset.group);
+  if (await folder(page, group).getAttribute('aria-current') !== 'page') await folder(page, group).click();
+  await row.locator(':scope > .row-head > .state').click();
+}
+
+test('Inbox Dismiss works by keyboard from the Details pane opened beside the first row', async t => {
   const page = await pageFor(t);
   const observer = await pageFor(t);
   for (const current of [page, observer]) await current.goto(`${origin}/?page=inbox`);
-  const waiting = '[data-group="needs you"] .command';
+  const waiting = '#inbox > [data-group="needs you"] .command';
   const row = page.locator(waiting).first();
-  const id = await row.getAttribute('id');
   const count = await page.locator(waiting).count();
   await page.evaluate(() => { window.sameDocument = true; });
-  const dismiss = row.getByRole('button', { name: 'Dismiss', exact: true });
-  await dismiss.waitFor({ timeout: 2000 });
+  assert.equal(await row.getAttribute('aria-current'), 'true');
+  const dismiss = page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true });
+  await dismiss.waitFor({ timeout: 5000 });
+  assert.equal(await page.locator('#peek-content form[data-dismiss] [name="command"]').inputValue(), await row.getAttribute('data-command'));
   await dismiss.focus();
   await page.keyboard.press('Enter');
   for (const current of [page, observer]) {
     await current.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count - 1, { waiting, count });
   }
-  assert.equal(await page.locator('#peek').isVisible(), false);
   assert.equal(await page.evaluate(() => window.sameDocument), true);
-  await page.locator('[data-group="done"]').evaluate(section => { section.open = true; });
-  await page.locator(`[id="${id}"] .peek-link`).click();
   await page.locator('#peek-content').getByRole('button', { name: 'Undo', exact: true }).click();
   await page.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count, { waiting, count });
 });
@@ -106,15 +113,15 @@ for (const [outcome, group] of [['failed', 'needs you'], ['ready for review', 'r
     });
     const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
     await page.goto(`${origin}/?page=inbox`);
-    const section = page.locator(`[data-group="${group}"]`);
-    if (group === 'ready for review') await section.locator('summary').click();
+    const section = page.locator(`#inbox > [data-group="${group}"]`);
+    if (group === 'ready for review') await folder(page, group).click();
     const row = section.locator('.command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
     await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
     await page.waitForURL(`${origin}/`);
     assert.equal(await section.locator('.subject a[href$="/issues/223"]').count(), 0);
     assert.equal(await page.locator('#peek').isVisible(), false);
-    await page.locator('[data-group="done"] > summary').click();
-    const dismissed = page.locator('[data-group="done"] .command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
+    await folder(page, 'done').click();
+    const dismissed = page.locator('#inbox > [data-group="done"] .command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
     assert.equal(await dismissed.getByRole('button', { name: 'Dismiss', exact: true }).count(), 0);
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
     await dismissed.locator('.peek-link').click();
@@ -128,7 +135,7 @@ test('Dismiss keeps Undo in Command details and updates another open Inbox', asy
   for (const current of [page, observer]) await current.goto(origin);
   const waiting = '[data-group="needs you"] .command';
   const count = await page.locator(waiting).count();
-  await page.locator(`${waiting} .peek-link`).first().click();
+  await showDetails(page, page.locator(waiting).first());
   await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   await page.evaluate(() => { window.sameDocument = true; });
   await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).click();
@@ -145,7 +152,7 @@ test('Dismiss keeps Undo in Command details and updates another open Inbox', asy
 test('Dismiss and Undo show pending feedback through live refresh and prevent duplicate submissions', async t => {
   const page = await pageFor(t);
   await page.goto(origin);
-  await page.locator('[data-group="needs you"] .peek-link').first().click();
+  await showDetails(page, page.locator('#inbox > [data-group="needs you"] .command').first());
   const form = page.locator('#peek-content form[data-dismiss]');
   await form.waitFor();
   const recordPath = await form.locator('[name="command"]').inputValue();
@@ -164,12 +171,7 @@ test('Dismiss and Undo show pending feedback through live refresh and prevent du
         await route.continue();
       });
       try {
-        if (label === 'Dismiss') {
-          const row = page.locator('.command').filter({ has: page.locator(`form[data-dismiss] input[value="${recordPath}"]`) });
-          await row.getByRole('button', { name: label, exact: true }).click();
-        } else {
-          await page.locator('#peek-content').getByRole('button', { name: label, exact: true }).click();
-        }
+        await page.locator('#peek-content').getByRole('button', { name: label, exact: true }).click();
         await page.waitForFunction(pending => document.querySelector('#peek-content form[data-dismiss] [role="status"]').textContent === pending, pending, { timeout: 2000 });
         assert.equal(await form.locator('button').isDisabled(), true);
         const updated = JSON.parse(original);
@@ -195,7 +197,7 @@ test('Dismiss and Undo show pending feedback through live refresh and prevent du
 test('A failed Dismiss shows the error through live refresh and allows retry', async t => {
   const page = await pageFor(t);
   await page.goto(origin);
-  await page.locator('[data-group="needs you"] .peek-link').first().click();
+  await showDetails(page, page.locator('#inbox > [data-group="needs you"] .command').first());
   const form = page.locator('#peek-content form[data-dismiss]');
   await form.waitFor();
   const recordPath = await form.locator('[name="command"]').inputValue();
@@ -252,10 +254,10 @@ test("Shift+T switches all built-in Themes and saves hidden sections across brow
     await page.getByRole('button', { name: 'Sections', exact: true }).click();
     await page.getByLabel('Show Done', { exact: true }).uncheck();
     await page.getByRole('button', { name: 'Save sections' }).click();
-    await page.locator('[data-group="done"][hidden]').waitFor({ state: 'attached' });
+    await page.locator('#inbox .folders a[data-group="done"][hidden]').waitFor({ state: 'attached' });
     const other = await pageFor(t);
     await other.goto(origin);
-    await other.locator('[data-group="done"][hidden]').waitFor({ state: 'attached' });
+    await other.locator('#inbox .folders a[data-group="done"][hidden]').waitFor({ state: 'attached' });
     assert.equal(await other.locator('html').getAttribute('data-theme'), 'factory-dark');
     assert.deepEqual(remote, [], 'Themes must load fonts and assets locally');
   } finally { await writeFile(join(home, '.thirdshift/config.toml'), '[console]\nport = 0\n'); }
@@ -324,7 +326,7 @@ test("every built-in Theme text pair meets AA in both system modes, including so
   assert.equal(await page.evaluate(() => document.getAnimations().length), 0, 'idle Commands must not animate');
 });
 
-test("Inbox folds, loads only its own resources and fits a 390 px phone", async t => {
+test("Inbox folders load only their own resources and fit a 390 px phone", async t => {
   const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
   const remote = [], errors = [];
   page.on("request", request => { if (!request.url().startsWith(origin)) remote.push(request.url()); });
@@ -332,13 +334,14 @@ test("Inbox folds, loads only its own resources and fits a 390 px phone", async 
   const response = await page.goto(origin);
   assert.equal(response.status(), 200);
   await page.evaluate(() => document.fonts.ready);
-  assert.equal(await page.locator('details[open]').count(), 1);
-  assert.equal(await page.locator('details[open]').getAttribute("data-group"), "needs you");
+  assert.equal(await shownGroup(page).count(), 1);
+  assert.equal(await shownGroup(page).getAttribute("data-group"), "needs you");
+  assert.equal(await page.locator('#peek').isVisible(), false, 'a phone opens Details only on a tap');
   assert.match(await page.locator(".plan").first().textContent(), /Ticket #98 · waiting on #97/);
   assert.equal(await page.locator('.command .state').first().textContent(), "Failed");
   assert.equal(await page.locator(".command script").count(), 0);
-  for (const summary of await page.locator("summary").all()) {
-    await summary.click();
+  for (const link of await page.locator("#inbox .folders a:not([hidden])").all()) {
+    await link.click();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
   }
   assert.deepEqual(remote, []);
@@ -388,14 +391,19 @@ test("existing refresh advances finish age while keeping its recorded instant", 
   assert.equal(await time.getAttribute('datetime'), end);
 });
 
-test("all section headings fit above the fold on a 14 inch laptop with a busy Needs you", async t => {
+test("every section folder fits above the fold on a 14 inch laptop and a busy Needs you never scrolls inside itself", async t => {
   const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
   await page.goto(origin);
   await page.evaluate(() => document.fonts.ready);
-  assert.equal(await page.locator('[data-group="needs you"][open] .command').count(), 10);
-  for (const summary of await page.locator("summary").all()) {
-    const rect = await summary.boundingBox();
-    assert.ok(rect.y >= 0 && rect.y + rect.height < 900, `${await summary.textContent()}: ${JSON.stringify(rect)}`);
+  const rows = page.locator('#inbox > [data-group="needs you"]:not([hidden]) > .commands > .command');
+  assert.equal(await rows.count(), 10);
+  for (const row of await rows.all()) {
+    assert.ok((await row.boundingBox()).height < 60, 'one line per row');
+  }
+  assert.equal(await page.locator('#inbox .commands').evaluateAll(lists => lists.every(list => list.scrollHeight <= list.clientHeight)), true);
+  for (const link of await page.locator("#inbox .folders a").all()) {
+    const rect = await link.boundingBox();
+    assert.ok(rect.y >= 0 && rect.y + rect.height < 900, `${await link.textContent()}: ${JSON.stringify(rect)}`);
   }
 });
 
@@ -430,7 +438,7 @@ test("Run metrics show present and missing signals in details, including at 390 
         await replaceRecord(path, JSON.stringify(fixture));
         await page.goto(origin);
         const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#1$/ }) });
-        await row.locator('.peek-link').click();
+        await showDetails(page, row);
         const details = page.locator('#peek');
         const shown = fact(details, 'run metrics');
         await shown.waitFor();
@@ -478,9 +486,10 @@ test("Run metrics show present and missing signals in details, including at 390 
 test("the Inbox works without JavaScript and Focus auto follows system light and dark", async t => {
   const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 }, colorScheme: "light" });
   await page.goto(origin);
-  assert.equal(await page.locator('[data-group="needs you"][open]').count(), 1);
-  await page.locator('[data-group="working"] > summary').click();
-  assert.equal(await page.locator('[data-group="working"][open]').count(), 1);
+  assert.equal(await shownGroup(page).getAttribute('data-group'), 'needs you');
+  await folder(page, 'working').click();
+  await page.waitForURL('**/?section=working');
+  assert.equal(await shownGroup(page).getAttribute('data-group'), 'working');
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(247, 247, 245)");
   await page.emulateMedia({ colorScheme: "dark" });
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(18, 18, 20)");
@@ -516,7 +525,7 @@ test("idle skipped Passes start folded and can be opened on phones with or witho
         assert.ok((await notice.textContent()).includes(`${label} (hidden; show it with Sections or thirdshift console sections --show ${section})`));
       }
       assert.equal(await notice.getByRole('link', { name: 'Cron jobs', exact: true }).getAttribute('href'), '/cronjobs');
-      assert.equal(await page.locator('#inbox > details:visible').count(), 0);
+      assert.equal(await page.locator('#inbox > .group:visible').count(), 0);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       if (javaScriptEnabled) {
         await page.evaluate(() => { window.visitMarker = 'same idle Inbox'; });
@@ -557,9 +566,11 @@ test("skipped Pass disclosure keeps native keyboard controls after selecting an 
   await notice.locator('summary').focus();
   await page.keyboard.press('Space');
   await reason.waitFor({ state: 'visible' });
+  const shown = await page.locator('#peek-content [name="command"]').inputValue();
   await page.keyboard.press('Enter');
   await reason.waitFor({ state: 'hidden' });
-  assert.equal(await page.locator('#peek').isVisible(), false);
+  assert.equal(await page.locator('#peek').isVisible(), true);
+  assert.equal(await page.locator('#peek-content [name="command"]').inputValue(), shown);
 });
 
 test("explicit Focus light and dark override the system preference", async t => {
@@ -578,29 +589,27 @@ test("explicit Focus light and dark override the system preference", async t => 
   } finally { await writeFile(config, "[console]\nport = 0\n"); }
 });
 
-test("push morphs keep the selected row, folds and scroll without a reload", async t => {
-  const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
+test("push morphs keep the selected row, folder and scroll without a reload", async t => {
+  const page = await pageFor(t, { viewport: { width: 1440, height: 500 } });
   const errors = [];
   page.on("pageerror", error => errors.push(error.message));
   await page.goto(origin);
   const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#1$/ }) });
-  await page.locator('[data-group="done"] > summary').click();
   await row.click();
   await page.evaluate(() => {
     window.visitMarker = "same document";
     window.selectedRow = document.activeElement;
-    document.querySelector('.commands').scrollTop = 120;
+    window.scrollTo(0, 120);
   });
   const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
   const fixture = JSON.parse(await readFile(path, 'utf8'));
   fixture.issue.title = 'Advanced while you watched';
   await replaceRecord(path, JSON.stringify(fixture));
-  await page.getByText('Advanced while you watched', { exact: true }).waitFor();
+  await row.locator('.issue-title').filter({ hasText: 'Advanced while you watched' }).waitFor();
   assert.equal(await page.evaluate(() => document.activeElement === window.selectedRow && document.activeElement.matches('.command')), true);
   assert.equal(await page.evaluate(() => window.visitMarker), "same document");
-  assert.equal(await page.locator('[data-group="done"][open]').count(), 1);
-  assert.equal(await page.locator('[data-group="needs you"][open]').count(), 1);
-  assert.equal(await page.locator('[data-group="needs you"] .commands').evaluate(el => el.scrollTop), 120);
+  assert.equal(await shownGroup(page).getAttribute('data-group'), 'needs you');
+  assert.equal(await page.evaluate(() => scrollY), 120);
   assert.deepEqual(errors, []);
 });
 
@@ -615,8 +624,8 @@ test("keyboard selection and the open peek survive an Inbox push", async t => {
   const path = selector.split('::')[0];
   const original = await readFile(path, 'utf8');
   try {
-    await page.keyboard.press('Space');
-    await page.locator('#peek dt').first().waitFor();
+    // Details follows the keyboard selection.
+    await page.waitForFunction(selector => document.querySelector('#peek-content [name="command"]')?.value === selector, selector);
     const fixture = JSON.parse(original);
     fixture.issue.title = 'Keyboard-selected Command after push';
     await replaceRecord(path, JSON.stringify(fixture));
@@ -629,7 +638,9 @@ test("keyboard selection and the open peek survive an Inbox push", async t => {
     assert.equal(await page.locator('#peek').isVisible(), false);
     await page.keyboard.press('g');
     await page.keyboard.press('w');
-    assert.equal(await page.locator('.is-selected').evaluate(el => el.parentElement.dataset.group), 'working');
+    await page.waitForURL('**/?section=working');
+    assert.equal(await shownGroup(page).getAttribute('data-group'), 'working');
+    assert.equal(await page.locator('.is-selected').count(), 0);
   } finally { await replaceRecord(path, original); }
 });
 
@@ -721,7 +732,7 @@ for (const storage of ['blocked', 'malformed']) {
       fixture.issue.title = `Still live with ${storage} storage`;
       await replaceRecord(path, JSON.stringify(fixture));
       await page.getByText(fixture.issue.title, { exact: true }).waitFor();
-      assert.equal(await page.locator('[data-group="needs you"][open]').count(), 1);
+      assert.equal(await shownGroup(page).getAttribute('data-group'), 'needs you');
       assert.deepEqual(errors, []);
     } finally { await replaceRecord(path, original); }
   });
@@ -876,7 +887,7 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
   }
 });
 
-test("a push keeps a Pass dispatch selected instead of its parent", async t => {
+test("a push keeps a Pass row selected, with its dispatch in Details rather than the list", async t => {
   const dir = join(home, '.thirdshift/logs/acme/widgets/commands/security');
   await mkdir(dir, { recursive: true });
   const path = join(dir, '20261019T110000+0000~security.command.json');
@@ -892,17 +903,20 @@ test("a push keeps a Pass dispatch selected instead of its parent", async t => {
     const page = await pageFor(t);
     await page.goto(origin);
     const child = page.locator('.command').filter({ has: page.locator(':scope > .row-head > .subject', { hasText: /^acme\/widgets#303$/ }) });
-    await child.click();
+    const pass = page.locator('#inbox > .group > .commands > .command').filter({ has: child });
+    assert.equal(await child.isVisible(), false);
+    await pass.locator(':scope > .row-head > .state').click();
+    const id = await pass.getAttribute('id');
     fixture.dispatched[0].issue.title = 'Dispatch after push';
     await replaceRecord(path, JSON.stringify(fixture));
-    await page.getByText('Dispatch after push', { exact: true }).waitFor();
-    assert.equal(await page.evaluate(() => document.activeElement.querySelector(':scope > .row-head > .subject')?.textContent), 'acme/widgets#303');
+    await child.locator('.issue-title').filter({ hasText: 'Dispatch after push' }).waitFor({ state: 'attached' });
+    assert.equal(await page.evaluate(() => document.activeElement.id), id);
     const ids = await page.locator('.command').evaluateAll(rows => rows.map(row => row.id));
     assert.equal(new Set(ids).size, ids.length);
   } finally { await rm(path, { force: true }); }
 });
 
-test("selection survives a move into folded Done and regains focus when opened", async t => {
+test("selection survives a move into the Done folder and regains focus when it is opened", async t => {
   const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
   const original = await readFile(path, 'utf8');
   try {
@@ -914,10 +928,10 @@ test("selection survives a move into folded Done and regains focus when opened",
     const fixture = JSON.parse(original);
     fixture.outcome = 'merged';
     await replaceRecord(path, JSON.stringify(fixture));
-    await page.waitForFunction(id => document.getElementById(id)?.closest('details').dataset.group === 'done', id);
+    await page.waitForFunction(id => document.getElementById(id)?.closest('.group').dataset.group === 'done', id);
     assert.equal(await page.evaluate(() => document.querySelector('.command[aria-current="true"]')?.id ?? document.activeElement.id), id);
-    assert.equal(await page.locator('[data-group="done"][open]').count(), 0);
-    await page.locator('[data-group="done"] > summary').click();
+    assert.equal(await shownGroup(page).getAttribute('data-group'), 'needs you');
+    await folder(page, 'done').click();
     await page.waitForFunction(id => document.activeElement.id === id, id);
   } finally { await replaceRecord(path, original); }
 });
@@ -971,6 +985,53 @@ test("a push during a record replacement keeps the selected row selected and foc
   }
 });
 
+test("folders switch in place and Back and Forward return to them, including a URL that names none", async t => {
+  const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
+  await page.goto(`${origin}/?page=inbox`);
+  await page.evaluate(() => { window.sameDocument = true; });
+  await page.waitForURL('**/?section=needs-you');
+  await folder(page, 'done').click();
+  await page.waitForURL('**/?section=done');
+  assert.equal(await shownGroup(page).getAttribute('data-group'), 'done');
+  await page.goBack();
+  await page.waitForURL('**/?section=needs-you');
+  assert.equal(await shownGroup(page).getAttribute('data-group'), 'needs you');
+  await page.goForward();
+  await page.waitForURL('**/?section=done');
+  assert.equal(await shownGroup(page).getAttribute('data-group'), 'done');
+  assert.equal(await page.evaluate(() => window.sameDocument), true, 'switching folders never reloads');
+  // An entry that names no folder gets the server's default.
+  await page.evaluate(() => history.pushState(null, '', '/'));
+  await folder(page, 'resolved').click();
+  await page.goBack();
+  await page.waitForURL(`${origin}/`);
+  await page.waitForFunction(() => document.querySelector('#inbox > .group:not([hidden])')?.dataset.group === 'needs you');
+});
+
+test("hiding the open folder with Sections opens the first folder left with rows", async t => {
+  const config = join(home, '.thirdshift/config.toml');
+  const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const merged = join(directory, '225-fixture.command.json');
+  const fixture = JSON.parse(await readFile(join(directory, '1-fixture.command.json'), 'utf8'));
+  fixture.issue = { number: 225, url: 'https://github.com/acme/widgets/issues/225', title: 'Merged fixture' };
+  fixture.outcome = 'merged';
+  await replaceRecord(merged, JSON.stringify(fixture));
+  const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
+  try {
+    await page.goto(`${origin}/?section=needs-you`);
+    assert.equal(await folder(page, 'ready for review').getAttribute('data-empty'), '');
+    await page.getByRole('button', { name: 'Sections', exact: true }).click();
+    await page.getByLabel('Show Needs you', { exact: true }).uncheck();
+    await page.getByRole('button', { name: 'Save sections' }).click();
+    await page.locator('#inbox .folders a[data-group="needs you"][hidden]').waitFor({ state: 'attached' });
+    // Ready for review comes first but is empty, so Done opens.
+    await page.waitForFunction(() => document.querySelector('#inbox > .group:not([hidden])')?.dataset.group === 'done');
+  } finally {
+    await writeFile(config, '[console]\nport = 0\n');
+    await rm(merged, { force: true });
+  }
+});
+
 test("every keyboard action preserves list nodes and Escape closes one layer at a time", async t => {
   const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
   await page.goto(origin);
@@ -983,19 +1044,21 @@ test("every keyboard action preserves list nodes and Escape closes one layer at 
     }
   });
   const selected = page.locator('.is-selected');
+  const detailsShow = () => page.waitForFunction(() => document.querySelector('#peek-content [name="command"]')?.value === document.querySelector('.is-selected')?.dataset.command);
+  // The first row opens with its Details beside the list, and Details follows j and k.
+  await detailsShow();
+  const first = await selected.getAttribute('id');
   await page.keyboard.press('j');
-  assert.equal(await selected.evaluate(el => el.tagName), 'SUMMARY');
+  assert.notEqual(await selected.getAttribute('id'), first);
+  await detailsShow();
   await page.keyboard.press('k');
-  assert.equal(await selected.textContent().then(s => s.trim().startsWith('Resolved')), true);
-  await page.keyboard.press('j');
-  await page.keyboard.press('Space');
-  assert.equal(await page.locator('[data-group="needs you"][open]').count(), 0);
-  await page.keyboard.press('Space');
-  await page.keyboard.press('j');
-  assert.equal(await selected.getAttribute('class').then(s => s.includes('command')), true);
+  assert.equal(await selected.getAttribute('id'), first);
   await page.keyboard.press('k');
-  assert.equal(await selected.evaluate(el => el.tagName), 'SUMMARY');
+  assert.equal(await selected.evaluate(el => el === el.parentElement.lastElementChild), true, 'k wraps to the last row');
   await page.keyboard.press('j');
+  assert.equal(await selected.getAttribute('id'), first);
+  await page.keyboard.press('Space');
+  assert.equal(await page.locator('#peek').isVisible(), false);
   await page.keyboard.press('Space');
   await page.locator('#peek dt').first().waitFor();
   const peekBox = await page.locator('#peek').boundingBox();
@@ -1017,26 +1080,14 @@ test("every keyboard action preserves list nodes and Escape closes one layer at 
   assert.equal(await selected.count(), 1);
   await page.keyboard.press('Escape');
   assert.equal(await selected.count(), 0);
-  for (const [letter, group] of [['r', 'ready for review'], ['l', 'landing'], ['d', 'done'], ['v', 'resolved']]) {
+  for (const [letter, group, slug] of [['r', 'ready for review', 'ready-for-review'], ['l', 'landing', 'landing'], ['w', 'working', 'working'], ['d', 'done', 'done'], ['v', 'resolved', 'resolved'], ['n', 'needs you', 'needs-you']]) {
     await page.keyboard.press('g');
     await page.keyboard.press(letter);
-    assert.equal(await selected.evaluate(el => el.parentElement.dataset.group), group);
-    assert.equal(await selected.evaluate(el => el.parentElement.open), true);
+    await page.waitForURL(`**/?section=${slug}`);
+    assert.equal(await shownGroup(page).getAttribute('data-group'), group);
+    assert.equal(await folder(page, group).getAttribute('aria-current'), 'page');
   }
-  await page.keyboard.press('g');
-  await page.keyboard.press('w');
-  assert.equal(await page.locator('[data-group="working"][open]').count(), 1);
-  await page.keyboard.press('g');
-  await page.keyboard.press('n');
-  await page.keyboard.press('j');
-  await page.keyboard.press('z');
-  assert.equal(await page.locator('[data-group="needs you"][open]').count(), 0);
-  await page.keyboard.press('Space');
-  await page.keyboard.press('j');
-  await page.keyboard.press('Space');
-  await page.locator('#peek dt').first().waitFor();
-  await page.keyboard.press('Space');
-  assert.equal(await page.locator('#peek').isVisible(), false);
+  assert.equal(await selected.getAttribute('id'), first, 'opening a folder selects its first row');
   assert.deepEqual(await page.evaluate(() => window.listChanges), []);
   assert.equal(await page.evaluate(() => window.rowsBefore.every((row, i) => row === document.querySelectorAll('.command')[i])), true);
   await page.keyboard.press('Enter');

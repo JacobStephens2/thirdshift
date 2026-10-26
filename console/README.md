@@ -128,7 +128,7 @@ is off; ask the owner to use `thirdshift console password` instead.
 The header names this machine and links to those addresses, without fetching
 them. The Inbox and its `/events` stream pair with `thirdshift status`. One
 server observer checks records and log lengths every second; the page morphs
-after a change notice, preserving the selected row, folds and scroll. If the
+after a change notice, preserving the open section, selected row and scroll. If the
 stream drops or is unavailable, the page polls every five seconds until it
 reconnects. The heartbeat only beats for observed log growth, stays flat while
 Silent and respects reduced motion. The tab counts Needs you and its favicon
@@ -138,8 +138,19 @@ and Ready tag colours, Landing keeps Working's live-activity marker, and a live
 row given a Stop shows Stopping with a drifting stripe until it ends. Pause
 motion and reduced motion hold the stripe still.
 
-Dismiss is available directly on Inbox rows in Needs you and Ready for review,
-as well as in Command details. Undo remains in Command details. Both immediately
+The Inbox reads like a mailbox. Its sections, Needs you through Resolved, are
+folders on the left with their counts, and one section's rows show at a time,
+on one line each: state, subject, title and age. Hover an ended row's age for
+its finish time. The list never scrolls inside itself; the page does. The
+folder is in the URL, such as `/?section=done`, so it survives a reload and
+works without JavaScript; with none named, the first section with rows opens.
+On a wide screen, Command details stay open beside the list for the selected
+row, starting with the folder's first row. On a phone the folders are a row of
+tabs and Command details open as a bottom sheet when you tap a row. Without
+JavaScript, rows show in full, with their own Dismiss and logs links.
+
+Dismiss is in Command details, and on Needs you and Ready for review rows
+without JavaScript. Undo remains in Command details. Both immediately
 show “Dismissing…” or
 “Taking back dismissal…” while the request is pending. The button stays disabled
 through live updates to prevent duplicate submissions. A failed request shows
@@ -156,7 +167,7 @@ time unknown”; file modification times are not presented as recorded finishes.
 Above its sections, the Inbox shows how many runs are active, such as
 `2 active runs`, the same `active_runs` total as `thirdshift status --json`.
 Each Command with live work anywhere in it counts once, whatever its group or
-whether that section is folded or hidden: a Spec run's Tickets, and the Spec run
+whether that section is open or hidden: a Spec run's Tickets, and the Spec run
 or Ticket run a Pass dispatched, are part of that one. The live update refreshes
 it as Commands start and end.
 
@@ -185,8 +196,9 @@ control explains when these are unavailable; if permission is blocked, change
 it in the browser's site settings. There are no notifications with all Console
 tabs closed, and no service worker, Web Push or subscription to set up.
 
-Folds and the last-look time stay in this browser. Commands started since the
-previous visit are marked new, including those arriving while the page is open.
+History and Security folds and the last-look time stay in this browser.
+Commands started since the previous visit are marked new, including those
+arriving while the page is open.
 Missing or malformed storage hides nothing. Replacing the installed binary
 closes open streams and re-executes the Console with its original arguments.
 
@@ -322,14 +334,16 @@ proposals for its suites. Approve one there or with
 state and start no work. Approval affects future Experiments; an existing
 Experiment keeps its fixed Eval tasks on resume.
 
-`j` / `k` select headings and visible rows, wrapping at either end. `Space`
-folds a heading or toggles a row's peek; `Enter` opens that row's full Command
-log. `z` folds the current section. `Escape` closes help, jumps or the peek,
-one layer at a time, then clears selection. `?` opens the key list. `g` opens
-the jump list: `i` Inbox, `b` Lanes, `t` Stages, `f` Waterfall, `h` History, `o` Logs, `s` Security, `j` Cron jobs,
-`c` Console log, `a` Account, or a section's displayed
-letter. Text fields keep their normal keys. The peek starts closed and sits
-beside the list on a wide screen or at the bottom of a phone.
+`j` / `k` select headings and visible rows, wrapping at either end; on the
+Inbox, open Command details follow the selection. `Space` toggles a row's
+peek, or folds a heading; `Enter` opens that row's full Command log. `z` folds
+the current History or Security section. `Escape` closes help, jumps or the
+peek, one layer at a time, then clears selection. `?` opens the key list. `g`
+opens the jump list: `i` Inbox, `b` Lanes, `t` Stages, `f` Waterfall, `h` History, `o` Logs, `s` Security, `j` Cron jobs,
+`c` Console log, `a` Account, or an Inbox section's displayed letter, which
+opens its folder. Text fields keep their normal keys. On the Inbox, the peek
+opens beside the list on a wide screen; elsewhere it starts closed. On a phone
+it sits at the bottom.
 
 For an exact older Command, `show` and `logs` also accept the absolute record
 or Command-log path. The Console adds `::name` to a record path to distinguish

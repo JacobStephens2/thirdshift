@@ -1,4 +1,4 @@
-use super::{Console, configure, record};
+use super::{Console, configure, record, section};
 use serde_json::Value;
 use std::path::Path;
 use std::{fs, process::Command};
@@ -101,15 +101,12 @@ fn shared_ended_states_show_each_commands_finish() {
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get("/").text().unwrap();
     for group in ["needs you", "ready for review", "done", "resolved"] {
-        let section = html
-            .split(&format!("data-group=\"{group}\""))
-            .nth(1)
-            .unwrap()
-            .split("</details>")
-            .next()
-            .unwrap();
+        let section = section(&html, group);
         assert!(section.contains("<time datetime="), "{group}: {section}");
-        assert!(section.contains(" UTC</time> · "), "{group}: {section}");
+        assert!(
+            section.contains(" UTC</time> · </span>"),
+            "{group}: {section}"
+        );
         assert!(section.contains(" ago</span>"), "{group}: {section}");
     }
     assert!(html.contains("0 sec ago"), "{html}");
@@ -233,8 +230,11 @@ fn idle_inbox_surfaces_recorded_skip_reasons_and_waiting_work() {
     );
     assert!(!notice.contains("<script>unsafe</script>"));
     assert!(!notice.contains("No Pass is currently recorded as skipped."));
-    assert!(notice.contains("href=\"#group-1\""), "{notice}");
-    assert!(notice.contains("href=\"#group-2\""), "{notice}");
+    assert!(notice.contains("href=\"/?section=needs-you\""), "{notice}");
+    assert!(
+        notice.contains("href=\"/?section=ready-for-review\""),
+        "{notice}"
+    );
     assert!(
         !html.contains("aria-label=\"Idle Passes\""),
         "skip reasons should appear only once"
@@ -382,13 +382,7 @@ fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status()
             row.contains(&format!("<span class=\"state\">{state}</span>")),
             "{row}"
         );
-        let section = html
-            .split(&format!("data-group=\"{group}\""))
-            .nth(1)
-            .unwrap()
-            .split("</details>")
-            .next()
-            .unwrap();
+        let section = section(&html, group);
         assert!(
             section.contains(&format!(">acme/widgets#{number}<")),
             "{section}"
@@ -436,13 +430,7 @@ fn taken_up_rows_say_why_they_left_on_the_console_row() {
     let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
     let console = Console::start(binary, home.path());
     let html = console.get("/").text().unwrap();
-    let resolved = html
-        .split("data-group=\"resolved\"")
-        .nth(1)
-        .unwrap()
-        .split("</details>")
-        .next()
-        .unwrap();
+    let resolved = section(&html, "resolved");
     assert!(resolved.contains(">acme/widgets#40<"), "{resolved}");
     let row = resolved
         .split("<li class=\"command\"")
@@ -584,4 +572,88 @@ fn the_inbox_and_status_count_each_active_outer_command_once_whatever_its_group(
     assert!(html.contains("No running Commands"), "{html}");
     let json: Value = serde_json::from_str(&status(&["status", "--json"])).unwrap();
     assert_eq!(json["active_runs"], 0);
+}
+
+#[test]
+fn sections_are_folders_chosen_by_the_url_and_hidden_sections_are_not_offered() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    record(home.path(), 1, Some("failed"), 0);
+    record(home.path(), 2, Some("merged"), 0);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let shown = |html: &str| -> Vec<String> {
+        html.split("<section id=\"group-")
+            .skip(1)
+            .filter(|section| !section.split('>').next().unwrap().contains(" hidden"))
+            .map(|section| {
+                section
+                    .split("data-group=\"")
+                    .nth(1)
+                    .unwrap()
+                    .split('"')
+                    .next()
+                    .unwrap()
+                    .to_owned()
+            })
+            .collect()
+    };
+
+    // With no choice, the first section with rows opens, and every section is a folder.
+    let html = console.get("/").text().unwrap();
+    let folders = html
+        .split("aria-label=\"Inbox sections\"")
+        .nth(1)
+        .expect(&html)
+        .split("</nav>")
+        .next()
+        .unwrap();
+    for (group, slug) in [
+        ("needs you", "needs-you"),
+        ("ready for review", "ready-for-review"),
+        ("landing", "landing"),
+        ("working", "working"),
+        ("done", "done"),
+        ("resolved", "resolved"),
+    ] {
+        assert!(
+            folders.contains(&format!("href=\"/?section={slug}\"")),
+            "{group}: {folders}"
+        );
+    }
+    assert!(
+        folders.contains(
+            "href=\"/?section=needs-you\" data-group=\"needs you\" aria-current=\"page\""
+        ),
+        "{folders}"
+    );
+    assert_eq!(shown(&html), ["needs you"], "{html}");
+    // Both sections are still on the page, so a switch needs no request.
+    assert!(html.contains("data-group=\"done\""), "{html}");
+
+    let html = console.get("/?section=done").text().unwrap();
+    assert_eq!(shown(&html), ["done"], "{html}");
+    assert!(
+        html.contains("href=\"/?section=done\" data-group=\"done\" aria-current=\"page\""),
+        "{html}"
+    );
+
+    // An unknown section falls back to the default.
+    assert_eq!(
+        shown(&console.get("/?section=nonsense").text().unwrap()),
+        ["needs you"]
+    );
+
+    // A section hidden with Sections keeps a hidden folder, for Sections to
+    // show again, and is not shown when asked for.
+    fs::write(
+        home.path().join(".thirdshift/config.toml"),
+        "[console]\nport = 0\nhidden_sections = [\"needs-you\"]\n",
+    )
+    .unwrap();
+    let html = console.get("/?section=needs-you").text().unwrap();
+    assert!(
+        html.contains("href=\"/?section=needs-you\" data-group=\"needs you\" hidden>"),
+        "{html}"
+    );
+    assert_eq!(shown(&html), ["done"], "{html}");
 }

@@ -179,6 +179,16 @@ fn configure(home: &Path) {
         "[console]\nport = 0\nother_consoles = [\"https://other.example.test\"]\ntheme = \"focus-auto\"\n").unwrap();
 }
 
+/// One Inbox section's markup, found by its group name.
+fn section<'a>(page: &'a str, group: &str) -> &'a str {
+    page.split(&format!("class=\"group\" data-group=\"{group}\""))
+        .nth(1)
+        .expect(page)
+        .split("</section>")
+        .next()
+        .unwrap()
+}
+
 fn record(home: &Path, number: u64, outcome: Option<&str>, days: i64) -> Value {
     let time = (chrono::Local::now() - chrono::Duration::days(days)).to_rfc3339();
     let record = json!({
@@ -1475,7 +1485,7 @@ fn inbox_over_http_matches_status_and_embeds_only_local_resources() {
     );
     let status: Value = serde_json::from_slice(&status.stdout).unwrap();
     let groups: Vec<_> = html
-        .split("data-group=\"")
+        .split("class=\"group\" data-group=\"")
         .skip(1)
         .map(|rest| rest.split('"').next().unwrap())
         .collect();
@@ -1512,13 +1522,7 @@ fn inbox_over_http_matches_status_and_embeds_only_local_resources() {
     for item in status["commands"].as_array().unwrap() {
         let number = item["issue"]["number"].as_u64().unwrap();
         let group = item["group"].as_str().unwrap();
-        let section = html
-            .split(&format!("data-group=\"{group}\""))
-            .nth(1)
-            .unwrap()
-            .split("</details>")
-            .next()
-            .unwrap();
+        let section = section(&html, group);
         assert!(
             section.contains(&format!("acme/widgets#{number}")),
             "{section}"

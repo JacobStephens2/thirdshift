@@ -126,7 +126,7 @@ test('several tabs notify once per rise, including a rise after a fall; off stay
     const record = JSON.parse(await readFile(path, 'utf8'));
     record.issue.title = 'Changed without a count rise';
     await writeFile(path, JSON.stringify(record));
-    for (const page of pages) await page.getByText(record.issue.title, { exact: true }).waitFor();
+    for (const page of pages) await page.locator('#inbox .issue-title').getByText(record.issue.title, { exact: true }).waitFor();
     await settle(2);
     assert.equal(await total(), 1);
     await item(3, 'merged');

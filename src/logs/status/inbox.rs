@@ -23,7 +23,6 @@ pub(crate) struct Inbox {
 pub(crate) struct Section {
     pub group: &'static str,
     pub title: &'static str,
-    pub open: bool,
     pub rows: Vec<Row>,
     pub references: Vec<String>,
 }
@@ -314,7 +313,6 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     Group::History => unreachable!(),
                 },
                 title: group.title(),
-                open: group == Group::NeedsYou,
                 rows,
                 references,
             })

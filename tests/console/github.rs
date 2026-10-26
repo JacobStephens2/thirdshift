@@ -36,13 +36,7 @@ fn pr_is(scenario: &Scenario, state: &str) {
 }
 
 fn group(page: &str, name: &str) -> String {
-    page.split(&format!("data-group=\"{name}\""))
-        .nth(1)
-        .unwrap()
-        .split("</details>")
-        .next()
-        .unwrap()
-        .to_owned()
+    section(page, name).to_owned()
 }
 
 fn events(console: &Console) -> BufReader<reqwest::blocking::Response> {
