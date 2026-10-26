@@ -746,8 +746,6 @@ mod tests {
         }
     }
 
-    /// The golden-file test: the page carries the fragment as rendered now.
-    /// The crates.io package leaves `site/` out, so it skips there.
     #[test]
     fn a_continuation_bug_prompt_names_the_merge_base_and_a_fresh_one_does_not() {
         let prompts = prompts();
@@ -772,6 +770,8 @@ mod tests {
         assert!(!fresh.contains("Merge base commit:"), "{fresh}");
     }
 
+    /// The golden-file test: the page carries the fragment as rendered now.
+    /// The crates.io package leaves `site/` out, so it skips there.
     #[test]
     fn prompts_page_shows_what_the_binary_sends() {
         let site = Path::new(env!("CARGO_MANIFEST_DIR")).join("site");

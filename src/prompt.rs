@@ -236,12 +236,8 @@ pub fn diagnosing_bugs(issue: &IssueUrl, implementation: &str, merge_base: Optio
     let baseline = match merge_base {
         Some(commit) => format!(
             "This Continuation's Issue branch is ahead of the Base branch. \
-             Reproduce at the merge base, not on the branch, then check the fix on the branch.\n\
-             Merge base commit: `{commit}`.\n\
-             Use that commit as given; do not infer another from git history.\n\
-             Hand back `needs-info` only when the bug does not reproduce at that merge base.\n\
-             When it reproduces there and the branch already fixes it, that is the reproduced ending: \
-             continue to review and the pull request.\n\n"
+             Reproduce at the merge base, then check the fix on the branch.\n\
+             Merge base commit: `{commit}`.\n\n"
         ),
         None => String::new(),
     };

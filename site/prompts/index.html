@@ -292,11 +292,8 @@ Use the `thirdshift-diagnosing-bugs` skill before changing code.
 Follow the skill to one of its two endings. Its not reproduced ending replaces the implementation steps below.
 Completion lines (the final message's last line): reproduced: `Bug reproduced: fixed`; not reproduced: `Bug not reproduced: &lt;comment URL&gt;`.
 
-This Continuation's Issue branch is ahead of the Base branch. Reproduce at the merge base, not on the branch, then check the fix on the branch.
+This Continuation's Issue branch is ahead of the Base branch. Reproduce at the merge base, then check the fix on the branch.
 Merge base commit: `<mark class="ph">&lt;merge base commit&gt;</mark>`.
-Use that commit as given; do not infer another from git history.
-Hand back `needs-info` only when the bug does not reproduce at that merge base.
-When it reproduces there and the branch already fixes it, that is the reproduced ending: continue to review and the pull request.
 
 Implementation after reproduction:
 /thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
@@ -338,11 +335,8 @@ Use the `thirdshift-diagnosing-bugs` skill before changing code.
 Follow the skill to one of its two endings. Its not reproduced ending replaces the implementation steps below.
 Completion lines (the final message's last line): reproduced: `Bug reproduced: fixed`; not reproduced: `Bug not reproduced: &lt;comment URL&gt;`.
 
-This Continuation's Issue branch is ahead of the Base branch. Reproduce at the merge base, not on the branch, then check the fix on the branch.
+This Continuation's Issue branch is ahead of the Base branch. Reproduce at the merge base, then check the fix on the branch.
 Merge base commit: `<mark class="ph">&lt;merge base commit&gt;</mark>`.
-Use that commit as given; do not infer another from git history.
-Hand back `needs-info` only when the bug does not reproduce at that merge base.
-When it reproduces there and the branch already fixes it, that is the reproduced ending: continue to review and the pull request.
 
 Implementation after reproduction:
 /thirdshift-implement <mark class="ph">&lt;Issue URL&gt;</mark>
@@ -1096,7 +1090,7 @@ Remove one input or step at a time, rerunning the loop, until every remaining el
 
 Before changing production code, turn the reproduction into a regression test at a seam that exercises the actual reported pattern. Run it and capture its failure for that reason. If no suitable seam can exercise the bug unattended, record that limitation through the not reproduced ending instead of guessing at a fix.
 
-Make the smallest fix, watch the same test pass, then rerun the original reproduction and the repository's affected checks. Keep the regression test. When the Issue branch already fixes a bug you reproduced at the named merge base, keep that fix and its regression test. Remove temporary instrumentation and throwaway artifacts. Continue the Session prompt's implementation, review, commit and PR steps. In the PR's Evidence, show the exact command and its failing-before and passing-after results, and explain the confirmed cause. End the final message with the Session prompt's reproduced completion line only after those steps succeed.
+Make the smallest fix, watch the same test pass, then rerun the original reproduction and the repository's affected checks. Keep the regression test. Remove temporary instrumentation and throwaway artifacts. Continue the Session prompt's implementation, review, commit and PR steps. In the PR's Evidence, show the exact command and its failing-before and passing-after results, and explain the confirmed cause. End the final message with the Session prompt's reproduced completion line only after those steps succeed.
 
 ## Not reproduced: needs information, no PR
 

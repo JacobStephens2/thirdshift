@@ -37,7 +37,7 @@ Remove one input or step at a time, rerunning the loop, until every remaining el
 
 Before changing production code, turn the reproduction into a regression test at a seam that exercises the actual reported pattern. Run it and capture its failure for that reason. If no suitable seam can exercise the bug unattended, record that limitation through the not reproduced ending instead of guessing at a fix.
 
-Make the smallest fix, watch the same test pass, then rerun the original reproduction and the repository's affected checks. Keep the regression test. When the Issue branch already fixes a bug you reproduced at the named merge base, keep that fix and its regression test. Remove temporary instrumentation and throwaway artifacts. Continue the Session prompt's implementation, review, commit and PR steps. In the PR's Evidence, show the exact command and its failing-before and passing-after results, and explain the confirmed cause. End the final message with the Session prompt's reproduced completion line only after those steps succeed.
+Make the smallest fix, watch the same test pass, then rerun the original reproduction and the repository's affected checks. Keep the regression test. Remove temporary instrumentation and throwaway artifacts. Continue the Session prompt's implementation, review, commit and PR steps. In the PR's Evidence, show the exact command and its failing-before and passing-after results, and explain the confirmed cause. End the final message with the Session prompt's reproduced completion line only after those steps succeed.
 
 ## Not reproduced: needs information, no PR
 
