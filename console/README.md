@@ -290,6 +290,12 @@ After a build on Linux, `python3 console/reproductions/peek-cache-contention.py`
 checks that parsing another Command's cold Session trace does not delay cached
 Command details.
 
+Historical Session signals are cached in memory and in disposable
+`*.signals-cache.json` files beside their Session traces, with per-trace
+`*.signals-cache.lock` files coordinating CLI processes. Appends, replacements
+and binary changes invalidate saved signals. A read-only logs directory still
+works by parsing without saving a cache. Command records are never rewritten.
+
 Zoom fits a parent span or a padded window around a call. The sticky axis keeps
 the zoom notice and Zoom out control visible; the slowest calls re-rank within
 the window. Folds, selection, zoom and Peek disclosures survive live refresh.

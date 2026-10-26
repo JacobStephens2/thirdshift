@@ -7,6 +7,93 @@ use support::Scenario;
 
 const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
+#[cfg(target_os = "linux")]
+#[test]
+fn unchanged_session_signals_survive_between_cli_processes() {
+    use std::ffi::CString;
+    use std::io::{Read, Write};
+    use std::os::fd::FromRawFd;
+    use std::os::unix::ffi::OsStrExt;
+
+    let scenario = Scenario::new();
+    let log = trace(&scenario, "historical", "claude", "1.0", json!([]));
+    let mut past = record(7);
+    past["stages"][0]["session_log"] = json!(log);
+    let record = write(&scenario, "7-fixture.command.json", &past);
+    let original_record = fs::read(&record).unwrap();
+    let original_trace = fs::read_to_string(&log).unwrap();
+    // SAFETY: File owns the successful descriptor; the path is NUL terminated.
+    let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+    assert!(fd >= 0);
+    let mut watcher = unsafe { fs::File::from_raw_fd(fd) };
+    let name = CString::new(log.as_os_str().as_bytes()).unwrap();
+    assert!(unsafe { libc::inotify_add_watch(fd, name.as_ptr(), libc::IN_OPEN) } >= 0);
+    let opened = |watcher: &mut fs::File| {
+        let mut buffer = [0; 1024];
+        match watcher.read(&mut buffer) {
+            Ok(len) => usize::from(len > 0),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => 0,
+            Err(error) => panic!("{error}"),
+        }
+    };
+    let first = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert_eq!(opened(&mut watcher), 1);
+    let second = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert_eq!(
+        opened(&mut watcher),
+        0,
+        "a second CLI process reparsed an unchanged historical Session trace"
+    );
+    assert_eq!(first, second);
+
+    let amendment = |version: &str| {
+        serde_json::to_string(&json!({"resourceLogs": [{"resource": {"attributes": [
+            {"key": "thirdshift.harness.version", "value": {"stringValue": version}}
+        ]}, "scopeLogs": []}]}))
+        .unwrap()
+            + "\n"
+    };
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&log)
+        .unwrap()
+        .write_all(amendment("2.0").as_bytes())
+        .unwrap();
+    opened(&mut watcher);
+    let appended = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert_eq!(opened(&mut watcher), 1);
+    assert_eq!(
+        appended["command"]["metrics"]["stages"][0]["session_signals"]["harness_version"],
+        "2.0"
+    );
+
+    // Replacing a trace with the same length and mtime must still refresh it.
+    let modified = fs::metadata(&log).unwrap().modified().unwrap();
+    let replacement = log.with_extension("replacement");
+    fs::write(&replacement, original_trace + &amendment("3.0")).unwrap();
+    fs::File::open(&replacement)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    fs::rename(replacement, &log).unwrap();
+    opened(&mut watcher);
+    // SAFETY: the descriptor is still owned by watcher and name is NUL terminated.
+    assert!(unsafe { libc::inotify_add_watch(fd, name.as_ptr(), libc::IN_OPEN) } >= 0);
+    let replaced = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert_eq!(opened(&mut watcher), 1);
+    assert_eq!(
+        replaced["command"]["metrics"]["stages"][0]["session_signals"]["harness_version"],
+        "3.0"
+    );
+    let shown = metrics(&scenario, &["show", "widgets#7", "--json"]);
+    assert_eq!(opened(&mut watcher), 0);
+    assert_eq!(
+        shown["command"]["run_metrics"]["session_signals"],
+        replaced["command"]["metrics"]["session_signals"]
+    );
+    assert_eq!(fs::read(record).unwrap(), original_record);
+}
+
 fn trace(
     scenario: &Scenario,
     name: &str,

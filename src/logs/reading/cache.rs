@@ -1,6 +1,6 @@
-//! Bounded, process-local caches of retained facts. Liveness and health are
-//! sampled afresh; file contents, parsed records and derived Session signals
-//! survive between requests.
+//! Bounded caches of retained facts. Liveness and health are sampled afresh;
+//! derived Session signals also survive between CLI processes.
+mod retained_signals;
 use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -8,11 +8,12 @@ use std::sync::{Arc, LazyLock, Mutex, Weak};
 use std::time::{Instant, SystemTime};
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::logs::command_record::CommandTree;
 use crate::logs::session_signals::SessionSignals;
 
-#[derive(PartialEq)]
+#[derive(PartialEq, Serialize, Deserialize)]
 struct Identity {
     len: u64,
     modified: Option<SystemTime>,
@@ -193,8 +194,20 @@ pub(super) fn session_signals(log: &Path) -> Option<SessionSignals> {
     if let Some(value) = SIGNALS.lock().unwrap().cache.get(&path, &identity) {
         return value;
     }
-    let value = crate::logs::session_signals::read(&path).ok()?;
+    // The file lock also coordinates cold readers in separate CLI processes.
+    // An unwritable cache is only a missed optimization, never missing evidence.
+    let retained = retained_signals::RetainedSignals::lock(&path).ok();
+    let identity = Identity::read(&path).ok()?;
+    let cached = retained.as_ref().and_then(|cache| cache.read(&identity));
+    let persist = cached.is_none();
+    let value = match cached {
+        Some(value) => value,
+        None => crate::logs::session_signals::read(&path).ok()?,
+    };
     if Identity::read(&path).ok().as_ref() == Some(&identity) {
+        if persist && let Some(retained) = retained {
+            let _ = retained.write(&identity, &value);
+        }
         let bytes = serde_json::to_vec(&value)
             .expect("Session signals serialize")
             .len() as u64;
