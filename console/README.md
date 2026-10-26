@@ -306,7 +306,11 @@ including nested Ticket runs. Recorded zeroes stay zero; unavailable signals say
 Missing, including older Ticket runs without retained metrics.
 That Peek's Copy CLI copies its `thirdshift show '<command>' --json` line; if
 the browser refuses the clipboard, the line is selected to copy by keyboard,
-and stays selected through live refresh.
+and stays selected through live refresh. The Dismiss line works the same way:
+`[Dismiss] thirdshift dismiss '<command>' [Copy CLI]`. Each CLI line stays on one
+line, cut off at the pane's edge, with the whole command on hover and in the
+copy. Session trace links also stay on one line, trimmed from the start so the
+end of each path, which tells them apart, still shows.
 
 Zoom fits a parent span or a padded window around a call. The sticky axis keeps
 the zoom notice and Zoom out control visible; the slowest calls re-rank within

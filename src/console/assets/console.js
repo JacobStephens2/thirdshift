@@ -301,18 +301,19 @@ async function refreshPeek() {
   }
 }
 
-// A live refresh replaces the pane; keep a copy's status and its by-hand selection.
+// A live refresh replaces the pane; keep each copy's status and its by-hand selection.
 function keepCopy() {
-  const old = content.querySelector('.peek-cli');
-  if (!old) return () => {};
-  const status = old.querySelector('[role="status"]').textContent;
   const selection = getSelection();
-  const selected = old.contains(selection.anchorNode) && selection.toString() === old.querySelector('code').textContent;
+  const kept = [...content.querySelectorAll('.peek-cli')].map(line => ({
+    status: line.querySelector('[role="status"]').textContent,
+    selected: line.contains(selection.anchorNode) && selection.toString() === line.querySelector('code').textContent
+  }));
   return () => {
-    const fresh = content.querySelector('.peek-cli');
-    if (!fresh) return;
-    fresh.querySelector('[role="status"]').textContent = status;
-    if (selected) selection.selectAllChildren(fresh.querySelector('code'));
+    content.querySelectorAll('.peek-cli').forEach((fresh, index) => {
+      if (!kept[index]) return;
+      fresh.querySelector('[role="status"]').textContent = kept[index].status;
+      if (kept[index].selected) selection.selectAllChildren(fresh.querySelector('code'));
+    });
   };
 }
 

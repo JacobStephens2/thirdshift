@@ -21,6 +21,19 @@ a { color: var(--link); overflow-wrap: anywhere; }
 h2 { margin: 0; font-weight: var(--head-weight); }
 code, .now, .subject, .plan { font-family: var(--font-mono); font-size: 12px; }
 code { overflow-wrap: anywhere; }
+/* A CLI line stays one line, cut off at the edge; Copy CLI copies all of it. */
+.peek-cli { display: flex; align-items: baseline; gap: 8px; }
+.peek-cli code { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.peek-cli > :not(code) { flex: none; }
+.peek-cli [role="status"]:empty { display: none; }
+.peek-action { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 8px; margin: 1em 0; }
+.peek-action > button, .peek-action > [role="status"] { flex: none; }
+.peek-action > [role="status"]:empty { display: none; }
+.peek-action > .peek-cli { flex: 1 1 auto; min-width: 0; }
+/* A Session trace path stays one line and keeps its end, which tells traces apart. */
+.peek-trace a { display: flex; gap: 0.3em; max-width: 100%; }
+.peek-trace a > span { flex: none; }
+.peek-trace .tail { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; }
 .group { border-bottom: 1px solid var(--rule); }
 summary { padding: 10px 2px; cursor: pointer; font-size: 17px; }
 summary .count { margin-left: 12px; color: var(--dim); font-size: 13px; }

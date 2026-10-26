@@ -176,13 +176,13 @@ test('Dismiss and Undo show pending feedback through live refresh and prevent du
       try {
         await page.locator('#peek-content').getByRole('button', { name: label, exact: true }).click();
         await page.waitForFunction(pending => document.querySelector('#peek-content form[data-dismiss] [role="status"]').textContent === pending, pending, { timeout: 2000 });
-        assert.equal(await form.locator('button').isDisabled(), true);
+        assert.equal(await form.locator(':scope > button').isDisabled(), true);
         const updated = JSON.parse(original);
         updated.cause = `Live refresh while ${label} is pending`;
         await replaceRecord(recordPath, JSON.stringify(updated));
         await page.locator('#peek-content').getByText(updated.cause, { exact: true }).waitFor();
-        assert.equal(await form.getByRole('status').textContent(), pending);
-        assert.equal(await form.locator('button').isDisabled(), true);
+        assert.equal(await form.locator(':scope > [role="status"]').textContent(), pending);
+        assert.equal(await form.locator(':scope > button').isDisabled(), true);
         // A second submit event must be ignored even if a browser dispatches it directly.
         await form.evaluate(form => form.requestSubmit());
         release();
@@ -209,18 +209,18 @@ test('A failed Dismiss shows the error through live refresh and allows retry', a
   try {
     await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).click();
     const error = 'Could not save the dismissal: Please try again';
-    await form.getByRole('status').getByText(error, { exact: true }).waitFor();
-    assert.equal(await form.locator('button').isEnabled(), true);
+    await form.locator(':scope > [role="status"]').getByText(error, { exact: true }).waitFor();
+    assert.equal(await form.locator(':scope > button').isEnabled(), true);
     const updated = JSON.parse(original);
     updated.cause = 'Live refresh after failed dismissal';
     await replaceRecord(recordPath, JSON.stringify(updated));
     await page.locator('#peek-content').getByText(updated.cause, { exact: true }).waitFor();
-    assert.equal(await form.getByRole('status').textContent(), error);
+    assert.equal(await form.locator(':scope > [role="status"]').textContent(), error);
     await page.unrouteAll({ behavior: 'wait' });
     await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).click();
     await page.locator('#peek-content').getByRole('button', { name: 'Undo', exact: true }).waitFor();
     await page.waitForFunction(() => !document.querySelector('#peek-content form[data-dismiss] button').disabled);
-    assert.equal(await form.getByRole('status').textContent(), '');
+    assert.equal(await form.locator(':scope > [role="status"]').textContent(), '');
     await page.locator('#peek-content').getByRole('button', { name: 'Undo', exact: true }).click();
     await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   } finally {
@@ -1293,6 +1293,11 @@ test('Command details copies its show command to the clipboard', async t => {
   await page.locator('#peek dt').first().waitFor();
   const expected = `thirdshift show '${selector}' --json`;
   assert.equal(await page.locator('#peek code').filter({ hasText: 'thirdshift show' }).textContent(), expected);
+  // The CLI line stays one line, cut off, with Copy CLI at its end.
+  const line = page.locator('#peek .peek-cli').filter({ hasText: 'thirdshift show' });
+  const [code, button] = [await line.locator('code').boundingBox(), await line.getByRole('button', { name: 'Copy CLI' }).boundingBox()];
+  assert.ok(code.height < 2 * 18 && Math.abs(code.y + code.height / 2 - (button.y + button.height / 2)) < 8, JSON.stringify({ code, button }));
+  assert.ok(button.x > code.x + code.width);
   await page.locator('#peek').getByRole('button', { name: 'Copy CLI', exact: true }).click();
   await page.locator('#peek').getByRole('status').filter({ hasText: 'CLI copied.' }).waitFor();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), expected);
