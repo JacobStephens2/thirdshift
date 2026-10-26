@@ -221,6 +221,84 @@ pub(super) fn list(views: &[View]) -> String {
     html
 }
 
+/// What the Experiment asks, in words: the change between its arms, the suites
+/// it is judged on and what counts as worse, or that it tests no change at all.
+fn question(view: &View) -> String {
+    let d = &view.description;
+    let suites = match d.suites.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    let reference = |name: &Option<String>, commit: &str| match name {
+        Some(name) if !commit.starts_with(name.as_str()) => format!("{name} ({})", short(commit)),
+        _ => short(commit),
+    };
+    let mut changes = Vec::new();
+    if d.baseline.commit != d.candidate.commit {
+        let mut build = format!(
+            "Build: {} → {}",
+            reference(&view.details.baseline_ref, &d.baseline.commit),
+            reference(&view.details.candidate_ref, &d.candidate.commit)
+        );
+        if let Some(title) = view.details.title.as_deref().filter(|t| !t.is_empty()) {
+            build.push_str(&format!(", “{title}”"));
+        }
+        changes.push(build);
+    }
+    let versions = d.prepared.as_ref().map(|p| {
+        (
+            p.baseline.harness.version.as_str(),
+            p.candidate.harness.version.as_str(),
+        )
+    });
+    for (label, b, c) in [
+        (
+            "Harness",
+            d.baseline.harness.as_str(),
+            d.candidate.harness.as_str(),
+        ),
+        (
+            "Model",
+            d.baseline.model.as_deref().unwrap_or("default"),
+            d.candidate.model.as_deref().unwrap_or("default"),
+        ),
+        (
+            "Effort",
+            d.baseline.effort.as_deref().unwrap_or("default"),
+            d.candidate.effort.as_deref().unwrap_or("default"),
+        ),
+        (
+            "Harness version",
+            versions.map_or("", |v| v.0),
+            versions.map_or("", |v| v.1),
+        ),
+    ] {
+        if b != c {
+            changes.push(format!("{label}: {b} → {c}"));
+        }
+    }
+    let body = if changes.is_empty() {
+        format!(
+            "<p>Both arms are the same build, Harness, Model and Effort, so this Experiment tests no change: it shows how much {} results vary between runs of one setup.</p>",
+            esc(&suites)
+        )
+    } else {
+        format!(
+            "<p>Does the Candidate do worse than the Baseline on {}? The Candidate changes:</p><ul>{}</ul><p>Worse means a pass share more than {} points below the Baseline’s.</p>",
+            esc(&suites),
+            changes
+                .iter()
+                .map(|change| format!("<li>{}</li>", esc(change)))
+                .collect::<String>(),
+            (-d.bar.margin * 100.0).round()
+        )
+    };
+    format!(
+        "<section class=\"experiment-question\" aria-label=\"What this Experiment tests\"><h2>What it tests</h2>{body}</section>"
+    )
+}
+
 pub(super) fn detail(view: &View) -> String {
     let id = esc(&view.description.id);
     let command_log = view.details.command_log.as_ref().map_or_else(
@@ -237,9 +315,9 @@ pub(super) fn detail(view: &View) -> String {
         },
     );
     let mut html = format!(
-        "<p><a href=\"/experiments\">← Experiments</a></p><div class=\"page-title\"><h1>{}</h1><code>thirdshift experiments {id} --json</code></div><p>{} · Started <time>{}</time>{} · {}</p><section class=\"experiment-lead\" aria-label=\"Experiment status\">{} <p>{}</p></section>",
+        "<p><a href=\"/experiments\">← Experiments</a></p><div class=\"page-title\"><h1>{}</h1><code>thirdshift experiments {id} --json</code></div>{}<p>Started <time>{}</time>{} · {}</p><section class=\"experiment-lead\" aria-label=\"Experiment status\">{} <p>{}</p></section>",
         esc(&name(view)),
-        esc(view.details.title.as_deref().unwrap_or("")),
+        question(view),
         esc(&view.created_at),
         view.details
             .ended_at

@@ -339,7 +339,11 @@ escaping and 390 px. Retained timing checks also run with
 `python3 console/reproductions/waterfall-trace-axis.py` after a build.
 
 Experiments (`/experiments`, or `g` then `x`) uses Running, Needs you and Done
-groups. Its Experiment page shows the live Trial grid, per-suite Verdict
+groups. Its Experiment page opens with What it tests: the Candidate's changes
+from the Baseline (build with its commit title, Harness, Model, Effort or
+Harness version), the suites it is judged on and the Bar's margin, or, when the
+arms match, that it tests no change and shows run-to-run variation. It then
+shows the live Trial grid, per-suite Verdict
 intervals, pending rechecks, Arm comparison and folded Bar. A Trial or Eval task
 opens the Peek; each retained attempt links to its Session log or Session trace.
 Both pages use the same view as `thirdshift experiments [<id>] --json`, including
