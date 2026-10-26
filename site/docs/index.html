@@ -766,9 +766,9 @@ Command record, Console entry or Session log is created for a standalone skill.<
 </div></details>
 <details class="fold"><summary><h3>Custom processes</h3></summary>
 <div class="manual-content" id="custom-processes">
-<p>A Custom process runs Steps in order. A Step is a skill session or a command.
-It is experimental. Write <code>~/.thirdshift/processes/&lt;name&gt;.toml</code>. The name is
-the file&#39;s stem.</p>
+<p>A Custom process runs Steps in order, and can run consecutive Steps together.
+A Step is a skill session or a command. It is experimental. Write
+<code>~/.thirdshift/processes/&lt;name&gt;.toml</code>. The name is the file&#39;s stem.</p>
 <pre><code class="language-toml">version = 1
 description = &quot;Gather notes, then review them&quot;
 
@@ -785,6 +785,48 @@ name = &quot;extra&quot;
 command = &quot;false&quot;
 optional = true
 </code></pre>
+<p>With no <code>[worktrees]</code> table, every Step shares one throwaway worktree. To run
+Steps at the same time, declare a throwaway worktree for each and give
+consecutive Steps the same <code>parallel</code> group:</p>
+<pre><code class="language-toml">version = 1
+description = &quot;Three families, then a judge&quot;
+
+[worktrees.claude]
+kind = &quot;throwaway&quot;
+
+[worktrees.codex]
+kind = &quot;throwaway&quot;
+
+[worktrees.grok]
+kind = &quot;throwaway&quot;
+
+[worktrees.judge]
+kind = &quot;throwaway&quot;
+
+[[steps]]
+name = &quot;claude&quot;
+skill = &quot;thirdshift-code-review&quot;
+worktree = &quot;claude&quot;
+parallel = &quot;families&quot;
+
+[[steps]]
+name = &quot;codex&quot;
+skill = &quot;thirdshift-code-review&quot;
+worktree = &quot;codex&quot;
+parallel = &quot;families&quot;
+
+[[steps]]
+name = &quot;grok&quot;
+skill = &quot;thirdshift-code-review&quot;
+worktree = &quot;grok&quot;
+parallel = &quot;families&quot;
+optional = true
+
+[[steps]]
+name = &quot;judge&quot;
+skill = &quot;thirdshift-to-spec&quot;
+worktree = &quot;judge&quot;
+</code></pre>
 <p><code>version</code> must be <code>1</code>. Each Step has a <code>name</code> and exactly one kind. <code>skill</code> is
 looked up the same way as <code>thirdshift skill</code>. First a Factory skill whose
 directory is exactly that name. Then the repository&#39;s committed
@@ -798,33 +840,48 @@ skills are
 (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md">ADR-0012</a>),
 under its own name, as a copy written out beside those skills, and kept out
 of git. A repository skill of the same name is not replaced. <code>command</code> is a command or script,
-run with <code>sh -c</code> in the Step&#39;s worktree. It starts no session. <code>optional = true</code>
-records that Step&#39;s failure and the Process carries on. Without <code>optional</code>, or
-with <code>optional = false</code>, a failure stops the Process.</p>
+run with <code>sh -c</code> in the Step&#39;s worktree. It starts no session. A declared
+worktree&#39;s <code>kind</code> must be <code>throwaway</code>: it is detached at the Base branch. When
+the Process declares worktrees, every Step names one with <code>worktree</code>.
+Consecutive Steps with the same <code>parallel</code> name run at the same time. Every
+session or command Step edits the worktree it runs in, so Steps in one group
+cannot share a worktree. The same group name after a Step that is not in the
+group starts a new group. <code>optional = true</code> records that Step&#39;s failure and
+the Process carries on. Without <code>optional</code>, or with <code>optional = false</code>, a
+failure stops the Process once the other Steps in its group have finished.</p>
 <pre><code class="language-sh">thirdshift process
 thirdshift process check gather-review
 thirdshift process gather-review
 </code></pre>
 <p><code>thirdshift process</code> lists each Custom process and its description. <code>check</code>
-validates the file and prints the plan: the description, a throwaway worktree
-at the Base branch, the Command&#39;s Harness, Model and Effort, and each Step.
-A skill Step shows the skill and where it was found. A command Step shows its
-command, and <code>check</code> does not run it. An optional Step is marked <code>(optional)</code>.
-It starts no session. Running the process starts the Steps in order in one
-throwaway worktree, detached at the Base branch and cleaned up as a standalone
-skill&#39;s worktree is. The Base branch is the branch checked out in the launch
-directory, at its commit on origin. The launch checkout stays untouched.</p>
+validates the file and prints the plan: the description, the Command&#39;s Harness,
+Model and Effort, and each Step. A Process with no named worktrees prints one
+throwaway worktree at the Base branch. A Process that declares worktrees prints
+each one, the worktree each Step uses, and a <code>together:</code> line for each group
+of Steps that run at the same time. A skill Step shows the skill and where it
+was found. A command Step shows its command, and <code>check</code> does not run it. An
+optional Step is marked <code>(optional)</code>. <code>check</code> starts no session.</p>
+<p>Running the Process starts the Steps in its throwaway worktrees, detached at
+the Base branch and cleaned up as a standalone skill&#39;s worktree is. Every
+throwaway worktree is removed at the end, including after a failure, unless
+uncommitted changes, commits absent from every remote-tracking branch, or
+uncertain ownership keep it. The Base branch is the branch checked out in the
+launch directory, at its commit on origin. The launch checkout stays untouched.</p>
 <p>Every session Step uses the Command&#39;s Harness, Model and Effort: the User
 config default, or the Harness default when that is unset. A command Step does
 not. Each finished Step&#39;s result is stored beside the Command log, one file
 per Step. A session&#39;s result is its final message. A command&#39;s result is its
 stdout followed by its stderr. The next session Step&#39;s prompt names the paths
-of those finished results. A Step that fails has no result to pass on. The
-last finished Step&#39;s result goes to stdout. Progress and failure causes go to
-stderr. The first failed Step that is not optional fails the Process, and
-later Steps do not run. Exit codes match <code>thirdshift skill</code>: <code>0</code> when the
-Process finishes, including when the only failures were optional Steps, <code>1</code>
-when a required Step or a check fails, <code>2</code> when the arguments are wrong.</p>
+of those finished results. Members of a parallel group do not see one
+another&#39;s results; each member&#39;s result is passed on to the Steps after the
+group. A Step that fails has no result to pass on. The last finished Step&#39;s
+result goes to stdout. Progress and failure causes go to stderr. When one
+Step in a group fails, the others finish and record their results first. The
+group then fails unless every failed Step is optional, and later Steps do not
+run. A failed Step outside a group stops the Process immediately, unless that
+Step is optional. Exit codes match <code>thirdshift skill</code>: <code>0</code> when the Process
+finishes, including when the only failures were optional Steps, <code>1</code> when a
+required Step or a check fails, <code>2</code> when the arguments are wrong.</p>
 <p>A command Step&#39;s environment sets <code>THIRDSHIFT_RESULTS_DIR</code> to the folder of
 Step result files and <code>THIRDSHIFT_STEP_RESULT</code> to the path of that Step&#39;s own
 result file. thirdshift writes the combined output to that path when the Step
@@ -833,10 +890,12 @@ has an issue, and is unset when it does not.</p>
 <p><code>check</code> and running refuse a missing file, a file that is not valid TOML, a
 missing or wrong <code>version</code>, an unknown key, a Step without exactly one of
 <code>skill</code> and <code>command</code>, a command that is not a string or is empty, an
-<code>optional</code> value that is not a boolean, a skill that cannot be found, and a
-reserved name (<code>check</code>, <code>list</code>, <code>ticket-run</code>, <code>spec-run</code>, <code>architect-run</code>,
-<code>pickup-run</code>, <code>security-run</code>). The refusal names the rule and the file line,
-and starts no session.</p>
+<code>optional</code> value that is not a boolean, a skill that cannot be found, an
+unknown worktree, a Step that does not name a worktree when the Process
+declares them, parallel Steps that share a worktree, a worktree whose kind is
+not <code>throwaway</code>, and a reserved name (<code>check</code>, <code>list</code>, <code>ticket-run</code>,
+<code>spec-run</code>, <code>architect-run</code>, <code>pickup-run</code>, <code>security-run</code>). The refusal names
+the rule and the file line, and starts no session.</p>
 <p>The Command is recorded as kind <code>Process</code>, with the process name. Its Command
 log has one line per Step: the Step&#39;s name, duration, outcome and cause. A
 command that exits non-zero is failed, and the line names its exit status.

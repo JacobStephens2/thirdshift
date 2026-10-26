@@ -842,9 +842,9 @@ Command record, Console entry or Session log is created for a standalone skill.
 
 ### Custom processes
 
-A Custom process runs Steps in order. A Step is a skill session or a command.
-It is experimental. Write `~/.thirdshift/processes/<name>.toml`. The name is
-the file's stem.
+A Custom process runs Steps in order, and can run consecutive Steps together.
+A Step is a skill session or a command. It is experimental. Write
+`~/.thirdshift/processes/<name>.toml`. The name is the file's stem.
 
 ```toml
 version = 1
@@ -864,6 +864,51 @@ command = "false"
 optional = true
 ```
 
+With no `[worktrees]` table, every Step shares one throwaway worktree. To run
+Steps at the same time, declare a throwaway worktree for each and give
+consecutive Steps the same `parallel` group:
+
+```toml
+version = 1
+description = "Three families, then a judge"
+
+[worktrees.claude]
+kind = "throwaway"
+
+[worktrees.codex]
+kind = "throwaway"
+
+[worktrees.grok]
+kind = "throwaway"
+
+[worktrees.judge]
+kind = "throwaway"
+
+[[steps]]
+name = "claude"
+skill = "thirdshift-code-review"
+worktree = "claude"
+parallel = "families"
+
+[[steps]]
+name = "codex"
+skill = "thirdshift-code-review"
+worktree = "codex"
+parallel = "families"
+
+[[steps]]
+name = "grok"
+skill = "thirdshift-code-review"
+worktree = "grok"
+parallel = "families"
+optional = true
+
+[[steps]]
+name = "judge"
+skill = "thirdshift-to-spec"
+worktree = "judge"
+```
+
 `version` must be `1`. Each Step has a `name` and exactly one kind. `skill` is
 looked up the same way as `thirdshift skill`. First a Factory skill whose
 directory is exactly that name. Then the repository's committed
@@ -877,9 +922,15 @@ skills are
 ([ADR-0012](adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md)),
 under its own name, as a copy written out beside those skills, and kept out
 of git. A repository skill of the same name is not replaced. `command` is a command or script,
-run with `sh -c` in the Step's worktree. It starts no session. `optional = true`
-records that Step's failure and the Process carries on. Without `optional`, or
-with `optional = false`, a failure stops the Process.
+run with `sh -c` in the Step's worktree. It starts no session. A declared
+worktree's `kind` must be `throwaway`: it is detached at the Base branch. When
+the Process declares worktrees, every Step names one with `worktree`.
+Consecutive Steps with the same `parallel` name run at the same time. Every
+session or command Step edits the worktree it runs in, so Steps in one group
+cannot share a worktree. The same group name after a Step that is not in the
+group starts a new group. `optional = true` records that Step's failure and
+the Process carries on. Without `optional`, or with `optional = false`, a
+failure stops the Process once the other Steps in its group have finished.
 
 ```sh
 thirdshift process
@@ -888,26 +939,36 @@ thirdshift process gather-review
 ```
 
 `thirdshift process` lists each Custom process and its description. `check`
-validates the file and prints the plan: the description, a throwaway worktree
-at the Base branch, the Command's Harness, Model and Effort, and each Step.
-A skill Step shows the skill and where it was found. A command Step shows its
-command, and `check` does not run it. An optional Step is marked `(optional)`.
-It starts no session. Running the process starts the Steps in order in one
-throwaway worktree, detached at the Base branch and cleaned up as a standalone
-skill's worktree is. The Base branch is the branch checked out in the launch
-directory, at its commit on origin. The launch checkout stays untouched.
+validates the file and prints the plan: the description, the Command's Harness,
+Model and Effort, and each Step. A Process with no named worktrees prints one
+throwaway worktree at the Base branch. A Process that declares worktrees prints
+each one, the worktree each Step uses, and a `together:` line for each group
+of Steps that run at the same time. A skill Step shows the skill and where it
+was found. A command Step shows its command, and `check` does not run it. An
+optional Step is marked `(optional)`. `check` starts no session.
+
+Running the Process starts the Steps in its throwaway worktrees, detached at
+the Base branch and cleaned up as a standalone skill's worktree is. Every
+throwaway worktree is removed at the end, including after a failure, unless
+uncommitted changes, commits absent from every remote-tracking branch, or
+uncertain ownership keep it. The Base branch is the branch checked out in the
+launch directory, at its commit on origin. The launch checkout stays untouched.
 
 Every session Step uses the Command's Harness, Model and Effort: the User
 config default, or the Harness default when that is unset. A command Step does
 not. Each finished Step's result is stored beside the Command log, one file
 per Step. A session's result is its final message. A command's result is its
 stdout followed by its stderr. The next session Step's prompt names the paths
-of those finished results. A Step that fails has no result to pass on. The
-last finished Step's result goes to stdout. Progress and failure causes go to
-stderr. The first failed Step that is not optional fails the Process, and
-later Steps do not run. Exit codes match `thirdshift skill`: `0` when the
-Process finishes, including when the only failures were optional Steps, `1`
-when a required Step or a check fails, `2` when the arguments are wrong.
+of those finished results. Members of a parallel group do not see one
+another's results; each member's result is passed on to the Steps after the
+group. A Step that fails has no result to pass on. The last finished Step's
+result goes to stdout. Progress and failure causes go to stderr. When one
+Step in a group fails, the others finish and record their results first. The
+group then fails unless every failed Step is optional, and later Steps do not
+run. A failed Step outside a group stops the Process immediately, unless that
+Step is optional. Exit codes match `thirdshift skill`: `0` when the Process
+finishes, including when the only failures were optional Steps, `1` when a
+required Step or a check fails, `2` when the arguments are wrong.
 
 A command Step's environment sets `THIRDSHIFT_RESULTS_DIR` to the folder of
 Step result files and `THIRDSHIFT_STEP_RESULT` to the path of that Step's own
@@ -918,10 +979,12 @@ has an issue, and is unset when it does not.
 `check` and running refuse a missing file, a file that is not valid TOML, a
 missing or wrong `version`, an unknown key, a Step without exactly one of
 `skill` and `command`, a command that is not a string or is empty, an
-`optional` value that is not a boolean, a skill that cannot be found, and a
-reserved name (`check`, `list`, `ticket-run`, `spec-run`, `architect-run`,
-`pickup-run`, `security-run`). The refusal names the rule and the file line,
-and starts no session.
+`optional` value that is not a boolean, a skill that cannot be found, an
+unknown worktree, a Step that does not name a worktree when the Process
+declares them, parallel Steps that share a worktree, a worktree whose kind is
+not `throwaway`, and a reserved name (`check`, `list`, `ticket-run`,
+`spec-run`, `architect-run`, `pickup-run`, `security-run`). The refusal names
+the rule and the file line, and starts no session.
 
 The Command is recorded as kind `Process`, with the process name. Its Command
 log has one line per Step: the Step's name, duration, outcome and cause. A
