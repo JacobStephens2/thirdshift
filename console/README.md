@@ -144,9 +144,10 @@ on one line each: state, subject, title and age. Hover an ended row's age for
 its finish time. The list never scrolls inside itself; the page does. The
 folder is in the URL, such as `/?section=done`, so it survives a reload and
 works without JavaScript; with none named, the first section with rows opens.
-On a wide screen, Command details stay open beside the list for the selected
-row, starting with the folder's first row. On a phone the folders are a row of
-tabs and Command details open as a bottom sheet when you tap a row. Without
+The page opens with nothing selected and Command details closed. Click a row,
+or select it and press `Space`, to open its details beside the list; they stay
+open for the selected row as you move with `j` / `k` or switch folders. On a
+phone the folders are a row of tabs and Command details open as a bottom sheet. Without
 JavaScript, rows show in full, with their own Dismiss and logs links.
 
 Dismiss is in Command details, and on Needs you and Ready for review rows
@@ -342,9 +343,8 @@ the current History or Security section. `Escape` closes help, jumps or the
 peek, one layer at a time, then clears selection. `?` opens the key list. `g`
 opens the jump list: `i` Inbox, `b` Lanes, `t` Stages, `f` Waterfall, `h` History, `o` Logs, `s` Security, `j` Cron jobs,
 `c` Console log, `a` Account, or an Inbox section's displayed letter, which
-opens its folder. Text fields keep their normal keys. On the Inbox, the peek
-opens beside the list on a wide screen; elsewhere it starts closed. On a phone
-it sits at the bottom.
+opens its folder. Text fields keep their normal keys. The peek starts closed
+and sits beside the list on a wide screen or at the bottom of a phone.
 
 For an exact older Command, `show` and `logs` also accept the absolute record
 or Command-log path. The Console adds `::name` to a record path to distinguish

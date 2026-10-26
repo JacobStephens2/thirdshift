@@ -75,7 +75,7 @@ async function showDetails(page, row) {
   await row.locator(':scope > .row-head > .state').click();
 }
 
-test('Inbox Dismiss works by keyboard from the Details pane opened beside the first row', async t => {
+test('the Inbox opens with Details closed, and Dismiss works by keyboard from Details beside a clicked row', async t => {
   const page = await pageFor(t);
   const observer = await pageFor(t);
   for (const current of [page, observer]) await current.goto(`${origin}/?page=inbox`);
@@ -83,6 +83,9 @@ test('Inbox Dismiss works by keyboard from the Details pane opened beside the fi
   const row = page.locator(waiting).first();
   const count = await page.locator(waiting).count();
   await page.evaluate(() => { window.sameDocument = true; });
+  assert.equal(await page.locator('#peek').isVisible(), false);
+  assert.equal(await page.locator('.is-selected').count(), 0);
+  await showDetails(page, row);
   assert.equal(await row.getAttribute('aria-current'), 'true');
   const dismiss = page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true });
   await dismiss.waitFor({ timeout: 5000 });
@@ -566,11 +569,9 @@ test("skipped Pass disclosure keeps native keyboard controls after selecting an 
   await notice.locator('summary').focus();
   await page.keyboard.press('Space');
   await reason.waitFor({ state: 'visible' });
-  const shown = await page.locator('#peek-content [name="command"]').inputValue();
   await page.keyboard.press('Enter');
   await reason.waitFor({ state: 'hidden' });
-  assert.equal(await page.locator('#peek').isVisible(), true);
-  assert.equal(await page.locator('#peek-content [name="command"]').inputValue(), shown);
+  assert.equal(await page.locator('#peek').isVisible(), false);
 });
 
 test("explicit Focus light and dark override the system preference", async t => {
@@ -624,8 +625,8 @@ test("keyboard selection and the open peek survive an Inbox push", async t => {
   const path = selector.split('::')[0];
   const original = await readFile(path, 'utf8');
   try {
-    // Details follows the keyboard selection.
-    await page.waitForFunction(selector => document.querySelector('#peek-content [name="command"]')?.value === selector, selector);
+    await page.keyboard.press('Space');
+    await page.locator('#peek dt').first().waitFor();
     const fixture = JSON.parse(original);
     fixture.issue.title = 'Keyboard-selected Command after push';
     await replaceRecord(path, JSON.stringify(fixture));
@@ -1045,9 +1046,13 @@ test("every keyboard action preserves list nodes and Escape closes one layer at 
   });
   const selected = page.locator('.is-selected');
   const detailsShow = () => page.waitForFunction(() => document.querySelector('#peek-content [name="command"]')?.value === document.querySelector('.is-selected')?.dataset.command);
-  // The first row opens with its Details beside the list, and Details follows j and k.
-  await detailsShow();
+  // Nothing is selected or open on load; Space opens Details, which then follows j and k.
+  assert.equal(await selected.count(), 0);
+  assert.equal(await page.locator('#peek').isVisible(), false);
+  await page.keyboard.press('j');
   const first = await selected.getAttribute('id');
+  await page.keyboard.press('Space');
+  await detailsShow();
   await page.keyboard.press('j');
   assert.notEqual(await selected.getAttribute('id'), first);
   await detailsShow();

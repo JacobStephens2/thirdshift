@@ -249,11 +249,9 @@ function showPeek(row) {
   if (peekCommand !== row.dataset.command) togglePeek(row);
 }
 
-// The Inbox is a mailbox: one section, a folder, shows at a time, and on a
-// wide screen Details stays open beside it for the selected row.
+// The Inbox is a mailbox: one section, a folder, shows at a time, and once
+// opened, Details stays beside it for the selected row.
 const mailbox = document.body.classList.contains('mailbox');
-// Matches the phone layout's max-width: 760px in console.css.
-const wide = matchMedia('(min-width: 761px)');
 function currentFolder() {
   return document.querySelector('#inbox .folders a[aria-current="page"]');
 }
@@ -278,8 +276,9 @@ function openFolder(link, { push = true } = {}) {
   const row = kept ?? document.querySelector('#inbox > .group:not([hidden]) .command');
   select(row ?? null, { scroll: false });
   kept?.focus({ preventScroll: true });
+  // Open Details move to the folder's row; closed ones stay closed.
   if (!row) closePeek();
-  else if (wide.matches) showPeek(row);
+  else if (!peek.hidden) showPeek(row);
 }
 if (mailbox) {
   const folder = currentFolder();
@@ -486,11 +485,3 @@ document.addEventListener('keydown', event => {
     if (row?.dataset.log) location.assign(row.dataset.log);
   }
 });
-
-if (mailbox && wide.matches && !selected) {
-  const first = document.querySelector('#inbox > .group:not([hidden]) .command');
-  if (first) {
-    select(first, { scroll: false });
-    showPeek(first);
-  }
-}
