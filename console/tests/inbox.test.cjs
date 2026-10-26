@@ -1170,6 +1170,48 @@ test('Needs you copies problem context and links for an agent by keyboard', asyn
   assert.equal(await page.getByRole('button', { name: 'Copy', exact: true }).count(), 0);
 });
 
+for (const clipboard of ['refused', 'unavailable']) {
+  test(`Needs you keeps selected context through live updates when clipboard is ${clipboard}`, async t => {
+    const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
+    await page.addInitScript(clipboard => {
+      if (clipboard === 'unavailable') Object.defineProperty(navigator, 'clipboard', { value: undefined });
+      else navigator.clipboard.writeText = () => Promise.reject(new DOMException('refused', 'NotAllowedError'));
+    }, clipboard);
+    await page.goto(origin);
+    const row = page.locator('[data-group="needs you"] > .commands > .command').filter({
+      has: page.locator('.subject', { hasText: /^acme\/widgets#1$/ })
+    });
+    const recordPath = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+    const original = await readFile(recordPath, 'utf8');
+    await row.getByRole('button', { name: 'Copy', exact: true }).focus();
+    await page.keyboard.press('Space');
+    const dialog = page.getByRole('dialog', { name: 'Needs you information' });
+    await dialog.waitFor();
+    const field = dialog.getByRole('textbox', { name: 'Information to share with an agent' });
+    const text = await field.inputValue();
+    assert.ok(text.includes('distinct fixture failure 1'));
+    assert.ok(text.includes('https://github.com/acme/widgets/issues/1'));
+    assert.ok(text.includes('thirdshift show'));
+    assert.equal(await field.evaluate(field => field.value.slice(field.selectionStart, field.selectionEnd)), text);
+    assert.equal(await field.evaluate(field => document.activeElement === field), true);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    try {
+      const updated = JSON.parse(original);
+      updated.cause = 'Updated while the copy dialog is open';
+      await replaceRecord(recordPath, JSON.stringify(updated));
+      await row.getByText(updated.cause, { exact: true }).waitFor();
+      assert.equal(await field.inputValue(), text);
+      assert.equal(await field.evaluate(field => field.value.slice(field.selectionStart, field.selectionEnd)), text);
+      await dialog.getByRole('button', { name: 'Close', exact: true }).focus();
+      await page.keyboard.press('5');
+      assert.equal(new URL(page.url()).searchParams.get('page'), null);
+      await page.keyboard.press('Enter');
+      await dialog.waitFor({ state: 'hidden' });
+      assert.equal(await page.locator('#peek').isVisible(), false);
+    } finally { await replaceRecord(recordPath, original); }
+  });
+}
+
 test('Command details copies its show command to the clipboard', async t => {
   const page = await pageFor(t);
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
