@@ -15,20 +15,20 @@ echo 'Bug reproduced: fixed' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#;
 
 fn late_background_reply(earlier: &str) -> String {
-    let earlier = serde_json::json!({"type": "result", "subtype": "success", "result": earlier});
+    let earlier = serde_json::json!({
+        "type": "assistant", "message": {
+            "id": "earlier", "role": "assistant",
+            "content": [{"type": "text", "text": earlier}]
+        }
+    });
     format!(
         r#"
-if [ -n "${{FAKE_GROK_RESULT:-}}" ]; then
-  cat > "$FAKE_GROK_RESULT" <<'JSON'
+cat <<'JSON'
 {earlier}
-JSON
-else
-  : > "$FAKE_CLAUDE_AFTER_RESULT"
-fi
-cat >> "${{FAKE_GROK_RESULT:-$FAKE_CLAUDE_AFTER_RESULT}}" <<'JSON'
 {{"type":"system","subtype":"task_notification","task_id":"test","status":"failed","summary":"Earlier test failed"}}
-{{"type":"result","subtype":"success","result":"The earlier background failure was handled. The PR is unchanged."}}
+{{"type":"assistant","message":{{"id":"later","role":"assistant","content":[{{"type":"text","text":"The earlier background failure was handled. The PR is unchanged."}}]}}}}
 JSON
+echo 'The earlier background failure was handled. The PR is unchanged.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#
     )
 }

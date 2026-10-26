@@ -240,6 +240,80 @@ fn claude_completion_keeps_the_last_result_and_the_last_complete_usage() {
 }
 
 #[test]
+fn assistant_completion_line_survives_a_late_result() {
+    for harness in [Harness::Grok, Harness::Claude] {
+        for earlier in [
+            "PR ready.\nBug reproduced: fixed",
+            "Bug not reproduced: https://github.com/acme/widgets/issues/7#issuecomment-42",
+            "Security audit: complete",
+        ] {
+            let later = "The earlier background failure was already handled.";
+            let mut interpretation = stream(harness, "");
+            for event in [
+                serde_json::json!({
+                    "type": "assistant",
+                    "message": {
+                        "id": "earlier", "role": "assistant",
+                        "content": [{"type": "text", "text": earlier}]
+                    }
+                }),
+                serde_json::json!({
+                    "type": "system", "subtype": "task_notification",
+                    "task_id": "test", "status": "failed",
+                    "summary": "The earlier background test failed."
+                }),
+                serde_json::json!({
+                    "type": "assistant",
+                    "message": {
+                        "id": "later", "role": "assistant",
+                        "content": [{"type": "text", "text": later}]
+                    }
+                }),
+                serde_json::json!({
+                    "type": "result", "subtype": "success", "result": later
+                }),
+            ] {
+                interpretation.condense(&event.to_string());
+            }
+            let ended = finish(interpretation).outcome.unwrap();
+            assert_eq!(
+                ended.require_final_message("fixture").unwrap(),
+                earlier,
+                "{harness:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn assistant_handoffs_keep_reply_order_and_require_a_root_result() {
+    for harness in [Harness::Grok, Harness::Claude] {
+        let mut interpretation = stream(harness, "");
+        interpretation.condense(r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Bug reproduced: fixed"}]}}"#);
+        assert_eq!(finish(interpretation).outcome.unwrap().final_message, None);
+
+        let mut interpretation = stream(harness, "");
+        for event in [
+            r#"{"type":"result","subtype":"success","result":"Bug reproduced: fixed"}"#,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Security audit: incomplete"}]}}"#,
+            r#"{"type":"assistant","parent_tool_use_id":"child","message":{"content":[{"type":"text","text":"Security audit: complete"}]}}"#,
+            r#"{"type":"result","subtype":"success","result":"Background task handled."}"#,
+        ] {
+            interpretation.decode(event);
+        }
+        assert_eq!(
+            finish(interpretation)
+                .outcome
+                .unwrap()
+                .final_message
+                .as_deref(),
+            Some("Security audit: incomplete"),
+            "{harness:?}"
+        );
+    }
+}
+
+#[test]
 fn completion_line_survives_background_notification() {
     let messages: Vec<_> = [Harness::Grok, Harness::Claude]
         .into_iter()

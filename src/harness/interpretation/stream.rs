@@ -2,7 +2,7 @@
 //!
 //! A result ends a turn, not necessarily the session: background sub-agents
 //! can resume it. Only the first init sets shared session fields, and only
-//! completion supplies the last result holding a completion line (otherwise
+//! completion supplies the last reply holding a completion line (otherwise
 //! the last result) and any work killed since the latest result.
 
 use std::collections::{BTreeMap, HashMap};
@@ -23,6 +23,7 @@ pub struct Stream {
     /// Cumulative totals survive later results without a complete pair.
     turns_and_cost: Option<(u64, f64)>,
     final_message: Option<String>,
+    completion_message: Option<String>,
     completed: bool,
     dialect: Dialect,
 }
@@ -214,6 +215,7 @@ impl Stream {
             init: None,
             turns_and_cost: None,
             final_message: None,
+            completion_message: None,
             completed: false,
             dialect,
         }
@@ -234,6 +236,12 @@ impl Stream {
             Dialect::Claude(_) => totals(),
             Dialect::Grok(grok) if grok.cost_known => totals().or_else(|| grok.usage.clone()),
             Dialect::Grok(grok) => grok.usage.clone(),
+        }
+    }
+
+    fn remember_completion(&mut self, message: &str) {
+        if has_completion_line(message) {
+            self.completion_message = Some(message.to_string());
         }
     }
 
@@ -290,6 +298,11 @@ impl Stream {
             Some("assistant") => {
                 if event["parent_tool_use_id"].is_null() {
                     self.completed = false;
+                    if !assistant_error(event)
+                        && let Some(message) = message_text(event)
+                    {
+                        self.remember_completion(&message);
+                    }
                 }
                 if let Dialect::Claude(claude) = &mut self.dialect {
                     claude.assistant(event);
@@ -316,15 +329,10 @@ impl Stream {
                 {
                     return Vec::new();
                 }
-                let message = event["result"].as_str();
-                if message.is_some_and(has_completion_line)
-                    || !self
-                        .final_message
-                        .as_deref()
-                        .is_some_and(has_completion_line)
-                {
-                    self.final_message = message.map(String::from);
+                if let Some(message) = event["result"].as_str() {
+                    self.remember_completion(message);
                 }
+                self.final_message = event["result"].as_str().map(String::from);
                 self.completed = true;
                 if let (Some(turns), Some(cost)) = (
                     event["num_turns"].as_u64(),
@@ -383,7 +391,13 @@ impl Decoder for Stream {
         let mut ended = Ended {
             session_id: self.init.and_then(|init| init.session_id),
             killed: Vec::new(),
-            final_message: self.final_message,
+            // A handoff can precede the sole result, but cannot supply a
+            // missing terminal result itself.
+            final_message: if self.completed {
+                self.completion_message.or(self.final_message)
+            } else {
+                self.final_message
+            },
             completed: self.completed,
         };
         let (failed, diagnostic) = match self.dialect {
