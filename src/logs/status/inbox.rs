@@ -35,6 +35,7 @@ pub(crate) struct Row {
     pub logging: bool,
     pub log_growth: String,
     pub selector: String,
+    pub can_dismiss: bool,
     pub logs_url: String,
     pub subject: String,
     /// The issue's `https://` address, which the subject links to.
@@ -209,6 +210,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 logging: false,
                 log_growth: String::new(),
                 selector: Observation::History(command).selector().unwrap_or_default(),
+                can_dismiss: false,
                 logs_url: command
                     .command_log
                     .as_ref()
@@ -268,6 +270,8 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     row.state = item.state_word().into();
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
+                    row.can_dismiss = matches!(item.command, Observation::Record(_))
+                        && matches!(group, Group::NeedsYou | Group::ReadyForReview);
                     row.left = item
                         .dismissal
                         .as_ref()
@@ -371,6 +375,7 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
         logging: live && !matches!(command.health, Some(Health::Silent { .. })),
         log_growth: format!("{log_length}:{session_length}"),
         selector: Observation::Record(command).selector().unwrap_or_default(),
+        can_dismiss: false,
         logs_url: logs_url(&command.record_path, root),
         subject,
         subject_url: issue_url(facts.issue.as_ref()),

@@ -99,6 +99,7 @@ function morph(html) {
   document.title = next.title;
   document.querySelector('link[rel="icon"]').href = next.querySelector('link[rel="icon"]').getAttribute("href");
   markNew();
+  showDismissal();
   activity();
   loadLook();
   for (const row of document.querySelectorAll('.command[data-logging="true"]')) {
@@ -186,16 +187,16 @@ const jumps = document.querySelector('#jumps');
 let selected = null;
 let peekCommand = null;
 let pendingPeek = null;
-// Details can be replaced or reopened while a dismissal request is in flight.
+// Inbox rows and details can be replaced while a dismissal request is in flight.
 const dismissals = new Map();
 
 function showDismissal() {
-  const form = content.querySelector('form[data-dismiss]');
-  if (!form) return;
-  const state = dismissals.get(form.elements.command.value);
-  form.querySelector('button').disabled = state?.pending ?? false;
-  form.querySelector('[role="status"]').textContent = state && (state.pending || state.action === form.action)
-    ? state.message : '';
+  for (const form of document.querySelectorAll('form[data-dismiss]')) {
+    const state = dismissals.get(form.elements.command.value);
+    form.querySelector('button').disabled = state?.pending ?? false;
+    form.querySelector('[role="status"]').textContent = state && (state.pending || state.action === form.action)
+      ? state.message : '';
+  }
 }
 
 function initializeSpanTree() { return initSpanTree({
@@ -333,7 +334,7 @@ content.addEventListener('click', async event => {
     status.textContent = 'Selected; copy it with your keyboard.';
   }
 });
-content.addEventListener('submit', async event => {
+document.addEventListener('submit', async event => {
   const form = event.target.closest('form[data-dismiss]');
   if (!form) return;
   event.preventDefault();

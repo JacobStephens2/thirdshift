@@ -138,7 +138,9 @@ and Ready tag colours, Landing keeps Working's live-activity marker, and a live
 row given a Stop shows Stopping with a drifting stripe until it ends. Pause
 motion and reduced motion hold the stripe still.
 
-Dismiss and Undo in Command details immediately show “Dismissing…” or
+Dismiss is available directly on Inbox rows in Needs you and Ready for review,
+as well as in Command details. Undo remains in Command details. Both immediately
+show “Dismissing…” or
 “Taking back dismissal…” while the request is pending. The button stays disabled
 through live updates to prevent duplicate submissions. A failed request shows
 the error and enables the button for another try.

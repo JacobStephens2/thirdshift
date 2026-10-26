@@ -1152,13 +1152,13 @@ Command, its issue, labels, Claim and pull request stay as they are, and nothing
 is written to GitHub. The Activity log records each dismissal and each one taken
 back, naming the Unix user and the CLI. `dismiss --json` reports what it did.
 
-In the Console, any signed-in account can click **Dismiss** in a waiting row's
-Command details, beside Stop when available. One click dismisses, with no
-confirmation page. A dismissed row offers **Undo** there. While either request
-is pending, Command details shows “Dismissing…” or “Taking back dismissal…”
-and disables the button, including through live updates. A failed request shows
-the error and lets you retry. Each button shows its CLI form beside it. Both
-posts require a session and a valid CSRF token, open
+In the Console, any signed-in account can click **Dismiss** directly on a waiting
+Inbox row or in its Command details, beside Stop when available. One click
+dismisses, with no confirmation page. A dismissed row offers **Undo** in Command
+details. While either request is pending, its buttons show “Dismissing…” or
+“Taking back dismissal…” and stay disabled, including through live updates.
+A failed request shows the error and lets you retry. Command details shows each
+button's CLI form beside it. Both posts require a session and a valid CSRF token, open
 pages update together, and the Activity log names the account's email and the
 Console.
 

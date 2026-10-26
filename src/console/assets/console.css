@@ -28,6 +28,8 @@ summary .count { margin-left: 12px; color: var(--dim); font-size: 13px; }
 .age { margin-left: auto; }
 .issue-title { flex: 1 1 160px; }
 .command p { margin: 4px 0 0; }
+.row-actions { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.row-actions form { margin: 4px 0 0; }
 .now { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .command[data-state="Died"], .command[data-state="Failed"], .command[data-state="Silent"], .command[data-state="Finding"], .command[data-state="Triage"] { background: var(--panel); border-left: 3px solid var(--urgent); color: var(--urgent-text); }
 .command[data-state="Slow"] { border-left: 3px solid var(--look); color: var(--look-text); }
