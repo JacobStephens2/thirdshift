@@ -334,16 +334,18 @@ fn pause_excluded_by_saved_bar_still_pauses_after_terminal_publication() {
 
 #[test]
 fn retained_retryable_pause_resumes_with_the_same_budget_and_new_score() {
-    let fixture = Fixture::new(2);
-    let paused = Scripted::new(vec![step("void", Some(VoidCause::UsageLimit), false)]);
-    assert!(fixture.run(&paused).is_err());
-    assert_eq!(fixture.pending()["score"]["passed"], false);
-    let resumed = Scripted::new(vec![step("succeeded", None, true)]);
-    fixture.run(&resumed).unwrap();
-    resumed.assert_indices(&[1]);
-    assert_eq!(fixture.result()["outcome"], "succeeded");
-    assert_eq!(fixture.result()["score"]["passed"], true);
-    assert_eq!(fixture.result()["attempts"].as_array().unwrap().len(), 2);
+    for cause in [VoidCause::UsageLimit, VoidCause::RateLimit] {
+        let fixture = Fixture::new(2);
+        let paused = Scripted::new(vec![step("void", Some(cause), false)]);
+        assert!(fixture.run(&paused).is_err());
+        assert_eq!(fixture.pending()["score"]["passed"], false);
+        let resumed = Scripted::new(vec![step("succeeded", None, true)]);
+        fixture.run(&resumed).unwrap();
+        resumed.assert_indices(&[1]);
+        assert_eq!(fixture.result()["outcome"], "succeeded");
+        assert_eq!(fixture.result()["score"]["passed"], true);
+        assert_eq!(fixture.result()["attempts"].as_array().unwrap().len(), 2);
+    }
 }
 
 #[test]

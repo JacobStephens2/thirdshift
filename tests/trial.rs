@@ -529,6 +529,32 @@ touch '{}'
 }
 
 #[test]
+fn a_codex_capacity_error_is_a_rate_limited_void_trial() {
+    let scenario = Scenario::new();
+    let request = request(&scenario);
+    let mut document: Value = serde_json::from_slice(&fs::read(&request).unwrap()).unwrap();
+    document["harness"] = json!("codex");
+    fs::write(&request, serde_json::to_vec(&document).unwrap()).unwrap();
+    scenario.agent_does(
+        r#"
+printf 'Selected model is at capacity. Please try a different model.' > "$FAKE_CODEX_ERROR"
+exit 1
+"#,
+    );
+
+    let result = run_trial(&scenario, &request, &[]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let output: Value = serde_json::from_str(&result.stdout).unwrap();
+    assert_eq!(output["outcome"], "void", "{output}");
+    assert_eq!(output["void_cause"], "rate_limit", "{output}");
+    assert_eq!(
+        output["cause"],
+        "codex exited 1: Selected model is at capacity. Please try a different model."
+    );
+}
+
+#[test]
 fn unavailable_sessions_and_provider_limits_are_void_trials() {
     for (script, expected, diagnostic) in [
         (
