@@ -23,7 +23,10 @@ fn ended_rows_distinguish_finish_age_from_run_duration() {
         "{html}"
     );
     assert!(
-        html.contains(&format!("Ended {}", super::local_minute(&end.to_rfc3339()))),
+        html.contains(&format!(
+            "Ended {}",
+            super::support::local_minute(&end.to_rfc3339())
+        )),
         "{html}"
     );
     assert!(!html.contains("2 hr 20 min"), "{html}");
@@ -77,7 +80,7 @@ fn finish_instants_survive_offsets_and_nested_history() {
     assert!(
         html.contains(&format!(
             "<time datetime=\"{outer_end}\">Ended {}",
-            super::local_minute(outer_end)
+            super::support::local_minute(outer_end)
         )),
         "{html}"
     );
@@ -86,7 +89,7 @@ fn finish_instants_survive_offsets_and_nested_history() {
     assert!(
         nested.contains(&format!(
             "<time datetime=\"{child_end}\">Ended {}",
-            super::local_minute(child_end)
+            super::support::local_minute(child_end)
         )),
         "{nested}"
     );
@@ -146,7 +149,7 @@ fn retained_activity_finishes_show_dates_and_missing_finishes_stay_unknown() {
     assert!(
         html.contains(&format!(
             "<time datetime=\"2026-01-01T23:59:00-04:00\">Ended {}",
-            super::local_minute("2026-01-01T23:59:00-04:00")
+            super::support::local_minute("2026-01-01T23:59:00-04:00")
         )),
         "{html}"
     );

@@ -181,14 +181,6 @@ fn configure(home: &Path) {
 
 /// How the Console shows `rfc3339` up to its zone name: this machine's date
 /// and time to the minute, as in `Ended 2026-10-23 19:03 EDT`.
-fn local_minute(rfc3339: &str) -> String {
-    chrono::DateTime::parse_from_rfc3339(rfc3339)
-        .unwrap()
-        .with_timezone(&chrono::Local)
-        .format("%Y-%m-%d %H:%M ")
-        .to_string()
-}
-
 /// One Inbox section's markup, found by its group name.
 fn section<'a>(page: &'a str, group: &str) -> &'a str {
     page.split(&format!("class=\"group\" data-group=\"{group}\""))
@@ -974,7 +966,7 @@ fn inbox_and_command_details_show_instants_in_local_minutes() {
     assert!(
         html.contains(&format!(
             "quota resets at {}",
-            local_minute("2026-10-24T03:28:16Z")
+            support::local_minute("2026-10-24T03:28:16Z")
         )),
         "{html}"
     );
@@ -993,7 +985,10 @@ fn inbox_and_command_details_show_instants_in_local_minutes() {
     assert_eq!(raw_instants(&peek), Vec::<String>::new(), "{peek}");
     let started = fixture["started_at"].as_str().unwrap();
     assert!(
-        peek.contains(&format!("<dt>started at</dt><dd>{}", local_minute(started))),
+        peek.contains(&format!(
+            "<dt>started at</dt><dd>{}",
+            support::local_minute(started)
+        )),
         "{peek}"
     );
 }
