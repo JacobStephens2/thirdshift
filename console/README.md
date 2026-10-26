@@ -174,8 +174,9 @@ it as Commands start and end.
 When no Commands are live on this machine, the Inbox explains that above its
 sections. It points to ended problems in Needs you and pull requests in Ready
 for review, and offers the last recorded skipped Pass reasons from Activity logs
-under **Last recorded skipped Passes**, folded closed on each page load. Open it
-to read the reasons; live updates keep it open while you read.
+under **Last recorded skipped Passes**, and when each Pass last fired under
+**Last fired Passes**, both folded closed on each page load. Open either to
+read it; live updates keep it open while you read.
 These reasons are retained observations, not a check that the scheduler still
 runs. With none recorded, it says so. Cron jobs and the scheduler's output help
 diagnose launch failures; the Console never starts work. A live Command in

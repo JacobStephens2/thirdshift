@@ -657,3 +657,30 @@ fn sections_are_folders_chosen_by_the_url_and_hidden_sections_are_not_offered() 
     );
     assert_eq!(shown(&html), ["done"], "{html}");
 }
+
+#[test]
+fn idle_inbox_folds_last_fired_passes_closed_on_load() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let root = home.path().join(".thirdshift/logs/acme/widgets");
+    fs::create_dir_all(&root).unwrap();
+    fs::write(root.join("pickup.last-fired"), chrono::Utc::now().to_rfc3339()).unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/").text().unwrap();
+    let notice = html
+        .split("aria-label=\"No running Commands\"")
+        .nth(1)
+        .expect(&html)
+        .split("</section>")
+        .next()
+        .unwrap();
+    let starts = notice
+        .split("<details id=\"pass-starts\"><summary>Last fired Passes:</summary>")
+        .nth(1)
+        .expect(notice)
+        .split("</details>")
+        .next()
+        .unwrap();
+    assert!(starts.contains("Pickup last fired"), "{starts}");
+    assert!(starts.contains("on acme/widgets"), "{starts}");
+}

@@ -53,7 +53,11 @@
         <ul>{% for pass in inbox.idle_passes %}<li>{{ pass|linkify }}</li>{% endfor %}</ul>
       </details>
       {% endif %}
-      <ul>{% for pass in inbox.pass_starts %}<li>{% include "console/pass_start.html" %}</li>{% endfor %}</ul>
+      {% if !inbox.pass_starts.is_empty() %}
+      <details id="pass-starts"><summary>Last fired Passes:</summary>
+        <ul>{% for pass in inbox.pass_starts %}<li>{% include "console/pass_start.html" %}</li>{% endfor %}</ul>
+      </details>
+      {% endif %}
       <p>Check <a href="/cronjobs">Cron jobs</a> and the scheduler's output for launch failures. Activity logs record skipped Passes; <code>thirdshift status</code> shows their reasons. The Console does not start work.</p>
     </section>
     {% endif %}
