@@ -6,6 +6,7 @@ use std::path::Path;
 use super::{age, stage_text, ticket_text};
 use crate::config::UserConfig;
 use crate::logs::command_record::Issue;
+use crate::logs::dismiss::Action as DismissAction;
 use crate::logs::pass_starts::PassStart;
 use crate::logs::reading::{Command, Entry, Group, Health, Observation, Snapshot};
 
@@ -270,8 +271,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     row.state = item.state_word().into();
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
-                    row.can_dismiss = matches!(item.command, Observation::Record(_))
-                        && matches!(group, Group::NeedsYou | Group::ReadyForReview);
+                    row.can_dismiss = DismissAction::for_row(item) == Some(DismissAction::Dismiss);
                     row.left = item
                         .dismissal
                         .as_ref()
