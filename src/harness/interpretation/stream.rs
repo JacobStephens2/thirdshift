@@ -2,7 +2,8 @@
 //!
 //! A result ends a turn, not necessarily the session: background sub-agents
 //! can resume it. Only the first init sets shared session fields, and only
-//! completion supplies the last result and any work killed since that result.
+//! completion supplies the last result holding a completion line (otherwise
+//! the last result) and any work killed since the latest result.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -13,6 +14,7 @@ use super::{
     TurnOutcome,
 };
 use crate::progress::{bash, shorten};
+use crate::prompt;
 mod events;
 
 pub struct Stream {
@@ -116,6 +118,31 @@ fn message_text(event: &Value) -> Option<String> {
         .filter_map(|block| nonempty_text(&block["text"]))
         .collect();
     (!text.is_empty()).then(|| text.join("\n"))
+}
+
+/// Recognize handoffs here, leaving their payload validation to each reader.
+/// Keep the whole reply: Architecture reviews also carry a strength line.
+fn has_completion_line(message: &str) -> bool {
+    let line = message.trim_end().lines().last().unwrap_or("").trim();
+    matches!(
+        line,
+        prompt::BUG_REPRODUCED_LINE
+            | prompt::AUDIT_COMPLETE_LINE
+            | prompt::AUDIT_INCOMPLETE_LINE
+            | prompt::CLOSE_CHECK_PASSES_LINE
+    ) || [
+        prompt::BUG_NOT_REPRODUCED_LINE,
+        prompt::PLAN_LINE,
+        prompt::IDEA_LINE,
+        prompt::ALREADY_FILED_LINE,
+        prompt::CLOSE_CHECK_FAILS_PREFIX,
+        prompt::SECURITY_FIX_LINE,
+        prompt::SECURITY_FIX_SPEC_LINE,
+        "Security review: ",
+        "Security reproduction: ",
+    ]
+    .iter()
+    .any(|prefix| line.starts_with(prefix))
 }
 
 impl Dialect {
@@ -289,7 +316,15 @@ impl Stream {
                 {
                     return Vec::new();
                 }
-                self.final_message = event["result"].as_str().map(String::from);
+                let message = event["result"].as_str();
+                if message.is_some_and(has_completion_line)
+                    || !self
+                        .final_message
+                        .as_deref()
+                        .is_some_and(has_completion_line)
+                {
+                    self.final_message = message.map(String::from);
+                }
                 self.completed = true;
                 if let (Some(turns), Some(cost)) = (
                     event["num_turns"].as_u64(),

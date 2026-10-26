@@ -239,6 +239,125 @@ fn claude_completion_keeps_the_last_result_and_the_last_complete_usage() {
     );
 }
 
+#[test]
+fn completion_line_survives_background_notification() {
+    let messages: Vec<_> = [Harness::Grok, Harness::Claude]
+        .into_iter()
+        .map(|harness| {
+            let completion = after_background_notification(
+                harness,
+                "PR ready.\nBug reproduced: fixed",
+                "That background failure was already handled. The PR is unchanged.",
+            );
+            completion.outcome.unwrap().final_message
+        })
+        .collect();
+    assert_eq!(
+        messages,
+        vec![Some("PR ready.\nBug reproduced: fixed".to_string()); 2]
+    );
+}
+
+#[test]
+fn completion_handoffs_survive_late_replies_and_later_handoffs_win() {
+    for harness in [Harness::Grok, Harness::Claude] {
+        for message in [
+            "Bug not reproduced: https://github.com/acme/widgets/issues/7#issuecomment-42",
+            "Recommendation strength: Strong\nArchitecture review plan: https://github.com/acme/widgets/issues/8",
+            "Architecture review idea: https://github.com/acme/widgets/issues/9",
+            "Architecture review already filed: https://github.com/acme/widgets/issues/10",
+            "Security audit: complete",
+            "Security audit: incomplete",
+            "Security close check: passes",
+            "Security close check: fails: test still fails",
+            "Security fix Ticket: https://github.com/acme/widgets/issues/11",
+            "Security fix Spec: https://github.com/acme/widgets/issues/12",
+            "Security reproduction: reproduced high single",
+            "Security reproduction: not reproduced",
+        ] {
+            for later in ["Background task handled.", ""] {
+                let ended = after_background_notification(harness, message, later)
+                    .outcome
+                    .unwrap();
+                assert_eq!(
+                    ended.require_final_message("fixture").unwrap(),
+                    message,
+                    "{harness:?}"
+                );
+            }
+            let ended = after_background_notification(harness, "Bug reproduced: fixed", message)
+                .outcome
+                .unwrap();
+            assert_eq!(ended.final_message.as_deref(), Some(message), "{harness:?}");
+        }
+    }
+}
+
+#[test]
+fn security_review_reads_its_completion_line_after_a_background_notification() {
+    let message = concat!(
+        "Reviewed.\n",
+        r#"Security review: {"unaddressed_count":1,"findings":["Cross-tenant read"],"pre_existing_count":0}"#
+    );
+    for harness in [Harness::Grok, Harness::Claude] {
+        let ended = after_background_notification(harness, message, "Background task handled.")
+            .outcome
+            .unwrap();
+        let review =
+            crate::security::review::Review::from_final_message(ended.final_message.as_deref())
+                .unwrap();
+        assert_eq!(review.findings, ["Cross-tenant read"]);
+    }
+}
+
+#[test]
+fn only_root_result_handoffs_count_and_later_failures_still_fail() {
+    let mut interpretation = stream(Harness::Claude, "");
+    for event in [
+        r#"{"type":"result","subtype":"success","result":"Bug reproduced: fixed"}"#,
+        r#"{"type":"result","subtype":"success","parent_tool_use_id":"child","result":"Security audit: incomplete"}"#,
+    ] {
+        interpretation.decode(event);
+    }
+    assert_eq!(
+        finish(interpretation)
+            .outcome
+            .unwrap()
+            .final_message
+            .as_deref(),
+        Some("Bug reproduced: fixed")
+    );
+    for harness in [Harness::Grok, Harness::Claude] {
+        let mut interpretation = stream(harness, "");
+        for event in [
+            r#"{"type":"result","subtype":"success","result":"Bug reproduced: fixed"}"#,
+            r#"{"type":"result","subtype":"error","is_error":true,"result":"Late turn failed"}"#,
+        ] {
+            interpretation.decode(event);
+        }
+        assert!(finish(interpretation).outcome.is_err(), "{harness:?}");
+    }
+}
+
+fn after_background_notification(
+    harness: Harness,
+    earlier: &str,
+    later: &str,
+) -> interpretation::Completion {
+    let mut interpretation = stream(harness, "");
+    for event in [
+        serde_json::json!({"type": "result", "subtype": "success", "result": earlier}),
+        serde_json::json!({
+            "type": "system", "subtype": "task_notification", "task_id": "test",
+            "status": "failed", "summary": "The earlier background test failed."
+        }),
+        serde_json::json!({"type": "result", "subtype": "success", "result": later}),
+    ] {
+        interpretation.condense(&event.to_string());
+    }
+    finish(interpretation)
+}
+
 pub(crate) fn stream(harness: Harness, prompt: &str) -> interpretation::Interpretation {
     // A missing working directory makes optional OpenCode acquisition fail
     // locally, so in-process fallback tests never invoke a machine's CLI.

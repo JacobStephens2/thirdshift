@@ -100,6 +100,7 @@ thirdshift --no-merge https://github.com/acme/widgets/issues/7</code></pre>
       <summary class="sec-head"><p class="eyebrow">03 / What the agent does</p><h2 id="session-title">Let the agent implement and review</h2></summary>
       <div class="guide-content" id="session">
       <p>thirdshift starts a headless session in the selected Harness, in the Worktree. The <strong>Session prompt</strong> supplies the issue, Base branch, Issue branch and review instructions. <strong>Factory skills</strong> are linked where that Harness discovers them. The opening session carries the change from implementation through review to a committed branch and pull request.</p>
+      <p>On Claude and Grok, a Session's completion line survives later background-task notifications. A later reply carrying a completion line takes precedence.</p>
       <figure class="guide-diagram grid-bg">
         <figcaption>Inside the opening agent session</figcaption>
         <ol class="guide-flow">
