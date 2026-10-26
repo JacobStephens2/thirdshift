@@ -8,6 +8,7 @@ const { join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
 const { chromium } = require("playwright");
 const { record: traceRecord } = require("./session-trace.cjs");
+const { replaceRecord } = require("./records.cjs");
 
 let home, server, exited, browser, origin;
 before(async () => {
@@ -65,6 +66,62 @@ async function pageFor(t, options) {
   return page;
 }
 
+test('Inbox row Dismiss works by keyboard without opening Command details', async t => {
+  const page = await pageFor(t);
+  const observer = await pageFor(t);
+  for (const current of [page, observer]) await current.goto(`${origin}/?page=inbox`);
+  const waiting = '[data-group="needs you"] .command';
+  const row = page.locator(waiting).first();
+  const id = await row.getAttribute('id');
+  const count = await page.locator(waiting).count();
+  await page.evaluate(() => { window.sameDocument = true; });
+  const dismiss = row.getByRole('button', { name: 'Dismiss', exact: true });
+  await dismiss.waitFor({ timeout: 2000 });
+  await dismiss.focus();
+  await page.keyboard.press('Enter');
+  for (const current of [page, observer]) {
+    await current.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count - 1, { waiting, count });
+  }
+  assert.equal(await page.locator('#peek').isVisible(), false);
+  assert.equal(await page.evaluate(() => window.sameDocument), true);
+  await page.locator('[data-group="done"]').evaluate(section => { section.open = true; });
+  await page.locator(`[id="${id}"] .peek-link`).click();
+  await page.locator('#peek-content').getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count, { waiting, count });
+});
+
+for (const [outcome, group] of [['failed', 'needs you'], ['ready for review', 'ready for review']]) {
+  test(`Inbox row Dismiss works in ${group} without JavaScript on a phone`, async t => {
+    const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+    const recordPath = join(directory, '223-fixture.command.json');
+    const fixture = JSON.parse(await readFile(join(directory, '1-fixture.command.json'), 'utf8'));
+    fixture.issue = { number: 223, url: 'https://github.com/acme/widgets/issues/223', title: 'Dismiss from the Inbox' };
+    fixture.outcome = outcome;
+    fixture.cause = null;
+    fixture.pull_request = outcome === 'ready for review' ? 'https://github.com/acme/widgets/pull/224' : null;
+    await writeFile(recordPath, JSON.stringify(fixture));
+    t.after(async () => {
+      await rm(recordPath, { force: true });
+      await rm(join(directory, '223-fixture.command.dismiss.json'), { force: true });
+    });
+    const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
+    await page.goto(`${origin}/?page=inbox`);
+    const section = page.locator(`[data-group="${group}"]`);
+    if (group === 'ready for review') await section.locator('summary').click();
+    const row = section.locator('.command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
+    await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await page.waitForURL(`${origin}/`);
+    assert.equal(await section.locator('.subject a[href$="/issues/223"]').count(), 0);
+    assert.equal(await page.locator('#peek').isVisible(), false);
+    await page.locator('[data-group="done"] > summary').click();
+    const dismissed = page.locator('[data-group="done"] .command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
+    assert.equal(await dismissed.getByRole('button', { name: 'Dismiss', exact: true }).count(), 0);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    await dismissed.locator('.peek-link').click();
+    await page.getByRole('button', { name: 'Undo', exact: true }).waitFor();
+  });
+}
+
 test('Dismiss keeps Undo in Command details and updates another open Inbox', async t => {
   const page = await pageFor(t);
   const observer = await pageFor(t);
@@ -72,15 +129,15 @@ test('Dismiss keeps Undo in Command details and updates another open Inbox', asy
   const waiting = '[data-group="needs you"] .command';
   const count = await page.locator(waiting).count();
   await page.locator(`${waiting} .peek-link`).first().click();
-  await page.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
+  await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   await page.evaluate(() => { window.sameDocument = true; });
-  await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
-  await page.getByRole('button', { name: 'Undo', exact: true }).waitFor({ timeout: 3000 });
+  await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await page.locator('#peek-content').getByRole('button', { name: 'Undo', exact: true }).waitFor({ timeout: 3000 });
   assert.equal(await page.evaluate(() => window.sameDocument), true);
   await observer.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count - 1, { waiting, count });
   assert.match(await page.locator('#peek-content').textContent(), /thirdshift dismiss .* --undo/);
-  await page.getByRole('button', { name: 'Undo', exact: true }).click();
-  await page.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
+  await page.locator('#peek-content').getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   await observer.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count, { waiting, count });
   assert.equal(await page.evaluate(() => window.sameDocument), true);
 });
@@ -89,7 +146,7 @@ test('Dismiss and Undo show pending feedback through live refresh and prevent du
   const page = await pageFor(t);
   await page.goto(origin);
   await page.locator('[data-group="needs you"] .peek-link').first().click();
-  const form = page.locator('form[data-dismiss]');
+  const form = page.locator('#peek-content form[data-dismiss]');
   await form.waitFor();
   const recordPath = await form.locator('[name="command"]').inputValue();
   const original = await readFile(recordPath, 'utf8');
@@ -107,58 +164,63 @@ test('Dismiss and Undo show pending feedback through live refresh and prevent du
         await route.continue();
       });
       try {
-        await page.getByRole('button', { name: label, exact: true }).click();
-        await page.waitForFunction(pending => document.querySelector('form[data-dismiss] [role="status"]').textContent === pending, pending, { timeout: 2000 });
+        if (label === 'Dismiss') {
+          const row = page.locator('.command').filter({ has: page.locator(`form[data-dismiss] input[value="${recordPath}"]`) });
+          await row.getByRole('button', { name: label, exact: true }).click();
+        } else {
+          await page.locator('#peek-content').getByRole('button', { name: label, exact: true }).click();
+        }
+        await page.waitForFunction(pending => document.querySelector('#peek-content form[data-dismiss] [role="status"]').textContent === pending, pending, { timeout: 2000 });
         assert.equal(await form.locator('button').isDisabled(), true);
         const updated = JSON.parse(original);
         updated.cause = `Live refresh while ${label} is pending`;
-        await writeFile(recordPath, JSON.stringify(updated));
+        await replaceRecord(recordPath, JSON.stringify(updated));
         await page.locator('#peek-content').getByText(updated.cause, { exact: true }).waitFor();
         assert.equal(await form.getByRole('status').textContent(), pending);
         assert.equal(await form.locator('button').isDisabled(), true);
         // A second submit event must be ignored even if a browser dispatches it directly.
         await form.evaluate(form => form.requestSubmit());
         release();
-        await page.getByRole('button', { name: next, exact: true }).waitFor({ timeout: 3000 });
-        await page.waitForFunction(() => !document.querySelector('form[data-dismiss] button').disabled);
+        await page.locator('#peek-content').getByRole('button', { name: next, exact: true }).waitFor({ timeout: 3000 });
+        await page.waitForFunction(() => !document.querySelector('#peek-content form[data-dismiss] button').disabled);
         assert.equal(requests, 1);
       } finally {
         release();
         await page.unrouteAll({ behavior: 'wait' });
       }
     }
-  } finally { await writeFile(recordPath, original); }
+  } finally { await replaceRecord(recordPath, original); }
 });
 
 test('A failed Dismiss shows the error through live refresh and allows retry', async t => {
   const page = await pageFor(t);
   await page.goto(origin);
   await page.locator('[data-group="needs you"] .peek-link').first().click();
-  const form = page.locator('form[data-dismiss]');
+  const form = page.locator('#peek-content form[data-dismiss]');
   await form.waitFor();
   const recordPath = await form.locator('[name="command"]').inputValue();
   const original = await readFile(recordPath, 'utf8');
   await page.route(`${origin}/dismiss`, route => route.fulfill({ status: 409, body: 'Please try again' }));
   try {
-    await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).click();
     const error = 'Could not save the dismissal: Please try again';
     await form.getByRole('status').getByText(error, { exact: true }).waitFor();
     assert.equal(await form.locator('button').isEnabled(), true);
     const updated = JSON.parse(original);
     updated.cause = 'Live refresh after failed dismissal';
-    await writeFile(recordPath, JSON.stringify(updated));
+    await replaceRecord(recordPath, JSON.stringify(updated));
     await page.locator('#peek-content').getByText(updated.cause, { exact: true }).waitFor();
     assert.equal(await form.getByRole('status').textContent(), error);
     await page.unrouteAll({ behavior: 'wait' });
-    await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
-    await page.getByRole('button', { name: 'Undo', exact: true }).waitFor();
-    await page.waitForFunction(() => !document.querySelector('form[data-dismiss] button').disabled);
+    await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await page.locator('#peek-content').getByRole('button', { name: 'Undo', exact: true }).waitFor();
+    await page.waitForFunction(() => !document.querySelector('#peek-content form[data-dismiss] button').disabled);
     assert.equal(await form.getByRole('status').textContent(), '');
-    await page.getByRole('button', { name: 'Undo', exact: true }).click();
-    await page.getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
+    await page.locator('#peek-content').getByRole('button', { name: 'Undo', exact: true }).click();
+    await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
   } finally {
     await page.unrouteAll({ behavior: 'wait' });
-    await writeFile(recordPath, original);
+    await replaceRecord(recordPath, original);
   }
 });
 
@@ -305,7 +367,7 @@ test("existing refresh advances finish age while keeping its recorded instant", 
   fixture.started_at = new Date(Date.parse(end) - 140 * 60000).toISOString();
   fixture.ended_at = end;
   fixture.cause = 'finish refresh fixture';
-  await writeFile(path, JSON.stringify(fixture));
+  await replaceRecord(path, JSON.stringify(fixture));
   t.after(() => rm(path, { force: true }));
   const page = await pageFor(t);
   await page.goto(origin);
@@ -365,7 +427,7 @@ test("Run metrics show present and missing signals in details, including at 390 
           fixture.outcome = null;
           fixture.ended_at = null;
         }
-        await writeFile(path, JSON.stringify(fixture));
+        await replaceRecord(path, JSON.stringify(fixture));
         await page.goto(origin);
         const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#1$/ }) });
         await row.locator('.peek-link').click();
@@ -410,7 +472,7 @@ test("Run metrics show present and missing signals in details, including at 390 
       }
       await page.close();
     }
-  } finally { await writeFile(path, original); }
+  } finally { await replaceRecord(path, original); }
 });
 
 test("the Inbox works without JavaScript and Focus auto follows system light and dark", async t => {
@@ -424,23 +486,30 @@ test("the Inbox works without JavaScript and Focus auto follows system light and
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(18, 18, 20)");
 });
 
-test("idle explanations stay visible with hidden sections, on phones and without JavaScript", async t => {
+test("idle skipped Passes start folded and can be opened on phones with or without JavaScript", async t => {
   const config = join(home, '.thirdshift/config.toml');
   const activity = join(home, '.thirdshift/logs/acme/widgets/activity.log');
   const ready = join(home, '.thirdshift/logs/acme/widgets/commands/issue/203-fixture.command.json');
   const fixture = JSON.parse(await readFile(join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json'), 'utf8'));
   Object.assign(fixture, { outcome: 'ready for review', pull_request: 'https://github.com/acme/widgets/pull/203' });
   fixture.issue.number = 203;
-  await writeFile(ready, JSON.stringify(fixture));
+  await replaceRecord(ready, JSON.stringify(fixture));
   await writeFile(config, '[console]\nport = 0\nhidden_sections = ["needs-you", "ready-for-review", "landing", "working", "done", "resolved"]\n');
   await writeFile(activity, '2026-01-01 12:00:00 Pickup run skipped: no Ready issue on acme/widgets <script>unsafe</script>\n');
   try {
     for (const javaScriptEnabled of [false, true]) {
       const page = await pageFor(t, { javaScriptEnabled, viewport: { width: 390, height: 844 } });
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
       await page.goto(origin);
       const notice = page.getByRole('region', { name: 'No running Commands' });
       assert.equal(await notice.isVisible(), true);
-      assert.match(await notice.textContent(), /Pickup run idle on acme\/widgets: no Ready issue/);
+      const reason = notice.getByText('Pickup run idle on acme/widgets: no Ready issue', { exact: false });
+      await reason.waitFor({ state: 'hidden' });
+      const summary = notice.locator('summary').filter({ hasText: 'Last recorded skipped Passes:' });
+      await summary.focus();
+      await page.keyboard.press('Enter');
+      await reason.waitFor({ state: 'visible' });
       assert.equal(await notice.locator('script').count(), 0);
       for (const [label, section] of [['Needs you', 'needs-you'], ['Ready for review', 'ready-for-review']]) {
         assert.equal(await notice.getByRole('link', { name: label, exact: true }).count(), 0, 'hidden sections must not have dead links');
@@ -449,12 +518,48 @@ test("idle explanations stay visible with hidden sections, on phones and without
       assert.equal(await notice.getByRole('link', { name: 'Cron jobs', exact: true }).getAttribute('href'), '/cronjobs');
       assert.equal(await page.locator('#inbox > details:visible').count(), 0);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      if (javaScriptEnabled) {
+        await page.evaluate(() => { window.visitMarker = 'same idle Inbox'; });
+        await writeFile(activity, '2026-01-01 12:01:00 Pickup run skipped: Claim limit reached\n');
+        const updated = notice.getByText('Pickup run idle on acme/widgets: Claim limit reached', { exact: true });
+        await updated.waitFor({ state: 'visible' });
+        assert.equal(await page.evaluate(() => window.visitMarker), 'same idle Inbox');
+        await summary.click();
+        await updated.waitFor({ state: 'hidden' });
+        await writeFile(activity, '2026-01-01 12:02:00 Pickup run skipped: no Ready issue on acme/widgets\n');
+        await reason.waitFor({ state: 'attached' });
+        await reason.waitFor({ state: 'hidden' });
+        await summary.click();
+        await reason.waitFor({ state: 'visible' });
+      }
+      assert.deepEqual(errors, []);
+      await page.reload();
+      await reason.waitFor({ state: 'hidden' });
     }
   } finally {
     await rm(activity, { force: true });
     await rm(ready, { force: true });
     await writeFile(config, '[console]\nport = 0\n');
   }
+});
+
+test("skipped Pass disclosure keeps native keyboard controls after selecting an Inbox row", async t => {
+  const activity = join(home, '.thirdshift/logs/acme/widgets/activity.log');
+  await writeFile(activity, '2026-01-01 12:00:00 Pickup run skipped: no Ready issue on acme/widgets\n');
+  t.after(() => rm(activity, { force: true }));
+  const page = await pageFor(t);
+  await page.goto(origin);
+  await page.keyboard.press('j');
+  await page.keyboard.press('j');
+  await page.locator('.command.is-selected').waitFor();
+  const notice = page.getByRole('region', { name: 'No running Commands' });
+  const reason = notice.getByText('Pickup run idle on acme/widgets: no Ready issue on acme/widgets', { exact: true });
+  await notice.locator('summary').focus();
+  await page.keyboard.press('Space');
+  await reason.waitFor({ state: 'visible' });
+  await page.keyboard.press('Enter');
+  await reason.waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#peek').isVisible(), false);
 });
 
 test("explicit Focus light and dark override the system preference", async t => {
@@ -489,7 +594,7 @@ test("push morphs keep the selected row, folds and scroll without a reload", asy
   const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
   const fixture = JSON.parse(await readFile(path, 'utf8'));
   fixture.issue.title = 'Advanced while you watched';
-  await writeFile(path, JSON.stringify(fixture));
+  await replaceRecord(path, JSON.stringify(fixture));
   await page.getByText('Advanced while you watched', { exact: true }).waitFor();
   assert.equal(await page.evaluate(() => document.activeElement === window.selectedRow && document.activeElement.matches('.command')), true);
   assert.equal(await page.evaluate(() => window.visitMarker), "same document");
@@ -514,7 +619,7 @@ test("keyboard selection and the open peek survive an Inbox push", async t => {
     await page.locator('#peek dt').first().waitFor();
     const fixture = JSON.parse(original);
     fixture.issue.title = 'Keyboard-selected Command after push';
-    await writeFile(path, JSON.stringify(fixture));
+    await replaceRecord(path, JSON.stringify(fixture));
     await row.locator('.issue-title').filter({ hasText: fixture.issue.title }).waitFor();
     await page.locator('#peek').getByText(fixture.issue.title, { exact: true }).waitFor();
     assert.equal(await row.getAttribute('id'), id);
@@ -525,7 +630,7 @@ test("keyboard selection and the open peek survive an Inbox push", async t => {
     await page.keyboard.press('g');
     await page.keyboard.press('w');
     assert.equal(await page.locator('.is-selected').evaluate(el => el.parentElement.dataset.group), 'working');
-  } finally { await writeFile(path, original); }
+  } finally { await replaceRecord(path, original); }
 });
 
 test("tab title and favicon follow Needs you through pushes", async t => {
@@ -542,11 +647,11 @@ test("tab title and favicon follow Needs you through pushes", async t => {
       fixtures.push([path, original]);
       const fixture = JSON.parse(original);
       fixture.outcome = 'merged';
-      await writeFile(path, JSON.stringify(fixture));
+      await replaceRecord(path, JSON.stringify(fixture));
     }
     await page.waitForFunction(() => document.title === '0 need you · thirdshift Console');
     assert.equal(await page.locator('link[rel="icon"]').getAttribute('href'), '/assets/favicon.svg');
-  } finally { for (const [path, original] of fixtures) await writeFile(path, original); }
+  } finally { for (const [path, original] of fixtures) await replaceRecord(path, original); }
 });
 
 test("new since the last visit survives browser storage and clears after looking", async t => {
@@ -561,7 +666,7 @@ test("new since the last visit survives browser storage and clears after looking
     fixture.issue.number = 201;
     fixture.started_at = fixture.ended_at = new Date().toISOString();
     fixture.cause = 'New problem after the last visit';
-    await writeFile(path, JSON.stringify(fixture));
+    await replaceRecord(path, JSON.stringify(fixture));
     await page.goto(origin);
     const row = page.locator('.command').filter({ has: page.locator('.subject', { hasText: /^acme\/widgets#201$/ }) });
     await row.locator('.new').waitFor();
@@ -590,10 +695,10 @@ test("cutting the open stream falls back to polling and catches up", async t => 
   try {
     const fixture = JSON.parse(original);
     fixture.issue.title = 'Caught up by polling';
-    await writeFile(path, JSON.stringify(fixture));
+    await replaceRecord(path, JSON.stringify(fixture));
     await page.getByText('Caught up by polling', { exact: true }).waitFor({ timeout: 12000 });
     assert.equal(await page.evaluate(() => window.inboxStream.readyState), 2);
-  } finally { await writeFile(path, original); }
+  } finally { await replaceRecord(path, original); }
 });
 
 for (const storage of ['blocked', 'malformed']) {
@@ -614,11 +719,11 @@ for (const storage of ['blocked', 'malformed']) {
     try {
       const fixture = JSON.parse(original);
       fixture.issue.title = `Still live with ${storage} storage`;
-      await writeFile(path, JSON.stringify(fixture));
+      await replaceRecord(path, JSON.stringify(fixture));
       await page.getByText(fixture.issue.title, { exact: true }).waitFor();
       assert.equal(await page.locator('[data-group="needs you"][open]').count(), 1);
       assert.deepEqual(errors, []);
-    } finally { await writeFile(path, original); }
+    } finally { await replaceRecord(path, original); }
   });
 }
 
@@ -638,7 +743,7 @@ for (const storage of ['blocked', 'malformed']) {
     fixture.issue.number = 202;
     const began = new Date(Date.now() - 20 * 60 * 1000).toISOString();
     fixture.stages = [{ name: 'implement', began_at: began, session_log: session }];
-    await writeFile(path, JSON.stringify(fixture));
+    await replaceRecord(path, JSON.stringify(fixture));
     await writeFile(log, 'command');
     await writeFile(session, event('session'));
     try {
@@ -687,7 +792,7 @@ for (const storage of ['blocked', 'malformed']) {
       await page.waitForFunction(id => document.getElementById(id).dataset.logging === 'true', id);
       assert.equal(await row.locator('.heartbeat').evaluate(dot => dot.getAnimations().length), 0);
       fixture.outcome = 'merged'; fixture.ended_at = new Date().toISOString();
-      await writeFile(path, JSON.stringify(fixture));
+      await replaceRecord(path, JSON.stringify(fixture));
       await page.waitForFunction(() => document.documentElement.dataset.live === 'false');
       await page.getByRole('region', { name: 'No running Commands' }).waitFor();
       await page.emulateMedia({ reducedMotion: 'no-preference' });
@@ -717,7 +822,7 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
   for (const [number, change] of Object.entries(fixtures)) {
     const path = join(dir, `${number}-fixture.command.json`);
     paths.push(path, join(dir, `${number}-fixture.log`));
-    await writeFile(path, JSON.stringify({ ...base, ...change, issue: { ...base.issue, number: Number(number), url: `https://github.com/acme/widgets/issues/${number}` } }));
+    await replaceRecord(path, JSON.stringify({ ...base, ...change, issue: { ...base.issue, number: Number(number), url: `https://github.com/acme/widgets/issues/${number}` } }));
     await writeFile(join(dir, `${number}-fixture.log`), 'command\n');
   }
   try {
@@ -753,7 +858,7 @@ test('Landing, Ready and Stopping rows carry their state, Theme tags and still-a
       assert.deepEqual([working.state, working.word, working.background, working.spin], ['live', 'live', working.bg, 'working']);
     }
     // A Stop request reaches the open Inbox through its live update.
-    await writeFile(stop, JSON.stringify({ who: 'fixture', requeue: false }));
+    await replaceRecord(stop, JSON.stringify({ who: 'fixture', requeue: false }));
     await page.waitForFunction(() => document.querySelector('.command:has(> .row-head > .subject a[href$="/issues/213"])')?.dataset.state === 'Stopping');
     assert.equal(await row(213).evaluate(node => node.closest('[data-group]').dataset.group), 'working');
     const stripe = () => row(213).evaluate(node => ({ word: node.querySelector(':scope > .row-head > .state').textContent, height: getComputedStyle(node, '::after').height, motion: getComputedStyle(node, '::after').animationName, running: node.getAnimations({ subtree: true }).length }));
@@ -782,14 +887,14 @@ test("a push keeps a Pass dispatch selected instead of its parent", async t => {
     started_at: now, ended_at: now, stages: [], session_log: null, outcome: 'failed', cause: 'Pass failure', issue_branch: null, pull_request: null
   };
   fixture.dispatched = [{ ...fixture, kind: 'Run', name: 'issue-303', issue: { number: 303, url: 'https://github.com/acme/widgets/issues/303', title: 'Dispatch before push' } }];
-  await writeFile(path, JSON.stringify(fixture));
+  await replaceRecord(path, JSON.stringify(fixture));
   try {
     const page = await pageFor(t);
     await page.goto(origin);
     const child = page.locator('.command').filter({ has: page.locator(':scope > .row-head > .subject', { hasText: /^acme\/widgets#303$/ }) });
     await child.click();
     fixture.dispatched[0].issue.title = 'Dispatch after push';
-    await writeFile(path, JSON.stringify(fixture));
+    await replaceRecord(path, JSON.stringify(fixture));
     await page.getByText('Dispatch after push', { exact: true }).waitFor();
     assert.equal(await page.evaluate(() => document.activeElement.querySelector(':scope > .row-head > .subject')?.textContent), 'acme/widgets#303');
     const ids = await page.locator('.command').evaluateAll(rows => rows.map(row => row.id));
@@ -808,13 +913,62 @@ test("selection survives a move into folded Done and regains focus when opened",
     const id = await row.getAttribute('id');
     const fixture = JSON.parse(original);
     fixture.outcome = 'merged';
-    await writeFile(path, JSON.stringify(fixture));
+    await replaceRecord(path, JSON.stringify(fixture));
     await page.waitForFunction(id => document.getElementById(id)?.closest('details').dataset.group === 'done', id);
     assert.equal(await page.evaluate(() => document.querySelector('.command[aria-current="true"]')?.id ?? document.activeElement.id), id);
     assert.equal(await page.locator('[data-group="done"][open]').count(), 0);
     await page.locator('[data-group="done"] > summary').click();
     await page.waitForFunction(id => document.activeElement.id === id, id);
-  } finally { await writeFile(path, original); }
+  } finally { await replaceRecord(path, original); }
+});
+
+test("a push during a record replacement keeps the selected row selected and focused", async t => {
+  const dir = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const path = join(dir, '2-fixture.command.json');
+  const otherLog = join(dir, '3-fixture.log');
+  const [original, originalLog] = await Promise.all([readFile(path, 'utf8'), readFile(otherLog, 'utf8')]);
+  try {
+    const page = await pageFor(t);
+    await page.goto(origin);
+    const rowFor = number => page.locator('.command').filter({ has: page.locator(':scope > .row-head > .subject', { hasText: new RegExp(`^acme/widgets#${number}$`) }) });
+    const row = rowFor(2);
+    await row.click();
+    const id = await row.getAttribute('id');
+    const other = await rowFor(3).getAttribute('id');
+    // Each morph restores selection before its mutations are delivered here.
+    await page.evaluate(id => {
+      window.unselected = [];
+      new MutationObserver(() => {
+        const node = document.getElementById(id);
+        if (node?.getAttribute('aria-current') !== 'true' || document.activeElement !== node) {
+          window.unselected.push(node ? `${document.activeElement.tagName} focused` : 'row missing');
+        }
+      }).observe(document.getElementById('inbox'), { subtree: true, childList: true, characterData: true, attributes: true });
+    }, id);
+    const fixture = JSON.parse(original);
+    const title = fixture.issue.title;
+    fixture.issue.title = 'Replaced while a push arrived';
+    let pushedMidway = false;
+    await replaceRecord(path, JSON.stringify(fixture), {
+      // Another row's log growth pushes the page while the record is replaced.
+      async midway() {
+        const growth = await page.locator(`[id="${other}"]`).getAttribute('data-log-growth');
+        await appendFile(otherLog, 'Growth during a replacement\n');
+        await page.waitForFunction(([other, growth]) => document.getElementById(other).dataset.logGrowth !== growth, [other, growth]);
+        // That push still read the whole earlier record.
+        assert.deepEqual(await page.evaluate(() => window.unselected), []);
+        assert.equal(await row.locator('.issue-title').textContent(), title);
+        pushedMidway = true;
+      }
+    });
+    assert.equal(pushedMidway, true);
+    await row.locator('.issue-title').filter({ hasText: fixture.issue.title }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.unselected), []);
+    assert.equal(await page.evaluate(() => document.activeElement.id), id);
+  } finally {
+    await replaceRecord(path, original);
+    await writeFile(otherLog, originalLog);
+  }
 });
 
 test("every keyboard action preserves list nodes and Escape closes one layer at a time", async t => {
@@ -1021,7 +1175,7 @@ test('Command details keeps its fallback selection across a live refresh', { ski
   Object.assign(fixture, { kind: 'Run', process_id: server.pid, process_start: start, outcome: null, ended_at: null, session_log: session });
   fixture.issue.number = 203;
   fixture.stages = [{ name: 'implement', began_at: new Date().toISOString(), session_log: session }];
-  await writeFile(path, JSON.stringify(fixture));
+  await replaceRecord(path, JSON.stringify(fixture));
   await writeFile(join(dir, '203-fixture.log'), 'command');
   await writeFile(session, traceRecord('session'));
   try {
@@ -1074,7 +1228,7 @@ test('the active-run total follows live trees, stays visible and fits every Them
   const spec = join(dir, '221-fixture.command.json');
   const tickets = [222, 223].map(number => join(dir, `221-fixture.command.issue-${number}.child.json`));
   const separate = join(dir, '224-fixture.command.json');
-  const write = (path, number, change = {}) => writeFile(path, JSON.stringify({ ...base, ...live, issue: issue(number), ...change }));
+  const write = (path, number, change = {}) => replaceRecord(path, JSON.stringify({ ...base, ...live, issue: issue(number), ...change }));
   const ended = { outcome: 'merged', ended_at: now };
   try {
     const page = await pageFor(t, { viewport: { width: 390, height: 844 } });

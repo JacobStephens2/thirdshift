@@ -201,7 +201,7 @@ fn analyze(config: &UserConfig, bug: &ClosedBug, fix: &str, directory: &Path) ->
     let choice = config.scoring.grader();
     let binary = crate::sandbox::resolve_binary(choice.harness.name())?;
     let caps = config.trial_caps.with_env()?;
-    private::run(private::Request {
+    let ran = private::run(private::Request {
         kind: "Bug-origin proposal",
         choice: &choice,
         binary: &binary,
@@ -211,24 +211,26 @@ fn analyze(config: &UserConfig, bug: &ClosedBug, fix: &str, directory: &Path) ->
         timeout: Duration::from_secs(300),
         caps: &caps,
         environment: &[],
-    })
-    .map_err(|error| {
-        if error.is::<crate::session::limits::Reached>() {
-            anyhow::anyhow!("Scoring stopped at a plan-limit warning; window was not advanced")
-        } else {
-            error.context("Bug-origin session failed")
+    });
+    // A plan-limit stop or an interrupt ends Scoring with no window. Any
+    // other failure is this bug's alone: it records no commit, the window
+    // keeps every other proposal, and its artifacts are published with them.
+    match ran {
+        Err(error) if error.is::<crate::session::limits::Reached>() => {
+            anyhow::bail!("Scoring stopped at a plan-limit warning; window was not advanced")
         }
-    })?;
+        Err(error) if interrupt::requested() => return Err(error),
+        Err(error) => return Ok(failed(&format!("Bug-origin session failed: {error:#}"))),
+        Ok(()) => {}
+    }
     let proposal = workspace.join("proposal.json");
-    let response: Response = serde_json::from_slice(
-        &private::read_session_file(&proposal, private::SESSION_OUTPUT_MAX).map_err(|error| {
-            if private::is_missing_file(&error) {
-                anyhow::anyhow!("Bug-origin session left no proposal")
-            } else {
-                error
-            }
-        })?,
-    )?;
+    let text = match private::read_session_file(&proposal, private::SESSION_OUTPUT_MAX) {
+        Err(error) if private::is_missing_file(&error) => {
+            return Ok(failed("Bug-origin session failed: it left no proposal"));
+        }
+        read => read?,
+    };
+    let response: Response = serde_json::from_slice(&text)?;
     ensure!(
         !response.reason.trim().is_empty(),
         "Bug-origin proposal has no evidence"
@@ -240,6 +242,16 @@ fn analyze(config: &UserConfig, bug: &ClosedBug, fix: &str, directory: &Path) ->
         );
     }
     Ok(response)
+}
+
+/// A proposal for a bug whose session failed: no commit, and where to look.
+fn failed(cause: &str) -> Response {
+    Response {
+        commit: None,
+        reason: format!(
+            "{cause}. No introducing commit was established; the session's artifacts are in this window's packets/origins/, and the Day shift can settle the bug by hand."
+        ),
+    }
 }
 
 fn is_commit(commit: &str) -> bool {

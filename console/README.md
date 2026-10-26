@@ -138,7 +138,9 @@ and Ready tag colours, Landing keeps Working's live-activity marker, and a live
 row given a Stop shows Stopping with a drifting stripe until it ends. Pause
 motion and reduced motion hold the stripe still.
 
-Dismiss and Undo in Command details immediately show “Dismissing…” or
+Dismiss is available directly on Inbox rows in Needs you and Ready for review,
+as well as in Command details. Undo remains in Command details. Both immediately
+show “Dismissing…” or
 “Taking back dismissal…” while the request is pending. The button stays disabled
 through live updates to prevent duplicate submissions. A failed request shows
 the error and enables the button for another try.
@@ -160,7 +162,9 @@ it as Commands start and end.
 
 When no Commands are live on this machine, the Inbox explains that above its
 sections. It points to ended problems in Needs you and pull requests in Ready
-for review, and shows the last recorded skipped Pass reasons from Activity logs.
+for review, and offers the last recorded skipped Pass reasons from Activity logs
+under **Last recorded skipped Passes**, folded closed on each page load. Open it
+to read the reasons; live updates keep it open while you read.
 These reasons are retained observations, not a check that the scheduler still
 runs. With none recorded, it says so. Cron jobs and the scheduler's output help
 diagnose launch failures; the Console never starts work. A live Command in

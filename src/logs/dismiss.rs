@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use super::reading::{Group, Observation, Snapshot};
+use super::reading::{Group, InboxItem, Observation, Snapshot};
 use crate::config::UserConfig;
 
 /// The stored kind of a dismissed Ready for review row.
@@ -228,6 +228,24 @@ pub(crate) enum Action {
     Undo,
 }
 
+impl Action {
+    /// Availability for an evaluated row, including every collapsed member.
+    pub(super) fn for_row(row: &InboxItem<'_>) -> Option<Self> {
+        if !std::iter::once(row).chain(&row.collapsed).all(|item| {
+            matches!(item.command, Observation::Record(_)) && item.command.selector().is_some()
+        }) {
+            return None;
+        }
+        if matches!(row.group, Group::NeedsYou | Group::ReadyForReview) {
+            Some(Self::Dismiss)
+        } else if row.dismissal.is_some() {
+            Some(Self::Undo)
+        } else {
+            None
+        }
+    }
+}
+
 /// Command details uses the same row and collapse selection as a request.
 pub(super) fn action(
     snapshot: &Snapshot,
@@ -235,14 +253,15 @@ pub(super) fn action(
     input: &str,
     days: i64,
 ) -> Option<Action> {
-    let target = row_for(snapshot, github, input, days, true).ok()?;
-    if matches!(target.group, Group::NeedsYou | Group::ReadyForReview) {
-        Some(Action::Dismiss)
-    } else if target.dismissed {
-        Some(Action::Undo)
-    } else {
-        None
+    let selected = snapshot.resolve(input).ok()?;
+    if !matches!(selected.observation, Observation::Record(_)) {
+        return None;
     }
+    let selector = selected.observation.selector()?;
+    let row = snapshot
+        .evaluate_inbox(days, github)
+        .into_target(&selector)?;
+    Action::for_row(&row)
 }
 
 pub(crate) struct Request {

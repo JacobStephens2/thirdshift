@@ -4,6 +4,33 @@ use super::*;
 use std::cell::Cell;
 use std::rc::Rc;
 
+thread_local! {
+    static GRADER: RefCell<Option<Rc<Fixture>>> = const { RefCell::new(None) };
+}
+
+/// Exercise a caller's complete Session interface with local kernel evidence.
+/// The override belongs only to this thread and is restored even on panic.
+pub(crate) fn with_grader<T>(fixture: &Rc<Fixture>, exercise: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Rc<Fixture>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            GRADER.with(|slot| slot.replace(self.0.take()));
+        }
+    }
+    let _restore = Restore(GRADER.with(|slot| slot.replace(Some(Rc::clone(fixture)))));
+    exercise()
+}
+
+pub(super) fn grader_command(program: &Path, args: &[String], directory: &Path) -> Option<Launch> {
+    GRADER.with(|slot| {
+        let fixture = slot.borrow();
+        let fixture = fixture.as_ref()?;
+        let mut command = Command::new(program);
+        command.args(args).current_dir(directory);
+        Some(fixture.launch(command))
+    })
+}
+
 pub(crate) struct Fixture {
     pub directory: tempfile::TempDir,
     journal_reads: Cell<usize>,

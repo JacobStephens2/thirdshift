@@ -64,6 +64,17 @@ pub fn make<'a>(issue: &'a IssueUrl, launch: &'a Git, branch: &str) -> Result<Cl
 }
 
 impl Claim<'_> {
+    /// A bug Ticket run handed reproduction back to the reporter. End its Claim
+    /// without making the issue Ready again, including in a Continuation.
+    pub fn needs_info(self) {
+        let launch = self.launch.completion();
+        self.claimed.needs_info(&mut OnGitHub {
+            launch: &launch,
+            github: GitHub::new().completion(),
+            branch: &self.branch,
+        });
+    }
+
     /// End the Claim once the Run or the Spec run that made it has ended,
     /// having reached `reached`, or none in a Failed run:
     ///
@@ -225,6 +236,34 @@ impl<'a> Claimed<'a> {
         }
         outside.apply(&edit)?;
         Ok(claimed)
+    }
+
+    /// [`Claim::needs_info`], through `outside`.
+    fn needs_info(&self, outside: &mut impl Outside) {
+        let issue = self.issue;
+        let result = (|| {
+            let edit = Edit::of(
+                issue,
+                outside.labels(issue)?,
+                &[IN_PROGRESS, READY_FOR_AGENT],
+                &[labels::NEEDS_INFO],
+            );
+            outside.apply(&edit)
+        })();
+        if let Err(error) = result {
+            outside.warn(
+                &error,
+                format!(
+                    "could not end the Claim on #{} after diagnosis; run: {}",
+                    issue.number,
+                    labels::by_hand(
+                        issue,
+                        &[IN_PROGRESS, READY_FOR_AGENT],
+                        &[labels::NEEDS_INFO]
+                    ),
+                ),
+            );
+        }
     }
 
     /// [`Claim::end`], through `outside`.

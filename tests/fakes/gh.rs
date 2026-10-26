@@ -1106,6 +1106,19 @@ fn issue_create(state: &mut Json, flags: &Flags) {
     let labels = labels.into_iter().map(string).collect();
     state.entry("labels", object([])).set(&n, Array(labels));
     state.entry("created", object([])).set(&n, string(now()));
+    if issue_labels(state, &n)
+        .iter()
+        .any(|label| label.str().eq_ignore_ascii_case("ready-for-agent"))
+    {
+        state.entry("timeline", object([])).set(
+            &n,
+            Array(vec![object([
+                ("event", string("labeled")),
+                ("label", string("ready-for-agent")),
+                ("at", string(now())),
+            ])]),
+        );
+    }
     save(state);
     println!("https://github.com/{}/issues/{n}", state.at("repo").str());
 }
@@ -1478,7 +1491,8 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
         assert_eq!(query["per_page"], "100");
         assert!(flags.contains_key("paginate"));
         assert_eq!(flag(flags, "jq"), Some(".[]"));
-        for (n, issue_state) in matching_issues(state, &wanted_state, Some(query["labels"])) {
+        for (n, issue_state) in matching_issues(state, &wanted_state, query.get("labels").copied())
+        {
             let mut issue = issue_fields(state, &n.to_string(), issue_state);
             issue.set("html_url", issue.at("url").clone());
             println!("{issue}");
@@ -1495,6 +1509,63 @@ fn api(state: &mut Json, positional: &[String], flags: &Flags) {
             "{}",
             object([("login", string("runner")), ("email", email)])
         );
+        return;
+    }
+    if let Some((repo, rest)) = repo_prefix(path)
+        && rest.starts_with("actions/runs?")
+        && rest.contains("event=push")
+    {
+        check_repo_is(state, Some(repo));
+        let branch = rest
+            .split("branch=")
+            .nth(1)
+            .unwrap()
+            .split('&')
+            .next()
+            .unwrap();
+        let runs = state.get("runs").map(Json::items).unwrap_or_default();
+        let latest = runs.iter().rev().find(|run| {
+            run.get("head_branch").and_then(Json::as_str) == Some(branch)
+                && run.get("event").and_then(Json::as_str) == Some("push")
+        });
+        println!(
+            "{}",
+            object([(
+                "workflow_runs",
+                Array(latest.cloned().into_iter().collect())
+            )])
+        );
+        return;
+    }
+    if let Some((repo, rest)) = repo_prefix(path)
+        && let Some(id) = rest
+            .strip_prefix("actions/runs/")
+            .and_then(|rest| rest.strip_suffix("/jobs?per_page=100"))
+    {
+        check_repo_is(state, Some(repo));
+        assert!(flags.contains_key("paginate"));
+        assert_eq!(flag(flags, "jq"), Some(".jobs[]"));
+        let run = state
+            .at("runs")
+            .items()
+            .iter()
+            .find(|run| run.at("id").python() == id)
+            .unwrap();
+        for job in run.at("jobs").items() {
+            println!("{job}");
+        }
+        return;
+    }
+    if let Some((repo, rest)) = repo_prefix(path)
+        && let Some(id) = rest
+            .strip_prefix("actions/jobs/")
+            .and_then(|rest| rest.strip_suffix("/logs"))
+    {
+        check_repo_is(state, Some(repo));
+        match state.get("job_logs").and_then(|logs| logs.get(id)) {
+            Some(log) => println!("{}", log.str()),
+            None => die("gh: logs unavailable (HTTP 404)", 1),
+        }
         return;
     }
     if let Some((repo, rest)) = repo_prefix(path)
@@ -2107,6 +2178,11 @@ fn graphql(state: &Json, args: &[&str]) {
     } else if is_candidate {
         candidate(state, n, after)
     } else {
+        let blocker_label_limit = query
+            .split("blockedBy(first: ")
+            .nth(1)
+            .and_then(|rest| rest.split("labels(first: ").nth(1))
+            .map(|rest| rest.split(')').next().unwrap().parse::<usize>().unwrap());
         let nodes = listed(state, "sub_issues", n)
             .iter()
             .map(|ticket| {
@@ -2118,7 +2194,7 @@ fn graphql(state: &Json, args: &[&str]) {
                 let mut node = numbered_issue(state, ticket);
                 node.set("labels", object([("nodes", Array(labels))]));
                 node.set("subIssues", sub_issue_count(state, &key));
-                node.set("blockedBy", blockers(state, &key));
+                node.set("blockedBy", blockers(state, &key, blocker_label_limit));
                 node
             })
             .collect();
@@ -2335,6 +2411,14 @@ fn numbered_issue(state: &Json, n: &Json) -> Json {
     object([
         ("number", n.clone()),
         (
+            "title",
+            state
+                .get("titles")
+                .and_then(|titles| titles.get(&n.python()))
+                .cloned()
+                .unwrap_or(Null),
+        ),
+        (
             "url",
             state
                 .get("issue_urls")
@@ -2358,10 +2442,28 @@ fn sub_issue_count(state: &Json, key: &str) -> Json {
 }
 
 /// The issues issue `key` is blocked by, as GraphQL's `blockedBy`.
-fn blockers(state: &Json, key: &str) -> Json {
+fn blockers(state: &Json, key: &str, label_limit: Option<usize>) -> Json {
     let blockers = listed(state, "blocked_by", key)
         .iter()
-        .map(|blocker| numbered_issue(state, blocker))
+        .map(|blocker| {
+            let mut node = numbered_issue(state, blocker);
+            let all_labels = listed(state, "labels", &blocker.python());
+            let limit = label_limit.unwrap_or(usize::MAX);
+            let more_labels = all_labels.len() > limit;
+            let labels = all_labels
+                .into_iter()
+                .take(limit)
+                .map(|label| object([("name", label)]))
+                .collect();
+            node.set(
+                "labels",
+                object([
+                    ("nodes", Array(labels)),
+                    ("pageInfo", object([("hasNextPage", Bool(more_labels))])),
+                ]),
+            );
+            node
+        })
         .collect();
     object([("nodes", Array(blockers))])
 }
@@ -2509,7 +2611,7 @@ fn candidate(state: &Json, n: &str, after: Option<&str>) -> Json {
     object([
         ("parent", parent),
         ("subIssues", object([("nodes", Array(sub_issues))])),
-        ("blockedBy", blockers(state, n)),
+        ("blockedBy", blockers(state, n, None)),
         (
             "labelled",
             object([("nodes", Array(labelled)), ("pageInfo", page_info)]),

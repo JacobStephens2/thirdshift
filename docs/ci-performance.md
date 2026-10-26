@@ -80,6 +80,11 @@ A failed or cancelled job, or a skipped one the event requires, fails
 `test-macos`. The Linux checks `test`, `site-test` and `console-test` run on
 every pull request as before.
 
+On pushes to `main`, each macOS shard adds `--no-fail-fast` to its nextest
+command, so one red run reports every failing test in every shard (#1325).
+PR runs (including the gate and `test:macos` shards), nightly runs and manual
+runs keep nextest's default fail-fast behavior.
+
 The gate is one `macos-26` job: `cargo clippy --all-targets -- -D warnings`,
 then `cargo nextest run --profile macos-gate`. That profile's `default-filter`
 in `.config/nextest.toml` selects the tests of the macOS-specific code: the

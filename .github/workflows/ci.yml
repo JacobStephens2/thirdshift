@@ -179,7 +179,8 @@ jobs:
       # Linux also uses nextest, except for its nightly cargo test run.
       - uses: taiki-e/install-action@nextest
       # Hash partitions cover the same suite once across all four runners.
-      - run: cargo nextest run --partition hash:${{ matrix.shard }}/${{ strategy.job-total }}
+      # Pushes to main report every failure in a shard in the same run (#1325).
+      - run: cargo nextest run --partition hash:${{ matrix.shard }}/${{ strategy.job-total }} ${{ github.event_name == 'push' && '--no-fail-fast' || '' }}
 
   # Keep one stable check name on every run. It requires what the plan
   # asked for: every shard passed, or the gate passed, or, with no macOS work,

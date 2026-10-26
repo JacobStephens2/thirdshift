@@ -53,21 +53,40 @@ fn peek_refreshes_confirmed_bug_origins_without_rewriting_run_metrics() {
         }]
     });
     let checkpoint = scoring.join("week.json");
-    fs::write(&checkpoint, serde_json::to_vec(&week).unwrap()).unwrap();
-    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
-    let html = console.get("/peek?command=widgets%237").text().unwrap();
-    assert!(
-        html.contains("<dt>confirmed bug origins</dt><dd>1"),
-        "{html}"
-    );
-
-    week["bug_origins"][0]["state"] = json!("rejected");
-    fs::write(checkpoint, serde_json::to_vec(&week).unwrap()).unwrap();
-    let html = console.get("/peek?command=widgets%237").text().unwrap();
-    assert!(
-        html.contains("<dt>confirmed bug origins</dt><dd>0"),
-        "{html}"
-    );
+    let binary = Path::new(env!("CARGO_BIN_EXE_thirdshift"));
+    let console = Console::start(binary, home.path());
+    for (state, expected) in [
+        ("proposed", 0),
+        ("confirmed", 1),
+        ("rejected", 0),
+        ("confirmed", 1),
+        ("future_state", 0),
+    ] {
+        week["bug_origins"][0]["state"] = json!(state);
+        fs::write(&checkpoint, serde_json::to_vec(&week).unwrap()).unwrap();
+        let response = console.get("/peek?command=widgets%237");
+        assert_eq!(response.status(), 200);
+        let html = response.text().unwrap();
+        assert!(
+            html.contains(&format!("<dt>confirmed bug origins</dt><dd>{expected}")),
+            "{state}: {html}"
+        );
+        let output = Command::new(binary)
+            .args(["show", "widgets#7", "--json"])
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let shown: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            shown["command"]["run_metrics"]["confirmed_bug_origins"], expected,
+            "{state}"
+        );
+    }
     let path = home
         .path()
         .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture.command.json");

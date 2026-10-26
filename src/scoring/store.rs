@@ -5,12 +5,33 @@ use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
+use serde::de::DeserializeOwned;
 
 use super::Week;
 use crate::{config, interrupt};
 
+mod confirmed;
+pub(crate) use confirmed::read_confirmed_origins;
+
 pub(super) struct Store {
     root: PathBuf,
+}
+
+/// Both full samples and narrow projections use the same chronological reader.
+trait Windowed: DeserializeOwned {
+    fn window_end(&self) -> DateTime<Utc>;
+}
+
+impl Windowed for Week {
+    fn window_end(&self) -> DateTime<Utc> {
+        self.window_end
+    }
+}
+
+struct Checkpoint<T> {
+    value: T,
+    path: PathBuf,
 }
 
 impl Store {
@@ -23,10 +44,21 @@ impl Store {
     }
 
     pub fn load(&self) -> Result<Vec<Retained>> {
+        Ok(self
+            .ordered::<Week>()?
+            .into_iter()
+            .map(|checkpoint| Retained {
+                week: checkpoint.value,
+                path: checkpoint.path,
+            })
+            .collect())
+    }
+
+    fn ordered<T: Windowed>(&self) -> Result<Vec<Checkpoint<T>>> {
         let entries = match fs::read_dir(&self.root) {
             Ok(entries) => entries,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error).context("could not read Scoring checkpoints"),
         };
         let mut samples = Vec::new();
         for entry in entries {
@@ -35,12 +67,15 @@ impl Store {
                 .extension()
                 .is_some_and(|extension| extension == "json")
             {
-                let week = serde_json::from_slice(&fs::read(&path)?)
+                let value: T =
+                    serde_json::from_slice(&fs::read(&path).with_context(|| {
+                        format!("can't read Scoring sample {}", path.display())
+                    })?)
                     .with_context(|| format!("can't read Scoring sample {}", path.display()))?;
-                samples.push(Retained { week, path });
+                samples.push(Checkpoint { value, path });
             }
         }
-        samples.sort_by_key(|sample| sample.week.window_end);
+        samples.sort_by_key(|sample| sample.value.window_end());
         Ok(samples)
     }
 

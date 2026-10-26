@@ -19,6 +19,7 @@ pub mod export;
 pub(crate) mod github;
 pub mod metrics;
 pub(crate) mod owner;
+pub(crate) mod pass_starts;
 mod process_identity;
 mod reading;
 pub(crate) use reading::Framing;
@@ -46,7 +47,7 @@ use crate::session::Logged;
 
 use activity::Kind;
 pub use command_record::StageName as Stage;
-pub(crate) use command_record::{TicketRecord, TicketState, experiment_rechecked};
+pub(crate) use command_record::{Issue, TicketRecord, TicketState, experiment_rechecked};
 use effects::OnMachine;
 use recording::Record;
 
@@ -147,20 +148,32 @@ pub enum Work<'a> {
 }
 
 /// A Pass, a command that may be skipped before it starts work.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Pass {
     Architect,
     Pickup,
     Security,
 }
 
+impl Pass {
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            Self::Architect => "Architect",
+            Self::Pickup => "Pickup",
+            Self::Security => "Security",
+        }
+    }
+}
+
 impl Display for Pass {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(match self {
-            Pass::Architect => "Architect run",
-            Pass::Pickup => "Pickup run",
-            Pass::Security => "Security run",
-        })
+        write!(f, "{} run", self.name())
+    }
+}
+
+impl serde::Serialize for Pass {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
     }
 }
 
@@ -215,6 +228,11 @@ pub fn configured(config: &UserConfig) {
     record().configured(config);
 }
 
+/// Keep the Pass's latest start once its repository is known, before gates.
+pub(crate) fn pass_fired(repo: &Repo) {
+    record().pass_fired(repo);
+}
+
 /// Record that the command starts `work`, its sessions on `harness`: keep its
 /// Command log, showing any lines held from the terminal, with a line naming
 /// the Harness, Model and Effort, then write the Activity log's line that it
@@ -232,6 +250,11 @@ pub fn started(work: Work, harness: &Choice) {
 /// stays held, and is dropped with the Command log it never kept.
 pub fn skipped(pass: Pass, repo: &Repo, reason: impl Display) {
     record().skipped(pass, repo, reason);
+}
+
+/// Add an observation to the running command's repository Activity log.
+pub(crate) fn activity(message: impl Display) {
+    record().activity(message);
 }
 
 /// Record how the command ended, `outcome` in short: show any lines held

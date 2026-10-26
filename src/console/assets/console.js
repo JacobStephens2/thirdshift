@@ -4,6 +4,22 @@ import { initSpanTree } from './spans.js';
 import { initStages } from './stages.js';
 let spanTree;
 
+// Elapsed Pass ages keep advancing even when no Command or file changes.
+function agePassStarts() {
+  for (const element of document.querySelectorAll('[data-pass-fired-at]')) {
+    const seconds = Math.max(0, Math.floor((Date.now() - Date.parse(element.dataset.passFiredAt)) / 1000));
+    if (!Number.isFinite(seconds)) continue;
+    element.textContent = seconds < 60 ? `${seconds} sec`
+      : seconds < 3600 ? `${Math.floor(seconds / 60)} min`
+      : `${Math.floor(seconds / 3600)} hr ${Math.floor(seconds % 3600 / 60)} min`;
+  }
+}
+// Inbox refreshes can introduce the first observed Pass after page load.
+if (document.getElementById('inbox') || document.querySelector('[data-pass-fired-at]')) {
+  agePassStarts();
+  setInterval(agePassStarts, 1000);
+}
+
 // Browser preferences are conveniences; malformed or unavailable storage hides nothing.
 function stored(key, fallback) {
   try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
@@ -60,7 +76,7 @@ function morph(html) {
   const active = document.activeElement;
   const focused = active?.id || active?.closest("details")?.id;
   const wasSummary = active?.matches("summary");
-  const scroll = [...current.querySelectorAll("details")].map(section => [section.id, section.querySelector(".commands").scrollTop]);
+  const scroll = [...current.querySelectorAll("details[data-group]")].map(section => [section.id, section.querySelector(".commands").scrollTop]);
   const position = [scrollX, scrollY];
   const selection = selected?.id || selected?.closest('details')?.id;
   const selectedSummary = selected?.matches('summary');
@@ -68,7 +84,7 @@ function morph(html) {
   Idiomorph.morph(current, replacement, {
     callbacks: {
       beforeAttributeUpdated(name, node) {
-        if (name === "open" && node.matches("details[data-group]")) return false;
+        if (name === "open" && node.matches("details")) return false;
       }
     }
   });
@@ -83,6 +99,7 @@ function morph(html) {
   document.title = next.title;
   document.querySelector('link[rel="icon"]').href = next.querySelector('link[rel="icon"]').getAttribute("href");
   markNew();
+  showDismissal();
   activity();
   loadLook();
   for (const row of document.querySelectorAll('.command[data-logging="true"]')) {
@@ -170,16 +187,16 @@ const jumps = document.querySelector('#jumps');
 let selected = null;
 let peekCommand = null;
 let pendingPeek = null;
-// Details can be replaced or reopened while a dismissal request is in flight.
+// Inbox rows and details can be replaced while a dismissal request is in flight.
 const dismissals = new Map();
 
 function showDismissal() {
-  const form = content.querySelector('form[data-dismiss]');
-  if (!form) return;
-  const state = dismissals.get(form.elements.command.value);
-  form.querySelector('button').disabled = state?.pending ?? false;
-  form.querySelector('[role="status"]').textContent = state && (state.pending || state.action === form.action)
-    ? state.message : '';
+  for (const form of document.querySelectorAll('form[data-dismiss]')) {
+    const state = dismissals.get(form.elements.command.value);
+    form.querySelector('button').disabled = state?.pending ?? false;
+    form.querySelector('[role="status"]').textContent = state && (state.pending || state.action === form.action)
+      ? state.message : '';
+  }
 }
 
 function initializeSpanTree() { return initSpanTree({
@@ -317,7 +334,7 @@ content.addEventListener('click', async event => {
     status.textContent = 'Selected; copy it with your keyboard.';
   }
 });
-content.addEventListener('submit', async event => {
+document.addEventListener('submit', async event => {
   const form = event.target.closest('form[data-dismiss]');
   if (!form) return;
   event.preventDefault();
@@ -366,6 +383,7 @@ document.addEventListener('click', event => {
 
 document.addEventListener('keydown', event => {
   if (event.ctrlKey || event.metaKey || event.altKey || event.target.closest('input, select, textarea, [contenteditable="true"]')) return;
+  if (event.target.matches('summary') && !event.target.closest('.group') && ['Enter', ' '].includes(event.key)) return;
   if (event.key === 'Enter' && event.target.closest('a, button')) return;
   if (event.key === ' ' && event.target.closest('button')) return;
   if (document.querySelector('#themes[open], #sections-chooser[open]')) return;

@@ -134,6 +134,25 @@ impl<O: Outside> Record<O> {
         }
     }
 
+    pub(super) fn pass_fired(&mut self, repo: &Repo) {
+        let pass = match self.command {
+            CommandKind::Architect => Pass::Architect,
+            CommandKind::Pickup => Pass::Pickup,
+            CommandKind::Secure => Pass::Security,
+            _ => return,
+        };
+        let path = super::pass_starts::path(&self.root(repo), pass);
+        let time = self.outside.now().to_rfc3339();
+        // One atomic replacement per kind also keeps competing launches from
+        // truncating a reader's time or overwriting another kind's start.
+        if let Err(error) = self.outside.replace_record(&path, time.as_bytes()) {
+            self.show_held();
+            self.step(format_args!(
+                "warning: could not keep the Pass's last-fired time: {error:#}"
+            ));
+        }
+    }
+
     pub(super) fn started(&mut self, work: Work, harness: &Choice) {
         let first = !self.started;
         self.started = true;
@@ -275,6 +294,13 @@ impl<O: Outside> Record<O> {
             &format!("{kind} skipped: {reason}"),
             Some(kind),
         );
+    }
+
+    pub(super) fn activity(&mut self, message: impl Display) {
+        if let Some(started) = &self.activity_started {
+            let root = started.root.clone();
+            self.activity_write(&root, &message.to_string(), None);
+        }
     }
 
     pub(super) fn ended(&mut self, outcome: impl Display) {

@@ -6,6 +6,8 @@ use std::path::Path;
 use super::{age, stage_text, ticket_text};
 use crate::config::UserConfig;
 use crate::logs::command_record::Issue;
+use crate::logs::dismiss::Action as DismissAction;
+use crate::logs::pass_starts::PassStart;
 use crate::logs::reading::{Command, Entry, Group, Health, Observation, Snapshot};
 
 pub(crate) struct Inbox {
@@ -13,6 +15,7 @@ pub(crate) struct Inbox {
     pub active_runs: usize,
     pub sections: Vec<Section>,
     pub idle_passes: Vec<String>,
+    pub pass_starts: Vec<PassStart>,
     pub warning: Option<&'static str>,
     pub github_warning: Option<String>,
 }
@@ -33,6 +36,7 @@ pub(crate) struct Row {
     pub logging: bool,
     pub log_growth: String,
     pub selector: String,
+    pub can_dismiss: bool,
     pub logs_url: String,
     pub subject: String,
     /// The issue's `https://` address, which the subject links to.
@@ -207,6 +211,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 logging: false,
                 log_growth: String::new(),
                 selector: Observation::History(command).selector().unwrap_or_default(),
+                can_dismiss: false,
                 logs_url: command
                     .command_log
                     .as_ref()
@@ -266,6 +271,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     row.state = item.state_word().into();
                     row.count = item.count;
                     row.cause = item.cause().unwrap_or_default().into();
+                    row.can_dismiss = DismissAction::for_row(item) == Some(DismissAction::Dismiss);
                     row.left = item
                         .dismissal
                         .as_ref()
@@ -319,6 +325,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
         sections,
         github_warning: kept.warning(),
         idle_passes: snapshot.idle_passes.iter().map(|pass| format!("{} idle on {}: {}", pass.kind, pass.repository, pass.reason)).collect(),
+        pass_starts: snapshot.pass_starts,
         warning: (config.effective_waiting_line_interval() != config.waiting_line_interval).then_some(
             "logs.waiting_line_minutes must be less than inbox.silent_minutes; using half the silent time for waiting lines"),
     })
@@ -368,6 +375,7 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
         logging: live && !matches!(command.health, Some(Health::Silent { .. })),
         log_growth: format!("{log_length}:{session_length}"),
         selector: Observation::Record(command).selector().unwrap_or_default(),
+        can_dismiss: false,
         logs_url: logs_url(&command.record_path, root),
         subject,
         subject_url: issue_url(facts.issue.as_ref()),

@@ -270,13 +270,13 @@ pub(super) fn verify(repo: &Path, base: &str) -> Result<()> {
     Ok(())
 }
 
-fn git(repo: &Path, args: &[&str]) -> Result<String> {
+pub(super) fn git(repo: &Path, args: &[&str]) -> Result<String> {
     String::from_utf8(bytes(repo, args, None)?)
         .map(|s| s.trim().into())
         .context("git output is not UTF-8")
 }
 
-fn bytes(repo: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>> {
+pub(super) fn bytes(repo: &Path, args: &[&str], input: Option<&[u8]>) -> Result<Vec<u8>> {
     // Prepared repositories must not inherit host hooks, templates, replacement
     // refs or Git directory overrides. Local fetching needs no host credentials.
     let output = process::output(

@@ -16,6 +16,7 @@ use crate::issue::IssueUrl;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UntrustedIssue {
     Author,
+    NeverReady,
     ReadyLabel,
     /// Its `IssueText` was edited, after it was last marked ready, by an account
     /// that is not a Trusted account.
@@ -26,6 +27,7 @@ impl fmt::Display for UntrustedIssue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Author => f.write_str("issue author is not a Trusted account"),
+            Self::NeverReady => f.write_str("has never been labelled ready-for-agent"),
             Self::ReadyLabel => {
                 f.write_str("most recent ready-for-agent label actor is not a Trusted account")
             }
@@ -87,11 +89,10 @@ pub fn issue_trust(reads: &impl Reads, issue: &IssueUrl) -> Result<Option<Untrus
     if !check.trusted_author(issue)? {
         return Ok(Some(UntrustedIssue::Author));
     }
-    let Some(Action {
-        actor: Some(actor),
-        at,
-    }) = reads.ready_labellings(issue)?.pop()
-    else {
+    let Some(Action { actor, at }) = reads.ready_labellings(issue)?.pop() else {
+        return Ok(Some(UntrustedIssue::NeverReady));
+    };
+    let Some(actor) = actor else {
         return Ok(Some(UntrustedIssue::ReadyLabel));
     };
     if !check.trusted_actor(issue, &actor)? {
@@ -363,7 +364,12 @@ mod tests {
     fn an_issue_never_labelled_ready_is_untrusted() {
         let reads = InMemory::with(Issue::default());
 
-        assert_eq!(issue_trust_of(&reads), Some(UntrustedIssue::ReadyLabel));
+        let reason = issue_trust_of(&reads).unwrap();
+        assert_eq!(reason, UntrustedIssue::NeverReady);
+        assert_eq!(
+            reason.to_string(),
+            "has never been labelled ready-for-agent"
+        );
         assert!(reads.edits_read.borrow().is_empty());
     }
 

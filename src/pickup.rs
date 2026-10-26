@@ -15,7 +15,7 @@ use anyhow::Result;
 use crate::asks::Flags;
 use crate::claim;
 use crate::config::UserConfig;
-use crate::github::ListedIssue;
+use crate::github::{GitHub, ListedIssue};
 use crate::harness::Choice;
 use crate::issue::{IssueUrl, Repo};
 use crate::labels::Edit;
@@ -143,6 +143,11 @@ pub fn run(
             return Ok(Outcome::Skipped(Skipped::AlreadyRunning(running)));
         }
     };
+    // Only Pickup files this ordinary Ticket. A CI or publication failure
+    // must never prevent the usual Ready search or dispatch.
+    if let Err(error) = file_ci_red_ticket(directory.git(), &repo, base.name()) {
+        crate::progress::warn(&error, format_args!("could not file CI-red Ticket"));
+    }
     let mut outside = LaunchAndGitHub {
         launch: &directory,
         base: &base,
@@ -170,6 +175,20 @@ pub fn run(
             )
         },
     )
+}
+
+fn file_ci_red_ticket(git: &crate::git::Git, repo: &Repo, base: &str) -> Result<()> {
+    let github = GitHub::new();
+    let Some(failure) = github.base_ci_failure(repo, base)? else {
+        return Ok(());
+    };
+    let Some(_reservation) = reservation::Reservation::ci_red(git)? else {
+        return Ok(());
+    };
+    if let Some(issue) = github.file_ci_red_ticket(repo, failure)? {
+        crate::progress::step(format!("filed CI-red Ticket {}", issue.url));
+    }
+    Ok(())
 }
 
 /// [`run`], once it holds its repository's lock, on `repo` with the Base
@@ -645,6 +664,6 @@ mod tests {
         assert_eq!(took.issue.number, 9);
         assert_eq!(took.title, "Issue 9");
         let reached = took.ended.outcome.ok().expect("the dispatched run failed");
-        assert_eq!(reached.pr_url, PR_URL);
+        assert_eq!(reached.resolution.url(), PR_URL);
     }
 }

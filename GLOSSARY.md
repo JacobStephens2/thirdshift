@@ -36,7 +36,7 @@ An open **Ticket** labelled with a triage role that says it is not agent work: `
 An open **Ticket** in its **Spec**'s repository, with no sub-issues of its own, no open blocker, and not an **Unready Ticket**: one a **Spec run** could start if no Ticket were running. A Spec run starts only these, and a **Spec** with none is not a **Ready issue**.
 
 **Claim**:
-The mark that the factory has taken an issue: thirdshift labels the issue `in-progress`, in place of `ready-for-agent` if it has that, when a **Ticket run** or a **Spec run** starts on it, whether started on its **Issue URL** or by an **Architect run**, a **Pickup run** or a **Security run**. A **Ticket run** in a Spec run and a **Base fix** make none. Ending a Claim finishes even after Command interruption. A failed Security fix keeps its Claim even with nothing on `origin`, so it stays with the Day shift. For other Ticket runs, a Claim is released, `ready-for-agent` put back, only when the Ticket run ends with nothing on `origin` to take over and was not ended by a **Stop**: no **Issue branch** and no pull request. Otherwise it stays while the issue is open, whether its pull request is ready for review or the Ticket run failed, until the **Day shift** relabels it, and thirdshift takes the label off once the issue is closed.
+The mark that the factory has taken an issue: thirdshift labels the issue `in-progress`, in place of `ready-for-agent` if it has that, when a **Ticket run** or a **Spec run** starts on it, whether started on its **Issue URL** or by an **Architect run**, a **Pickup run** or a **Security run**. A **Ticket run** in a Spec run and a **Base fix** make none. Ending a Claim finishes even after Command interruption. A failed Security fix keeps its Claim even with nothing on `origin`, so it stays with the Day shift. For other Ticket runs, a Claim is released, `ready-for-agent` put back, only when the Ticket run ends with nothing on `origin` to take over and was not ended by a **Stop**: no **Issue branch** and no pull request. Otherwise it stays while the issue is open, whether its pull request is ready for review or the Ticket run failed, until the **Day shift** relabels it, and thirdshift takes the label off once the issue is closed. A bug Ticket run that cannot reproduce the bug ends its Claim with `needs-info`, leaving `ready-for-agent` absent.
 _Avoid_: lock (a lock is per machine and ends with its process), assignment
 
 **Claim limit**:
@@ -96,7 +96,7 @@ One invocation of thirdshift that does factory work: a **Ticket run** or **Spec 
 _Avoid_: invocation, job
 
 **Ticket run**:
-One invocation of the factory on a single issue that is not a **Spec**, from launch to cleanup, ending in one pull request ready for review, or a **Self-merge** when its command or the **User config** asks for one. Started directly on an **Issue URL**, by a **Spec run** for one of its **Tickets**, by an **Architect run** for the Ticket its **Architecture review** published, by a **Pickup run** for the **Ready issue** it took, or by a **Security run** for a **Security finding** it fixes.
+One invocation of the factory on a single issue that is not a **Spec**, from launch to cleanup, normally ending in one pull request ready for review, or a **Self-merge** when its command or the **User config** asks for one. A Ticket run on an issue labelled `bug` reproduces the bug before fixing it, in a fresh Ticket run or a **Continuation**, except for Security fixes and **Base fixes**, which have their own flow. If the bug is not reproduced, the Ticket run ends successfully with triage notes and `needs-info` on the issue, without opening or merging a pull request. Started directly on an **Issue URL**, by a **Spec run** for one of its **Tickets**, by an **Architect run** for the Ticket its **Architecture review** published, by a **Pickup run** for the **Ready issue** it took, or by a **Security run** for a **Security finding** it fixes.
 _Avoid_: Run, Merge run (former names), auto-merge (GitHub's own feature)
 
 **Spec run**:
@@ -244,6 +244,9 @@ _Avoid_: init, onboarding, configure
 **Session trace**:
 The events and timed work of one agent session, one per session, a **Resume** and each **Repair** included. Each belongs to its owning **Command**'s **Trace**. Kept with its repository's other logs, named for the session's kind and stamped with the local time its command started, so all of a command's Session traces sort together. The start stamp is a display and grouping fact; distinct Commands have distinct storage ownership even when their stamps agree. Model evidence is kept beside each Session trace and belongs to the exact owning **Command**, including across child Ticket runs. It survives an interrupted stream and is replaced by completed retained evidence only when a report is available, even when that report has no observed Models; an absent report leaves the stream evidence intact. Requested **Model** and **Effort** choices are recorded separately from observed Models. A session that ran the code review has its reviewers' reports kept beside its Session trace.
 _Avoid_: Session log, transcript, session file
+
+**Session usage**:
+The token counts and cost reported in one **Session trace**, grouped by observed **Model**. Partial authoritative totals refine only reported fields, without inventing missing measurements.
 
 **Trace**:
 A **Command**'s whole tree of work, its child **Ticket runs** and all of their **Session traces** included. Their shared identity keeps the tree together across sessions.

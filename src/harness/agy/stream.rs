@@ -119,6 +119,7 @@ impl Decoder for AgyProgress {
                 final_message: result
                     .and_then(|result| result["response"].as_str())
                     .map(String::from),
+                completed: result.is_some(),
             },
             outcome: TurnOutcome::from_failed(
                 result.is_some_and(|result| result["status"] == "ERROR"),

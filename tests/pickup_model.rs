@@ -17,6 +17,7 @@ enum Phase {
     ClaimRead,
     ClaimWrite,
     Running,
+    NeedsInfoWrite,
     EndRead,
     EndWrite,
     Release,
@@ -82,6 +83,8 @@ enum Action {
     PutClaimLabels(usize),
     FailedRunReadsOrigin(usize),
     KeepClaim(usize),
+    ReadNeedsInfoLabels(usize),
+    PutNeedsInfoLabels(usize),
     ReadEndingLabels(usize),
     PutEndingLabels(usize),
     ReleaseReservation(usize),
@@ -134,6 +137,7 @@ impl Model for Pickup {
                     Action::FailedRunReadsOrigin(h)
                 }
                 Phase::Running => Action::KeepClaim(h),
+                Phase::NeedsInfoWrite => Action::PutNeedsInfoLabels(h),
                 Phase::EndRead => Action::ReadEndingLabels(h),
                 Phase::EndWrite => Action::PutEndingLabels(h),
                 Phase::Release => Action::ReleaseReservation(h),
@@ -150,6 +154,9 @@ impl Model for Pickup {
             {
                 actions.push(Action::KeepClaim(h));
             }
+            if host.phase == Phase::Running {
+                actions.push(Action::ReadNeedsInfoLabels(h));
+            }
         }
         if state.reservation.is_some() && state.day_observed != state.reservation {
             actions.push(Action::DayReadsReservation);
@@ -161,7 +168,7 @@ impl Model for Pickup {
             actions.push(Action::DayDeletesStaleReservation);
         }
         // A hand-back follows confirmation that dispatched work has ended.
-        if state.labels.claimed
+        if !state.labels.ready
             && state.hosts.iter().all(|host| {
                 !host.dispatched
                     || matches!(host.phase, Phase::Release | Phase::Done | Phase::Crashed)
@@ -241,6 +248,16 @@ impl Model for Pickup {
             }
             Action::FailedRunReadsOrigin(h) => next.hosts[h].phase = Phase::EndRead,
             Action::KeepClaim(h) => next.hosts[h].phase = Phase::Release,
+            Action::ReadNeedsInfoLabels(h) => next.hosts[h].phase = Phase::NeedsInfoWrite,
+            Action::PutNeedsInfoLabels(h) => {
+                // Diagnosis hands the bug back for information, ending the
+                // Claim without making another Ready generation available.
+                next.labels = Labels {
+                    ready: false,
+                    claimed: false,
+                };
+                next.hosts[h].phase = Phase::Release;
+            }
             Action::ReadEndingLabels(h) => {
                 next.hosts[h].labels = state.labels;
                 next.hosts[h].phase = if state.labels.claimed {
@@ -291,6 +308,13 @@ impl Model for Pickup {
             properties.extend([
                 Property::<Self>::sometimes("three hosts select", |_, s| {
                     s.hosts.iter().all(|h| h.phase == Phase::Reserve)
+                }),
+                Property::<Self>::sometimes("unreproduced bug ends without Ready", |_, s| {
+                    !s.labels.ready
+                        && !s.labels.claimed
+                        && s.hosts
+                            .iter()
+                            .any(|h| h.phase == Phase::Release && h.claim_completed)
                 }),
                 Property::<Self>::sometimes("failed winner restores Ready", |_, s| {
                     s.labels.ready

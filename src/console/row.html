@@ -7,7 +7,8 @@
   {% if row.count > 1 %}<p>{{ row.count }} Commands with this cause: {{ row.cause|linkify }}</p>{% else if !row.cause.is_empty() %}<p>{{ row.cause|linkify }}</p>{% endif %}
   {% if !row.left.is_empty() %}<p class="left">{{ row.left }}</p>{% endif %}
   {% if !row.tickets.is_empty() %}<ul class="plan" aria-label="Tickets">{% for ticket in row.tickets %}<li>{{ ticket|linkify }}</li>{% endfor %}</ul>{% endif %}
-  <p><a class="peek-link" href="{{ row.peek_url() }}">Details</a> · <a href="{{ row.log_url() }}">Full log</a></p>
+  <div class="row-actions"><p><a class="peek-link" href="{{ row.peek_url() }}">Details</a> · <a href="{{ row.log_url() }}">Full log</a></p>
+  {% if row.can_dismiss %}<form method="post" action="/dismiss" data-dismiss><input type="hidden" name="command" value="{{ row.selector }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button id="dismiss-{{ row.id }}">Dismiss</button><span role="status"></span></form>{% endif %}</div>
   {% if !row.findings.is_empty() %}<ul aria-label="Security findings">{% for finding in row.findings %}<li>{{ finding.title }} · {% match finding.severity %}{% when Some with (severity) %}{{ severity }}{% when None %}ungraded{% endmatch %} · {{ finding.url|linkify }}</li>{% endfor %}</ul>{% endif %}
   {% if !row.sessions.is_empty() %}<ul aria-label="Session traces">{% for session in row.sessions %}<li><a href="{{ row.session_url(session) }}">{{ session.display() }}</a></li>{% endfor %}</ul>{% endif %}
   {% if !row.children.is_empty() %}<ul class="children">{% for child in row.children %}{{ self.child(child)|safe }}{% endfor %}</ul>{% endif %}

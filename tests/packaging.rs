@@ -77,6 +77,7 @@ fn package_carries_the_factory_skills_with_their_license_and_credits() {
         "skills/LICENSE",
         "skills/thirdshift-pr/CREDITS.md",
         "skills/thirdshift-implement/SKILL.md",
+        "skills/thirdshift-diagnosing-bugs/SKILL.md",
         "skills/thirdshift-improve-codebase-architecture/SKILL.md",
         "skills/thirdshift-improve-codebase-architecture/REPORT.md",
         "skills/thirdshift-to-spec/SKILL.md",

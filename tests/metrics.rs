@@ -233,6 +233,46 @@ fn shell_commands_from_each_harness_are_checked() {
 }
 
 #[test]
+fn partial_model_totals_preserve_known_call_usage() {
+    for (total, expected_input) in [
+        (json!({"output":3}), 16),
+        (json!({"input":20,"output":3}), 25),
+    ] {
+        let scenario = Scenario::new();
+        let log = trace(
+            &scenario,
+            "partial-total",
+            "claude",
+            "1.0",
+            json!([
+                {"type":"model_call_ended", "id":"m", "parent_id":null, "model":"observed",
+                 "usage":{"input":11,"output":2,"cache_read":5}, "cost_usd":0.1, "outcome":"succeeded"},
+                {"type":"usage", "scope":"model", "model":"observed", "usage":total, "cost_usd":null}
+            ]),
+        );
+        let mut past = record(7);
+        past["stages"][0]["session_log"] = json!(log);
+        let path = write(&scenario, "7-fixture.command.json", &past);
+        let original = fs::read(&path).unwrap();
+        let shown = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+        let signals = &shown["command"]["metrics"]["session_signals"]["implement"]["signals"];
+        assert_eq!(
+            signals["tokens_by_model"],
+            json!([{
+                "model":"observed", "input_tokens":expected_input, "output_tokens":3,
+                "cache_read_tokens":5, "cache_write_tokens":null
+            }])
+        );
+        assert_eq!(signals["cost_usd"], 0.1);
+        assert_eq!(
+            fs::read(path).unwrap(),
+            original,
+            "historical reads stay read-only"
+        );
+    }
+}
+
+#[test]
 fn session_signals_sum_by_kind_and_trends_split_by_trace_harness_version() {
     let scenario = Scenario::new();
     let first = trace(

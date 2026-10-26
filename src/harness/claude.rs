@@ -53,18 +53,19 @@ impl Adapter for Claude {
     fn trial_session(&self, choice: &Choice, resume: Option<&str>, prompt: &str) -> Invocation {
         let mut invocation = self.code_review_session(choice, resume, prompt);
         let at = invocation.args.len() - 1;
-        invocation.args.splice(
-            at..at,
-            [
-                "--disallowedTools".to_string(),
-                "WebSearch,WebFetch".to_string(),
-            ],
-        );
+        // One argument: the flag takes every following word as a tool name,
+        // so a separate value would also take the prompt after it.
+        invocation
+            .args
+            .insert(at, "--disallowedTools=WebSearch,WebFetch".to_string());
         invocation
     }
-    fn check(&self, choice: &mut Choice) -> Result<()> {
+    fn check(&self, choice: &mut Choice, probe: super::Probe) -> Result<()> {
         super::check_sign_in(self, &["auth", "status"])?;
-        test_call(choice)
+        match probe {
+            super::Probe::Allow => test_call(choice),
+            super::Probe::Skip => Ok(()),
+        }
     }
     fn summary(&self, choice: &Choice, prompt: &str, _prompt_file: &Path) -> Invocation {
         let mut invocation = self.session(choice, None, prompt);
@@ -172,6 +173,13 @@ const TEST_PROMPT: &str = "Reply with OK.";
 /// checked with a test call, as a Ticket run checks it, and on a refusal the Model
 /// and Effort are asked again.
 fn ask_claude(outside: &mut dyn Terminal, current: &ModelAndEffort) -> Result<ModelAndEffort> {
+    // Suggested settings from https://code.claude.com/docs/en/model-config#model-aliases.
+    // Reviewed 2026-10-25; refresh from that page when updating Claude Setup.
+    // Claude resolves alias versions; these suggestions never restrict Model IDs.
+    outside.say(
+        "Claude's Model suggestions: default, best, fable, opus, sonnet, haiku, opusplan, sonnet[1m], opus[1m]. Type any Model ID, or press Enter to keep the default shown."
+            .into(),
+    );
     loop {
         let chosen = ModelAndEffort {
             model: ask_setting(outside, "Model", Harness::Claude, current.model.as_deref())?,
@@ -229,19 +237,24 @@ mod tests {
         let choice = Choice::default();
         for resume in [None, Some("session-id")] {
             let trial = Claude.trial_session(&choice, resume, "review");
-            let at = trial
-                .args
-                .iter()
-                .position(|arg| arg == "--disallowedTools")
-                .expect("a Trial must deny web tools");
-            assert_eq!(trial.args[at + 1], "WebSearch,WebFetch");
+            // One argument: the flag takes every following word as a tool,
+            // so a separate value would swallow the prompt after it.
+            assert!(
+                trial
+                    .args
+                    .iter()
+                    .any(|arg| arg == "--disallowedTools=WebSearch,WebFetch"),
+                "a Trial must deny web tools: {:?}",
+                trial.args
+            );
+            assert!(!trial.args.iter().any(|arg| arg == "--disallowedTools"));
             assert_eq!(trial.args.last().unwrap(), "review");
             assert!(
                 !Claude
                     .session(&choice, resume, "review")
                     .args
                     .iter()
-                    .any(|arg| arg == "--disallowedTools")
+                    .any(|arg| arg.starts_with("--disallowedTools"))
             );
         }
     }

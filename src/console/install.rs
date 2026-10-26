@@ -108,7 +108,22 @@ fi
 # Read this script, then run it with sudo sh.
 set -eu
 
-{preflight}cat > /etc/systemd/system/thirdshift-console.service <<'THIRDSHIFT_UNIT'
+{preflight}if command -v getenforce >/dev/null 2>&1 && [ "$(getenforce 2>/dev/null)" = Enforcing ]; then
+    printf '%s\n' 'Warning: SELinux can block the Console. See https://github.com/JacobStephens2/thirdshift/issues/1078' >&2
+fi
+
+if ! command -v curl >/dev/null 2>&1; then
+    printf '%s\n' 'Install curl before running this script; it checks the Console localhost port.' >&2
+    exit 1
+fi
+
+console_failed() {{
+    printf '%s\n' 'thirdshift-console.service did not become active and answer on 127.0.0.1:{port}. Last journal lines:' >&2
+    journalctl -u thirdshift-console.service -n 50 --no-pager >&2 || true
+    exit 1
+}}
+
+cat > /etc/systemd/system/thirdshift-console.service <<'THIRDSHIFT_UNIT'
 [Unit]
 Description=thirdshift Console
 After=network.target
@@ -126,9 +141,19 @@ THIRDSHIFT_UNIT
 
 systemctl daemon-reload
 systemctl enable thirdshift-console.service
-systemctl restart thirdshift-console.service
+systemctl restart thirdshift-console.service || console_failed
 
-{site}{finish}"#
+attempt=1
+# Any HTTP response counts, including the Console sign-in response.
+until systemctl is-active --quiet thirdshift-console.service &&
+    curl --disable --noproxy '*' --silent --output /dev/null --connect-timeout 1 --max-time 1 http://127.0.0.1:{port}/; do
+    [ "$attempt" -lt 15 ] || console_failed
+    attempt=$((attempt + 1))
+    sleep 1
+done
+
+{site}{finish}"#,
+        port = config.console.port
     ))
 }
 
