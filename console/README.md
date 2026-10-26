@@ -286,6 +286,10 @@ That Peek's Copy CLI copies its `thirdshift show '<command>' --json` line; if
 the browser refuses the clipboard, the line is selected to copy by keyboard,
 and stays selected through live refresh.
 
+After a build on Linux, `python3 console/reproductions/peek-cache-contention.py`
+checks that parsing another Command's cold Session trace does not delay cached
+Command details.
+
 Zoom fits a parent span or a padded window around a call. The sticky axis keeps
 the zoom notice and Zoom out control visible; the slowest calls re-rank within
 the window. Folds, selection, zoom and Peek disclosures survive live refresh.
