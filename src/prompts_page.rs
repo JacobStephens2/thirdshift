@@ -332,6 +332,7 @@ fn prompts() -> Vec<Prompt> {
                 SKILL_NAME,
                 std::path::Path::new(SKILL_PATH),
                 &[],
+                true,
             ),
         },
         Prompt {
@@ -348,6 +349,7 @@ fn prompts() -> Vec<Prompt> {
                     EARLIER_STEP.to_string(),
                     std::path::PathBuf::from(EARLIER_RESULT),
                 )],
+                false,
             ),
         },
     ];

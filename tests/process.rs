@@ -138,10 +138,10 @@ description = \"Review the diff\"
 
 [[steps]]
 name = \"review\"
-command = \"echo hi\"
+bogus = \"echo hi\"
 ",
                 ),
-                ":6: unknown key: command",
+                ":6: unknown key: bogus",
             ),
             (
                 "ticket-run",
@@ -161,6 +161,64 @@ skill = \"not-a-skill\"
 ",
                 ),
                 ":6: skill not found:",
+            ),
+            (
+                "review",
+                Some(
+                    "\
+version = 1
+description = \"Review the diff\"
+
+[[steps]]
+name = \"review\"
+skill = \"code-review\"
+command = \"echo hi\"
+",
+                ),
+                ":7: exactly one kind: step review has more than one kind",
+            ),
+            (
+                "review",
+                Some(
+                    "\
+version = 1
+description = \"Review the diff\"
+
+[[steps]]
+name = \"review\"
+command = \"\"
+",
+                ),
+                ":6: exactly one kind: command must not be empty",
+            ),
+            (
+                "review",
+                Some(
+                    "\
+version = 1
+description = \"Review the diff\"
+
+[[steps]]
+name = \"review\"
+command = 1
+",
+                ),
+                ":6: exactly one kind: command must be a string",
+            ),
+            (
+                "review",
+                Some(
+                    "\
+version = 1
+description = \"Review the diff\"
+
+[[steps]]
+name = \"review\"
+optional = \"yes\"
+skill = \"code-review\"
+",
+                ),
+                ":6: optional: optional must be a boolean",
             ),
         ];
         for (name, body, expect) in cases {
@@ -431,6 +489,198 @@ printf 'judged' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
 }
 
 #[test]
+fn check_prints_a_command_step_and_does_not_run_it() {
+    let scenario = Scenario::new();
+    let marker = scenario.path("command-ran");
+    write_process(
+        &scenario,
+        "notes",
+        &format!(
+            "\
+version = 1
+description = \"Touch a file\"
+
+[[steps]]
+name = \"gather\"
+command = \"touch {}\"
+optional = true
+",
+            marker.display()
+        ),
+    );
+
+    let result = scenario.run(&["process", "check", "notes"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(!marker.exists(), "check ran the command");
+    assert!(scenario.claude_calls().is_empty(), "a session started");
+    assert!(
+        result.stdout.contains(&format!(
+            "gather: command touch {} (optional)",
+            marker.display()
+        )),
+        "{}",
+        result.stdout
+    );
+    assert!(
+        result
+            .stdout
+            .contains("throwaway worktree at the Base branch")
+    );
+    assert!(!process_dir(&scenario).exists());
+    assert_eq!(scenario.launch_git(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn a_command_step_runs_in_the_worktree_and_a_later_session_reads_its_output() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "notes",
+        r#"
+version = 1
+description = "Gather, then read"
+
+[[steps]]
+name = "gather"
+command = """
+printf 'from-command\n' > marker.txt
+printf 'cwd=%s\n' "$(pwd)"
+printf 'results=%s\n' "$THIRDSHIFT_RESULTS_DIR"
+printf 'result=%s\n' "$THIRDSHIFT_STEP_RESULT"
+if [ -n "${THIRDSHIFT_ISSUE_URL+x}" ]; then printf 'issue=set\n'; else printf 'issue=unset\n'; fi
+printf 'stderr-note\n' >&2
+"""
+
+[[steps]]
+name = "read"
+skill = "code-review"
+"#,
+    );
+    scenario.agent_does(
+        r#"
+path=$(printf '%s\n' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Earlier Step result gather: //p')
+test -n "$path"
+expected=$(printf 'cwd=%s\nresults=%s\nresult=%s\nissue=unset\nstderr-note\n' "$(pwd)" "$(dirname "$path")" "$path")
+test "$(cat "$path")" = "$expected"
+test "$(cat marker.txt)" = "from-command"
+rm marker.txt
+printf 'read' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&["process", "notes"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "read\n");
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 1, "{}", result.stderr);
+    let cwd = Path::new(calls[0]["cwd"].as_str().unwrap());
+    assert_ne!(cwd, scenario.launch_dir());
+    assert!(!cwd.exists(), "worktree was kept: {}", result.stderr);
+    let prompt = calls[0]["prompt"].as_str().unwrap();
+    assert!(prompt.contains("Earlier Step result gather:"), "{prompt}");
+    assert!(!prompt.contains("This is the first Step"), "{prompt}");
+    let (log_path, log) = command_log(&scenario);
+    let gathered = fs::read_to_string(log_path.with_extension("steps").join("gather.txt")).unwrap();
+    assert!(gathered.contains("issue=unset\n"), "{gathered}");
+    assert!(gathered.contains("stderr-note\n"), "{gathered}");
+    assert!(step_line(&log, "gather").contains("succeeded"), "{log}");
+    assert!(step_line(&log, "read").contains("succeeded"), "{log}");
+    assert_eq!(scenario.launch_git(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn an_optional_step_failure_is_recorded_and_the_process_succeeds() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "notes",
+        r#"
+version = 1
+description = "Keep going after an optional failure"
+
+[[steps]]
+name = "flaky"
+command = "printf 'partial\n' >&2; exit 9"
+optional = true
+
+[[steps]]
+name = "after"
+skill = "code-review"
+"#,
+    );
+    scenario.agent_does(
+        r#"
+printf '%s\n' "$FAKE_CLAUDE_PROMPT" | grep -q 'Earlier Step result flaky:' && exit 1
+printf '%s\n' "$FAKE_CLAUDE_PROMPT" | grep -q 'This is the first Step' && exit 1
+printf '%s\n' "$FAKE_CLAUDE_PROMPT" | grep -q 'No earlier Step has a result.'
+printf 'kept' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&["process", "notes"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "kept\n");
+    assert_eq!(scenario.claude_calls().len(), 1, "{}", result.stderr);
+    let (_, log) = command_log(&scenario);
+    let failed = step_line(&log, "flaky");
+    assert!(failed.contains("failed"), "{log}");
+    assert!(failed.contains("exit status 9"), "{failed}");
+    assert!(step_line(&log, "after").contains("succeeded"), "{log}");
+    let record = process_record(&scenario);
+    assert_eq!(record["outcome"], "succeeded");
+    assert!(record["cause"].is_null(), "{}", record["cause"]);
+}
+
+#[test]
+fn a_failing_command_stops_the_process_and_the_log_names_its_exit_status() {
+    let scenario = Scenario::new();
+    let marker = scenario.path("later-step");
+    write_process(
+        &scenario,
+        "notes",
+        &format!(
+            "\
+version = 1
+description = \"Fail, then continue\"
+
+[[steps]]
+name = \"fail\"
+command = \"printf 'nope\\n' >&2; exit 4\"
+optional = false
+
+[[steps]]
+name = \"later\"
+command = \"touch {}\"
+
+[[steps]]
+name = \"read\"
+skill = \"code-review\"
+",
+            marker.display()
+        ),
+    );
+    scenario.agent_does("printf 'read' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+
+    let result = scenario.run(&["process", "notes"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert!(!marker.exists(), "a later command ran");
+    assert!(scenario.claude_calls().is_empty(), "a later session ran");
+    let (_, log) = command_log(&scenario);
+    let failed = step_line(&log, "fail");
+    assert!(failed.contains("failed"), "{log}");
+    assert!(failed.contains("exit status 4"), "{failed}");
+    assert!(!log.contains("step later:"), "{log}");
+    assert!(!log.contains("step read:"), "{log}");
+    let record = process_record(&scenario);
+    assert_eq!(record["outcome"], "failed");
+}
+
+#[test]
 fn a_failed_step_fails_the_process_and_later_steps_do_not_run() {
     let scenario = Scenario::new();
     write_process(
@@ -557,6 +807,60 @@ fn interrupting_a_resource_wait_starts_no_session() {
     assert!(scenario.claude_calls().is_empty());
     let record = process_record(&scenario);
     assert_eq!(record["outcome"], "interrupted");
+}
+
+#[test]
+fn stop_interrupts_a_running_command_step() {
+    let scenario = Scenario::new();
+    let started = scenario.path("started");
+    let later = scenario.path("later-step");
+    write_process(
+        &scenario,
+        "notes",
+        &format!(
+            "\
+version = 1
+description = \"Loop until stopped\"
+
+[[steps]]
+name = \"wait\"
+command = \"touch '{}'; while true; do sleep 0.05; done\"
+optional = true
+
+[[steps]]
+name = \"later\"
+command = \"touch '{}'\"
+",
+            started.display(),
+            later.display()
+        ),
+    );
+    let mut held = scenario.run_until(&["process", "notes"], &[], "started");
+    let status = scenario.run(&["status", "--json"]);
+    assert_eq!(status.code, Some(0), "{}", status.stderr);
+    let status: serde_json::Value = serde_json::from_str(&status.stdout).unwrap();
+    let command = status["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|command| command["kind"] == "Process")
+        .unwrap_or_else(|| panic!("no Process in {status}"));
+    let name = command["name"].as_str().unwrap();
+    let stopped = scenario.run(&["stop", name]);
+    if stopped.code != Some(0) {
+        held.signal("TERM");
+    }
+    let ended = held.finish();
+
+    assert_eq!(stopped.code, Some(0), "{}", stopped.stderr);
+    assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+    assert!(scenario.claude_calls().is_empty(), "a session started");
+    assert!(!later.exists(), "a later step ran");
+    let record = process_record(&scenario);
+    assert_eq!(record["outcome"], "interrupted");
+    let (_, log) = command_log(&scenario);
+    assert!(step_line(&log, "wait").contains("interrupted"), "{log}");
+    assert!(!log.contains("step later:"), "{log}");
 }
 
 #[test]
@@ -721,6 +1025,23 @@ parallel = \"g\"
         (
             "\
 version = 1
+description = \"Commands\"
+
+[[steps]]
+name = \"a\"
+command = \"true\"
+parallel = \"g\"
+
+[[steps]]
+name = \"b\"
+command = \"true\"
+parallel = \"g\"
+",
+            ":12: shared worktree:",
+        ),
+        (
+            "\
+version = 1
 description = \"Missing\"
 
 [[steps]]
@@ -804,11 +1125,24 @@ printf 'judged' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
         assert_ne!(cwd, scenario.launch_dir());
         assert!(!cwd.exists(), "{step} worktree kept: {}", cwd.display());
         directories.push(cwd.to_path_buf());
-        if step == "judge" {
-            assert!(!prompt.contains("This is the first Step"), "{prompt}");
-        } else {
+        if step == "claude" {
             assert!(
                 prompt.contains("This is the first Step. No earlier Step has a result."),
+                "{step}: {prompt}"
+            );
+        } else if step == "judge" {
+            assert!(!prompt.contains("This is the first Step"), "{prompt}");
+            assert!(
+                !prompt.contains("No earlier Step has a result."),
+                "{prompt}"
+            );
+        } else {
+            assert!(
+                prompt.contains("No earlier Step has a result."),
+                "{step}: {prompt}"
+            );
+            assert!(
+                !prompt.contains("This is the first Step"),
                 "{step}: {prompt}"
             );
         }
