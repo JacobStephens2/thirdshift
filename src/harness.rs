@@ -1,9 +1,9 @@
-//! The Harness a Command's agent sessions run on, with its Model and Effort:
-//! one [`Choice`] per Command, made by the command, else the User config,
-//! else the default, checked before any work, passed on to every session and
-//! child Run, and recorded with what the Command did. A Security review is
-//! the one session that may run on another: the User config's
-//! `security.harness`, when set (ADR-0021).
+//! The Harness a session runs on, with its Model and Effort. A Command
+//! chooses one, by the command, else the User config, else the default,
+//! checked before any work. A Step defaults to that Command's choice and
+//! may name its own. A Security review may still run on another: the User
+//! config's `security.harness`, when set, falling back to the default
+//! Harness when it can't start (ADR-0021).
 
 use std::fmt;
 use std::process::{Command, Output};
@@ -157,9 +157,11 @@ pub enum ChosenBy {
     SecurityConfig,
     /// Neither: Claude Code, the default.
     Default,
+    /// A Process Step named its Harness.
+    Step,
 }
 
-/// The Harness, Model and Effort every session of a Command runs on.
+/// The Harness, Model and Effort a session runs on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Choice {
     pub harness: Harness,
@@ -355,6 +357,7 @@ impl fmt::Display for ChosenBy {
                 "the default, as neither the harness flag nor harness.default in the User \
                  config names one"
             }
+            ChosenBy::Step => "the Step",
         })
     }
 }

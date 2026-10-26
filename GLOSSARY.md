@@ -76,14 +76,14 @@ The message thirdshift starts or resumes an agent session with. It carries the *
 _Avoid_: instructions, system prompt
 
 **Harness**:
-The headless agent CLI that runs every agent session of a **Command**, named as its CLI is: Claude Code (`claude`), Codex (`codex`), Antigravity CLI (`agy`), Grok Build (`grok`), Muse Code (`muse`) or OpenCode (`opencode`). One per Command, its child Ticket runs and every **Resume** and **Repair** included, except the **Security review**, which runs on the User config's `security.harness` when that is set, falling back to the default Harness when it can't start. Chosen by the command, else, for a **Security run**, the User config's `security.harness`, else the **User config**'s default Harness, else Claude Code.
+The headless agent CLI that runs an agent session, named as its CLI is: Claude Code (`claude`), Codex (`codex`), Antigravity CLI (`agy`), Grok Build (`grok`), Muse Code (`muse`) or OpenCode (`opencode`). One per **Step**, defaulting to the **Command**'s, its child Ticket runs and every **Resume** and **Repair** included, except the **Security review**, which runs on the User config's `security.harness` when that is set, falling back to the default Harness when it can't start. Chosen by the Step, else the command, else, for a **Security run**, the User config's `security.harness`, else the **User config**'s default Harness, else Claude Code.
 _Avoid_: agent, provider, backend
 
 **Model**:
-The model the **Harness** runs its sessions on, such as Opus 5.5 or GPT-6.1-Sol. One per **Command**, chosen by the command, else the **User config**'s choice for that Harness, else the Harness's own default.
+The model a **Harness** runs a session on, such as Opus 5.5 or GPT-6.1-Sol. One per **Step**, defaulting to the **Command**'s, chosen by the Step, else the command, else the **User config**'s choice for that Harness, else the Harness's own default.
 
 **Effort**:
-How hard the **Model** reasons in each session, such as `high` or `max`. One per **Command**, chosen the way the Model is.
+How hard the **Model** reasons in a session, such as `high` or `max`. One per **Step**, defaulting to the **Command**'s, chosen the way the Model is.
 _Avoid_: reasoning level, thinking budget
 
 **Resume**:

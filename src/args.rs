@@ -20,8 +20,15 @@ use crate::run::Goal;
 /// What `thirdshift process` was asked to do.
 pub enum ProcessAction {
     List,
-    Check(String),
-    Run(String),
+    Check(ProcessRun),
+    Run(ProcessRun),
+}
+
+/// A Custom process to check or run, and the Harness, Model and Effort the
+/// command asked for. A Step that names one of its own does not use these.
+pub struct ProcessRun {
+    pub name: String,
+    pub asked: harness::Asked,
 }
 
 /// What thirdshift was asked to do.
@@ -832,21 +839,54 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
     Ok(asked)
 }
 
+const PROCESS_USAGE: &str = "\
+usage: thirdshift process [check] <name> [harness <name>] [model <model>] [effort <level>]";
+
 fn parse_process(args: &[String]) -> Result<ProcessAction> {
-    match args {
-        [] => Ok(ProcessAction::List),
-        [keyword] if keyword == "check" => bail!("usage: thirdshift process check <name>"),
-        [name] => Ok(ProcessAction::Run(process_name(name)?)),
-        [keyword, name] if keyword == "check" => Ok(ProcessAction::Check(process_name(name)?)),
-        _ => bail!("usage: thirdshift process [check <name> | <name>]"),
+    let mut check = false;
+    let mut name = None;
+    let mut asked = harness::Asked::default();
+    let mut rest = args.iter();
+    while let Some(arg) = rest.next() {
+        match arg.as_str() {
+            "harness" | "--harness" => ask_harness(&mut asked.harness, arg, rest.next())?,
+            "model" | "--model" => ask_word(
+                &mut asked.model_and_effort.model,
+                arg,
+                rest.next(),
+                "a model",
+            )?,
+            "effort" | "--effort" => ask_word(
+                &mut asked.model_and_effort.effort,
+                arg,
+                rest.next(),
+                "an effort level",
+            )?,
+            "check" if !check && name.is_none() => check = true,
+            _ if name.is_none() && !arg.starts_with('-') => name = Some(process_name(arg)?),
+            _ => bail!("{PROCESS_USAGE}"),
+        }
     }
+    let Some(name) = name else {
+        return if !check && asked == harness::Asked::default() {
+            Ok(ProcessAction::List)
+        } else {
+            bail!("{PROCESS_USAGE}")
+        };
+    };
+    let command = ProcessRun { name, asked };
+    Ok(if check {
+        ProcessAction::Check(command)
+    } else {
+        ProcessAction::Run(command)
+    })
 }
 
 /// A process name is one path component. A slash is an argument error, not a
 /// file rule: the file is `~/.thirdshift/processes/<name>.toml`.
 fn process_name(name: &str) -> Result<String> {
     if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
-        bail!("usage: thirdshift process [check <name> | <name>]");
+        bail!("{PROCESS_USAGE}");
     }
     Ok(name.to_string())
 }

@@ -844,39 +844,53 @@ skill = "thirdshift-to-spec"
 [[steps]]
 name = "review"
 skill = "thirdshift-code-review"
+harness = "codex"
+model = "gpt-6.1-sol"
+effort = "high"
 ```
 
 `version` must be `1`. Each Step has a `name` and one kind. This version's kind
-is `skill`, looked up the same way as `thirdshift skill`.
+is `skill`, looked up the same way as `thirdshift skill`. `harness`, `model`
+and `effort` are optional.
 
 ```sh
 thirdshift process
 thirdshift process check gather-review
 thirdshift process gather-review
+thirdshift process gather-review --harness claude --model opus --effort high
 ```
 
 `thirdshift process` lists each Custom process and its description. `check`
 validates the file and prints the plan: the description, a throwaway worktree
-at the Base branch, the Command's Harness, Model and Effort, and each Step's
-skill. It starts no session. Running the process starts the Steps in order in
-one throwaway worktree, detached at the Base branch and cleaned up as a
-standalone skill's worktree is. The Base branch is the branch checked out in
-the launch directory, at its commit on origin. The launch checkout stays
-untouched.
+at the Base branch, and each Step's skill, Harness, Model and Effort, where
+each came from (`Step`, `command`, `User config` or `default`), and whether
+that Harness starts. It starts no session. Running the process starts the
+Steps in order in one throwaway worktree, detached at the Base branch and
+cleaned up as a standalone skill's worktree is. The Base branch is the branch
+checked out in the launch directory, at its commit on origin. The launch
+checkout stays untouched.
 
-Every Step uses the Command's Harness, Model and Effort: the User config
-default, or the Harness default when that is unset. Each Step's final message
-is stored beside the Command log. The next Step's session prompt names those
-paths. The last Step's final message goes to stdout. Progress and failure
-causes go to stderr. A failed Step fails the process and later Steps do not
-run. Exit codes match `thirdshift skill`: `0` when the last Step finishes,
-`1` when a Step or a check fails, `2` when the arguments are wrong.
+A Step that names nothing uses the Command's Harness, Model and Effort. The
+command's `harness`, `model` and `effort` words, with or without dashes, set
+that, then the User config, then the Harness's default. A Step that names a
+different Harness takes its Model and Effort from the Step, else the User
+config's choice for that Harness, else the Harness's default. The command's
+model and effort stay with the Command's Harness. Each distinct Harness is
+checked before the first session. One that can't start fails the Command
+before any session, naming the Step and the Harness, and is not replaced
+with another. Each Step's final message is stored beside the Command log.
+The next Step's session prompt names those paths. The last Step's final
+message goes to stdout. Progress and failure causes go to stderr. A failed
+Step fails the process and later Steps do not run. Exit codes match
+`thirdshift skill`: `0` when the last Step finishes, `1` when a Step or a
+check fails, `2` when the arguments are wrong.
 
 `check` and running refuse a missing file, a file that is not valid TOML, a
-missing or wrong `version`, an unknown key, a Step without exactly one kind,
-a skill that cannot be found, and a reserved name (`check`, `list`,
-`ticket-run`, `spec-run`, `architect-run`, `pickup-run`, `security-run`).
-The refusal names the rule and the file line, and starts no session.
+missing or wrong `version`, an unknown key, an unknown Harness, a Step
+without exactly one kind, a skill that cannot be found, and a reserved name
+(`check`, `list`, `ticket-run`, `spec-run`, `architect-run`, `pickup-run`,
+`security-run`). The refusal names the rule and the file line, and starts
+no session.
 
 The Command is recorded as kind `Process`, with the process name. Its Command
 log has one line per Step: the Step's name, duration, outcome and cause. Stop

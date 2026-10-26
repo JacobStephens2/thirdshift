@@ -92,8 +92,8 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
        thirdshift process                          List Custom processes (experimental)
-       thirdshift process <name>                   Run a Custom process (experimental)
-       thirdshift process check <name>             Validate a Custom process and print its plan (experimental)
+       thirdshift process <name>                   Run a Custom process; Steps that name none use its harness, model and effort (experimental)
+       thirdshift process check <name>             Print each Step's Harness, Model, Effort and whether its Harness starts (experimental)
        thirdshift score                               Sample merged factory work and propose Bug origins
        thirdshift scores [<pull request>] [--mine] [--json]  Show Scores; --mine enters yours
        thirdshift bug-origins [<issue>] [--json]       Show origins; --confirm / --correct <pr> / --none settles one

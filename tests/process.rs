@@ -162,6 +162,21 @@ skill = \"not-a-skill\"
                 ),
                 ":6: skill not found:",
             ),
+            (
+                "review",
+                Some(
+                    "\
+version = 1
+description = \"Review the diff\"
+
+[[steps]]
+name = \"review\"
+skill = \"code-review\"
+harness = \"nope\"
+",
+                ),
+                ":7: unknown harness: nope",
+            ),
         ];
         for (name, body, expect) in cases {
             let scenario = Scenario::new();
@@ -331,7 +346,10 @@ skill = \"code-review\"
             .stdout
             .contains("throwaway worktree at the Base branch")
     );
-    assert!(result.stdout.contains("claude"));
+    assert!(result.stdout.contains("harness: claude (default)"));
+    assert!(result.stdout.contains("model: default (default)"));
+    assert!(result.stdout.contains("effort: default (default)"));
+    assert_eq!(result.stdout.matches("starts: yes").count(), 2);
     assert!(result.stdout.contains("gather: thirdshift-to-spec"));
     assert!(result.stdout.contains("review: thirdshift-code-review"));
     assert!(result.stdout.contains("SKILL.md"), "{}", result.stdout);
@@ -589,6 +607,409 @@ fn stop_interrupts_a_running_process() {
     assert!(name.starts_with("process-notes-"), "{name}");
     let record = process_record(&scenario);
     assert_eq!(record["outcome"], "interrupted");
+}
+
+#[test]
+fn steps_on_claude_codex_and_agy_use_the_model_and_effort_each_step_asked_for() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "families",
+        "\
+version = 1
+description = \"One skill on three Harnesses\"
+
+[[steps]]
+name = \"claude\"
+skill = \"to-spec\"
+harness = \"claude\"
+model = \"opus\"
+effort = \"high\"
+
+[[steps]]
+name = \"codex\"
+skill = \"code-review\"
+harness = \"codex\"
+model = \"gpt-6.1-sol\"
+effort = \"max\"
+
+[[steps]]
+name = \"agy\"
+skill = \"pr\"
+harness = \"agy\"
+model = \"gemini-3.8-flash\"
+effort = \"high\"
+",
+    );
+    scenario.agent_does("printf 'done' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+
+    let result = scenario.run(&["process", "families"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "done\n");
+    let claude = scenario.claude_calls();
+    let codex = scenario.codex_calls();
+    let agy = scenario.agy_calls();
+    assert_eq!(claude.len(), 1, "{}", result.stderr);
+    assert_eq!(codex.len(), 1, "{}", result.stderr);
+    assert_eq!(agy.len(), 1, "{}", result.stderr);
+    assert_flag(&claude[0], "--model", "opus");
+    assert_flag(&claude[0], "--effort", "high");
+    assert_flag(&codex[0], "-m", "gpt-6.1-sol");
+    assert!(
+        argv_of(&codex[0]).contains(&"model_reasoning_effort=\"max\"".to_string()),
+        "{:?}",
+        argv_of(&codex[0])
+    );
+    assert_flag(&agy[0], "--model", "gemini-3.8-flash");
+    assert_flag(&agy[0], "--effort", "high");
+    let claude_prompt = claude[0]["prompt"].as_str().unwrap();
+    assert!(
+        claude_prompt.contains("This is the first Step. No earlier Step has a result."),
+        "{claude_prompt}"
+    );
+    let codex_prompt = codex[0]["prompt"].as_str().unwrap();
+    assert!(
+        codex_prompt.contains("Earlier Step result claude:"),
+        "{codex_prompt}"
+    );
+    let agy_prompt = agy[0]["prompt"].as_str().unwrap();
+    assert!(
+        agy_prompt.contains("Earlier Step result claude:"),
+        "{agy_prompt}"
+    );
+    assert!(
+        agy_prompt.contains("Earlier Step result codex:"),
+        "{agy_prompt}"
+    );
+}
+
+#[test]
+fn a_step_that_names_nothing_uses_the_commands_harness_model_and_effort() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "\
+[harness]
+default = \"agy\"
+
+[harness.agy]
+model = \"gemini-3.8-flash\"
+effort = \"low\"
+
+[harness.codex]
+model = \"gpt-6-luna\"
+effort = \"low\"
+",
+    );
+    write_process(&scenario, "notes", REVIEW);
+    scenario.agent_does("printf 'done' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+
+    let flagged = scenario.run(&[
+        "process",
+        "notes",
+        "--harness",
+        "codex",
+        "--model",
+        "gpt-6.1-sol",
+        "--effort",
+        "max",
+    ]);
+
+    assert_eq!(flagged.code, Some(0), "{}", flagged.stderr);
+    assert!(scenario.claude_calls().is_empty(), "{}", flagged.stderr);
+    assert!(scenario.agy_calls().is_empty(), "{}", flagged.stderr);
+    let codex = scenario.codex_calls();
+    assert_eq!(codex.len(), 1, "{}", flagged.stderr);
+    assert_flag(&codex[0], "-m", "gpt-6.1-sol");
+    assert!(
+        argv_of(&codex[0]).contains(&"model_reasoning_effort=\"max\"".to_string()),
+        "{:?}",
+        argv_of(&codex[0])
+    );
+
+    let configured = Scenario::new();
+    configured.user_config_is(
+        "\
+[harness]
+default = \"agy\"
+
+[harness.agy]
+model = \"gemini-3.8-flash\"
+effort = \"low\"
+",
+    );
+    write_process(&configured, "notes", REVIEW);
+    configured.agent_does("printf 'done' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+
+    let result = configured.run(&["process", "notes"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(configured.claude_calls().is_empty(), "{}", result.stderr);
+    assert!(configured.codex_calls().is_empty(), "{}", result.stderr);
+    let agy = configured.agy_calls();
+    assert_eq!(agy.len(), 1, "{}", result.stderr);
+    assert_flag(&agy[0], "--model", "gemini-3.8-flash");
+    assert_flag(&agy[0], "--effort", "low");
+}
+
+#[test]
+fn a_step_on_another_harness_keeps_that_harnesss_model_and_effort() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "\
+[harness.agy]
+model = \"gemini-3.8-flash\"
+effort = \"low\"
+",
+    );
+    write_process(
+        &scenario,
+        "notes",
+        "\
+version = 1
+description = \"Review the diff\"
+
+[[steps]]
+name = \"command\"
+skill = \"to-spec\"
+
+[[steps]]
+name = \"other\"
+skill = \"code-review\"
+harness = \"agy\"
+",
+    );
+    scenario.agent_does("printf 'done' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+
+    let result = scenario.run(&[
+        "process",
+        "--harness",
+        "codex",
+        "--model",
+        "gpt-6.1-sol",
+        "--effort",
+        "max",
+        "notes",
+    ]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(scenario.claude_calls().is_empty(), "{}", result.stderr);
+    let codex = scenario.codex_calls();
+    let agy = scenario.agy_calls();
+    assert_eq!(codex.len(), 1, "{}", result.stderr);
+    assert_eq!(agy.len(), 1, "{}", result.stderr);
+    assert_flag(&codex[0], "-m", "gpt-6.1-sol");
+    assert!(
+        argv_of(&codex[0]).contains(&"model_reasoning_effort=\"max\"".to_string()),
+        "{:?}",
+        argv_of(&codex[0])
+    );
+    assert_flag(&agy[0], "--model", "gemini-3.8-flash");
+    assert_flag(&agy[0], "--effort", "low");
+    let agy_argv = argv_of(&agy[0]);
+    assert!(
+        !agy_argv.iter().any(|arg| arg.contains("gpt-6.1-sol")),
+        "{agy_argv:?}"
+    );
+}
+
+#[test]
+fn check_names_where_each_step_got_its_harness_model_and_effort() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "\
+[harness]
+default = \"codex\"
+
+[harness.codex]
+model = \"gpt-6-luna\"
+effort = \"high\"
+
+[harness.claude]
+model = \"opus\"
+effort = \"high\"
+",
+    );
+    write_process(
+        &scenario,
+        "sources",
+        "\
+version = 1
+description = \"Where each setting came from\"
+
+[[steps]]
+name = \"configured\"
+skill = \"to-spec\"
+
+[[steps]]
+name = \"named\"
+skill = \"code-review\"
+harness = \"agy\"
+model = \"gemini-3.8-flash\"
+effort = \"low\"
+
+[[steps]]
+name = \"partial\"
+skill = \"pr\"
+harness = \"claude\"
+",
+    );
+
+    let configured = scenario.run(&["process", "check", "sources"]);
+
+    assert_eq!(configured.code, Some(0), "{}", configured.stderr);
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.codex_calls().is_empty());
+    assert!(scenario.agy_calls().is_empty());
+    assert!(
+        configured
+            .stdout
+            .contains("harness: codex (User config)\nmodel: gpt-6-luna (User config)\neffort: high (User config)\nstarts: yes"),
+        "{}",
+        configured.stdout
+    );
+    assert!(
+        configured.stdout.contains(
+            "harness: agy (Step)\nmodel: gemini-3.8-flash (Step)\neffort: low (Step)\nstarts: yes"
+        ),
+        "{}",
+        configured.stdout
+    );
+    assert!(
+        configured.stdout.contains(
+            "harness: claude (Step)\nmodel: opus (User config)\neffort: high (User config)\nstarts: yes"
+        ),
+        "{}",
+        configured.stdout
+    );
+
+    let flagged = scenario.run(&[
+        "process",
+        "check",
+        "sources",
+        "harness",
+        "codex",
+        "model",
+        "gpt-6.1-sol",
+    ]);
+
+    assert_eq!(flagged.code, Some(0), "{}", flagged.stderr);
+    assert!(
+        flagged.stdout.contains(
+            "harness: codex (command)\nmodel: gpt-6.1-sol (command)\neffort: high (User config)\nstarts: yes"
+        ),
+        "{}",
+        flagged.stdout
+    );
+    assert!(scenario.claude_calls().is_empty());
+    assert!(scenario.codex_calls().is_empty());
+    assert!(scenario.agy_calls().is_empty());
+}
+
+#[test]
+fn a_harness_that_cannot_start_fails_before_any_session() {
+    for check in [false, true] {
+        let scenario = Scenario::new();
+        write_process(
+            &scenario,
+            "notes",
+            "\
+version = 1
+description = \"Review the diff\"
+
+[[steps]]
+name = \"first\"
+skill = \"to-spec\"
+
+[[steps]]
+name = \"second\"
+skill = \"code-review\"
+harness = \"codex\"
+model = \"gpt-6.1-sol\"
+effort = \"high\"
+",
+        );
+        scenario.agent_does("printf 'done' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+        let args: &[&str] = if check {
+            &["process", "check", "notes"]
+        } else {
+            &["process", "notes"]
+        };
+
+        let result = scenario.run_with_env(args, &[("FAKE_CODEX_SIGNED_OUT", "1")]);
+
+        assert_eq!(result.code, Some(1), "check={check}: {}", result.stderr);
+        assert!(
+            result
+                .stderr
+                .contains("step second's Harness codex can't start"),
+            "check={check}: {}",
+            result.stderr
+        );
+        assert!(
+            result.stderr.contains("codex is not signed in"),
+            "check={check}: {}",
+            result.stderr
+        );
+        assert!(scenario.claude_calls().is_empty(), "check={check}");
+        assert!(scenario.codex_calls().is_empty(), "check={check}");
+        assert!(scenario.agy_calls().is_empty(), "check={check}");
+        assert!(!process_dir(&scenario).exists());
+        if check {
+            assert!(result.stdout.contains("starts: yes"), "{}", result.stdout);
+            assert!(result.stdout.contains("starts: no:"), "{}", result.stdout);
+        } else {
+            assert_eq!(result.stdout, "");
+        }
+
+        let inherited = Scenario::new();
+        write_process(&inherited, "notes", REVIEW);
+        inherited.agent_does("printf 'done' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+        let inherited_args: &[&str] = if check {
+            &["process", "check", "notes", "--harness", "codex"]
+        } else {
+            &["process", "notes", "--harness", "codex"]
+        };
+        let inherited_result =
+            inherited.run_with_env(inherited_args, &[("FAKE_CODEX_SIGNED_OUT", "1")]);
+        assert_eq!(
+            inherited_result.code,
+            Some(1),
+            "check={check}: {}",
+            inherited_result.stderr
+        );
+        assert!(
+            inherited_result
+                .stderr
+                .contains("step review's Harness codex can't start"),
+            "check={check}: {}",
+            inherited_result.stderr
+        );
+        assert!(inherited.claude_calls().is_empty(), "check={check}");
+        assert!(inherited.codex_calls().is_empty(), "check={check}");
+    }
+}
+
+fn argv_of(call: &serde_json::Value) -> Vec<String> {
+    call["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arg| arg.as_str().unwrap().to_string())
+        .collect()
+}
+
+fn assert_flag(call: &serde_json::Value, flag: &str, value: &str) {
+    let argv = argv_of(call);
+    let at = argv
+        .iter()
+        .position(|arg| arg == flag)
+        .unwrap_or_else(|| panic!("{flag} missing in {argv:?}"));
+    assert_eq!(
+        argv.get(at + 1).map(String::as_str),
+        Some(value),
+        "{argv:?}"
+    );
 }
 
 fn step_line<'a>(log: &'a str, name: &str) -> &'a str {

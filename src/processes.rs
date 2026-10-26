@@ -10,10 +10,10 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow};
 use toml_edit::{Document, Item, Key, Table};
 
-use crate::args::ProcessAction;
+use crate::args::{ProcessAction, ProcessRun};
 use crate::config::UserConfig;
 use crate::git::Git;
-use crate::harness::{Asked, Choice};
+use crate::harness::{self, Asked, Choice, ChosenBy, Harness};
 use crate::logs::{self, Begin, Work};
 use crate::skill;
 use crate::worktree::SkillWorktree;
@@ -39,18 +39,53 @@ struct StepDraft {
     name_line: usize,
     skill: String,
     skill_line: usize,
+    harness: Option<Harness>,
+    /// The line a refusal names: the Step's `harness` when it has one, else its name.
+    report_line: usize,
+    model: Option<String>,
+    effort: Option<String>,
 }
 
 struct ResolvedStep {
     name: String,
+    report_line: usize,
     skill_name: String,
     skill_path: PathBuf,
+    choice: Choice,
+    harness_source: Source,
+    model_source: Source,
+    effort_source: Source,
+    /// Why this Step's Harness can't start, when the preflight failed.
+    start_failure: Option<String>,
+}
+
+/// Where a Step's Harness, Model or Effort came from.
+#[derive(Clone, Copy)]
+enum Source {
+    Step,
+    Command,
+    UserConfig,
+    Default,
+}
+
+impl std::fmt::Display for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(match self {
+            Source::Step => "Step",
+            Source::Command => "command",
+            Source::UserConfig => "User config",
+            Source::Default => "default",
+        })
+    }
 }
 
 struct Prepared {
+    path: PathBuf,
     worktree: SkillWorktree,
     _written: WrittenGuard,
-    choice: Choice,
+    /// The Command's Harness, Model and Effort. A Step that names one of
+    /// its own uses that instead.
+    command: Choice,
     description: String,
     steps: Vec<ResolvedStep>,
 }
@@ -66,8 +101,8 @@ impl Drop for WrittenGuard {
 pub fn execute(action: ProcessAction) -> Result<String> {
     match action {
         ProcessAction::List => list(),
-        ProcessAction::Check(name) => check(&name),
-        ProcessAction::Run(name) => run(&name),
+        ProcessAction::Check(command) => check(&command),
+        ProcessAction::Run(command) => run(&command),
     }
 }
 
@@ -109,21 +144,29 @@ fn list() -> Result<String> {
     Ok(lines.join("\n"))
 }
 
-fn check(name: &str) -> Result<String> {
+fn check(command: &ProcessRun) -> Result<String> {
     interrupt::install()?;
     let config = UserConfig::load()?;
-    let prepared = prepare(name, &config)?;
-    Ok(plan(name, &prepared))
+    let prepared = prepare(&command.name, &command.asked, &config)?;
+    let text = plan(&command.name, &prepared);
+    if let Err(error) = started(&prepared) {
+        // The plan says whether each Harness starts, including one that can't.
+        println!("{text}");
+        return Err(error);
+    }
+    Ok(text)
 }
 
-fn run(name: &str) -> Result<String> {
+fn run(command: &ProcessRun) -> Result<String> {
     interrupt::install()?;
     let config = UserConfig::load()?;
-    let prepared = prepare(name, &config)?;
+    let name = &command.name;
+    let prepared = prepare(name, &command.asked, &config)?;
+    started(&prepared)?;
     let repo = launch::repo()?;
     logs::begin(Begin::Process(name));
     logs::configured(&config);
-    logs::started(Work::Process { repo: &repo, name }, &prepared.choice);
+    logs::started(Work::Process { repo: &repo, name }, &prepared.command);
     let result = execute_steps(name, &prepared);
     let (outcome, cause) = classify(&result);
     drop(prepared);
@@ -133,9 +176,7 @@ fn run(name: &str) -> Result<String> {
 }
 
 fn execute_steps(process: &str, prepared: &Prepared) -> Result<String> {
-    let adapter = prepared.choice.harness.adapter();
-    skills::link_into(prepared.worktree.path(), adapter)?;
-    adapter.link_instruction_fallback(prepared.worktree.path())?;
+    link_harnesses(prepared.worktree.path(), &prepared.steps)?;
     let results = logs::command_log_path()
         .context("a Process has no Command log")?
         .with_extension("steps");
@@ -179,7 +220,7 @@ fn run_step(
     crate::resources::wait()?;
     progress::step(format_args!(
         "running step {} with {}",
-        step.name, prepared.choice
+        step.name, step.choice
     ));
     let prompt = prompt::process_step(
         process,
@@ -190,10 +231,47 @@ fn run_step(
     );
     skill::run_session(
         prepared.worktree.path(),
-        &prepared.choice,
+        &step.choice,
         &format!("Step {}", step.name),
         &prompt,
     )
+}
+
+/// Link each distinct Harness's Factory skills before the first session.
+fn link_harnesses(worktree: &Path, steps: &[ResolvedStep]) -> Result<()> {
+    let mut linked = Vec::new();
+    for step in steps {
+        if linked.contains(&step.choice.harness) {
+            continue;
+        }
+        linked.push(step.choice.harness);
+        let adapter = step.choice.harness.adapter();
+        skills::link_into(worktree, adapter)?;
+        adapter.link_instruction_fallback(worktree)?;
+    }
+    Ok(())
+}
+
+/// The first Step whose Harness can't start, as a refusal. No session has run.
+fn started(prepared: &Prepared) -> Result<()> {
+    let Some(step) = prepared
+        .steps
+        .iter()
+        .find(|step| step.start_failure.is_some())
+    else {
+        return Ok(());
+    };
+    let reason = step.start_failure.as_deref().unwrap_or_default();
+    Err(rule(
+        &prepared.path,
+        step.report_line,
+        "harness",
+        format!(
+            "step {}'s Harness {} can't start: {reason}",
+            step.name,
+            step.choice.harness.name()
+        ),
+    ))
 }
 
 fn classify(result: &Result<String>) -> (String, Option<String>) {
@@ -221,10 +299,8 @@ fn one_line(error: &anyhow::Error) -> String {
 
 fn plan(name: &str, prepared: &Prepared) -> String {
     let mut text = format!(
-        "{name}: {description}\nthrowaway worktree at the Base branch\nharness: {choice} ({chosen})\n",
+        "{name}: {description}\nthrowaway worktree at the Base branch\n",
         description = prepared.description,
-        choice = prepared.choice,
-        chosen = prepared.choice.chosen_by,
     );
     for step in &prepared.steps {
         let _ = writeln!(
@@ -234,11 +310,37 @@ fn plan(name: &str, prepared: &Prepared) -> String {
             step.skill_name,
             step.skill_path.display()
         );
+        let _ = writeln!(
+            text,
+            "harness: {} ({})",
+            step.choice.harness.name(),
+            step.harness_source
+        );
+        let _ = writeln!(
+            text,
+            "model: {} ({})",
+            step.choice.model.as_deref().unwrap_or("default"),
+            step.model_source
+        );
+        let _ = writeln!(
+            text,
+            "effort: {} ({})",
+            step.choice.effort.as_deref().unwrap_or("default"),
+            step.effort_source
+        );
+        let _ = writeln!(
+            text,
+            "starts: {}",
+            match &step.start_failure {
+                None => "yes".to_string(),
+                Some(reason) => format!("no: {reason}"),
+            }
+        );
     }
     text.trim_end().to_string()
 }
 
-fn prepare(name: &str, config: &UserConfig) -> Result<Prepared> {
+fn prepare(name: &str, asked: &Asked, config: &UserConfig) -> Result<Prepared> {
     let path = process_path(name)?;
     refuse_reserved(&path, name)?;
     let text = read_process(&path)?;
@@ -246,34 +348,123 @@ fn prepare(name: &str, config: &UserConfig) -> Result<Prepared> {
     let base = launch::checked_out_base()?;
     let worktree = SkillWorktree::at(&Git::new(std::env::current_dir()?), base.origin_commit())?;
     let written = WrittenGuard;
+    let command = Choice::of(asked, &config.harness);
     let mut steps = Vec::new();
     for step in &file.steps {
-        steps.push(resolve(&path, step, worktree.path())?);
+        steps.push(resolve(
+            &path,
+            step,
+            worktree.path(),
+            &command,
+            asked,
+            config,
+        )?);
     }
-    let mut choice = Choice::of(&Asked::default(), &config.harness);
-    choice.check_without_probe()?;
     Ok(Prepared {
+        path,
         worktree,
         _written: written,
-        choice,
+        command,
         description: file.description,
         steps,
     })
 }
 
-fn resolve(path: &Path, step: &StepDraft, worktree: &Path) -> Result<ResolvedStep> {
-    match skills::find(worktree, &step.skill) {
-        Ok(skill) => Ok(ResolvedStep {
-            name: step.name.clone(),
-            skill_name: skill.name,
-            skill_path: skill.path,
-        }),
-        Err(error) => Err(rule(
-            path,
-            step.skill_line,
-            "skill not found",
-            format!("{error:#}"),
-        )),
+fn resolve(
+    path: &Path,
+    step: &StepDraft,
+    worktree: &Path,
+    command: &Choice,
+    asked: &Asked,
+    config: &UserConfig,
+) -> Result<ResolvedStep> {
+    let skill = match skills::find(worktree, &step.skill) {
+        Ok(skill) => skill,
+        Err(error) => {
+            return Err(rule(
+                path,
+                step.skill_line,
+                "skill not found",
+                format!("{error:#}"),
+            ));
+        }
+    };
+    let (mut choice, harness_source, model_source, effort_source) =
+        step_choice(step, command, asked, &config.harness);
+    let start_failure = match choice.check_without_probe() {
+        Ok(()) => None,
+        Err(error) => Some(one_line(&error)),
+    };
+    Ok(ResolvedStep {
+        name: step.name.clone(),
+        report_line: step.report_line,
+        skill_name: skill.name,
+        skill_path: skill.path,
+        choice,
+        harness_source,
+        model_source,
+        effort_source,
+        start_failure,
+    })
+}
+
+/// The Step's Harness, Model and Effort. One it leaves out uses the
+/// Command's, except a Step on another Harness: the command's model and
+/// effort belong to the Command's Harness, so that Step takes its Harness's
+/// User config, then that Harness's default, and is never silently given
+/// the command's model.
+fn step_choice(
+    step: &StepDraft,
+    command: &Choice,
+    asked: &Asked,
+    settings: &harness::Settings,
+) -> (Choice, Source, Source, Source) {
+    let (harness, harness_source, chosen_by) = match step.harness {
+        Some(harness) => (harness, Source::Step, ChosenBy::Step),
+        None => (
+            command.harness,
+            source_from(command.chosen_by),
+            command.chosen_by,
+        ),
+    };
+    let (model, model_source) = if let Some(model) = step.model.clone() {
+        (Some(model), Source::Step)
+    } else if harness == command.harness && asked.model_and_effort.model.is_some() {
+        (command.model.clone(), Source::Command)
+    } else {
+        match settings.of(harness).model.clone() {
+            Some(model) => (Some(model), Source::UserConfig),
+            None => (None, Source::Default),
+        }
+    };
+    let (effort, effort_source) = if let Some(effort) = step.effort.clone() {
+        (Some(effort), Source::Step)
+    } else if harness == command.harness && asked.model_and_effort.effort.is_some() {
+        (command.effort.clone(), Source::Command)
+    } else {
+        match settings.of(harness).effort.clone() {
+            Some(effort) => (Some(effort), Source::UserConfig),
+            None => (None, Source::Default),
+        }
+    };
+    (
+        Choice {
+            harness,
+            model,
+            effort,
+            chosen_by,
+        },
+        harness_source,
+        model_source,
+        effort_source,
+    )
+}
+
+fn source_from(chosen_by: ChosenBy) -> Source {
+    match chosen_by {
+        ChosenBy::Command => Source::Command,
+        ChosenBy::UserConfig | ChosenBy::SecurityConfig => Source::UserConfig,
+        ChosenBy::Default | ChosenBy::Step => Source::Default,
     }
 }
 
@@ -418,11 +609,17 @@ fn parse_steps(path: &Path, text: &str, line: usize, item: &Item) -> Result<Vec<
 fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Result<StepDraft> {
     let mut name = None;
     let mut skill = None;
+    let mut harness = None;
+    let mut model = None;
+    let mut effort = None;
     for (key, item) in table.iter() {
         let line = key_line(text, table.key(key));
         match key {
             "name" => name = Some(step_name(path, line, item)?),
             "skill" => skill = Some(step_skill(path, line, item)?),
+            "harness" => harness = Some(step_harness(path, line, item)?),
+            "model" => model = Some(step_word(path, line, item, "model")?),
+            "effort" => effort = Some(step_word(path, line, item, "effort")?),
             other => return Err(rule(path, line, "unknown key", other)),
         }
     }
@@ -437,12 +634,48 @@ fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Resu
             format!("step {name} has no kind"),
         ));
     };
+    let (harness, report_line) = match harness {
+        Some((harness, line)) => (Some(harness), line),
+        None => (None, name_line),
+    };
     Ok(StepDraft {
         name,
         name_line,
         skill,
         skill_line,
+        harness,
+        report_line,
+        model,
+        effort,
     })
+}
+
+fn step_harness(path: &Path, line: usize, item: &Item) -> Result<(Harness, usize)> {
+    let value = step_word(path, line, item, "harness")?;
+    let Some(harness) = Harness::named(&value) else {
+        return Err(rule(path, line, "unknown harness", &value));
+    };
+    Ok((harness, line))
+}
+
+fn step_word(path: &Path, line: usize, item: &Item, rule_name: &str) -> Result<String> {
+    let Some(value) = item.as_str() else {
+        return Err(rule(
+            path,
+            line,
+            rule_name,
+            format!("{rule_name} must be a string"),
+        ));
+    };
+    if value.trim().is_empty() {
+        return Err(rule(
+            path,
+            line,
+            rule_name,
+            format!("{rule_name} must not be empty"),
+        ));
+    }
+    Ok(value.to_string())
 }
 
 fn step_name(path: &Path, line: usize, item: &Item) -> Result<(String, usize)> {
