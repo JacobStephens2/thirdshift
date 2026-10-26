@@ -631,7 +631,8 @@ test("keyboard selection and the open peek survive an Inbox push", async t => {
     fixture.issue.title = 'Keyboard-selected Command after push';
     await replaceRecord(path, JSON.stringify(fixture));
     await row.locator('.issue-title').filter({ hasText: fixture.issue.title }).waitFor();
-    await page.locator('#peek').getByText(fixture.issue.title, { exact: true }).waitFor();
+    // The folded issue fact previews its title.
+    await page.locator('#peek summary').getByText(fixture.issue.title, { exact: true }).waitFor();
     assert.equal(await row.getAttribute('id'), id);
     assert.equal(await row.getAttribute('aria-current'), 'true');
     assert.equal(await page.locator('#peek').isVisible(), true);
@@ -1161,6 +1162,7 @@ test('History filters and Security findings and sessions work from a phone', asy
   assert.match(await page.title(), /^Security ·/);
   assert.deepEqual(streams, []);
   assert.deepEqual(errors, []);
+  await page.locator('#peek .peek-traces > summary').click();
   await page.locator('#peek a').filter({ hasText: 'Session trace:' }).click();
   await page.waitForURL('**/log?*');
   assert.match(await page.locator('body').textContent(), /Security Session output/);
@@ -1170,6 +1172,7 @@ test("Enter activates the focused Security session link", async t => {
   const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
   await page.goto(`${origin}/?page=security`);
   await page.locator('.peek-link').click();
+  await page.locator('#peek .peek-traces > summary').click();
   const sessionLink = page.locator('#peek a').filter({ hasText: 'Session trace:' });
   await sessionLink.waitFor();
   await sessionLink.focus();
@@ -1301,6 +1304,37 @@ test('Command details copies its show command to the clipboard', async t => {
   await page.locator('#peek').getByRole('button', { name: 'Copy CLI', exact: true }).click();
   await page.locator('#peek').getByRole('status').filter({ hasText: 'CLI copied.' }).waitFor();
   assert.equal(await page.evaluate(() => navigator.clipboard.readText()), expected);
+});
+
+test('Command details open folded, keep opened facts through a push and copy a path from its icon', async t => {
+  const page = await pageFor(t);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+  await page.goto(origin);
+  const row = page.locator('[data-group="needs you"] > .commands > .command').filter({
+    has: page.locator('.subject', { hasText: /^acme\/widgets#1$/ })
+  });
+  await showDetails(page, row);
+  const issue = page.locator('#peek details[data-fact="issue"]');
+  await issue.waitFor();
+  assert.equal(await page.locator('#peek details[data-fact][open]').count(), 0);
+  await issue.locator('> summary').click();
+  const recordPath = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(recordPath, 'utf8');
+  try {
+    const updated = JSON.parse(original);
+    updated.cause = 'Pushed while a fact is open';
+    await replaceRecord(recordPath, JSON.stringify(updated));
+    await page.locator('#peek-content').getByText(updated.cause, { exact: true }).waitFor();
+    assert.equal(await page.locator('#peek details[data-fact="issue"]').getAttribute('open'), '');
+  } finally { await replaceRecord(recordPath, original); }
+  // A path keeps one line and copies whole from its icon.
+  const file = page.locator('#peek dd.file').first();
+  const path = await file.locator('.tail').getAttribute('title');
+  const box = await file.boundingBox();
+  assert.ok(box.height < 2 * 18, JSON.stringify(box));
+  await file.locator('.copy-icon').click();
+  await file.locator('.copy-icon[data-copied]').waitFor();
+  assert.equal(await page.evaluate(() => navigator.clipboard.readText()), path);
 });
 
 test('Command details selects its show command when the clipboard is refused', async t => {

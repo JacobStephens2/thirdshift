@@ -152,6 +152,14 @@ open for the selected row as you move with `j` / `k` or switch folders. On a
 phone the folders are a row of tabs and Command details open as a bottom sheet. Without
 JavaScript, rows show in full, with their own Dismiss and logs links.
 
+Command details give the high-level view first: one line per recorded fact,
+label then value. A long value, or a fact with its own facts, such as stages,
+the dispatched Run or run metrics, starts folded behind a one-line preview (a
+title, a name or a count); open it to drill down, as deep as the record goes.
+Session traces fold into one count. Folds stay as you left them while live
+updates refresh the same Command. A file path shows on one line with its end
+kept and a copy icon that copies the whole path.
+
 Each Needs you row has a **Copy** button at the end of its line for sharing its
 problem with an agent. It copies the machine, Command selector, state, cause,
 issue title, Harness, Tickets and any findings, with absolute issue, pull

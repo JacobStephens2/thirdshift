@@ -317,6 +317,19 @@ function keepCopy() {
   };
 }
 
+// Command details open folded; a refresh of the same Command keeps what was opened.
+let foldsCommand = null;
+function keepFolds(url) {
+  const command = new URL(url, location.href).searchParams.get('command');
+  const open = command === foldsCommand
+    ? new Set([...content.querySelectorAll('details[data-fact][open]')].map(fold => fold.dataset.fact))
+    : new Set();
+  foldsCommand = command;
+  return () => {
+    for (const fold of content.querySelectorAll('details[data-fact]')) if (open.has(fold.dataset.fact)) fold.open = true;
+  };
+}
+
 async function loadPeek(url) {
   pendingPeek?.abort();
   const request = new AbortController();
@@ -327,9 +340,11 @@ async function loadPeek(url) {
     const html = await response.text();
     if (request.signal.aborted) return;
     const restoreCopy = keepCopy();
+    const restoreFolds = keepFolds(url);
     // Only the server's escaped show template is inserted, never a log.
     content.replaceChildren(document.createRange().createContextualFragment(html));
     restoreCopy();
+    restoreFolds();
     showDismissal();
     if (content.querySelector('[data-live="true"]')) startUpdates();
     else stopPeekUpdates();
@@ -420,6 +435,19 @@ content.addEventListener('click', async event => {
     status.textContent = 'Selected; copy it with your keyboard.';
   }
 });
+// A copy icon copies its one value, such as a log path, and shows a tick when done.
+content.addEventListener('click', async event => {
+  const copy = event.target.closest('[data-copy-text]');
+  if (!copy) return;
+  try {
+    await navigator.clipboard.writeText(copy.dataset.copyText);
+    copy.dataset.copied = '';
+    copy.setAttribute('aria-label', 'Copied');
+  } catch {
+    getSelection().selectAllChildren(copy.previousElementSibling);
+  }
+});
+
 document.addEventListener('submit', async event => {
   const form = event.target.closest('form[data-dismiss]');
   if (!form) return;

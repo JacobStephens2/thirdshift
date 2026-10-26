@@ -901,6 +901,50 @@ fn ready_dispatches_leave_ready_for_review_and_are_shown_at_most_once() {
 }
 
 #[test]
+fn command_details_show_short_facts_and_fold_nested_ones_closed() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut fixture = record(home.path(), 7, Some("failed"), 0);
+    fixture["cause"] = json!("Short failure");
+    let folder = home
+        .path()
+        .join(".thirdshift/logs/acme/widgets/commands/issue");
+    let session = folder.join("7-fixture-implement.logs.jsonl");
+    support::session_trace::write(&session, "Session output\n");
+    fixture["session_log"] = json!(session);
+    write_record(home.path(), 7, &fixture);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let mut url = reqwest::Url::parse("http://localhost/peek").unwrap();
+    url.query_pairs_mut().append_pair(
+        "command",
+        folder.join("7-fixture.command.json").to_str().unwrap(),
+    );
+    let peek = console
+        .get(&format!("/peek?{}", url.query().unwrap()))
+        .text()
+        .unwrap();
+    // The high-level view: short facts in the open, nested ones behind a preview.
+    assert!(peek.contains("<dt>cause</dt><dd>Short failure"), "{peek}");
+    assert!(
+        peek.contains("<details data-fact=\"issue\"><summary>Widgets &#60;script&#62;alert(1)&#60;/script&#62;</summary>"),
+        "{peek}"
+    );
+    assert!(
+        peek.contains("<details data-fact=\"stages\"><summary>1 item</summary>"),
+        "{peek}"
+    );
+    assert!(
+        peek.contains("<details data-fact=\"stages/1\"><summary>implement</summary>"),
+        "{peek}"
+    );
+    assert!(
+        peek.contains("<details class=\"peek-traces\" data-fact=\"session traces\"><summary>Session traces <span class=\"count\">1</span></summary>"),
+        "{peek}"
+    );
+    assert!(!peek.contains("<details open"), "{peek}");
+}
+
+#[test]
 fn dispatched_run_and_its_security_command_have_distinct_peeks() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
@@ -1755,7 +1799,8 @@ fn urls_in_inbox_and_peek_text_are_links_and_other_text_stays_escaped() {
     for expected in [
         &format!("<dd>{pr}</dd>"),
         "<dd><a href=\"https://github.com/acme/widgets/issues/812\">https://github.com/acme/widgets/issues/812</a>",
-        "<dd>PR <a href=",
+        // A long value opens from its one-line summary.
+        "<summary>PR <a href=",
     ] {
         assert!(peek.contains(expected), "missing {expected}: {peek}");
     }
