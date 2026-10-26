@@ -63,6 +63,9 @@ echo '{{"type":"step_start","sessionID":"s1","part":{{}}}}'
         command
             .args(["--exact", test, "--nocapture"])
             .env(FIXTURE, self.0.path())
+            // Fake Harness scripts also invoke Git directly.
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
             .env("PATH", path);
         command
     }
@@ -438,6 +441,31 @@ fn keeps_review_reports_beside_each_harness_session_log() {
             .unwrap();
         assert!(output.status.success(), "{harness:?}: {output:?}");
     }
+}
+
+#[test]
+fn shell_git_fixtures_ignore_global_and_system_config() {
+    let temp = tempfile::tempdir().unwrap();
+    let config = temp.path().join("host.gitconfig");
+    fs::write(&config, "[core]\n ignoreCase = invalid\n").unwrap();
+    let output = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "session::execution_tests::keeps_review_reports_beside_each_harness_session_log",
+            "--nocapture",
+        ])
+        .env_remove(FIXTURE)
+        .env("GIT_CONFIG_GLOBAL", &config)
+        .env("GIT_CONFIG_SYSTEM", &config)
+        .env_remove("GIT_CONFIG_NOSYSTEM")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 #[test]
