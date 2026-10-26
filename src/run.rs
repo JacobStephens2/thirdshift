@@ -572,7 +572,9 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
                 && !labels.has(crate::security::fixing::SECURITY_FIX)
             {
                 opening.session = OpeningSession::BugDiagnosis;
-                opening.prompt = prompt::diagnosing_bugs(self.issue, &opening.prompt);
+                let merge_base = worktree.ahead_merge_base(base)?;
+                opening.prompt =
+                    prompt::diagnosing_bugs(self.issue, &opening.prompt, merge_base.as_deref());
             }
         }
         let mut pull_request = crate::pull_request::PullRequest::new(
