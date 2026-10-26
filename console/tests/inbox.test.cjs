@@ -1006,7 +1006,8 @@ test("folders switch in place and Back and Forward return to them, including a U
   await page.evaluate(() => history.pushState(null, '', '/'));
   await folder(page, 'resolved').click();
   await page.goBack();
-  await page.waitForURL(`${origin}/`);
+  // The reload names the default folder in the URL as soon as it loads.
+  await page.waitForURL('**/?section=needs-you');
   await page.waitForFunction(() => document.querySelector('#inbox > .group:not([hidden])')?.dataset.group === 'needs you');
 });
 
