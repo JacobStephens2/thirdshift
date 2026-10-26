@@ -6,7 +6,7 @@ const { mkdtemp, mkdir, readFile, writeFile, appendFile, rm } = require("node:fs
 const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
-const { chromium } = require("playwright");
+const { chromium } = require("./playwright.cjs");
 const { record: traceRecord } = require("./session-trace.cjs");
 
   describe('Session trace', { timeout: 120000 }, () => {

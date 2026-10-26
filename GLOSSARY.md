@@ -119,6 +119,19 @@ _Avoid_: Fencing (former name), Secure run (it reads as a run that is secure), a
 An **Architect run**, a **Pickup run** or a **Security run**: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped.
 _Avoid_: tick, cycle
 
+**Process**:
+A named sequence of **Steps** that a **Command** carries out: a **Built-in process**, which ships with thirdshift, or a **Custom process**.
+_Avoid_: workflow, pipeline, recipe, run type
+
+**Built-in process**:
+A **Process** that ships inside thirdshift, such as the one a **Ticket run** carries out.
+
+**Custom process**:
+A **Process** a user defines on their own machine and starts by name. It can't take a **Built-in process**'s name.
+
+**Step**:
+One entry in a **Process**: an agent session that runs a named skill, or a fixed part of the factory whose rules stay in thirdshift, such as **Delivery** or a **Self-merge**.
+
 ### Architecture
 
 **Architecture review**:

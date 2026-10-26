@@ -55,3 +55,14 @@
   .trial-cell { width: 25px; height: 25px; }
   .experiment-arms th, .experiment-arms td { padding: 6px 5px; font-size: 12px; }
 }
+/* Folded sections read as one line each: the heading and its gist. */
+.experiment-suite > summary h2, .trial-suite > summary h3, #experiment-arms summary h2 { display: inline; margin: 0; }
+.experiment-suite, .trial-suite { margin: 4px 0; }
+.experiment-gist { margin-left: 10px; color: var(--dim); font-size: 13px; }
+/* The list reads at a glance: each Experiment's headline, status line and accuracy.
+   A click opens its page; without JavaScript rows keep every line. */
+@media (scripting: enabled) {
+  .experiment-row { cursor: pointer; }
+  .experiment-row > :not(.row-head, .now, .experiment-list-interval) { display: none; }
+  .experiment-row .now { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}

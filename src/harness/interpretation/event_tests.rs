@@ -2,6 +2,48 @@ use crate::harness::{Harness, interpretation_tests::stream};
 use serde_json::{Value, json};
 
 #[test]
+fn provider_capacity_and_overload_errors_are_rate_limits() {
+    for (message, expected) in [
+        (
+            "Selected model is at capacity. Please try a different model.",
+            "rate_limit",
+        ),
+        (
+            "The server is OVERLOADED. Please try again later.",
+            "rate_limit",
+        ),
+        ("overloaded_error", "rate_limit"),
+        ("HTTP 503 Service Unavailable", "rate_limit"),
+        ("HTTP 529", "rate_limit"),
+        ("API Error: 503", "rate_limit"),
+        ("Error code: 529", "rate_limit"),
+        ("rate limit reached", "rate_limit"),
+        ("quota exceeded", "usage_limit"),
+        ("Model returned invalid JSON", "other"),
+        ("assertion failed at src/check.rs:1503", "other"),
+        ("worker529 exited 1", "other"),
+    ] {
+        for (harness, record) in [
+            (
+                Harness::Codex,
+                json!({"type":"turn.failed","error":{"message":message}}),
+            ),
+            (
+                Harness::Claude,
+                json!({"type":"result","subtype":"error_during_execution","is_error":true,"errors":[message]}),
+            ),
+        ] {
+            let events = decoded(harness, [record]);
+            let error = events
+                .iter()
+                .find(|event| event["type"] == "error")
+                .unwrap();
+            assert_eq!(error["kind"], expected, "{harness:?}: {message}");
+        }
+    }
+}
+
+#[test]
 fn review_claude_permission_denial_metadata_overrides_prior_tool_error() {
     use serde_json::json;
 

@@ -3232,7 +3232,12 @@ fn github_failures_warn_with_last_answer_and_clear_after_recovery() {
             "{}",
             text.stdout
         );
-        assert!(text.stdout.contains(answered), "{}", text.stdout);
+        // The plain view reads the instant in this machine's zone, to the minute.
+        assert!(
+            text.stdout.contains(&support::local_minute(answered)),
+            "{}",
+            text.stdout
+        );
         assert!(text.stdout.contains(diagnostic), "{}", text.stdout);
         gh["failing"] = serde_json::json!([]);
         scenario.write_gh_state(&gh);
@@ -3414,7 +3419,11 @@ fn legacy_github_answer_time_survives_a_failed_refresh() {
         "a failed refresh must preserve the last successful read time: {second}"
     );
     let text = scenario.run(&["status"]);
-    assert!(text.stdout.contains(&answered), "{}", text.stdout);
+    assert!(
+        text.stdout.contains(&support::local_minute(&answered)),
+        "{}",
+        text.stdout
+    );
     assert!(!text.stdout.contains("GitHub has not answered yet"));
 }
 

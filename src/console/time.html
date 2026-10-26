@@ -19,7 +19,7 @@
       <input type="hidden" name="page" value="lanes">
       <label>Window <select name="hours">{% for value in ["3.5", "12", "24"] %}<option value="{{ value }}" {% if hours == *value %}selected{% endif %}>{{ value }} hours</option>{% endfor %}</select></label><button>Show</button>
     </form>
-    <p>Stages drawn to scale from {{ views.start }} to {{ views.end }}. Times below each lane include the whole stage.</p>
+    <p>Stages drawn to scale from {{ views.start|readable }} to {{ views.end|readable }}. Times below each lane include the whole stage.</p>
     <p>Older Commands are on <a href="/?page=history">History</a>.</p>
     {% if views.lanes.is_empty() %}<p class="empty">No Commands in this window.</p>{% endif %}
     {% for lane in views.lanes %}
@@ -42,19 +42,20 @@
     <p>Spec runs stay with their Ticket runs. Groups and Tickets are newest-started first. Scroll right for older runs; stage names stay at the left. Each cell shows its repository's Usual range. Repeated stages list every visit.</p>
     {% if views.grids.is_empty() %}<p class="empty">No Ticket runs yet.</p>{% endif %}
     {% for grid in views.grids %}
-    <section class="stage-section" data-grid="{{ grid.repository }}">
-    <h3>{{ grid.repository }}</h3><button type="button" data-newest-runs>Newest runs<span class="cell-run"> · {{ grid.repository }}</span></button>
+    {# With several repositories each folds to its name and run count. #}
+    <details class="stage-section" data-grid="{{ grid.repository }}"{% if views.grids.len() == 1 %} open{% endif %}>
+    <summary><h3>{{ grid.repository }}</h3> <span class="count">{{ grid.runs.len() }} runs</span></summary><button type="button" data-newest-runs>Newest runs<span class="cell-run"> · {{ grid.repository }}</span></button>
     <div class="stage-scroll" tabindex="0" role="region" aria-label="{{ grid.repository }} stages, scroll right for older runs">
     <table class="stage-grid">
       <caption>{{ grid.repository }} · stage times</caption>
       <thead>
-      <tr><th scope="col">Run groups</th>{% for group in grid.groups %}<th scope="colgroup" colspan="{{ group.runs.len() }}" data-run-group="{{ group.identity }}">{{ group.subject }}<br>Started {{ group.started }}</th>{% endfor %}</tr>
+      <tr><th scope="col">Run groups</th>{% for group in grid.groups %}<th scope="colgroup" colspan="{{ group.runs.len() }}" data-run-group="{{ group.identity }}">{{ group.subject }}<br>Started {{ group.started|readable }}</th>{% endfor %}</tr>
       <tr><th scope="col">Stage</th>{% for run in grid.runs %}<th scope="col" class="command {% if run.group_start %}group-start{% endif %}" tabindex="0" data-live="{{ run.state == "live" }}" data-command="{{ run.selector }}" data-peek="{{ run.peek_url }}" data-log="{{ run.log_url }}"><a class="peek-link" href="{{ run.peek_url }}">{{ run.subject }}</a><br>{{ run.state }}<br>{{ run.title }}{% if !run.context.is_empty() %}<p class="run-context">{{ run.context }}</p>{% endif %}{% match run.issue_url %}{% when Some with (url) %}<br><a href="{{ url }}">{{ run.issue_label }}</a>{% when None %}{% endmatch %}</th>{% endfor %}</tr></thead>
       <tbody>{% for row in grid.rows %}<tr><th scope="row">{{ crate::logs::display_name(row.name) }}<br></th>{% for cell in row.cells %}<td class="{% if cell.running %}running-stage {% endif %}{% if cell.group_start %}group-start{% endif %}"><span class="cell-run">{{ grid.runs[loop.index0].subject }}: </span>{{ cell.text }}<br><span class="usual">Usual range: {{ cell.usual }}</span></td>{% endfor %}</tr>{% endfor %}</tbody>
     </table>
     </div>
     {% if grid.rows.is_empty() %}<p>No stage times retained.</p>{% endif %}
-    </section>
+    </details>
     {% endfor %}
     {% endif %}
   </main>

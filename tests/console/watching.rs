@@ -252,19 +252,7 @@ fn taken_up_boundary_moves_the_row_without_a_file_change() {
     });
     write_record(home.path(), 82, &later);
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
-    let resolved = || {
-        console
-            .get("/")
-            .text()
-            .unwrap()
-            .split("data-group=\"resolved\"")
-            .nth(1)
-            .unwrap()
-            .split("</details>")
-            .next()
-            .unwrap()
-            .to_owned()
-    };
+    let resolved = || section(&console.get("/").text().unwrap(), "resolved").to_owned();
     assert!(
         resolved().contains("taken up by a later Command"),
         "{}",

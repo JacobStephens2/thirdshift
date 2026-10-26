@@ -76,13 +76,16 @@ function morph(html) {
   const active = document.activeElement;
   const focused = active?.id || active?.closest("details")?.id;
   const wasSummary = active?.matches("summary");
-  const scroll = [...current.querySelectorAll("details[data-group]")].map(section => [section.id, section.querySelector(".commands").scrollTop]);
   const position = [scrollX, scrollY];
   const selection = selected?.id || selected?.closest('details')?.id;
   const selectedSummary = selected?.matches('summary');
   const previousGrowth = growth();
   Idiomorph.morph(current, replacement, {
     callbacks: {
+      beforeNodeMorphed(node) {
+        // Copy feedback belongs to this browser, not the refreshed server row.
+        return !node.matches?.('[data-copy-status]');
+      },
       beforeAttributeUpdated(name, node) {
         if (name === "open" && node.matches("details")) return false;
       }
@@ -94,7 +97,6 @@ function morph(html) {
   // it remains selected, and regains focus, when that section is reopened.
   const selectedNode = document.getElementById(selection);
   select(selectedSummary ? selectedNode?.querySelector('summary') : selectedNode, { scroll: false });
-  for (const [id, top] of scroll) document.getElementById(id).querySelector(".commands").scrollTop = top;
   window.scrollTo(...position);
   document.title = next.title;
   document.querySelector('link[rel="icon"]').href = next.querySelector('link[rel="icon"]').getAttribute("href");
@@ -158,11 +160,16 @@ async function refresh() {
       activity();
       loadLook();
     } else {
-      const response = await fetch(stages?.url() ?? (timePage ? location.href : '/'), { cache: "no-store" });
+      const url = stages?.url() ?? location.href;
+      const response = await fetch(url, { cache: "no-store" });
       if (!response.ok) throw new Error("Inbox unavailable");
       const html = await response.text();
       if (timePage) morphTimePage(html);
-      else morph(html);
+      else {
+        morph(html);
+        // A folder opened while this answer was on its way outranks it.
+        if (url !== location.href) showFolder(urlFolder()?.dataset.group);
+      }
     }
   }
   await refreshPeek();
@@ -242,24 +249,84 @@ async function togglePeek(row) {
   await loadPeek(row.dataset.peek);
 }
 
+function showPeek(row) {
+  if (peekCommand !== row.dataset.command) togglePeek(row);
+}
+
+// The Inbox is a mailbox: one section, a folder, shows at a time, and once
+// opened, Details stays beside it for the selected row.
+const mailbox = document.body.classList.contains('mailbox');
+function currentFolder() {
+  return document.querySelector('#inbox .folders a[aria-current="page"]');
+}
+// The folder this page's URL names, if it names one.
+function urlFolder() {
+  const section = new URLSearchParams(location.search).get('section');
+  return [...document.querySelectorAll('#inbox .folders a[data-group]')]
+    .find(link => new URL(link.href).searchParams.get('section') === section);
+}
+function showFolder(group) {
+  for (const link of document.querySelectorAll('#inbox .folders a[data-group]')) {
+    if (link.dataset.group === group) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  }
+  for (const section of document.querySelectorAll('#inbox > .group[data-group]')) section.hidden = section.dataset.group !== group;
+}
+function openFolder(link, { push = true } = {}) {
+  showFolder(link.dataset.group);
+  if (push && link.href !== location.href) history.pushState(null, '', link.href);
+  // A selected row that moved into this folder keeps its selection and focus.
+  const kept = selected?.closest('#inbox > .group:not([hidden])') && selected.matches('.command') ? selected : null;
+  const row = kept ?? document.querySelector('#inbox > .group:not([hidden]) .command');
+  select(row ?? null, { scroll: false });
+  kept?.focus({ preventScroll: true });
+  // Open Details move to the folder's row; closed ones stay closed.
+  if (!row) closePeek();
+  else if (!peek.hidden) showPeek(row);
+}
+if (mailbox) {
+  const folder = currentFolder();
+  if (folder && !new URLSearchParams(location.search).has('section')) history.replaceState(null, '', folder.href);
+  addEventListener('popstate', () => {
+    const link = urlFolder();
+    // Only the server knows the default folder of a URL that names none.
+    if (link) openFolder(link, { push: false });
+    else location.reload();
+  });
+}
+
 async function refreshPeek() {
   if (peekCommand && !pendingPeek) {
     await loadPeek(`/peek?${new URLSearchParams({ command: peekCommand })}`);
   }
 }
 
-// A live refresh replaces the pane; keep a copy's status and its by-hand selection.
+// A live refresh replaces the pane; keep each copy's status and its by-hand selection.
 function keepCopy() {
-  const old = content.querySelector('.peek-cli');
-  if (!old) return () => {};
-  const status = old.querySelector('[role="status"]').textContent;
   const selection = getSelection();
-  const selected = old.contains(selection.anchorNode) && selection.toString() === old.querySelector('code').textContent;
+  const kept = [...content.querySelectorAll('.peek-cli')].map(line => ({
+    status: line.querySelector('[role="status"]').textContent,
+    selected: line.contains(selection.anchorNode) && selection.toString() === line.querySelector('code').textContent
+  }));
   return () => {
-    const fresh = content.querySelector('.peek-cli');
-    if (!fresh) return;
-    fresh.querySelector('[role="status"]').textContent = status;
-    if (selected) selection.selectAllChildren(fresh.querySelector('code'));
+    content.querySelectorAll('.peek-cli').forEach((fresh, index) => {
+      if (!kept[index]) return;
+      fresh.querySelector('[role="status"]').textContent = kept[index].status;
+      if (kept[index].selected) selection.selectAllChildren(fresh.querySelector('code'));
+    });
+  };
+}
+
+// Command details open folded; a refresh of the same Command keeps what was opened.
+let foldsCommand = null;
+function keepFolds(url) {
+  const command = new URL(url, location.href).searchParams.get('command');
+  const open = command === foldsCommand
+    ? new Set([...content.querySelectorAll('details[data-fact][open]')].map(fold => fold.dataset.fact))
+    : new Set();
+  foldsCommand = command;
+  return () => {
+    for (const fold of content.querySelectorAll('details[data-fact]')) if (open.has(fold.dataset.fact)) fold.open = true;
   };
 }
 
@@ -278,9 +345,11 @@ async function loadPeek(url) {
     const html = await response.text();
     if (request.signal.aborted) return;
     const restoreCopy = keepCopy();
+    const restoreFolds = keepFolds(url);
     // Only the server's escaped show template is inserted, never a log.
     content.replaceChildren(document.createRange().createContextualFragment(html));
     restoreCopy();
+    restoreFolds();
     showDismissal();
     if (content.querySelector('[data-live="true"]')) startUpdates();
     else stopPeekUpdates();
@@ -300,7 +369,8 @@ function items() {
       for (let parent = element.parentElement; parent; parent = parent.parentElement) {
         if (parent.hidden || (parent.tagName === 'DETAILS' && !parent.open && element !== parent.firstElementChild)) return false;
       }
-      return true;
+      // One-line Inbox rows keep their child rows for Details, undrawn.
+      return element.getClientRects().length > 0;
     });
 }
 
@@ -309,14 +379,13 @@ const targets = new Map();
 for (const link of document.querySelectorAll('nav[aria-label="Pages"] a')) {
   targets.set(link.dataset.jump, { label: link.textContent.replace(/^\d+ /, ''), go: () => link.click() });
 }
-for (const section of document.querySelectorAll('.group')) {
-  const letter = sectionLetters[section.dataset.group];
+for (const link of document.querySelectorAll('#inbox .folders a[data-group]')) {
+  const letter = sectionLetters[link.dataset.group];
   if (letter) targets.set(letter, {
-    label: section.querySelector('summary span').textContent,
+    label: link.querySelector('span').textContent,
     go: () => {
-      const current = section.id ? document.getElementById(section.id) : section;
-      current.open = true;
-      select(current.querySelector('summary'));
+      const current = document.querySelector(`#inbox .folders a[data-group="${CSS.escape(link.dataset.group)}"]`);
+      if (current && !current.hidden) openFolder(current);
     }
   });
 }
@@ -327,6 +396,38 @@ for (const [letter, target] of targets) {
   button.addEventListener('click', () => { jumps.hidden = true; target.go(); });
   jumps.append(button);
 }
+
+// Copy the rendered facts, including child Commands, without fetching or exposing logs.
+function needsYouContext(row) {
+  const facts = row.cloneNode(true);
+  for (const control of facts.querySelectorAll('button, form, [role="status"], .new, .heartbeat, .gist')) control.remove();
+  for (const link of facts.querySelectorAll('a')) {
+    link.replaceWith(link.textContent === link.href ? link.href : `${link.textContent} (${link.href})`);
+  }
+  for (const block of facts.querySelectorAll('p, li, ul, .row-head, .row-head > span')) block.append('\n');
+  const text = facts.textContent.split('\n').map(line => line.trim()).filter(Boolean).join('\n');
+  const command = row.dataset.command.replaceAll("'", "'\\''");
+  return `thirdshift · Needs you\nMachine: ${document.querySelector('header h1').textContent}\nCommand: ${row.dataset.command}\n${text}\nthirdshift show '${command}' --json`;
+}
+
+document.addEventListener('click', async event => {
+  const copy = event.target.closest('[data-copy-context]');
+  if (!copy) return;
+  const row = copy.closest('.command');
+  const text = needsYouContext(row);
+  try {
+    await navigator.clipboard.writeText(text);
+    document.getElementById(row.id)?.querySelector('[data-copy-status]')?.replaceChildren('Copied.');
+  } catch {
+    // Keep a selectable snapshot outside the live Inbox so updates cannot erase it.
+    const dialog = document.getElementById('copy-context');
+    const field = dialog.querySelector('textarea');
+    field.value = text;
+    dialog.showModal();
+    field.focus();
+    field.select();
+  }
+});
 
 content.addEventListener('click', async event => {
   const copy = event.target.closest('.peek-cli [data-copy-cli]');
@@ -342,6 +443,19 @@ content.addEventListener('click', async event => {
     status.textContent = 'Selected; copy it with your keyboard.';
   }
 });
+// A copy icon copies its one value, such as a log path, and shows a tick when done.
+content.addEventListener('click', async event => {
+  const copy = event.target.closest('[data-copy-text]');
+  if (!copy) return;
+  try {
+    await navigator.clipboard.writeText(copy.dataset.copyText);
+    copy.dataset.copied = '';
+    copy.setAttribute('aria-label', 'Copied');
+  } catch {
+    getSelection().selectAllChildren(copy.previousElementSibling);
+  }
+});
+
 document.addEventListener('submit', async event => {
   const form = event.target.closest('form[data-dismiss]');
   if (!form) return;
@@ -381,8 +495,14 @@ document.querySelector('[data-open-keys]').addEventListener('click', () => help.
 document.addEventListener('click', event => {
   const link = event.target.closest('.peek-link');
   const row = event.target.closest('main .command, main .log-row');
-  if (link) { event.preventDefault(); select(row); togglePeek(row); }
-  else if (row && !event.target.closest('a, button, input, select, textarea')) select(row);
+  const folder = event.target.closest('#inbox .folders a[data-group]');
+  if (folder && event.button === 0 && !(event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)) { event.preventDefault(); openFolder(folder); }
+  else if (link) { event.preventDefault(); select(row); togglePeek(row); }
+  else if (row && !event.target.closest('a, button, input, select, textarea')) {
+    select(row);
+    // One-line rows, in the Inbox, History and Security, open their Details.
+    if (row.closest('.one-line')) showPeek(row);
+  }
   else if (event.target.closest('main .group > summary')) {
     const summary = event.target.closest('summary');
     if (summary.parentElement.open || !selected?.matches('.command') || !summary.parentElement.contains(selected)) select(summary);
@@ -390,6 +510,7 @@ document.addEventListener('click', event => {
 });
 
 document.addEventListener('keydown', event => {
+  if (document.querySelector('#copy-context[open]')) return;
   if (event.ctrlKey || event.metaKey || event.altKey || event.target.closest('input, select, textarea, [contenteditable="true"]')) return;
   if (event.target.matches('summary') && !event.target.closest('.group') && ['Enter', ' '].includes(event.key)) return;
   if (event.key === 'Enter' && event.target.closest('a, button')) return;
@@ -422,19 +543,20 @@ document.addEventListener('keydown', event => {
     const next = index < 0 ? (event.key === 'j' ? 0 : visible.length - 1)
       : (index + (event.key === 'j' ? 1 : -1) + visible.length) % visible.length;
     select(visible[next] ?? null);
+    if (!peek.hidden && selected?.matches('.one-line .command')) showPeek(selected);
   } else if (event.key === ' ' && selected) {
     event.preventDefault();
     if (selected.tagName === 'SUMMARY') selected.parentElement.open = !selected.parentElement.open;
     else togglePeek(selected);
   } else if (event.key === 'z' && selected) {
     event.preventDefault();
-    const section = selected.closest('.group');
+    const section = selected.closest('details.group');
     if (!section) return;
     section.open = false;
     select(section.querySelector('summary'));
   } else if (event.key === 'Enter' && selected) {
     event.preventDefault();
-    const row = selected.matches('.command, .log-row') ? selected : selected.parentElement.querySelector('.command');
+    const row = selected.matches('.command, .log-row') ? selected : selected.parentElement.querySelector('.command, .log-row');
     if (row?.dataset.log) location.assign(row.dataset.log);
   }
 });

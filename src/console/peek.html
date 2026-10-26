@@ -1,13 +1,13 @@
 <section aria-label="Command details" data-live="{{ live }}">
   <h2>Command details</h2>
   {% if can_stop %}<form method="get" action="/stop"><input type="hidden" name="command" value="{{ command }}"><button>Stop</button> <code>{{ stop_cli }}</code></form>{% endif %}
-  {% match dismissal %}{% when Some with (action) %}<form method="post" action="{{ action.path }}" data-dismiss><input type="hidden" name="command" value="{{ command }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>{{ action.label }}</button> <code>{{ action.cli }}</code><span role="status"></span></form>{% when None %}{% endmatch %}
+  {% match dismissal %}{% when Some with (action) %}<form class="peek-action" method="post" action="{{ action.path }}" data-dismiss><input type="hidden" name="command" value="{{ command }}"><input type="hidden" name="csrf" value="{{ csrf }}"><button>{{ action.label }}</button><span role="status"></span><span class="peek-cli"><code title="{{ action.cli }}">{{ action.cli }}</code> <button type="button" data-copy-cli="{{ action.cli }}">Copy CLI</button> <span role="status"></span></span></form>{% when None %}{% endmatch %}
   {% if stopping %}<p role="status">still ending</p><div class="stopping-bar" role="progressbar" aria-label="Command stopping"></div>{% endif %}
   {% for branch in branches %}<p>Issue branch left: {{ branch }}</p>{% endfor %}
   {% for pr in pull_requests %}<p>Pull request left: {{ pr|linkify }}</p>{% endfor %}
   {% match issue_url %}{% when Some with (url) %}<p><a href="{{ url }}">{{ issue_label }}</a></p>{% when None %}{% endmatch %}
-  <p class="peek-cli"><code>{{ cli }}</code> <button type="button" data-copy-cli="{{ cli }}">Copy CLI</button> <span role="status"></span></p>
+  <p class="peek-cli"><code title="{{ cli }}">{{ cli }}</code> <button type="button" data-copy-cli="{{ cli }}">Copy CLI</button> <span role="status"></span></p>
   <p><a href="{{ crate::logs::status::inspect::url("/log", command, None) }}">Full Command log</a></p>
-  {% for log in logs %}<p><a href="{{ log.url }}">Session trace: {{ log.name }}</a></p>{% endfor %}
-  <dl>{% for fact in facts %}{{ self.fact(fact)|safe }}{% endfor %}</dl>
+  {% if !logs.is_empty() %}<details class="peek-traces" data-fact="session traces"><summary>Session traces <span class="count">{{ logs.len() }}</span></summary>{% for log in logs %}<p class="peek-trace"><a href="{{ log.url }}" title="{{ log.name }}"><span>Session trace:</span> <span class="tail"><bdi>{{ log.name }}</bdi></span></a></p>{% endfor %}</details>{% endif %}
+  <dl class="peek-facts">{% for fact in facts %}{{ self.fact(fact)|safe }}{% endfor %}</dl>
 </section>

@@ -352,6 +352,16 @@ echo '{{"type": "system", "subtype": "task_updated", "task_id": "b1", "patch": {
     )
 }
 
+/// How thirdshift shows an RFC 3339 instant to people: this machine's date
+/// and time to the minute, followed by the zone name this leaves out.
+pub fn local_minute(rfc3339: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(rfc3339)
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M ")
+        .to_string()
+}
+
 /// `stderr` with the `HH:MM:SS ` that starts each progress line, after its
 /// `thirdshift: `, removed.
 pub fn unstamped(stderr: &str) -> String {

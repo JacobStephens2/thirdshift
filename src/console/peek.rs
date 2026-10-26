@@ -36,6 +36,10 @@ pub(super) struct DismissAction {
 pub(super) struct Fact {
     label: String,
     value: String,
+    /// Where the fact sits, such as `stages/1`, so its fold survives a refresh.
+    path: String,
+    /// The folded line of a fact with children: its title or name, or a count.
+    preview: String,
     children: Vec<Fact>,
 }
 
@@ -97,7 +101,7 @@ impl Peek {
             issue_label,
             command,
             cli,
-            facts: Fact::children(value, false),
+            facts: Fact::children(value, false, ""),
             logs,
         }
     }
@@ -107,8 +111,23 @@ impl Peek {
 }
 
 impl Fact {
-    fn new(label: String, value: Value, in_metrics: bool) -> Self {
+    fn new(label: String, value: Value, in_metrics: bool, parent: &str) -> Self {
         let in_metrics = in_metrics || label == "run_metrics";
+        let label = label.replace('_', " ");
+        let path = if parent.is_empty() {
+            label.clone()
+        } else {
+            format!("{parent}/{label}")
+        };
+        let preview = match &value {
+            Value::Object(fields) => ["title", "name", "outcome", "state"]
+                .iter()
+                .find_map(|key| fields.get(*key).and_then(Value::as_str))
+                .map(|text| crate::logs::display_name(text).to_owned())
+                .unwrap_or_else(|| count(fields.len(), "field")),
+            Value::Array(items) => count(items.len(), "item"),
+            _ => String::new(),
+        };
         let text = match &value {
             Value::Null if in_metrics => "Missing".into(),
             Value::Null => "None".into(),
@@ -121,26 +140,44 @@ impl Fact {
             Value::Array(_) | Value::Object(_) => String::new(),
             other => other.to_string(),
         };
+        let children = Self::children(value, in_metrics, &path);
         Self {
-            label: label.replace('_', " "),
+            label,
             value: text,
-            children: Self::children(value, in_metrics),
+            path,
+            preview,
+            children,
         }
     }
-    fn children(value: Value, in_metrics: bool) -> Vec<Self> {
+    fn children(value: Value, in_metrics: bool, parent: &str) -> Vec<Self> {
         match value {
             Value::Object(fields) => fields
                 .into_iter()
-                .map(|(label, value)| Self::new(label, value, in_metrics))
+                .map(|(label, value)| Self::new(label, value, in_metrics, parent))
                 .collect(),
             Value::Array(items) => items
                 .into_iter()
                 .enumerate()
-                .map(|(index, value)| Self::new((index + 1).to_string(), value, in_metrics))
+                .map(|(index, value)| Self::new((index + 1).to_string(), value, in_metrics, parent))
                 .collect(),
             _ => Vec::new(),
         }
     }
+}
+
+impl Fact {
+    /// A value too long for its one line, which opens to show it whole.
+    /// An absolute path, shown on one line with its end kept and a copy button.
+    fn is_file(&self) -> bool {
+        self.value.starts_with('/') && !self.value.contains(char::is_whitespace)
+    }
+    fn long(&self) -> bool {
+        self.value.chars().count() > 60
+    }
+}
+
+fn count(n: usize, noun: &str) -> String {
+    format!("{n} {noun}{}", if n == 1 { "" } else { "s" })
 }
 
 #[derive(Template)]
