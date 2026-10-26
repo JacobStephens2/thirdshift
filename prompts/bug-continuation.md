@@ -2,13 +2,19 @@
 
 # Bug Ticket run, Continuation without a pull request
 
-Diagnoses a bug in a Continuation with no pull request before changing code. A not reproduced ending hands the issue back for information without a PR.
+Diagnoses a bug in a Continuation with no pull request before changing code. When the Issue branch is ahead of the Base branch, the prompt names their merge base and reproduction happens there. A not reproduced ending hands the issue back for information without a PR.
 
 ```
 /thirdshift-diagnosing-bugs <Issue URL>
 Use the `thirdshift-diagnosing-bugs` skill before changing code.
 Follow the skill to one of its two endings. Its not reproduced ending replaces the implementation steps below.
 Completion lines (the final message's last line): reproduced: `Bug reproduced: fixed`; not reproduced: `Bug not reproduced: <comment URL>`.
+
+This Continuation's Issue branch is ahead of the Base branch. Reproduce at the merge base, not on the branch, then check the fix on the branch.
+Merge base commit: `<merge base commit>`.
+Use that commit as given; do not infer another from git history.
+Hand back `needs-info` only when the bug does not reproduce at that merge base.
+When it reproduces there and the branch already fixes it, that is the reproduced ending: continue to review and the pull request.
 
 Implementation after reproduction:
 /thirdshift-implement <Issue URL>

@@ -268,6 +268,19 @@ impl Worktree {
         })
     }
 
+    /// The merge base with the published Base branch when this Issue branch
+    /// has commits that Base branch does not. `None` when this head is already
+    /// contained in the Base branch: a fresh branch, or a Continuation with
+    /// nothing beyond it. Bug diagnosis reproduces at this commit.
+    pub fn ahead_merge_base(&self, base: &str) -> Result<Option<String>> {
+        self.checkout.ordinary(&self.launch, |operation| {
+            let merge_base =
+                operation.run(&["merge-base", &format!("refs/remotes/origin/{base}"), "HEAD"])?;
+            let head = operation.head()?;
+            Ok((merge_base != head).then_some(merge_base))
+        })
+    }
+
     /// Fetch and sample `origin/<base>`, then merge that commit into the
     /// Issue branch. A clean outcome includes the selected commit for CI
     /// comparison, including when the merge had nothing to do.

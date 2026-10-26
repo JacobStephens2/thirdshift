@@ -198,26 +198,28 @@ fn prompts() -> Vec<Prompt> {
             title: "Bug Ticket run, fresh",
             when: "Starts the implement session on an issue labelled bug: diagnose before changing code, then implement only if reproduced. Security fixes and Base fixes keep their own flow.",
             sender: Units(&[IMPLEMENT]),
-            text: prompt::diagnosing_bugs(&issue, &prompt::fresh(&issue, BASE, BRANCH)),
+            text: prompt::diagnosing_bugs(&issue, &prompt::fresh(&issue, BASE, BRANCH), None),
         },
         Prompt {
             id: "prompt-bug-continuation",
             title: "Bug Ticket run, Continuation without a pull request",
-            when: "Diagnoses a bug in a Continuation with no pull request before changing code. A not reproduced ending hands the issue back for information without a PR.",
+            when: "Diagnoses a bug in a Continuation with no pull request before changing code. When the Issue branch is ahead of the Base branch, the prompt names their merge base and reproduction happens there. A not reproduced ending hands the issue back for information without a PR.",
             sender: Units(&[IMPLEMENT]),
             text: prompt::diagnosing_bugs(
                 &issue,
                 &prompt::continuation(&issue, BASE, BRANCH, None),
+                Some(prompt::SECURITY_REVIEW_MERGE_BASE),
             ),
         },
         Prompt {
             id: "prompt-bug-continuation-pr",
             title: "Bug Ticket run, Continuation with an open pull request",
-            when: "Diagnoses a bug before continuing its open pull request. A not reproduced ending leaves the existing PR unmerged and hands the issue back for information.",
+            when: "Diagnoses a bug before continuing its open pull request. When the Issue branch is ahead of the Base branch, the prompt names their merge base and reproduction happens there. A not reproduced ending leaves the existing PR unmerged and hands the issue back for information.",
             sender: Units(&[IMPLEMENT]),
             text: prompt::diagnosing_bugs(
                 &issue,
                 &prompt::continuation(&issue, BASE, BRANCH, Some(PR_URL)),
+                Some(prompt::SECURITY_REVIEW_MERGE_BASE),
             ),
         },
         Prompt {
@@ -746,6 +748,30 @@ mod tests {
 
     /// The golden-file test: the page carries the fragment as rendered now.
     /// The crates.io package leaves `site/` out, so it skips there.
+    #[test]
+    fn a_continuation_bug_prompt_names_the_merge_base_and_a_fresh_one_does_not() {
+        let prompts = prompts();
+        let text = |id: &str| {
+            prompts
+                .iter()
+                .find(|prompt| prompt.id == id)
+                .unwrap_or_else(|| panic!("missing {id}"))
+                .text
+                .clone()
+        };
+        let line = format!(
+            "Merge base commit: `{}`.",
+            prompt::SECURITY_REVIEW_MERGE_BASE
+        );
+        for id in ["prompt-bug-continuation", "prompt-bug-continuation-pr"] {
+            let text = text(id);
+            assert!(text.contains(&line), "{id}: {text}");
+            assert!(text.contains("Reproduce at the merge base"), "{id}");
+        }
+        let fresh = text("prompt-bug-fresh");
+        assert!(!fresh.contains("Merge base commit:"), "{fresh}");
+    }
+
     #[test]
     fn prompts_page_shows_what_the_binary_sends() {
         let site = Path::new(env!("CARGO_MANIFEST_DIR")).join("site");
