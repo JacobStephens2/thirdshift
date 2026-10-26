@@ -623,6 +623,7 @@ fn toolchains_into(home: &Path, binds: &mut Binds, environment: &mut Environment
         .join("bin");
     if crate::process::is_executable(&cargo_bin.join("rustup")) {
         // Prefer rustup's proxies to a host PATH naming one toolchain's bin.
+        environment.path_dirs.retain(|path| path != &cargo_bin);
         environment.prepend_path(&cargo_bin);
     }
 }
@@ -1832,6 +1833,13 @@ mod tests {
             "[toolchain]\nchannel = 'thirdshift-pin'\n",
         )
         .unwrap();
+        let path = std::env::join_paths(
+            std::iter::once(rustup_home.join("toolchains/thirdshift-default/bin"))
+                .chain(std::env::split_paths(&std::env::var_os("PATH").unwrap())),
+        )
+        .unwrap();
+        // This exact-test child is isolated from the rest of the suite.
+        unsafe { std::env::set_var("PATH", path) };
         let request = layout.request(
             Harness::Codex,
             "cargo --version",

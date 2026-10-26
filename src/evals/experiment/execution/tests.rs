@@ -178,7 +178,12 @@ fn trial_installs_its_historical_rust_pin_before_the_session() {
 import os, pathlib, sys, tomllib
 root = pathlib.Path(os.environ['THIRDSHIFT_EXECUTION_FIXTURE'])
 args = sys.argv[1:]
-if args[:2] == ['toolchain', 'install']:
+if pathlib.Path(sys.argv[0]).name == 'cargo':
+    if not (root / 'installed').exists() or not os.environ.get('RUSTUP_HOME'):
+        print('pinned Rust 1.99.0 download refused by Trial proxy', file=sys.stderr)
+        sys.exit(1)
+    print('cargo 1.99.0 (fixture)')
+elif args[:2] == ['toolchain', 'install']:
     pin = tomllib.loads(pathlib.Path('rust-toolchain.toml').read_text())['toolchain']
     assert pin['channel'] == '1.99.0', pin
     assert pin['components'] == ['rustfmt', 'clippy'], pin
@@ -200,7 +205,7 @@ print('cargo 1.99.0 (fixture)')
 "#,
     );
     let mut fixture = Fixture::new(&format!(
-        "import subprocess\ncheck = subprocess.run(['cargo', '--version'], cwd=repository, capture_output=True, text=True)\nassert check.returncode == 0, check.stderr\nassert check.stdout == 'cargo 1.99.0 (fixture)\\n'\n{SUCCESS}"
+        "import subprocess\n# Historical Arms clear RUSTUP_HOME when launching their session.\nenv = dict(PATH=os.environ['PATH'], HOME=str(output / 'home'), THIRDSHIFT_EXECUTION_FIXTURE=os.environ['THIRDSHIFT_EXECUTION_FIXTURE'])\ncheck = subprocess.run(['cargo', '--version'], cwd=repository, env=env, capture_output=True, text=True)\nassert check.returncode == 0, check.stderr\nassert check.stdout == 'cargo 1.99.0 (fixture)\\n'\n{SUCCESS}"
     ));
     let source = fixture.root.join("source");
     fs::write(
