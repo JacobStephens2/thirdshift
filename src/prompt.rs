@@ -81,13 +81,21 @@ fn issue_file_instruction(issue: &IssueUrl) -> String {
     )
 }
 
-/// A standalone skill, optionally working on the issue handed to it.
-pub fn skill(name: &str, path: &std::path::Path, issue: Option<&IssueUrl>) -> String {
+/// The Factory-skill sigil, when `name` is one, and the instruction to read it.
+fn skill_preamble(name: &str, path: &std::path::Path) -> String {
     let invocation = if name.starts_with("thirdshift-") {
         format!("/{name}\n")
     } else {
         String::new()
     };
+    format!(
+        "{invocation}Use the {name} skill. Read and follow `{path}`.\n",
+        path = path.display(),
+    )
+}
+
+/// A standalone skill, optionally working on the issue handed to it.
+pub fn skill(name: &str, path: &std::path::Path, issue: Option<&IssueUrl>) -> String {
     let task = issue.map_or_else(String::new, |issue| {
         format!(
             "Run the skill on issue {}.\n{}",
@@ -96,8 +104,8 @@ pub fn skill(name: &str, path: &std::path::Path, issue: Option<&IssueUrl>) -> St
         )
     });
     format!(
-        "{invocation}Use the {name} skill. Read and follow `{path}`.\n{task}{SOURCE_EDITS}{HEADLESS}",
-        path = path.display(),
+        "{preamble}{task}{SOURCE_EDITS}{HEADLESS}",
+        preamble = skill_preamble(name, path),
     )
 }
 
@@ -110,11 +118,6 @@ pub fn process_step(
     skill_path: &std::path::Path,
     earlier: &[(String, std::path::PathBuf)],
 ) -> String {
-    let invocation = if skill_name.starts_with("thirdshift-") {
-        format!("/{skill_name}\n")
-    } else {
-        String::new()
-    };
     let mut earlier_text = if earlier.is_empty() {
         "This is the first Step. No earlier Step has a result.\n".to_string()
     } else {
@@ -128,10 +131,9 @@ pub fn process_step(
         );
     }
     format!(
-        "{invocation}Use the {skill_name} skill. Read and follow `{path}`.\n\
-         This is Step {step} of the Custom process {process}.\n\
+        "{preamble}This is Step {step} of the Custom process {process}.\n\
          {earlier_text}{SOURCE_EDITS}{HEADLESS}",
-        path = skill_path.display(),
+        preamble = skill_preamble(skill_name, skill_path),
     )
 }
 

@@ -199,6 +199,59 @@ skill = \"not-a-skill\"
 }
 
 #[test]
+fn steps_run_detached_at_the_base_branch_tip() {
+    let scenario = Scenario::new();
+    scenario.origin_has_commit(
+        "main",
+        "base-only.txt",
+        "from-base\n",
+        "Move the Base branch",
+    );
+    let base = scenario.origin_git(&["rev-parse", "refs/heads/main"]);
+    assert_ne!(
+        base.trim(),
+        scenario.launch_git(&["rev-parse", "HEAD"]).trim()
+    );
+    write_process(&scenario, "notes", REVIEW);
+    scenario.agent_does(
+        "test -f base-only.txt\n\
+         printf '%s' \"$(git rev-parse HEAD)\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+    );
+
+    let result = scenario.run(&["process", "notes"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout.trim(), base.trim());
+}
+
+#[test]
+fn a_missing_file_and_a_syntax_error_are_not_version_refusals() {
+    let missing = Scenario::new();
+    let absent = missing.run(&["process", "check", "missing"]);
+    assert_eq!(absent.code, Some(1), "{}", absent.stderr);
+    assert!(
+        !absent.stderr.contains(": version:"),
+        "missing file uses the version rule: {}",
+        absent.stderr
+    );
+    assert!(missing.claude_calls().is_empty(), "{}", absent.stderr);
+
+    let broken = Scenario::new();
+    write_process(
+        &broken,
+        "review",
+        "version = 1\ndescription = \"Review the diff\"\n[[steps]\n",
+    );
+    let result = broken.run(&["process", "check", "review"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        !result.stderr.contains(": version:"),
+        "syntax error uses the version rule: {}",
+        result.stderr
+    );
+}
+
+#[test]
 fn a_reserved_name_is_refused_for_every_built_in() {
     for name in [
         "check",

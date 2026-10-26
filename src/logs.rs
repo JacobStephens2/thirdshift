@@ -311,12 +311,12 @@ pub(crate) fn experiment(description: &crate::evals::experiment::Description) {
 }
 
 pub(crate) fn experiment_finished(outcome: &str, cause: Option<&str>) {
-    record().experiment_finished(outcome, cause);
+    complete(outcome, cause);
 }
 
 /// Record how a Command with no Run account ended, such as a Process.
 pub fn complete(outcome: &str, cause: Option<&str>) {
-    record().experiment_finished(outcome, cause);
+    record().outcome(outcome, cause);
 }
 
 /// The Stop given to this Command, if interruption is being handled.

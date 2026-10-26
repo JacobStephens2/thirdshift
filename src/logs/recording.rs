@@ -398,7 +398,8 @@ impl<O: Outside> Record<O> {
         }
     }
 
-    pub(super) fn experiment_finished(&mut self, outcome: &str, cause: Option<&str>) {
+    /// How a Command ended when it has no Run account: an Experiment or a Process.
+    pub(super) fn outcome(&mut self, outcome: &str, cause: Option<&str>) {
         if let Some((_, tree)) = &mut self.command_record {
             tree.command.outcome = Some(outcome.into());
             tree.command.cause = cause.map(String::from);

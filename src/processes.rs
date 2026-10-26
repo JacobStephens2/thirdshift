@@ -157,14 +157,10 @@ fn execute_steps(process: &str, prepared: &Prepared) -> Result<String> {
             }
             Err(error) => {
                 let duration = progress::duration(started.elapsed());
-                let word = if interrupt::requested() {
-                    "interrupted"
-                } else {
-                    "failed"
-                };
                 progress::step(format_args!(
-                    "step {}: {duration} {word}: {}",
+                    "step {}: {duration} {}: {}",
                     step.name,
+                    failure_outcome(),
                     one_line(&error)
                 ));
                 return Err(error);
@@ -203,14 +199,15 @@ fn run_step(
 fn classify(result: &Result<String>) -> (String, Option<String>) {
     match result {
         Ok(_) => ("succeeded".to_string(), None),
-        Err(error) => {
-            let outcome = if interrupt::requested() {
-                "interrupted"
-            } else {
-                "failed"
-            };
-            (outcome.to_string(), Some(one_line(error)))
-        }
+        Err(error) => (failure_outcome().to_string(), Some(one_line(error))),
+    }
+}
+
+fn failure_outcome() -> &'static str {
+    if interrupt::requested() {
+        "interrupted"
+    } else {
+        "failed"
     }
 }
 
@@ -246,7 +243,8 @@ fn prepare(name: &str, config: &UserConfig) -> Result<Prepared> {
     refuse_reserved(&path, name)?;
     let text = read_process(&path)?;
     let file = parse(&path, &text)?;
-    let worktree = SkillWorktree::create(&Git::new(std::env::current_dir()?))?;
+    let base = launch::checked_out_base()?;
+    let worktree = SkillWorktree::at(&Git::new(std::env::current_dir()?), base.origin_commit())?;
     let written = WrittenGuard;
     let mut steps = Vec::new();
     for step in &file.steps {
@@ -282,13 +280,16 @@ fn resolve(path: &Path, step: &StepDraft, worktree: &Path) -> Result<ResolvedSte
 fn read_process(path: &Path) -> Result<String> {
     match fs::read_to_string(path) {
         Ok(text) => Ok(text),
-        Err(error) if error.kind() == ErrorKind::NotFound => {
-            Err(rule(path, 1, "version", "version = 1 is required"))
-        }
+        Err(error) if error.kind() == ErrorKind::NotFound => Err(rule(
+            path,
+            1,
+            "missing file",
+            "the process file does not exist",
+        )),
         Err(error) => Err(rule(
             path,
             1,
-            "version",
+            "file",
             format!("could not read the file: {error}"),
         )),
     }
@@ -313,7 +314,7 @@ fn parse(path: &Path, text: &str) -> Result<ProcessFile> {
             .span()
             .map(|span| line_of(text, span.start))
             .unwrap_or(1);
-        rule(path, line, "version", error)
+        rule(path, line, "syntax", error)
     })?;
     let table = doc.as_table();
     let mut saw_version = false;

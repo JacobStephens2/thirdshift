@@ -777,9 +777,10 @@ thirdshift process gather-review
 validates the file and prints the plan: the description, a throwaway worktree
 at the Base branch, the Command&#39;s Harness, Model and Effort, and each Step&#39;s
 skill. It starts no session. Running the process starts the Steps in order in
-one throwaway worktree, detached at the checkout&#39;s committed HEAD (the Base
-branch, when you start from it) and cleaned up as a standalone skill&#39;s
-worktree is. The launch checkout stays untouched.</p>
+one throwaway worktree, detached at the Base branch and cleaned up as a
+standalone skill&#39;s worktree is. The Base branch is the branch checked out in
+the launch directory, at its commit on origin. The launch checkout stays
+untouched.</p>
 <p>Every Step uses the Command&#39;s Harness, Model and Effort: the User config
 default, or the Harness default when that is unset. Each Step&#39;s final message
 is stored beside the Command log. The next Step&#39;s session prompt names those
@@ -787,11 +788,11 @@ paths. The last Step&#39;s final message goes to stdout. Progress and failure
 causes go to stderr. A failed Step fails the process and later Steps do not
 run. Exit codes match <code>thirdshift skill</code>: <code>0</code> when the last Step finishes,
 <code>1</code> when a Step or a check fails, <code>2</code> when the arguments are wrong.</p>
-<p><code>check</code> and running refuse a missing or wrong <code>version</code>, an unknown key, a
-Step without exactly one kind, a skill that cannot be found, and a reserved
-name (<code>check</code>, <code>list</code>, <code>ticket-run</code>, <code>spec-run</code>, <code>architect-run</code>,
-<code>pickup-run</code>, <code>security-run</code>). The refusal names the rule and the file line,
-and starts no session.</p>
+<p><code>check</code> and running refuse a missing file, a file that is not valid TOML, a
+missing or wrong <code>version</code>, an unknown key, a Step without exactly one kind,
+a skill that cannot be found, and a reserved name (<code>check</code>, <code>list</code>,
+<code>ticket-run</code>, <code>spec-run</code>, <code>architect-run</code>, <code>pickup-run</code>, <code>security-run</code>).
+The refusal names the rule and the file line, and starts no session.</p>
 <p>The Command is recorded as kind <code>Process</code>, with the process name. Its Command
 log has one line per Step: the Step&#39;s name, duration, outcome and cause. Stop
 and Ctrl-C interrupt it the way they interrupt other Commands, and

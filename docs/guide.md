@@ -859,9 +859,10 @@ thirdshift process gather-review
 validates the file and prints the plan: the description, a throwaway worktree
 at the Base branch, the Command's Harness, Model and Effort, and each Step's
 skill. It starts no session. Running the process starts the Steps in order in
-one throwaway worktree, detached at the checkout's committed HEAD (the Base
-branch, when you start from it) and cleaned up as a standalone skill's
-worktree is. The launch checkout stays untouched.
+one throwaway worktree, detached at the Base branch and cleaned up as a
+standalone skill's worktree is. The Base branch is the branch checked out in
+the launch directory, at its commit on origin. The launch checkout stays
+untouched.
 
 Every Step uses the Command's Harness, Model and Effort: the User config
 default, or the Harness default when that is unset. Each Step's final message
@@ -871,11 +872,11 @@ causes go to stderr. A failed Step fails the process and later Steps do not
 run. Exit codes match `thirdshift skill`: `0` when the last Step finishes,
 `1` when a Step or a check fails, `2` when the arguments are wrong.
 
-`check` and running refuse a missing or wrong `version`, an unknown key, a
-Step without exactly one kind, a skill that cannot be found, and a reserved
-name (`check`, `list`, `ticket-run`, `spec-run`, `architect-run`,
-`pickup-run`, `security-run`). The refusal names the rule and the file line,
-and starts no session.
+`check` and running refuse a missing file, a file that is not valid TOML, a
+missing or wrong `version`, an unknown key, a Step without exactly one kind,
+a skill that cannot be found, and a reserved name (`check`, `list`,
+`ticket-run`, `spec-run`, `architect-run`, `pickup-run`, `security-run`).
+The refusal names the rule and the file line, and starts no session.
 
 The Command is recorded as kind `Process`, with the process name. Its Command
 log has one line per Step: the Step's name, duration, outcome and cause. Stop
