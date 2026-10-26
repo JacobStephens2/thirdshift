@@ -83,6 +83,7 @@ pub(crate) fn record(args: &[String]) -> Result<String> {
         });
     experiment.refresh_verdict()?;
     experiment.save()?;
+    super::retention::repositories(&experiment);
     if let Some(log) = &experiment.details.command_log
         && let Err(error) = crate::logs::experiment_rechecked(
             log,

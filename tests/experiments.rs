@@ -20,6 +20,9 @@ mod model_graders;
 #[path = "experiments/rechecks.rs"]
 mod rechecks;
 
+#[path = "experiments/retention.rs"]
+mod retention;
+
 #[path = "experiments/release.rs"]
 mod release;
 
@@ -1350,6 +1353,12 @@ while true; do sleep 0.05; done
     assert_eq!(stopped["outcome"], "interrupted");
     let before = fixture.experiment();
     assert_eq!(before["state"], "interrupted");
+    let attempts = retention::attempts(&fixture, &before);
+    assert!(
+        attempts
+            .iter()
+            .all(|attempt| attempt.join("repository").is_dir())
+    );
     let finished = before["results"].as_array().unwrap();
     assert!(!finished.is_empty());
     assert!(finished.len() < 6);
@@ -1371,6 +1380,11 @@ while true; do sleep 0.05; done
     assert_eq!(after["state"], "completed");
     assert_eq!(after["id"], before["id"]);
     assert_eq!(after["results"].as_array().unwrap().len(), 6);
+    assert!(
+        retention::attempts(&fixture, &after)
+            .iter()
+            .all(|attempt| !attempt.join("repository").exists())
+    );
     for result in finished {
         let saved = after["results"]
             .as_array()

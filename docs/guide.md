@@ -718,6 +718,18 @@ to either Arm. The text view shows usage beside each Arm's minutes.
 Both views show Void counts and causes per Arm, and report repeated
 Trial-only memory-cap stops as a finding against that Arm.
 
+Each attempt keeps its request, result, start record, stdout, stderr, scope,
+traces, Session reports and summaries, model evidence and native transcripts.
+Harness caches in the Session home's `.codex/cache/`, `.cache/` and
+`.local/share/muse/model-catalog/` are removed when the Trial session ends,
+whatever its outcome. After grading finishes and
+the Verdict has no pending rechecks, every attempt's `repository/` copy is
+removed. Paused or interrupted Experiments keep their repositories for resume;
+waiting rechecks keep them until the last recheck is recorded. Grader output,
+packets and Scores stay in place, and `experiments <id>` and `--session` still
+read the retained evidence. Pruning failures print a `warning:` without changing
+the Verdict or exit status.
+
 The Console's **Experiments** link opens `/experiments`, grouped into Running,
 Needs you and Done, newest first within each. Open an Experiment for its live
 Trial grid, per-suite Verdict intervals, Arm comparison and folded Bar. Select
