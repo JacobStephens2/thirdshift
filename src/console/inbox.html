@@ -33,7 +33,7 @@
     {% endif %}
     <details class="group archive" data-group="{{ title }}" open><summary>{{ title }} <span class="count">{{ archive.rows.len() }}</span></summary>
       {% if archive.rows.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
-      <ul class="commands">{% for item in archive.rows %}{{ self.row(item)|safe }}{% endfor %}</ul>
+      <ul class="commands">{% for item in archive.rows %}{{ self.row(item, false)|safe }}{% endfor %}</ul>
     </details>
     {% when None %}
     <nav class="folders" aria-label="Inbox sections">{% for section in inbox.sections %}<a href="/?section={{ self.slug(section.group) }}" data-group="{{ section.group }}"{% if section.rows.is_empty() %} data-empty{% endif %}{% if self.hidden(section.group) %} hidden{% endif %}{% if self.folder() == section.group %} aria-current="page"{% endif %}><span>{{ section.title }}</span><span class="count">{{ section.rows.len() }}</span></a>{% endfor %}</nav>
@@ -63,7 +63,7 @@
     <section id="group-{{ loop.index }}" class="group" data-group="{{ section.group }}" aria-label="{{ section.title }}"{% if self.hidden(section.group) || self.folder() != section.group %} hidden{% endif %}>
       {% if section.rows.is_empty() && section.references.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
       {# Only the rendered, auto-escaped RowTemplate is trusted as HTML. #}
-      <ul class="commands">{% for item in section.rows %}{{ self.row(item)|safe }}{% endfor %}</ul>
+      <ul class="commands">{% for item in section.rows %}{{ self.row(item, section.group == "needs you")|safe }}{% endfor %}</ul>
       {% for reference in section.references %}<p>{{ reference|linkify }}</p>{% endfor %}
     </section>
     {% endfor %}

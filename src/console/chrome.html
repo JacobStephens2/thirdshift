@@ -1,4 +1,11 @@
   <aside id="peek" hidden aria-label="Peek"><button type="button" data-close-peek>Close details (Esc)</button><div id="peek-content" aria-live="polite"></div></aside>
+  <dialog id="copy-context" aria-labelledby="copy-context-title">
+    <h2 id="copy-context-title">Needs you information</h2>
+    <p role="status">Clipboard unavailable. Selected; copy it with your keyboard.</p>
+    <label for="copy-context-text">Information to share with an agent</label>
+    <textarea id="copy-context-text" rows="12" readonly spellcheck="false"></textarea>
+    <form method="dialog"><button>Close</button></form>
+  </dialog>
   <footer><button type="button" data-open-keys>Keyboard help (?)</button> <button type="button" data-open-themes>Themes (Shift+T)</button> <button type="button" data-open-sections>Sections</button> <button type="button" id="pause-motion" aria-pressed="false">Pause motion</button><p id="look-status" role="status"></p></footer>
   <dialog id="themes" aria-labelledby="themes-title">
     <h2 id="themes-title">Themes</h2><p><code>thirdshift console theme &lt;name&gt;</code></p>

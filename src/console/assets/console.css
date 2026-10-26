@@ -70,6 +70,7 @@ dd dl { border-left: 1px solid var(--rule); padding-left: 8px; }
 #jumps button { margin: 3px; }
 dialog::backdrop { background: #0006; }
 #theme-editor textarea { display: block; width: 100%; max-width: 100%; font: 12px/1.4 var(--font-mono); color: var(--text); background: var(--bg); border: 1px solid var(--rule); }
+#copy-context textarea { display: block; width: 100%; font: 12px/1.4 var(--font-mono); color: var(--text); background: var(--bg); border: 1px solid var(--rule); }
 footer { margin-top: 16px; }
 #section-options label { display: block; margin: 8px 0; }
 .command { box-shadow: var(--panel-shadow); --tag-bg: var(--tag-done-bg); --tag-text: var(--tag-done-text); }
@@ -169,7 +170,7 @@ body.mailbox.peek-open { max-width: 1600px; grid-template-columns: minmax(0, 1fr
   #inbox .command { position: relative; padding: 0; cursor: pointer; }
   #inbox .command > :not(.row-head) { display: none; }
   #inbox .command:hover { background: var(--sel-bg); }
-  #inbox .row-head { display: grid; grid-template-columns: 6.5em minmax(8em, 16em) fit-content(60%) minmax(0, 1fr) fit-content(4em) fit-content(10em); gap: 12px; padding: 7px 10px; }
+  #inbox .row-head { display: grid; grid-template-columns: 6.5em minmax(8em, 16em) fit-content(60%) minmax(0, 1fr) fit-content(4em) fit-content(10em) auto; gap: 12px; padding: 7px 10px; }
   #inbox .row-head > * { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   #inbox .row-head > .heartbeat { position: absolute; left: 2px; top: 50%; margin-top: -3px; }
   #inbox .row-head > .state { grid-column: 1; justify-self: start; max-width: 100%; }
@@ -183,6 +184,10 @@ body.mailbox.peek-open { max-width: 1600px; grid-template-columns: minmax(0, 1fr
   #inbox .row-head > .new::before { content: "New"; font-size: 12px; color: var(--head); font-weight: var(--head-weight); }
   #inbox .row-head > .age { grid-column: 6; margin: 0; font-size: 12px; }
   #inbox .row-head .finish { display: none; }
+  #inbox .row-head > .copy { grid-column: 7; display: flex; align-items: baseline; gap: 6px; overflow: visible; }
+  #inbox .row-head > .copy button { padding: 0 8px; font-size: 12px; }
+  #inbox .row-head [data-copy-status] { font-size: 12px; }
+  #inbox .row-head [data-copy-status]:empty { display: none; }
 }
 @media (max-width: 760px) {
   #inbox { display: block; }
@@ -192,8 +197,9 @@ body.mailbox.peek-open { max-width: 1600px; grid-template-columns: minmax(0, 1fr
     #inbox .row-head { grid-template-columns: auto minmax(0, 1fr) auto; row-gap: 2px; }
     #inbox .row-head > .new { display: none; }
     #inbox .row-head > .age { grid-column: 3; grid-row: 1; }
-    #inbox .row-head > .issue-title { grid-column: 1 / -1; grid-row: 2; }
+    #inbox .row-head > .copy { grid-column: 3; grid-row: 2; justify-self: end; }
+    #inbox .row-head > .issue-title { grid-column: 1 / 3; grid-row: 2; }
     #inbox .row-head > .gist { display: none; }
-    #inbox .row-head > .issue-title:empty + .gist { display: block; grid-column: 1 / -1; grid-row: 2; }
+    #inbox .row-head > .issue-title:empty + .gist { display: block; grid-column: 1 / 3; grid-row: 2; }
   }
 }

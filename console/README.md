@@ -152,6 +152,14 @@ open for the selected row as you move with `j` / `k` or switch folders. On a
 phone the folders are a row of tabs and Command details open as a bottom sheet. Without
 JavaScript, rows show in full, with their own Dismiss and logs links.
 
+Each Needs you row has a **Copy** button at the end of its line for sharing its
+problem with an agent. It copies the machine, Command selector, state, cause,
+issue title, Harness, Tickets and any findings, with absolute issue, pull
+request and Console log links, plus the `thirdshift show '<command>' --json`
+command, without opening Command details. If clipboard access is unavailable,
+a dialog selects the same text for copying by keyboard. The dialog keeps that
+snapshot through live updates.
+
 Dismiss is in Command details, and on Needs you and Ready for review rows
 without JavaScript. Undo remains in Command details. Both immediately
 show “Dismissing…” or

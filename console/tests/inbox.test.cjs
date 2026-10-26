@@ -1193,6 +1193,97 @@ test('Enter and Space activate focused peek buttons', async t => {
   }
 });
 
+test('Needs you copies problem context and links for an agent by keyboard', async t => {
+  const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+  const recordPath = join(directory, '1365-copy.command.json');
+  const logPath = join(directory, '1365-copy.log');
+  const fixture = JSON.parse(await readFile(join(directory, '1-fixture.command.json'), 'utf8'));
+  fixture.issue = { number: 1365, url: 'https://github.com/acme/widgets/issues/1365', title: "Copy <script>alert('unsafe')</script> as text" };
+  fixture.cause = 'Copy fixture failure';
+  fixture.started_at = fixture.ended_at = new Date().toISOString();
+  await replaceRecord(recordPath, JSON.stringify(fixture));
+  await writeFile(logPath, 'Copy fixture output\n');
+  t.after(async () => { await rm(recordPath, { force: true }); await rm(logPath, { force: true }); });
+  const page = await pageFor(t);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+  await page.goto(origin);
+  const row = page.locator('[data-group="needs you"] > .commands > .command').filter({
+    has: page.locator('.subject', { hasText: /^acme\/widgets#1365$/ })
+  });
+  const selector = await row.getAttribute('data-command');
+  const copy = row.getByRole('button', { name: 'Copy', exact: true });
+  // The one-line row offers Copy without opening Command details.
+  assert.equal(await copy.isVisible(), true);
+  await copy.focus({ timeout: 3000 });
+  await page.keyboard.press('Enter');
+  await row.getByRole('status').filter({ hasText: 'Copied.' }).waitFor();
+  const text = await page.evaluate(() => navigator.clipboard.readText());
+  assert.match(text, /Needs you/);
+  assert.ok(text.includes(`Machine: ${await page.locator('header h1').textContent()}`));
+  assert.ok(text.includes('acme/widgets#1365'));
+  assert.ok(text.includes("Copy <script>alert('unsafe')</script> as text"));
+  assert.ok(text.includes('Failed'));
+  assert.ok(text.includes('Copy fixture failure'));
+  assert.ok(text.includes('codex · gpt-6 · high'));
+  assert.ok(text.includes('https://github.com/acme/widgets/issues/1365'));
+  assert.ok(text.includes('Ticket #98 · waiting on #97'));
+  assert.ok(text.includes(`${origin}/peek?`));
+  assert.ok(text.includes(`${origin}/log?`));
+  assert.ok(text.includes(`${origin}/logs/command/`));
+  assert.ok(text.includes(`thirdshift show '${selector}' --json`));
+  assert.doesNotMatch(text, /Dismiss|New since you last looked|csrf|Copy CLI/);
+  assert.equal(await page.locator('#peek').isVisible(), false);
+  assert.equal(await page.locator('[data-group="resolved"] .subject', { hasText: /^acme\/widgets#1365$/ }).count(), 0);
+  fixture.cause = 'Updated after copying';
+  await replaceRecord(recordPath, JSON.stringify(fixture));
+  await row.getByText(fixture.cause, { exact: true }).waitFor({ state: 'attached' });
+  assert.equal(await row.locator('[data-copy-status]').textContent(), 'Copied.');
+  await page.goto(`${origin}/?page=history`);
+  assert.equal(await page.getByRole('button', { name: 'Copy', exact: true }).count(), 0);
+});
+
+for (const clipboard of ['refused', 'unavailable']) {
+  test(`Needs you keeps selected context through live updates when clipboard is ${clipboard}`, async t => {
+    const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
+    await page.addInitScript(clipboard => {
+      if (clipboard === 'unavailable') Object.defineProperty(navigator, 'clipboard', { value: undefined });
+      else navigator.clipboard.writeText = () => Promise.reject(new DOMException('refused', 'NotAllowedError'));
+    }, clipboard);
+    await page.goto(origin);
+    const row = page.locator('[data-group="needs you"] > .commands > .command').filter({
+      has: page.locator('.subject', { hasText: /^acme\/widgets#1$/ })
+    });
+    const recordPath = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+    const original = await readFile(recordPath, 'utf8');
+    await row.getByRole('button', { name: 'Copy', exact: true }).focus();
+    await page.keyboard.press('Space');
+    const dialog = page.getByRole('dialog', { name: 'Needs you information' });
+    await dialog.waitFor();
+    const field = dialog.getByRole('textbox', { name: 'Information to share with an agent' });
+    const text = await field.inputValue();
+    assert.ok(text.includes('distinct fixture failure 1'));
+    assert.ok(text.includes('https://github.com/acme/widgets/issues/1'));
+    assert.ok(text.includes('thirdshift show'));
+    assert.equal(await field.evaluate(field => field.value.slice(field.selectionStart, field.selectionEnd)), text);
+    assert.equal(await field.evaluate(field => document.activeElement === field), true);
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    try {
+      const updated = JSON.parse(original);
+      updated.cause = 'Updated while the copy dialog is open';
+      await replaceRecord(recordPath, JSON.stringify(updated));
+      await row.getByText(updated.cause, { exact: true }).waitFor({ state: 'attached' });
+      assert.equal(await field.inputValue(), text);
+      assert.equal(await field.evaluate(field => field.value.slice(field.selectionStart, field.selectionEnd)), text);
+      await dialog.getByRole('button', { name: 'Close', exact: true }).focus();
+      await page.keyboard.press('5');
+      assert.equal(new URL(page.url()).searchParams.get('page'), null);
+      await page.keyboard.press('Enter');
+      await dialog.waitFor({ state: 'hidden' });
+      assert.equal(await page.locator('#peek').isVisible(), false);
+    } finally { await replaceRecord(recordPath, original); }
+  });
+}
+
 test('Command details copies its show command to the clipboard', async t => {
   const page = await pageFor(t);
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
