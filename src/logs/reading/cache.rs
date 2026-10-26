@@ -42,6 +42,7 @@ struct Retained<T> {
     identity: Identity,
     value: T,
     used: Instant,
+    bytes: u64,
 }
 
 struct Cache<T> {
@@ -57,7 +58,12 @@ impl<T: Clone> Cache<T> {
         }
     }
 
-    fn read(&mut self, path: &Path, load: impl FnOnce(&Path) -> Result<T>) -> Result<T> {
+    fn read(
+        &mut self,
+        path: &Path,
+        load: impl FnOnce(&Path) -> Result<T>,
+        retained_bytes: impl FnOnce(&T, u64) -> u64,
+    ) -> Result<T> {
         let identity = Identity::read(path)?;
         if let Some(retained) = self.entries.get_mut(path)
             && retained.identity == identity
@@ -66,28 +72,30 @@ impl<T: Clone> Cache<T> {
             return Ok(retained.value.clone());
         }
         if let Some(old) = self.entries.remove(path) {
-            self.bytes -= old.identity.len;
+            self.bytes -= old.bytes;
         }
         let value = load(path)?;
+        let bytes = retained_bytes(&value, identity.len);
         // Don't retain a partial in-place write. A later request retries it.
         const BUDGET: u64 = 64 * 1024 * 1024;
-        if identity.len <= BUDGET && Identity::read(path)? == identity {
-            while self.bytes + identity.len > BUDGET || self.entries.len() >= 8192 {
+        if bytes <= BUDGET && Identity::read(path)? == identity {
+            while self.bytes + bytes > BUDGET || self.entries.len() >= 8192 {
                 let oldest = self
                     .entries
                     .iter()
                     .min_by_key(|(_, entry)| entry.used)
                     .map(|(path, _)| path.clone())
                     .expect("nonempty cache over budget");
-                self.bytes -= self.entries.remove(&oldest).unwrap().identity.len;
+                self.bytes -= self.entries.remove(&oldest).unwrap().bytes;
             }
-            self.bytes += identity.len;
+            self.bytes += bytes;
             self.entries.insert(
                 path.to_path_buf(),
                 Retained {
                     identity,
                     value: value.clone(),
                     used: Instant::now(),
+                    bytes,
                 },
             );
         }
@@ -101,19 +109,21 @@ pub(super) fn record(path: &Path) -> Result<Option<CommandTree>> {
     RECORDS
         .lock()
         .unwrap()
-        .read(path, |path| {
-            Ok(serde_json::from_slice(&fs::read(path)?).ok())
-        })
+        .read(
+            path,
+            |path| Ok(serde_json::from_slice(&fs::read(path)?).ok()),
+            |_, source_bytes| source_bytes,
+        )
         .with_context(|| format!("could not read {}", path.display()))
 }
 
 pub(super) fn text(path: &Path) -> Result<Arc<str>> {
     static TEXT: LazyLock<Mutex<Cache<Arc<str>>>> = LazyLock::new(|| Mutex::new(Cache::new()));
-    match TEXT
-        .lock()
-        .unwrap()
-        .read(path, |path| Ok(fs::read_to_string(path)?.into()))
-    {
+    match TEXT.lock().unwrap().read(
+        path,
+        |path| Ok(fs::read_to_string(path)?.into()),
+        |_, source_bytes| source_bytes,
+    ) {
         Ok(text) => Ok(text),
         Err(error)
             if error
@@ -124,4 +134,23 @@ pub(super) fn text(path: &Path) -> Result<Arc<str>> {
         }
         Err(error) => Err(error).with_context(|| format!("could not read {}", path.display())),
     }
+}
+
+/// Retain only the derived signals, keyed by the resolved Session trace's
+/// identity. Large source traces must not consume the summary cache's budget.
+pub(super) fn session_signals(log: &Path) -> Option<crate::logs::session_signals::SessionSignals> {
+    use crate::logs::session_signals::{SessionSignals, read};
+
+    static SIGNALS: LazyLock<Mutex<Cache<Option<SessionSignals>>>> =
+        LazyLock::new(|| Mutex::new(Cache::new()));
+    SIGNALS
+        .lock()
+        .unwrap()
+        .read(&crate::logs::session::path(log), read, |signals, _| {
+            serde_json::to_vec(signals)
+                .expect("Session signals serialize")
+                .len() as u64
+        })
+        .ok()
+        .flatten()
 }

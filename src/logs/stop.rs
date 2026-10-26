@@ -118,10 +118,11 @@ pub(crate) struct Inspection {
 
 /// Availability follows the CLI's child refusal and captured process identity.
 pub(crate) fn inspect(config: &UserConfig, input: &str) -> Result<Inspection> {
-    let snapshot = Snapshot::load_metrics_with_silence(
+    let snapshot = Snapshot::load_details(
         &config.logs_dir,
         chrono::Local::now(),
         config.silent_interval,
+        input,
     )?;
     let selected = snapshot.resolve(input)?;
     let pending = selected
