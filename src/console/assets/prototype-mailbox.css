@@ -1,0 +1,69 @@
+/* PROTOTYPE (throwaway): mailbox layouts for the Inbox, switched with ?variant=.
+   See prototype-mailbox.js. Not for main. */
+
+.proto-bar { position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%); z-index: 100; display: flex; align-items: center; gap: 10px; padding: 6px 10px; border-radius: 999px; background: #ff0; color: #000; font: 600 13px/1 system-ui, sans-serif; box-shadow: 0 4px 18px #0008; }
+.proto-bar button { background: #000; color: #ff0; border: 0; border-radius: 999px; padding: 4px 10px; cursor: pointer; }
+html[data-proto-variant]:not([data-proto-variant="now"]) footer { padding-bottom: 60px; }
+
+/* Shared by every variant: rows are one line, and lists are never capped. */
+html:not([data-proto-variant="now"]) #inbox .commands { max-height: none !important; overflow: visible; margin: 0; padding: 0; }
+html:not([data-proto-variant="now"]) #inbox .command { margin: 0; padding: 0; border-radius: 0; border-bottom: 1px solid var(--rule); cursor: pointer; }
+html:not([data-proto-variant="now"]) #inbox .command > :not(.row-head) { display: none; }
+html:not([data-proto-variant="now"]) #inbox .row-head { display: grid; grid-template-columns: 5.5em minmax(8em, 14em) minmax(0, 1fr) 7.5em; align-items: baseline; gap: 12px; padding: 7px 10px; flex-wrap: nowrap; }
+html:not([data-proto-variant="now"]) #inbox .row-head > * { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+html:not([data-proto-variant="now"]) #inbox .row-head .heartbeat { display: none; }
+html:not([data-proto-variant="now"]) #inbox .row-head .age { text-align: right; font-size: 12px; }
+html:not([data-proto-variant="now"]) #inbox .row-head .age time { display: none; }
+html:not([data-proto-variant="now"]) #inbox .row-head .new:not([hidden]) { display: none; }
+html:not([data-proto-variant="now"]) #inbox .command:hover { background: var(--sel-bg); }
+html:not([data-proto-variant="now"]) #inbox .command.is-selected, html:not([data-proto-variant="now"]) #inbox .command[aria-current] { background: var(--sel-bg); }
+html:not([data-proto-variant="now"]) #inbox .command[data-state="Failed"] .issue-title,
+html:not([data-proto-variant="now"]) #inbox .command[data-state="Died"] .issue-title { font-weight: 600; }
+html:not([data-proto-variant="now"]) #inbox .idle-notice { padding: 8px 12px; }
+html:not([data-proto-variant="now"]) #inbox .idle-notice > :not(h3) { display: none; }
+html:not([data-proto-variant="now"]) #inbox .idle-notice h3 { font-size: 14px; }
+
+/* Folders (A) and tabs (B). */
+.proto-folders button { display: flex; justify-content: space-between; gap: 12px; width: 100%; text-align: left; border: 0; background: none; border-radius: var(--radius); padding: 7px 10px; cursor: pointer; }
+.proto-folders button[aria-pressed="true"] { background: var(--sel-bg); font-weight: 600; }
+.proto-folders .proto-count { color: var(--dim); }
+.proto-folders .proto-urgent .proto-count { color: var(--tag-text); font-weight: 700; }
+html[data-proto-variant="a"] #inbox details.group > summary,
+html[data-proto-variant="b"] #inbox details.group > summary { display: none; }
+html[data-proto-variant="a"] #inbox details.group, html[data-proto-variant="b"] #inbox details.group { border: 1px solid var(--rule); border-radius: var(--radius); }
+
+/* Only the chosen folder or tab shows. */
+html[data-proto-folder="needs-you"] #inbox details.group:not([data-group="needs you"]),
+html[data-proto-folder="ready-for-review"] #inbox details.group:not([data-group="ready for review"]),
+html[data-proto-folder="landing"] #inbox details.group:not([data-group="landing"]),
+html[data-proto-folder="working"] #inbox details.group:not([data-group="working"]),
+html[data-proto-folder="done"] #inbox details.group:not([data-group="done"]),
+html[data-proto-folder="resolved"] #inbox details.group:not([data-group="resolved"]) { display: none; }
+
+/* B: the clicked row opens in place. */
+html[data-proto-variant="b"] #inbox .command.proto-expanded > :not(.row-head) { display: block; }
+html[data-proto-variant="b"] #inbox .command.proto-expanded { background: var(--panel); }
+
+/* A: folders | list | reading pane. */
+html[data-proto-variant="a"] body { display: grid; grid-template-columns: 180px minmax(0, 1fr) minmax(320px, 36%); column-gap: 20px; max-width: none; }
+html[data-proto-variant="a"] body > header, html[data-proto-variant="a"] body > nav:not(.proto-folders), html[data-proto-variant="a"] body > footer { grid-column: 1 / -1; }
+html[data-proto-variant="a"] .proto-folders { grid-column: 1; align-self: start; position: sticky; top: 20px; margin-top: 64px; }
+html[data-proto-variant="a"] body > main { grid-column: 2; min-width: 0; }
+html[data-proto-variant="a"] #peek { grid-column: 3; grid-row: auto; }
+html[data-proto-variant="a"] body:not(.peek-open) > main { grid-column: 2 / 4; }
+
+/* B: tabs across the top, the row opens in place. */
+html[data-proto-variant="b"] .proto-folders { display: flex; gap: 4px; margin: 16px 0 0; border-bottom: 1px solid var(--rule); }
+html[data-proto-variant="b"] .proto-folders button { width: auto; border-radius: var(--radius) var(--radius) 0 0; }
+html[data-proto-variant="b"] .proto-folders button[aria-pressed="true"] { box-shadow: inset 0 -3px 0 var(--head); }
+html[data-proto-variant="b"] #inbox .command > :not(.row-head) { margin-left: 18px; margin-right: 18px; }
+html[data-proto-variant="b"] #inbox .command > .row-actions { padding-bottom: 10px; }
+
+/* C: every section stacked as group headings in one table, reading pane docked below. */
+html[data-proto-variant="c"] body { max-width: none; }
+html[data-proto-variant="c"] #inbox details.group > summary { position: sticky; top: 0; z-index: 2; background: var(--bg); font-size: 13px; text-transform: uppercase; letter-spacing: .06em; padding: 6px 4px; border-bottom: 1px solid var(--rule); }
+html[data-proto-variant="c"] #inbox .row-head .age time { display: inline; }
+html[data-proto-variant="c"] #inbox .row-head { grid-template-columns: 5.5em 16em minmax(0, 1fr) 24em; font-size: 13px; padding: 4px 10px; }
+html[data-proto-variant="c"] #inbox .command:nth-child(even) { background: color-mix(in srgb, var(--panel) 60%, transparent); }
+html[data-proto-variant="c"] body.peek-open { display: block; padding-bottom: 42dvh; }
+html[data-proto-variant="c"] #peek { position: fixed; inset: auto 0 0 0; width: auto; height: 40dvh; max-height: none; margin: 0; z-index: 10; border-width: 2px 0 0; border-color: var(--head); box-shadow: 0 -6px 24px #0006; }
