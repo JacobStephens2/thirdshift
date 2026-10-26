@@ -595,13 +595,15 @@ prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
 Override these with `--margin`, `--credible-level`, `--prior`, `--seed`,
 `--draws`, `--trials-per-task`, `--timeout` (seconds), or `--void-retries`.
 `--void-retries` accepts zero, one or two. A sandbox that cannot start, a
-provider connection or login failure, a provider server error before work, a
-plan-limit stop, or a host kill or Trial-only memory cap makes a Trial void.
+provider connection or login failure, a provider server error before work,
+provider capacity or overload errors, a plan-limit stop, or a host kill or
+Trial-only memory cap makes a Trial void.
 Timeouts, context-window overflow, refusals and agent failures count as failed
 Trials. Void Trials retry fresh up to the Bar's limit and remain void if
 exhausted. A task still void in either Arm drops out of both Arms.
 
-Usage/rate limits pause scheduling until the same Experiment is started again.
+Usage/rate limits, including provider capacity and overload errors, pause
+scheduling until the same Experiment is started again.
 Claude's warning and rejection events also pause it immediately, as do Codex quota reports at
 85% usage in either window. A Trial cut short by a warning is void; a Trial
 already running on the other worker may finish, but neither worker starts
@@ -610,7 +612,12 @@ The Experiment watches each Trial with the current detectors, including when
 an Arm's build predates warning detection.
 
 Two workers take alternating Baseline and Candidate Trials, each in a fresh
-prepared repository. Trial artifacts and one result per finished Trial live
+prepared repository. Before the session, the host installs that repository's
+pinned Rust toolchain from `rust-toolchain.toml` or `rust-toolchain`, including
+its listed components. Trials with the same pin share one preparation across
+both workers. An installation failure makes the Trial void with
+`session_unavailable`; it does not count as failed. The sandbox's network
+allowlist stays unchanged. Trial artifacts and one result per finished Trial live
 privately in `~/.thirdshift/evals/experiments/<id>/`. Trials run in a bwrap
 sandbox with a fresh home and provider-only network. Code Graders then score each Trial:
 editing or deleting `.thirdshift-issue.md` or a declared input, moving the Base

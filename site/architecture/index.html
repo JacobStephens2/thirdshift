@@ -606,7 +606,7 @@
 <rect class="lbg" x="650.5" y="278" width="43" height="16"/><text class="al" x="672" y="290" text-anchor="middle">HTTPS</text>
 </svg></div>
         <ul class="arch-key"><li class="k-machine">your machine</li><li class="k-user">enforced by the OS</li><li class="k-soft">keeps things apart, not security</li><li class="k-prop">proposed, not built</li></ul>
-        <figcaption><b>Figure 6</b> Containment. Setup's probe is shipped; thirdshift's sandbox runner covers Trials and Graders. Trusted accounts limit the issue material handed to a session, not what the session can do.</figcaption>
+        <figcaption><b>Figure 6</b> Containment. Setup's probe is shipped; thirdshift's sandbox runner covers Trials and Graders. The host prepares each Trial repository's pinned Rust toolchain before its session, sharing preparation across Trials with the same pin; the sandbox's network allowlist stays unchanged. Trusted accounts limit the issue material handed to a session, not what the session can do.</figcaption>
       </figure>
       <dl class="arch-layers">
         <div><dt>Your machine</dt><dd><em class="st-hold">holds · your setup</em> Keep production data, keys and unrelated logins off it, and assume a session can read or change anything on it.</dd></div>
