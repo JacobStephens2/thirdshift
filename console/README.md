@@ -15,6 +15,10 @@ npm test
 home folder and a free localhost port, and closes its own server and browser.
 Node and npm are test tools only; the release build embeds its assets.
 
+Tests load Playwright through `tests/playwright.cjs`, which gives every page a
+5 s default timeout (#1391): a broken locator fails fast instead of waiting
+30 s. A step that needs longer passes its own `timeout`.
+
 The **Resources** page (`9`, or `g e`) shows a host snapshot and the configured
 session admission decision, also available with `thirdshift resources --json`.
 Reload to refresh it. Set `[resources] min_available_memory_mb` and
