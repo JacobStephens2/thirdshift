@@ -401,7 +401,7 @@ sudo sh install-console.sh
 </div></details>
 <details class="fold"><summary><h3>What sessions leave behind</h3></summary>
 <div class="manual-content" id="what-sessions-leave-behind">
-<p>Cleanup removes only thirdshift&#39;s own worktree, local Issue branch and the temporary directory it wrote the Factory skills out to. The <code>.git/info/exclude</code> entry that keeps the linked skills out of git, <code>/.claude/skills/thirdshift-*</code>, or <code>/.agents/skills/thirdshift-*</code> on the other Harnesses, is added once and left in place, as every worktree of the repository shares the file. Anything else an agent does as your user stays. For example, one Ticket run downloaded a JDK to <code>~/.local/jdk/</code> because the server had no Java, installed Playwright in <code>/tmp/pw</code>, and left a pull request body draft in <code>/tmp/</code>. This is by design, but worth knowing:</p>
+<p>Cleanup removes only thirdshift&#39;s own worktree, local Issue branch and the temporary directory it wrote the Factory skills out to. The <code>.git/info/exclude</code> entry that keeps the linked skills out of git, <code>/.claude/skills/thirdshift-*</code>, or <code>/.agents/skills/thirdshift-*</code> on the other Harnesses, is added once and left in place, as every worktree of the repository shares the file. Each home skill linked from <code>~/.thirdshift/skills</code> adds its own entry for that name, and that entry is left in place too. Anything else an agent does as your user stays. For example, one Ticket run downloaded a JDK to <code>~/.local/jdk/</code> because the server had no Java, installed Playwright in <code>/tmp/pw</code>, and left a pull request body draft in <code>/tmp/</code>. This is by design, but worth knowing:</p>
 <ul>
 <li><strong>Install the target repository&#39;s toolchains up front</strong> (language runtimes, package managers, test tools), so the agents don&#39;t download their own on every Ticket run.</li>
 <li><strong>For UI work, install the headless browser dependencies</strong>, e.g. <code>libgbm1</code> on Ubuntu server, which headless Chromium needs. Without it, agents can&#39;t take screenshots to check a UI change and fall back to reading the code.</li>
@@ -735,17 +735,26 @@ max_load_per_cpu_percent = 100
 thirdshift skill thirdshift-code-review
 thirdshift skill my-repository-skill
 </code></pre>
-<p>The command uses the User config&#39;s default Harness, Model and Effort. It first
-looks for the exact name among the Factory skills and the repository&#39;s committed
-<code>.agents/skills/&lt;name&gt;/SKILL.md</code> and <code>.claude/skills/&lt;name&gt;/SKILL.md</code> files. If none
-matches, it tries the Factory skill <code>thirdshift-&lt;name&gt;</code>. A skill file that
-resolves outside the worktree is not a match. An unknown name lists the
-available skills and starts no session. The optional issue is an Issue URL or a
-positive number resolved from <code>origin</code>. An Issue URL from another repository
-is an origin mismatch and stops the command before any work.</p>
+<p>The command uses the User config&#39;s default Harness, Model and Effort. It looks
+up <code>&lt;name&gt;</code> in order. First a Factory skill whose directory is exactly
+<code>&lt;name&gt;</code>. Then the repository&#39;s committed <code>.agents/skills/&lt;name&gt;/SKILL.md</code>, or
+<code>.claude/skills/&lt;name&gt;/SKILL.md</code> when only that copy exists; <code>.agents/skills</code>
+wins when both exist. Then <code>~/.thirdshift/skills/&lt;name&gt;/SKILL.md</code>. Then the
+Factory skill <code>thirdshift-&lt;name&gt;</code>. A skill file that resolves outside the
+directory being searched is not a match, so a symlink cannot select
+instructions from somewhere else. A repository skill wins over the home skill
+of the same name. An unknown name lists the available skills and starts no
+session. The optional issue is an Issue URL or a positive number resolved from
+<code>origin</code>. An Issue URL from another repository is an origin mismatch and stops
+the command before any work.</p>
 <p>The session runs in a temporary worktree at the head of the checked-out branch,
-with the Factory skills available. Uncommitted changes in your checkout stay out
-of it. Your checkout stays untouched. The final message goes to stdout; progress,
+with the Factory skills available, and with each home skill linked under its
+own name in that same project skills directory. A repository skill of the same
+name is left in place. Each linked home skill is kept out of git by its own
+<code>.git/info/exclude</code> entry, added once and left there, as the Factory
+<code>thirdshift-*</code> pattern is (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md">ADR-0012</a>).
+Uncommitted changes in your checkout stay out of it. Your checkout stays
+untouched. The final message goes to stdout; progress,
 failure causes and the path of any retained worktree go to stderr. A completed
 session exits <code>0</code>; a failed or incomplete session exits non-zero.</p>
 <p>The worktree is kept when it has uncommitted changes, commits absent from all
@@ -774,7 +783,17 @@ command = &quot;false&quot;
 optional = true
 </code></pre>
 <p><code>version</code> must be <code>1</code>. Each Step has a <code>name</code> and exactly one kind. <code>skill</code> is
-looked up the same way as <code>thirdshift skill</code>. <code>command</code> is a command or script,
+looked up the same way as <code>thirdshift skill</code>: a Factory skill whose directory
+is exactly that name, then the repository&#39;s committed
+<code>.agents/skills/&lt;name&gt;/SKILL.md</code> and <code>.claude/skills/&lt;name&gt;/SKILL.md</code>, then
+<code>~/.thirdshift/skills/&lt;name&gt;/SKILL.md</code>, then the Factory shorthand
+<code>thirdshift-&lt;name&gt;</code>. <code>.agents/skills</code> wins when both repository copies exist.
+A repository skill wins over the home skill of the same name. A skill file
+that resolves outside the directory being searched is not a match. The home
+skill is linked into the Step&#39;s worktree the way the Factory skills are
+(<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md">ADR-0012</a>),
+under its own name, and kept out of git. A repository skill of the same name is not
+replaced. <code>command</code> is a command or script,
 run with <code>sh -c</code> in the Step&#39;s worktree. It starts no session. <code>optional = true</code>
 records that Step&#39;s failure and the Process carries on. Without <code>optional</code>, or
 with <code>optional = false</code>, a failure stops the Process.</p>
