@@ -139,6 +139,8 @@ header::after { content: ""; display: block; height: 4px; background: var(--acti
 @media (prefers-reduced-motion: reduce) { .stopping-bar { animation: none; } }
 .log-list li { margin: 10px 0; overflow-wrap: anywhere; }
 .log-list span { display: block; color: var(--dim); }
+.log-group > summary { padding: 8px 0; cursor: pointer; }
+.log-group > summary .live-count { margin-left: 8px; font-size: 13px; }
 #log-content { margin-top: 16px; }
 #log-content pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 12px; }
 #log-content article, #log-content > pre, .thinking, .tool-group { padding: 8px 12px; border: 1px solid var(--rule); margin: 8px 0; border-radius: var(--radius); }

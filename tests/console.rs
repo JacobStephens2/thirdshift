@@ -1220,6 +1220,45 @@ fn logs_inventory_matches_cli_and_reads_current_layout_only() {
 }
 
 #[test]
+fn logs_fold_by_repository_unless_there_is_only_one() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let log = |repository: &str, number: u64| {
+        let folder = home
+            .path()
+            .join(format!(".thirdshift/logs/{repository}/commands/issue"));
+        fs::create_dir_all(&folder).unwrap();
+        fs::write(
+            folder.join(format!("{number}-20261003T120000-0400.log")),
+            "Command output\n",
+        )
+        .unwrap();
+    };
+    log("acme/widgets", 7);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let page = console.get("/logs").text().unwrap();
+    assert!(
+        page.contains("<details class=\"group log-group\" data-repository=\"acme/widgets\" open>"),
+        "{page}"
+    );
+    log("acme/widgets", 8);
+    log("aaa/first", 3);
+    let page = console.get("/logs").text().unwrap();
+    for (repository, count) in [("aaa/first", "1 log"), ("acme/widgets", "2 logs")] {
+        let fold = format!("<details class=\"group log-group\" data-repository=\"{repository}\">");
+        let start = page.find(&fold).unwrap_or_else(|| panic!("{page}"));
+        let fold = &page[start..start + page[start..].find("</details>").unwrap()];
+        assert!(
+            fold.contains(&format!(
+                "<summary>{repository} <span class=\"count\">{count}</span>"
+            )),
+            "{fold}"
+        );
+        assert!(fold.contains("class=\"log-row\""), "{fold}");
+    }
+}
+
+#[test]
 fn command_logs_have_the_same_exact_owner_filter_in_cli_and_http() {
     let home = tempfile::tempdir().unwrap();
     configure(home.path());
