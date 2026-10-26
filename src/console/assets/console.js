@@ -548,7 +548,7 @@ document.addEventListener('keydown', event => {
     select(section.querySelector('summary'));
   } else if (event.key === 'Enter' && selected) {
     event.preventDefault();
-    const row = selected.matches('.command, .log-row') ? selected : selected.parentElement.querySelector('.command');
+    const row = selected.matches('.command, .log-row') ? selected : selected.parentElement.querySelector('.command, .log-row');
     if (row?.dataset.log) location.assign(row.dataset.log);
   }
 });

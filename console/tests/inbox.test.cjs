@@ -1390,9 +1390,14 @@ test('Command details keeps its fallback selection across a live refresh', { ski
 test('Logs rows open the shared reader and page keys work from the reader', async t => {
   const page = await pageFor(t);
   await page.goto(`${origin}/?page=logs`);
+  // One repository's logs show open under its name; j/k step through both.
+  assert.equal(await page.locator('.log-group[open]').count(), 1);
+  await page.keyboard.press('j');
+  assert.equal(await page.locator('.log-group > summary.is-selected').count(), 1);
   await page.keyboard.press('j');
   assert.equal(await page.locator('.is-selected.log-row').count(), 1);
   await page.keyboard.press('z');
+  assert.equal(await page.locator('.log-group > summary.is-selected').count(), 1);
   await page.keyboard.press('Enter');
   await page.waitForURL(/\/logs\/[a-f0-9]+$/);
   await page.keyboard.press('5');

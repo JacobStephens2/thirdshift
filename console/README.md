@@ -240,7 +240,8 @@ beside the list, and without JavaScript rows show in full. The Experiments
 list shows each Experiment's headline and status line, and a click opens its
 page. An Experiment page folds each suite's Verdict to its intervals, each
 suite's Trial grid to its task count, and What was compared and the Bar to
-their headings. Stages by repository folds each repository to its run count.
+their headings. Stages by repository folds each repository to its run count,
+and Logs folds each repository to its log count when it lists more than one.
 Folds stay as left through live updates.
 
 Cron jobs (`/cronjobs`, or `g` then `j`) shows schedules and commands from the
