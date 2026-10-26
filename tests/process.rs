@@ -895,6 +895,678 @@ fn stop_interrupts_a_running_process() {
     assert_eq!(record["outcome"], "interrupted");
 }
 
+const FAMILIES: &str = "\
+version = 1
+description = \"Three families, then a judge\"
+
+[worktrees.claude]
+kind = \"throwaway\"
+
+[worktrees.codex]
+kind = \"throwaway\"
+
+[worktrees.grok]
+kind = \"throwaway\"
+
+[worktrees.judge]
+kind = \"throwaway\"
+
+[[steps]]
+name = \"claude\"
+skill = \"code-review\"
+worktree = \"claude\"
+parallel = \"families\"
+
+[[steps]]
+name = \"codex\"
+skill = \"code-review\"
+worktree = \"codex\"
+parallel = \"families\"
+
+[[steps]]
+name = \"grok\"
+skill = \"code-review\"
+worktree = \"grok\"
+parallel = \"families\"
+
+[[steps]]
+name = \"judge\"
+skill = \"to-spec\"
+worktree = \"judge\"
+";
+
+#[test]
+fn check_prints_each_steps_worktree_and_which_steps_run_together() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "families", FAMILIES);
+
+    let result = scenario.run(&["process", "check", "families"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(scenario.claude_calls().is_empty(), "a session started");
+    assert!(
+        result
+            .stdout
+            .contains("families: Three families, then a judge")
+    );
+    for name in ["claude", "codex", "grok", "judge"] {
+        assert!(
+            result
+                .stdout
+                .contains(&format!("worktree {name}: throwaway at the Base branch")),
+            "{}",
+            result.stdout
+        );
+        assert!(
+            result.stdout.contains(&format!("(worktree {name})")),
+            "{}",
+            result.stdout
+        );
+    }
+    assert!(result.stdout.contains("together: claude, codex, grok\n"));
+    assert_eq!(
+        result.stdout.matches("together:").count(),
+        1,
+        "{}",
+        result.stdout
+    );
+    assert!(result.stdout.contains("SKILL.md"), "{}", result.stdout);
+    assert!(
+        !result
+            .stdout
+            .contains("together: claude, codex, grok, judge")
+    );
+    assert_eq!(worktree_count(&scenario), 1);
+    assert!(!process_dir(&scenario).exists());
+}
+
+#[test]
+fn parallel_steps_that_share_a_worktree_or_name_an_unknown_one_are_refused() {
+    let cases = [
+        (
+            "\
+version = 1
+description = \"Shared\"
+
+[worktrees.one]
+kind = \"throwaway\"
+
+[[steps]]
+name = \"a\"
+skill = \"code-review\"
+worktree = \"one\"
+parallel = \"g\"
+
+[[steps]]
+name = \"b\"
+skill = \"code-review\"
+worktree = \"one\"
+parallel = \"g\"
+",
+            ":16: shared worktree:",
+        ),
+        (
+            "\
+version = 1
+description = \"Implicit\"
+
+[[steps]]
+name = \"a\"
+skill = \"code-review\"
+parallel = \"g\"
+
+[[steps]]
+name = \"b\"
+skill = \"code-review\"
+parallel = \"g\"
+",
+            ":12: shared worktree:",
+        ),
+        (
+            "\
+version = 1
+description = \"Commands\"
+
+[[steps]]
+name = \"a\"
+command = \"true\"
+parallel = \"g\"
+
+[[steps]]
+name = \"b\"
+command = \"true\"
+parallel = \"g\"
+",
+            ":12: shared worktree:",
+        ),
+        (
+            "\
+version = 1
+description = \"Missing\"
+
+[[steps]]
+name = \"a\"
+skill = \"code-review\"
+worktree = \"missing\"
+",
+            ":7: unknown worktree:",
+        ),
+        (
+            "\
+version = 1
+description = \"Nameless\"
+
+[worktrees.one]
+kind = \"throwaway\"
+
+[[steps]]
+name = \"a\"
+skill = \"code-review\"
+",
+            ":8: worktree:",
+        ),
+        (
+            "\
+version = 1
+description = \"Branch\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+",
+            ":5: worktree kind:",
+        ),
+    ];
+    for check in [true, false] {
+        for (body, expect) in cases {
+            let scenario = Scenario::new();
+            write_process(&scenario, "families", body);
+            let result = if check {
+                scenario.run(&["process", "check", "families"])
+            } else {
+                scenario.run(&["process", "families"])
+            };
+            assert_no_session(&scenario, &result);
+            assert!(
+                result.stderr.contains(expect),
+                "check={check} expected {expect} in {}",
+                result.stderr
+            );
+            assert_eq!(worktree_count(&scenario), 1, "{}", result.stderr);
+        }
+    }
+}
+
+#[test]
+fn three_parallel_steps_overlap_and_the_next_step_sees_every_result() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "families", FAMILIES);
+    scenario.agent_does(&family_sessions(
+        "printf '%s\\n' \"$name\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+        "\
+for step in claude codex grok; do
+  path=$(printf '%s\\n' \"$FAKE_CLAUDE_PROMPT\" | sed -n \"s/^Earlier Step result ${step}: //p\")
+  test -n \"$path\"
+  test \"$(cat \"$path\")\" = \"$step\"
+done
+printf 'judged' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
+",
+    ));
+
+    let result = scenario.run(&["process", "families"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "judged\n");
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 4, "{}", result.stderr);
+    let mut directories = Vec::new();
+    for step in ["claude", "codex", "grok", "judge"] {
+        let prompt = prompt_of(&calls, step);
+        let cwd = cwd_of(&calls, step);
+        assert_ne!(cwd, scenario.launch_dir());
+        assert!(!cwd.exists(), "{step} worktree kept: {}", cwd.display());
+        directories.push(cwd.to_path_buf());
+        if step == "claude" {
+            assert!(
+                prompt.contains("This is the first Step. No earlier Step has a result."),
+                "{step}: {prompt}"
+            );
+        } else if step == "judge" {
+            assert!(!prompt.contains("This is the first Step"), "{prompt}");
+            assert!(
+                !prompt.contains("No earlier Step has a result."),
+                "{prompt}"
+            );
+        } else {
+            assert!(
+                prompt.contains("No earlier Step has a result."),
+                "{step}: {prompt}"
+            );
+            assert!(
+                !prompt.contains("This is the first Step"),
+                "{step}: {prompt}"
+            );
+        }
+    }
+    directories.sort();
+    directories.dedup();
+    assert_eq!(directories.len(), 4, "parallel steps shared a worktree");
+    let (log_path, log) = command_log(&scenario);
+    for step in ["claude", "codex", "grok", "judge"] {
+        assert!(step_line(&log, step).contains("succeeded"), "{log}");
+    }
+    let steps = log_path.with_extension("steps");
+    for step in ["claude", "codex", "grok"] {
+        assert_eq!(
+            fs::read_to_string(steps.join(format!("{step}.txt"))).unwrap(),
+            format!("{step}\n")
+        );
+    }
+    assert_eq!(worktree_count(&scenario), 1);
+    assert_eq!(process_record(&scenario)["outcome"], "succeeded");
+}
+
+#[test]
+fn a_failed_parallel_step_lets_the_others_finish_before_the_process_fails() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "families", FAMILIES);
+    scenario.agent_does(&family_sessions(
+        "\
+if [ \"$name\" = \"codex\" ]; then
+  exit 1
+fi
+sleep 0.3
+printf '%s\\n' \"$name\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
+",
+        "printf 'judge ran\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    ));
+
+    let result = scenario.run(&["process", "families"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(result.stdout, "");
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 3, "{}", result.stderr);
+    assert!(prompt_of_optional(&calls, "judge").is_none(), "{calls:?}");
+    for step in ["claude", "grok"] {
+        assert!(!cwd_of(&calls, step).exists(), "{step} kept");
+    }
+    assert!(!cwd_of(&calls, "codex").exists(), "failed worktree kept");
+    let (log_path, log) = command_log(&scenario);
+    assert!(step_line(&log, "claude").contains("succeeded"), "{log}");
+    assert!(step_line(&log, "grok").contains("succeeded"), "{log}");
+    assert!(step_line(&log, "codex").contains("failed"), "{log}");
+    assert!(!log.contains("step judge:"), "{log}");
+    let steps = log_path.with_extension("steps");
+    assert_eq!(
+        fs::read_to_string(steps.join("claude.txt")).unwrap(),
+        "claude\n"
+    );
+    assert_eq!(
+        fs::read_to_string(steps.join("grok.txt")).unwrap(),
+        "grok\n"
+    );
+    assert!(!steps.join("codex.txt").exists());
+    assert!(!steps.join("judge.txt").exists());
+    assert_eq!(worktree_count(&scenario), 1, "{}", result.stderr);
+    assert_eq!(process_record(&scenario)["outcome"], "failed");
+}
+
+#[test]
+fn a_failed_parallel_step_keeps_only_a_worktree_retention_would_keep() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "families", FAMILIES);
+    scenario.agent_does(&family_sessions(
+        "\
+if [ \"$name\" = \"codex\" ]; then
+  printf 'kept\\n' > leftover.txt
+  exit 1
+fi
+printf '%s\\n' \"$name\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
+",
+        "printf 'judge ran\\n' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    ));
+
+    let result = scenario.run(&["process", "families"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 3, "{}", result.stderr);
+    let kept = cwd_of(&calls, "codex");
+    assert!(
+        kept.exists(),
+        "dirty worktree was removed: {}",
+        result.stderr
+    );
+    assert_eq!(
+        fs::read_to_string(kept.join("leftover.txt")).unwrap(),
+        "kept\n"
+    );
+    assert!(
+        result.stderr.contains("retaining checkout"),
+        "{}",
+        result.stderr
+    );
+    for step in ["claude", "grok"] {
+        assert!(!cwd_of(&calls, step).exists(), "{step} kept");
+    }
+    assert_eq!(worktree_count(&scenario), 2, "{}", result.stderr);
+    assert_eq!(
+        scenario.launch_git(&["status", "--porcelain", "--untracked-files=all"]),
+        ""
+    );
+}
+
+#[test]
+fn an_optional_parallel_failure_does_not_fail_the_group() {
+    let scenario = Scenario::new();
+    let mut body = FAMILIES.to_string();
+    body = body.replacen(
+        "\
+name = \"codex\"
+skill = \"code-review\"
+worktree = \"codex\"
+parallel = \"families\"
+",
+        "\
+name = \"codex\"
+skill = \"code-review\"
+worktree = \"codex\"
+parallel = \"families\"
+optional = true
+",
+        1,
+    );
+    write_process(&scenario, "families", &body);
+    let plan = scenario.run(&["process", "check", "families"]);
+    assert_eq!(plan.code, Some(0), "{}", plan.stderr);
+    assert!(
+        plan.stdout.contains("(worktree codex) (optional)"),
+        "{}",
+        plan.stdout
+    );
+    scenario.agent_does(&family_sessions(
+        "\
+if [ \"$name\" = \"codex\" ]; then
+  exit 1
+fi
+printf '%s\\n' \"$name\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
+",
+        "\
+if printf '%s\\n' \"$FAKE_CLAUDE_PROMPT\" | grep -q 'Earlier Step result codex:'; then
+  exit 1
+fi
+for step in claude grok; do
+  path=$(printf '%s\\n' \"$FAKE_CLAUDE_PROMPT\" | sed -n \"s/^Earlier Step result ${step}: //p\")
+  test \"$(cat \"$path\")\" = \"$step\"
+done
+printf 'judged' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
+",
+    ));
+
+    let result = scenario.run(&["process", "families"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "judged\n");
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 4, "{}", result.stderr);
+    let (_, log) = command_log(&scenario);
+    assert!(step_line(&log, "codex").contains("failed"), "{log}");
+    for step in ["claude", "grok", "judge"] {
+        assert!(step_line(&log, step).contains("succeeded"), "{log}");
+        assert!(!cwd_of(&calls, step).exists(), "{step} kept");
+    }
+    assert!(!cwd_of(&calls, "codex").exists());
+    assert_eq!(worktree_count(&scenario), 1);
+    assert_eq!(process_record(&scenario)["outcome"], "succeeded");
+}
+
+#[test]
+fn the_same_parallel_name_after_another_step_is_a_new_group() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "groups",
+        "\
+version = 1
+description = \"Two groups of the same name\"
+
+[worktrees.wa]
+kind = \"throwaway\"
+
+[worktrees.wb]
+kind = \"throwaway\"
+
+[worktrees.wm]
+kind = \"throwaway\"
+
+[worktrees.wc]
+kind = \"throwaway\"
+
+[worktrees.wd]
+kind = \"throwaway\"
+
+[worktrees.wj]
+kind = \"throwaway\"
+
+[[steps]]
+name = \"a\"
+skill = \"code-review\"
+worktree = \"wa\"
+parallel = \"g\"
+
+[[steps]]
+name = \"b\"
+skill = \"code-review\"
+worktree = \"wb\"
+parallel = \"g\"
+
+[[steps]]
+name = \"mid\"
+skill = \"to-spec\"
+worktree = \"wm\"
+
+[[steps]]
+name = \"c\"
+skill = \"code-review\"
+worktree = \"wc\"
+parallel = \"g\"
+
+[[steps]]
+name = \"d\"
+skill = \"code-review\"
+worktree = \"wd\"
+parallel = \"g\"
+
+[[steps]]
+name = \"judge\"
+skill = \"pr\"
+worktree = \"wj\"
+",
+    );
+    scenario.agent_does(
+        r#"name=$(printf '%s\n' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^This is Step \([^ ]*\) of the Custom process .*/\1/p')
+root=$(dirname "$FAKE_CLAUDE_RECORD")
+overlap() {
+  dir=$1
+  shift
+  mkdir -p "$dir"
+  touch "$dir/$name"
+  ready=0
+  for _ in $(seq 1 100); do
+    ready=1
+    for member in "$@"; do
+      if [ ! -f "$dir/$member" ]; then
+        ready=0
+      fi
+    done
+    if [ "$ready" = 1 ]; then
+      break
+    fi
+    sleep 0.05
+  done
+  test "$ready" = 1
+}
+has() {
+  printf '%s\n' "$FAKE_CLAUDE_PROMPT" | grep -q "Earlier Step result $1:"
+}
+case "$name" in
+  a|b)
+    if has mid || has c || has d; then exit 1; fi
+    overlap "$root/first" a b
+    printf '%s\n' "$name" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+    ;;
+  mid)
+    for step in a b; do
+      path=$(printf '%s\n' "$FAKE_CLAUDE_PROMPT" | sed -n "s/^Earlier Step result ${step}: //p")
+      test "$(cat "$path")" = "$step"
+    done
+    if has c || has d; then exit 1; fi
+    printf 'mid\n' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+    ;;
+  c|d)
+    for step in a b mid; do
+      path=$(printf '%s\n' "$FAKE_CLAUDE_PROMPT" | sed -n "s/^Earlier Step result ${step}: //p")
+      test -n "$path"
+    done
+    other=d
+    if [ "$name" = "d" ]; then other=c; fi
+    if has "$other"; then exit 1; fi
+    overlap "$root/second" c d
+    printf '%s\n' "$name" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+    ;;
+  judge)
+    for step in a b mid c d; do
+      path=$(printf '%s\n' "$FAKE_CLAUDE_PROMPT" | sed -n "s/^Earlier Step result ${step}: //p")
+      test "$(cat "$path")" = "$step"
+    done
+    printf 'judged' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+    ;;
+esac
+"#,
+    );
+
+    let result = scenario.run(&["process", "groups"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "judged\n");
+    assert_eq!(scenario.claude_calls().len(), 6, "{}", result.stderr);
+    let plan = scenario.run(&["process", "check", "groups"]);
+    assert!(plan.stdout.contains("together: a, b\n"), "{}", plan.stdout);
+    assert!(plan.stdout.contains("together: c, d\n"), "{}", plan.stdout);
+    assert_eq!(
+        plan.stdout.matches("together:").count(),
+        2,
+        "{}",
+        plan.stdout
+    );
+    assert_eq!(worktree_count(&scenario), 1);
+}
+
+#[test]
+fn an_optional_step_failure_is_recorded_and_later_steps_run() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "notes",
+        "\
+version = 1
+description = \"Optional gather\"
+
+[[steps]]
+name = \"gather\"
+skill = \"to-spec\"
+optional = true
+
+[[steps]]
+name = \"judge\"
+skill = \"code-review\"
+",
+    );
+    scenario.agent_does_in_session(1, "exit 1");
+    scenario.agent_does_in_session(
+        2,
+        "\
+if printf '%s\\n' \"$FAKE_CLAUDE_PROMPT\" | grep -q 'Earlier Step result gather:'; then
+  exit 1
+fi
+printf 'judged' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
+",
+    );
+
+    let result = scenario.run(&["process", "notes"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "judged\n");
+    assert_eq!(scenario.claude_calls().len(), 2, "{}", result.stderr);
+    let (_, log) = command_log(&scenario);
+    assert!(step_line(&log, "gather").contains("failed"), "{log}");
+    assert!(step_line(&log, "judge").contains("succeeded"), "{log}");
+    assert_eq!(process_record(&scenario)["outcome"], "succeeded");
+    assert_eq!(worktree_count(&scenario), 1);
+}
+
+fn family_sessions(members: &str, judge: &str) -> String {
+    format!(
+        r#"name=$(printf '%s\n' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^This is Step \([^ ]*\) of the Custom process .*/\1/p')
+root=$(dirname "$FAKE_CLAUDE_RECORD")
+case "$name" in
+  claude|codex|grok)
+    mkdir -p "$root/overlap"
+    touch "$root/overlap/$name"
+    ready=0
+    for _ in $(seq 1 100); do
+      if [ -f "$root/overlap/claude" ] && [ -f "$root/overlap/codex" ] && [ -f "$root/overlap/grok" ]; then
+        ready=1
+        break
+      fi
+      sleep 0.05
+    done
+    test "$ready" = 1
+    {members}
+    ;;
+  judge)
+    {judge}
+    ;;
+esac
+"#
+    )
+}
+
+fn prompt_of<'a>(calls: &'a [serde_json::Value], step: &str) -> &'a str {
+    prompt_of_optional(calls, step).unwrap_or_else(|| panic!("no session for {step}"))
+}
+
+fn prompt_of_optional<'a>(calls: &'a [serde_json::Value], step: &str) -> Option<&'a str> {
+    let needle = format!("This is Step {step} of the Custom process");
+    calls.iter().find_map(|call| {
+        call["prompt"]
+            .as_str()
+            .filter(|prompt| prompt.contains(&needle))
+    })
+}
+
+fn cwd_of<'a>(calls: &'a [serde_json::Value], step: &str) -> &'a Path {
+    let needle = format!("This is Step {step} of the Custom process");
+    let cwd = calls
+        .iter()
+        .find(|call| {
+            call["prompt"]
+                .as_str()
+                .is_some_and(|prompt| prompt.contains(&needle))
+        })
+        .unwrap_or_else(|| panic!("no session for {step}"))["cwd"]
+        .as_str()
+        .unwrap();
+    Path::new(cwd)
+}
+
+fn worktree_count(scenario: &Scenario) -> usize {
+    scenario
+        .launch_git(&["worktree", "list", "--porcelain"])
+        .matches("worktree ")
+        .count()
+}
+
 fn step_line<'a>(log: &'a str, name: &str) -> &'a str {
     log.lines()
         .find(|line| line.contains(&format!("step {name}:")))
