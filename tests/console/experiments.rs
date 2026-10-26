@@ -353,3 +353,66 @@ fn selected_session_evidence_survives_unrelated_corruption_and_legacy_verdicts()
         }
     }
 }
+
+#[test]
+fn experiment_detail_says_plainly_what_the_experiment_tests() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let changed = "c".repeat(64);
+    let directory = fixture(home.path(), &changed, "2026-10-24T09:00:00-04:00");
+    let mut record: Value =
+        serde_json::from_slice(&fs::read(directory.join("experiment.json")).unwrap()).unwrap();
+    record["suites"] = json!(["code-review", "spec-review"]);
+    record["bar"]["trials_per_task"]["spec-review"] = json!(1);
+    record["baseline_ref"] = json!("v0.16.0");
+    record["candidate_ref"] = json!("main");
+    record["title"] = json!("Merge pull request #1351 from acme/issue-1223");
+    fs::write(
+        directory.join("experiment.json"),
+        serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+    let same = "d".repeat(64);
+    let directory = fixture(home.path(), &same, "2026-10-24T10:00:00-04:00");
+    let mut record: Value =
+        serde_json::from_slice(&fs::read(directory.join("experiment.json")).unwrap()).unwrap();
+    record["candidate"] = record["baseline"].clone();
+    record["baseline_ref"] = json!("71c7a497");
+    record["candidate_ref"] = json!("71c7a497");
+    fs::write(
+        directory.join("experiment.json"),
+        serde_json::to_vec(&record).unwrap(),
+    )
+    .unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+
+    let html = console
+        .get(&format!("/experiments/{changed}"))
+        .text()
+        .unwrap();
+    let question = html
+        .split("<section class=\"experiment-question\"")
+        .nth(1)
+        .expect(&html)
+        .split("</section>")
+        .next()
+        .unwrap();
+    for expected in [
+        "<h2>What it tests</h2>",
+        "Does the Candidate do worse than the Baseline on code-review and spec-review?",
+        "Build: v0.16.0 (aaaaaaaaaa) → main (bbbbbbbbbb), “Merge pull request #1351 from acme/issue-1223”",
+        "Harness: claude → codex",
+        "Worse means a pass share more than 10 points below the Baseline’s.",
+    ] {
+        assert!(
+            question.contains(expected),
+            "missing {expected}: {question}"
+        );
+    }
+
+    let html = console.get(&format!("/experiments/{same}")).text().unwrap();
+    assert!(
+        html.contains("Both arms are the same build, Harness, Model and Effort, so this Experiment tests no change: it shows how much code-review results vary between runs of one setup."),
+        "{html}"
+    );
+}

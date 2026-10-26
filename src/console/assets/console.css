@@ -6,6 +6,12 @@
 * { box-sizing: border-box; }
 body { margin: 0 auto; max-width: 1120px; padding: 20px 28px; background: var(--bg); color: var(--text); font: var(--body-size)/1.4 var(--font-body); }
 header { border-bottom: 2px solid var(--head); padding-bottom: 14px; }
+/* Notifications sit top right, beside the machine's name, not under it. */
+header { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 16px; }
+header > * { grid-column: 1; }
+header > .notifications { grid-column: 2; grid-row: 1 / span 2; align-self: start; margin: 0; text-align: right; }
+header::after { grid-column: 1 / -1; }
+@media (max-width: 760px) { header { display: block; } header > .notifications { text-align: left; } }
 .brand, .harness, .age, .empty, aside { color: var(--dim); }
 .brand { margin: 0; }
 h1 { margin: 4px 0; font: var(--head-weight) clamp(24px, 4vw, 40px)/1.1 var(--font-head); overflow-wrap: anywhere; text-transform: var(--head-case); text-shadow: var(--title-shadow); }
@@ -15,11 +21,33 @@ a { color: var(--link); overflow-wrap: anywhere; }
 h2 { margin: 0; font-weight: var(--head-weight); }
 code, .now, .subject, .plan { font-family: var(--font-mono); font-size: 12px; }
 code { overflow-wrap: anywhere; }
+/* A CLI line stays one line, cut off at the edge; Copy CLI copies all of it. */
+.peek-cli { display: flex; align-items: baseline; gap: 8px; }
+.peek-cli code { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.peek-cli > :not(code) { flex: none; }
+.peek-cli [role="status"]:empty { display: none; }
+.peek-action { display: flex; flex-wrap: nowrap; align-items: baseline; gap: 8px; margin: 1em 0; }
+.peek-action > button, .peek-action > [role="status"] { flex: none; }
+.peek-action > [role="status"]:empty { display: none; }
+.peek-action > .peek-cli { flex: 1 1 auto; min-width: 0; }
+/* A Session trace path stays one line and keeps its end, which tells traces apart. */
+.peek-trace a { display: flex; gap: 0.3em; max-width: 100%; }
+.peek-trace a > span { flex: none; }
+.peek-trace .tail { flex: 0 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; }
 .group { border-bottom: 1px solid var(--rule); }
 summary { padding: 10px 2px; cursor: pointer; font-size: 17px; }
 summary .count { margin-left: 12px; color: var(--dim); font-size: 13px; }
+/* Command details: one line per fact, label then value; long or nested facts open on a click. */
+.peek-facts, .peek-facts dl { display: grid; grid-template-columns: minmax(6em, max-content) minmax(0, 1fr); column-gap: 12px; row-gap: 2px; }
+.peek-facts dd { margin: 0; min-width: 0; }
+.peek-facts dd:not(:has(> details)), details[data-fact]:not([open]) > summary { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+details[data-fact] > summary { padding: 0; font-size: inherit; }
+details[data-fact] > dl { margin: 4px 0 6px; }
+.peek-facts dd.file { display: flex; align-items: center; gap: 6px; }
+.peek-facts dd.file .tail { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; }
+.copy-icon { flex: none; display: inline-grid; place-items: center; padding: 3px; line-height: 0; }
+.copy-icon[data-copied] { color: var(--head); }
 .commands, .children, .plan { list-style: none; padding: 0; margin: 0; }
-.commands { max-height: 300px; overflow: auto; }
 .command { padding: 8px 10px; margin-bottom: 4px; border-radius: var(--radius); color: var(--dim); overflow-wrap: anywhere; }
 .command:focus, .command[aria-current="true"] { outline: 2px solid var(--head); outline-offset: -2px; }
 .row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
@@ -45,10 +73,6 @@ summary .count { margin-left: 12px; color: var(--dim); font-size: 13px; }
 .idle-notice h3 { margin: 0; font-size: 17px; }
 .idle-notice p { margin: 6px 0 0; }
 .idle-notice ul { margin: 6px 0; padding-left: 20px; overflow-wrap: anywhere; }
-.idle-notice + .group > .commands { max-height: 160px; }
-@media (min-width: 960px) and (max-height: 920px) {
-  .idle-notice + .group > .commands { max-height: 96px; }
-}
 aside { font-size: 12px; }
 :focus-visible { outline: 2px solid var(--head); outline-offset: 2px; }
 .is-selected { outline: 2px solid var(--head); outline-offset: -2px; background: var(--sel-bg); }
@@ -60,7 +84,6 @@ form label { min-width: 0; }
 .judgment-form label { display: block; margin: 8px 0; }
 .judgment-form textarea, .judgment-form input:not([type="hidden"]) { display: block; width: 100%; max-width: 100%; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--rule); border-radius: var(--radius); padding: 8px; }
 select { max-width: 100%; }
-.archive .commands { max-height: none; }
 body.peek-open { max-width: 1500px; display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); column-gap: 24px; }
 body.peek-open > header, body.peek-open > nav, body.peek-open > footer { grid-column: 1 / -1; }
 body.peek-open > main { grid-column: 1; }
@@ -116,6 +139,8 @@ header::after { content: ""; display: block; height: 4px; background: var(--acti
 @media (prefers-reduced-motion: reduce) { .stopping-bar { animation: none; } }
 .log-list li { margin: 10px 0; overflow-wrap: anywhere; }
 .log-list span { display: block; color: var(--dim); }
+.log-group > summary { padding: 8px 0; cursor: pointer; }
+.log-group > summary .live-count { margin-left: 8px; font-size: 13px; }
 #log-content { margin-top: 16px; }
 #log-content pre { white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: 12px; }
 #log-content article, #log-content > pre, .thinking, .tool-group { padding: 8px 12px; border: 1px solid var(--rule); margin: 8px 0; border-radius: var(--radius); }
@@ -135,6 +160,10 @@ header::after { content: ""; display: block; height: 4px; background: var(--acti
 .command-chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
 .command-chips a { border: 1px solid var(--rule); border-radius: var(--radius); padding: 6px; overflow-wrap: anywhere; }
 .command-chips [aria-current] { outline: 2px solid var(--head); }
+/* Waterfall folds its runs to one line naming the run shown. */
+.command-choices { margin: 16px 0; }
+.command-choices > summary { cursor: pointer; }
+.command-choices .command-chips { margin: 12px 0 0; }
 .stage-section { min-width: 0; margin: 20px 0; }
 .stage-section h3 { display: inline; margin-right: 16px; }
 .stage-scroll { overflow-x: auto; max-width: 100%; margin-top: 10px; overflow-anchor: none; }
@@ -151,6 +180,61 @@ header::after { content: ""; display: block; height: 4px; background: var(--acti
 @media (max-width: 500px) {
   body { padding: 14px 12px; }
   .issue-title { flex-basis: 100%; order: 1; }
-  .commands { max-height: none; }
   .children { padding-left: 8px; }
+}
+
+/* The Inbox reads like mail: section folders, a list of one-line rows, and
+   Details beside them. Rows stay whole without JavaScript, which Details needs. */
+body:is(.mailbox, .archive-page) { max-width: 1600px; }
+body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-columns: minmax(0, 1fr) minmax(320px, 38%); }
+#inbox { display: grid; grid-template-columns: 180px minmax(0, 1fr); column-gap: 20px; align-content: start; }
+#inbox > * { grid-column: 2; min-width: 0; }
+/* Spans every row the Inbox's other children make, whichever are present. */
+#inbox > .folders { grid-column: 1; grid-row: 1 / span 20; align-self: start; position: sticky; top: 20px; display: flex; flex-direction: column; gap: 2px; margin-top: 16px; }
+.folders a { display: flex; justify-content: space-between; gap: 12px; padding: 7px 10px; border-radius: var(--radius); color: var(--text); text-decoration: none; }
+.folders a:hover { background: var(--sel-bg); }
+.folders a[aria-current="page"] { background: var(--sel-bg); font-weight: var(--head-weight); }
+.folders .count { color: var(--dim); }
+.folders a[data-group="needs you"]:not([data-empty]) .count { color: var(--urgent-text); font-weight: var(--head-weight); }
+#inbox > .group { border: 1px solid var(--rule); border-radius: var(--radius); margin-top: 12px; }
+#inbox > .group > .empty, #inbox > .group > p { margin: 0; padding: 10px; }
+.row-head > .gist { display: none; }
+.one-line .command { margin: 0; border-radius: 0; border-bottom: 1px solid var(--rule); }
+.one-line .command:last-child { border-bottom: 0; }
+@media (scripting: enabled) {
+  .one-line .command { position: relative; padding: 0; cursor: pointer; }
+  .one-line .command > :not(.row-head) { display: none; }
+  .one-line .command:hover { background: var(--sel-bg); }
+  .one-line .row-head { display: grid; grid-template-columns: 6.5em minmax(8em, 16em) fit-content(60%) minmax(0, 1fr) fit-content(4em) fit-content(10em) auto; gap: 12px; padding: 7px 10px; }
+  .one-line .row-head > * { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .one-line .row-head > .heartbeat { position: absolute; left: 2px; top: 50%; margin-top: -3px; }
+  .one-line .row-head > .state { grid-column: 1; justify-self: start; max-width: 100%; }
+  .one-line .row-head > .subject { grid-column: 2; }
+  .one-line .row-head > .issue-title { grid-column: 3; color: var(--text); }
+  .one-line .row-head > .issue-title:empty { display: none; }
+  .one-line .row-head > .gist { display: block; grid-column: 4; }
+  .one-line .row-head > .issue-title:empty + .gist { grid-column: 3 / 5; }
+  /* The full words stay for screen readers; the line shows a short badge. */
+  .one-line .row-head > .new { grid-column: 5; font-size: 0; }
+  .one-line .row-head > .new::before { content: "New"; font-size: 12px; color: var(--head); font-weight: var(--head-weight); }
+  .one-line .row-head > .age { grid-column: 6; margin: 0; font-size: 12px; }
+  .one-line .row-head .finish { display: none; }
+  .one-line .row-head > .copy { grid-column: 7; display: flex; align-items: baseline; gap: 6px; overflow: visible; }
+  .one-line .row-head > .copy button { padding: 0 8px; font-size: 12px; }
+  .one-line .row-head [data-copy-status] { font-size: 12px; }
+  .one-line .row-head [data-copy-status]:empty { display: none; }
+}
+@media (max-width: 760px) {
+  #inbox { display: block; }
+  #inbox > .folders { position: static; flex-direction: row; overflow-x: auto; margin: 12px 0 0; padding-bottom: 4px; border-bottom: 1px solid var(--rule); }
+  .folders a { flex: none; }
+  @media (scripting: enabled) {
+    .one-line .row-head { grid-template-columns: auto minmax(0, 1fr) auto; row-gap: 2px; }
+    .one-line .row-head > .new { display: none; }
+    .one-line .row-head > .age { grid-column: 3; grid-row: 1; }
+    .one-line .row-head > .copy { grid-column: 3; grid-row: 2; justify-self: end; }
+    .one-line .row-head > .issue-title { grid-column: 1 / 3; grid-row: 2; }
+    .one-line .row-head > .gist { display: none; }
+    .one-line .row-head > .issue-title:empty + .gist { display: block; grid-column: 1 / 3; grid-row: 2; }
+  }
 }

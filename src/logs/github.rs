@@ -163,8 +163,11 @@ impl Kept {
             return None;
         }
         let reason = reasons.join("; ");
-        Some(match self.last_answered_at() {
-            Some(at) => format!("GitHub last answered at {at}; {reason}"),
+        Some(match self.last_answered {
+            Some(at) => format!(
+                "GitHub last answered at {}; {reason}",
+                crate::local_time::stamp(&at)
+            ),
             None => format!("GitHub has not answered yet; {reason}"),
         })
     }

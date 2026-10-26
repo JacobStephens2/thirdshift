@@ -15,6 +15,10 @@ pub(in crate::logs) struct CommandIdentity {
 }
 
 impl CommandIdentity {
+    pub(in crate::logs) fn matches(&self, command: &Command) -> bool {
+        self.record_path == command.record_path && self.name == command.record.name
+    }
+
     pub(in crate::logs) fn of(command: &Command) -> Self {
         Self {
             record_path: command.record_path.clone(),

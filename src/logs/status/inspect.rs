@@ -96,10 +96,11 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
 
 pub fn show(input: &str, json: bool) -> Result<()> {
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load_metrics_with_silence(
+    let snapshot = Snapshot::load_details(
         &config.logs_dir,
         Local::now(),
         config.silent_interval,
+        input,
     )?;
     let command = snapshot.resolve(input)?.observation;
     if json {

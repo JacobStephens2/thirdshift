@@ -79,7 +79,7 @@ function sync() {
   button.disabled = !!reason;
   button.setAttribute('aria-pressed', String(on));
   button.textContent = on ? 'Turn notifications off' : 'Turn notifications on';
-  status.textContent = reason || (on ? 'Notifications on for this browser while a Console tab is open.' : 'Notifications off for this browser.');
+  status.textContent = reason || '';
   if (!on) {
     generation++;
     stopWatching?.();

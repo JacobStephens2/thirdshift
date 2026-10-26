@@ -22,8 +22,38 @@ use crate::logs::catalog::{self, Log};
 #[template(path = "console/logs.html")]
 struct LogsPage {
     page: super::PageContext,
-    logs: Vec<Log>,
+    groups: Vec<LogGroup>,
     owner: String,
+}
+
+/// One repository's logs, in catalog order; the page folds each group.
+struct LogGroup {
+    repository: String,
+    logs: Vec<Log>,
+}
+
+impl LogGroup {
+    fn live(&self) -> usize {
+        self.logs.iter().filter(|log| log.live).count()
+    }
+}
+
+/// Logs grouped by repository, the groups in order of their first log.
+fn by_repository(logs: Vec<Log>) -> Vec<LogGroup> {
+    let mut groups: Vec<LogGroup> = Vec::new();
+    for log in logs {
+        match groups
+            .iter_mut()
+            .find(|group| group.repository == log.repository)
+        {
+            Some(group) => group.logs.push(log),
+            None => groups.push(LogGroup {
+                repository: log.repository.clone(),
+                logs: vec![log],
+            }),
+        }
+    }
+    groups
 }
 
 #[derive(Template)]
@@ -50,7 +80,7 @@ async fn inventory(owner: Option<String>) -> Response {
             let logs = catalog::load(&config, owner.as_deref())?;
             Ok(LogsPage {
                 page: super::PageContext::new(&config),
-                logs,
+                groups: by_repository(logs),
                 owner: owner.unwrap_or_default(),
             }
             .render()?)

@@ -331,13 +331,7 @@ fn console_dismiss_and_undo_update_open_pages_and_name_the_account() {
             for stream in &mut pages {
                 assert!(sse_event(stream).contains("event: commands"));
                 let page = get(&console, "/", &session).text().unwrap();
-                let section = page
-                    .split(&format!("data-group=\"{expected_group}\""))
-                    .nth(1)
-                    .expect(&page)
-                    .split("</details>")
-                    .next()
-                    .unwrap();
+                let section = section(&page, expected_group);
                 assert!(section.contains("widgets#7"), "{page}");
             }
             let details = get(&console, peek, &session).text().unwrap();

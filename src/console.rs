@@ -527,13 +527,35 @@ struct InboxPage {
     archive: Option<status::Archive>,
     outcome: String,
     repository: String,
+    /// The `section` the URL asked for, as its slug.
+    section: String,
 }
 
 impl InboxPage {
     fn hidden(&self, group: &str) -> bool {
         self.hidden_sections
             .iter()
-            .any(|section| section == &group.replace(' ', "-"))
+            .any(|section| section == &slug(group))
+    }
+
+    /// The one section the Inbox shows, like a mail folder: the one the URL
+    /// names if it is visible, otherwise the first visible one with rows.
+    fn folder(&self) -> &'static str {
+        let visible = || {
+            self.inbox
+                .sections
+                .iter()
+                .filter(|section| !self.hidden(section.group))
+        };
+        visible()
+            .find(|section| slug(section.group) == self.section)
+            .or_else(|| visible().find(|section| !section.rows.is_empty()))
+            .or_else(|| visible().next())
+            .map_or("", |section| section.group)
+    }
+
+    fn slug(&self, group: &str) -> String {
+        slug(group)
     }
     fn needs_you(&self) -> usize {
         self.inbox.sections[0].rows.len()
@@ -583,6 +605,11 @@ impl RowTemplate<'_> {
             can_copy: false,
         }
     }
+}
+
+/// A section's name as config and URLs spell it: `needs you` is `needs-you`.
+fn slug(group: &str) -> String {
+    group.replace(' ', "-")
 }
 
 fn query_value(query: &Option<String>, key: &str) -> String {
@@ -656,6 +683,7 @@ async fn render_page(
                 .transpose()?,
             outcome,
             repository,
+            section: query_value(&query, "section"),
         }
         .render()?)
     })

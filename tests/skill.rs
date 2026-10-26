@@ -413,7 +413,7 @@ fn partial_muse_and_opencode_messages_are_not_success() {
         fs::remove_file(&executable).unwrap();
         fs::write(
             &executable,
-            format!("#!/bin/sh\ncat <<'JSON'\n{event}\nJSON\nexit 0\n"),
+            format!("#!/bin/sh\ncat > /dev/null\ncat <<'JSON'\n{event}\nJSON\nexit 0\n"),
         )
         .unwrap();
         fs::set_permissions(&executable, fs::Permissions::from_mode(0o755)).unwrap();
