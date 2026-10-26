@@ -15,6 +15,23 @@ npm test
 home folder and a free localhost port, and closes its own server and browser.
 Node and npm are test tools only; the release build embeds its assets.
 
+For Console CSS and JavaScript development, serve the assets from this checkout:
+
+```sh
+THIRDSHIFT_CONSOLE_ASSETS=src/console/assets cargo run -- console --no-sign-in
+```
+
+In a debug build, `/assets/*` reads that directory with `no-store`; missing files
+return 404. Open Console pages use their existing `/events` connection to swap
+changed stylesheets in place after loading them, and reload for changed scripts,
+usually within a second. No rebuild or manual reload is needed for asset edits.
+Paths outside the directory and symlinks are refused. Custom Theme stylesheets
+and fonts retain their usual handling.
+
+Without the variable, and in release builds even when it is set, assets come
+from the binary and disk edits have no effect. Askama templates and Rust code
+stay compiled in and still require a build.
+
 Tests load Playwright through `tests/playwright.cjs`, which gives every page a
 5 s default timeout (#1391): a broken locator fails fast instead of waiting
 30 s. A step that needs longer passes its own `timeout`.

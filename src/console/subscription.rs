@@ -6,13 +6,15 @@ use std::sync::Arc;
 use anyhow::Result;
 
 use super::auth::Viewer;
-use super::changes::{Notifier, Receiver};
+use super::changes::{Notifier, Receiver, Revision};
 use super::watching::Following;
 
 #[derive(Clone, Copy, PartialEq)]
 pub(super) enum Readiness {
     /// Catch up immediately once, then sleep until Commands change.
     Wait,
+    /// Page change notices include development assets as well as Commands.
+    Page,
     /// Permit work now, e.g. output already buffered behind the last batch.
     Drain,
 }
@@ -21,7 +23,7 @@ pub(super) struct Subscription {
     changes: Receiver,
     check: Check,
     authorized_accounts: Option<u64>,
-    granted_commands: Option<u64>,
+    granted: Option<Revision>,
     // Released on termination; None means no further work turn.
     lease: Option<Arc<Following>>,
 }
@@ -37,7 +39,7 @@ impl Subscription {
             changes,
             check,
             authorized_accounts: None,
-            granted_commands: None,
+            granted: None,
             lease: Some(lease),
         }
     }
@@ -53,6 +55,10 @@ impl Subscription {
             self.lease = None;
         }
         result
+    }
+
+    pub fn revision(&self) -> Revision {
+        self.granted.expect("a work turn has been granted")
     }
 
     async fn next(&mut self, mode: Readiness) -> Result<bool> {
@@ -71,9 +77,16 @@ impl Subscription {
                 self.authorized_accounts = Some(current.accounts);
                 continue;
             }
-            if mode == Readiness::Drain || self.granted_commands != Some(current.commands) {
+            if mode == Readiness::Drain
+                || self.granted.is_none_or(|previous| {
+                    previous.commands != current.commands
+                        || (mode == Readiness::Page
+                            && (previous.styles != current.styles
+                                || previous.scripts != current.scripts))
+                })
+            {
                 // A change during the caller's work stays unseen until it waits.
-                self.granted_commands = Some(current.commands);
+                self.granted = Some(current);
                 return Ok(true);
             }
             if self.changes.changed().await.is_err() {

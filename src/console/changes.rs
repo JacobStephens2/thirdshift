@@ -14,6 +14,8 @@ use tokio::sync::watch;
 pub(super) struct Revision {
     pub commands: u64,
     pub accounts: u64,
+    pub styles: u64,
+    pub scripts: u64,
     executable: u64,
 }
 
@@ -68,6 +70,7 @@ struct Paths {
     root: PathBuf,
     logs: PathBuf,
     executable: PathBuf,
+    assets: Option<PathBuf>,
 }
 
 impl Paths {
@@ -76,6 +79,7 @@ impl Paths {
             root: observed_path(&root),
             logs: observed_path(&logs),
             executable: observed_path(&executable),
+            assets: None,
         }
     }
 
@@ -90,6 +94,10 @@ impl Paths {
                 revision.commands += 1;
                 revision.accounts += 1;
                 revision.executable += 1;
+                if self.assets.is_some() {
+                    revision.styles += 1;
+                    revision.scripts += 1;
+                }
                 return;
             }
         };
@@ -105,6 +113,25 @@ impl Paths {
             ) && path.is_dir()
             {
                 continue;
+            }
+            if let Some(directory) = &self.assets
+                && (path.starts_with(directory) || directory.starts_with(&path))
+            {
+                match path.extension().and_then(|ext| ext.to_str()) {
+                    Some("js") => revision.scripts += 1,
+                    Some("css" | "woff2" | "woff" | "otf" | "ttf") => revision.styles += 1,
+                    _ if path == *directory
+                        || path.is_dir()
+                        || matches!(
+                            event.kind,
+                            EventKind::Remove(notify::event::RemoveKind::Folder)
+                        ) =>
+                    {
+                        revision.styles += 1;
+                        revision.scripts += 1;
+                    }
+                    _ => {}
+                }
             }
             if path == self.root.join("config.toml") || self.root.starts_with(&path) {
                 revision.commands += 1;
@@ -135,7 +162,13 @@ impl Paths {
                 self.executable.parent().unwrap().to_path_buf(),
                 RecursiveMode::NonRecursive,
             ),
-        ] {
+        ]
+        .into_iter()
+        .chain(
+            self.assets
+                .iter()
+                .map(|path| (path.clone(), RecursiveMode::Recursive)),
+        ) {
             // An absent log root is normal. Observe its nearest existing parent
             // until it is created, then move the recursive watch onto the root.
             let ancestor = path.ancestors().find(|path| path.is_dir()).unwrap();
@@ -179,12 +212,15 @@ pub(super) fn observed_path(path: &std::path::Path) -> PathBuf {
 pub(super) fn observe(
     config: &crate::config::UserConfig,
     executable: &super::restart::Executable,
+    assets: &super::assets::Development,
 ) -> Result<(Receiver, Notifier, tokio::task::JoinHandle<()>)> {
-    let paths = Arc::new(RwLock::new(Paths::new(
+    let mut paths = Paths::new(
         crate::config::home()?.join(".thirdshift"),
         config.logs_dir.clone(),
         executable.path.clone(),
-    )));
+    );
+    paths.assets = assets.directory().map(PathBuf::from);
+    let paths = Arc::new(RwLock::new(paths));
     let (pending, mut notifications) = watch::channel(Revision::default());
     let notifier = Notifier {
         pending: pending.clone(),
@@ -193,9 +229,9 @@ pub(super) fn observe(
     let observed = paths.clone();
     let enqueue = move |event| {
         pending.send_if_modified(|revision| {
-            let before = (revision.commands, revision.accounts, revision.executable);
+            let before = *revision;
             observed.read().unwrap().notice(event, revision);
-            before != (revision.commands, revision.accounts, revision.executable)
+            before != *revision
         });
     };
     let mut watcher = notify::recommended_watcher(enqueue.clone())?;
@@ -246,6 +282,12 @@ pub(super) fn observe(
                 }
                 if revision.executable != previous.executable {
                     current.executable += 1;
+                }
+                if revision.styles != previous.styles {
+                    current.styles += 1;
+                }
+                if revision.scripts != previous.scripts {
+                    current.scripts += 1;
                 }
                 *current != before
             });
