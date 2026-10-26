@@ -10,6 +10,7 @@ mod options;
 mod reading;
 mod rechecks;
 mod release;
+mod retention;
 mod session_evidence;
 mod store;
 mod trace;
@@ -241,6 +242,7 @@ pub fn run(options: Options) -> Result<()> {
         );
     };
     if experiment.state == State::Completed {
+        retention::repositories(&experiment);
         println!("{}", experiment.render(options.json)?);
         return Ok(());
     }
@@ -327,6 +329,7 @@ pub fn run(options: Options) -> Result<()> {
     experiment.details.pause_reason = cause.clone();
     let saved = experiment.save();
     if result.is_ok() && saved.is_ok() {
+        retention::repositories(&experiment);
         // Results contain private Grader evidence, unlike the public Command
         // facts. Print them without copying them into the factory's logs.
         println!("{}", experiment.render(options.json)?);

@@ -84,6 +84,7 @@ impl<'a> Execution<'a> {
             .prefix("attempt-")
             .tempdir_in(&directory)?
             .keep();
+        let caches = super::retention::Caches(attempt.clone());
         let prepared_repo = super::super::repository::prepare_trial(
             &task.directory,
             &task.manifest,
@@ -166,6 +167,7 @@ impl<'a> Execution<'a> {
             Instant::now() + self.timeout,
             &|| monitor.borrow_mut().check(self.signal),
         );
+        drop(caches);
         interrupt::check()?;
         // A kernel kill in the Trial's scope is the outer launcher's evidence
         // the cap killed Trial work. The live watch catches slow kills; the

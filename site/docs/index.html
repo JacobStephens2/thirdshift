@@ -657,6 +657,16 @@ Totals include all attempts and Resume sessions; Grader usage is not charged
 to either Arm. The text view shows usage beside each Arm&#39;s minutes.
 Both views show Void counts and causes per Arm, and report repeated
 Trial-only memory-cap stops as a finding against that Arm.</p>
+<p>Each attempt keeps its request, result, start record, stdout, stderr, scope,
+traces, Session reports and summaries, model evidence and native transcripts.
+Harness caches in the Session home&#39;s <code>.codex/cache/</code> and <code>.cache/</code> are removed
+when the Trial session ends, whatever its outcome. After grading finishes and
+the Verdict has no pending rechecks, every attempt&#39;s <code>repository/</code> copy is
+removed. Paused or interrupted Experiments keep their repositories for resume;
+waiting rechecks keep them until the last recheck is recorded. Grader output,
+packets and Scores stay in place, and <code>experiments &lt;id&gt;</code> and <code>--session</code> still
+read the retained evidence. Pruning failures print a <code>warning:</code> without changing
+the Verdict or exit status.</p>
 <p>The Console&#39;s <strong>Experiments</strong> link opens <code>/experiments</code>, grouped into Running,
 Needs you and Done, newest first within each. Open an Experiment for its live
 Trial grid, per-suite Verdict intervals, Arm comparison and folded Bar. Select

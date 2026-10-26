@@ -166,6 +166,67 @@ report.write_text('Review complete.\n')
 print(json.dumps(dict(version=1, outcome='succeeded', timings=dict(total_ms=12, session_ms=10), reports=dict(standards=str(report), spec=None), void_cause=None, cause=None, session_id=None, log=None, model_evidence=None)))
 "#;
 
+#[test]
+fn ended_trial_sessions_drop_caches_and_keep_native_records_for_every_outcome() {
+    if isolated(&[]) {
+        return;
+    }
+    for ending in [
+        SUCCESS.to_owned(),
+        SUCCESS.replace("outcome='succeeded'", "outcome='failed'"),
+        SUCCESS.replace("outcome='succeeded'", "outcome='void'"),
+        "sys.exit(23)".into(),
+        "print('invalid protocol')".into(),
+        "time.sleep(30)".into(),
+        "os.kill(os.getppid(), signal.SIGTERM); time.sleep(30)".into(),
+    ] {
+        let fixture = Fixture::new(&format!(
+            r#"
+for cache in ['.codex/cache/remote_plugin_catalog', '.cache/opencode']:
+    path = output / 'home' / cache
+    path.mkdir(parents=True)
+    (path / 'bulk').write_text('Disposable cache')
+native = output / 'home/.codex/sessions/retained.jsonl'
+native.parent.mkdir(parents=True)
+native.write_text('Native transcript\n')
+(output / 'retained.models.json').write_text('Model evidence\n')
+{ending}
+"#
+        ));
+        let result = fixture
+            .execution(1)
+            .run(fixture.request(), |attempt, _, _| {
+                assert!(!attempt.join("session/home/.codex/cache").exists());
+                assert!(!attempt.join("session/home/.cache").exists());
+                Ok(())
+            });
+        if ending.contains("sys.exit")
+            || ending.contains("invalid protocol")
+            || ending.contains("os.kill")
+        {
+            assert!(result.is_err());
+        } else {
+            result.unwrap();
+        }
+        let trial = fixture
+            .root
+            .join("trials")
+            .join(fixture.request().identity.key());
+        let attempt = fs::read_dir(trial).unwrap().next().unwrap().unwrap().path();
+        assert!(!attempt.join("session/home/.codex/cache").exists());
+        assert!(!attempt.join("session/home/.cache").exists());
+        assert_eq!(
+            fs::read_to_string(attempt.join("session/home/.codex/sessions/retained.jsonl"))
+                .unwrap(),
+            "Native transcript\n"
+        );
+        assert_eq!(
+            fs::read_to_string(attempt.join("session/retained.models.json")).unwrap(),
+            "Model evidence\n"
+        );
+    }
+}
+
 const GIT: &str = r#"
 import subprocess
 def git(*args):

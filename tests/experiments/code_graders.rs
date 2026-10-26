@@ -221,6 +221,8 @@ fn snapshot_preserves_files_directories_and_symlinks_but_skips_special_files() {
 {reports}
 mkfifo pipe
 python3 -c 'import socket; s=socket.socket(socket.AF_UNIX); s.bind("server.sock")'
+test -p pipe && test -S server.sock && test -L link && test "$(cat nested/file)" = ordinary || exit 99
+printf verified > ../session/special-files-checked
 exit 1
 "#,
         reports = review_reports_prelude(),
@@ -244,28 +246,21 @@ exit 1
         assert_eq!(result["outcome"], "failed", "{result}");
         assert_eq!(result["score"]["checks"][2]["passed"], true, "{result}");
     }
-    use std::os::unix::fs::FileTypeExt;
     for call in fixture.trial_calls() {
         let repository = PathBuf::from(call["cwd"].as_str().unwrap());
-        assert!(
-            fs::symlink_metadata(repository.join("pipe"))
-                .unwrap()
-                .file_type()
-                .is_fifo()
-        );
-        assert!(
-            fs::symlink_metadata(repository.join("server.sock"))
-                .unwrap()
-                .file_type()
-                .is_socket()
-        );
         assert_eq!(
-            fs::read_link(repository.join("link")).unwrap(),
-            PathBuf::from("nested/file")
+            fs::read_to_string(
+                repository
+                    .parent()
+                    .unwrap()
+                    .join("session/special-files-checked")
+            )
+            .unwrap(),
+            "verified"
         );
-        assert_eq!(
-            fs::read_to_string(repository.join("nested/file")).unwrap(),
-            "ordinary"
+        assert!(
+            !repository.exists(),
+            "completed Experiment retained a repository"
         );
     }
 }
