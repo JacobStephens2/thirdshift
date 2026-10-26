@@ -1137,6 +1137,39 @@ test('Enter and Space activate focused peek buttons', async t => {
   }
 });
 
+test('Needs you copies problem context and links for an agent by keyboard', async t => {
+  const page = await pageFor(t);
+  await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+  await page.goto(origin);
+  const row = page.locator('[data-group="needs you"] > .commands > .command').filter({
+    has: page.locator('.subject', { hasText: /^acme\/widgets#1$/ })
+  });
+  const selector = await row.getAttribute('data-command');
+  const copy = row.getByRole('button', { name: 'Copy', exact: true });
+  await copy.focus({ timeout: 3000 });
+  await page.keyboard.press('Enter');
+  await row.getByRole('status').filter({ hasText: 'Copied.' }).waitFor();
+  const text = await page.evaluate(() => navigator.clipboard.readText());
+  assert.match(text, /Needs you/);
+  assert.ok(text.includes(`Machine: ${await page.locator('header h1').textContent()}`));
+  assert.ok(text.includes('acme/widgets#1'));
+  assert.ok(text.includes("A long title that should wrap on a phone, even with <script>alert('unsafe')</script>"));
+  assert.ok(text.includes('Failed'));
+  assert.ok(text.includes('distinct fixture failure 1'));
+  assert.ok(text.includes('codex · gpt-6 · high'));
+  assert.ok(text.includes('https://github.com/acme/widgets/issues/1'));
+  assert.ok(text.includes('Ticket #98 · waiting on #97'));
+  assert.ok(text.includes(`${origin}/peek?`));
+  assert.ok(text.includes(`${origin}/log?`));
+  assert.ok(text.includes(`${origin}/logs/command/`));
+  assert.ok(text.includes(`thirdshift show '${selector}' --json`));
+  assert.doesNotMatch(text, /Dismiss|New since you last looked|csrf|Copy CLI/);
+  assert.equal(await page.locator('#peek').isVisible(), false);
+  assert.equal(await page.locator('[data-group="resolved"] .subject', { hasText: /^acme\/widgets#1$/ }).count(), 0);
+  await page.goto(`${origin}/?page=history`);
+  assert.equal(await page.getByRole('button', { name: 'Copy', exact: true }).count(), 0);
+});
+
 test('Command details copies its show command to the clipboard', async t => {
   const page = await pageFor(t);
   await page.context().grantPermissions(['clipboard-read', 'clipboard-write'], { origin });

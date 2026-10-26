@@ -138,6 +138,13 @@ and Ready tag colours, Landing keeps Working's live-activity marker, and a live
 row given a Stop shows Stopping with a drifting stripe until it ends. Pause
 motion and reduced motion hold the stripe still.
 
+Each Needs you row has a **Copy** button for sharing its problem with an agent.
+It copies the machine, Command selector, state, cause, issue title, Harness,
+Tickets and any findings, with absolute issue, pull request and Console log
+links, plus the `thirdshift show '<command>' --json` command. If clipboard access
+is unavailable, a dialog selects the same text for copying by keyboard. The
+dialog keeps that snapshot through live updates.
+
 Dismiss is available directly on Inbox rows in Needs you and Ready for review,
 as well as in Command details. Undo remains in Command details. Both immediately
 show “Dismissing…” or

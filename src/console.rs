@@ -558,10 +558,11 @@ impl InboxPage {
             .any(|row| row.state != "Slow")
     }
 
-    fn row<'a>(&'a self, row: &'a Row) -> RowTemplate<'a> {
+    fn row<'a>(&'a self, row: &'a Row, can_copy: bool) -> RowTemplate<'a> {
         RowTemplate {
             row,
             csrf: &self.csrf,
+            can_copy,
         }
     }
 }
@@ -571,6 +572,7 @@ impl InboxPage {
 struct RowTemplate<'a> {
     row: &'a Row,
     csrf: &'a str,
+    can_copy: bool,
 }
 
 impl RowTemplate<'_> {
@@ -578,6 +580,7 @@ impl RowTemplate<'_> {
         RowTemplate {
             row,
             csrf: self.csrf,
+            can_copy: false,
         }
     }
 }

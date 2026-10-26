@@ -33,7 +33,7 @@
     {% endif %}
     <details class="group archive" data-group="{{ title }}" open><summary>{{ title }} <span class="count">{{ archive.rows.len() }}</span></summary>
       {% if archive.rows.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
-      <ul class="commands">{% for item in archive.rows %}{{ self.row(item)|safe }}{% endfor %}</ul>
+      <ul class="commands">{% for item in archive.rows %}{{ self.row(item, false)|safe }}{% endfor %}</ul>
     </details>
     {% when None %}
     {% match inbox.warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning }}</p>{% when None %}{% endmatch %}
@@ -61,7 +61,7 @@
       <summary><span>{{ section.title }}</span><span class="count">{{ section.rows.len() }}</span></summary>
       {% if section.rows.is_empty() && section.references.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
       {# Only the rendered, auto-escaped RowTemplate is trusted as HTML. #}
-      <ul class="commands">{% for item in section.rows %}{{ self.row(item)|safe }}{% endfor %}</ul>
+      <ul class="commands">{% for item in section.rows %}{{ self.row(item, section.group == "needs you")|safe }}{% endfor %}</ul>
       {% for reference in section.references %}<p>{{ reference|linkify }}</p>{% endfor %}
     </details>
     {% endfor %}

@@ -320,6 +320,38 @@ for (const [letter, target] of targets) {
   jumps.append(button);
 }
 
+// Copy the rendered facts, including child Commands, without fetching or exposing logs.
+function needsYouContext(row) {
+  const facts = row.cloneNode(true);
+  for (const control of facts.querySelectorAll('button, form, [role="status"], .new, .heartbeat')) control.remove();
+  for (const link of facts.querySelectorAll('a')) {
+    link.replaceWith(link.textContent === link.href ? link.href : `${link.textContent} (${link.href})`);
+  }
+  for (const block of facts.querySelectorAll('p, li, ul, .row-head, .row-head > span')) block.append('\n');
+  const text = facts.textContent.split('\n').map(line => line.trim()).filter(Boolean).join('\n');
+  const command = row.dataset.command.replaceAll("'", "'\\''");
+  return `thirdshift · Needs you\nMachine: ${document.querySelector('header h1').textContent}\nCommand: ${row.dataset.command}\n${text}\nthirdshift show '${command}' --json`;
+}
+
+document.addEventListener('click', async event => {
+  const copy = event.target.closest('[data-copy-context]');
+  if (!copy) return;
+  const row = copy.closest('.command');
+  const text = needsYouContext(row);
+  try {
+    await navigator.clipboard.writeText(text);
+    document.getElementById(row.id)?.querySelector('[data-copy-status]')?.replaceChildren('Copied.');
+  } catch {
+    // Keep a selectable snapshot outside the live Inbox so updates cannot erase it.
+    const dialog = document.getElementById('copy-context');
+    const field = dialog.querySelector('textarea');
+    field.value = text;
+    dialog.showModal();
+    field.focus();
+    field.select();
+  }
+});
+
 content.addEventListener('click', async event => {
   const copy = event.target.closest('.peek-cli [data-copy-cli]');
   if (!copy) return;
@@ -382,6 +414,7 @@ document.addEventListener('click', event => {
 });
 
 document.addEventListener('keydown', event => {
+  if (document.querySelector('#copy-context[open]')) return;
   if (event.ctrlKey || event.metaKey || event.altKey || event.target.closest('input, select, textarea, [contenteditable="true"]')) return;
   if (event.target.matches('summary') && !event.target.closest('.group') && ['Enter', ' '].includes(event.key)) return;
   if (event.key === 'Enter' && event.target.closest('a, button')) return;
