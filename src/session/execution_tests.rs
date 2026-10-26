@@ -105,7 +105,7 @@ fn execute_session(root: &Path) -> anyhow::Error {
     let worktree = root.join("worktree");
     fs::create_dir(&worktree).unwrap();
     assert!(
-        Command::new("git")
+        crate::test_support::git_command()
             .args(["init", "-q"])
             .arg(&worktree)
             .status()
@@ -368,7 +368,7 @@ fn with_review_sessions(
     let worktree = root.join("worktree");
     fs::create_dir(&worktree).unwrap();
     assert!(
-        Command::new("git")
+        crate::test_support::git_command()
             .args(["init", "-q"])
             .arg(&worktree)
             .status()

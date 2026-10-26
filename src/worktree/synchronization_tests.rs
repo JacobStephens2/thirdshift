@@ -1061,6 +1061,63 @@ fn base_merges_ignore_shadowing_branch_and_tag_names() {
 }
 
 #[test]
+fn git_fixtures_ignore_global_and_system_config() {
+    const CHILD: &str = "THIRDSHIFT_TEST_HOST_GIT_CONFIG";
+    if std::env::var_os(CHILD).is_some() {
+        base_merges_ignore_shadowing_branch_and_tag_names();
+        foreign_observation_and_merge_ignore_shadowing_branch_and_tag_names();
+        spec_catch_up_ignores_shadowing_branch_and_tag_names();
+
+        let (_temp, launch, worktree) = fixture();
+        for git in [launch, Git::new(worktree.path()).completion()] {
+            for scope in ["global", "system"] {
+                assert!(
+                    !git.succeeds(&["config", "--get", &format!("fixture.{scope}")])
+                        .unwrap(),
+                    "fixture read {scope} config"
+                );
+            }
+            git.run(&["config", "fixture.local", "visible"]).unwrap();
+            assert_eq!(
+                git.run(&["config", "--get", "fixture.local"]).unwrap(),
+                "visible"
+            );
+        }
+        return;
+    }
+
+    let temp = tempfile::tempdir().unwrap();
+    for scope in ["global", "system"] {
+        fs::write(
+            temp.path().join(scope),
+            format!(
+                "[tag]\n gpgsign = true\n[commit]\n gpgsign = true\n[fixture]\n {scope} = visible\n"
+            ),
+        )
+        .unwrap();
+    }
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "worktree::synchronization_tests::git_fixtures_ignore_global_and_system_config",
+            "--nocapture",
+        ])
+        .env(CHILD, "1")
+        .env("GIT_CONFIG_GLOBAL", temp.path().join("global"))
+        .env("GIT_CONFIG_SYSTEM", temp.path().join("system"))
+        .env_remove("GIT_CONFIG_NOSYSTEM")
+        .env("GIT_EDITOR", "true")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn foreign_observation_and_merge_ignore_shadowing_branch_and_tag_names() {
     for kind in ["branch", "tag"] {
         let (_temp, launch, worktree, foreign) = foreign_origin();

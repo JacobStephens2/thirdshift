@@ -2,7 +2,7 @@
 
 use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Output;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
@@ -304,8 +304,12 @@ impl Git {
     }
 
     fn output(&self, args: &[&str]) -> Result<Output> {
+        #[cfg(not(test))]
+        let mut command = std::process::Command::new("git");
+        #[cfg(test)]
+        let mut command = crate::test_support::git_command();
         process::output(
-            Command::new("git").args(args).current_dir(&self.dir),
+            command.args(args).current_dir(&self.dir),
             None,
             Control {
                 name: &format!("git {}", args.join(" ")),
@@ -419,11 +423,9 @@ mod tests {
     pub(super) fn repo_with_origin() -> (tempfile::TempDir, Git) {
         let temp = tempfile::TempDir::new().unwrap();
         let isolated = |dir: &Path, args: &[&str]| {
-            let status = Command::new("git")
+            let status = crate::test_support::git_command()
                 .args(args)
                 .current_dir(dir)
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                .env("GIT_CONFIG_NOSYSTEM", "1")
                 .status()
                 .unwrap();
             assert!(status.success(), "git {args:?}");
@@ -434,6 +436,8 @@ mod tests {
         for (key, value) in [
             ("user.name", "Test Runner"),
             ("user.email", "runner@example.com"),
+            ("commit.gpgsign", "false"),
+            ("tag.gpgsign", "false"),
             ("remote.origin.url", "../origin.git"),
         ] {
             isolated(&work, &["config", key, value]);

@@ -11,6 +11,17 @@ use std::process::Command;
 
 use crate::interrupt;
 
+/// Git for unit-test fixtures, including commands made after repository setup.
+/// Keep this on each child Command so parallel tests never change the process
+/// environment and new Git views of a fixture inherit the same isolation.
+pub(crate) fn git_command() -> Command {
+    let mut command = Command::new("git");
+    command
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_NOSYSTEM", "1");
+    command
+}
+
 /// A child that announces Session s1 after writing a native Codex quota record.
 /// The record may deliberately name another Session/directory or a stale time;
 /// `current` writes a fresh timestamp. HOME is set only on the child Command.
@@ -44,7 +55,7 @@ touch "$HOME/../continued"
 pub(crate) fn scratch_worktree() -> tempfile::TempDir {
     let worktree = tempfile::tempdir().unwrap();
     assert!(
-        Command::new("git")
+        git_command()
             .args(["init", "-q"])
             .arg(worktree.path())
             .status()
