@@ -1249,7 +1249,9 @@ fn logs_fold_by_repository_unless_there_is_only_one() {
         let start = page.find(&fold).unwrap_or_else(|| panic!("{page}"));
         let fold = &page[start..start + page[start..].find("</details>").unwrap()];
         assert!(
-            fold.contains(&format!("<summary>{repository} <span class=\"count\">{count}</span>")),
+            fold.contains(&format!(
+                "<summary>{repository} <span class=\"count\">{count}</span>"
+            )),
             "{fold}"
         );
         assert!(fold.contains("class=\"log-row\""), "{fold}");
