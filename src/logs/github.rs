@@ -164,7 +164,10 @@ impl Kept {
         }
         let reason = reasons.join("; ");
         Some(match self.last_answered {
-            Some(at) => format!("GitHub last answered at {}; {reason}", local_stamp(at)),
+            Some(at) => format!(
+                "GitHub last answered at {}; {reason}",
+                crate::local_time::stamp(&at)
+            ),
             None => format!("GitHub has not answered yet; {reason}"),
         })
     }
@@ -506,53 +509,4 @@ fn save(logs_dir: &Path, kept: &Kept, answered: bool) -> Result<()> {
         std::fs::write(path.with_extension("changed"), [])?;
     }
     Ok(())
-}
-
-/// `at` in this machine's zone, as people read it: `2026-10-26 06:23 EDT`.
-fn local_stamp(at: DateTime<Utc>) -> String {
-    let local = at.with_timezone(&chrono::Local);
-    let zone =
-        zone_abbreviation(at.timestamp()).unwrap_or_else(|| local.format("UTC%:z").to_string());
-    format!("{} {zone}", local.format("%Y-%m-%d %H:%M"))
-}
-
-/// The zone's short name at that instant, such as `EDT` or `UTC`; chrono
-/// knows only the offset.
-#[cfg(unix)]
-fn zone_abbreviation(seconds: i64) -> Option<String> {
-    let time = libc::time_t::try_from(seconds).ok()?;
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    if unsafe { libc::localtime_r(&time, &mut tm) }.is_null() || tm.tm_zone.is_null() {
-        return None;
-    }
-    let name = unsafe { std::ffi::CStr::from_ptr(tm.tm_zone) }
-        .to_str()
-        .ok()?;
-    (!name.is_empty()).then(|| name.to_owned())
-}
-
-#[cfg(not(unix))]
-fn zone_abbreviation(_seconds: i64) -> Option<String> {
-    None
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn local_stamp_reads_date_minutes_and_zone_name() {
-        let at = DateTime::parse_from_rfc3339("2026-10-26T10:23:28Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let local = at.with_timezone(&chrono::Local);
-        let stamp = local_stamp(at);
-        let expected = local.format("%Y-%m-%d %H:%M ").to_string();
-        assert!(stamp.starts_with(&expected), "{stamp}");
-        let zone = &stamp[expected.len()..];
-        assert!(
-            !zone.is_empty() && !zone.contains(' '),
-            "zone should be one short name, got {stamp}"
-        );
-    }
 }

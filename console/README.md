@@ -175,8 +175,11 @@ show “Dismissing…” or
 through live updates to prevent duplicate submissions. A failed request shows
 the error and enables the button for another try.
 
-Ended rows show their recorded finish date and time in UTC, followed by an
-explicit relative age, such as “Ended Oct 23, 2026 at 23:03:17 UTC · 52 min ago”.
+Ended rows show their recorded finish in this machine's time zone, to the
+minute, followed by an explicit relative age, such as “Ended 2026-10-23 19:03
+EDT · 52 min ago”. Every date and time the Console shows reads the same way,
+including ones inside causes and Command details; records, CLI output and
+Session traces keep their full RFC 3339 instants.
 That age is time since finish, not run duration. Each nested Ticket run uses its
 own finish time, including in History. Refreshing recomputes the relative age
 and keeps the recorded instant. The information is rendered by the server and

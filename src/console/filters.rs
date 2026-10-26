@@ -4,9 +4,18 @@ use askama::filters::{Escaper, Html, Safe};
 use askama::{Result, Values};
 
 /// Escape `text` and link each `https://` URL in it; other schemes stay text.
+/// Instants in it read in this machine's zone, to the minute.
 #[askama::filter_fn]
 pub fn linkify(text: impl std::fmt::Display, _: &dyn Values) -> Result<Safe<String>> {
-    Ok(Safe(linked(&text.to_string())))
+    Ok(Safe(linked(&crate::local_time::readable(
+        &text.to_string(),
+    ))))
+}
+
+/// `text` with its instants in this machine's zone, to the minute.
+#[askama::filter_fn]
+pub fn readable(text: impl std::fmt::Display, _: &dyn Values) -> Result<String> {
+    Ok(crate::local_time::readable(&text.to_string()).into_owned())
 }
 
 /// Escaped HTML for `text`, with each `https://` URL a link. Trailing

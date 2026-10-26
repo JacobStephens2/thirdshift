@@ -179,6 +179,16 @@ fn configure(home: &Path) {
         "[console]\nport = 0\nother_consoles = [\"https://other.example.test\"]\ntheme = \"focus-auto\"\n").unwrap();
 }
 
+/// How the Console shows `rfc3339` up to its zone name: this machine's date
+/// and time to the minute, as in `Ended 2026-10-23 19:03 EDT`.
+fn local_minute(rfc3339: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(rfc3339)
+        .unwrap()
+        .with_timezone(&chrono::Local)
+        .format("%Y-%m-%d %H:%M ")
+        .to_string()
+}
+
 /// One Inbox section's markup, found by its group name.
 fn section<'a>(page: &'a str, group: &str) -> &'a str {
     page.split(&format!("class=\"group\" data-group=\"{group}\""))
@@ -898,6 +908,74 @@ fn ready_dispatches_leave_ready_for_review_and_are_shown_at_most_once() {
         let row = format!("data-command=\"{}::acme/widgets#{issue}\"", path.display());
         assert_eq!(html.matches(&row).count(), shown, "{html}");
     }
+}
+
+/// The visible text of `html`, tags and attribute values left out, and any
+/// RFC 3339 instant in it, such as `2026-10-25T17:43:26-04:00`.
+fn raw_instants(html: &str) -> Vec<String> {
+    let mut text = String::new();
+    let mut in_tag = false;
+    for c in html.chars() {
+        match c {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            c if !in_tag => text.push(c),
+            _ => {}
+        }
+    }
+    let bytes = text.as_bytes();
+    (0..bytes.len().saturating_sub(19))
+        .filter(|&i| {
+            b"dddd-dd-ddTdd:dd:dd"
+                .iter()
+                .zip(&bytes[i..])
+                .all(|(want, got)| {
+                    if *want == b'd' {
+                        got.is_ascii_digit()
+                    } else {
+                        want == got
+                    }
+                })
+        })
+        .map(|i| text[i..i + 19].to_owned())
+        .collect()
+}
+
+#[test]
+fn inbox_and_command_details_show_instants_in_local_minutes() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let mut fixture = record(home.path(), 7, Some("failed"), 0);
+    fixture["cause"] = json!("quota resets at 2026-10-24T03:28:16Z");
+    write_record(home.path(), 7, &fixture);
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let html = console.get("/").text().unwrap();
+    assert_eq!(raw_instants(&html), Vec::<String>::new(), "{html}");
+    assert!(
+        html.contains(&format!(
+            "quota resets at {}",
+            local_minute("2026-10-24T03:28:16Z")
+        )),
+        "{html}"
+    );
+    let mut url = reqwest::Url::parse("http://localhost/peek").unwrap();
+    url.query_pairs_mut().append_pair(
+        "command",
+        home.path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture.command.json")
+            .to_str()
+            .unwrap(),
+    );
+    let peek = console
+        .get(&format!("/peek?{}", url.query().unwrap()))
+        .text()
+        .unwrap();
+    assert_eq!(raw_instants(&peek), Vec::<String>::new(), "{peek}");
+    let started = fixture["started_at"].as_str().unwrap();
+    assert!(
+        peek.contains(&format!("<dt>started at</dt><dd>{}", local_minute(started))),
+        "{peek}"
+    );
 }
 
 #[test]

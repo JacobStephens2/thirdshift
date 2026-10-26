@@ -6,7 +6,7 @@
 <p>Weekly samples. Enter all five of your Scores and reasons before the model's Scores appear. Reload to see changes.</p>
 <section aria-label="Calibration"><h2>Calibration</h2><dl>{% for (criterion, state) in view.calibration %}
 <dt>{{ criterion.name() }}</dt><dd>{% if state.calibrated %}calibrated{% else %}uncalibrated{% endif %}: {{ state.matches }}/{{ state.compared }} agreements</dd>{% endfor %}</dl></section>
-{% for week in view.weeks %}<section><h2>{{ week.week }}</h2><p>{{ week.window_start }} → {{ week.window_end }}</p>
+{% for week in view.weeks %}<section><h2>{{ week.week }}</h2><p>{{ week.window_start|readable }} → {{ week.window_end|readable }}</p>
 <ul class="log-list">{% for pr in week.sample %}<li><article aria-label="{{ pr.url }}"><h3><a href="{{ pr.url }}">{{ pr.url }}</a></h3>
 <p>{{ pr.harness }} · {{ pr.model }} · {{ pr.effort }}{% if let Some(version) = pr.harness_version %} · {{ version }}{% endif %}</p>
 {% if pr.for_you %}<p>For you to score</p>{% endif %}

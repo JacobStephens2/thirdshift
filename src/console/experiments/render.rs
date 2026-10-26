@@ -45,6 +45,10 @@ pub(super) fn name(view: &View) -> String {
     }
 }
 
+/// An instant as people read it, escaped: this machine's zone, to the minute.
+fn when(text: &str) -> String {
+    esc(&crate::local_time::readable(text))
+}
 fn short(text: &str) -> String {
     text.chars().take(10).collect()
 }
@@ -214,7 +218,7 @@ pub(super) fn list(views: &[View]) -> String {
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            html.push_str(&format!("<li class=\"command experiment-row\" tabindex=\"0\" id=\"experiment-{id}\" data-tone=\"{}\" data-command=\"{}\" data-peek=\"{}\"><div class=\"row-head\">{} <span class=\"subject\"><a href=\"/experiments/{id}\">{}</a></span><span class=\"issue-title\">{}</span><time class=\"age\">{}</time></div><p class=\"now\">{}</p>{}<p class=\"harness\">{}</p><p><a href=\"/experiments/{id}\">Experiment</a> · {}</p></li>", tone(view), esc(&command), esc(&crate::logs::status::inspect::url("/peek", &command, None)), tag(view), esc(&name(view)), esc(view.details.title.as_deref().unwrap_or("")), esc(view.details.ended_at.as_deref().unwrap_or(&view.created_at)), esc(&now(view)), list_intervals(view), builds(view), command_links(view)));
+            html.push_str(&format!("<li class=\"command experiment-row\" tabindex=\"0\" id=\"experiment-{id}\" data-tone=\"{}\" data-command=\"{}\" data-peek=\"{}\"><div class=\"row-head\">{} <span class=\"subject\"><a href=\"/experiments/{id}\">{}</a></span><span class=\"issue-title\">{}</span><time class=\"age\">{}</time></div><p class=\"now\">{}</p>{}<p class=\"harness\">{}</p><p><a href=\"/experiments/{id}\">Experiment</a> · {}</p></li>", tone(view), esc(&command), esc(&crate::logs::status::inspect::url("/peek", &command, None)), tag(view), esc(&name(view)), esc(view.details.title.as_deref().unwrap_or("")), when(view.details.ended_at.as_deref().unwrap_or(&view.created_at)), esc(&now(view)), list_intervals(view), builds(view), command_links(view)));
         }
         html.push_str("</ul></details>");
     }
@@ -318,11 +322,11 @@ pub(super) fn detail(view: &View) -> String {
         "<p><a href=\"/experiments\">← Experiments</a></p><div class=\"page-title\"><h1>{}</h1><code>thirdshift experiments {id} --json</code></div>{}<p>Started <time>{}</time>{} · {}</p><section class=\"experiment-lead\" aria-label=\"Experiment status\">{} <p>{}</p></section>",
         esc(&name(view)),
         question(view),
-        esc(&view.created_at),
+        when(&view.created_at),
         view.details
             .ended_at
             .as_ref()
-            .map(|time| format!(" · Ended <time>{}</time>", esc(time)))
+            .map(|time| format!(" · Ended <time>{}</time>", when(time)))
             .unwrap_or_default(),
         command_log,
         tag(view),
@@ -823,7 +827,7 @@ impl<'a> Cell<'a> {
                         "<dt>Your recheck</dt><dd>{}: {} · {} · wrong finding: {}</dd>",
                         if recheck.passed { "Pass" } else { "Fail" },
                         esc(&recheck.reason),
-                        esc(&recheck.recorded_at),
+                        when(&recheck.recorded_at),
                         recheck.wrong_finding.map_or("unchanged", |wrong| if wrong {
                             "yes"
                         } else {
@@ -876,7 +880,7 @@ impl<'a> Cell<'a> {
         if let Some(running) = self.view.running_trials.iter().find(|r| r.id == self.key) {
             html.push_str(&format!(
                 "<p>Started {}</p><p>{}</p>",
-                esc(&running.started_at),
+                when(&running.started_at),
                 self.view
                     .sessions
                     .iter()
@@ -1157,6 +1161,6 @@ fn bar(view: &View) -> String {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ")),
-        esc(&view.created_at)
+        when(&view.created_at)
     )
 }

@@ -357,7 +357,7 @@ test("finish information is visible without JavaScript on a narrow phone", async
   await page.goto(origin);
   const age = page.locator('[data-group="needs you"] .command > .row-head > .age').first();
   assert.equal(await age.isVisible(), true);
-  assert.match(await age.innerText(), /^Ended \w+ \d+, \d{4} at \d\d:\d\d:\d\d UTC · \d+ (sec|min|hr \d+ min) ago$/);
+  assert.match(await age.innerText(), /^Ended \d{4}-\d\d-\d\d \d\d:\d\d [A-Z][A-Za-z0-9+:-]* · \d+ (sec|min|hr \d+ min) ago$/);
   assert.ok(Number.isFinite(Date.parse(await age.locator('time').getAttribute('datetime'))));
   const box = await age.boundingBox();
   assert.ok(box.x >= 0 && box.x + box.width <= 320, JSON.stringify(box));

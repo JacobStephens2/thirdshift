@@ -1,6 +1,6 @@
 //! Owned Inbox presentation for the Console, from the same observations as status.
 use anyhow::Result;
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local};
 use std::path::Path;
 
 use super::{age, stage_text, ticket_text};
@@ -78,10 +78,7 @@ impl Timing {
         let finish = end.and_then(|end| {
             DateTime::parse_from_rfc3339(end).ok().map(|time| Finish {
                 datetime: end.into(),
-                label: time
-                    .with_timezone(&Utc)
-                    .format("%b %-d, %Y at %H:%M:%S UTC")
-                    .to_string(),
+                label: crate::local_time::stamp(&time),
             })
         });
         let age = finish.as_ref().map_or_else(

@@ -22,7 +22,10 @@ fn ended_rows_distinguish_finish_age_from_run_duration() {
         html.contains(&format!("<time datetime=\"{}\">Ended ", end.to_rfc3339())),
         "{html}"
     );
-    assert!(html.contains(" UTC</time>"), "{html}");
+    assert!(
+        html.contains(&format!("Ended {}", super::local_minute(&end.to_rfc3339()))),
+        "{html}"
+    );
     assert!(!html.contains("2 hr 20 min"), "{html}");
 }
 
@@ -70,10 +73,24 @@ fn finish_instants_survive_offsets_and_nested_history() {
     write_record(home.path(), 7, &outer);
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get("/?page=history").text().unwrap();
-    assert!(html.contains("<time datetime=\"2026-10-23T19:03:18.964097412-04:00\">Ended Oct 23, 2026 at 23:03:18 UTC</time>"), "{html}");
+    let outer_end = "2026-10-23T19:03:18.964097412-04:00";
+    assert!(
+        html.contains(&format!(
+            "<time datetime=\"{outer_end}\">Ended {}",
+            super::local_minute(outer_end)
+        )),
+        "{html}"
+    );
     let nested = html.split("<ul class=\"children\">").nth(1).unwrap();
-    assert!(nested.contains("<time datetime=\"2026-10-23T19:03:17.705023444-04:00\">Ended Oct 23, 2026 at 23:03:17 UTC</time>"), "{nested}");
-    assert!(!nested.contains("23:03:18 UTC"), "{nested}");
+    let child_end = "2026-10-23T19:03:17.705023444-04:00";
+    assert!(
+        nested.contains(&format!(
+            "<time datetime=\"{child_end}\">Ended {}",
+            super::local_minute(child_end)
+        )),
+        "{nested}"
+    );
+    assert!(!nested.contains(outer_end), "{nested}");
 }
 
 #[test]
@@ -103,10 +120,7 @@ fn shared_ended_states_show_each_commands_finish() {
     for group in ["needs you", "ready for review", "done", "resolved"] {
         let section = section(&html, group);
         assert!(section.contains("<time datetime="), "{group}: {section}");
-        assert!(
-            section.contains(" UTC</time> · </span>"),
-            "{group}: {section}"
-        );
+        assert!(section.contains("</time> · </span>"), "{group}: {section}");
         assert!(section.contains(" ago</span>"), "{group}: {section}");
     }
     assert!(html.contains("0 sec ago"), "{html}");
@@ -130,9 +144,10 @@ fn retained_activity_finishes_show_dates_and_missing_finishes_stay_unknown() {
     let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
     let html = console.get("/?page=history").text().unwrap();
     assert!(
-        html.contains(
-            "<time datetime=\"2026-01-01T23:59:00-04:00\">Ended Jan 2, 2026 at 03:59:00 UTC</time>"
-        ),
+        html.contains(&format!(
+            "<time datetime=\"2026-01-01T23:59:00-04:00\">Ended {}",
+            super::local_minute("2026-01-01T23:59:00-04:00")
+        )),
         "{html}"
     );
     assert_eq!(html.matches("<time datetime=").count(), 1, "{html}");
