@@ -83,6 +83,10 @@ function morph(html) {
   const previousGrowth = growth();
   Idiomorph.morph(current, replacement, {
     callbacks: {
+      beforeNodeMorphed(node) {
+        // Copy feedback belongs to this browser, not the refreshed server row.
+        return !node.matches?.('[data-copy-status]');
+      },
       beforeAttributeUpdated(name, node) {
         if (name === "open" && node.matches("details")) return false;
       }
