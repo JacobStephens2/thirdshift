@@ -175,9 +175,8 @@ fn idle_inbox_explains_missing_activity_before_the_folded_sections() {
         notice.contains("No Pass is currently recorded as skipped."),
         "{html}"
     );
-    assert!(notice.contains("href=\"/cronjobs\""), "{html}");
-    assert!(notice.contains("Activity logs"), "{html}");
-    assert!(notice.contains("thirdshift status"), "{html}");
+    let notice = notice.split("</section>").next().unwrap();
+    assert!(!notice.contains("scheduler's output"), "{notice}");
     assert!(html.find("No running Commands").unwrap() < html.find("id=\"group-1\"").unwrap());
     for page in ["history", "security"] {
         let html = console.get(&format!("/?page={page}")).text().unwrap();
@@ -230,7 +229,8 @@ fn idle_inbox_surfaces_recorded_skip_reasons_and_waiting_work() {
     );
     assert!(!notice.contains("<script>unsafe</script>"));
     assert!(!notice.contains("No Pass is currently recorded as skipped."));
-    assert!(notice.contains("href=\"/?section=needs-you\""), "{notice}");
+    // Needs you is its own folder, with its count; the notice doesn't repeat it.
+    assert!(!notice.contains("Ended problems"), "{notice}");
     assert!(
         notice.contains("href=\"/?section=ready-for-review\""),
         "{notice}"

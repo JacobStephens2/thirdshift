@@ -523,11 +523,11 @@ test("idle skipped Passes start folded and can be opened on phones with or witho
       await page.keyboard.press('Enter');
       await reason.waitFor({ state: 'visible' });
       assert.equal(await notice.locator('script').count(), 0);
-      for (const [label, section] of [['Needs you', 'needs-you'], ['Ready for review', 'ready-for-review']]) {
+      assert.equal((await notice.textContent()).includes('Needs you'), false);
+      for (const [label, section] of [['Ready for review', 'ready-for-review']]) {
         assert.equal(await notice.getByRole('link', { name: label, exact: true }).count(), 0, 'hidden sections must not have dead links');
         assert.ok((await notice.textContent()).includes(`${label} (hidden; show it with Sections or thirdshift console sections --show ${section})`));
       }
-      assert.equal(await notice.getByRole('link', { name: 'Cron jobs', exact: true }).getAttribute('href'), '/cronjobs');
       assert.equal(await page.locator('#inbox > .group:visible').count(), 0);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
       if (javaScriptEnabled) {
