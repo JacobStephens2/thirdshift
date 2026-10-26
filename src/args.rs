@@ -885,10 +885,15 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
 /// A process name is one path component. A slash is an argument error, not a
 /// file rule: the file is `~/.thirdshift/processes/<name>.toml`.
 fn process_name(name: &str) -> Result<String> {
-    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
+    if !one_path_component(name) {
         bail!("{PROCESS_USAGE}");
     }
     Ok(name.to_string())
+}
+
+/// One path component: not empty, not `.` or `..`, and no separator or line break.
+pub(crate) fn one_path_component(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0', '\n', '\r'])
 }
 
 /// Parse the arguments after `architect`: at most one focus, and its flags,

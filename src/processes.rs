@@ -52,14 +52,20 @@ struct ResolvedStep {
     skill_name: String,
     skill_path: PathBuf,
     choice: Choice,
-    harness_source: Source,
-    model_source: Source,
-    effort_source: Source,
+    sources: Sources,
     /// Why this Step's Harness can't start, when the preflight failed.
     start_failure: Option<String>,
 }
 
-/// Where a Step's Harness, Model or Effort came from.
+/// Where a Step's Harness, Model and Effort each came from.
+#[derive(Clone, Copy)]
+struct Sources {
+    harness: Source,
+    model: Source,
+    effort: Source,
+}
+
+/// Where one of a Step's Harness, Model or Effort came from.
 #[derive(Clone, Copy)]
 enum Source {
     Step,
@@ -125,7 +131,7 @@ fn list() -> Result<String> {
         else {
             continue;
         };
-        if !single_component(name) || reserved(name) {
+        if !crate::args::one_path_component(name) || reserved(name) {
             continue;
         }
         let path = entry.path();
@@ -149,7 +155,7 @@ fn check(command: &ProcessRun) -> Result<String> {
     let config = UserConfig::load()?;
     let prepared = prepare(&command.name, &command.asked, &config)?;
     let text = plan(&command.name, &prepared);
-    if let Err(error) = started(&prepared) {
+    if let Err(error) = refuse_unstartable(&prepared) {
         // The plan says whether each Harness starts, including one that can't.
         println!("{text}");
         return Err(error);
@@ -162,7 +168,7 @@ fn run(command: &ProcessRun) -> Result<String> {
     let config = UserConfig::load()?;
     let name = &command.name;
     let prepared = prepare(name, &command.asked, &config)?;
-    started(&prepared)?;
+    refuse_unstartable(&prepared)?;
     let repo = launch::repo()?;
     logs::begin(Begin::Process(name));
     logs::configured(&config);
@@ -253,7 +259,7 @@ fn link_harnesses(worktree: &Path, steps: &[ResolvedStep]) -> Result<()> {
 }
 
 /// The first Step whose Harness can't start, as a refusal. No session has run.
-fn started(prepared: &Prepared) -> Result<()> {
+fn refuse_unstartable(prepared: &Prepared) -> Result<()> {
     let Some(step) = prepared
         .steps
         .iter()
@@ -314,19 +320,19 @@ fn plan(name: &str, prepared: &Prepared) -> String {
             text,
             "harness: {} ({})",
             step.choice.harness.name(),
-            step.harness_source
+            step.sources.harness
         );
         let _ = writeln!(
             text,
             "model: {} ({})",
             step.choice.model.as_deref().unwrap_or("default"),
-            step.model_source
+            step.sources.model
         );
         let _ = writeln!(
             text,
             "effort: {} ({})",
             step.choice.effort.as_deref().unwrap_or("default"),
-            step.effort_source
+            step.sources.effort
         );
         let _ = writeln!(
             text,
@@ -389,8 +395,7 @@ fn resolve(
             ));
         }
     };
-    let (mut choice, harness_source, model_source, effort_source) =
-        step_choice(step, command, asked, &config.harness);
+    let (mut choice, sources) = step_choice(step, command, asked, &config.harness);
     let start_failure = match choice.check_without_probe() {
         Ok(()) => None,
         Err(error) => Some(one_line(&error)),
@@ -401,24 +406,21 @@ fn resolve(
         skill_name: skill.name,
         skill_path: skill.path,
         choice,
-        harness_source,
-        model_source,
-        effort_source,
+        sources,
         start_failure,
     })
 }
 
 /// The Step's Harness, Model and Effort. One it leaves out uses the
-/// Command's, except a Step on another Harness: the command's model and
-/// effort belong to the Command's Harness, so that Step takes its Harness's
-/// User config, then that Harness's default, and is never silently given
-/// the command's model.
+/// Command's for that setting: the command's word, else the User config for
+/// this Step's Harness, else that Harness's default. A command model or
+/// effort applies even when the Step names a different Harness.
 fn step_choice(
     step: &StepDraft,
     command: &Choice,
     asked: &Asked,
     settings: &harness::Settings,
-) -> (Choice, Source, Source, Source) {
+) -> (Choice, Sources) {
     let (harness, harness_source, chosen_by) = match step.harness {
         Some(harness) => (harness, Source::Step, ChosenBy::Step),
         None => (
@@ -427,26 +429,19 @@ fn step_choice(
             command.chosen_by,
         ),
     };
-    let (model, model_source) = if let Some(model) = step.model.clone() {
-        (Some(model), Source::Step)
-    } else if harness == command.harness && asked.model_and_effort.model.is_some() {
-        (command.model.clone(), Source::Command)
-    } else {
-        match settings.of(harness).model.clone() {
-            Some(model) => (Some(model), Source::UserConfig),
-            None => (None, Source::Default),
-        }
-    };
-    let (effort, effort_source) = if let Some(effort) = step.effort.clone() {
-        (Some(effort), Source::Step)
-    } else if harness == command.harness && asked.model_and_effort.effort.is_some() {
-        (command.effort.clone(), Source::Command)
-    } else {
-        match settings.of(harness).effort.clone() {
-            Some(effort) => (Some(effort), Source::UserConfig),
-            None => (None, Source::Default),
-        }
-    };
+    let configured = settings.of(harness);
+    let (model, model_source) = left_out(
+        step.model.clone(),
+        asked.model_and_effort.model.as_deref(),
+        command.model.clone(),
+        configured.model.clone(),
+    );
+    let (effort, effort_source) = left_out(
+        step.effort.clone(),
+        asked.model_and_effort.effort.as_deref(),
+        command.effort.clone(),
+        configured.effort.clone(),
+    );
     (
         Choice {
             harness,
@@ -454,10 +449,30 @@ fn step_choice(
             effort,
             chosen_by,
         },
-        harness_source,
-        model_source,
-        effort_source,
+        Sources {
+            harness: harness_source,
+            model: model_source,
+            effort: effort_source,
+        },
     )
+}
+
+/// A Step value, else the command's word, else the User config, else default.
+fn left_out(
+    named: Option<String>,
+    command_asked: Option<&str>,
+    command_value: Option<String>,
+    configured: Option<String>,
+) -> (Option<String>, Source) {
+    if let Some(value) = named {
+        (Some(value), Source::Step)
+    } else if command_asked.is_some() {
+        (command_value, Source::Command)
+    } else if let Some(value) = configured {
+        (Some(value), Source::UserConfig)
+    } else {
+        (None, Source::Default)
+    }
 }
 
 fn source_from(chosen_by: ChosenBy) -> Source {
@@ -682,7 +697,7 @@ fn step_name(path: &Path, line: usize, item: &Item) -> Result<(String, usize)> {
     let Some(value) = item.as_str() else {
         return Err(rule(path, line, "step name", "name must be a string"));
     };
-    if !single_component(value) {
+    if !crate::args::one_path_component(value) {
         return Err(rule(
             path,
             line,
@@ -715,10 +730,6 @@ fn process_path(name: &str) -> Result<PathBuf> {
 
 fn reserved(name: &str) -> bool {
     RESERVED.contains(&name)
-}
-
-fn single_component(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0', '\n', '\r'])
 }
 
 fn line_of(text: &str, offset: usize) -> usize {

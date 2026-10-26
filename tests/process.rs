@@ -753,7 +753,130 @@ effort = \"low\"
 }
 
 #[test]
-fn a_step_on_another_harness_keeps_that_harnesss_model_and_effort() {
+fn a_step_that_leaves_model_and_effort_out_uses_the_commands() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "\
+[harness.agy]
+model = \"gemini-3.8-flash\"
+effort = \"low\"
+",
+    );
+    write_process(
+        &scenario,
+        "notes",
+        "\
+version = 1
+description = \"Review the diff\"
+
+[[steps]]
+name = \"other\"
+skill = \"code-review\"
+harness = \"agy\"
+",
+    );
+    scenario.agent_does("printf 'done' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+
+    let result = scenario.run(&[
+        "process",
+        "notes",
+        "--harness",
+        "codex",
+        "--model",
+        "gpt-6.1-sol",
+        "--effort",
+        "max",
+    ]);
+
+    // The command's model is applied, then agy's catalog preflight rejects it.
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result
+            .stderr
+            .contains("step other's Harness agy can't start"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result
+            .stderr
+            .contains("the Model gpt-6.1-sol is not in Antigravity CLI's catalog"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.agy_calls().is_empty(), "{}", result.stderr);
+    assert!(scenario.claude_calls().is_empty(), "{}", result.stderr);
+    assert!(scenario.codex_calls().is_empty(), "{}", result.stderr);
+    assert_eq!(result.stdout, "");
+
+    let checked = scenario.run(&[
+        "process",
+        "check",
+        "notes",
+        "--harness",
+        "codex",
+        "--model",
+        "gpt-6.1-sol",
+        "--effort",
+        "max",
+    ]);
+    assert_eq!(checked.code, Some(1), "{}", checked.stderr);
+    assert!(
+        checked.stdout.contains(
+            "harness: agy (Step)\nmodel: gpt-6.1-sol (command)\neffort: max (command)\nstarts: no:"
+        ),
+        "{}",
+        checked.stdout
+    );
+}
+
+#[test]
+fn a_step_on_another_harness_uses_the_commands_model_when_that_harness_accepts_it() {
+    let scenario = Scenario::new();
+    scenario.user_config_is(
+        "\
+[harness.claude]
+model = \"sonnet\"
+effort = \"low\"
+",
+    );
+    write_process(
+        &scenario,
+        "notes",
+        "\
+version = 1
+description = \"Review the diff\"
+
+[[steps]]
+name = \"other\"
+skill = \"code-review\"
+harness = \"claude\"
+",
+    );
+    scenario.agent_does("printf 'done' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+
+    let result = scenario.run(&[
+        "process",
+        "notes",
+        "--harness",
+        "codex",
+        "--model",
+        "opus",
+        "--effort",
+        "high",
+    ]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(scenario.codex_calls().is_empty(), "{}", result.stderr);
+    assert!(scenario.agy_calls().is_empty(), "{}", result.stderr);
+    let claude = scenario.claude_calls();
+    assert_eq!(claude.len(), 1, "{}", result.stderr);
+    assert_flag(&claude[0], "--model", "opus");
+    assert_flag(&claude[0], "--effort", "high");
+}
+
+#[test]
+fn a_later_step_that_cannot_start_runs_no_session() {
     let scenario = Scenario::new();
     scenario.user_config_is(
         "\
@@ -792,24 +915,44 @@ harness = \"agy\"
         "notes",
     ]);
 
-    assert_eq!(result.code, Some(0), "{}", result.stderr);
-    assert!(scenario.claude_calls().is_empty(), "{}", result.stderr);
-    let codex = scenario.codex_calls();
-    let agy = scenario.agy_calls();
-    assert_eq!(codex.len(), 1, "{}", result.stderr);
-    assert_eq!(agy.len(), 1, "{}", result.stderr);
-    assert_flag(&codex[0], "-m", "gpt-6.1-sol");
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert!(
-        argv_of(&codex[0]).contains(&"model_reasoning_effort=\"max\"".to_string()),
-        "{:?}",
-        argv_of(&codex[0])
+        result
+            .stderr
+            .contains("step other's Harness agy can't start"),
+        "{}",
+        result.stderr
     );
-    assert_flag(&agy[0], "--model", "gemini-3.8-flash");
-    assert_flag(&agy[0], "--effort", "low");
-    let agy_argv = argv_of(&agy[0]);
+    assert!(scenario.claude_calls().is_empty(), "{}", result.stderr);
+    assert!(scenario.codex_calls().is_empty(), "{}", result.stderr);
+    assert!(scenario.agy_calls().is_empty(), "{}", result.stderr);
+    assert_eq!(result.stdout, "");
+
+    let checked = scenario.run(&[
+        "process",
+        "check",
+        "--harness",
+        "codex",
+        "--model",
+        "gpt-6.1-sol",
+        "--effort",
+        "max",
+        "notes",
+    ]);
+    assert_eq!(checked.code, Some(1), "{}", checked.stderr);
     assert!(
-        !agy_argv.iter().any(|arg| arg.contains("gpt-6.1-sol")),
-        "{agy_argv:?}"
+        checked.stdout.contains(
+            "harness: codex (command)\nmodel: gpt-6.1-sol (command)\neffort: max (command)\nstarts: yes"
+        ),
+        "{}",
+        checked.stdout
+    );
+    assert!(
+        checked.stdout.contains(
+            "harness: agy (Step)\nmodel: gpt-6.1-sol (command)\neffort: max (command)\nstarts: no:"
+        ),
+        "{}",
+        checked.stdout
     );
 }
 
