@@ -293,7 +293,7 @@ impl<'a> Execution<'a> {
             .join(request.identity.arm.name());
         let path_env = std::env::join_paths(
             std::iter::once(directory)
-                .chain(toolchains.map(|root| root.join("bin")))
+                .chain(toolchains.map(|root| root.join("session/bin")))
                 .chain(std::env::split_paths(
                     &std::env::var_os("PATH").unwrap_or_default(),
                 )),

@@ -82,9 +82,11 @@ fn proxies(directory: &Path) -> Result<tempfile::TempDir> {
     let root = tempfile::Builder::new()
         .prefix("rust-toolchain-")
         .tempdir_in(directory)?;
-    let bin = root.path().join("bin");
+    // Leave CARGO_HOME/bin absent. Old Arms add that directory before their
+    // PATH discovery, whose duplicate check would keep the host shims ahead.
+    let bin = root.path().join("session/bin");
     let dispatch = root.path().join("proxies");
-    fs::create_dir(&bin)?;
+    fs::create_dir_all(&bin)?;
     fs::create_dir(&dispatch)?;
     let rustup = process::find_executable("rustup").context("rustup is not on PATH")?;
     fs::copy(rustup, dispatch.join("rustup"))?;

@@ -198,14 +198,33 @@ else:
         r#"#!/usr/bin/env python3
 import os, pathlib, sys
 root = pathlib.Path(os.environ['THIRDSHIFT_EXECUTION_FIXTURE'])
-if not (root / 'installed').exists():
+if not (root / 'installed').exists() or not os.environ.get('RUSTUP_HOME'):
     print('pinned Rust 1.99.0 download refused by Trial proxy', file=sys.stderr)
     sys.exit(1)
 print('cargo 1.99.0 (fixture)')
 "#,
     );
+    let default_cargo = PathBuf::from(std::env::var_os("HOME").unwrap()).join(".cargo/bin");
+    fs::create_dir_all(&default_cargo).unwrap();
+    fs::copy(bin.join("cargo"), default_cargo.join("cargo")).unwrap();
     let mut fixture = Fixture::new(&format!(
-        "import subprocess\n# Historical Arms clear RUSTUP_HOME when launching their session.\nenv = dict(PATH=os.environ['PATH'], HOME=str(output / 'home'), THIRDSHIFT_EXECUTION_FIXTURE=os.environ['THIRDSHIFT_EXECUTION_FIXTURE'])\ncheck = subprocess.run(['cargo', '--version'], cwd=repository, env=env, capture_output=True, text=True)\nassert check.returncode == 0, check.stderr\nassert check.stdout == 'cargo 1.99.0 (fixture)\\n'\n{SUCCESS}"
+        r#"
+import shutil, subprocess
+# Preserve historical Arms' root ordering and duplicate-skipping PATH discovery.
+paths = []
+for root in [pathlib.Path(os.environ['CARGO_HOME']), pathlib.Path(os.environ['HOME']) / '.cargo']:
+    directory = str(root / 'bin')
+    if pathlib.Path(directory).is_dir() and directory not in paths:
+        paths.insert(0, directory)
+directory = str(pathlib.Path(shutil.which('cargo')).resolve().parent)
+if directory not in paths:
+    paths.insert(0, directory)
+env = dict(PATH=os.pathsep.join(paths + ['/usr/bin', '/bin']), HOME=str(output / 'home'), THIRDSHIFT_EXECUTION_FIXTURE=os.environ['THIRDSHIFT_EXECUTION_FIXTURE'])
+check = subprocess.run(['cargo', '--version'], cwd=repository, env=env, capture_output=True, text=True)
+assert check.returncode == 0, check.stderr
+assert check.stdout == 'cargo 1.99.0 (fixture)\n'
+{SUCCESS}
+"#
     ));
     let source = fixture.root.join("source");
     fs::write(
