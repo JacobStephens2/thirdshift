@@ -542,7 +542,6 @@ fn lock_launch(launch: &Git) -> Result<File> {
 
 #[cfg(test)]
 mod tests {
-    use std::process::Command;
     use std::time::Duration;
 
     use super::*;
@@ -552,11 +551,9 @@ mod tests {
     pub(super) fn launch_directory() -> (tempfile::TempDir, Git) {
         let temp = tempfile::TempDir::new().unwrap();
         let git = |dir: &Path, args: &[&str]| {
-            let status = Command::new("git")
+            let status = crate::test_support::git_command()
                 .args(args)
                 .current_dir(dir)
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                .env("GIT_CONFIG_NOSYSTEM", "1")
                 .status()
                 .unwrap();
             assert!(status.success(), "git {args:?}");
@@ -581,6 +578,7 @@ mod tests {
             ("user.name", "Test Runner"),
             ("user.email", "runner@example.com"),
             ("commit.gpgSign", "false"),
+            ("tag.gpgsign", "false"),
             ("core.hooksPath", hooks.to_str().unwrap()),
         ] {
             git(&work, &["config", key, value]);

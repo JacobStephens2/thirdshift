@@ -456,6 +456,8 @@ mod tests {
         for (key, value) in [
             ("user.name", "Test Runner"),
             ("user.email", "runner@example.com"),
+            ("commit.gpgsign", "false"),
+            ("tag.gpgsign", "false"),
             ("remote.origin.url", "https://github.com/acme/widgets.git"),
             ("remote.origin.fetch", "+refs/heads/*:refs/remotes/origin/*"),
             (
@@ -471,11 +473,9 @@ mod tests {
     }
 
     fn isolated(dir: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
+        let output = crate::test_support::git_command()
             .args(args)
             .current_dir(dir)
-            .env("GIT_CONFIG_GLOBAL", "/dev/null")
-            .env("GIT_CONFIG_NOSYSTEM", "1")
             .output()
             .unwrap();
         assert!(output.status.success(), "git {args:?}");
