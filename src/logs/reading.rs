@@ -86,11 +86,10 @@ impl Snapshot {
         let mut snapshot =
             Self::capture_records(Arc::new(inventory::Native), root, now, silent, true)?;
         if let Observation::Record(selected) = snapshot.resolve(input)?.observation {
-            let path = selected.record_path.clone();
-            let name = selected.record.name.clone();
+            let identity = CommandIdentity::of(selected);
             for entry in &mut snapshot.commands {
                 if let Entry::Record(command) = entry {
-                    command.add_session_signals(Some((&path, &name)));
+                    command.add_session_signals(Some(&identity));
                 }
             }
         }
@@ -282,12 +281,11 @@ pub(super) struct CurrentStage {
 
 impl Command {
     /// Enrich this Command when `selected` is every Command (`None`), or this
-    /// Command's own record path and name. A match also enriches nested Ticket
+    /// Command's exact identity. A match also enriches nested Ticket
     /// runs and dispatches. Path alone is not enough: a dispatch shares its
     /// parent's record path. Usual ranges and health already include every record.
-    fn add_session_signals(&mut self, selected: Option<(&Path, &str)>) {
-        let enrich = selected
-            .is_none_or(|(path, name)| self.record_path == path && self.record.name == name);
+    fn add_session_signals(&mut self, selected: Option<&CommandIdentity>) {
+        let enrich = selected.is_none_or(|identity| identity.matches(self));
         if enrich && let Some(mut metrics) = self.record.run_metrics.take() {
             metrics.add_session_signals(&self.record, cache::session_signals);
             self.record.run_metrics = Some(metrics);

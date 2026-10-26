@@ -202,7 +202,9 @@ pub(super) fn session_signals(log: &Path) -> Option<SessionSignals> {
     let persist = cached.is_none();
     let value = match cached {
         Some(value) => value,
-        None => crate::logs::session_signals::read(&path).ok()?,
+        // Readers expose a parse error as Missing. Retain that observation too;
+        // repairing the trace changes its identity and retries the parser.
+        None => crate::logs::session_signals::read(&path).ok().flatten(),
     };
     if Identity::read(&path).ok().as_ref() == Some(&identity) {
         if persist && let Some(retained) = retained {
