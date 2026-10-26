@@ -1,11 +1,15 @@
-//! Custom processes: sequential skill Steps from `~/.thirdshift/processes/<name>.toml`.
+//! Custom processes: skill Steps from `~/.thirdshift/processes/<name>.toml`.
+//!
+//! Steps run in order. Consecutive Steps that name the same `parallel` group
+//! run at the same time, each in a throwaway worktree the Process declares.
 
 use std::collections::BTreeSet;
 use std::fmt::Write;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow};
 use toml_edit::{Document, Item, Key, Table};
@@ -31,7 +35,12 @@ const RESERVED: &[&str] = &[
 
 struct ProcessFile {
     description: String,
+    worktrees: Vec<WorktreeDraft>,
     steps: Vec<StepDraft>,
+}
+
+struct WorktreeDraft {
+    name: String,
 }
 
 struct StepDraft {
@@ -39,16 +48,28 @@ struct StepDraft {
     name_line: usize,
     skill: String,
     skill_line: usize,
+    worktree: Option<(String, usize)>,
+    parallel: Option<(String, usize)>,
+    optional: bool,
 }
 
 struct ResolvedStep {
     name: String,
     skill_name: String,
     skill_path: PathBuf,
+    worktree: Option<String>,
+    parallel: Option<String>,
+    optional: bool,
+}
+
+struct OwnedWorktree {
+    name: Option<String>,
+    checkout: SkillWorktree,
 }
 
 struct Prepared {
-    worktree: SkillWorktree,
+    worktrees: Vec<OwnedWorktree>,
+    declared: Vec<String>,
     _written: WrittenGuard,
     choice: Choice,
     description: String,
@@ -134,8 +155,10 @@ fn run(name: &str) -> Result<String> {
 
 fn execute_steps(process: &str, prepared: &Prepared) -> Result<String> {
     let adapter = prepared.choice.harness.adapter();
-    skills::link_into(prepared.worktree.path(), adapter)?;
-    adapter.link_instruction_fallback(prepared.worktree.path())?;
+    for worktree in &prepared.worktrees {
+        skills::link_into(worktree.checkout.path(), adapter)?;
+        adapter.link_instruction_fallback(worktree.checkout.path())?;
+    }
     let results = logs::command_log_path()
         .context("a Process has no Command log")?
         .with_extension("steps");
@@ -143,31 +166,109 @@ fn execute_steps(process: &str, prepared: &Prepared) -> Result<String> {
         .with_context(|| format!("could not create {}", results.display()))?;
     let mut earlier = Vec::new();
     let mut last = String::new();
-    for step in &prepared.steps {
-        let started = Instant::now();
-        match run_step(process, prepared, step, &earlier) {
-            Ok(message) => {
-                let duration = progress::duration(started.elapsed());
-                progress::step(format_args!("step {}: {duration} succeeded", step.name));
-                let path = results.join(format!("{}.txt", step.name));
-                fs::write(&path, &message)
-                    .with_context(|| format!("could not write {}", path.display()))?;
-                earlier.push((step.name.clone(), path));
-                last = message;
+    for range in group_ranges(&prepared.steps) {
+        let group = &prepared.steps[range];
+        let outcomes = if group.len() == 1 {
+            let started = Instant::now();
+            let outcome = run_step(process, prepared, &group[0], &earlier);
+            vec![(started.elapsed(), outcome)]
+        } else {
+            run_parallel(process, prepared, group, &earlier)
+        };
+        let mut group_error = None;
+        for (step, (elapsed, outcome)) in group.iter().zip(outcomes) {
+            match finish_step(step, elapsed, outcome, &results, &mut earlier, &mut last) {
+                Ok(()) => {}
+                Err(error) if group_error.is_none() => group_error = Some(error),
+                Err(_) => {}
             }
-            Err(error) => {
-                let duration = progress::duration(started.elapsed());
-                progress::step(format_args!(
-                    "step {}: {duration} {}: {}",
-                    step.name,
-                    failure_outcome(),
-                    one_line(&error)
-                ));
-                return Err(error);
-            }
+        }
+        if let Some(error) = group_error {
+            return Err(error);
         }
     }
     Ok(last)
+}
+
+/// Consecutive Steps that share a group name. A Step with no group, and a
+/// repeat of a name after a Step outside it, each start their own range.
+fn group_ranges(steps: &[ResolvedStep]) -> Vec<std::ops::Range<usize>> {
+    let mut ranges = Vec::new();
+    let mut index = 0;
+    while index < steps.len() {
+        let start = index;
+        if let Some(name) = &steps[index].parallel {
+            index += 1;
+            while index < steps.len() && steps[index].parallel.as_ref() == Some(name) {
+                index += 1;
+            }
+        } else {
+            index += 1;
+        }
+        ranges.push(start..index);
+    }
+    ranges
+}
+
+fn run_parallel(
+    process: &str,
+    prepared: &Prepared,
+    group: &[ResolvedStep],
+    earlier: &[(String, PathBuf)],
+) -> Vec<(Duration, Result<String>)> {
+    thread::scope(|scope| {
+        let mut handles = Vec::with_capacity(group.len());
+        for step in group {
+            let cwd = worktree_path(&prepared.worktrees, step.worktree.as_deref()).to_path_buf();
+            let choice = prepared.choice.clone();
+            let earlier = earlier.to_vec();
+            let process = process.to_string();
+            handles.push(scope.spawn(move || {
+                let started = Instant::now();
+                let outcome = run_step_in(&process, &choice, &cwd, step, &earlier);
+                (started.elapsed(), outcome)
+            }));
+        }
+        handles
+            .into_iter()
+            .map(|handle| handle.join().expect("a step thread panicked"))
+            .collect()
+    })
+}
+
+fn finish_step(
+    step: &ResolvedStep,
+    elapsed: Duration,
+    outcome: Result<String>,
+    results: &Path,
+    earlier: &mut Vec<(String, PathBuf)>,
+    last: &mut String,
+) -> Result<()> {
+    let duration = progress::duration(elapsed);
+    match outcome {
+        Ok(message) => {
+            progress::step(format_args!("step {}: {duration} succeeded", step.name));
+            let path = results.join(format!("{}.txt", step.name));
+            fs::write(&path, &message)
+                .with_context(|| format!("could not write {}", path.display()))?;
+            earlier.push((step.name.clone(), path));
+            *last = message;
+            Ok(())
+        }
+        Err(error) => {
+            progress::step(format_args!(
+                "step {}: {duration} {}: {}",
+                step.name,
+                failure_outcome(),
+                one_line(&error)
+            ));
+            if step.optional && !interrupt::requested() {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        }
+    }
 }
 
 fn run_step(
@@ -176,11 +277,24 @@ fn run_step(
     step: &ResolvedStep,
     earlier: &[(String, PathBuf)],
 ) -> Result<String> {
+    run_step_in(
+        process,
+        &prepared.choice,
+        worktree_path(&prepared.worktrees, step.worktree.as_deref()),
+        step,
+        earlier,
+    )
+}
+
+fn run_step_in(
+    process: &str,
+    choice: &Choice,
+    cwd: &Path,
+    step: &ResolvedStep,
+    earlier: &[(String, PathBuf)],
+) -> Result<String> {
     crate::resources::wait()?;
-    progress::step(format_args!(
-        "running step {} with {}",
-        step.name, prepared.choice
-    ));
+    progress::step(format_args!("running step {} with {choice}", step.name));
     let prompt = prompt::process_step(
         process,
         &step.name,
@@ -188,12 +302,21 @@ fn run_step(
         &step.skill_path,
         earlier,
     );
-    skill::run_session(
-        prepared.worktree.path(),
-        &prepared.choice,
-        &format!("Step {}", step.name),
-        &prompt,
-    )
+    skill::run_session(cwd, choice, &format!("Step {}", step.name), &prompt)
+}
+
+fn worktree_path<'a>(worktrees: &'a [OwnedWorktree], name: Option<&str>) -> &'a Path {
+    worktrees
+        .iter()
+        .find(|worktree| worktree.name.as_deref() == name)
+        .unwrap_or_else(|| {
+            panic!(
+                "missing worktree {}",
+                name.unwrap_or("the throwaway worktree")
+            )
+        })
+        .checkout
+        .path()
 }
 
 fn classify(result: &Result<String>) -> (String, Option<String>) {
@@ -221,21 +344,51 @@ fn one_line(error: &anyhow::Error) -> String {
 
 fn plan(name: &str, prepared: &Prepared) -> String {
     let mut text = format!(
-        "{name}: {description}\nthrowaway worktree at the Base branch\nharness: {choice} ({chosen})\n",
-        description = prepared.description,
+        "{name}: {description}\n",
+        description = prepared.description
+    );
+    if prepared.declared.is_empty() {
+        text.push_str("throwaway worktree at the Base branch\n");
+    }
+    let _ = writeln!(
+        text,
+        "harness: {choice} ({chosen})",
         choice = prepared.choice,
         chosen = prepared.choice.chosen_by,
     );
-    for step in &prepared.steps {
-        let _ = writeln!(
-            text,
-            "{}: {} {}",
-            step.name,
-            step.skill_name,
-            step.skill_path.display()
-        );
+    for worktree in &prepared.declared {
+        let _ = writeln!(text, "worktree {worktree}: throwaway at the Base branch");
+    }
+    let named = !prepared.declared.is_empty();
+    for range in group_ranges(&prepared.steps) {
+        let names: Vec<_> = prepared.steps[range.clone()]
+            .iter()
+            .map(|step| step.name.as_str())
+            .collect();
+        for step in &prepared.steps[range] {
+            let _ = writeln!(text, "{}", step_plan(step, named));
+        }
+        if names.len() > 1 {
+            let _ = writeln!(text, "together: {}", names.join(", "));
+        }
     }
     text.trim_end().to_string()
+}
+
+fn step_plan(step: &ResolvedStep, named: bool) -> String {
+    let mut line = format!(
+        "{}: {} {}",
+        step.name,
+        step.skill_name,
+        step.skill_path.display()
+    );
+    if named && let Some(worktree) = &step.worktree {
+        let _ = write!(line, " (worktree {worktree})");
+    }
+    if step.optional {
+        line.push_str(" (optional)");
+    }
+    line
 }
 
 fn prepare(name: &str, config: &UserConfig) -> Result<Prepared> {
@@ -243,17 +396,29 @@ fn prepare(name: &str, config: &UserConfig) -> Result<Prepared> {
     refuse_reserved(&path, name)?;
     let text = read_process(&path)?;
     let file = parse(&path, &text)?;
+    refuse_worktrees(&path, &file)?;
     let base = launch::checked_out_base()?;
-    let worktree = SkillWorktree::at(&Git::new(std::env::current_dir()?), base.origin_commit())?;
+    let launch = Git::new(std::env::current_dir()?);
+    let commit = base.origin_commit();
     let written = WrittenGuard;
+    let worktrees = create_worktrees(&launch, commit, &file)?;
     let mut steps = Vec::new();
     for step in &file.steps {
-        steps.push(resolve(&path, step, worktree.path())?);
+        let checkout = worktree_path(
+            &worktrees,
+            step.worktree.as_ref().map(|(name, _)| name.as_str()),
+        );
+        steps.push(resolve(&path, step, checkout)?);
     }
     let mut choice = Choice::of(&Asked::default(), &config.harness);
     choice.check_without_probe()?;
     Ok(Prepared {
-        worktree,
+        worktrees,
+        declared: file
+            .worktrees
+            .into_iter()
+            .map(|worktree| worktree.name)
+            .collect(),
         _written: written,
         choice,
         description: file.description,
@@ -261,20 +426,134 @@ fn prepare(name: &str, config: &UserConfig) -> Result<Prepared> {
     })
 }
 
-fn resolve(path: &Path, step: &StepDraft, worktree: &Path) -> Result<ResolvedStep> {
-    match skills::find(worktree, &step.skill) {
-        Ok(skill) => Ok(ResolvedStep {
-            name: step.name.clone(),
-            skill_name: skill.name,
-            skill_path: skill.path,
-        }),
-        Err(error) => Err(rule(
-            path,
-            step.skill_line,
-            "skill not found",
-            format!("{error:#}"),
-        )),
+fn create_worktrees(launch: &Git, commit: &str, file: &ProcessFile) -> Result<Vec<OwnedWorktree>> {
+    if file.worktrees.is_empty() {
+        return Ok(vec![OwnedWorktree {
+            name: None,
+            checkout: SkillWorktree::at(launch, commit)?,
+        }]);
     }
+    let mut worktrees = Vec::new();
+    let mut seen = BTreeSet::new();
+    for step in &file.steps {
+        let Some((name, _)) = &step.worktree else {
+            continue;
+        };
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        worktrees.push(OwnedWorktree {
+            name: Some(name.clone()),
+            checkout: SkillWorktree::at(launch, commit)?,
+        });
+    }
+    Ok(worktrees)
+}
+
+fn refuse_worktrees(path: &Path, file: &ProcessFile) -> Result<()> {
+    let declared: BTreeSet<&str> = file
+        .worktrees
+        .iter()
+        .map(|worktree| worktree.name.as_str())
+        .collect();
+    for step in &file.steps {
+        match &step.worktree {
+            Some((name, line)) if !declared.contains(name.as_str()) => {
+                return Err(rule(
+                    path,
+                    *line,
+                    "unknown worktree",
+                    format!("step {} names worktree {name}", step.name),
+                ));
+            }
+            None if !declared.is_empty() => {
+                return Err(rule(
+                    path,
+                    step.name_line,
+                    "worktree",
+                    format!("step {} does not name a worktree", step.name),
+                ));
+            }
+            _ => {}
+        }
+    }
+    let mut index = 0;
+    while index < file.steps.len() {
+        let Some(group) = file.steps[index]
+            .parallel
+            .as_ref()
+            .map(|(name, _)| name.clone())
+        else {
+            index += 1;
+            continue;
+        };
+        let start = index;
+        index += 1;
+        while index < file.steps.len()
+            && file.steps[index]
+                .parallel
+                .as_ref()
+                .map(|(name, _)| name.as_str())
+                == Some(group.as_str())
+        {
+            index += 1;
+        }
+        let mut seen: Vec<(&str, &str)> = Vec::new();
+        for step in &file.steps[start..index] {
+            let worktree = step
+                .worktree
+                .as_ref()
+                .map(|(name, _)| name.as_str())
+                .unwrap_or("");
+            if let Some(other) = seen
+                .iter()
+                .find(|(name, _)| *name == worktree)
+                .map(|(_, step)| *step)
+            {
+                let line = step
+                    .worktree
+                    .as_ref()
+                    .map(|(_, line)| *line)
+                    .or_else(|| step.parallel.as_ref().map(|(_, line)| *line))
+                    .unwrap_or(step.name_line);
+                let shared = if worktree.is_empty() {
+                    "the throwaway worktree".to_string()
+                } else {
+                    format!("worktree {worktree}")
+                };
+                return Err(rule(
+                    path,
+                    line,
+                    "shared worktree",
+                    format!("steps {other} and {} share {shared}", step.name),
+                ));
+            }
+            seen.push((worktree, step.name.as_str()));
+        }
+    }
+    Ok(())
+}
+
+fn resolve(path: &Path, step: &StepDraft, worktree: &Path) -> Result<ResolvedStep> {
+    let skill = match skills::find(worktree, &step.skill) {
+        Ok(skill) => skill,
+        Err(error) => {
+            return Err(rule(
+                path,
+                step.skill_line,
+                "skill not found",
+                format!("{error:#}"),
+            ));
+        }
+    };
+    Ok(ResolvedStep {
+        name: step.name.clone(),
+        skill_name: skill.name,
+        skill_path: skill.path,
+        worktree: step.worktree.as_ref().map(|(name, _)| name.clone()),
+        parallel: step.parallel.as_ref().map(|(name, _)| name.clone()),
+        optional: step.optional,
+    })
 }
 
 fn read_process(path: &Path) -> Result<String> {
@@ -319,6 +598,7 @@ fn parse(path: &Path, text: &str) -> Result<ProcessFile> {
     let table = doc.as_table();
     let mut saw_version = false;
     let mut description = None;
+    let mut worktrees = Vec::new();
     let mut steps = None;
     for (key, item) in table.iter() {
         let line = key_line(text, table.key(key));
@@ -334,6 +614,9 @@ fn parse(path: &Path, text: &str) -> Result<ProcessFile> {
             }
             "description" => {
                 description = Some(description_of(path, line, item)?);
+            }
+            "worktrees" => {
+                worktrees = parse_worktrees(path, text, line, item)?;
             }
             "steps" => {
                 let parsed = parse_steps(path, text, line, item)?;
@@ -354,7 +637,88 @@ fn parse(path: &Path, text: &str) -> Result<ProcessFile> {
     let Some(steps) = steps else {
         return Err(rule(path, 1, "steps", "at least one step is required"));
     };
-    Ok(ProcessFile { description, steps })
+    Ok(ProcessFile {
+        description,
+        worktrees,
+        steps,
+    })
+}
+
+fn parse_worktrees(
+    path: &Path,
+    text: &str,
+    line: usize,
+    item: &Item,
+) -> Result<Vec<WorktreeDraft>> {
+    let Some(table) = item.as_table() else {
+        return Err(rule(
+            path,
+            line,
+            "worktrees",
+            "worktrees must be a table of named worktrees",
+        ));
+    };
+    if table.is_empty() {
+        return Err(rule(
+            path,
+            line,
+            "worktrees",
+            "at least one worktree is required",
+        ));
+    }
+    let mut worktrees = Vec::new();
+    for (key, item) in table.iter() {
+        let name_line = key_line(text, table.key(key));
+        if !single_component(key) {
+            return Err(rule(
+                path,
+                name_line,
+                "worktree name",
+                "a worktree name must be a single path component",
+            ));
+        }
+        let Some(body) = item.as_table() else {
+            return Err(rule(
+                path,
+                name_line,
+                "worktree",
+                "a worktree must be a table",
+            ));
+        };
+        let mut saw_kind = false;
+        for (field, value) in body.iter() {
+            let field_line = key_line(text, body.key(field));
+            match field {
+                "kind" => {
+                    let Some(kind) = value.as_str() else {
+                        return Err(rule(
+                            path,
+                            field_line,
+                            "worktree kind",
+                            "kind must be a string",
+                        ));
+                    };
+                    if kind != "throwaway" {
+                        return Err(rule(
+                            path,
+                            field_line,
+                            "worktree kind",
+                            "kind must be throwaway",
+                        ));
+                    }
+                    saw_kind = true;
+                }
+                other => return Err(rule(path, field_line, "unknown key", other)),
+            }
+        }
+        if !saw_kind {
+            return Err(rule(path, name_line, "worktree kind", "kind is required"));
+        }
+        worktrees.push(WorktreeDraft {
+            name: key.to_string(),
+        });
+    }
+    Ok(worktrees)
 }
 
 fn description_of(path: &Path, line: usize, item: &Item) -> Result<String> {
@@ -418,11 +782,17 @@ fn parse_steps(path: &Path, text: &str, line: usize, item: &Item) -> Result<Vec<
 fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Result<StepDraft> {
     let mut name = None;
     let mut skill = None;
+    let mut worktree = None;
+    let mut parallel = None;
+    let mut optional = false;
     for (key, item) in table.iter() {
         let line = key_line(text, table.key(key));
         match key {
             "name" => name = Some(step_name(path, line, item)?),
             "skill" => skill = Some(step_skill(path, line, item)?),
+            "worktree" => worktree = Some(step_worktree(path, line, item)?),
+            "parallel" => parallel = Some(step_parallel(path, line, item)?),
+            "optional" => optional = step_optional(path, line, item)?,
             other => return Err(rule(path, line, "unknown key", other)),
         }
     }
@@ -442,7 +812,45 @@ fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Resu
         name_line,
         skill,
         skill_line,
+        worktree,
+        parallel,
+        optional,
     })
+}
+
+fn step_worktree(path: &Path, line: usize, item: &Item) -> Result<(String, usize)> {
+    let Some(value) = item.as_str() else {
+        return Err(rule(path, line, "worktree", "worktree must be a string"));
+    };
+    if !single_component(value) {
+        return Err(rule(
+            path,
+            line,
+            "worktree",
+            "worktree must be a single path component",
+        ));
+    }
+    Ok((value.to_string(), line))
+}
+
+fn step_parallel(path: &Path, line: usize, item: &Item) -> Result<(String, usize)> {
+    let Some(value) = item.as_str() else {
+        return Err(rule(path, line, "parallel", "parallel must be a string"));
+    };
+    if value.is_empty() || value.chars().any(|c| c == '\n' || c == '\r') {
+        return Err(rule(
+            path,
+            line,
+            "parallel",
+            "parallel must be a single-line group name",
+        ));
+    }
+    Ok((value.to_string(), line))
+}
+
+fn step_optional(path: &Path, line: usize, item: &Item) -> Result<bool> {
+    item.as_bool()
+        .ok_or_else(|| rule(path, line, "optional", "optional must be a boolean"))
 }
 
 fn step_name(path: &Path, line: usize, item: &Item) -> Result<(String, usize)> {
