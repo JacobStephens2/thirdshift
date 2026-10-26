@@ -334,6 +334,11 @@ async function loadPeek(url) {
   pendingPeek?.abort();
   const request = new AbortController();
   pendingPeek = request;
+  let timedOut = false;
+  const timeout = setTimeout(() => {
+    timedOut = true;
+    request.abort();
+  }, 10000);
   try {
     const response = await fetch(url, { signal: request.signal, cache: 'no-store' });
     if (!response.ok) throw new Error('Details unavailable');
@@ -349,8 +354,11 @@ async function loadPeek(url) {
     if (content.querySelector('[data-live="true"]')) startUpdates();
     else stopPeekUpdates();
   } catch (error) {
-    if (!request.signal.aborted && error.name !== 'AbortError') content.textContent = 'Details unavailable. Reload to try again.';
+    if (pendingPeek === request && (timedOut || (!request.signal.aborted && error.name !== 'AbortError'))) {
+      content.textContent = 'Details unavailable. Reload to try again.';
+    }
   } finally {
+    clearTimeout(timeout);
     if (pendingPeek === request) pendingPeek = null;
   }
 }

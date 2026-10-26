@@ -7,6 +7,131 @@ use support::Scenario;
 
 const LOGS: &str = "home/.thirdshift/logs/acme/widgets/commands/issue";
 
+#[cfg(target_os = "linux")]
+struct TraceOpens(fs::File);
+
+#[cfg(target_os = "linux")]
+impl TraceOpens {
+    fn new(log: &std::path::Path) -> Self {
+        use std::os::fd::FromRawFd;
+        use std::os::unix::ffi::OsStrExt;
+        // SAFETY: File owns the successful descriptor; name is NUL terminated.
+        let fd = unsafe { libc::inotify_init1(libc::IN_NONBLOCK | libc::IN_CLOEXEC) };
+        assert!(fd >= 0);
+        let file = unsafe { fs::File::from_raw_fd(fd) };
+        let name = std::ffi::CString::new(log.as_os_str().as_bytes()).unwrap();
+        assert!(unsafe { libc::inotify_add_watch(fd, name.as_ptr(), libc::IN_OPEN) } >= 0);
+        Self(file)
+    }
+
+    fn take(&mut self) -> bool {
+        use std::io::Read;
+        let mut buffer = [0; 1024];
+        match self.0.read(&mut buffer) {
+            Ok(len) => len > 0,
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => false,
+            Err(error) => panic!("{error}"),
+        }
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn unchanged_malformed_session_signals_are_not_reparsed_and_repair_refreshes_them() {
+    let scenario = Scenario::new();
+    let log = trace(&scenario, "malformed", "claude", "1.0", json!([]));
+    fs::write(&log, "{\"resourceLogs\":[]}\n{invalid}\n").unwrap();
+    let mut past = record(7);
+    past["stages"][0]["session_log"] = json!(log);
+    write(&scenario, "7-fixture.command.json", &past);
+    let mut opens = TraceOpens::new(&log);
+    let first = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert!(first["command"]["metrics"]["stages"][0]["session_signals"].is_null());
+    assert!(opens.take());
+    let second = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert!(
+        !opens.take(),
+        "unchanged malformed Session trace was reparsed"
+    );
+    assert_eq!(first, second);
+    trace(&scenario, "malformed", "claude", "2.0", json!([]));
+    opens.take();
+    let repaired = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert!(opens.take());
+    assert_eq!(
+        repaired["command"]["metrics"]["stages"][0]["session_signals"]["harness_version"],
+        "2.0"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn unchanged_session_signals_survive_between_cli_processes() {
+    use std::io::Write;
+
+    let scenario = Scenario::new();
+    let log = trace(&scenario, "historical", "claude", "1.0", json!([]));
+    let mut past = record(7);
+    past["stages"][0]["session_log"] = json!(log);
+    let record = write(&scenario, "7-fixture.command.json", &past);
+    let original_record = fs::read(&record).unwrap();
+    let original_trace = fs::read_to_string(&log).unwrap();
+    let mut watcher = TraceOpens::new(&log);
+    let first = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert!(watcher.take());
+    let second = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert!(
+        !watcher.take(),
+        "a second CLI process reparsed an unchanged historical Session trace"
+    );
+    assert_eq!(first, second);
+
+    let amendment = |version: &str| {
+        serde_json::to_string(&json!({"resourceLogs": [{"resource": {"attributes": [
+            {"key": "thirdshift.harness.version", "value": {"stringValue": version}}
+        ]}, "scopeLogs": []}]}))
+        .unwrap()
+            + "\n"
+    };
+    fs::OpenOptions::new()
+        .append(true)
+        .open(&log)
+        .unwrap()
+        .write_all(amendment("2.0").as_bytes())
+        .unwrap();
+    watcher.take();
+    let appended = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert!(watcher.take());
+    assert_eq!(
+        appended["command"]["metrics"]["stages"][0]["session_signals"]["harness_version"],
+        "2.0"
+    );
+
+    // Replacing a trace with the same length and mtime must still refresh it.
+    let modified = fs::metadata(&log).unwrap().modified().unwrap();
+    let replacement = log.with_extension("replacement");
+    fs::write(&replacement, original_trace + &amendment("3.0")).unwrap();
+    fs::File::open(&replacement)
+        .unwrap()
+        .set_times(fs::FileTimes::new().set_modified(modified))
+        .unwrap();
+    fs::rename(replacement, &log).unwrap();
+    watcher = TraceOpens::new(&log);
+    let replaced = metrics(&scenario, &["metrics", "widgets#7", "--json"]);
+    assert!(watcher.take());
+    assert_eq!(
+        replaced["command"]["metrics"]["stages"][0]["session_signals"]["harness_version"],
+        "3.0"
+    );
+    let shown = metrics(&scenario, &["show", "widgets#7", "--json"]);
+    assert!(!watcher.take());
+    assert_eq!(
+        shown["command"]["run_metrics"]["session_signals"],
+        replaced["command"]["metrics"]["session_signals"]
+    );
+    assert_eq!(fs::read(record).unwrap(), original_record);
+}
+
 fn trace(
     scenario: &Scenario,
     name: &str,

@@ -66,6 +66,32 @@ async function pageFor(t, options) {
   return page;
 }
 
+test('Command details times out a held request and can be opened again', async t => {
+  const page = await pageFor(t);
+  await page.clock.install();
+  let release;
+  const held = new Promise(resolve => { release = resolve; });
+  await page.route('**/peek?*', async route => {
+    await held;
+    await route.continue();
+  });
+  try {
+    await page.goto(`${origin}/?page=security`);
+    const requested = page.waitForRequest('**/peek?*');
+    await page.locator('.command .state').first().click();
+    await requested;
+    await page.clock.fastForward(15000);
+    await page.getByText('Details unavailable. Reload to try again.', { exact: true })
+      .waitFor({ timeout: 2000 });
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: 'wait' });
+  }
+  await page.locator('[data-close-peek]').click();
+  await page.locator('.command .state').first().click();
+  await page.locator('#peek dt').first().waitFor();
+});
+
 // The Inbox shows one section, a folder, at a time; Details opens from a row.
 const folder = (page, group) => page.locator(`#inbox .folders a[data-group="${group}"]`);
 const shownGroup = page => page.locator('#inbox > .group:not([hidden])');
