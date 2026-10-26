@@ -55,6 +55,13 @@ checks 121 seconds and site checks 60 seconds. These are job execution times
 from the Actions jobs API, excluding queue delay. Linux test execution was
 the critical path; runner changes target that cost while preserving coverage.
 
+The first successful [nextest PR run 40194983650](https://github.com/JacobStephens2/thirdshift/actions/runs/40194983650)
+on the same date took **620 seconds** for `cargo nextest run` and **670 seconds**
+for the Linux `test` job, including a one-second nextest installation. That is
+about **10% less** for both the test step and the job than the baseline above.
+These are separate CI runs, not a controlled benchmark; runner load and build
+cache can vary, so this comparison does not establish the typical saving.
+
 ### Which runs test on macOS
 
 Issue [#893](https://github.com/JacobStephens2/thirdshift/issues/893) moved the
