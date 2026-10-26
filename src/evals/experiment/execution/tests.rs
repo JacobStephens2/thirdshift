@@ -175,7 +175,7 @@ fn trial_installs_its_historical_rust_pin_before_the_session() {
     executable(
         &bin.join("rustup"),
         r#"#!/usr/bin/env python3
-import os, pathlib, sys, tomllib
+import os, pathlib, re, sys
 root = pathlib.Path(os.environ['THIRDSHIFT_EXECUTION_FIXTURE'])
 args = sys.argv[1:]
 if pathlib.Path(sys.argv[0]).name == 'cargo':
@@ -184,9 +184,10 @@ if pathlib.Path(sys.argv[0]).name == 'cargo':
         sys.exit(1)
     print('cargo 1.99.0 (fixture)')
 elif args[:2] == ['toolchain', 'install']:
-    pin = tomllib.loads(pathlib.Path('rust-toolchain.toml').read_text())['toolchain']
-    assert pin['channel'] == '1.99.0', pin
-    assert pin['components'] == ['rustfmt', 'clippy'], pin
+    # No tomllib: macOS runners' python3 predates 3.11.
+    pin = pathlib.Path('rust-toolchain.toml').read_text()
+    assert re.search(r'^channel = "1\.99\.0"$', pin, re.M), pin
+    assert re.search(r'^components = \["rustfmt", "clippy"\]$', pin, re.M), pin
     (root / 'installed').write_text('1.99.0')
     with (root / 'installs').open('a') as log: log.write('install\n')
 else:
