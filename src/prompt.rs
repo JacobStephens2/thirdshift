@@ -229,12 +229,24 @@ pub const BUG_REPRODUCED_LINE: &str = "Bug reproduced: fixed";
 
 /// Diagnose first on a bug Ticket run, retaining its fresh or Continuation facts
 /// and its implementation steps for the reproduced ending only.
-pub fn diagnosing_bugs(issue: &IssueUrl, implementation: &str) -> String {
+///
+/// `merge_base` is set when a Continuation's Issue branch has commits the Base
+/// branch does not. The session reproduces there, then checks the fix on the branch.
+pub fn diagnosing_bugs(issue: &IssueUrl, implementation: &str, merge_base: Option<&str>) -> String {
+    let baseline = match merge_base {
+        Some(commit) => format!(
+            "This Continuation's Issue branch is ahead of the Base branch. \
+             Reproduce at the merge base, then check the fix on the branch.\n\
+             Merge base commit: `{commit}`.\n\n"
+        ),
+        None => String::new(),
+    };
     format!(
         "/thirdshift-diagnosing-bugs {url}\n\
          Use the `thirdshift-diagnosing-bugs` skill before changing code.\n\
          Follow the skill to one of its two endings. Its not reproduced ending replaces the implementation steps below.\n\
          Completion lines (the final message's last line): reproduced: `{BUG_REPRODUCED_LINE}`; not reproduced: `{BUG_NOT_REPRODUCED_LINE}<comment URL>`.\n\n\
+         {baseline}\
          Implementation after reproduction:\n{implementation}",
         url = issue.url,
     )
