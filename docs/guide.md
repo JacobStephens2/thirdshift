@@ -612,7 +612,12 @@ The Experiment watches each Trial with the current detectors, including when
 an Arm's build predates warning detection.
 
 Two workers take alternating Baseline and Candidate Trials, each in a fresh
-prepared repository. Trial artifacts and one result per finished Trial live
+prepared repository. Before the session, the host installs that repository's
+pinned Rust toolchain from `rust-toolchain.toml` or `rust-toolchain`, including
+its listed components. Trials with the same pin share one preparation across
+both workers. An installation failure makes the Trial void with
+`session_unavailable`; it does not count as failed. The sandbox's network
+allowlist stays unchanged. Trial artifacts and one result per finished Trial live
 privately in `~/.thirdshift/evals/experiments/<id>/`. Trials run in a bwrap
 sandbox with a fresh home and provider-only network. Code Graders then score each Trial:
 editing or deleting `.thirdshift-issue.md` or a declared input, moving the Base
