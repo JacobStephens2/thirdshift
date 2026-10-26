@@ -77,7 +77,14 @@ jobs:
       - run: cargo clippy --all-targets -- -D warnings
       # The tests run the binary against real git and fake gh and claude,
       # which the tests build from tests/fakes.rs with rustc.
+      # nextest fills idle slots across test binaries (#1317). Keep the
+      # contributor's cargo test path exercised by the nightly run too.
+      - uses: taiki-e/install-action@nextest
+        if: ${{ github.event_name != 'schedule' }}
+      - run: cargo nextest run
+        if: ${{ github.event_name != 'schedule' }}
       - run: cargo test
+        if: ${{ github.event_name == 'schedule' }}
 
   # Which macOS work this event gets (#893, docs/ci-performance.md): the full
   # suite on pushes to main, nightly, by hand or for a PR into main labelled
@@ -169,8 +176,7 @@ jobs:
       # nextest runs tests from every test binary in parallel, where cargo test
       # runs the binaries one after another; that matters on the slower macOS
       # runners. Without a lib target there are no doctests for it to miss.
-      # The Linux job keeps plain cargo test, so the suite also runs the way
-      # a contributor runs it locally.
+      # Linux also uses nextest, except for its nightly cargo test run.
       - uses: taiki-e/install-action@nextest
       # Hash partitions cover the same suite once across all four runners.
       # Pushes to main report every failure in a shard in the same run (#1325).
