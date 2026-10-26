@@ -1,0 +1,506 @@
+//! Custom processes: sequential skill Steps from `~/.thirdshift/processes/<name>.toml`.
+
+use std::collections::BTreeSet;
+use std::fmt::Write;
+use std::fs;
+use std::io::ErrorKind;
+use std::path::{Path, PathBuf};
+use std::time::Instant;
+
+use anyhow::{Context, Result, anyhow};
+use toml_edit::{Document, Item, Key, Table};
+
+use crate::args::ProcessAction;
+use crate::config::UserConfig;
+use crate::git::Git;
+use crate::harness::{Asked, Choice};
+use crate::logs::{self, Begin, Work};
+use crate::skill;
+use crate::worktree::SkillWorktree;
+use crate::{interrupt, launch, progress, prompt, skills};
+
+const RESERVED: &[&str] = &[
+    "check",
+    "list",
+    "ticket-run",
+    "spec-run",
+    "architect-run",
+    "pickup-run",
+    "security-run",
+];
+
+struct ProcessFile {
+    description: String,
+    steps: Vec<StepDraft>,
+}
+
+struct StepDraft {
+    name: String,
+    name_line: usize,
+    skill: String,
+    skill_line: usize,
+}
+
+struct ResolvedStep {
+    name: String,
+    skill_name: String,
+    skill_path: PathBuf,
+}
+
+struct Prepared {
+    worktree: SkillWorktree,
+    _written: WrittenGuard,
+    choice: Choice,
+    description: String,
+    steps: Vec<ResolvedStep>,
+}
+
+struct WrittenGuard;
+
+impl Drop for WrittenGuard {
+    fn drop(&mut self) {
+        skills::remove_written();
+    }
+}
+
+pub fn execute(action: ProcessAction) -> Result<String> {
+    match action {
+        ProcessAction::List => list(),
+        ProcessAction::Check(name) => check(&name),
+        ProcessAction::Run(name) => run(&name),
+    }
+}
+
+fn list() -> Result<String> {
+    let dir = processes_dir()?;
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(String::new()),
+        Err(error) => {
+            return Err(error).with_context(|| format!("could not list {}", dir.display()));
+        }
+    };
+    let mut lines = Vec::new();
+    for entry in entries {
+        let entry = entry.with_context(|| format!("could not list {}", dir.display()))?;
+        let file_name = entry.file_name();
+        let Some(name) = file_name
+            .to_str()
+            .and_then(|name| name.strip_suffix(".toml"))
+        else {
+            continue;
+        };
+        if !single_component(name) || reserved(name) {
+            continue;
+        }
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let Ok(text) = fs::read_to_string(&path) else {
+            continue;
+        };
+        let Ok(file) = parse(&path, &text) else {
+            continue;
+        };
+        lines.push(format!("{name}: {}", file.description));
+    }
+    lines.sort();
+    Ok(lines.join("\n"))
+}
+
+fn check(name: &str) -> Result<String> {
+    interrupt::install()?;
+    let config = UserConfig::load()?;
+    let prepared = prepare(name, &config)?;
+    Ok(plan(name, &prepared))
+}
+
+fn run(name: &str) -> Result<String> {
+    interrupt::install()?;
+    let config = UserConfig::load()?;
+    let prepared = prepare(name, &config)?;
+    let repo = launch::repo()?;
+    logs::begin(Begin::Process(name));
+    logs::configured(&config);
+    logs::started(Work::Process { repo: &repo, name }, &prepared.choice);
+    let result = execute_steps(name, &prepared);
+    let (outcome, cause) = classify(&result);
+    drop(prepared);
+    logs::ended(&outcome);
+    logs::complete(&outcome, cause.as_deref());
+    result
+}
+
+fn execute_steps(process: &str, prepared: &Prepared) -> Result<String> {
+    let adapter = prepared.choice.harness.adapter();
+    skills::link_into(prepared.worktree.path(), adapter)?;
+    adapter.link_instruction_fallback(prepared.worktree.path())?;
+    let results = logs::command_log_path()
+        .context("a Process has no Command log")?
+        .with_extension("steps");
+    fs::create_dir_all(&results)
+        .with_context(|| format!("could not create {}", results.display()))?;
+    let mut earlier = Vec::new();
+    let mut last = String::new();
+    for step in &prepared.steps {
+        let started = Instant::now();
+        match run_step(process, prepared, step, &earlier) {
+            Ok(message) => {
+                let duration = progress::duration(started.elapsed());
+                progress::step(format_args!("step {}: {duration} succeeded", step.name));
+                let path = results.join(format!("{}.txt", step.name));
+                fs::write(&path, &message)
+                    .with_context(|| format!("could not write {}", path.display()))?;
+                earlier.push((step.name.clone(), path));
+                last = message;
+            }
+            Err(error) => {
+                let duration = progress::duration(started.elapsed());
+                let word = if interrupt::requested() {
+                    "interrupted"
+                } else {
+                    "failed"
+                };
+                progress::step(format_args!(
+                    "step {}: {duration} {word}: {}",
+                    step.name,
+                    one_line(&error)
+                ));
+                return Err(error);
+            }
+        }
+    }
+    Ok(last)
+}
+
+fn run_step(
+    process: &str,
+    prepared: &Prepared,
+    step: &ResolvedStep,
+    earlier: &[(String, PathBuf)],
+) -> Result<String> {
+    crate::resources::wait()?;
+    progress::step(format_args!(
+        "running step {} with {}",
+        step.name, prepared.choice
+    ));
+    let prompt = prompt::process_step(
+        process,
+        &step.name,
+        &step.skill_name,
+        &step.skill_path,
+        earlier,
+    );
+    skill::run_session(
+        prepared.worktree.path(),
+        &prepared.choice,
+        &format!("Step {}", step.name),
+        &prompt,
+    )
+}
+
+fn classify(result: &Result<String>) -> (String, Option<String>) {
+    match result {
+        Ok(_) => ("succeeded".to_string(), None),
+        Err(error) => {
+            let outcome = if interrupt::requested() {
+                "interrupted"
+            } else {
+                "failed"
+            };
+            (outcome.to_string(), Some(one_line(error)))
+        }
+    }
+}
+
+fn one_line(error: &anyhow::Error) -> String {
+    format!("{error:#}")
+        .replace(['\n', '\r'], " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn plan(name: &str, prepared: &Prepared) -> String {
+    let mut text = format!(
+        "{name}: {description}\nthrowaway worktree at the Base branch\nharness: {choice} ({chosen})\n",
+        description = prepared.description,
+        choice = prepared.choice,
+        chosen = prepared.choice.chosen_by,
+    );
+    for step in &prepared.steps {
+        let _ = writeln!(
+            text,
+            "{}: {} {}",
+            step.name,
+            step.skill_name,
+            step.skill_path.display()
+        );
+    }
+    text.trim_end().to_string()
+}
+
+fn prepare(name: &str, config: &UserConfig) -> Result<Prepared> {
+    let path = process_path(name)?;
+    refuse_reserved(&path, name)?;
+    let text = read_process(&path)?;
+    let file = parse(&path, &text)?;
+    let worktree = SkillWorktree::create(&Git::new(std::env::current_dir()?))?;
+    let written = WrittenGuard;
+    let mut steps = Vec::new();
+    for step in &file.steps {
+        steps.push(resolve(&path, step, worktree.path())?);
+    }
+    let mut choice = Choice::of(&Asked::default(), &config.harness);
+    choice.check_without_probe()?;
+    Ok(Prepared {
+        worktree,
+        _written: written,
+        choice,
+        description: file.description,
+        steps,
+    })
+}
+
+fn resolve(path: &Path, step: &StepDraft, worktree: &Path) -> Result<ResolvedStep> {
+    match skills::find(worktree, &step.skill) {
+        Ok(skill) => Ok(ResolvedStep {
+            name: step.name.clone(),
+            skill_name: skill.name,
+            skill_path: skill.path,
+        }),
+        Err(error) => Err(rule(
+            path,
+            step.skill_line,
+            "skill not found",
+            format!("{error:#}"),
+        )),
+    }
+}
+
+fn read_process(path: &Path) -> Result<String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(text),
+        Err(error) if error.kind() == ErrorKind::NotFound => {
+            Err(rule(path, 1, "version", "version = 1 is required"))
+        }
+        Err(error) => Err(rule(
+            path,
+            1,
+            "version",
+            format!("could not read the file: {error}"),
+        )),
+    }
+}
+
+fn refuse_reserved(path: &Path, name: &str) -> Result<()> {
+    if reserved(name) {
+        Err(rule(
+            path,
+            1,
+            "reserved name",
+            format!("{name} is reserved"),
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn parse(path: &Path, text: &str) -> Result<ProcessFile> {
+    let doc = Document::parse(text).map_err(|error: toml_edit::TomlError| {
+        let line = error
+            .span()
+            .map(|span| line_of(text, span.start))
+            .unwrap_or(1);
+        rule(path, line, "version", error)
+    })?;
+    let table = doc.as_table();
+    let mut saw_version = false;
+    let mut description = None;
+    let mut steps = None;
+    for (key, item) in table.iter() {
+        let line = key_line(text, table.key(key));
+        match key {
+            "version" => {
+                let Some(value) = item.as_integer() else {
+                    return Err(rule(path, line, "version", "version must be the integer 1"));
+                };
+                if value != 1 {
+                    return Err(rule(path, line, "version", "version must be 1"));
+                }
+                saw_version = true;
+            }
+            "description" => {
+                description = Some(description_of(path, line, item)?);
+            }
+            "steps" => {
+                let parsed = parse_steps(path, text, line, item)?;
+                if parsed.is_empty() {
+                    return Err(rule(path, line, "steps", "at least one step is required"));
+                }
+                steps = Some(parsed);
+            }
+            other => return Err(rule(path, line, "unknown key", other)),
+        }
+    }
+    if !saw_version {
+        return Err(rule(path, 1, "version", "version = 1 is required"));
+    }
+    let Some(description) = description else {
+        return Err(rule(path, 1, "description", "description is required"));
+    };
+    let Some(steps) = steps else {
+        return Err(rule(path, 1, "steps", "at least one step is required"));
+    };
+    Ok(ProcessFile { description, steps })
+}
+
+fn description_of(path: &Path, line: usize, item: &Item) -> Result<String> {
+    let Some(value) = item.as_str() else {
+        return Err(rule(
+            path,
+            line,
+            "description",
+            "description must be a string",
+        ));
+    };
+    if value.is_empty() {
+        return Err(rule(
+            path,
+            line,
+            "description",
+            "description must not be empty",
+        ));
+    }
+    if value.chars().any(|c| c == '\n' || c == '\r') {
+        return Err(rule(
+            path,
+            line,
+            "description",
+            "description must be one line",
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn parse_steps(path: &Path, text: &str, line: usize, item: &Item) -> Result<Vec<StepDraft>> {
+    let Some(tables) = item.as_array_of_tables() else {
+        return Err(rule(
+            path,
+            line,
+            "steps",
+            "steps must be an array of tables",
+        ));
+    };
+    let mut steps = Vec::new();
+    let mut names = BTreeSet::new();
+    for table in tables.iter() {
+        let table_line = table
+            .span()
+            .map(|span| line_of(text, span.start))
+            .unwrap_or(line);
+        let step = parse_step(path, text, table_line, table)?;
+        if !names.insert(step.name.clone()) {
+            return Err(rule(
+                path,
+                step.name_line,
+                "step name",
+                format!("duplicate step {}", step.name),
+            ));
+        }
+        steps.push(step);
+    }
+    Ok(steps)
+}
+
+fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Result<StepDraft> {
+    let mut name = None;
+    let mut skill = None;
+    for (key, item) in table.iter() {
+        let line = key_line(text, table.key(key));
+        match key {
+            "name" => name = Some(step_name(path, line, item)?),
+            "skill" => skill = Some(step_skill(path, line, item)?),
+            other => return Err(rule(path, line, "unknown key", other)),
+        }
+    }
+    let Some((name, name_line)) = name else {
+        return Err(rule(path, table_line, "step name", "a step needs a name"));
+    };
+    let Some((skill, skill_line)) = skill else {
+        return Err(rule(
+            path,
+            name_line,
+            "exactly one kind",
+            format!("step {name} has no kind"),
+        ));
+    };
+    Ok(StepDraft {
+        name,
+        name_line,
+        skill,
+        skill_line,
+    })
+}
+
+fn step_name(path: &Path, line: usize, item: &Item) -> Result<(String, usize)> {
+    let Some(value) = item.as_str() else {
+        return Err(rule(path, line, "step name", "name must be a string"));
+    };
+    if !single_component(value) {
+        return Err(rule(
+            path,
+            line,
+            "step name",
+            "name must be a single path component",
+        ));
+    }
+    Ok((value.to_string(), line))
+}
+
+fn step_skill(path: &Path, line: usize, item: &Item) -> Result<(String, usize)> {
+    let Some(value) = item.as_str() else {
+        return Err(rule(
+            path,
+            line,
+            "exactly one kind",
+            "skill must be a string",
+        ));
+    };
+    Ok((value.to_string(), line))
+}
+
+fn processes_dir() -> Result<PathBuf> {
+    Ok(crate::config::home()?.join(".thirdshift/processes"))
+}
+
+fn process_path(name: &str) -> Result<PathBuf> {
+    Ok(processes_dir()?.join(format!("{name}.toml")))
+}
+
+fn reserved(name: &str) -> bool {
+    RESERVED.contains(&name)
+}
+
+fn single_component(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0', '\n', '\r'])
+}
+
+fn line_of(text: &str, offset: usize) -> usize {
+    text.bytes()
+        .take(offset)
+        .filter(|byte| *byte == b'\n')
+        .count()
+        + 1
+}
+
+fn key_line(text: &str, key: Option<&Key>) -> usize {
+    key.and_then(Key::span)
+        .map(|span| line_of(text, span.start))
+        .unwrap_or(1)
+}
+
+fn rule(path: &Path, line: usize, rule: &str, detail: impl std::fmt::Display) -> anyhow::Error {
+    anyhow!("{path}:{line}: {rule}: {detail}", path = path.display())
+}

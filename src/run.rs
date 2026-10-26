@@ -709,7 +709,8 @@ mod tests {
                 | Work::ArchitectRun(_)
                 | Work::SecurityRun(_)
                 | Work::ScoringRun(_)
-                | Work::Experiment(_) => {
+                | Work::Experiment(_)
+                | Work::Process { .. } => {
                     panic!("not a Run's work")
                 }
             };

@@ -463,6 +463,9 @@ thirdshift pickup base &lt;branch&gt;     # do that with &lt;branch&gt; as the B
 thirdshift secure                   # audit the Base branch and record findings privately (see Security runs)
 thirdshift secure base &lt;branch&gt;     # do that with &lt;branch&gt; as the Base branch, from a clone on any branch
 thirdshift skill &lt;skill&gt; [issue &lt;issue&gt;]   # run one skill headlessly and print its final message
+thirdshift process                      # list Custom processes (experimental)
+thirdshift process &lt;name&gt;               # run a Custom process (experimental)
+thirdshift process check &lt;name&gt;         # validate one and print its plan (experimental)
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
 thirdshift scores [&lt;pull request&gt;] [--json] # show Scores and calibration
 thirdshift scores &lt;pull request&gt; --mine [--json] # enter your five Scores
@@ -748,6 +751,51 @@ session exits <code>0</code>; a failed or incomplete session exits non-zero.</p>
 <p>The worktree is kept when it has uncommitted changes, commits absent from all
 remote-tracking branches, or uncertain ownership. Otherwise it is removed. No
 Command record, Console entry or Session log is created for a standalone skill.</p>
+</div></details>
+<details class="fold"><summary><h3>Custom processes</h3></summary>
+<div class="manual-content" id="custom-processes">
+<p>A Custom process runs skill Steps in order. It is experimental. Write
+<code>~/.thirdshift/processes/&lt;name&gt;.toml</code>. The name is the file&#39;s stem.</p>
+<pre><code class="language-toml">version = 1
+description = &quot;Gather notes, then review them&quot;
+
+[[steps]]
+name = &quot;gather&quot;
+skill = &quot;thirdshift-to-spec&quot;
+
+[[steps]]
+name = &quot;review&quot;
+skill = &quot;thirdshift-code-review&quot;
+</code></pre>
+<p><code>version</code> must be <code>1</code>. Each Step has a <code>name</code> and one kind. This version&#39;s kind
+is <code>skill</code>, looked up the same way as <code>thirdshift skill</code>.</p>
+<pre><code class="language-sh">thirdshift process
+thirdshift process check gather-review
+thirdshift process gather-review
+</code></pre>
+<p><code>thirdshift process</code> lists each Custom process and its description. <code>check</code>
+validates the file and prints the plan: the description, a throwaway worktree
+at the Base branch, the Command&#39;s Harness, Model and Effort, and each Step&#39;s
+skill. It starts no session. Running the process starts the Steps in order in
+one throwaway worktree, detached at the checkout&#39;s committed HEAD (the Base
+branch, when you start from it) and cleaned up as a standalone skill&#39;s
+worktree is. The launch checkout stays untouched.</p>
+<p>Every Step uses the Command&#39;s Harness, Model and Effort: the User config
+default, or the Harness default when that is unset. Each Step&#39;s final message
+is stored beside the Command log. The next Step&#39;s session prompt names those
+paths. The last Step&#39;s final message goes to stdout. Progress and failure
+causes go to stderr. A failed Step fails the process and later Steps do not
+run. Exit codes match <code>thirdshift skill</code>: <code>0</code> when the last Step finishes,
+<code>1</code> when a Step or a check fails, <code>2</code> when the arguments are wrong.</p>
+<p><code>check</code> and running refuse a missing or wrong <code>version</code>, an unknown key, a
+Step without exactly one kind, a skill that cannot be found, and a reserved
+name (<code>check</code>, <code>list</code>, <code>ticket-run</code>, <code>spec-run</code>, <code>architect-run</code>,
+<code>pickup-run</code>, <code>security-run</code>). The refusal names the rule and the file line,
+and starts no session.</p>
+<p>The Command is recorded as kind <code>Process</code>, with the process name. Its Command
+log has one line per Step: the Step&#39;s name, duration, outcome and cause. Stop
+and Ctrl-C interrupt it the way they interrupt other Commands, and
+<code>[resources]</code> is checked before each Step&#39;s session.</p>
 </div></details>
 <details class="fold"><summary><h3>User config</h3></summary>
 <div class="manual-content" id="user-config">

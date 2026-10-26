@@ -29,6 +29,7 @@ mod pass;
 mod pickup;
 mod poll;
 mod process;
+mod processes;
 mod progress;
 mod prompt;
 #[cfg(test)]
@@ -90,6 +91,9 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift secure                              Audit and record findings privately
        thirdshift secure base <branch>                Use <branch> as the Base branch
        thirdshift skill <skill> [issue <issue>]        Run one skill and print its final message
+       thirdshift process                          List Custom processes (experimental)
+       thirdshift process <name>                   Run a Custom process (experimental)
+       thirdshift process check <name>             Validate a Custom process and print its plan (experimental)
        thirdshift score                               Sample merged factory work and propose Bug origins
        thirdshift scores [<pull request>] [--mine] [--json]  Show Scores; --mine enters yours
        thirdshift bug-origins [<issue>] [--json]       Show origins; --confirm / --correct <pr> / --none settles one
@@ -299,6 +303,12 @@ fn main() -> ExitCode {
         }
         Ok(Command::ReleaseSummary) => return release_summary(),
         Ok(Command::Skill { name, issue }) => return printed(skill::run(&name, issue)),
+        Ok(Command::Process(action)) => {
+            return match processes::execute(action) {
+                Ok(text) if text.is_empty() => ExitCode::SUCCESS,
+                other => printed(other),
+            };
+        }
         Ok(Command::Trial(request)) => return printed(trial::run(&request)),
         Ok(Command::OomExec { program, args }) => match scope::oom_exec(&program, &args) {
             // Unreachable on success: `exec` replaces this process.

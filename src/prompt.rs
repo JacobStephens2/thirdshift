@@ -1,5 +1,7 @@
 //! The prompts agent sessions are started with.
 
+use std::fmt::Write;
+
 use crate::ci::{self, FailedChecks};
 use crate::issue::IssueUrl;
 use crate::labels::{NEEDS_TRIAGE, READY_FOR_AGENT};
@@ -96,6 +98,40 @@ pub fn skill(name: &str, path: &std::path::Path, issue: Option<&IssueUrl>) -> St
     format!(
         "{invocation}Use the {name} skill. Read and follow `{path}`.\n{task}{SOURCE_EDITS}{HEADLESS}",
         path = path.display(),
+    )
+}
+
+/// One Step of a Custom process. `earlier` is each finished Step's name and
+/// the path of its final message, outside the worktree.
+pub fn process_step(
+    process: &str,
+    step: &str,
+    skill_name: &str,
+    skill_path: &std::path::Path,
+    earlier: &[(String, std::path::PathBuf)],
+) -> String {
+    let invocation = if skill_name.starts_with("thirdshift-") {
+        format!("/{skill_name}\n")
+    } else {
+        String::new()
+    };
+    let mut earlier_text = if earlier.is_empty() {
+        "This is the first Step. No earlier Step has a result.\n".to_string()
+    } else {
+        String::new()
+    };
+    for (name, path) in earlier {
+        let _ = writeln!(
+            earlier_text,
+            "Earlier Step result {name}: {}",
+            path.display()
+        );
+    }
+    format!(
+        "{invocation}Use the {skill_name} skill. Read and follow `{path}`.\n\
+         This is Step {step} of the Custom process {process}.\n\
+         {earlier_text}{SOURCE_EDITS}{HEADLESS}",
+        path = skill_path.display(),
     )
 }
 

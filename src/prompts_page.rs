@@ -19,7 +19,7 @@ use crate::prompt;
 use crate::session::{claude_args, codex_args};
 use crate::skills::SKILLS;
 
-use Sender::{ArchitectRun, Experiment, ScoringRun, SecurityRun, Trial, Units};
+use Sender::{ArchitectRun, Experiment, Process, ScoringRun, SecurityRun, Trial, Units};
 
 /// A press unit on the home page, which each prompt and skill links back to.
 struct Unit {
@@ -60,7 +60,13 @@ const SESSION_ID: &str = "<session id>";
 const PROMPT: &str = "<prompt>";
 const MODEL: &str = "<model>";
 const EFFORT: &str = "<effort>";
-const PLACEHOLDERS: [&str; 20] = [
+const PROCESS: &str = "<process>";
+const STEP: &str = "<step>";
+const SKILL_NAME: &str = "<skill>";
+const SKILL_PATH: &str = "<skill path>";
+const EARLIER_STEP: &str = "<earlier step>";
+const EARLIER_RESULT: &str = "<earlier step result>";
+const PLACEHOLDERS: [&str; 26] = [
     ISSUE_URL,
     SPEC_URL,
     NUMBER,
@@ -81,6 +87,12 @@ const PLACEHOLDERS: [&str; 20] = [
     prompt::REVIEW_REPORTS_DIRECTORY,
     prompt::SECURITY_REVIEW_REPORT_FILE,
     prompt::SECURITY_REVIEW_MERGE_BASE,
+    PROCESS,
+    STEP,
+    SKILL_NAME,
+    SKILL_PATH,
+    EARLIER_STEP,
+    EARLIER_RESULT,
 ];
 
 /// Who sends a prompt.
@@ -96,6 +108,8 @@ enum Sender {
     ScoringRun,
     /// An Eval Trial, outside the Run's press units.
     Trial,
+    /// A Step of a Custom process.
+    Process,
 }
 
 /// A prompt as the page shows it: when it is sent, by whom, and its text
@@ -306,6 +320,35 @@ fn prompts() -> Vec<Prompt> {
             when: "Continues any session, once, that ended its turn with background work still running, which was killed with it.",
             sender: Units(&[IMPLEMENT, REVIEW, FINISH]),
             text: prompt::resume(&[BACKGROUND_WORK]),
+        },
+        Prompt {
+            id: "prompt-process-step",
+            title: "Custom process Step",
+            when: "Starts the first Step of a Custom process. No earlier Step has a result.",
+            sender: Process,
+            text: prompt::process_step(
+                PROCESS,
+                STEP,
+                SKILL_NAME,
+                std::path::Path::new(SKILL_PATH),
+                &[],
+            ),
+        },
+        Prompt {
+            id: "prompt-process-step-later",
+            title: "Custom process Step, with an earlier result",
+            when: "Starts a later Step of a Custom process. The prompt names the path of each earlier Step's final message.",
+            sender: Process,
+            text: prompt::process_step(
+                PROCESS,
+                STEP,
+                SKILL_NAME,
+                std::path::Path::new(SKILL_PATH),
+                &[(
+                    EARLIER_STEP.to_string(),
+                    std::path::PathBuf::from(EARLIER_RESULT),
+                )],
+            ),
         },
     ];
     with_sentinel
@@ -661,6 +704,7 @@ fn sent_by(sender: &Sender) -> String {
         Experiment => "an Experiment, after its Trials".to_string(),
         ScoringRun => "a Scoring run".to_string(),
         Trial => "an Eval Trial, outside the Run's units".to_string(),
+        Process => "a Custom process".to_string(),
     }
 }
 
@@ -799,6 +843,8 @@ mod tests {
                     | "prompt-review-repair"
                     | "prompt-ci-fix-repair"
                     | "prompt-ci-fix-repair-inherited"
+                    | "prompt-process-step"
+                    | "prompt-process-step-later"
             );
             for instruction in [
                 "For source edits, prefer an available structured patch/edit tool",

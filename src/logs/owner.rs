@@ -144,6 +144,7 @@ pub(super) fn allocate<F: Files>(
         Work::SecurityRun(_) => (CommandKind::Secure, String::new()),
         Work::ScoringRun(_) => (CommandKind::Scoring, String::new()),
         Work::Experiment(_) => (CommandKind::Experiment, String::new()),
+        Work::Process { .. } => (CommandKind::Process, String::new()),
     };
     let folder = root.join("commands").join(kind.folder());
     let allocated = tempfile::Builder::new()

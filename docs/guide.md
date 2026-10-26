@@ -504,6 +504,9 @@ thirdshift pickup base <branch>     # do that with <branch> as the Base branch, 
 thirdshift secure                   # audit the Base branch and record findings privately (see Security runs)
 thirdshift secure base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
 thirdshift skill <skill> [issue <issue>]   # run one skill headlessly and print its final message
+thirdshift process                      # list Custom processes (experimental)
+thirdshift process <name>               # run a Custom process (experimental)
+thirdshift process check <name>         # validate one and print its plan (experimental)
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
 thirdshift scores [<pull request>] [--json] # show Scores and calibration
 thirdshift scores <pull request> --mine [--json] # enter your five Scores
@@ -824,6 +827,60 @@ session exits `0`; a failed or incomplete session exits non-zero.
 The worktree is kept when it has uncommitted changes, commits absent from all
 remote-tracking branches, or uncertain ownership. Otherwise it is removed. No
 Command record, Console entry or Session log is created for a standalone skill.
+
+### Custom processes
+
+A Custom process runs skill Steps in order. It is experimental. Write
+`~/.thirdshift/processes/<name>.toml`. The name is the file's stem.
+
+```toml
+version = 1
+description = "Gather notes, then review them"
+
+[[steps]]
+name = "gather"
+skill = "thirdshift-to-spec"
+
+[[steps]]
+name = "review"
+skill = "thirdshift-code-review"
+```
+
+`version` must be `1`. Each Step has a `name` and one kind. This version's kind
+is `skill`, looked up the same way as `thirdshift skill`.
+
+```sh
+thirdshift process
+thirdshift process check gather-review
+thirdshift process gather-review
+```
+
+`thirdshift process` lists each Custom process and its description. `check`
+validates the file and prints the plan: the description, a throwaway worktree
+at the Base branch, the Command's Harness, Model and Effort, and each Step's
+skill. It starts no session. Running the process starts the Steps in order in
+one throwaway worktree, detached at the checkout's committed HEAD (the Base
+branch, when you start from it) and cleaned up as a standalone skill's
+worktree is. The launch checkout stays untouched.
+
+Every Step uses the Command's Harness, Model and Effort: the User config
+default, or the Harness default when that is unset. Each Step's final message
+is stored beside the Command log. The next Step's session prompt names those
+paths. The last Step's final message goes to stdout. Progress and failure
+causes go to stderr. A failed Step fails the process and later Steps do not
+run. Exit codes match `thirdshift skill`: `0` when the last Step finishes,
+`1` when a Step or a check fails, `2` when the arguments are wrong.
+
+`check` and running refuse a missing or wrong `version`, an unknown key, a
+Step without exactly one kind, a skill that cannot be found, and a reserved
+name (`check`, `list`, `ticket-run`, `spec-run`, `architect-run`,
+`pickup-run`, `security-run`). The refusal names the rule and the file line,
+and starts no session.
+
+The Command is recorded as kind `Process`, with the process name. Its Command
+log has one line per Step: the Step's name, duration, outcome and cause. Stop
+and Ctrl-C interrupt it the way they interrupt other Commands, and
+`[resources]` is checked before each Step's session.
 
 ### User config
 

@@ -17,6 +17,13 @@ use crate::notification::NotificationAsk;
 use crate::ready::PickupOrder;
 use crate::run::Goal;
 
+/// What `thirdshift process` was asked to do.
+pub enum ProcessAction {
+    List,
+    Check(String),
+    Run(String),
+}
+
 /// What thirdshift was asked to do.
 pub enum Command {
     Help,
@@ -112,6 +119,7 @@ pub enum Command {
         name: String,
         issue: Option<IssueInput>,
     },
+    Process(ProcessAction),
     /// Internal versioned session protocol for Evals.
     Trial(std::path::PathBuf),
     /// Internal scope wrapper for Evals: raise this scope's own `oom_score_adj`,
@@ -719,6 +727,7 @@ pub fn parse(args: &[String]) -> Result<Command> {
                 _ => bail!("usage: thirdshift skill <skill> [issue <issue>]"),
             };
         }
+        Some("process") => return parse_process(&args[1..]).map(Command::Process),
         Some("setup") => {
             return match &args[1..] {
                 [] => Ok(Command::Setup),
@@ -821,6 +830,25 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
         "week and repository filters apply only to metrics trends"
     );
     Ok(asked)
+}
+
+fn parse_process(args: &[String]) -> Result<ProcessAction> {
+    match args {
+        [] => Ok(ProcessAction::List),
+        [keyword] if keyword == "check" => bail!("usage: thirdshift process check <name>"),
+        [name] => Ok(ProcessAction::Run(process_name(name)?)),
+        [keyword, name] if keyword == "check" => Ok(ProcessAction::Check(process_name(name)?)),
+        _ => bail!("usage: thirdshift process [check <name> | <name>]"),
+    }
+}
+
+/// A process name is one path component. A slash is an argument error, not a
+/// file rule: the file is `~/.thirdshift/processes/<name>.toml`.
+fn process_name(name: &str) -> Result<String> {
+    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
+        bail!("usage: thirdshift process [check <name> | <name>]");
+    }
+    Ok(name.to_string())
 }
 
 /// Parse the arguments after `architect`: at most one focus, and its flags,
