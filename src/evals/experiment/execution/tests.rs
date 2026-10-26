@@ -167,6 +167,46 @@ print(json.dumps(dict(version=1, outcome='succeeded', timings=dict(total_ms=12, 
 "#;
 
 #[test]
+fn ended_muse_trial_drops_model_catalog_cache() {
+    if isolated(&[]) {
+        return;
+    }
+    let mut fixture = Fixture::new(
+        r#"
+catalog = output / 'home/.local/share/muse/model-catalog'
+catalog.mkdir(parents=True)
+(catalog / 'models.json').write_text('{"rows": []}')
+native = output / 'home/.local/share/muse/sessions/retained/session.jsonl'
+native.parent.mkdir(parents=True)
+native.write_text('Native transcript\n')
+report = output / 'standards.md'
+report.write_text('Review complete.\n')
+print(json.dumps(dict(version=1, outcome='succeeded', timings=dict(total_ms=12, session_ms=10), reports=dict(standards=str(report), spec=None), void_cause=None, cause=None, session_id=None, log=None, model_evidence=None)))
+"#,
+    );
+    fixture.setup.harness = "muse".into();
+    fixture
+        .execution(5)
+        .run(fixture.request(), |attempt, _, _| {
+            assert_eq!(
+                fs::read_to_string(
+                    attempt.join("session/home/.local/share/muse/sessions/retained/session.jsonl")
+                )
+                .unwrap(),
+                "Native transcript\n"
+            );
+            assert!(
+                !attempt
+                    .join("session/home/.local/share/muse/model-catalog")
+                    .exists(),
+                "ended Muse Trial retained its model catalog cache"
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn ended_trial_sessions_drop_caches_and_keep_native_records_for_every_outcome() {
     if isolated(&[]) {
         return;

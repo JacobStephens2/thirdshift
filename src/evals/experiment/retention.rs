@@ -14,7 +14,11 @@ pub(super) struct Caches(pub PathBuf);
 
 impl Drop for Caches {
     fn drop(&mut self) {
-        for relative in ["session/home/.codex/cache", "session/home/.cache"] {
+        for relative in [
+            "session/home/.codex/cache",
+            "session/home/.cache",
+            "session/home/.local/share/muse/model-catalog",
+        ] {
             let path = self.0.join(relative);
             warn(&path, || {
                 let mut parent = self.0.clone();

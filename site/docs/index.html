@@ -659,8 +659,9 @@ Both views show Void counts and causes per Arm, and report repeated
 Trial-only memory-cap stops as a finding against that Arm.</p>
 <p>Each attempt keeps its request, result, start record, stdout, stderr, scope,
 traces, Session reports and summaries, model evidence and native transcripts.
-Harness caches in the Session home&#39;s <code>.codex/cache/</code> and <code>.cache/</code> are removed
-when the Trial session ends, whatever its outcome. After grading finishes and
+Harness caches in the Session home&#39;s <code>.codex/cache/</code>, <code>.cache/</code> and
+<code>.local/share/muse/model-catalog/</code> are removed when the Trial session ends,
+whatever its outcome. After grading finishes and
 the Verdict has no pending rechecks, every attempt&#39;s <code>repository/</code> copy is
 removed. Paused or interrupted Experiments keep their repositories for resume;
 waiting rechecks keep them until the last recheck is recorded. Grader output,
