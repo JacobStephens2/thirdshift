@@ -120,23 +120,46 @@ fn repository_skills(worktree: &Path) -> Result<Vec<(String, PathBuf)>> {
     Ok(skills)
 }
 
+struct HomeSkill {
+    name: String,
+    skill_md: PathBuf,
+}
+
+struct HomeCatalog {
+    root: PathBuf,
+    skills: Vec<HomeSkill>,
+}
+
 /// Home skills, each `~/.thirdshift/skills/<name>/SKILL.md` that resolves
 /// inside that directory. No home directory, or `HOME` unset, is none.
 fn home_skills() -> Result<Vec<(String, PathBuf)>> {
+    Ok(read_home_skills()?
+        .map(|catalog| {
+            catalog
+                .skills
+                .into_iter()
+                .map(|skill| (skill.name, skill.skill_md))
+                .collect()
+        })
+        .unwrap_or_default())
+}
+
+/// The canonical home skills directory and the skills inside it.
+fn read_home_skills() -> Result<Option<HomeCatalog>> {
     let Ok(home) = crate::config::home() else {
-        return Ok(Vec::new());
+        return Ok(None);
     };
     let skills_dir = home.join(".thirdshift/skills");
     let entries = match fs::read_dir(&skills_dir) {
         Ok(entries) => entries,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(error).with_context(|| format!("could not list {}", skills_dir.display()));
         }
     };
     let root = match fs::canonicalize(&skills_dir) {
         Ok(root) => root,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(None),
         Err(error) => {
             return Err(error)
                 .with_context(|| format!("could not resolve {}", skills_dir.display()));
@@ -156,9 +179,12 @@ fn home_skills() -> Result<Vec<(String, PathBuf)>> {
         if !resolved_inside(&root, &path) || !path.is_file() {
             continue;
         }
-        skills.push((name, path));
+        skills.push(HomeSkill {
+            name,
+            skill_md: path,
+        });
     }
-    Ok(skills)
+    Ok(Some(HomeCatalog { root, skills }))
 }
 
 /// A single path component that can be one line of `.git/info/exclude`.
@@ -192,9 +218,11 @@ static WRITTEN: Mutex<Option<TempDir>> = Mutex::new(None);
 /// Link every Factory skill into `worktree`'s project skills for `adapter`,
 /// `.claude/skills/` or `.agents/skills/`, writing them out first if the
 /// Command has not yet, and make sure the repository's `.git/info/exclude`
-/// keeps them out of git. Home skills are linked under their own names the
-/// same way, except where the repository already has that skill. The links
-/// are left in place: they go with the worktree.
+/// keeps them out of git. Home skills are copied into that same folder and
+/// linked under their own names, except where the repository already has
+/// that skill or the name is a Factory skill. The copy is what a Trial
+/// reads: its sandbox binds this folder and not `~/.thirdshift/skills`. The
+/// links are left in place: they go with the worktree.
 pub fn link_into(worktree: &Path, adapter: &dyn Adapter) -> Result<()> {
     let dir = adapter.project_skills();
     // Refuse an unsafe path before writing skills or updating excludes.
@@ -211,34 +239,96 @@ pub fn link_into(worktree: &Path, adapter: &dyn Adapter) -> Result<()> {
 }
 
 /// Link each home skill under its own name, unless the repository already has
-/// that skill or the destination is some other entry. Each linked name is
-/// excluded on its own, because home skills do not share the `thirdshift-`
-/// prefix. The entry stays, as the Factory pattern does.
+/// that skill, the name is a Factory skill, or the destination is some other
+/// entry. The worktree link points at a copy in the Factory skills folder.
+/// Each linked name is excluded on its own, because home skills do not share
+/// the `thirdshift-` prefix. The entry stays, as the Factory pattern does.
 fn link_home_skills(worktree: &Path, project_skills: &CheckedDirectory, dir: &str) -> Result<()> {
-    let skills = home_skills()?;
-    if skills.is_empty() {
+    let Some(catalog) = read_home_skills()? else {
+        return Ok(());
+    };
+    if catalog.skills.is_empty() {
         return Ok(());
     }
     // Probe each name. Listing the project skills directory would fail when
     // it is searchable but not readable, which Factory linking allows.
     let root = fs::canonicalize(worktree)
         .with_context(|| format!("could not resolve {}", worktree.display()))?;
-    for (name, skill_md) in skills {
-        if repository_has_skill(&root, worktree, &name) {
+    for skill in catalog.skills {
+        if factory_skill(&skill.name) || repository_has_skill(&root, worktree, &skill.name) {
             continue;
         }
-        let Some(directory) = skill_md.parent() else {
+        let Some(home_directory) = skill.skill_md.parent() else {
             continue;
         };
-        let destination = worktree.join(dir).join(&name);
-        if !home_link_allowed(&destination, directory)? {
+        let destination = worktree.join(dir).join(&skill.name);
+        let published = written_out()?.join(&skill.name);
+        if !home_link_allowed(&destination, &published, home_directory)? {
             continue;
         }
+        publish_home_skill(&catalog.root, &skill.name, home_directory, &published)?;
         exclude(
             &Git::new(worktree),
-            &exclude_literal(&format!("/{dir}/{name}")),
+            &exclude_literal(&format!("/{dir}/{}", skill.name)),
         )?;
-        project_skills.link(directory, Path::new(&name))?;
+        project_skills.link(&published, Path::new(&skill.name))?;
+    }
+    Ok(())
+}
+
+/// A Factory skill already uses this directory name in the written-out folder.
+fn factory_skill(name: &str) -> bool {
+    SKILLS.dirs().any(|dir| dir.path().to_str() == Some(name))
+}
+
+/// Copy `source` into `destination`, which lives in the Factory skills folder.
+/// A symlink is kept only by copying the file it names when that file stays
+/// inside `root`, so the published tree does not point at the operator's home.
+fn publish_home_skill(root: &Path, name: &str, source: &Path, destination: &Path) -> Result<()> {
+    if destination.exists() {
+        fs::remove_dir_all(destination)
+            .with_context(|| format!("could not replace {}", destination.display()))?;
+    }
+    copy_inside(source, destination, root, 0)?;
+    if !destination.join("SKILL.md").is_file() {
+        bail!("could not publish home skill {name}");
+    }
+    Ok(())
+}
+
+fn copy_inside(source: &Path, destination: &Path, root: &Path, depth: u32) -> Result<()> {
+    if depth > 32 {
+        bail!("home skill {} is nested too deeply", source.display());
+    }
+    fs::create_dir_all(destination)
+        .with_context(|| format!("could not create {}", destination.display()))?;
+    let entries =
+        fs::read_dir(source).with_context(|| format!("could not list {}", source.display()))?;
+    for entry in entries {
+        let entry = entry.with_context(|| format!("could not list {}", source.display()))?;
+        let path = entry.path();
+        if !resolved_inside(root, &path) {
+            continue;
+        }
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("could not inspect {}", path.display()))?;
+        let target = destination.join(entry.file_name());
+        if file_type.is_symlink() {
+            let metadata = fs::metadata(&path)
+                .with_context(|| format!("could not inspect {}", path.display()))?;
+            if metadata.is_dir() {
+                copy_inside(&path, &target, root, depth + 1)?;
+            } else if metadata.is_file() {
+                fs::copy(&path, &target)
+                    .with_context(|| format!("could not copy {}", path.display()))?;
+            }
+        } else if file_type.is_dir() {
+            copy_inside(&path, &target, root, depth + 1)?;
+        } else if file_type.is_file() {
+            fs::copy(&path, &target)
+                .with_context(|| format!("could not copy {}", path.display()))?;
+        }
     }
     Ok(())
 }
@@ -255,16 +345,18 @@ fn repository_has_skill(root: &Path, worktree: &Path, name: &str) -> bool {
 }
 
 /// The destination is absent, or it is already this home skill's link and can
-/// be refreshed. A repository file or directory, or a link to somewhere else,
-/// stays.
-fn home_link_allowed(destination: &Path, directory: &Path) -> Result<bool> {
+/// be refreshed. A link still aimed at the home directory is refreshed onto
+/// the published copy. A repository file or directory, or a link to somewhere
+/// else, stays.
+fn home_link_allowed(destination: &Path, published: &Path, home_directory: &Path) -> Result<bool> {
     match fs::symlink_metadata(destination) {
         Err(error) if error.kind() == ErrorKind::NotFound => Ok(true),
         Err(error) => {
             Err(error).with_context(|| format!("could not inspect {}", destination.display()))
         }
         Ok(metadata) if metadata.file_type().is_symlink() => {
-            Ok(fs::read_link(destination).ok().as_deref() == Some(directory))
+            let target = fs::read_link(destination).ok();
+            Ok(target.as_deref() == Some(published) || target.as_deref() == Some(home_directory))
         }
         Ok(_) => Ok(false),
     }

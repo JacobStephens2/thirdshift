@@ -824,8 +824,11 @@ the command before any work.
 
 The session runs in a temporary worktree at the head of the checked-out branch,
 with the Factory skills available, and with each home skill linked under its
-own name in that same project skills directory. A repository skill of the same
-name is left in place. Each linked home skill is kept out of git by its own
+own name in that same project skills directory. The link points at a copy
+written out beside the Factory skills. A Trial binds that folder and not
+`~/.thirdshift/skills`, so the session reads the copy; the prompt still names
+the home file, which is where the skill was found. A repository skill of the
+same name is left in place. Each linked home skill is kept out of git by its own
 `.git/info/exclude` entry, added once and left there, as the Factory
 `thirdshift-*` pattern is ([ADR-0012](adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md)).
 Uncommitted changes in your checkout stay out of it. Your checkout stays
@@ -862,17 +865,18 @@ optional = true
 ```
 
 `version` must be `1`. Each Step has a `name` and exactly one kind. `skill` is
-looked up the same way as `thirdshift skill`: a Factory skill whose directory
-is exactly that name, then the repository's committed
-`.agents/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md`, then
-`~/.thirdshift/skills/<name>/SKILL.md`, then the Factory shorthand
-`thirdshift-<name>`. `.agents/skills` wins when both repository copies exist.
-A repository skill wins over the home skill of the same name. A skill file
-that resolves outside the directory being searched is not a match. The home
-skill is linked into the Step's worktree the way the Factory skills are
+looked up the same way as `thirdshift skill`. First a Factory skill whose
+directory is exactly that name. Then the repository's committed
+`.agents/skills/<name>/SKILL.md`, or `.claude/skills/<name>/SKILL.md` when
+only that copy exists; `.agents/skills` wins when both exist. Then
+`~/.thirdshift/skills/<name>/SKILL.md`. Then the Factory skill
+`thirdshift-<name>`. A repository skill wins over the home skill of the same
+name. A skill file that resolves outside the directory being searched is not
+a match. The home skill is linked into the Step's worktree the way the Factory
+skills are
 ([ADR-0012](adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md)),
-under its own name, and kept out of git. A repository skill of the same name is not
-replaced. `command` is a command or script,
+under its own name, as a copy written out beside those skills, and kept out
+of git. A repository skill of the same name is not replaced. `command` is a command or script,
 run with `sh -c` in the Step's worktree. It starts no session. `optional = true`
 records that Step's failure and the Process carries on. Without `optional`, or
 with `optional = false`, a failure stops the Process.

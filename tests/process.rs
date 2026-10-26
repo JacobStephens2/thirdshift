@@ -945,6 +945,71 @@ skill = \"house-style\"
 }
 
 #[test]
+fn a_home_skill_link_is_readable_in_the_trial_sandbox() {
+    let scenario = Scenario::new();
+    let house = scenario.path("home/.thirdshift/skills/house-style");
+    let outside = scenario.path("outside-notes");
+    fs::create_dir_all(&house).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(house.join("SKILL.md"), "# House style\n").unwrap();
+    fs::write(house.join("notes.md"), "# Notes\n").unwrap();
+    fs::write(outside.join("secret.md"), "secret\n").unwrap();
+    symlink(outside.join("secret.md"), house.join("secret.md")).unwrap();
+    write_process(
+        &scenario,
+        "style",
+        "\
+version = 1
+description = \"Apply the house style\"
+
+[[steps]]
+name = \"style\"
+skill = \"house-style\"
+",
+    );
+    // The Trial sandbox binds the repository, the Factory skills folder and a
+    // fresh home. /usr, /lib, /lib64 and /bin are here only so /usr/bin/test
+    // can run; the skill binds are those three. The link used to point at
+    // ~/.thirdshift/skills, which that sandbox does not mount.
+    scenario.agent_does(
+        "test \"$(cat .claude/skills/house-style/SKILL.md)\" = '# House style'\n\
+         test \"$(cat .claude/skills/house-style/notes.md)\" = '# Notes'\n\
+         test ! -e .claude/skills/house-style/secret.md\n\
+         factory=$(dirname \"$(readlink .claude/skills/thirdshift-implement)\")\n\
+         case \"$(readlink .claude/skills/house-style)\" in\n\
+           \"$factory\"/*) ;;\n\
+           *) printf 'home skill link is outside the Factory skills folder\n' >&2; exit 1 ;;\n\
+         esac\n\
+         case \"$(readlink .claude/skills/house-style)\" in\n\
+           *.thirdshift/skills/*) printf 'home skill link points at the home directory\n' >&2; exit 1 ;;\n\
+         esac\n\
+         fresh=$(mktemp -d)\n\
+         bwrap --bind \"$PWD\" \"$PWD\" \\\n\
+           --ro-bind \"$factory\" \"$factory\" \\\n\
+           --bind \"$fresh\" \"$fresh\" \\\n\
+           --ro-bind /usr /usr --ro-bind /lib /lib --ro-bind /lib64 /lib64 --ro-bind /bin /bin \\\n\
+           -- /usr/bin/test -f \"$PWD/.claude/skills/house-style/SKILL.md\"\n\
+         test -z \"$(git status --porcelain --untracked-files=all)\"\n\
+         printf 'readable' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+
+    let result = scenario.run(&["process", "style"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "readable\n");
+    let calls = scenario.claude_calls();
+    let prompt = calls[0]["prompt"].as_str().unwrap();
+    let found = scenario.path("home/.thirdshift/skills/house-style/SKILL.md");
+    assert!(
+        prompt.contains(&format!(
+            "house-style skill. Read and follow `{}`",
+            found.display()
+        )),
+        "{prompt}"
+    );
+}
+
+#[test]
 fn a_repository_skill_wins_over_the_home_skill() {
     for folder in [".agents/skills", ".claude/skills"] {
         let scenario = Scenario::new();
