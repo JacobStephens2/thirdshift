@@ -47,8 +47,10 @@
       {% if inbox.idle_passes.is_empty() %}
       <p>No Pass is currently recorded as skipped.</p>
       {% else %}
-      <p>Last recorded skipped Passes:</p>
-      <ul>{% for pass in inbox.idle_passes %}<li>{{ pass|linkify }}</li>{% endfor %}</ul>
+      <details id="idle-passes">
+        <summary>Last recorded skipped Passes:</summary>
+        <ul>{% for pass in inbox.idle_passes %}<li>{{ pass|linkify }}</li>{% endfor %}</ul>
+      </details>
       {% endif %}
       <ul>{% for pass in inbox.pass_starts %}<li>{% include "console/pass_start.html" %}</li>{% endfor %}</ul>
       <p>Check <a href="/cronjobs">Cron jobs</a> and the scheduler's output for launch failures. Activity logs record skipped Passes; <code>thirdshift status</code> shows their reasons. The Console does not start work.</p>

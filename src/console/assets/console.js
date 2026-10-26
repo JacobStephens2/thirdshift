@@ -76,7 +76,7 @@ function morph(html) {
   const active = document.activeElement;
   const focused = active?.id || active?.closest("details")?.id;
   const wasSummary = active?.matches("summary");
-  const scroll = [...current.querySelectorAll("details")].map(section => [section.id, section.querySelector(".commands").scrollTop]);
+  const scroll = [...current.querySelectorAll("details[data-group]")].map(section => [section.id, section.querySelector(".commands").scrollTop]);
   const position = [scrollX, scrollY];
   const selection = selected?.id || selected?.closest('details')?.id;
   const selectedSummary = selected?.matches('summary');
@@ -84,7 +84,7 @@ function morph(html) {
   Idiomorph.morph(current, replacement, {
     callbacks: {
       beforeAttributeUpdated(name, node) {
-        if (name === "open" && node.matches("details[data-group]")) return false;
+        if (name === "open" && node.matches("details")) return false;
       }
     }
   });
@@ -383,6 +383,7 @@ document.addEventListener('click', event => {
 
 document.addEventListener('keydown', event => {
   if (event.ctrlKey || event.metaKey || event.altKey || event.target.closest('input, select, textarea, [contenteditable="true"]')) return;
+  if (event.target.matches('summary') && !event.target.closest('.group') && ['Enter', ' '].includes(event.key)) return;
   if (event.key === 'Enter' && event.target.closest('a, button')) return;
   if (event.key === ' ' && event.target.closest('button')) return;
   if (document.querySelector('#themes[open], #sections-chooser[open]')) return;

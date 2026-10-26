@@ -486,7 +486,7 @@ test("the Inbox works without JavaScript and Focus auto follows system light and
   assert.equal(await page.evaluate(() => getComputedStyle(document.body).backgroundColor), "rgb(18, 18, 20)");
 });
 
-test("idle explanations stay visible with hidden sections, on phones and without JavaScript", async t => {
+test("idle skipped Passes start folded and can be opened on phones with or without JavaScript", async t => {
   const config = join(home, '.thirdshift/config.toml');
   const activity = join(home, '.thirdshift/logs/acme/widgets/activity.log');
   const ready = join(home, '.thirdshift/logs/acme/widgets/commands/issue/203-fixture.command.json');
@@ -499,10 +499,17 @@ test("idle explanations stay visible with hidden sections, on phones and without
   try {
     for (const javaScriptEnabled of [false, true]) {
       const page = await pageFor(t, { javaScriptEnabled, viewport: { width: 390, height: 844 } });
+      const errors = [];
+      page.on('pageerror', error => errors.push(error.message));
       await page.goto(origin);
       const notice = page.getByRole('region', { name: 'No running Commands' });
       assert.equal(await notice.isVisible(), true);
-      assert.match(await notice.textContent(), /Pickup run idle on acme\/widgets: no Ready issue/);
+      const reason = notice.getByText('Pickup run idle on acme/widgets: no Ready issue', { exact: false });
+      await reason.waitFor({ state: 'hidden' });
+      const summary = notice.locator('summary').filter({ hasText: 'Last recorded skipped Passes:' });
+      await summary.focus();
+      await page.keyboard.press('Enter');
+      await reason.waitFor({ state: 'visible' });
       assert.equal(await notice.locator('script').count(), 0);
       for (const [label, section] of [['Needs you', 'needs-you'], ['Ready for review', 'ready-for-review']]) {
         assert.equal(await notice.getByRole('link', { name: label, exact: true }).count(), 0, 'hidden sections must not have dead links');
@@ -511,12 +518,48 @@ test("idle explanations stay visible with hidden sections, on phones and without
       assert.equal(await notice.getByRole('link', { name: 'Cron jobs', exact: true }).getAttribute('href'), '/cronjobs');
       assert.equal(await page.locator('#inbox > details:visible').count(), 0);
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      if (javaScriptEnabled) {
+        await page.evaluate(() => { window.visitMarker = 'same idle Inbox'; });
+        await writeFile(activity, '2026-01-01 12:01:00 Pickup run skipped: Claim limit reached\n');
+        const updated = notice.getByText('Pickup run idle on acme/widgets: Claim limit reached', { exact: true });
+        await updated.waitFor({ state: 'visible' });
+        assert.equal(await page.evaluate(() => window.visitMarker), 'same idle Inbox');
+        await summary.click();
+        await updated.waitFor({ state: 'hidden' });
+        await writeFile(activity, '2026-01-01 12:02:00 Pickup run skipped: no Ready issue on acme/widgets\n');
+        await reason.waitFor({ state: 'attached' });
+        await reason.waitFor({ state: 'hidden' });
+        await summary.click();
+        await reason.waitFor({ state: 'visible' });
+      }
+      assert.deepEqual(errors, []);
+      await page.reload();
+      await reason.waitFor({ state: 'hidden' });
     }
   } finally {
     await rm(activity, { force: true });
     await rm(ready, { force: true });
     await writeFile(config, '[console]\nport = 0\n');
   }
+});
+
+test("skipped Pass disclosure keeps native keyboard controls after selecting an Inbox row", async t => {
+  const activity = join(home, '.thirdshift/logs/acme/widgets/activity.log');
+  await writeFile(activity, '2026-01-01 12:00:00 Pickup run skipped: no Ready issue on acme/widgets\n');
+  t.after(() => rm(activity, { force: true }));
+  const page = await pageFor(t);
+  await page.goto(origin);
+  await page.keyboard.press('j');
+  await page.keyboard.press('j');
+  await page.locator('.command.is-selected').waitFor();
+  const notice = page.getByRole('region', { name: 'No running Commands' });
+  const reason = notice.getByText('Pickup run idle on acme/widgets: no Ready issue on acme/widgets', { exact: true });
+  await notice.locator('summary').focus();
+  await page.keyboard.press('Space');
+  await reason.waitFor({ state: 'visible' });
+  await page.keyboard.press('Enter');
+  await reason.waitFor({ state: 'hidden' });
+  assert.equal(await page.locator('#peek').isVisible(), false);
 });
 
 test("explicit Focus light and dark override the system preference", async t => {
