@@ -31,15 +31,16 @@ test('development assets restyle open pages and reload changed scripts over one 
       return;
     }
     browser = await chromium.launch({ headless: true });
-    const pages = await Promise.all([browser.newPage(), browser.newPage()]);
-    const violations = [], streams = [0, 0], errors = [];
+    const paths = ['/', '/logs', '/account', '/console-log'];
+    const pages = await Promise.all(paths.map(() => browser.newPage()));
+    const violations = [], streams = paths.map(() => 0), errors = [];
     for (const [index, page] of pages.entries()) {
       await page.exposeFunction('cspViolation', value => violations.push(value));
       page.on('pageerror', error => errors.push(error.message));
       await page.addInitScript(() => document.addEventListener('securitypolicyviolation', event => window.cspViolation(event.violatedDirective)));
       page.on('request', request => { if (new URL(request.url()).pathname === '/events') streams[index]++; });
       const look = page.waitForResponse(response => response.url() === `${origin}/look`);
-      await page.goto(`${origin}${index ? '/logs' : '/'}`);
+      await page.goto(`${origin}${paths[index]}`);
       await look;
       await page.waitForFunction(() => getComputedStyle(document.body).getPropertyValue('--asset-test').trim() === 'before');
       await page.evaluate(() => { window.preservedThroughStyleChange = true; });
@@ -56,7 +57,7 @@ test('development assets restyle open pages and reload changed scripts over one 
       assert.equal(await page.evaluate(() => window.preservedThroughStyleChange), true);
     }
     assert.ok(Date.now() - began < 2000, 'stylesheet update should arrive in about a second');
-    assert.deepEqual(streams, [1, 1]);
+    assert.deepEqual(streams, paths.map(() => 1));
     // Imported Theme styles are refreshed through their containing stylesheet.
     const themesPath = join(assets, 'themes.css');
     await writeFile(themesPath, `${await readFile(themesPath, 'utf8')}\nbody { --import-test: changed; }\n`);
@@ -84,7 +85,7 @@ test('development assets restyle open pages and reload changed scripts over one 
     await page.waitForFunction(() => !document.querySelector('link[media="not all"]'));
     assert.equal(await page.evaluate(() => getComputedStyle(document.body).getPropertyValue('--asset-test').trim()), 'newest');
     await page.unroute('**/assets/console.css?revision=*');
-    const scriptPath = join(assets, 'console.js');
+    const scriptPath = join(assets, 'changes.js');
     const navigations = pages.map(page => page.waitForEvent('load'));
     await writeFile(scriptPath, `${await readFile(scriptPath, 'utf8')}\nwindow.changedScriptRan = true;\n`);
     await Promise.all(navigations);

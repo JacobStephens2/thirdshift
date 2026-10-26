@@ -97,7 +97,7 @@ function apply(settings) {
 }
 
 export async function loadLook() {
-  if (!themes || saving) return;
+  if (saving) return;
   const requestedRevision = revision;
   try {
     const response = await fetch('/look', { cache: 'no-store' });
@@ -105,6 +105,7 @@ export async function loadLook() {
     if (response.headers.get('x-thirdshift-console-assets') === 'development') {
       document.dispatchEvent(new Event('console-development-assets'));
     }
+    if (!themes) return;
     const settings = await response.json();
     if (requestedRevision !== revision || saving) return;
     csrf = settings.csrf;
@@ -129,7 +130,7 @@ export async function loadLook() {
       }
     }
     apply(settings);
-  } catch { message.textContent = 'Could not load the Console look. Reload to try again.'; }
+  } catch { if (message) message.textContent = 'Could not load the Console look. Reload to try again.'; }
 }
 
 async function save(path, values) {
@@ -192,6 +193,6 @@ if (themes) {
     const options = [...document.querySelectorAll('#section-options input')];
     save('/sections', { hide: options.filter(c => !c.checked).map(c => c.value).join(','), show: options.filter(c => c.checked).map(c => c.value).join(',') });
   });
-  loadLook();
 }
+loadLook();
 activity();
