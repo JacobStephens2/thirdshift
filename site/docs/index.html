@@ -560,7 +560,12 @@ another Trial or retry. Ordinary Runs do not stop at these warnings.
 The Experiment watches each Trial with the current detectors, including when
 an Arm&#39;s build predates warning detection.</p>
 <p>Two workers take alternating Baseline and Candidate Trials, each in a fresh
-prepared repository. Trial artifacts and one result per finished Trial live
+prepared repository. Before the session, the host installs that repository&#39;s
+pinned Rust toolchain from <code>rust-toolchain.toml</code> or <code>rust-toolchain</code>, including
+its listed components. Trials with the same pin share one preparation across
+both workers. An installation failure makes the Trial void with
+<code>session_unavailable</code>; it does not count as failed. The sandbox&#39;s network
+allowlist stays unchanged. Trial artifacts and one result per finished Trial live
 privately in <code>~/.thirdshift/evals/experiments/&lt;id&gt;/</code>. Trials run in a bwrap
 sandbox with a fresh home and provider-only network. Code Graders then score each Trial:
 editing or deleting <code>.thirdshift-issue.md</code> or a declared input, moving the Base

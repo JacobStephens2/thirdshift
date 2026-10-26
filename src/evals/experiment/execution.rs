@@ -3,6 +3,7 @@
 //! Trace and active evidence remain private and alive through publication.
 
 mod monitor;
+mod toolchains;
 
 use std::cell::RefCell;
 use std::fs;
@@ -27,6 +28,7 @@ pub(super) struct Execution<'a> {
     setups: [&'a Setup; 2],
     timeout: Duration,
     signal: &'a Path,
+    toolchains: toolchains::Toolchains,
 }
 
 pub(super) struct Request<'a> {
@@ -62,6 +64,7 @@ impl<'a> Execution<'a> {
             setups,
             timeout,
             signal,
+            toolchains: toolchains::Toolchains::default(),
         })
     }
 
@@ -90,6 +93,20 @@ impl<'a> Execution<'a> {
             &task.manifest,
             &attempt.join("repository"),
         )?;
+        let started = Instant::now();
+        let mut trace = super::trace::Attempt::start(&attempt, &key, request.trace)?;
+        let _active = super::evidence::Active::start(&directory, &attempt, request.attempt)?;
+        if let Err(error) = self.toolchains.ensure(&prepared_repo.repository) {
+            interrupt::check()?;
+            let mut output = Output::failed(started.elapsed().as_millis(), &format!("{error:#}"));
+            output.outcome = Outcome::Void;
+            output.void_cause = Some(VoidCause::SessionUnavailable);
+            output.timings.session_ms = 0;
+            let score = trace
+                .grade(|| grading::score(task, &prepared_repo.repository, &output, self.timeout))?;
+            trace.outcome(output.outcome);
+            return complete(attempt, output, score);
+        }
         // Establish the Harness's idempotent instruction fallback before the
         // comparison and the private repository captured for mechanical checks.
         setup
@@ -141,14 +158,12 @@ impl<'a> Execution<'a> {
             .open(self.directory.join("started"))?;
         limits::check(self.signal)?;
         progress::step(format!("Trial {} starting", key));
-        let _active = super::evidence::Active::start(&directory, &attempt, request.attempt)?;
         let monitor = RefCell::new(monitor::Monitor::new(
             &attempt.join("session"),
             &prepared_repo.repository,
             &setup.choice(),
         ));
         let started = Instant::now();
-        let mut trace = super::trace::Attempt::start(&attempt, &key, request.trace)?;
         // Machine caps are read live per attempt, not fixed with the Bar: an
         // operator edit between attempts applies to the next one.
         let caps = crate::config::UserConfig::load()?.trial_caps.with_env()?;

@@ -167,6 +167,113 @@ print(json.dumps(dict(version=1, outcome='succeeded', timings=dict(total_ms=12, 
 "#;
 
 #[test]
+fn trial_installs_its_historical_rust_pin_before_the_session() {
+    if isolated(&[]) {
+        return;
+    }
+    let bin = PathBuf::from(std::env::var_os("THIRDSHIFT_EXECUTION_FIXTURE").unwrap()).join("bin");
+    executable(
+        &bin.join("rustup"),
+        r#"#!/usr/bin/env python3
+import os, pathlib, sys, tomllib
+root = pathlib.Path(os.environ['THIRDSHIFT_EXECUTION_FIXTURE'])
+args = sys.argv[1:]
+if args[:2] == ['toolchain', 'install']:
+    pin = tomllib.loads(pathlib.Path('rust-toolchain.toml').read_text())['toolchain']
+    assert pin['channel'] == '1.99.0', pin
+    assert pin['components'] == ['rustfmt', 'clippy'], pin
+    (root / 'installed').write_text('1.99.0')
+    with (root / 'installs').open('a') as log: log.write('install\n')
+else:
+    raise AssertionError(args)
+"#,
+    );
+    executable(
+        &bin.join("cargo"),
+        r#"#!/usr/bin/env python3
+import os, pathlib, sys
+root = pathlib.Path(os.environ['THIRDSHIFT_EXECUTION_FIXTURE'])
+if not (root / 'installed').exists():
+    print('pinned Rust 1.99.0 download refused by Trial proxy', file=sys.stderr)
+    sys.exit(1)
+print('cargo 1.99.0 (fixture)')
+"#,
+    );
+    let mut fixture = Fixture::new(&format!(
+        "import subprocess\ncheck = subprocess.run(['cargo', '--version'], cwd=repository, capture_output=True, text=True)\nassert check.returncode == 0, check.stderr\nassert check.stdout == 'cargo 1.99.0 (fixture)\\n'\n{SUCCESS}"
+    ));
+    let source = fixture.root.join("source");
+    fs::write(
+        source.join("rust-toolchain.toml"),
+        "[toolchain]\nchannel = \"1.99.0\"\ncomponents = [\"rustfmt\", \"clippy\"]\n",
+    )
+    .unwrap();
+    let git = crate::git::Git::new(&source);
+    git.run(&["add", "."]).unwrap();
+    git.run(&["commit", "-m", "Historical Rust pin"]).unwrap();
+    fixture.task.manifest.change = git.run(&["rev-parse", "HEAD"]).unwrap();
+    let execution = fixture.execution(5);
+    std::thread::scope(|scope| {
+        for arm in [Arm::Baseline, Arm::Candidate] {
+            let fixture = &fixture;
+            let execution = &execution;
+            scope.spawn(move || {
+                let mut request = fixture.request();
+                request.identity.arm = arm;
+                execution
+                    .run(request, |_, output, _| {
+                        assert!(output.outcome == Outcome::Succeeded, "{:?}", output.cause);
+                        Ok(())
+                    })
+                    .unwrap();
+            });
+        }
+    });
+    let root = PathBuf::from(std::env::var_os("THIRDSHIFT_EXECUTION_FIXTURE").unwrap());
+    assert_eq!(
+        fs::read_to_string(root.join("installs")).unwrap(),
+        "install\n"
+    );
+}
+
+#[test]
+fn rust_install_failure_voids_the_trial_without_launching_a_session() {
+    if isolated(&[]) {
+        return;
+    }
+    let root = PathBuf::from(std::env::var_os("THIRDSHIFT_EXECUTION_FIXTURE").unwrap());
+    executable(
+        &root.join("bin/rustup"),
+        "#!/bin/sh\ntest \"$(cat rust-toolchain)\" = 1.99.0 || exit 99\necho 'fixture Rust download unavailable' >&2\nexit 1\n",
+    );
+    let mut fixture = Fixture::new("raise AssertionError('session must not start')");
+    fs::write(fixture.root.join("pin"), "1.99.0\n").unwrap();
+    fixture
+        .task
+        .manifest
+        .inputs
+        .insert("rust-toolchain".into(), "pin".into());
+    fixture
+        .execution(5)
+        .run(fixture.request(), |attempt, output, score| {
+            assert!(output.outcome == Outcome::Void);
+            assert_eq!(output.void_cause, Some(VoidCause::SessionUnavailable));
+            assert!(
+                output
+                    .cause
+                    .unwrap()
+                    .contains("fixture Rust download unavailable")
+            );
+            assert_eq!(output.timings.session_ms, 0);
+            assert_eq!(score.checks.len(), 2, "Void Trials must omit code checks");
+            assert!(attempt.parent().unwrap().join("active.json").is_file());
+            assert!(!attempt.join("session").exists());
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
 fn ended_muse_trial_drops_model_catalog_cache() {
     if isolated(&[]) {
         return;

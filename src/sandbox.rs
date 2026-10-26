@@ -610,6 +610,21 @@ fn toolchains_into(home: &Path, binds: &mut Binds, environment: &mut Environment
     for bin in tool_bin_dirs(&roots) {
         environment.prepend_path(&bin);
     }
+    let rustup = std::env::var_os("RUSTUP_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".rustup"));
+    if rustup.is_dir() {
+        // HOME belongs to the fresh sandbox; installed pins stay on the host.
+        environment.set("RUSTUP_HOME", &rustup);
+    }
+    let cargo_bin = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".cargo"))
+        .join("bin");
+    if crate::process::is_executable(&cargo_bin.join("rustup")) {
+        // Prefer rustup's proxies to a host PATH naming one toolchain's bin.
+        environment.prepend_path(&cargo_bin);
+    }
 }
 
 fn toolchains(home: &Path) -> Vec<PathBuf> {
@@ -1752,6 +1767,90 @@ mod tests {
         );
         assert!(stdout.contains("/sandbox/harness/grok"), "{stdout}");
         assert!(!stdout.contains("downloads"), "{stdout}");
+    }
+
+    #[test]
+    fn cargo_uses_the_repository_pin_with_a_fresh_sandbox_home() {
+        // Cargo itself inherits rustup's real RUSTUP_HOME. Keep this fixture's
+        // toolchains isolated without changing other tests' environment.
+        if std::env::var_os("THIRDSHIFT_RUST_SANDBOX_FIXTURE").is_none() {
+            let output = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    std::thread::current().name().unwrap(),
+                    "--nocapture",
+                ])
+                .env("THIRDSHIFT_RUST_SANDBOX_FIXTURE", "1")
+                .env_remove("RUSTUP_HOME")
+                .env_remove("CARGO_HOME")
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return;
+        }
+        if !bwrap_or_skip("pinned Rust toolchain") {
+            return;
+        }
+        let Some(rustup) = crate::process::find_executable("rustup") else {
+            println!("SKIPPED (pinned Rust toolchain): rustup is not on PATH");
+            return;
+        };
+        let layout = Layout::new();
+        let cargo = layout.home.join(".cargo/bin");
+        fs::create_dir_all(&cargo).unwrap();
+        fs::copy(rustup, cargo.join("rustup")).unwrap();
+        fs::hard_link(cargo.join("rustup"), cargo.join("cargo")).unwrap();
+        let rustup_home = layout.home.join(".rustup");
+        for (name, version) in [
+            ("thirdshift-pin", "1.99.0"),
+            ("thirdshift-default", "1.99.1"),
+        ] {
+            let bin = rustup_home.join("toolchains").join(name).join("bin");
+            fs::create_dir_all(&bin).unwrap();
+            for tool in ["rustc", "cargo"] {
+                let path = bin.join(tool);
+                fs::write(
+                    &path,
+                    format!("#!/bin/sh\necho '{tool} {version} (fixture)'\n"),
+                )
+                .unwrap();
+                fs::set_permissions(path, fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        }
+        fs::write(
+            rustup_home.join("settings.toml"),
+            "version = '12'\ndefault_toolchain = 'thirdshift-default'\n",
+        )
+        .unwrap();
+        fs::write(
+            layout.repo.join("rust-toolchain.toml"),
+            "[toolchain]\nchannel = 'thirdshift-pin'\n",
+        )
+        .unwrap();
+        let request = layout.request(
+            Harness::Codex,
+            "cargo --version",
+            Secrets::default(),
+            None,
+            &[],
+        );
+        let prepared = prepare(&request).unwrap();
+        let output = run_script(&prepared, &layout.repo);
+        assert!(
+            output.status.success(),
+            "{}: {}",
+            output.status,
+            fs::read_to_string(&prepared.stderr).unwrap()
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "cargo 1.99.0 (fixture)"
+        );
     }
 
     #[test]
