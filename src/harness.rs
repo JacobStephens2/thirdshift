@@ -284,23 +284,33 @@ impl Choice {
         let Some(review) = security_review else {
             return Ok(()); // The review shares the checked Command's choice.
         };
-        if let Err(error) = review.check() {
+        review.check_review(default, Some(self))
+    }
+
+    /// Settle an implicitly chosen Security review with the same fallback
+    /// policy as a Ticket run. Explicit Step Harnesses use `check` instead.
+    pub fn check_security_review(&mut self, default: &mut Choice) -> Result<()> {
+        self.check_review(default, None)
+    }
+
+    fn check_review(&mut self, default: &mut Choice, checked: Option<&Choice>) -> Result<()> {
+        if let Err(error) = self.check() {
             crate::interrupt::check()?;
-            if review.harness == default.harness {
+            if self.harness == default.harness {
                 return Err(error).with_context(|| {
                     format!(
                         "the Security review's default Harness {} can't run",
-                        review.harness.name()
+                        self.harness.name()
                     )
                 });
             }
-            warn_review_fallback(review.harness, default.harness, &format!("{error:#}"));
-            if default.runs_as(self) {
-                *default = self.clone();
+            warn_review_fallback(self.harness, default.harness, &format!("{error:#}"));
+            if let Some(checked) = checked.filter(|checked| default.runs_as(checked)) {
+                *default = checked.clone();
             } else {
                 default.check()?;
             }
-            *review = default.clone();
+            *self = default.clone();
         }
         Ok(())
     }

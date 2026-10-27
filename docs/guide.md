@@ -983,10 +983,24 @@ cleans up the Issue-branch worktree. Its result is the triage comment URL;
 the progress line and Ending say the bug was not reproduced. Only
 `implement` can end a Process early; there is no file setting for this.
 
-`catalogue = "delivery"` publishes that Issue branch. It is Delivery with no
-opening session and no Security review: push, open a draft pull request when
-the branch has none, write the Built-with line, mark the pull request ready
-for review, and keep it mergeable with green or absent CI through the Repair
+`catalogue = "security-review"` runs the same Security review as a Ticket run.
+Place it on the Issue-branch worktree after its editing Steps and before
+`delivery`, outside any parallel group. The Step runs when `security-review`
+(or `--security-review`) on the command or `[security] review = true` asks;
+`no-security-review` overrides the config. Otherwise it prints that the review
+was skipped. Before the Process name, spell these flags with `--`; the bare
+words remain valid Custom process names. It uses `security.harness` when configured, including that
+Harness's Model and Effort, and keeps the Ticket run's default-Harness fallback.
+A Harness explicitly named by the Step must start at preflight, with no
+fallback. A refused or incomplete review, or unaddressed introduced findings,
+holds a following Self-merge while Delivery still leaves the PR ready and
+repairs conflicts and CI. The public review outcome is written to the PR;
+pre-existing findings stay private as in a Ticket run.
+
+`catalogue = "delivery"` publishes that Issue branch after the earlier Steps'
+editing sessions and any Security review. It pushes, opens a draft pull request
+when the branch has none, writes the Built-with line, marks the pull request ready
+for review, and keeps it mergeable with green or absent CI through the Repair
 loop. When thirdshift opens the pull request, its title is the issue's and its body
 starts `Closes #<n>`. Repairs run on the Command's Harness, Model and Effort.
 A Process has at most one delivery Step. It names the Issue-branch worktree,
@@ -1058,7 +1072,7 @@ contain newlines and tabs. Any other control character in the command, the
 description, a step or worktree name, a skill, a model, an effort, a parallel
 group or a protected-path glob is refused before a step runs, so the plan
 `check` prints cannot hide the command. `catalogue` names a
-built-in Step: `implement`, `delivery` or `self-merge`, described above, or `run-published-issue`.
+built-in Step: `implement`, `security-review`, `delivery` or `self-merge`, described above, or `run-published-issue`.
 `run-published-issue` starts a Ticket run, or a Spec run when the issue has
 Tickets, on the issue the session Step before it published. That session's final
 message ends with the issue's URL on its last non-blank line. Before it starts a
@@ -1106,7 +1120,7 @@ Issue branch. When a limit tightens a built-in rule, `check` prints it: the
 repair cap out of 5, that self-merge is held, and the protected paths. A skill
 Step shows the skill and where it was found. A command
 Step shows its command, and `check` does not run it. A delivery Step shows
-`delivery`. A self-merge Step shows `self-merge`. A `run-published-issue` Step shows `run-published-issue`. An
+`delivery`. A Security review Step shows `security-review`. A self-merge Step shows `self-merge`. A `run-published-issue` Step shows `run-published-issue`. An
 optional Step is marked `(optional)`. `check` performs the same Harness
 preflight as running, including a minimal Model test when the Harness needs
 one, and runs no Step. `check <name> issue <issue>` resolves the issue and
@@ -1170,7 +1184,7 @@ that Step instead of starting the session. The Command log names the cause.
 `check` and running refuse a missing file, a file that is not valid TOML, a
 missing or wrong `version`, an unknown key, an unknown Harness, a Step without exactly one of
 `skill`, `command` and `catalogue`, a command that is not a string or is empty,
-a catalogue value other than `implement`, `delivery`, `run-published-issue` or `self-merge`, an
+a catalogue value other than `implement`, `delivery`, `run-published-issue`, `security-review` or `self-merge`, an
 `implement` Step outside an Issue-branch worktree, a
 `self-merge` Step that is not directly after `delivery`, a second self-merge
 Step, an optional self-merge Step, a self-merge Step in a parallel group, a

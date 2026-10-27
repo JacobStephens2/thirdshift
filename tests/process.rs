@@ -2,6 +2,8 @@
 
 #[path = "process/implement.rs"]
 mod implement;
+#[path = "process/security_review.rs"]
+mod security_review;
 mod support;
 
 use std::fs;
@@ -917,7 +919,7 @@ name = \"review\"
 catalogue = \"publish\"
 ",
                 ),
-                ":6: catalogue: catalogue must be implement, delivery, run-published-issue or self-merge",
+                ":6: catalogue: catalogue must be implement, delivery, run-published-issue, security-review or self-merge",
             ),
             (
                 "review",

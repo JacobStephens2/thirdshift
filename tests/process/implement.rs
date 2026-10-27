@@ -4,6 +4,34 @@ fn implementing_process() -> String {
     DELIVER.replace("skill = \"code-review\"", "catalogue = \"implement\"")
 }
 
+fn implementation_with_security_review() -> String {
+    implementing_process().replace("name = \"ship\"", "name = \"security\"\ncatalogue = \"security-review\"\nworktree = \"fix\"\n\n[[steps]]\nname = \"ship\"")
+}
+
+#[test]
+fn implement_and_security_review_share_the_delivery_path() {
+    let scenario = prepare_ship(&implementation_with_security_review());
+    scenario.agent_does_for_in_session(7, 2, r#"
+report=$(printf '%s' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Private report file: `\(.*\)`\.$/\1/p')
+test -n "$report"
+printf '[]' > "$report"
+printf '%s' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#);
+
+    let result = scenario.run(&["process", "ship", "issue", "7", "--security-review"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2);
+    let state = scenario.gh_state();
+    assert_eq!(state["prs"][0]["isDraft"], false);
+    assert!(
+        state["prs"][0]["body"]
+            .as_str()
+            .unwrap()
+            .contains("No unaddressed introduced findings.")
+    );
+}
+
 #[test]
 fn implement_then_delivery_leaves_a_ready_pull_request() {
     let scenario = prepare_ship(&implementing_process());
@@ -29,7 +57,7 @@ fn implement_then_delivery_leaves_a_ready_pull_request() {
 #[test]
 fn an_unreproduced_bug_ends_the_process_and_claim_without_delivery() {
     let scenario = Scenario::new();
-    let body = implementing_process()
+    let body = implementation_with_security_review()
         + "\n[[steps]]\nname = \"after\"\ncommand = \"exit 99\"\nworktree = \"notes\"\n";
     write_process(
         &scenario,
@@ -46,7 +74,7 @@ gh fake labels 7 '["bug", "needs-info", "in-progress"]'
 echo 'Bug not reproduced: https://github.com/acme/widgets/issues/7#issuecomment-42' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#);
 
-    let result = scenario.run(&["process", "ship", "issue", "7"]);
+    let result = scenario.run(&["process", "ship", "issue", "7", "--security-review"]);
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(
@@ -65,6 +93,11 @@ echo 'Bug not reproduced: https://github.com/acme/widgets/issues/7#issuecomment-
     );
     assert!(
         result.stderr.contains("step ship: 0s skipped"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("step security: 0s skipped"),
         "{}",
         result.stderr
     );
