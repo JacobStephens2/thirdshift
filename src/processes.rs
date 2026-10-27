@@ -1,4 +1,5 @@
-//! Custom processes: skill and command Steps from `~/.thirdshift/processes/<name>.toml`.
+//! Custom processes: skill, command and catalogue Steps from
+//! `~/.thirdshift/processes/<name>.toml`.
 //!
 //! Steps run in order. Consecutive Steps that name the same `parallel` group
 //! run at the same time, each in a throwaway worktree the Process declares.
@@ -22,9 +23,10 @@ use chrono::{DateTime, Utc};
 use toml_edit::{Document, Item, Key, Table};
 
 use crate::args::ProcessAction;
-use crate::asks::Flags;
+use crate::asks::{Asks, Flags};
 use crate::config::UserConfig;
 use crate::git::Git;
+use crate::github::GitHub;
 use crate::harness::{Asked, Choice};
 use crate::issue::{IssueInput, IssueUrl};
 use crate::logs::{self, Begin, Work};
@@ -74,6 +76,7 @@ struct StepDraft {
 enum DraftKind {
     Skill { skill: String, line: usize },
     Command { command: String },
+    Catalogue { line: usize },
 }
 
 struct ResolvedStep {
@@ -87,6 +90,7 @@ struct ResolvedStep {
 enum StepKind {
     Skill { name: String, path: PathBuf },
     Command(String),
+    RunPublishedIssue,
 }
 
 struct OwnedWorktree {
@@ -104,6 +108,8 @@ struct Prepared {
     issue: Option<IssueUrl>,
     /// When untrusted edits start counting, set when a run begins.
     started: DateTime<Utc>,
+    /// The Base branch checked out in the Launch directory.
+    base: String,
 }
 
 /// What one Step needs from the Process, shared by a parallel group.
@@ -112,6 +118,8 @@ struct StepRun<'a> {
     choice: &'a Choice,
     issue: Option<&'a IssueUrl>,
     started: DateTime<Utc>,
+    base: &'a str,
+    steps: &'a [ResolvedStep],
 }
 
 struct WrittenGuard;
@@ -305,26 +313,45 @@ fn execute_steps(process: &str, prepared: &Prepared) -> Result<String> {
     fs::create_dir_all(&results)
         .with_context(|| format!("could not create {}", results.display()))?;
     let mut earlier = Vec::new();
+    let mut began = Vec::new();
     let mut last = String::new();
     for range in group_ranges(&prepared.steps) {
         let group = &prepared.steps[range.clone()];
         let outcomes = if group.len() == 1 {
             let started = Instant::now();
+            let began_at = Utc::now();
             let outcome = run_step(
                 process,
                 prepared,
                 &group[0],
                 &earlier,
+                &began,
                 &results,
                 range.start == 0,
             );
-            vec![(started.elapsed(), outcome)]
+            vec![(started.elapsed(), began_at, outcome)]
         } else {
-            run_parallel(process, prepared, group, &earlier, &results, range.start)
+            run_parallel(
+                process,
+                prepared,
+                group,
+                &earlier,
+                &began,
+                &results,
+                range.start,
+            )
         };
         let mut group_error = None;
-        for (step, (elapsed, outcome)) in group.iter().zip(outcomes) {
-            match finish_step(step, elapsed, outcome, &results, &mut earlier, &mut last) {
+        for (step, (elapsed, began_at, outcome)) in group.iter().zip(outcomes) {
+            match finish_step(
+                step,
+                elapsed,
+                (began_at, outcome),
+                &results,
+                &mut earlier,
+                &mut began,
+                &mut last,
+            ) {
                 Ok(()) => {}
                 Err(error) if group_error.is_none() => group_error = Some(error),
                 Err(_) => {}
@@ -368,15 +395,19 @@ fn run_parallel(
     prepared: &Prepared,
     group: &[ResolvedStep],
     earlier: &[(String, PathBuf)],
+    began: &[(String, DateTime<Utc>)],
     results: &Path,
     group_start: usize,
-) -> Vec<(Duration, Result<String>)> {
+) -> Vec<(Duration, DateTime<Utc>, Result<String>)> {
+    let steps = &prepared.steps;
+    let base = prepared.base.as_str();
     thread::scope(|scope| {
         let mut handles = Vec::with_capacity(group.len());
         for (offset, step) in group.iter().enumerate() {
             let cwd = worktree_path(&prepared.worktrees, step.worktree.as_deref()).to_path_buf();
             let choice = prepared.choice.clone();
             let earlier = earlier.to_vec();
+            let began = began.to_vec();
             let process = process.to_string();
             let results = results.to_path_buf();
             let first = group_start + offset == 0;
@@ -384,14 +415,17 @@ fn run_parallel(
             let started_at = prepared.started;
             handles.push(scope.spawn(move || {
                 let started = Instant::now();
+                let began_at = Utc::now();
                 let run = StepRun {
                     process: &process,
                     choice: &choice,
                     issue: issue.as_ref(),
                     started: started_at,
+                    base,
+                    steps,
                 };
-                let outcome = run_step_in(&run, &cwd, step, &earlier, &results, first);
-                (started.elapsed(), outcome)
+                let outcome = run_step_in(&run, &cwd, step, &earlier, &began, &results, first);
+                (started.elapsed(), began_at, outcome)
             }));
         }
         handles
@@ -404,11 +438,13 @@ fn run_parallel(
 fn finish_step(
     step: &ResolvedStep,
     elapsed: Duration,
-    outcome: Result<String>,
+    outcome: (DateTime<Utc>, Result<String>),
     results: &Path,
     earlier: &mut Vec<(String, PathBuf)>,
+    began: &mut Vec<(String, DateTime<Utc>)>,
     last: &mut String,
 ) -> Result<()> {
+    let (began_at, outcome) = outcome;
     let duration = progress::duration(elapsed);
     match outcome {
         Ok(message) => {
@@ -417,6 +453,7 @@ fn finish_step(
             fs::write(&path, &message)
                 .with_context(|| format!("could not write {}", path.display()))?;
             earlier.push((step.name.clone(), path));
+            began.push((step.name.clone(), began_at));
             *last = message;
             Ok(())
         }
@@ -441,6 +478,7 @@ fn run_step(
     prepared: &Prepared,
     step: &ResolvedStep,
     earlier: &[(String, PathBuf)],
+    began: &[(String, DateTime<Utc>)],
     results: &Path,
     first: bool,
 ) -> Result<String> {
@@ -449,12 +487,15 @@ fn run_step(
         choice: &prepared.choice,
         issue: prepared.issue.as_ref(),
         started: prepared.started,
+        base: &prepared.base,
+        steps: &prepared.steps,
     };
     run_step_in(
         &run,
         worktree_path(&prepared.worktrees, step.worktree.as_deref()),
         step,
         earlier,
+        began,
         results,
         first,
     )
@@ -465,11 +506,13 @@ fn run_step_in(
     cwd: &Path,
     step: &ResolvedStep,
     earlier: &[(String, PathBuf)],
+    began: &[(String, DateTime<Utc>)],
     results: &Path,
     first: bool,
 ) -> Result<String> {
     crate::resources::wait()?;
     match &step.kind {
+        StepKind::RunPublishedIssue => run_published(run, step, earlier, began),
         StepKind::Skill { name, path } => {
             progress::step(format_args!(
                 "running step {} with {choice}",
@@ -560,6 +603,90 @@ fn run_skill_on_issue(
         return Ok(message);
     }
     ended.require_final_message(&label)
+}
+
+/// Start a Ticket run, or a Spec run, on the issue the session Step before
+/// this one published. The child run is part of this Command. Its outcome
+/// is this Step's outcome.
+fn run_published(
+    run: &StepRun<'_>,
+    step: &ResolvedStep,
+    earlier: &[(String, PathBuf)],
+    began: &[(String, DateTime<Utc>)],
+) -> Result<String> {
+    let index = run
+        .steps
+        .iter()
+        .position(|other| other.name == step.name)
+        .expect("the step is one of the process");
+    let Some(previous) = index.checked_sub(1).map(|index| &run.steps[index]) else {
+        bail!("run-published-issue must directly follow a session Step");
+    };
+    let issue = published_issue(previous, earlier)?;
+    let origin = Git::new(std::env::current_dir()?).run(&["config", "remote.origin.url"])?;
+    if !issue.matches_origin(&origin) {
+        bail!(
+            "the issue {} is not in the repository at origin {origin}",
+            issue.url
+        );
+    }
+    let github = GitHub::new();
+    let viewed = github.issue(&issue)?;
+    if !viewed.is_open {
+        bail!("the issue {} is closed", issue.url);
+    }
+    let association = trust::Reads::author_association(&github, &issue)?;
+    if !trust::trusted_association(&association) {
+        bail!("#{}'s author is not a Trusted account", issue.number);
+    }
+    let started = began
+        .iter()
+        .find(|(name, _)| name == &previous.name)
+        .map(|(_, at)| *at)
+        .with_context(|| format!("step {} has no start time", previous.name))?;
+    // GitHub's times are to the second.
+    if viewed.created.timestamp() < started.timestamp() {
+        bail!(
+            "the issue {} was created before the session Step began",
+            issue.url
+        );
+    }
+    interrupt::check()?;
+    progress::step(format_args!(
+        "dispatching {url}, as thirdshift {url} would",
+        url = issue.url
+    ));
+    logs::dispatching(Work::Run(&issue), run.choice);
+    let config = UserConfig::load()?;
+    let mut asks = Asks::of_run(&issue, &Flags::default(), &config);
+    asks.notification = NotificationAsk::Skip;
+    asks.harness = run.choice.clone();
+    let ended = crate::run::run_to_end(
+        &issue,
+        &mut asks,
+        crate::run::StartedBy::Dispatch { base: run.base },
+    );
+    logs::dispatch_ended(&ended);
+    match ended.outcome {
+        Ok(reached) => Ok(reached.resolution.url().to_string()),
+        Err(failed) => Err(failed.error),
+    }
+}
+
+fn published_issue(previous: &ResolvedStep, earlier: &[(String, PathBuf)]) -> Result<IssueUrl> {
+    let Some((_, path)) = earlier.iter().find(|(name, _)| name == &previous.name) else {
+        bail!("the session Step ended without a final message");
+    };
+    let message =
+        fs::read_to_string(path).with_context(|| format!("could not read {}", path.display()))?;
+    let Some(line) = message
+        .lines()
+        .map(str::trim)
+        .rfind(|line| !line.is_empty())
+    else {
+        bail!("the session Step ended without the issue's URL on its last line");
+    };
+    IssueUrl::parse(line).context("the session Step ended without the issue's URL on its last line")
 }
 
 fn resolve_process_issue(issue: Option<IssueInput>) -> Result<Option<IssueUrl>> {
@@ -706,6 +833,7 @@ fn step_plan(step: &ResolvedStep, named: bool) -> String {
             let shown = command.replace(['\n', '\r'], " ");
             format!("{}: command {shown}", step.name)
         }
+        StepKind::RunPublishedIssue => format!("{}: run-published-issue", step.name),
     };
     if named && let Some(worktree) = &step.worktree {
         let _ = write!(line, " (worktree {worktree})");
@@ -722,8 +850,10 @@ fn prepare(name: &str, config: &UserConfig) -> Result<Prepared> {
     let text = read_process(&path)?;
     let file = parse(&path, &text)?;
     refuse_worktrees(&path, &file)?;
+    refuse_published(&path, &file.steps)?;
     let base = launch::checked_out_base()?;
     let launch = Git::new(std::env::current_dir()?);
+    let base_name = base.name().to_string();
     let commit = base.origin_commit();
     let written = WrittenGuard;
     let worktrees = create_worktrees(&launch, commit, &file)?;
@@ -750,6 +880,7 @@ fn prepare(name: &str, config: &UserConfig) -> Result<Prepared> {
         steps,
         issue: None,
         started: Utc::now(),
+        base: base_name,
     })
 }
 
@@ -846,6 +977,34 @@ fn refuse_worktrees(path: &Path, file: &ProcessFile) -> Result<()> {
     Ok(())
 }
 
+fn refuse_published(path: &Path, steps: &[StepDraft]) -> Result<()> {
+    for (index, step) in steps.iter().enumerate() {
+        let DraftKind::Catalogue { line } = step.kind else {
+            continue;
+        };
+        let follows = index.checked_sub(1).is_some_and(|previous| {
+            matches!(steps[previous].kind, DraftKind::Skill { .. })
+                && !same_group(&steps[previous], step)
+        });
+        if !follows {
+            return Err(rule(
+                path,
+                line,
+                "run-published-issue",
+                "run-published-issue must directly follow a session Step",
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn same_group(earlier: &StepDraft, step: &StepDraft) -> bool {
+    match (&earlier.parallel, &step.parallel) {
+        (Some((earlier, _)), Some((step, _))) => earlier == step,
+        _ => false,
+    }
+}
+
 fn resolve(path: &Path, step: &StepDraft, worktree: &Path) -> Result<ResolvedStep> {
     let kind = match &step.kind {
         DraftKind::Skill { skill, line } => match skills::find(worktree, skill) {
@@ -858,6 +1017,7 @@ fn resolve(path: &Path, step: &StepDraft, worktree: &Path) -> Result<ResolvedSte
             }
         },
         DraftKind::Command { command } => StepKind::Command(command.clone()),
+        DraftKind::Catalogue { .. } => StepKind::RunPublishedIssue,
     };
     Ok(ResolvedStep {
         name: step.name.clone(),
@@ -1093,8 +1253,7 @@ fn parse_steps(path: &Path, text: &str, line: usize, item: &Item) -> Result<Vec<
 
 fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Result<StepDraft> {
     let mut name = None;
-    let mut skill = None;
-    let mut command = None;
+    let mut kinds = Vec::new();
     let mut worktree = None;
     let mut parallel = None;
     let mut optional = false;
@@ -1102,8 +1261,9 @@ fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Resu
         let line = key_line(text, table.key(key));
         match key {
             "name" => name = Some(step_name(path, line, item)?),
-            "skill" => skill = Some(step_skill(path, line, item)?),
-            "command" => command = Some(step_command(path, line, item)?),
+            "skill" => kinds.push(ParsedKind::Skill(step_skill(path, line, item)?)),
+            "command" => kinds.push(ParsedKind::Command(step_command(path, line, item)?)),
+            "catalogue" => kinds.push(ParsedKind::Catalogue(step_catalogue(path, line, item)?)),
             "worktree" => worktree = Some(step_worktree(path, line, item)?),
             "parallel" => parallel = Some(step_parallel(path, line, item)?),
             "optional" => optional = step_optional(path, line, item)?,
@@ -1113,10 +1273,16 @@ fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Resu
     let Some((name, name_line)) = name else {
         return Err(rule(path, table_line, "step name", "a step needs a name"));
     };
-    let kind = match (skill, command) {
-        (Some((skill, line)), None) => DraftKind::Skill { skill, line },
-        (None, Some((command, _))) => DraftKind::Command { command },
-        (None, None) => {
+    let kind = match kinds.as_slice() {
+        [ParsedKind::Skill((skill, line))] => DraftKind::Skill {
+            skill: skill.clone(),
+            line: *line,
+        },
+        [ParsedKind::Command((command, _))] => DraftKind::Command {
+            command: command.clone(),
+        },
+        [ParsedKind::Catalogue(line)] => DraftKind::Catalogue { line: *line },
+        [] => {
             return Err(rule(
                 path,
                 name_line,
@@ -1124,10 +1290,10 @@ fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Resu
                 format!("step {name} has no kind"),
             ));
         }
-        (Some(_), Some((_, line))) => {
+        [_, second, ..] => {
             return Err(rule(
                 path,
-                line,
+                kind_line(second),
                 "exactly one kind",
                 format!("step {name} has more than one kind"),
             ));
@@ -1141,6 +1307,40 @@ fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Resu
         parallel,
         kind,
     })
+}
+
+enum ParsedKind {
+    Skill((String, usize)),
+    Command((String, usize)),
+    Catalogue(usize),
+}
+
+fn kind_line(kind: &ParsedKind) -> usize {
+    match kind {
+        ParsedKind::Skill((_, line))
+        | ParsedKind::Command((_, line))
+        | ParsedKind::Catalogue(line) => *line,
+    }
+}
+
+fn step_catalogue(path: &Path, line: usize, item: &Item) -> Result<usize> {
+    let Some(value) = item.as_str() else {
+        return Err(rule(
+            path,
+            line,
+            "exactly one kind",
+            "catalogue must be a string",
+        ));
+    };
+    if value != "run-published-issue" {
+        return Err(rule(
+            path,
+            line,
+            "exactly one kind",
+            "catalogue must be run-published-issue",
+        ));
+    }
+    Ok(line)
 }
 
 fn step_worktree(path: &Path, line: usize, item: &Item) -> Result<(String, usize)> {
