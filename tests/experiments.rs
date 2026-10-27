@@ -781,7 +781,15 @@ PY
         for commit in [&baseline, &candidate] {
             let build = scenario.path(&format!("home/.thirdshift/evals/builds/{commit}"));
             fs::create_dir_all(&build).unwrap();
-            fs::copy(env!("CARGO_BIN_EXE_thirdshift"), build.join("thirdshift")).unwrap();
+            let binary = build.join("thirdshift");
+            fs::copy(env!("CARGO_BIN_EXE_thirdshift"), &binary).unwrap();
+            // macOS scans a fresh copy on its first exec, for about a second.
+            // Pay that here, outside the Trial deadline the tests time.
+            let warmed = std::process::Command::new(&binary)
+                .arg("--version")
+                .output()
+                .unwrap();
+            assert!(warmed.status.success(), "{warmed:?}");
         }
         let suite = scenario.path(&format!("home/.thirdshift/evals/suites/{session}"));
         let task = suite.join("tasks/fixture");
