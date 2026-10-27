@@ -239,13 +239,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 logs_url: command
                     .command_log
                     .as_ref()
-                    .map(|path| {
-                        if command.account.is_some() {
-                            format!("/logs/command/{}", crate::logs::catalog::id(path))
-                        } else {
-                            logs_url(path, root)
-                        }
-                    })
+                    .map(|path| logs_url(path, root, command.account.as_deref()))
                     .unwrap_or_else(|| "/?page=logs".into()),
                 subject,
                 subject_url: issue_url(command.issue.as_ref()),
@@ -410,14 +404,7 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
         log_growth: format!("{log_length}:{session_length}"),
         selector: Observation::Record(command).selector().unwrap_or_default(),
         can_dismiss: false,
-        logs_url: if command.account.is_some() {
-            format!(
-                "/logs/command/{}",
-                crate::logs::catalog::id(&command.record_path)
-            )
-        } else {
-            logs_url(&command.record_path, root)
-        },
+        logs_url: logs_url(&command.record_path, root, command.account.as_deref()),
         subject,
         subject_url: issue_url(facts.issue.as_ref()),
         title,
@@ -458,8 +445,13 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
     })
 }
 
-fn logs_url(path: &std::path::Path, root: &std::path::Path) -> String {
-    path.strip_prefix(root)
+fn logs_url(path: &std::path::Path, root: &std::path::Path, account: Option<&str>) -> String {
+    let relative = if account.is_some() {
+        Ok(path)
+    } else {
+        path.strip_prefix(root)
+    };
+    relative
         .map(|path| format!("/logs/command/{}", crate::logs::catalog::id(path)))
         .unwrap_or_else(|_| "/?page=logs".into())
 }

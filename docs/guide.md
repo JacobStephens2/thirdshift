@@ -119,7 +119,7 @@ thirdshift console other-accounts none
 
 Setup also asks for this setting when configuring the Console. Discovery uses the passwd database's home directory and the account's readable User config `logs.dir` override, expanding `~` against that account's home. The machine owner grants directory traversal and log read access using filesystem permissions or ACLs; thirdshift never grants access or asks for privilege. Grant access only to the logs you intend to expose, since they can contain sensitive work. Unreadable accounts are silently skipped in `readable` mode. For a named list, `status` reports each unavailable account once on stderr; the page stays quiet.
 
-Other-account Commands carry their OS account name in every Inbox section (including Needs you), History, Security, logs, Waterfall and Command details. JSON adds `account` only to other-account observations. Their Needs you rows count in the tab title. Stop, Requeue, Dismiss and Undo are unavailable for them, and the corresponding CLI requests refuse with the owning account's name. Reading never changes another account's logs, Activity log or repositories. The serving account's own Commands keep their existing controls.
+Other-account Commands carry their OS account name in every Inbox section (including Needs you), Lanes, Stages, History, Security, logs, Waterfall and Command details. JSON adds `account` only to other-account observations. Their Needs you rows count in the tab title. Stop, Requeue, Dismiss and Undo are unavailable for them, and the corresponding CLI requests refuse with the owning account's name. Reading never changes another account's logs, Activity log or repositories. The serving account's own Commands keep their existing controls.
 
 ### Inbox
 

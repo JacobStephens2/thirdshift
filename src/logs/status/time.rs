@@ -93,12 +93,16 @@ fn timestamp(value: &str) -> Option<i64> {
         .map(|time| time.timestamp())
 }
 
-fn subject(kind: &str, repository: &str, issue: Option<&Issue>) -> String {
+fn subject(kind: &str, repository: &str, issue: Option<&Issue>, account: Option<&str>) -> String {
     let kind = crate::logs::display_name(kind);
-    issue.map_or_else(
+    let subject = issue.map_or_else(
         || format!("{kind} on {repository}"),
         |issue| format!("{kind} · {repository}#{}", issue.number),
-    )
+    );
+    match account {
+        Some(account) => format!("[{account}] {subject}"),
+        None => subject,
+    }
 }
 
 fn issue_link(issue: Option<&Issue>) -> (Option<String>, String) {
@@ -174,7 +178,12 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
         .collect();
     let (issue_url, issue_label) = issue_link(record.issue.as_ref());
     Run {
-        subject: subject(&record.kind, &record.repository, record.issue.as_ref()),
+        subject: subject(
+            &record.kind,
+            &record.repository,
+            record.issue.as_ref(),
+            command.account.as_deref(),
+        ),
         title: record
             .issue
             .as_ref()
@@ -232,6 +241,7 @@ fn collect(
         &command.record.kind,
         &command.record.repository,
         command.record.issue.as_ref(),
+        command.account.as_deref(),
     );
     for dispatched in &command.dispatched {
         collect(
@@ -321,7 +331,7 @@ fn grid(repository: String, groups: Vec<Group>) -> Grid {
 pub(crate) fn load(config: &UserConfig, hours: f64, by_repository: bool) -> Result<Views> {
     let now = Local::now();
     let cutoff = now - chrono::Duration::seconds((hours * 3600.0) as i64);
-    let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
+    let snapshot = Snapshot::for_user(config, now)?;
     let mut lanes = Vec::new();
     let mut groups = Vec::new();
     for entry in snapshot.entries() {
@@ -342,7 +352,12 @@ pub(crate) fn load(config: &UserConfig, hours: f64, by_repository: bool) -> Resu
                 let selector = Observation::History(command).selector().unwrap_or_default();
                 let (issue_url, issue_label) = issue_link(command.issue.as_ref());
                 runs.push(Run {
-                    subject: subject(&command.kind, &command.repository, command.issue.as_ref()),
+                    subject: subject(
+                        &command.kind,
+                        &command.repository,
+                        command.issue.as_ref(),
+                        command.account.as_deref(),
+                    ),
                     title: String::new(),
                     state: command
                         .outcome

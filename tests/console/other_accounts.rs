@@ -38,7 +38,7 @@ void endpwent(void) { if (accounts) fclose(accounts); accounts = NULL; }
         record(&root.path().join("unreadable"), 99, Some("failed"), 0);
         fs::set_permissions(
             root.path().join("unreadable"),
-            fs::Permissions::from_mode(0),
+            fs::Permissions::from_mode(0o000),
         )
         .unwrap();
         let bin = root.path().join("bin");
@@ -99,6 +99,58 @@ fn retained_files(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf,
         }
     }
     files
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn foreign_only_status_keeps_github_answers_under_the_serving_account() {
+    let machine = Machine::new();
+    record(&machine.home("conductor"), 7, Some("failed"), 0);
+    machine.setting("readable");
+    let before = retained_files(&machine.home("conductor"));
+    assert!(!machine.home("serving").join(".thirdshift/logs").exists());
+    let output = machine.run(&["status", "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    let status: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(status["commands"][0]["account"], "conductor");
+    assert!(
+        machine
+            .home("serving")
+            .join(".thirdshift/logs/github-inbox.json")
+            .exists()
+    );
+    assert_eq!(retained_files(&machine.home("conductor")), before);
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn unreadable_foreign_logs_are_omitted_without_a_page_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    record(&home, 7, Some("failed"), 0);
+    let dir = home.join(".thirdshift/logs/acme/widgets/commands/issue");
+    let log = dir.join("7-fixture.log");
+    fs::write(&log, "private output").unwrap();
+    machine.setting("conductor");
+    let output = machine.run(&["logs", "--json"]);
+    let logs: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let id = logs["logs"][0]["id"].as_str().unwrap();
+    fs::set_permissions(&log, fs::Permissions::from_mode(0o000)).unwrap();
+    let output = machine.run(&["logs", "--json"]);
+    let logs: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(logs["logs"].as_array().unwrap().is_empty());
+    let console = Console::start_command({
+        let mut command = machine.command();
+        command.args(["console", "--no-sign-in"]);
+        command
+    });
+    assert_eq!(console.get(&format!("/logs/{id}")).status(), 404);
+    let selector = dir.join("7-fixture.command.json");
+    let query = serde_urlencoded::to_string([("command", selector.to_str().unwrap())]).unwrap();
+    assert_eq!(console.get(&format!("/log?{query}")).status(), 404);
+    assert!(console.get("/logs").status().is_success());
+    assert!(console.get("/").status().is_success());
 }
 
 #[cfg(target_os = "linux")]
@@ -190,7 +242,7 @@ fn readable_accounts_merge_needs_you_and_all_readers_without_foreign_writes() {
     fs::rename(foreign.join(".thirdshift/logs"), &override_dir).unwrap();
     fs::write(
         foreign.join(".thirdshift/config.toml"),
-        "[logs]\ndir = '~/retained'\n",
+        "[logs]\ndir = '~/retained/'\n",
     )
     .unwrap();
     let output = machine.run(&["status", "--json"]);
@@ -222,6 +274,31 @@ fn readable_accounts_merge_needs_you_and_all_readers_without_foreign_writes() {
     let html = console.get("/").text().unwrap();
     assert!(section(&html, "needs you").contains("conductor"), "{html}");
     assert!(html.contains("2 need you"), "{html}");
+    let row = html
+        .split("<li class=\"command\"")
+        .find(|row| row.contains("account-tag") && row.contains("conductor"))
+        .unwrap();
+    let inventory_url = row
+        .split("href=\"")
+        .skip(1)
+        .filter_map(|part| part.split_once('"'))
+        .map(|(url, _)| url)
+        .find(|url| url.starts_with("/logs/command/"))
+        .unwrap();
+    assert!(
+        console
+            .get(inventory_url)
+            .text()
+            .unwrap()
+            .contains("7-fixture.log")
+    );
+    for page in ["lanes", "stages"] {
+        let html = console.get(&format!("/?page={page}")).text().unwrap();
+        assert!(
+            html.contains("[conductor]") && html.contains("acme/widgets#7"),
+            "{html}"
+        );
+    }
     let query = serde_urlencoded::to_string([("command", command)]).unwrap();
     let peek = console.get(&format!("/peek?{query}")).text().unwrap();
     assert!(peek.contains("conductor"), "{peek}");

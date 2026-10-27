@@ -15,6 +15,16 @@ pub(crate) struct Source {
     pub root: PathBuf,
 }
 
+impl Source {
+    pub(super) fn id(&self, path: &std::path::Path) -> anyhow::Result<String> {
+        Ok(super::catalog::id(if self.account.is_some() {
+            path
+        } else {
+            path.strip_prefix(&self.root)?
+        }))
+    }
+}
+
 pub(crate) struct Sources {
     pub logs: Vec<Source>,
     pub unavailable: BTreeSet<String>,

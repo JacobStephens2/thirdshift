@@ -304,6 +304,7 @@ pub(super) fn refresh(
     }
     // Serialize readers across status and Console processes. A busy reader
     // already owns the refresh; status can show the kept answer immediately.
+    std::fs::create_dir_all(&config.logs_dir)?;
     let lock = std::fs::File::create(config.logs_dir.join(".github-inbox-lock"))?;
     match lock.try_lock() {
         Ok(()) => {}
