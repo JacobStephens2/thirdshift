@@ -30,6 +30,7 @@ Research date: 2026-10-27.
 - **Commodity** (where any saving would come from): Trial scheduling, resume, `pass_cubed`, descriptive and agreement statistics, the Experiments pages, a log schema, case authoring. Inspect covers most of it natively. The catch is that swapping it in moves the retries, caches, timeouts and resume rules — the documented sources of silent inaccuracy — outside the Bar's guarantee. `inspect_swe`'s `_BRIDGE_SAFE_ENV` table, which disables five Claude Code client-side watchdogs, is the field's own evidence that this risk is real. (§4.2, §4.3)
 - **Interop is already mostly done.** `thirdshift logs <command> --export <dir>` writes the Experiment's whole Trace, Trial and Grader sessions included, as OTLP JSON Lines, so any OTLP consumer reads the trajectories today — and OTLP/HTTP ingest is universal across MLflow, Braintrust, LangSmith and Weave. What it does not carry is the Scores and the Verdict. There is also **no trajectory standard outside ATIF**: OpenTelemetry's GenAI conventions are still Status Development with no releases and define no trajectory document. (§6.1)
 - **Three things to do.** (a) Adopt a hard cost ceiling in the Bar, borrowed from `claude plugin eval --max-cost-usd` — the only feature in the comparison that a tool has and thirdshift lacks. (b) Write a versioned output-format document for the per-Trial result, the Score with its recheck history and the Verdict, the way `docs/trial.md` versions the Trial protocol. (c) Cross-check a finished Experiment's Verdict against MLflow's McNemar and bootstrap CI in a throwaway script — the strongest available validation of 150 lines of statistics with no reference implementation. Decline `.eval` log writing, Docker/image-based harnesses and every hosted platform. (§6.2, §6.3, §7)
+- **Update 2026-10-27: disk is no longer a constraint.** The Day shift can provide a bigger host with room for container images. That meets §8's first trigger, without changing the main answer. It changes three narrower ones: the implement suite, container sandboxes, and a re-check of Harbor. See §8.1.
 - **What would change the answer:** more disk (not Docker specifically — Harbor runs on podman and singularity, but its tasks still need images); **Harbor wiring its `resolve_auth_file` helper through `grok-build` and `opencode`**, which would take it from two of six Harnesses to four — the most watchable change in the field; `claude plugin eval` growing `--agent` or an effort axis; an Inspect scorer that can see two Arms at once; a concrete outside consumer of Experiment results; eval maintenance outgrowing factory capacity; a second maintainer; or AISI's `hibayes`/`optstop` getting real releases. (§8)
 
 ## 1. What was built, and what it cost
@@ -333,6 +334,27 @@ Each of these is a concrete trigger, not a worry. **[interpretation]**
 - **The maintenance becoming the bottleneck.** Six days and 139 commits built it; the signal to watch is how many commits per month it takes to *keep* it running once Harnesses update themselves underneath it. If the eval modules start consuming more Run capacity than the factory produces, the commodity 20% is where to cut, and `inspect view` in place of the Console's Experiments pages is the first candidate.
 - **A second person.** The whole case for Rust-in-one-language rests on one maintainer and one test suite. A contributor who knows Inspect would change the cost of a second language.
 - **A Verdict that needs a hierarchical model.** [eval-runners.md §7.1](eval-runners.md) notes Bowyer et al. leave several trials per item to a hierarchical model they do not give. If the Bar ever needs one, the 150–200 lines of Rust becomes a real statistics dependency, and Python's ecosystem starts to matter.
+
+### 8.1 Update (2026-10-27): the host constraint is lifted
+
+The Day shift can provide a bigger host with room for container images, so this note no longer treats disk, or Docker, as a constraint. §8's first trigger is met.
+
+**What doesn't change: keep the runner.** Disk was never why a runner swap was declined. These still are:
+- Harbor and the other tools drive only Claude and Codex on subscription logins, out of six Harnesses (§5.3).
+- None hides which Arm produced an output from its Graders (§5).
+- None has the Verdict, the Bar or the Void Trial rules (§3).
+
+**What changes:**
+1. **The implement suite becomes much easier.**
+   - An image per repository solves the "a commit stops building on the host" problem that [`settled.md`](../grill-with-docs/done/698-evals/settled.md) Q6.7 anticipated.
+   - SWE-bench's harness (≥120 GB) and SWE-smith's per-repository images for bug injection ([eval-suite-scaling.md §2](eval-suite-scaling.md)) become usable as they are.
+   - Harbor's task format becomes a candidate for implement Eval tasks, even with thirdshift's runner still driving the Trials.
+
+   These are questions for the implement suite's grill (#1484), not research to do now.
+2. **Trials could run in containers instead of bwrap.** This is plausible now, though not clearly better. The bwrap sandbox works today, and what containers mainly add is per-repository toolchains, which only the implement suite needs. Decide it there.
+3. **Harbor is worth re-checking when the implement suite is grilled**, especially whether its `resolve_auth_file` helper reaches `grok-build` and `opencode`.
+
+§7 declined Harbor, SWE-bench's harness and Inspect's Docker sandbox mainly because of disk. For the implement suite's tasks and environments, that decline is reopened (item 1). As a replacement runner it still holds, on the grounds above.
 
 ## 9. Sources
 
