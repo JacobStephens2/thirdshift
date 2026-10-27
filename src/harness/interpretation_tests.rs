@@ -413,6 +413,50 @@ fn only_root_result_handoffs_count_and_later_failures_still_fail() {
     }
 }
 
+/// A delegated result is not a root handoff. Its completion line must not
+/// replace the root session's security review when a later root reply has none.
+#[test]
+fn grok_child_result_cannot_clear_a_root_security_review() {
+    let root = concat!(
+        "Reviewed.\n",
+        r#"Security review: {"unaddressed_count":1,"findings":["Cross-tenant read"],"pre_existing_count":0}"#
+    );
+    let child = r#"Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}"#;
+    for harness in [Harness::Grok, Harness::Claude] {
+        let mut interpretation = stream(harness, "");
+        for event in [
+            serde_json::json!({"type": "result", "subtype": "success", "result": root}),
+            serde_json::json!({
+                "type": "result",
+                "subtype": "success",
+                "parent_tool_use_id": "child",
+                "result": child
+            }),
+            serde_json::json!({
+                "type": "result",
+                "subtype": "success",
+                "result": "Background task handled."
+            }),
+        ] {
+            interpretation.condense(&event.to_string());
+        }
+        let message = finish(interpretation)
+            .outcome
+            .unwrap()
+            .final_message
+            .unwrap_or_default();
+        assert_ne!(message, child, "{harness:?}");
+        let review = crate::security::review::Review::from_final_message(Some(&message));
+        assert!(
+            review
+                .as_ref()
+                .ok()
+                .is_none_or(|review| !review.findings.is_empty()),
+            "{harness:?} accepted a cleared review from {message:?}"
+        );
+    }
+}
+
 fn after_background_notification(
     harness: Harness,
     earlier: &str,

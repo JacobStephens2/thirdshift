@@ -329,7 +329,12 @@ impl Stream {
                 {
                     return Vec::new();
                 }
-                if let Some(message) = event["result"].as_str() {
+                // A child result may replace the latest text, but it is not a
+                // root handoff. Remembering it would let that text outlive a
+                // later root reply that carries no completion line.
+                if event["parent_tool_use_id"].is_null()
+                    && let Some(message) = event["result"].as_str()
+                {
                     self.remember_completion(message);
                 }
                 self.final_message = event["result"].as_str().map(String::from);
