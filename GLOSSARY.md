@@ -87,7 +87,7 @@ How hard the **Model** reasons in a session, such as `high` or `max`. One per **
 _Avoid_: reasoning level, thinking budget
 
 **Resume**:
-A continuation of the same agent session, started once when that session ended its turn with background work still running, which was killed with it: thirdshift takes it as work the session was waiting on. Its **Session prompt** asks the agent to re-run that work in the foreground and finish. A Resume that ends the same way gets no second Resume and does not fail the **Ticket run**: the work may have been abandoned rather than awaited, so thirdshift names it in a progress line and carries on, and the steps that follow decide the outcome. If the Ticket run is then a **Failed ticket run**, its cause names the killed work ahead of the step that failed. A Resume is not a **Repair** and does not count against the Repair cap.
+A continuation of the same agent session, started once when that session ended its turn with background work still running, which was killed with it: thirdshift takes it as work the session was waiting on. Every session **Step** gets this rule, in a **Custom process** as in a **Ticket run**. Its **Session prompt** asks the agent to re-run that work in the foreground and finish. A Resume that ends the same way gets no second Resume and does not fail the **Process** or Ticket run: the work may have been abandoned rather than awaited, so thirdshift names it in a progress line and carries on, and the steps that follow decide the outcome. If the Process or Ticket run then fails, its cause names the killed work ahead of the step that failed. A Resume is not a **Repair** and does not count against the Repair cap.
 
 ### Factory work
 
