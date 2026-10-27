@@ -1691,7 +1691,11 @@ cargo test
 </div></details>
 <details class="fold"><summary><h2>Releasing</h2></summary>
 <div class="manual-content" id="releasing">
-<p>Before pushing anything, the release script runs <code>thirdshift experiment --release &lt;commit&gt;</code> using this checkout&#39;s runner and private Eval suites.
+<p>The release script skips Experiments by default, printing a note. Opt in with
+<code>scripts/release.sh --with-experiment 0.4.0</code>, adding <code>--with-experiment</code> again
+on each resume that should run an Experiment.</p>
+<p>With <code>--with-experiment</code>, before pushing anything, the script runs
+<code>thirdshift experiment --release &lt;commit&gt;</code> using this checkout&#39;s runner and private Eval suites.
 It evaluates the content commit beneath the version-only bump, so reruns use
 the same Experiment even before a bump branch exists. It pins that commit in a
 local Git ref before starting, so a merge to <code>main</code> during interruption does
@@ -1702,17 +1706,14 @@ intervals and asks <code>release anyway? [y/N]</code>, including without <code>-
 Only <code>y</code> or <code>yes</code> continues; EOF or any other answer stops. Pending borderline
 and decisive Scores are listed with their recheck commands and polled until
 you have rechecked them. No touched suite or a last release with no Trial flag
-prints a note and carries on. <code>--no-experiment</code> skips the release Experiment
-outright, on the first run and on every resume, and prints a line saying so:
-use it only when an Experiment can&#39;t give a Verdict worth its Trials, such as
-while every Trial is known to be void. An interrupted invocation resumes its saved
+prints a note and carries on. An interrupted invocation resumes its saved
 Trials. A pushed bump branch is checked again before opening its PR, and an
 open or merged bump PR before merging or tagging. An already pushed tag only
 resumes the release workflow. Python 3 is needed to read the Experiment results.</p>
 <p>If <code>main</code> gains different content after the Candidate was selected, the script
-refuses to push or merge that release under its old Experiment; choose a fresh
-release version to measure current <code>main</code>. It also checks the merged tree before
-tagging, so a concurrent merge cannot publish unmeasured content.</p>
+refuses to push or merge that release; choose a fresh release version for current
+<code>main</code>. It also checks the merged tree before tagging, so a concurrent merge
+cannot publish different content. These checks apply even without an Experiment.</p>
 <p>From a clone of this repo, signed in to <code>gh</code> and the User config&#39;s default Harness, run the release script with the new version:</p>
 <pre><code class="language-sh">scripts/release.sh 0.4.0
 </code></pre>
