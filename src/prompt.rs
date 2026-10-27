@@ -115,6 +115,13 @@ pub struct ProcessContinuation<'a> {
     pub base: &'a str,
 }
 
+/// Finished Steps named in a later Step's prompt, and whether that Step is
+/// the Process's first. A later Step with no finished result is not the first.
+pub struct EarlierSteps<'a> {
+    pub results: &'a [(String, std::path::PathBuf)],
+    pub first: bool,
+}
+
 /// The sentence a Continuation uses so the session builds on existing commits.
 fn continuing_work(branch: &str, base: &str) -> String {
     format!(
@@ -122,20 +129,17 @@ fn continuing_work(branch: &str, base: &str) -> String {
     )
 }
 
-/// One Step of a Custom process. `earlier` is each finished Step's name and
-/// the path of its final message, outside the worktree. `first` is whether
-/// this is the Process's first Step. A later Step with no finished result
-/// does not claim to be the first. `issue`, when the Process has one, is
-/// named for the session to work from its file. `continuation`, when the
-/// Step's checkout is an existing Issue branch, tells the session to build
-/// on that branch's commits.
+/// One Step of a Custom process. `earlier` names each finished Step and
+/// whether this is the Process's first Step. `issue`, when the Process has
+/// one, is named for the session to work from its file. `continuation`, when
+/// the Step's checkout is an existing Issue branch, tells the session to
+/// build on that branch's commits.
 pub fn process_step(
     process: &str,
     step: &str,
     skill_name: &str,
     skill_path: &std::path::Path,
-    earlier: &[(String, std::path::PathBuf)],
-    first: bool,
+    earlier: EarlierSteps<'_>,
     issue: Option<&IssueUrl>,
     continuation: Option<ProcessContinuation<'_>>,
 ) -> String {
@@ -143,8 +147,8 @@ pub fn process_step(
         .as_ref()
         .map(|note| format!("{}\n", continuing_work(note.branch, note.base)))
         .unwrap_or_default();
-    let mut earlier_text = if earlier.is_empty() {
-        if first && continuation.is_none() {
+    let mut earlier_text = if earlier.results.is_empty() {
+        if earlier.first && continuation.is_none() {
             "This is the first Step. No earlier Step has a result.\n".to_string()
         } else {
             "No earlier Step has a result.\n".to_string()
@@ -152,7 +156,7 @@ pub fn process_step(
     } else {
         String::new()
     };
-    for (name, path) in earlier {
+    for (name, path) in earlier.results {
         let _ = writeln!(
             earlier_text,
             "Earlier Step result {name}: {}",
@@ -716,8 +720,10 @@ mod tests {
                 "gather",
                 "to-spec",
                 std::path::Path::new("skills/to-spec/SKILL.md"),
-                &[],
-                true,
+                EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
                 Some(&issue),
                 None,
             ),
@@ -740,8 +746,10 @@ mod tests {
             "gather",
             "to-spec",
             std::path::Path::new("skills/to-spec/SKILL.md"),
-            &[],
-            true,
+            EarlierSteps {
+                results: &[],
+                first: true,
+            },
             Some(&issue),
             None,
         );
@@ -754,8 +762,10 @@ mod tests {
             "gather",
             "to-spec",
             std::path::Path::new("skills/to-spec/SKILL.md"),
-            &[],
-            true,
+            EarlierSteps {
+                results: &[],
+                first: true,
+            },
             None,
             None,
         );

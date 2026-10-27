@@ -139,13 +139,15 @@ impl Delivery<'_> {
         let child_asks = self.child_asks;
         let base_fix = self.base_fix;
         run_checked(
-            logs,
-            issue,
-            started,
-            &child_asks.harness,
-            child_asks.security_review_harness.as_ref(),
-            child_asks.security_review_default.as_ref(),
-            base,
+            CheckedRun {
+                logs,
+                issue,
+                started,
+                harness: &child_asks.harness,
+                security_review: child_asks.security_review_harness.as_ref(),
+                security_review_default: child_asks.security_review_default.as_ref(),
+                base,
+            },
             worktree,
             pull_request,
             &tracker,
@@ -207,45 +209,54 @@ impl Delivery<'_> {
         let child_asks = self.child_asks;
         let base_fix = self.base_fix;
         run_checked(
-            logs,
-            issue,
-            started,
-            &child_asks.harness,
-            child_asks.security_review_harness.as_ref(),
-            child_asks.security_review_default.as_ref(),
-            base,
+            CheckedRun {
+                logs,
+                issue,
+                started,
+                harness: &child_asks.harness,
+                security_review: child_asks.security_review_harness.as_ref(),
+                security_review_default: child_asks.security_review_default.as_ref(),
+                base,
+            },
             worktree,
             pull_request,
             &tracker,
             |url, _log| url,
             |merged, _log| merged.pr.url.clone(),
             |tracker, worktree, pull_request, sessions| {
-                publish_steps(
+                publish_steps(&mut InWorktree {
                     tracker,
                     issue,
-                    base,
-                    child_asks,
-                    base_fix,
                     worktree,
-                    pull_request,
+                    base,
+                    base_fix,
+                    child_asks,
                     sessions,
-                )
+                    pull_request,
+                })
             },
         )
     }
+}
+
+/// What the shared Delivery envelope checks before each session and names
+/// when a failure preserves the work: the issue, when the run began, where
+/// its sessions are logged, the harnesses they run on, and the Base branch.
+struct CheckedRun<'a> {
+    logs: &'a Logs,
+    issue: &'a IssueUrl,
+    started: DateTime<Utc>,
+    harness: &'a Choice,
+    security_review: Option<&'a Choice>,
+    security_review_default: Option<&'a Choice>,
+    base: &'a str,
 }
 
 /// The shared Delivery envelope: check for an untrusted edit before each
 /// session, run `steps`, and on failure either accept an already-merged pull
 /// request whose head includes the local work or take the Failed run path.
 fn run_checked<T, S>(
-    logs: &Logs,
-    issue: &IssueUrl,
-    started: DateTime<Utc>,
-    harness: &Choice,
-    security_review: Option<&Choice>,
-    security_review_default: Option<&Choice>,
-    base: &str,
+    checked: CheckedRun<'_>,
     worktree: Worktree,
     pull_request: &mut PullRequest,
     tracker: &Tracker,
@@ -253,6 +264,15 @@ fn run_checked<T, S>(
     on_merged: impl FnOnce(&AlreadyMerged, Option<PathBuf>) -> S,
     steps: impl FnOnce(&Tracker, &Worktree, &mut PullRequest, &Sessions) -> Result<T>,
 ) -> Result<S, FailedRun> {
+    let CheckedRun {
+        logs,
+        issue,
+        started,
+        harness,
+        security_review,
+        security_review_default,
+        base,
+    } = checked;
     pull_request.begin_delivery();
     let path = worktree.path().to_path_buf();
     let before_each = move || {
@@ -277,7 +297,7 @@ fn run_checked<T, S>(
                 progress::step("the pull request was merged while Delivery was running");
                 Ok(on_merged(merged, log))
             } else {
-                let stopped_at = stopped_at(&tracker, &error);
+                let stopped_at = stopped_at(tracker, &error);
                 let path = worktree.path().to_path_buf();
                 let mut outside = OnFailure {
                     base,
@@ -295,43 +315,45 @@ fn run_checked<T, S>(
 /// [`Delivery::publish`]'s steps: push, open a draft when none exists, write
 /// what it was built with, mark the pull request ready, and take it to ready
 /// for review through the Repair loop.
-fn publish_steps<'a>(
-    tracker: &Tracker,
-    issue: &'a IssueUrl,
-    base: &'a str,
-    child_asks: &'a ChildAsks,
-    base_fix: &'a mut BaseFix,
-    worktree: &'a Worktree,
-    pull_request: &'a mut PullRequest,
-    sessions: &'a Sessions<'a>,
-) -> Result<String> {
-    tracker.enter(Stage::Push);
-    pull_request.ensure_actionable(false)?;
-    worktree.push_if_actionable(&mut || pull_request.ensure_actionable(false))?;
-    let title = GitHub::new().issue_title(issue)?;
-    let body = format!("Closes #{}", issue.number);
-    pull_request.open_if_absent(&title, &body)?;
-    if let Err(error) = pull_request.write_built_with(&child_asks.harness) {
+fn publish_steps(outside: &mut InWorktree<'_>) -> Result<String> {
+    outside.tracker.enter(Stage::Push);
+    outside.pull_request.ensure_actionable(false)?;
+    outside
+        .worktree
+        .push_if_actionable(&mut || outside.pull_request.ensure_actionable(false))?;
+    let title = GitHub::new().issue_title(outside.issue)?;
+    let body = format!("Closes #{}", outside.issue.number);
+    outside.pull_request.open_if_absent(&title, &body)?;
+    if let Err(error) = outside
+        .pull_request
+        .write_built_with(&outside.child_asks.harness)
+    {
         progress::warn(
             &error,
             format_args!("could not write the Built-with line in the pull request's body"),
         );
     }
-    tracker.enter(Stage::PullRequestReadiness);
-    let pr = pull_request.mark_ready(None)?;
-    let mut outside = RunOutside {
+    outside.tracker.enter(Stage::PullRequestReadiness);
+    let tracker = outside.tracker;
+    let issue = outside.issue;
+    let worktree = outside.worktree;
+    let base = outside.base;
+    let child_asks = outside.child_asks;
+    let sessions = outside.sessions;
+    let pr = outside.pull_request.mark_ready(None)?;
+    let mut repair = RunOutside {
         tracker,
         issue,
         worktree,
         base,
         pr_url: &pr.url,
-        base_fix,
+        base_fix: outside.base_fix,
         child_asks,
         sessions,
-        pull_request,
+        pull_request: outside.pull_request,
         ci_watch: ci::Watch::new(issue),
     };
-    repair_loop::take_to_goal(&mut outside, base, Goal::ReadyForReview)?;
+    repair_loop::take_to_goal(&mut repair, base, Goal::ReadyForReview)?;
     Ok(pr.url)
 }
 

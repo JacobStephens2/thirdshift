@@ -246,9 +246,11 @@ fn check(name: &str, issue: Option<IssueInput>) -> Result<String> {
         file,
         issue,
         Utc::now(),
-        &launch,
-        base.origin_commit(),
-        None,
+        WorktreeSource {
+            git: &launch,
+            commit: base.origin_commit(),
+            issue_checkout: None,
+        },
     )?;
     Ok(plan(name, &prepared))
 }
@@ -323,9 +325,11 @@ fn run(name: &str, issue: Option<IssueInput>, email: Option<NotificationAsk>) ->
             file,
             None,
             started,
-            &launch,
-            base.origin_commit(),
-            None,
+            WorktreeSource {
+                git: &launch,
+                commit: base.origin_commit(),
+                issue_checkout: None,
+            },
         ) {
             Ok(prepared) => prepared,
             Err(error) => return Err(failed_before_steps(notification, error)),
@@ -351,9 +355,11 @@ fn run(name: &str, issue: Option<IssueInput>, email: Option<NotificationAsk>) ->
         file,
         Some(issue),
         started,
-        &launch,
-        base.origin_commit(),
-        None,
+        WorktreeSource {
+            git: &launch,
+            commit: base.origin_commit(),
+            issue_checkout: None,
+        },
     ) {
         Ok(prepared) => prepared,
         Err(error) => return Err(failed_before_steps(notification, error)),
@@ -417,8 +423,8 @@ fn finish_run(
     let result = execute_steps(name, &prepared, None);
     let (outcome, cause) = classify(&result);
     drop(prepared);
-    logs::ended(&outcome);
-    logs::complete(&outcome, cause.as_deref());
+    logs::ended(outcome);
+    logs::complete(outcome, cause.as_deref());
     notify(notification, outcome, cause.as_deref());
     result
 }
@@ -479,9 +485,11 @@ fn run_issue_branch(
         file,
         Some(issue.clone()),
         started,
-        &launch_git,
-        &commit,
-        Some(checkout.path()),
+        WorktreeSource {
+            git: &launch_git,
+            commit: &commit,
+            issue_checkout: Some(checkout.path()),
+        },
     ) {
         Ok(prepared) => prepared,
         Err(error) => return Err(failed_before_steps(notification, error)),
@@ -529,8 +537,8 @@ fn run_issue_branch(
     let (outcome, cause) = classify(&result);
     drop(prepared);
     drop(held);
-    logs::ended(&outcome);
-    logs::complete(&outcome, cause.as_deref());
+    logs::ended(outcome);
+    logs::complete(outcome, cause.as_deref());
     notify(notification, outcome, cause.as_deref());
     result
 }
@@ -556,10 +564,6 @@ fn execute_steps(
         .with_context(|| format!("could not create {}", results.display()))?;
     let mut earlier = Vec::new();
     let mut last = String::new();
-    let continuing = issue_run.as_ref().and_then(|run| {
-        run.on_origin
-            .then(|| (run.branch.to_string(), run.base.to_string()))
-    });
     for range in group_ranges(&prepared.steps) {
         let group = &prepared.steps[range.clone()];
         if group.len() == 1 && matches!(group[0].kind, StepKind::Delivery) {
@@ -578,7 +582,7 @@ fn execute_steps(
             )?;
             continue;
         }
-        let checkout = issue_run.as_ref().and_then(|run| run.checkout.as_ref());
+        let held = issue_run.as_deref();
         let outcomes = if group.len() == 1 {
             let started = Instant::now();
             let outcome = run_step(
@@ -588,8 +592,7 @@ fn execute_steps(
                 &earlier,
                 &results,
                 range.start == 0,
-                checkout,
-                step_continuation(prepared, &group[0], continuing.as_ref()),
+                held,
             );
             vec![(started.elapsed(), outcome)]
         } else {
@@ -600,8 +603,7 @@ fn execute_steps(
                 &earlier,
                 &results,
                 range.start,
-                checkout,
-                continuing.as_ref(),
+                held,
             )
         };
         let mut group_error = None;
@@ -652,9 +654,9 @@ fn run_parallel(
     earlier: &[(String, PathBuf)],
     results: &Path,
     group_start: usize,
-    checkout: Option<&Worktree>,
-    continuing: Option<&(String, String)>,
+    issue_run: Option<&IssueRun<'_>>,
 ) -> Vec<(Duration, Result<String>)> {
+    let (checkout, continuing) = held_issue_branch(issue_run);
     thread::scope(|scope| {
         let mut handles = Vec::with_capacity(group.len());
         for (offset, step) in group.iter().enumerate() {
@@ -666,7 +668,7 @@ fn run_parallel(
             let first = group_start + offset == 0;
             let issue = prepared.issue.clone();
             let started_at = prepared.started;
-            let continuation = step_continuation(prepared, step, continuing);
+            let continuation = step_continuation(prepared, step, continuing.as_ref());
             handles.push(scope.spawn(move || {
                 let started = Instant::now();
                 let run = StepRun {
@@ -729,15 +731,15 @@ fn run_step(
     earlier: &[(String, PathBuf)],
     results: &Path,
     first: bool,
-    checkout: Option<&Worktree>,
-    continuation: Option<(String, String)>,
+    issue_run: Option<&IssueRun<'_>>,
 ) -> Result<String> {
+    let (checkout, continuing) = held_issue_branch(issue_run);
     let run = StepRun {
         process,
         choice: &prepared.choice,
         issue: prepared.issue.as_ref(),
         started: prepared.started,
-        continuation,
+        continuation: step_continuation(prepared, step, continuing.as_ref()),
     };
     run_step_in(
         &run,
@@ -760,6 +762,20 @@ fn step_dir<'a>(
         return checkout.path();
     }
     worktree_path(&prepared.worktrees, step.worktree.as_deref())
+}
+
+/// The Issue-branch checkout a run holds, and the branch names when that
+/// branch already has commits on origin.
+fn held_issue_branch<'a>(
+    issue_run: Option<&'a IssueRun<'_>>,
+) -> (Option<&'a Worktree>, Option<(String, String)>) {
+    let Some(run) = issue_run else {
+        return (None, None);
+    };
+    let continuing = run
+        .on_origin
+        .then(|| (run.branch.to_string(), run.base.to_string()));
+    (run.checkout.as_ref(), continuing)
 }
 
 /// Branch and Base branch for a Step whose checkout continues the Issue branch.
@@ -847,7 +863,7 @@ fn preserve_step_failure(
 ) {
     let reason = Cause::of(error).first_line().to_string();
     let preserved = checkout.preserve_failed_run(&context.base, &reason, &mut || Ok(()));
-    let preservation = recovery::preservation_of(preserved, |line| progress::step(line));
+    let preservation = recovery::preservation_of(preserved, progress::step);
     let mut recovery = Recovery::new(recovery::Stage::Implementation, preservation);
     recovery.record_worktree(checkout.path().to_path_buf());
     recovery.add_command_context(context, on_origin);
@@ -877,8 +893,10 @@ fn run_step_in(
                 &step.name,
                 name,
                 path,
-                earlier,
-                first,
+                prompt::EarlierSteps {
+                    results: earlier,
+                    first,
+                },
                 run.issue,
                 run.continuation
                     .as_ref()
@@ -1135,15 +1153,22 @@ fn load(name: &str) -> Result<(PathBuf, ProcessFile)> {
     Ok((path, file))
 }
 
+/// The launch checkout a Process's worktrees are created from, and the
+/// Issue-branch checkout a run already holds.
+struct WorktreeSource<'a> {
+    git: &'a Git,
+    commit: &'a str,
+    /// Reuse this checkout for the Issue-branch worktree instead of creating it.
+    issue_checkout: Option<&'a Path>,
+}
+
 fn prepare_from(
     path: &Path,
     config: &UserConfig,
     file: ProcessFile,
     issue: Option<IssueUrl>,
     started: DateTime<Utc>,
-    launch: &Git,
-    commit: &str,
-    issue_checkout: Option<&Path>,
+    source: WorktreeSource<'_>,
 ) -> Result<Prepared> {
     let issue_worktree = file
         .worktrees
@@ -1157,11 +1182,16 @@ fn prepare_from(
             issue_branch: worktree.issue_branch_line.is_some(),
         })
         .collect();
-    let skip = issue_checkout.and(issue_worktree.as_deref());
-    let worktrees = create_worktrees(launch, commit, &file, skip)?;
+    let skip = source.issue_checkout.and(issue_worktree.as_deref());
+    let worktrees = create_worktrees(source.git, source.commit, &file, skip)?;
     let mut steps = Vec::new();
     for step in &file.steps {
-        let checkout = resolve_dir(&worktrees, step, issue_worktree.as_deref(), issue_checkout);
+        let checkout = resolve_dir(
+            &worktrees,
+            step,
+            issue_worktree.as_deref(),
+            source.issue_checkout,
+        );
         steps.push(resolve(path, step, checkout)?);
     }
     let mut choice = Choice::of(&Asked::default(), &config.harness);
