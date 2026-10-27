@@ -37,6 +37,36 @@ impl std::fmt::Display for AlreadyMerged {
 
 impl std::error::Error for AlreadyMerged {}
 
+/// The Spec PR Ticket accounting captured was closed, merged or retargeted
+/// under the Spec run: no further Ticket may start or land on its Spec
+/// branch, and no Recovery command may resume it.
+#[derive(Debug)]
+pub(crate) struct SpecPrChanged {
+    url: String,
+    change: String,
+}
+
+impl std::fmt::Display for SpecPrChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "the Spec PR {} was {} under this Spec run",
+            self.url, self.change
+        )
+    }
+}
+
+impl std::error::Error for SpecPrChanged {}
+
+impl SpecPrChanged {
+    pub(crate) fn new(url: &str, change: impl Into<String>) -> Self {
+        Self {
+            url: url.to_string(),
+            change: change.into(),
+        }
+    }
+}
+
 /// A gate error is terminal (`Err`); only a refused request can return to
 /// the Repair loop. A successful guarded command needs no additional read.
 pub(crate) enum MergeAttempt {
@@ -104,14 +134,36 @@ impl<A: Adapter> PullRequest<A> {
         }
     }
 
-    /// Progress text is optional. Invalid observations and failed writes warn
-    /// without replacing identity or granting readiness/merge authority.
-    pub fn show_checklist(&mut self, checklist: &str) {
+    /// Progress text is optional. Failed reads and writes warn without
+    /// replacing identity or granting readiness/merge authority; a captured
+    /// Spec PR changed under the Spec run is [`SpecPrChanged`].
+    pub fn show_checklist(&mut self, checklist: &str) -> Result<()> {
         if self.identified.is_none() {
-            return;
+            return Ok(());
         }
         if let Err(error) = self.restore_checklist(checklist, true) {
+            if error.is::<SpecPrChanged>() {
+                return Err(error);
+            }
             Self::warn_checklist(&error);
+        }
+        Ok(())
+    }
+
+    /// Before a Ticket starts, reobserve the captured Spec PR: one changed
+    /// under the Spec run is [`SpecPrChanged`]. A failed read only warns;
+    /// the landing's identity gate still decides.
+    pub fn ensure_spec_unchanged(&mut self) -> Result<()> {
+        if self.identified.is_none() || self.scope != CaptureScope::TicketAccounting {
+            return Ok(());
+        }
+        match self.accounting_snapshot(true) {
+            Ok(_) => Ok(()),
+            Err(error) if error.is::<SpecPrChanged>() => Err(error),
+            Err(error) => {
+                progress::step(format!("could not check the Spec PR: {error:#}"));
+                Ok(())
+            }
         }
     }
 
@@ -163,6 +215,19 @@ impl<A: Adapter> PullRequest<A> {
         let snapshot = self
             .observe(completion)?
             .context("the Spec PR is not found")?;
+        if self.scope == CaptureScope::TicketAccounting {
+            let pr = &snapshot.pr;
+            let change = if !pr.is_open() {
+                Some(pr.state.to_string())
+            } else if pr.base != self.base {
+                Some(format!("retargeted from {} to {}", self.base, pr.base))
+            } else {
+                None
+            };
+            if let Some(change) = change {
+                return Err(SpecPrChanged::new(&pr.url, change).into());
+            }
+        }
         self.validate(&snapshot, false)?;
         Ok(snapshot)
     }
@@ -1015,7 +1080,7 @@ mod tests {
                 ..World::default()
             });
             pr.resume_spec().unwrap();
-            pr.show_checklist("- [ ] #8 running\n");
+            pr.show_checklist("- [ ] #8 running\n").unwrap();
             assert_eq!(pr.info(), None);
             assert_eq!(
                 pr.land_spec("- [x] #8 landed\n").unwrap(),
@@ -1119,7 +1184,18 @@ mod tests {
                 ..World::default()
             });
             pr.resume_spec().unwrap();
-            pr.show_checklist("new\n");
+            let shown = pr.show_checklist("new\n");
+            let changed = matches!(
+                change,
+                ObservationChange::WrongBase
+                    | ObservationChange::Closed
+                    | ObservationChange::Merged
+            );
+            assert_eq!(
+                shown.is_err_and(|error| error.is::<SpecPrChanged>()),
+                changed,
+                "{change:?}"
+            );
             assert!(pr.land_spec("new\n").is_err(), "{change:?}");
             assert_eq!(world.borrow().body, "Closes #7\n");
             assert!(world.borrow().edits.is_empty());
@@ -1133,6 +1209,50 @@ mod tests {
     }
 
     #[test]
+    fn a_spec_pr_changed_under_accounting_fails_the_checklist_and_the_ticket_start_check() {
+        for (change, said) in [
+            (ObservationChange::Closed, "closed"),
+            (ObservationChange::Merged, "merged"),
+            (
+                ObservationChange::WrongBase,
+                "retargeted from main to develop",
+            ),
+        ] {
+            let (mut pr, world) = owner(World {
+                completion: VecDeque::from([change.answer(snapshot()), change.answer(snapshot())]),
+                ..World::default()
+            });
+            pr.resume_spec().unwrap();
+            let expected = format!("the Spec PR {URL} was {said} under this Spec run");
+            let started = pr.ensure_spec_unchanged().unwrap_err();
+            assert!(started.is::<SpecPrChanged>(), "{change:?}");
+            assert_eq!(format!("{started:#}"), expected);
+            let shown = pr.show_checklist("new\n").unwrap_err();
+            assert_eq!(format!("{shown:#}"), expected);
+            assert!(world.borrow().edits.is_empty());
+        }
+    }
+
+    #[test]
+    fn the_ticket_start_check_warns_on_a_failed_read_and_skips_before_capture() {
+        let (mut pr, world) = owner(World {
+            observations: VecDeque::from([Ok(None)]),
+            completion: VecDeque::from([Err("read failed")]),
+            ..World::default()
+        });
+        pr.resume_spec().unwrap();
+        pr.ensure_spec_unchanged().unwrap();
+        assert_eq!(world.borrow().selected, [("issue-7".to_string(), false)]);
+
+        let (mut pr, _) = owner(World {
+            completion: VecDeque::from([Err("read failed")]),
+            ..World::default()
+        });
+        pr.resume_spec().unwrap();
+        pr.ensure_spec_unchanged().unwrap();
+    }
+
+    #[test]
     fn checklist_preserves_surrounding_text_is_idempotent_and_never_marks_ready_or_merges() {
         let (mut pr, world) = owner(World {
             body:
@@ -1141,8 +1261,8 @@ mod tests {
             ..World::default()
         });
         pr.resume_spec().unwrap();
-        pr.show_checklist("- [x] #8 done\n");
-        pr.show_checklist("- [x] #8 done\n");
+        pr.show_checklist("- [x] #8 done\n").unwrap();
+        pr.show_checklist("- [x] #8 done\n").unwrap();
         assert_eq!(pr.land_spec("- [x] #8 done\n").unwrap(), URL);
         assert_eq!(
             world.borrow().body,
@@ -1163,7 +1283,7 @@ mod tests {
                 ..World::default()
             });
             pr.resume_spec().unwrap();
-            pr.show_checklist("new\n");
+            pr.show_checklist("new\n").unwrap();
             assert_eq!(pr.land_spec("new\n").unwrap(), URL);
             pr.begin_delivery();
             assert!(pr.mark_ready(Some("new\n")).is_err());
@@ -1192,7 +1312,7 @@ mod tests {
                 assert_eq!(pr.mark_ready(Some("done\n")).unwrap().number, 13);
             }
             pr.begin_delivery(); // A later call cannot reset a Delivery capture.
-            pr.show_checklist("final\n");
+            pr.show_checklist("final\n").unwrap();
             assert_eq!(world.borrow().edits.last().unwrap().0, 13);
             assert_eq!(
                 world.borrow().selected.last(),
@@ -1223,7 +1343,7 @@ mod tests {
                 ..World::default()
             });
             pr.resume_spec().unwrap();
-            pr.show_checklist("new\n");
+            pr.show_checklist("new\n").unwrap();
             assert_eq!(world.borrow().body, expected);
         }
     }
@@ -1250,7 +1370,7 @@ mod tests {
                     (&mut existing, existing_world),
                 ] {
                     assert_eq!(pr.land_spec("done\n").unwrap(), URL);
-                    pr.show_checklist("final\n");
+                    pr.show_checklist("final\n").unwrap();
                     assert!(
                         world
                             .borrow()

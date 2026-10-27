@@ -1875,7 +1875,10 @@ exit 1
 
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert_eq!(spec_pr(&scenario)["body"], "untouched");
-    assert_contains(&result.stderr, "PR targets develop, not main");
+    assert_contains(
+        &result.stderr,
+        "/pull/2 was retargeted from main to develop under this Spec run",
+    );
     assert_contains(&result.stderr, "#22 failed");
     assert!(!sessions_by_issue(&scenario).contains(&SPEC.to_string()));
 }
@@ -1905,9 +1908,9 @@ gh fake pr issue-20 body '"untouched"'"#
         assert_contains(
             &result.stderr,
             if replacement {
-                "is closed, not open"
+                "/pull/2 was closed under this Spec run"
             } else {
-                "PR targets develop, not main"
+                "/pull/2 was retargeted from main to develop under this Spec run"
             },
         );
         assert_contains(&result.stderr, "#22 landed");
@@ -3569,4 +3572,32 @@ fi
         "{args:?}"
     );
     assert_eq!(spec_pr(&scenario)["state"], "MERGED");
+}
+
+#[test]
+fn issue_1471_a_spec_pr_closed_mid_run_stops_dispatch_and_ticket_merges() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21]), (23, &[21])]);
+    scenario.agent_does_for(22, "gh fake pr issue-20 state '\"CLOSED\"'\nexit 1");
+
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(
+        sessions_by_issue(&scenario),
+        ["21", "22"],
+        "{}",
+        result.stderr
+    );
+    assert!(pr_from(&scenario, "issue-23").is_none());
+    assert_eq!(scenario.gh_state()["issues"]["23"], "OPEN");
+    let spec_pr_url = spec_pr(&scenario)["url"].as_str().unwrap().to_string();
+    assert_contains(
+        &result.stderr,
+        &format!("the Spec PR {spec_pr_url} was closed under this Spec run"),
+    );
+    assert!(
+        !result.stderr.contains("\nthirdshift: Recovery: "),
+        "{}",
+        result.stderr
+    );
 }
