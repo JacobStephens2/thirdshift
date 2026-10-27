@@ -331,8 +331,11 @@ fn prompts() -> Vec<Prompt> {
                 STEP,
                 SKILL_NAME,
                 std::path::Path::new(SKILL_PATH),
-                &[],
-                true,
+                prompt::EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
+                None,
                 None,
             ),
         },
@@ -346,11 +349,14 @@ fn prompts() -> Vec<Prompt> {
                 STEP,
                 SKILL_NAME,
                 std::path::Path::new(SKILL_PATH),
-                &[(
-                    EARLIER_STEP.to_string(),
-                    std::path::PathBuf::from(EARLIER_RESULT),
-                )],
-                false,
+                prompt::EarlierSteps {
+                    results: &[(
+                        EARLIER_STEP.to_string(),
+                        std::path::PathBuf::from(EARLIER_RESULT),
+                    )],
+                    first: false,
+                },
+                None,
                 None,
             ),
         },
@@ -364,9 +370,12 @@ fn prompts() -> Vec<Prompt> {
                 STEP,
                 SKILL_NAME,
                 std::path::Path::new(SKILL_PATH),
-                &[],
-                true,
+                prompt::EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
                 Some(&issue),
+                None,
             ),
         },
     ];

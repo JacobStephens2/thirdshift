@@ -109,22 +109,46 @@ pub fn skill(name: &str, path: &std::path::Path, issue: Option<&IssueUrl>) -> St
     )
 }
 
-/// One Step of a Custom process. `earlier` is each finished Step's name and
-/// the path of its final message, outside the worktree. `first` is whether
-/// this is the Process's first Step. A later Step with no finished result
-/// does not claim to be the first. `issue`, when the Process has one, is
-/// named for the session to work from its file.
+/// Branch and Base branch of a Step that continues an existing Issue branch.
+pub struct ProcessContinuation<'a> {
+    pub branch: &'a str,
+    pub base: &'a str,
+}
+
+/// Finished Steps named in a later Step's prompt, and whether that Step is
+/// the Process's first. A later Step with no finished result is not the first.
+pub struct EarlierSteps<'a> {
+    pub results: &'a [(String, std::path::PathBuf)],
+    pub first: bool,
+}
+
+/// The sentence a Continuation uses so the session builds on existing commits.
+fn continuing_work(branch: &str, base: &str) -> String {
+    format!(
+        "You are continuing work on branch {branch}, which already has commits (see git log {base}..HEAD). Build on them; don't start over."
+    )
+}
+
+/// One Step of a Custom process. `earlier` names each finished Step and
+/// whether this is the Process's first Step. `issue`, when the Process has
+/// one, is named for the session to work from its file. `continuation`, when
+/// the Step's checkout is an existing Issue branch, tells the session to
+/// build on that branch's commits.
 pub fn process_step(
     process: &str,
     step: &str,
     skill_name: &str,
     skill_path: &std::path::Path,
-    earlier: &[(String, std::path::PathBuf)],
-    first: bool,
+    earlier: EarlierSteps<'_>,
     issue: Option<&IssueUrl>,
+    continuation: Option<ProcessContinuation<'_>>,
 ) -> String {
-    let mut earlier_text = if earlier.is_empty() {
-        if first {
+    let continuing = continuation
+        .as_ref()
+        .map(|note| format!("{}\n", continuing_work(note.branch, note.base)))
+        .unwrap_or_default();
+    let mut earlier_text = if earlier.results.is_empty() {
+        if earlier.first && continuation.is_none() {
             "This is the first Step. No earlier Step has a result.\n".to_string()
         } else {
             "No earlier Step has a result.\n".to_string()
@@ -132,7 +156,7 @@ pub fn process_step(
     } else {
         String::new()
     };
-    for (name, path) in earlier {
+    for (name, path) in earlier.results {
         let _ = writeln!(
             earlier_text,
             "Earlier Step result {name}: {}",
@@ -148,7 +172,7 @@ pub fn process_step(
     });
     format!(
         "{preamble}This is Step {step} of the Custom process {process}.\n\
-         {issue_text}{earlier_text}{SOURCE_EDITS}{HEADLESS}",
+         {issue_text}{continuing}{earlier_text}{SOURCE_EDITS}{HEADLESS}",
         preamble = skill_preamble(skill_name, skill_path),
     )
 }
@@ -249,7 +273,7 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
     format!(
         "/thirdshift-implement {url}\n\
          \n\
-         You are continuing work on branch {branch}, which already has commits (see git log {base}..HEAD). Build on them; don't start over.\n\
+         {continuing}\n\
          \n\
          The base branch is {base}. Review with the `thirdshift-code-review` skill using {base} as the fixed point.\n\
          \n\
@@ -268,6 +292,7 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
+        continuing = continuing_work(branch, base),
         issue_file_instruction = issue_file_instruction(issue),
         number = issue.number,
         address_findings = review.address_findings(),
@@ -695,9 +720,12 @@ mod tests {
                 "gather",
                 "to-spec",
                 std::path::Path::new("skills/to-spec/SKILL.md"),
-                &[],
-                true,
+                EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
                 Some(&issue),
+                None,
             ),
         ] {
             for instruction in [
@@ -718,9 +746,12 @@ mod tests {
             "gather",
             "to-spec",
             std::path::Path::new("skills/to-spec/SKILL.md"),
-            &[],
-            true,
+            EarlierSteps {
+                results: &[],
+                first: true,
+            },
             Some(&issue),
+            None,
         );
         assert!(
             on_issue.contains("Run this Step on issue https://github.com/acme/widgets/issues/7."),
@@ -731,8 +762,11 @@ mod tests {
             "gather",
             "to-spec",
             std::path::Path::new("skills/to-spec/SKILL.md"),
-            &[],
-            true,
+            EarlierSteps {
+                results: &[],
+                first: true,
+            },
+            None,
             None,
         );
         assert!(!without.contains(".thirdshift-issue.md"), "{without}");

@@ -248,10 +248,10 @@ description = \"Review the diff\"
 
 [[steps]]
 name = \"review\"
-catalogue = \"delivery\"
+catalogue = \"publish\"
 ",
                 ),
-                ":6: exactly one kind: catalogue must be run-published-issue",
+                ":6: catalogue: catalogue must be delivery or run-published-issue",
             ),
             (
                 "review",
@@ -1386,7 +1386,7 @@ version = 1
 description = \"Branch\"
 
 [worktrees.fix]
-kind = \"issue-branch\"
+kind = \"orbit\"
 ",
             ":5: worktree kind:",
         ),
@@ -2192,7 +2192,8 @@ fn a_missing_issue_value_or_extra_argument_is_a_usage_error() {
     let cases: &[&[&str]] = &[
         &["process", "notes", "issue"],
         &["process", "notes", "issue", "7", "extra"],
-        &["process", "check", "notes", "issue", "7"],
+        &["process", "check", "notes", "issue"],
+        &["process", "check", "notes", "issue", "7", "extra"],
         &["process", "issue", "7"],
     ];
     for args in cases {
@@ -3692,4 +3693,597 @@ fn an_origin_mismatch_still_sends_the_run_notification() {
         result.stderr
     );
     assert_eq!(resend.requests().len(), 1, "{:?}", resend.requests());
+}
+
+const SHIP: &str = "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"review\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+";
+
+#[test]
+fn an_issue_branch_without_a_delivery_after_its_editing_steps_is_refused() {
+    let body = "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+";
+    for check in [true, false] {
+        let scenario = Scenario::new();
+        write_process(&scenario, "ship", body);
+        let result = if check {
+            scenario.run(&["process", "check", "ship"])
+        } else {
+            scenario.run(&["process", "ship", "issue", "7"])
+        };
+        assert_no_session(&scenario, &result);
+        assert!(
+            result.stderr.contains(":10: delivery:"),
+            "check={check} expected the delivery rule in {}",
+            result.stderr
+        );
+        assert_eq!(scenario.issue_labels(7), Vec::<String>::new());
+        assert!(scenario.origin_log("issue-7").is_none());
+    }
+}
+
+fn refuse_issue_branch(body: &str, needle: &str) {
+    for check in [true, false] {
+        let scenario = Scenario::new();
+        write_process(&scenario, "ship", body);
+        let result = if check {
+            scenario.run(&["process", "check", "ship", "issue", "7"])
+        } else {
+            scenario.run(&["process", "ship", "issue", "7"])
+        };
+        assert_no_session(&scenario, &result);
+        assert!(
+            result.stderr.contains(needle),
+            "check={check} expected {needle} in {}",
+            result.stderr
+        );
+        assert_eq!(scenario.issue_labels(7), Vec::<String>::new());
+        assert!(scenario.origin_log("issue-7").is_none());
+    }
+}
+
+#[test]
+fn an_issue_branch_process_needs_an_issue() {
+    for check in [true, false] {
+        let scenario = Scenario::new();
+        write_process(&scenario, "ship", SHIP);
+        let result = if check {
+            scenario.run(&["process", "check", "ship"])
+        } else {
+            scenario.run(&["process", "ship"])
+        };
+        assert_no_session(&scenario, &result);
+        assert!(
+            result.stderr.contains(":5: issue:"),
+            "check={check} expected the issue rule in {}",
+            result.stderr
+        );
+        assert!(
+            result
+                .stderr
+                .contains("an Issue-branch worktree needs an issue"),
+            "check={check} {}",
+            result.stderr
+        );
+        assert_eq!(scenario.issue_labels(7), Vec::<String>::new());
+        assert!(scenario.origin_log("issue-7").is_none());
+    }
+}
+
+#[test]
+fn check_of_an_issue_branch_process_prints_the_plan_and_starts_no_session() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "ship", SHIP);
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+
+    let result = scenario.run(&["process", "check", "ship", "issue", "7"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(scenario.claude_calls().is_empty(), "a session started");
+    assert!(
+        result.stdout.contains("ship: Ship a fix"),
+        "{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("worktree fix: Issue branch"),
+        "{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("ship: delivery (worktree fix)"),
+        "{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("implement: thirdshift-code-review"),
+        "{}",
+        result.stdout
+    );
+    assert_eq!(scenario.issue_labels(7), ["ready-for-agent"]);
+    assert!(scenario.origin_log("issue-7").is_none());
+    assert_eq!(worktree_count(&scenario), 1);
+    assert!(!process_dir(&scenario).exists());
+
+    let throwaway = Scenario::new();
+    write_process(&throwaway, "notes", REVIEW);
+    let plan = throwaway.run(&["process", "check", "notes"]);
+    assert_eq!(plan.code, Some(0), "{}", plan.stderr);
+    assert!(
+        plan.stdout
+            .contains("throwaway worktree at the Base branch")
+    );
+}
+
+#[test]
+fn an_issue_branch_process_is_refused_when_its_shape_would_lose_work() {
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[worktrees.again]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+",
+        ":8: issue-branch:",
+    );
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"self-merge\"
+worktree = \"fix\"
+",
+        ":14: catalogue:",
+    );
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+optional = true
+worktree = \"fix\"
+",
+        ":9: delivery:",
+    );
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+",
+        ":6: delivery:",
+    );
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[worktrees.notes]
+kind = \"throwaway\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"notes\"
+",
+        ":18: delivery:",
+    );
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[worktrees.notes]
+kind = \"throwaway\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"notes\"
+parallel = \"together\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+parallel = \"together\"
+",
+        ":20: delivery:",
+    );
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[worktrees.notes]
+kind = \"throwaway\"
+
+[[steps]]
+name = \"notes\"
+command = \"true\"
+worktree = \"notes\"
+",
+        ":5: delivery:",
+    );
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"review\"
+skill = \"code-review\"
+worktree = \"fix\"
+",
+        ":20: delivery:",
+    );
+}
+
+#[test]
+fn an_issue_branch_process_ends_ready_for_review_and_removes_the_claim() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "ship", SHIP);
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does_for_in_session(
+        7,
+        1,
+        r#"
+gh issue view 7 --repo acme/widgets --json labels | grep -q in-progress
+echo feature > feature.txt
+git add feature.txt
+git commit -q -m "Add feature"
+printf 'implemented' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for_in_session(
+        7,
+        2,
+        r#"
+test -f feature.txt
+printf 'reviewed' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = scenario.run(&["process", "ship", "issue", "7"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert_eq!(scenario.claude_calls().len(), 2, "{}", result.stderr);
+    let pr = &scenario.gh_state()["prs"][0];
+    assert_eq!(pr["state"], "OPEN");
+    assert_eq!(pr["isDraft"], false);
+    assert_eq!(pr["head"], "issue-7");
+    assert_eq!(pr["base"], "main");
+    assert!(
+        pr["body"].as_str().unwrap().contains("Closes #7"),
+        "{}",
+        pr["body"]
+    );
+    assert_eq!(scenario.issue_labels(7), Vec::<String>::new());
+    assert!(
+        result
+            .stderr
+            .contains("labelling #7 in-progress, in place of ready-for-agent"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("removing in-progress from issue #7"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.origin_file("issue-7", "feature.txt").as_deref(),
+        Some("feature\n")
+    );
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn a_step_that_fails_before_delivery_keeps_the_issue_branch_work() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "ship", SHIP);
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does_for(
+        7,
+        r#"
+echo left > left.txt
+git add left.txt
+exit 1
+"#,
+    );
+
+    let result = scenario.run(&["process", "ship", "issue", "7"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 1, "{}", result.stderr);
+    assert!(scenario.gh_state()["prs"].as_array().unwrap().is_empty());
+    assert!(
+        result.stderr.contains("Stopped at: Implementation"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("Preserved: remotely on issue-7"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains(
+            "Recovery: thirdshift process ship issue https://github.com/acme/widgets/issues/7"
+        ),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("Run from the Launch directory"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("Continuing reuses"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.origin_file("issue-7", "left.txt").as_deref(),
+        Some("left\n")
+    );
+    assert_eq!(scenario.issue_labels(7), ["in-progress"]);
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn a_delivery_repair_uses_the_commands_harness_model_and_effort() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "ship",
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+",
+    );
+    scenario.user_config_is(
+        "[harness]\ndefault = \"claude\"\n[harness.claude]\nmodel = \"opus\"\neffort = \"low\"\n",
+    );
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    let red = r#"[{"name": "test", "conclusion": "failure", "url": "https://ci.example/test"}]"#;
+    let green = r#"[{"name": "test", "conclusion": "success", "url": "https://ci.example/test"}]"#;
+    scenario.agent_does_for_in_session(
+        7,
+        1,
+        &format!(
+            "echo feature > feature.txt\n\
+             git add feature.txt\n\
+             git commit -q -m 'Add feature'\n\
+             gh fake checks \"$(git rev-parse HEAD)\" '{red}'\n\
+             printf 'implemented' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n"
+        ),
+    );
+    scenario.agent_does_for_in_session(
+        7,
+        2,
+        &format!(
+            "echo fix > fix-1.txt\n\
+             git add fix-1.txt\n\
+             git commit -q -m 'Fix CI 1'\n\
+             gh fake checks \"$(git rev-parse HEAD)\" '{green}'\n\
+             printf 'fixed' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n"
+        ),
+    );
+
+    let result = scenario.run(&["process", "ship", "issue", "7"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert!(
+        result.stderr.contains("CI red; starting Repair"),
+        "{}",
+        result.stderr
+    );
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 2, "{}", result.stderr);
+    assert!(
+        calls[1]["prompt"]
+            .as_str()
+            .unwrap()
+            .starts_with("CI failed on pull request "),
+        "{}",
+        calls[1]["prompt"]
+    );
+    assert_eq!(calls[1]["cwd"], calls[0]["cwd"]);
+    for call in &calls {
+        let args: Vec<String> = call["argv"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|arg| arg.as_str().unwrap().to_string())
+            .collect();
+        let value = |flag: &str| {
+            args.iter()
+                .position(|arg| arg == flag)
+                .and_then(|at| args.get(at + 1))
+                .map(String::as_str)
+        };
+        assert_eq!(value("--model"), Some("opus"), "{args:?}");
+        assert_eq!(value("--effort"), Some("low"), "{args:?}");
+    }
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+    assert_eq!(scenario.origin_log("issue-7").unwrap()[0], "Fix CI 1");
+    assert_eq!(scenario.issue_labels(7), Vec::<String>::new());
+}
+
+#[test]
+fn a_continuation_reuses_the_open_issue_branch() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "ship", SHIP);
+    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+    let url = scenario.github_has_pr("issue-7", "main", "OPEN");
+    scenario.issue_labelled(7, &["in-progress"]);
+    scenario.agent_does_for_in_session(
+        7,
+        1,
+        r#"
+echo more > more.txt
+git add more.txt
+git commit -q -m "Add more"
+printf 'continued' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for_in_session(
+        7,
+        2,
+        "printf 'reviewed' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+    );
+
+    let result = scenario.run(&["process", "ship", "issue", "7"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, format!("{url}\n"));
+    assert_eq!(scenario.gh_state()["prs"].as_array().unwrap().len(), 1);
+    assert_eq!(scenario.gh_state()["prs"][0]["head"], "issue-7");
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+    assert!(scenario.origin_log("issue-7-branch-2").is_none());
+    assert_eq!(scenario.origin_log("issue-7").unwrap()[0], "Add more");
+    assert_eq!(scenario.issue_labels(7), Vec::<String>::new());
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn a_continuation_prompt_differs_from_a_fresh_start() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "ship", SHIP);
+    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+    let _url = scenario.github_has_pr("issue-7", "main", "OPEN");
+    scenario.issue_labelled(7, &["in-progress"]);
+    scenario.agent_does_for_in_session(
+        7,
+        1,
+        "printf 'continued' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+    );
+    scenario.agent_does_for_in_session(
+        7,
+        2,
+        "printf 'reviewed' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+    );
+
+    let result = scenario.run(&["process", "ship", "issue", "7"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let calls = scenario.claude_calls();
+    let prompt = calls[0]["prompt"].as_str().unwrap();
+    assert!(
+        prompt.contains("already has commits")
+            || prompt.contains("Build on them")
+            || prompt.contains("don't start over"),
+        "continuation prompt should differ from a fresh start: {prompt}"
+    );
+    assert!(
+        !prompt.contains("This is the first Step. No earlier Step has a result."),
+        "continuation prompt still denies earlier work: {prompt}"
+    );
 }
