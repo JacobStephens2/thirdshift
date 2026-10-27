@@ -5,7 +5,7 @@
 # workflow, and the script waits for that workflow run to publish the GitHub
 # Release.
 #
-# Usage: scripts/release.sh [--review] [--no-experiment] <version>
+# Usage: scripts/release.sh [--review] [--with-experiment] <version>
 #
 # Run it in a clone of this repo, signed in to gh and the default Harness. It
 # works from origin/main in a temporary worktree, so the branch checked out
@@ -24,13 +24,13 @@
 # didn't succeed. It waits for that tip's run to appear and finish, following
 # main if it moves and naming each move. The version bump starts from the tip
 # whose CI succeeded, with the requested version checked against that tip.
-# Then an Experiment compares that content commit with its last release tag,
-# selecting touched suites. A pass carries on; pending Scores are listed and
-# waited for; fail/inconclusive Verdicts show intervals and require an override.
+# With --with-experiment, an Experiment compares that content commit with its
+# last release tag, selecting touched suites. A pass carries on; pending Scores
+# are listed and waited for; fail/inconclusive Verdicts show intervals and
+# require an override.
 # Untouched suites or a Baseline with no Trial flag need no Experiment.
-# --no-experiment skips the release Experiment outright, on a fresh run and on
-# every resume, and says so; use it only when an Experiment can't give a
-# Verdict worth its Trials.
+# Experiments are skipped by default, on a fresh run and on every resume,
+# with a progress note. Supply --with-experiment on each invocation to run one.
 #
 # If a run is interrupted, running it again with the same version carries on
 # from the first step not yet done: it opens the PR for a pushed branch, waits
@@ -74,17 +74,17 @@ poll_seconds=${RELEASE_POLL_SECONDS:-15}
 
 main() {
 	review=
-	no_experiment=
+	with_experiment=
 	while :; do
 		case ${1-} in
 		--review) review=1 ;;
-		--no-experiment) no_experiment=1 ;;
+		--with-experiment) with_experiment=1 ;;
 		*) break ;;
 		esac
 		shift
 	done
 	if [ "$#" -ne 1 ]; then
-		echo "usage: release.sh [--review] [--no-experiment] <version>" >&2
+		echo "usage: release.sh [--review] [--with-experiment] <version>" >&2
 		exit 2
 	fi
 	version=$1
@@ -262,8 +262,8 @@ commit_bump() {
 # Use this checkout's runner and private Eval suites, as for summary_agent.
 wait_for_experiment() {
 	local snapshot status outcome id answer
-	if [ -n "$no_experiment" ]; then
-		progress "skipping the release Experiment (--no-experiment) for ${1:0:7}"
+	if [ -z "$with_experiment" ]; then
+		progress "skipping the release Experiment (use --with-experiment to run it) for ${1:0:7}"
 		return
 	fi
 	progress "checking release Experiment for ${1:0:7}"

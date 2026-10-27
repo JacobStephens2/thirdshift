@@ -2007,8 +2007,12 @@ cargo test
 
 ## Releasing
 
-Before pushing anything, the release script runs `thirdshift experiment
---release <commit>` using this checkout's runner and private Eval suites.
+The release script skips Experiments by default, printing a note. Opt in with
+`scripts/release.sh --with-experiment 0.4.0`, adding `--with-experiment` again
+on each resume that should run an Experiment.
+
+With `--with-experiment`, before pushing anything, the script runs
+`thirdshift experiment --release <commit>` using this checkout's runner and private Eval suites.
 It evaluates the content commit beneath the version-only bump, so reruns use
 the same Experiment even before a bump branch exists. It pins that commit in a
 local Git ref before starting, so a merge to `main` during interruption does
@@ -2019,18 +2023,15 @@ intervals and asks `release anyway? [y/N]`, including without `--review`.
 Only `y` or `yes` continues; EOF or any other answer stops. Pending borderline
 and decisive Scores are listed with their recheck commands and polled until
 you have rechecked them. No touched suite or a last release with no Trial flag
-prints a note and carries on. `--no-experiment` skips the release Experiment
-outright, on the first run and on every resume, and prints a line saying so:
-use it only when an Experiment can't give a Verdict worth its Trials, such as
-while every Trial is known to be void. An interrupted invocation resumes its saved
+prints a note and carries on. An interrupted invocation resumes its saved
 Trials. A pushed bump branch is checked again before opening its PR, and an
 open or merged bump PR before merging or tagging. An already pushed tag only
 resumes the release workflow. Python 3 is needed to read the Experiment results.
 
 If `main` gains different content after the Candidate was selected, the script
-refuses to push or merge that release under its old Experiment; choose a fresh
-release version to measure current `main`. It also checks the merged tree before
-tagging, so a concurrent merge cannot publish unmeasured content.
+refuses to push or merge that release; choose a fresh release version for current
+`main`. It also checks the merged tree before tagging, so a concurrent merge
+cannot publish different content. These checks apply even without an Experiment.
 
 From a clone of this repo, signed in to `gh` and the User config's default Harness, run the release script with the new version:
 
