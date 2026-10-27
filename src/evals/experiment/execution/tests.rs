@@ -237,7 +237,8 @@ assert check.stdout == 'cargo 1.99.0 (fixture)\n'
     git.run(&["add", "."]).unwrap();
     git.run(&["commit", "-m", "Historical Rust pin"]).unwrap();
     fixture.task.manifest.change = git.run(&["rev-parse", "HEAD"]).unwrap();
-    let execution = fixture.execution(5);
+    // Allow loaded macOS runners time to start the concurrent Arms' Python processes.
+    let execution = fixture.execution(30);
     std::thread::scope(|scope| {
         for arm in [Arm::Baseline, Arm::Candidate] {
             let fixture = &fixture;
