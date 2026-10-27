@@ -930,7 +930,11 @@ skills are
 (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md">ADR-0012</a>),
 under its own name, as a copy written out beside those skills, and kept out
 of git. A repository skill of the same name is not replaced. <code>command</code> is a command or script,
-run with <code>sh -c</code> in the Step&#39;s worktree. It starts no session. <code>catalogue</code> names a
+run with <code>sh -c</code> in the Step&#39;s worktree. It starts no session. A command may
+contain newlines and tabs. Any other control character in the command, the
+description, a step or worktree name, a skill, a model, an effort, a parallel
+group or a protected-path glob is refused before a step runs, so the plan
+<code>check</code> prints cannot hide the command. <code>catalogue</code> names a
 built-in Step: <code>delivery</code> or <code>self-merge</code>, described above, or <code>run-published-issue</code>.
 <code>run-published-issue</code> starts a Ticket run, or a Spec run when the issue has
 Tickets, on the issue the session Step before it published. That session&#39;s final

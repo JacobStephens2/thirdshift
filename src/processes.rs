@@ -2412,6 +2412,7 @@ fn protected_paths_of(path: &Path, text: &str, line: usize, item: &Item) -> Resu
                 "a protected path glob must not be empty",
             ));
         }
+        refuse_controls(path, value_line, "protected path", glob, false)?;
         paths.push(glob.to_string());
     }
     Ok(paths)
@@ -2450,6 +2451,7 @@ fn parse_worktrees(
                 "a worktree name must be a single path component",
             ));
         }
+        refuse_controls(path, name_line, "worktree name", key, false)?;
         let Some(body) = item.as_table() else {
             return Err(rule(
                 path,
@@ -2514,7 +2516,9 @@ fn description_of(path: &Path, line: usize, item: &Item) -> Result<String> {
             "description must not be empty",
         ));
     }
-    if value.chars().any(|c| c == '\n' || c == '\r') {
+    // A newline keeps the one-line rule. Any other control character,
+    // including a carriage return or a tab, is refused on its own.
+    if value.contains('\n') {
         return Err(rule(
             path,
             line,
@@ -2522,6 +2526,7 @@ fn description_of(path: &Path, line: usize, item: &Item) -> Result<String> {
             "description must be one line",
         ));
     }
+    refuse_controls(path, line, "description", value, false)?;
     Ok(value.to_string())
 }
 
@@ -2648,6 +2653,7 @@ fn step_word(path: &Path, line: usize, item: &Item, rule_name: &str) -> Result<S
             format!("{rule_name} must not be empty"),
         ));
     }
+    refuse_controls(path, line, rule_name, value, false)?;
     Ok(value.to_string())
 }
 
@@ -2663,6 +2669,7 @@ fn step_worktree(path: &Path, line: usize, item: &Item) -> Result<(String, usize
             "worktree must be a single path component",
         ));
     }
+    refuse_controls(path, line, "worktree", value, false)?;
     Ok((value.to_string(), line))
 }
 
@@ -2678,6 +2685,7 @@ fn step_parallel(path: &Path, line: usize, item: &Item) -> Result<(String, usize
             "parallel must be a single-line group name",
         ));
     }
+    refuse_controls(path, line, "parallel", value, false)?;
     Ok((value.to_string(), line))
 }
 
@@ -2698,6 +2706,7 @@ fn step_name(path: &Path, line: usize, item: &Item) -> Result<(String, usize)> {
             "name must be a single path component",
         ));
     }
+    refuse_controls(path, line, "name", value, false)?;
     Ok((value.to_string(), line))
 }
 
@@ -2710,6 +2719,7 @@ fn step_skill(path: &Path, line: usize, item: &Item) -> Result<(String, usize)> 
             "skill must be a string",
         ));
     };
+    refuse_controls(path, line, "skill", value, false)?;
     Ok((value.to_string(), line))
 }
 
@@ -2755,7 +2765,34 @@ fn step_command(path: &Path, line: usize, item: &Item) -> Result<(String, usize)
             "command must not be empty",
         ));
     }
+    // Newlines and tabs are script text. Any other control character is
+    // refused so `check` cannot print a sequence that erases the plan.
+    refuse_controls(path, line, "command", value, true)?;
     Ok((value.to_string(), line))
+}
+
+/// `check` prints these strings. A control character in one can erase that
+/// plan in a terminal while the command still runs. A command may contain
+/// newlines and tabs; nothing else may.
+fn refuse_controls(
+    path: &Path,
+    line: usize,
+    field: &str,
+    value: &str,
+    allows_line_break: bool,
+) -> Result<()> {
+    let forbidden = value
+        .chars()
+        .any(|c| c.is_control() && !(allows_line_break && (c == '\n' || c == '\t')));
+    if forbidden {
+        return Err(rule(
+            path,
+            line,
+            "control character",
+            format!("{field} must not contain a control character"),
+        ));
+    }
+    Ok(())
 }
 
 fn processes_dir() -> Result<PathBuf> {

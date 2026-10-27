@@ -1124,6 +1124,122 @@ optional = true
     assert_eq!(scenario.launch_git(&["status", "--porcelain"]), "");
 }
 
+/// ECMA-48 erase-display (`CSI 2 J`) and cursor-home (`CSI H`), the sequences
+/// a command can print through `check` to replace the plan on screen.
+fn shown_in_a_terminal(text: &str) -> String {
+    let mut screen = vec![String::new()];
+    let mut row = 0usize;
+    let mut col = 0usize;
+    let chars: Vec<char> = text.chars().collect();
+    let mut index = 0;
+    while index < chars.len() {
+        if chars[index] == '\u{1b}' && chars.get(index + 1) == Some(&'[') {
+            index += 2;
+            let start = index;
+            while index < chars.len() && (chars[index].is_ascii_digit() || chars[index] == ';') {
+                index += 1;
+            }
+            if index >= chars.len() {
+                break;
+            }
+            let params = chars[start..index].iter().collect::<String>();
+            let final_byte = chars[index];
+            index += 1;
+            let erase_screen = final_byte == 'J'
+                && params
+                    .split(';')
+                    .any(|param| param.is_empty() || param == "2");
+            if erase_screen || final_byte == 'H' && params.is_empty() {
+                if erase_screen {
+                    screen = vec![String::new()];
+                }
+                row = 0;
+                col = 0;
+            }
+            continue;
+        }
+        let ch = chars[index];
+        index += 1;
+        if ch == '\n' {
+            row += 1;
+            col = 0;
+            if row == screen.len() {
+                screen.push(String::new());
+            }
+            continue;
+        }
+        while screen.len() <= row {
+            screen.push(String::new());
+        }
+        let mut owned: Vec<char> = screen[row].chars().collect();
+        while owned.len() < col {
+            owned.push(' ');
+        }
+        if col < owned.len() {
+            owned[col] = ch;
+        } else {
+            owned.push(ch);
+        }
+        screen[row] = owned.into_iter().collect();
+        col += 1;
+    }
+    screen.join("\n")
+}
+
+#[test]
+fn a_command_cannot_wipe_the_check_plan_and_hide_what_the_shell_runs() {
+    // The screen wipe sits in a shell comment, so sh runs `touch pwned` and
+    // ignores the escapes. `check` still prints those bytes, and a terminal
+    // erases the plan before showing `echo safe`.
+    let command = "touch pwned\n#\u{1b}[2J\u{1b}[Hecho safe";
+    let scenario = Scenario::new();
+    let proof = scenario.path("shell-proof");
+    fs::create_dir_all(&proof).unwrap();
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(command)
+        .current_dir(&proof)
+        .status()
+        .unwrap();
+    assert!(status.success(), "sh did not run the command");
+    assert!(
+        proof.join("pwned").is_file(),
+        "the bytes before the screen wipe are the command sh runs"
+    );
+
+    write_process(
+        &scenario,
+        "spoof",
+        "\
+version = 1
+description = \"Review the diff\"
+
+[[steps]]
+name = \"gather\"
+command = \"touch pwned\\n#\\u001b[2J\\u001b[Hecho safe\"
+",
+    );
+    let result = scenario.run(&["process", "check", "spoof"]);
+    if result.code == Some(0) {
+        let shown = shown_in_a_terminal(&result.stdout);
+        panic!(
+            "check accepted a command that wipes the plan.\n\
+             A terminal shows:\n{shown}\n\
+             sh -c still runs `touch pwned` before that wipe."
+        );
+    }
+    assert!(
+        result
+            .stderr
+            .contains(":6: control character: command must not contain a control character"),
+        "{}",
+        result.stderr
+    );
+    let ran = scenario.run(&["process", "spoof"]);
+    assert_ne!(ran.code, Some(0), "run started the hidden command");
+    assert!(ran.stderr.contains("control character"), "{}", ran.stderr);
+}
+
 #[test]
 fn a_command_step_runs_in_the_worktree_and_a_later_session_reads_its_output() {
     let scenario = Scenario::new();

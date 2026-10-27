@@ -1023,7 +1023,11 @@ skills are
 ([ADR-0012](adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md)),
 under its own name, as a copy written out beside those skills, and kept out
 of git. A repository skill of the same name is not replaced. `command` is a command or script,
-run with `sh -c` in the Step's worktree. It starts no session. `catalogue` names a
+run with `sh -c` in the Step's worktree. It starts no session. A command may
+contain newlines and tabs. Any other control character in the command, the
+description, a step or worktree name, a skill, a model, an effort, a parallel
+group or a protected-path glob is refused before a step runs, so the plan
+`check` prints cannot hide the command. `catalogue` names a
 built-in Step: `delivery` or `self-merge`, described above, or `run-published-issue`.
 `run-published-issue` starts a Ticket run, or a Spec run when the issue has
 Tickets, on the issue the session Step before it published. That session's final
