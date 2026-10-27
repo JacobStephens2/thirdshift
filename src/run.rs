@@ -480,6 +480,8 @@ impl LaunchAndGitHub<'_> {
             base_fix: self.base_fix,
             logs: &self.logs,
             started: self.started,
+            repair_cap: crate::delivery::MAX_REPAIRS,
+            protected_paths: &[],
         }
     }
 }

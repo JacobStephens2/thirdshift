@@ -251,7 +251,7 @@ name = \"review\"
 catalogue = \"publish\"
 ",
                 ),
-                ":6: catalogue: catalogue must be delivery or run-published-issue",
+                ":6: catalogue: catalogue must be delivery, run-published-issue or self-merge",
             ),
             (
                 "review",
@@ -3103,7 +3103,7 @@ command = \"touch '{}'\"
 #[test]
 fn process_email_flags_are_usage_errors_on_check_and_ticket_flags_are_rejected() {
     for args in [
-        vec!["process", "notes", "merge"],
+        vec!["process", "notes", "parallel", "2"],
         vec!["process", "notes", "harness", "codex"],
         vec!["process", "check", "notes", "--no-email"],
         vec!["process", "--email"],
@@ -3887,7 +3887,7 @@ name = \"ship\"
 catalogue = \"self-merge\"
 worktree = \"fix\"
 ",
-        ":14: catalogue:",
+        ":14: self-merge:",
     );
     refuse_issue_branch(
         "\
@@ -4286,4 +4286,741 @@ fn a_continuation_prompt_differs_from_a_fresh_start() {
         !prompt.contains("This is the first Step. No earlier Step has a result."),
         "continuation prompt still denies earlier work: {prompt}"
     );
+}
+
+const COMMIT_FEATURE: &str = r#"
+echo feature > feature.txt
+git add feature.txt
+git commit -q -m "Add feature"
+printf 'implemented' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#;
+
+const DELIVER: &str = "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+";
+
+const LAND: &str = "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"land\"
+catalogue = \"self-merge\"
+worktree = \"fix\"
+";
+
+fn prepare_ship(body: &str) -> Scenario {
+    let scenario = Scenario::new();
+    write_process(&scenario, "ship", body);
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does_for_in_session(7, 1, COMMIT_FEATURE);
+    scenario
+}
+
+fn assert_merged(scenario: &Scenario, result: &RunResult) {
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+    assert_eq!(scenario.gh_state()["issues"]["7"], "CLOSED");
+    assert_eq!(
+        scenario.gh_state()["comments"]["7"],
+        serde_json::json!([
+            "Closed by #1, merged into main by a thirdshift Ticket run with Self-merge."
+        ])
+    );
+    let calls = scenario.gh_calls_of("pr", "merge");
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    assert!(calls[0].contains(&"--merge".to_string()), "{calls:?}");
+    assert!(
+        calls[0].contains(&"--match-head-commit".to_string()),
+        "{calls:?}"
+    );
+    assert!(scenario.origin_log("issue-7").is_none());
+    assert_eq!(scenario.issue_labels(7), Vec::<String>::new());
+    scenario.assert_cleaned_up("issue-7");
+}
+
+fn assert_left_ready(scenario: &Scenario, result: &RunResult) {
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "https://github.com/acme/widgets/pull/1\n");
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+    let pr = &scenario.gh_state()["prs"][0];
+    assert_eq!(pr["state"], "OPEN");
+    assert_eq!(pr["isDraft"], false);
+    assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
+    assert_eq!(scenario.issue_labels(7), Vec::<String>::new());
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn self_merge_after_delivery_merges_when_asked_and_stays_ready_otherwise() {
+    let merging = prepare_ship(LAND);
+    assert_merged(
+        &merging,
+        &merging.run(&["process", "ship", "issue", "7", "merge"]),
+    );
+
+    let ready = prepare_ship(LAND);
+    assert_left_ready(&ready, &ready.run(&["process", "ship", "issue", "7"]));
+
+    let always = prepare_ship(LAND);
+    always.user_config_is("[merge]\nalways = true\n");
+    assert_merged(&always, &always.run(&["process", "ship", "issue", "7"]));
+
+    let overridden = prepare_ship(LAND);
+    overridden.user_config_is("[merge]\nalways = true\n");
+    assert_left_ready(
+        &overridden,
+        &overridden.run(&["process", "no-merge", "ship", "issue", "7"]),
+    );
+
+    let delivery_only = prepare_ship(DELIVER);
+    let result = delivery_only.run(&["process", "merge", "ship", "issue", "7"]);
+    assert_left_ready(&delivery_only, &result);
+    assert!(
+        result.stderr.contains("running step ship"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("running step land"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn self_merge_false_holds_the_merge_and_says_why() {
+    let body = "\
+version = 1
+description = \"Ship a fix\"
+
+[limits]
+self_merge = false
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"land\"
+catalogue = \"self-merge\"
+worktree = \"fix\"
+";
+    let scenario = prepare_ship(body);
+    let result = scenario.run(&["process", "ship", "merge", "issue", "7"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains(
+            "self_merge = false holds the Self-merge; the pull request stays ready for review"
+        ),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+    let pr = &scenario.gh_state()["prs"][0];
+    assert_eq!(pr["state"], "OPEN");
+    assert_eq!(pr["isDraft"], false);
+    assert_eq!(scenario.gh_state()["issues"]["7"], "OPEN");
+    assert_eq!(scenario.issue_labels(7), Vec::<String>::new());
+    let record = process_record(&scenario);
+    assert_eq!(record["outcome"], "failed");
+    assert!(
+        record["cause"]
+            .as_str()
+            .unwrap()
+            .contains("self_merge = false holds the Self-merge"),
+        "{record}"
+    );
+    scenario.assert_cleaned_up("issue-7");
+}
+
+#[test]
+fn a_protected_path_holds_the_self_merge_and_names_the_path() {
+    let body = "\
+version = 1
+description = \"Ship a fix\"
+
+[limits]
+protected_paths = [\"secrets/**\", \"*.txt\"]
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"land\"
+catalogue = \"self-merge\"
+worktree = \"fix\"
+";
+    let held = Scenario::new();
+    write_process(&held, "ship", body);
+    held.issue_labelled(7, &["ready-for-agent"]);
+    held.agent_does_for_in_session(
+        7,
+        1,
+        r#"
+mkdir -p secrets notes
+echo key > secrets/key.txt
+echo plain > notes/plain.txt
+git add secrets/key.txt notes/plain.txt
+git commit -q -m "Add files"
+printf 'implemented' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = held.run(&["process", "merge", "ship", "issue", "7"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains(
+            "protected path secrets/key.txt holds the Self-merge; the pull request stays ready for review"
+        ),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("notes/plain.txt"),
+        "a glob must not cross a slash: {}",
+        result.stderr
+    );
+    assert!(held.gh_calls_of("pr", "merge").is_empty());
+    assert_eq!(held.gh_state()["prs"][0]["state"], "OPEN");
+    assert_eq!(held.gh_state()["prs"][0]["isDraft"], false);
+    assert_eq!(held.gh_state()["issues"]["7"], "OPEN");
+    assert_eq!(held.issue_labels(7), Vec::<String>::new());
+    let record = process_record(&held);
+    assert_eq!(record["outcome"], "failed");
+    assert!(
+        record["cause"]
+            .as_str()
+            .unwrap()
+            .contains("protected path secrets/key.txt"),
+        "{record}"
+    );
+
+    let open = Scenario::new();
+    write_process(&open, "ship", body);
+    open.issue_labelled(7, &["ready-for-agent"]);
+    open.agent_does_for_in_session(
+        7,
+        1,
+        r#"
+mkdir -p notes
+echo plain > notes/plain.txt
+git add notes/plain.txt
+git commit -q -m "Add notes"
+printf 'implemented' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    assert_merged(
+        &open,
+        &open.run(&["process", "ship", "issue", "7", "merge"]),
+    );
+}
+
+#[test]
+fn a_lower_repair_cap_stops_the_repair_loop() {
+    let body = "\
+version = 1
+description = \"Ship a fix\"
+
+[limits]
+repair_cap = 1
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"land\"
+catalogue = \"self-merge\"
+worktree = \"fix\"
+";
+    let scenario = Scenario::new();
+    write_process(&scenario, "ship", body);
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    let red = r#"[{"name": "test", "conclusion": "failure", "url": "https://ci.example/test"}]"#;
+    scenario.agent_does_for_in_session(
+        7,
+        1,
+        &format!(
+            "echo feature > feature.txt\n\
+             git add feature.txt\n\
+             git commit -q -m 'Add feature'\n\
+             gh fake checks \"$(git rev-parse HEAD)\" '{red}'\n\
+             printf 'implemented' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n"
+        ),
+    );
+    scenario.agent_does_for_in_session(
+        7,
+        2,
+        &format!(
+            "echo fix > fix-1.txt\n\
+             git add fix-1.txt\n\
+             git commit -q -m 'Fix CI 1'\n\
+             gh fake checks \"$(git rev-parse HEAD)\" '{red}'\n\
+             printf 'still red' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n"
+        ),
+    );
+
+    let result = scenario.run(&["process", "ship", "issue", "7", "merge"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("starting Repair 1 of 1"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        result.stderr.contains("repairs exhausted"),
+        "{}",
+        result.stderr
+    );
+    assert!(!result.stderr.contains("Repair 2"), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 2, "{}", result.stderr);
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+}
+
+#[test]
+fn a_repair_cap_above_the_effective_cap_is_a_loosening_limit() {
+    let body = "\
+version = 1
+description = \"Ship a fix\"
+
+[limits]
+repair_cap = 6
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+";
+    refuse_issue_branch(
+        body,
+        ":5: loosening limit: repair_cap 6 is above the effective cap 5",
+    );
+}
+
+#[test]
+fn self_merge_true_is_a_loosening_limit() {
+    let body = "\
+version = 1
+description = \"Ship a fix\"
+
+[limits]
+self_merge = true
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+";
+    refuse_issue_branch(
+        body,
+        ":5: loosening limit: self_merge = true would allow a merge",
+    );
+}
+
+#[test]
+fn check_prints_limits_that_tighten_the_built_in_rules() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "ship",
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[limits]
+repair_cap = 0
+self_merge = false
+protected_paths = [\"secrets/**\", \"**/*.pem\"]
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"land\"
+catalogue = \"self-merge\"
+worktree = \"fix\"
+",
+    );
+
+    let result = scenario.run(&["process", "check", "ship", "issue", "7"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(scenario.claude_calls().is_empty(), "a session started");
+    assert!(
+        result.stdout.contains("limits: repair cap 0 of 5"),
+        "{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("limits: self-merge held"),
+        "{}",
+        result.stdout
+    );
+    assert!(
+        result
+            .stdout
+            .contains("limits: protected paths secrets/**, **/*.pem"),
+        "{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("land: self-merge (worktree fix)"),
+        "{}",
+        result.stdout
+    );
+    assert!(!process_dir(&scenario).exists());
+}
+
+#[test]
+fn self_merge_is_refused_unless_it_sits_directly_after_delivery() {
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"note\"
+command = \"true\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"land\"
+catalogue = \"self-merge\"
+worktree = \"fix\"
+",
+        ":24: self-merge: self-merge must be directly after delivery",
+    );
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"land\"
+catalogue = \"self-merge\"
+optional = true
+worktree = \"fix\"
+",
+        ":19: self-merge: self-merge cannot be optional",
+    );
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[worktrees.notes]
+kind = \"throwaway\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"land\"
+catalogue = \"self-merge\"
+parallel = \"together\"
+worktree = \"fix\"
+",
+        ":23: self-merge: self-merge cannot be in a parallel group",
+    );
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[worktrees.notes]
+kind = \"throwaway\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"land\"
+catalogue = \"self-merge\"
+worktree = \"notes\"
+",
+        ":23: self-merge: self-merge must use the Issue-branch worktree",
+    );
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"land\"
+catalogue = \"self-merge\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"again\"
+catalogue = \"self-merge\"
+worktree = \"fix\"
+",
+        ":24: self-merge: a Process has at most one self-merge Step",
+    );
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"implement\"
+skill = \"code-review\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"land\"
+catalogue = \"self-merge\"
+worktree = \"fix\"
+
+[[steps]]
+name = \"review\"
+skill = \"code-review\"
+worktree = \"fix\"
+",
+        ":25: delivery:",
+    );
+}
+
+#[test]
+fn a_limit_of_the_wrong_shape_is_refused_before_a_session() {
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[limits]
+repair_cap = \"six\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+",
+        ":5: repair_cap: repair_cap must be a whole number from 0 to 5",
+    );
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[limits]
+self_merge = \"false\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+",
+        ":5: self_merge: self_merge must be false",
+    );
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[limits]
+protected_paths = [\"\"]
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+",
+        ":5: protected path: a protected path glob must not be empty",
+    );
+    refuse_issue_branch(
+        "\
+version = 1
+description = \"Ship a fix\"
+
+[limits]
+protected_paths = \"secrets/**\"
+
+[worktrees.fix]
+kind = \"issue-branch\"
+
+[[steps]]
+name = \"ship\"
+catalogue = \"delivery\"
+worktree = \"fix\"
+",
+        ":5: protected_paths: protected_paths must be an array of globs",
+    );
+}
+
+#[test]
+fn merge_flags_on_process_check_are_a_usage_error() {
+    let scenario = Scenario::new();
+    for args in [
+        vec!["process", "check", "ship", "merge"],
+        vec!["process", "merge"],
+        vec!["process", "ship", "merge", "no-merge"],
+        vec!["process", "ship", "merge", "merge"],
+    ] {
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(2), "{args:?}: {}", result.stderr);
+        assert!(scenario.claude_calls().is_empty());
+    }
 }

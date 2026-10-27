@@ -5,9 +5,12 @@
 //! run at the same time, each in a throwaway worktree the Process declares.
 //! One worktree may be an Issue branch. The Steps that use it are the editing
 //! Steps, and a `delivery` Step after the last of them publishes that branch
-//! and leaves a pull request ready for review. The catalogue Step
-//! `run-published-issue` starts a Ticket run, or a Spec run, on the issue the
-//! session Step before it published.
+//! and leaves a pull request ready for review. A `self-merge` Step directly
+//! after `delivery` is the Self-merge: it merges when the command's `merge`
+//! flag or the User config's `merge_always` asks for one, and otherwise
+//! leaves the pull request ready for review. A file can only tighten limits.
+//! The catalogue Step `run-published-issue` starts a Ticket run, or a Spec
+//! run, on the issue the session Step before it published.
 //!
 //! A Process started with no issue is a Pass, unless it declares an
 //! Issue-branch worktree, which needs an issue. A Pass takes the repository's
@@ -72,6 +75,32 @@ struct ProcessFile {
     description: String,
     worktrees: Vec<WorktreeDraft>,
     steps: Vec<StepDraft>,
+    limits: Limits,
+    /// Filled by `run` from the merge flag or `merge_always`. Parsing leaves
+    /// this ready for review; `check` never merges.
+    goal: Goal,
+}
+
+/// Limits a file may set. Each one is at least as tight as the built-in rule.
+struct Limits {
+    /// The Repair cap the Delivery uses. Never above [`crate::delivery::MAX_REPAIRS`].
+    repair_cap: usize,
+    /// `self_merge = false` forbids a Self-merge the command or User config asked for.
+    forbid_self_merge: bool,
+    /// Globs. A changed path that matches one holds the Self-merge.
+    protected_paths: Vec<String>,
+}
+
+impl Limits {
+    /// The built-in limits: the effective Repair cap, a merge when asked, and
+    /// no protected path.
+    fn open() -> Self {
+        Self {
+            repair_cap: delivery::MAX_REPAIRS,
+            forbid_self_merge: false,
+            protected_paths: Vec::new(),
+        }
+    }
 }
 
 struct WorktreeDraft {
@@ -93,6 +122,7 @@ enum DraftKind {
     Skill { skill: String, line: usize },
     Command { command: String },
     Delivery { line: usize },
+    SelfMerge { line: usize },
     RunPublishedIssue { line: usize },
 }
 
@@ -113,6 +143,7 @@ enum StepKind {
     Skill { name: String, path: PathBuf },
     Command(String),
     Delivery,
+    SelfMerge,
     RunPublishedIssue,
 }
 
@@ -135,6 +166,9 @@ struct Prepared {
     started: DateTime<Utc>,
     /// The Base branch checked out in the Launch directory.
     base: String,
+    limits: Limits,
+    /// `Merged` only when this run was asked to Self-merge.
+    goal: Goal,
 }
 
 /// The Issue branch a run is delivering, beside the throwaway worktrees.
@@ -147,6 +181,8 @@ struct IssueRun<'a> {
     logs: &'a session::Logs,
     base_fix: &'a mut BaseFix,
     process: &'a str,
+    /// Delivery left a pull request ready for review, or merged it.
+    delivered: bool,
 }
 
 /// Ends the Claim on drop unless the run removed it or ended it already.
@@ -205,7 +241,12 @@ pub fn execute(action: ProcessAction) -> Result<String> {
     match action {
         ProcessAction::List => list(),
         ProcessAction::Check { name, issue } => check(&name, issue),
-        ProcessAction::Run { name, issue, email } => run(&name, issue, email),
+        ProcessAction::Run {
+            name,
+            issue,
+            email,
+            goal,
+        } => run(&name, issue, email, goal),
     }
 }
 
@@ -271,13 +312,23 @@ fn check(name: &str, issue: Option<IssueInput>) -> Result<String> {
     Ok(plan(name, &prepared))
 }
 
-fn run(name: &str, issue: Option<IssueInput>, email: Option<NotificationAsk>) -> Result<String> {
+fn run(
+    name: &str,
+    issue: Option<IssueInput>,
+    email: Option<NotificationAsk>,
+    goal: Option<Goal>,
+) -> Result<String> {
     interrupt::install()?;
     let config = UserConfig::load()?;
     // The same check as a Ticket run, before any worktree or Step: a missing
     // address or Resend key fails the Process before it starts. As for the
     // other Passes, the check is before a skip, so a Process that would be
     // skipped fails on it too.
+    let goal = goal.unwrap_or(if config.merge_always {
+        Goal::Merged
+    } else {
+        Goal::ReadyForReview
+    });
     let notification = RunNotification::new(
         Flags {
             email,
@@ -287,10 +338,11 @@ fn run(name: &str, issue: Option<IssueInput>, email: Option<NotificationAsk>) ->
         &config.email,
         About::Process { name },
     )?;
-    let (path, file) = match load(name) {
+    let (path, mut file) = match load(name) {
         Ok(loaded) => loaded,
         Err(error) => return Err(failed_before_steps(notification, error)),
     };
+    file.goal = goal;
     // Before any worktree: a foreign Issue URL is an origin mismatch, and a
     // number that cannot be resolved stops the same way. An Issue-branch
     // worktree with no issue is refused before the Pass log. A failure here
@@ -527,6 +579,7 @@ fn run_issue_branch(
     let mut base_fix = BaseFix::new(None, BaseFixAsk::Forbid);
     logs::started(Work::Process { repo: &repo, name }, &prepared.choice);
     notification.built_with(&prepared.choice);
+    let delivered;
     let result = {
         let mut issue_run = IssueRun {
             checkout: &mut held,
@@ -537,6 +590,7 @@ fn run_issue_branch(
             logs: &logs,
             base_fix: &mut base_fix,
             process: name,
+            delivered: false,
         };
         let result = execute_steps(name, &prepared, Some(&mut issue_run));
         let context = continuation(&issue_run);
@@ -546,9 +600,10 @@ fn run_issue_branch(
         {
             preserve_step_failure(checkout, context, kept_on_origin, error);
         }
+        delivered = issue_run.delivered;
         result
     };
-    if result.is_ok() {
+    if result.is_ok() || delivered {
         claim.remove();
     } else {
         claim.release();
@@ -584,24 +639,50 @@ fn execute_steps(
     let mut earlier = Vec::new();
     let mut began = Vec::new();
     let mut last = String::new();
-    for range in group_ranges(&prepared.steps) {
+    let ranges = group_ranges(&prepared.steps);
+    let mut index = 0;
+    while index < ranges.len() {
+        let range = ranges[index].clone();
         let group = &prepared.steps[range.clone()];
         if group.len() == 1 && matches!(group[0].kind, StepKind::Delivery) {
+            let merge_at = ranges.get(index + 1).and_then(|next| {
+                (next.len() == 1 && matches!(prepared.steps[next.start].kind, StepKind::SelfMerge))
+                    .then_some(next.start)
+            });
             let Some(issue_run) = issue_run.as_mut() else {
                 bail!("delivery has no Issue-branch worktree");
             };
             let started = Instant::now();
             let began_at = Utc::now();
-            let outcome = run_delivery(prepared, &group[0], issue_run);
+            let (delivery, merge) =
+                run_delivery(prepared, &group[0], issue_run, merge_at.is_some());
             finish_step(
                 &group[0],
                 started.elapsed(),
-                (began_at, outcome),
+                (began_at, delivery),
                 &results,
                 &mut earlier,
                 &mut began,
                 &mut last,
             )?;
+            if let Some(step_index) = merge_at {
+                let started = Instant::now();
+                let began_at = Utc::now();
+                finish_step(
+                    &prepared.steps[step_index],
+                    started.elapsed(),
+                    (
+                        began_at,
+                        merge.expect("a following self-merge has a result"),
+                    ),
+                    &results,
+                    &mut earlier,
+                    &mut began,
+                    &mut last,
+                )?;
+                index += 1;
+            }
+            index += 1;
             continue;
         }
         let held = issue_run.as_deref();
@@ -652,6 +733,7 @@ fn execute_steps(
         if let Some(error) = group_error {
             return Err(error);
         }
+        index += 1;
     }
     Ok(last)
 }
@@ -843,20 +925,39 @@ fn names_issue_worktree(step: Option<&str>, issue: Option<&str>) -> bool {
     matches!((step, issue), (Some(step), Some(issue)) if step == issue)
 }
 
+/// Publish the Issue branch, and when `merge_follows` run the Self-merge in
+/// that same Delivery. The Self-merge is the existing one: one Repair loop,
+/// then the merge when the run's goal asks for it and the file does not forbid it.
+/// A protected path, `self_merge = false`, or a policy refusal leaves the
+/// pull request ready and fails the self-merge Step. The pair's results are
+/// the delivery Step's and, when a self-merge Step follows, that Step's.
 fn run_delivery(
     prepared: &Prepared,
     step: &ResolvedStep,
     issue_run: &mut IssueRun<'_>,
-) -> Result<String> {
-    let checkout = issue_run
-        .checkout
-        .take()
-        .context("the Issue-branch worktree is gone")?;
+    merge_follows: bool,
+) -> (Result<String>, Option<Result<String>>) {
+    let checkout = match issue_run.checkout.take() {
+        Some(checkout) => checkout,
+        None => return (Err(anyhow!("the Issue-branch worktree is gone")), None),
+    };
+    let asked = prepared.goal == Goal::Merged;
+    let forbid = prepared.limits.forbid_self_merge;
+    let merge = merge_follows && asked && !forbid;
     progress::step(format_args!(
         "running step {} with {choice}",
         step.name,
         choice = prepared.choice
     ));
+    if merge {
+        let merge_step = prepared
+            .steps
+            .iter()
+            .find(|step| matches!(step.kind, StepKind::SelfMerge));
+        if let Some(merge_step) = merge_step {
+            progress::step(format_args!("running step {}", merge_step.name));
+        }
+    }
     let mut pull_request = PullRequest::new(
         issue_run.issue,
         issue_run.branch,
@@ -868,27 +969,57 @@ fn run_delivery(
         ..ChildAsks::default()
     };
     let started = prepared.started;
-    match (delivery::Delivery {
+    let protected = if merge {
+        prepared.limits.protected_paths.as_slice()
+    } else {
+        &[]
+    };
+    let published = (delivery::Delivery {
         security_review: false,
         child_asks: &child_asks,
         issue: issue_run.issue,
         base: issue_run.base,
-        goal: Goal::ReadyForReview,
+        goal: if merge {
+            Goal::Merged
+        } else {
+            Goal::ReadyForReview
+        },
         base_fix: issue_run.base_fix,
         logs: issue_run.logs,
         started,
+        repair_cap: prepared.limits.repair_cap,
+        protected_paths: protected,
     })
-    .publish(checkout, &mut pull_request)
-    {
-        Ok(url) => Ok(url),
+    .publish(checkout, &mut pull_request);
+    match published {
+        Ok(url) => {
+            issue_run.delivered = true;
+            let merge_result = if !merge_follows {
+                None
+            } else if asked && forbid {
+                Some(Err(anyhow!(
+                    "self_merge = false holds the Self-merge; the pull request stays ready for review"
+                )))
+            } else {
+                Some(Ok(url.clone()))
+            };
+            (Ok(url), merge_result)
+        }
         Err(mut failed) => {
+            let held = failed.error.is::<crate::failed_run::MergeHold>()
+                || failed.error.is::<crate::failed_run::PolicyRefusal>();
+            if held {
+                issue_run.delivered = true;
+                let url = failed.pr_url.clone().unwrap_or_default();
+                return (Ok(url), Some(Err(failed.error)));
+            }
             if let Some(recovery) = &mut failed.recovery {
                 recovery.add_command_context(continuation(issue_run), issue_run.on_origin);
                 for line in recovery.lines() {
                     progress::step(line);
                 }
             }
-            Err(failed.error)
+            (Err(failed.error), None)
         }
     }
 }
@@ -963,6 +1094,7 @@ fn run_step_in(
             }
         }
         StepKind::Delivery => bail!("delivery cannot be in a parallel group"),
+        StepKind::SelfMerge => bail!("self-merge must be directly after delivery"),
         StepKind::Command(command) => {
             progress::step(format_args!("running step {}", step.name));
             let result_file = results.join(format!("{}.txt", step.name));
@@ -1238,6 +1370,24 @@ fn plan(name: &str, prepared: &Prepared) -> String {
             );
         }
     }
+    if prepared.limits.repair_cap != delivery::MAX_REPAIRS {
+        let _ = writeln!(
+            text,
+            "limits: repair cap {} of {}",
+            prepared.limits.repair_cap,
+            delivery::MAX_REPAIRS
+        );
+    }
+    if prepared.limits.forbid_self_merge {
+        text.push_str("limits: self-merge held\n");
+    }
+    if !prepared.limits.protected_paths.is_empty() {
+        let _ = writeln!(
+            text,
+            "limits: protected paths {}",
+            prepared.limits.protected_paths.join(", ")
+        );
+    }
     let named = !prepared.declared.is_empty();
     for range in group_ranges(&prepared.steps) {
         let names: Vec<_> = prepared.steps[range.clone()]
@@ -1264,6 +1414,7 @@ fn step_plan(step: &ResolvedStep, named: bool) -> String {
             format!("{}: command {shown}", step.name)
         }
         StepKind::Delivery => format!("{}: delivery", step.name),
+        StepKind::SelfMerge => format!("{}: self-merge", step.name),
         StepKind::RunPublishedIssue => format!("{}: run-published-issue", step.name),
     };
     if named && let Some(worktree) = &step.worktree {
@@ -1281,6 +1432,7 @@ fn load(name: &str) -> Result<(PathBuf, ProcessFile)> {
     let text = read_process(&path)?;
     let file = parse(&path, &text)?;
     refuse_worktrees(&path, &file)?;
+    refuse_self_merge(&path, &file)?;
     refuse_issue_branch(&path, &file)?;
     refuse_published(&path, &file.steps)?;
     Ok((path, file))
@@ -1342,6 +1494,8 @@ fn prepare_from(
         issue,
         started,
         base: source.base.to_string(),
+        limits: file.limits,
+        goal: file.goal,
     })
 }
 
@@ -1488,6 +1642,73 @@ fn require_issue(path: &Path, file: &ProcessFile, issue: Option<&IssueUrl>) -> R
     ))
 }
 
+fn refuse_self_merge(path: &Path, file: &ProcessFile) -> Result<()> {
+    let issue_branch = file
+        .worktrees
+        .iter()
+        .find(|worktree| worktree.issue_branch_line.is_some());
+    let mut seen = false;
+    for (index, step) in file.steps.iter().enumerate() {
+        let DraftKind::SelfMerge { line } = step.kind else {
+            continue;
+        };
+        if seen {
+            return Err(rule(
+                path,
+                line,
+                "self-merge",
+                "a Process has at most one self-merge Step",
+            ));
+        }
+        seen = true;
+        let follows = index > 0
+            && matches!(file.steps[index - 1].kind, DraftKind::Delivery { .. })
+            && !same_group(&file.steps[index - 1], step);
+        if !follows {
+            return Err(rule(
+                path,
+                line,
+                "self-merge",
+                "self-merge must be directly after delivery",
+            ));
+        }
+        if step.optional {
+            return Err(rule(
+                path,
+                line,
+                "self-merge",
+                "self-merge cannot be optional",
+            ));
+        }
+        if let Some((_, parallel_line)) = &step.parallel {
+            return Err(rule(
+                path,
+                *parallel_line,
+                "self-merge",
+                "self-merge cannot be in a parallel group",
+            ));
+        }
+        let uses_issue = step
+            .worktree
+            .as_ref()
+            .is_some_and(|(name, _)| issue_branch.is_some_and(|branch| branch.name == *name));
+        if !uses_issue {
+            let reported = step
+                .worktree
+                .as_ref()
+                .map(|(_, worktree_line)| *worktree_line)
+                .unwrap_or(line);
+            return Err(rule(
+                path,
+                reported,
+                "self-merge",
+                "self-merge must use the Issue-branch worktree",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn refuse_issue_branch(path: &Path, file: &ProcessFile) -> Result<()> {
     let mut issue_branches = file
         .worktrees
@@ -1555,6 +1776,8 @@ fn refuse_issue_branch(path: &Path, file: &ProcessFile) -> Result<()> {
                 ));
             }
             delivery_at = Some(index);
+        } else if matches!(step.kind, DraftKind::SelfMerge { .. }) {
+            // Self-merge publishes; it is not an editing use of the worktree.
         } else if step
             .worktree
             .as_ref()
@@ -1633,6 +1856,7 @@ fn resolve(path: &Path, step: &StepDraft, worktree: &Path) -> Result<ResolvedSte
         },
         DraftKind::Command { command } => StepKind::Command(command.clone()),
         DraftKind::Delivery { .. } => StepKind::Delivery,
+        DraftKind::SelfMerge { .. } => StepKind::SelfMerge,
         DraftKind::RunPublishedIssue { .. } => StepKind::RunPublishedIssue,
     };
     Ok(ResolvedStep {
@@ -1688,6 +1912,7 @@ fn parse(path: &Path, text: &str) -> Result<ProcessFile> {
     let mut description = None;
     let mut worktrees = Vec::new();
     let mut steps = None;
+    let mut limits = Limits::open();
     for (key, item) in table.iter() {
         let line = key_line(text, table.key(key));
         match key {
@@ -1713,6 +1938,7 @@ fn parse(path: &Path, text: &str) -> Result<ProcessFile> {
                 }
                 steps = Some(parsed);
             }
+            "limits" => limits = parse_limits(path, text, line, item)?,
             other => return Err(rule(path, line, "unknown key", other)),
         }
     }
@@ -1729,7 +1955,106 @@ fn parse(path: &Path, text: &str) -> Result<ProcessFile> {
         description,
         worktrees,
         steps,
+        limits,
+        goal: Goal::ReadyForReview,
     })
+}
+
+fn parse_limits(path: &Path, text: &str, line: usize, item: &Item) -> Result<Limits> {
+    let Some(table) = item.as_table() else {
+        return Err(rule(path, line, "limits", "limits must be a table"));
+    };
+    let mut limits = Limits::open();
+    for (key, value) in table.iter() {
+        let field_line = key_line(text, table.key(key));
+        match key {
+            "repair_cap" => limits.repair_cap = repair_cap_of(path, field_line, value)?,
+            "self_merge" => limits.forbid_self_merge = forbid_self_merge(path, field_line, value)?,
+            "protected_paths" => {
+                limits.protected_paths = protected_paths_of(path, text, field_line, value)?;
+            }
+            other => return Err(rule(path, field_line, "unknown key", other)),
+        }
+    }
+    Ok(limits)
+}
+
+fn repair_cap_of(path: &Path, line: usize, item: &Item) -> Result<usize> {
+    let whole = format!(
+        "repair_cap must be a whole number from 0 to {}",
+        delivery::MAX_REPAIRS
+    );
+    let Some(value) = item.as_integer() else {
+        return Err(rule(path, line, "repair_cap", whole));
+    };
+    if value < 0 {
+        return Err(rule(path, line, "repair_cap", whole));
+    }
+    if value > delivery::MAX_REPAIRS as i64 {
+        return Err(rule(
+            path,
+            line,
+            "loosening limit",
+            format!(
+                "repair_cap {value} is above the effective cap {}",
+                delivery::MAX_REPAIRS
+            ),
+        ));
+    }
+    Ok(value as usize)
+}
+
+/// `self_merge = false` forbids a merge. `true` would loosen the built-in rule
+/// that a merge happens only when the command or the User config asks.
+fn forbid_self_merge(path: &Path, line: usize, item: &Item) -> Result<bool> {
+    let Some(value) = item.as_bool() else {
+        return Err(rule(path, line, "self_merge", "self_merge must be false"));
+    };
+    if value {
+        return Err(rule(
+            path,
+            line,
+            "loosening limit",
+            "self_merge = true would allow a merge",
+        ));
+    }
+    Ok(true)
+}
+
+fn protected_paths_of(path: &Path, text: &str, line: usize, item: &Item) -> Result<Vec<String>> {
+    let Some(array) = item.as_array() else {
+        return Err(rule(
+            path,
+            line,
+            "protected_paths",
+            "protected_paths must be an array of globs",
+        ));
+    };
+    let mut paths = Vec::new();
+    for value in array.iter() {
+        let value_line = value
+            .span()
+            .map(|span| line_of(text, span.start))
+            .unwrap_or(line);
+        let Some(glob) = value.as_str() else {
+            return Err(rule(
+                path,
+                value_line,
+                "protected_paths",
+                "protected_paths must be an array of globs",
+            ));
+        };
+        if glob.is_empty() {
+            return Err(rule(
+                path,
+                value_line,
+                "protected path",
+                "a protected path glob must not be empty",
+            ));
+        }
+        paths.push(glob.to_string());
+    }
+    Ok(paths)
 }
 
 fn parse_worktrees(
@@ -1998,12 +2323,13 @@ fn step_catalogue(path: &Path, line: usize, item: &Item) -> Result<(DraftKind, u
     let kind = match value {
         "delivery" => DraftKind::Delivery { line },
         "run-published-issue" => DraftKind::RunPublishedIssue { line },
+        "self-merge" => DraftKind::SelfMerge { line },
         _ => {
             return Err(rule(
                 path,
                 line,
                 "catalogue",
-                "catalogue must be delivery or run-published-issue",
+                "catalogue must be delivery, run-published-issue or self-merge",
             ));
         }
     };
