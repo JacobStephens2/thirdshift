@@ -21,6 +21,8 @@ pub(super) struct Peek {
     pub pull_requests: Vec<String>,
     pub advisories: Vec<Advisory>,
     pub issue_url: Option<String>,
+    /// The Experiment page of an Experiment record that names its id.
+    pub experiment_url: Option<String>,
     pub subject: String,
     pub title: String,
 }
@@ -75,6 +77,10 @@ impl Peek {
             issue.as_ref(),
         );
         let issue_url = crate::logs::status::issue_url(issue.as_ref());
+        let experiment_url = (value["kind"] == "Experiment")
+            .then(|| value["experiment"]["id"].as_str())
+            .flatten()
+            .map(|id| format!("/experiments/{id}"));
         let mut advisories = Advisory::of(&value, "Fixes advisory");
         if let Some(dispatched) = value["dispatched"].as_array() {
             for run in dispatched {
@@ -122,6 +128,7 @@ impl Peek {
             pull_requests: inspection.pull_requests,
             advisories,
             issue_url,
+            experiment_url,
             subject,
             title,
             command,
@@ -259,5 +266,48 @@ mod tests {
         assert!(html.find("</h2>").unwrap() < html.find(">Dismiss</button>").unwrap());
         assert!(html.contains("aria-label=\"Command details\""));
         assert!(!html.contains(">Issue #7</a>"));
+    }
+
+    fn render_peek(details: Value) -> String {
+        let inspection = crate::logs::stop::Inspection {
+            details,
+            dismissal: None,
+            can_stop: false,
+            stopping: false,
+            branches: vec![],
+            pull_requests: vec![],
+        };
+        Peek::new("widgets#7".into(), inspection, "csrf".into())
+            .render()
+            .unwrap()
+    }
+
+    #[test]
+    fn experiment_record_links_its_experiment_page() {
+        let html = render_peek(json!({
+            "kind": "Experiment", "outcome": "fail",
+            "experiment": {"id": "exp-1<b>"}
+        }));
+        assert!(
+            html.contains("<a href=\"/experiments/exp-1&#60;b&#62;\">Experiment</a>"),
+            "{html}"
+        );
+        assert!(
+            html.find(">Full Command log</a>").unwrap() < html.find(">Experiment</a>").unwrap()
+        );
+    }
+
+    #[test]
+    fn other_records_carry_no_experiment_link() {
+        let html = render_peek(json!({
+            "kind": "Run", "experiment": {"id": "exp-1"}
+        }));
+        assert!(!html.contains("/experiments/"), "{html}");
+    }
+
+    #[test]
+    fn experiment_record_without_an_id_carries_no_experiment_link() {
+        let html = render_peek(json!({"kind": "Experiment"}));
+        assert!(!html.contains("/experiments/"), "{html}");
     }
 }

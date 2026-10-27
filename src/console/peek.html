@@ -7,7 +7,7 @@
   {% for pr in pull_requests %}<p>Pull request left: {{ pr|linkify }}</p>{% endfor %}
   {% for advisory in advisories %}<p>{{ advisory.label }}: <a href="{{ advisory.finding.url }}">{{ advisory.finding.title }}</a> · {{ advisory.finding.severity.as_deref().unwrap_or("ungraded") }}</p>{% endfor %}
   <p class="peek-cli"><code title="{{ cli }}">{{ cli }}</code> <button type="button" data-copy-cli="{{ cli }}">Copy CLI</button> <span role="status"></span></p>
-  <p><a href="{{ crate::logs::status::inspect::url("/log", command, None) }}">Full Command log</a></p>
+  <p><a href="{{ crate::logs::status::inspect::url("/log", command, None) }}">Full Command log</a>{% match experiment_url %}{% when Some with (url) %} · <a href="{{ url }}">Experiment</a>{% when None %}{% endmatch %}</p>
   {% if !logs.is_empty() %}<details class="peek-traces" data-fact="session traces"><summary>Session traces <span class="count">{{ logs.len() }}</span></summary>{% for log in logs %}<p class="peek-trace"><a href="{{ log.url }}" title="{{ log.name }}"><span>Session trace:</span> <span class="tail"><bdi>{{ log.name }}</bdi></span></a></p>{% endfor %}</details>{% endif %}
   <dl class="peek-facts">{% for fact in facts %}{{ self.fact(fact)|safe }}{% endfor %}</dl>
 </section>
