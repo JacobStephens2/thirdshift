@@ -974,7 +974,10 @@ repair cap out of 5, that self-merge is held, and the protected paths. A skill
 Step shows the skill and where it was found. A command
 Step shows its command, and <code>check</code> does not run it. A delivery Step shows
 <code>delivery</code>. A self-merge Step shows <code>self-merge</code>. A <code>run-published-issue</code> Step shows <code>run-published-issue</code>. An
-optional Step is marked <code>(optional)</code>. <code>check</code> starts no session. <code>check &lt;name&gt; issue &lt;issue&gt;</code> resolves the issue and still creates no Issue branch and makes
+optional Step is marked <code>(optional)</code>. <code>check</code> performs the same Harness
+preflight as running, including a minimal Model test when the Harness needs
+one, and runs no Step. <code>check &lt;name&gt; issue &lt;issue&gt;</code> resolves the issue and
+still creates no Issue branch and makes
 no Claim. Without an issue, an Issue-branch worktree is the refusal above, not
 a plan.</p>
 <p>Running the Process starts the Steps in its throwaway worktrees, detached at

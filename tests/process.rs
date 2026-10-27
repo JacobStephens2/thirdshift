@@ -56,6 +56,15 @@ fn command_log(scenario: &Scenario) -> (std::path::PathBuf, String) {
     (path, text)
 }
 
+/// Process Step sessions stream JSON; minimal Claude Model probes use stdin.
+fn claude_sessions(scenario: &Scenario) -> Vec<serde_json::Value> {
+    scenario
+        .claude_calls()
+        .into_iter()
+        .filter(|call| call["stdin"].is_null())
+        .collect()
+}
+
 fn assert_no_session(scenario: &Scenario, result: &RunResult) {
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert_eq!(result.stdout, "");
@@ -4196,7 +4205,7 @@ worktree = \"fix\"
         "{}",
         result.stderr
     );
-    let calls = scenario.claude_calls();
+    let calls = claude_sessions(&scenario);
     assert_eq!(calls.len(), 2, "{}", result.stderr);
     assert!(
         calls[1]["prompt"]
@@ -5110,13 +5119,13 @@ model = \"gemini-3.8-flash\"
 effort = \"high\"
 ",
     );
-    scenario.agent_does("printf 'done' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    scenario.agent_does("if [ -n \"${FAKE_CLAUDE_FINAL_MESSAGE:-}\" ]; then printf 'done' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"; fi");
 
     let result = scenario.run(&["process", "families"]);
 
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert_eq!(result.stdout, "done\n");
-    let claude = scenario.claude_calls();
+    let claude = claude_sessions(&scenario);
     let codex = scenario.codex_calls();
     let agy = scenario.agy_calls();
     assert_eq!(claude.len(), 1, "{}", result.stderr);
@@ -5322,7 +5331,7 @@ skill = \"code-review\"
 harness = \"claude\"
 ",
     );
-    scenario.agent_does("printf 'done' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    scenario.agent_does("if [ -n \"${FAKE_CLAUDE_FINAL_MESSAGE:-}\" ]; then printf 'done' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"; fi");
 
     let result = scenario.run(&[
         "process",
@@ -5338,7 +5347,7 @@ harness = \"claude\"
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     assert!(scenario.codex_calls().is_empty(), "{}", result.stderr);
     assert!(scenario.agy_calls().is_empty(), "{}", result.stderr);
-    let claude = scenario.claude_calls();
+    let claude = claude_sessions(&scenario);
     assert_eq!(claude.len(), 1, "{}", result.stderr);
     assert_flag(&claude[0], "--model", "opus");
     assert_flag(&claude[0], "--effort", "high");
@@ -5470,7 +5479,7 @@ harness = \"claude\"
     let configured = scenario.run(&["process", "check", "sources"]);
 
     assert_eq!(configured.code, Some(0), "{}", configured.stderr);
-    assert!(scenario.claude_calls().is_empty());
+    assert!(claude_sessions(&scenario).is_empty());
     assert!(scenario.codex_calls().is_empty());
     assert!(scenario.agy_calls().is_empty());
     assert!(
@@ -5513,7 +5522,7 @@ harness = \"claude\"
         "{}",
         flagged.stdout
     );
-    assert!(scenario.claude_calls().is_empty());
+    assert!(claude_sessions(&scenario).is_empty());
     assert!(scenario.codex_calls().is_empty());
     assert!(scenario.agy_calls().is_empty());
 }

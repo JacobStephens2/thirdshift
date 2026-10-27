@@ -1070,8 +1070,10 @@ repair cap out of 5, that self-merge is held, and the protected paths. A skill
 Step shows the skill and where it was found. A command
 Step shows its command, and `check` does not run it. A delivery Step shows
 `delivery`. A self-merge Step shows `self-merge`. A `run-published-issue` Step shows `run-published-issue`. An
-optional Step is marked `(optional)`. `check` starts no session. `check <name>
-issue <issue>` resolves the issue and still creates no Issue branch and makes
+optional Step is marked `(optional)`. `check` performs the same Harness
+preflight as running, including a minimal Model test when the Harness needs
+one, and runs no Step. `check <name> issue <issue>` resolves the issue and
+still creates no Issue branch and makes
 no Claim. Without an issue, an Issue-branch worktree is the refusal above, not
 a plan.
 

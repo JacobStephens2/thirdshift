@@ -53,6 +53,12 @@ harness = "claude"
         "{}",
         result.stdout
     );
-    assert!(scenario.claude_calls().is_empty());
+    assert!(
+        scenario
+            .claude_calls()
+            .iter()
+            .all(|call| call["stdin"].is_string()),
+        "a Process Step session ran"
+    );
     assert!(scenario.codex_calls().is_empty());
 }

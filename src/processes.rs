@@ -149,6 +149,12 @@ struct ResolvedStep {
     start_failure: Option<String>,
 }
 
+impl ResolvedStep {
+    fn check(&mut self) {
+        self.start_failure = self.choice.check().err().map(|error| one_line(&error));
+    }
+}
+
 /// Where a Step's Harness, Model and Effort each came from.
 #[derive(Clone, Copy)]
 struct Sources {
@@ -172,6 +178,31 @@ impl CommandChoice {
             effort: Source::word(&asked.model_and_effort.effort, &choice.effort),
         };
         Self { choice, sources }
+    }
+
+    /// Settle catalog aliases when the Command's Harness is actually used,
+    /// then check each Step's effective choice with the usual preflight.
+    fn check_steps(&mut self, steps: &mut [ResolvedStep]) {
+        if steps
+            .iter()
+            .any(|step| step.choice.harness == self.choice.harness)
+        {
+            let mut settled = self.choice.clone();
+            // A Step may replace a rejected Command field. Only its effective
+            // choice can fail the Process; this pass just resolves aliases.
+            if settled.check_without_probe().is_ok() {
+                self.choice = settled;
+            }
+        }
+        for step in steps {
+            if !matches!(step.sources.model, Source::Step) {
+                step.choice.model = self.choice.model.clone();
+            }
+            if !matches!(step.sources.effort, Source::Step) {
+                step.choice.effort = self.choice.effort.clone();
+            }
+            step.check();
+        }
     }
 
     /// Only fields explicitly named by the Step replace the Command's values.
@@ -1630,7 +1661,7 @@ fn prepare_from(
         .collect();
     let skip = source.issue_checkout.and(issue_worktree.as_deref());
     let worktrees = create_worktrees(source.git, source.commit, &file, skip)?;
-    let command = CommandChoice::of(asked, &config.harness);
+    let mut command = CommandChoice::of(asked, &config.harness);
     let mut steps = Vec::new();
     for step in &file.steps {
         let checkout = resolve_dir(
@@ -1641,6 +1672,7 @@ fn prepare_from(
         );
         steps.push(resolve(path, step, checkout, &command)?);
     }
+    command.check_steps(&mut steps);
     Ok(Prepared {
         path: path.to_path_buf(),
         worktrees,
@@ -2023,11 +2055,7 @@ fn resolve(
         DraftKind::SelfMerge { .. } => StepKind::SelfMerge,
         DraftKind::RunPublishedIssue { .. } => StepKind::RunPublishedIssue,
     };
-    let (mut choice, sources) = command.step(step);
-    let start_failure = match choice.check_without_probe() {
-        Ok(()) => None,
-        Err(error) => Some(one_line(&error)),
-    };
+    let (choice, sources) = command.step(step);
     Ok(ResolvedStep {
         name: step.name.clone(),
         optional: step.optional,
@@ -2037,7 +2065,7 @@ fn resolve(
         report_line: step.report_line,
         choice,
         sources,
-        start_failure,
+        start_failure: None,
     })
 }
 
