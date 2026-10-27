@@ -82,7 +82,9 @@ Research: `docs/grill-with-docs/877-composable-by-file.md` (Q1.1, Q1.2, Q1.5, Q2
 
 *Answer:* agree
 
-## Round 3 (open)
+## Round 3 (answered)
+
+*Pre-answer:* Part of my intention with this putting these processes into this simple, easy-to-read process directory is trying to make it easier for people to understand how third shift works and the process that it operates. And to make it even easy as well to test modifications to it and evaluate those yeah and their impact on the output of the software factory that is third shift. 
 
 **Q3.1 - When `implement` ends a Process early.** On an issue labelled `bug`, the `implement` session can end with `Bug not reproduced`. The Ticket run then ends successfully with triage notes and `needs-info`, opening no pull request (GLOSSARY "Ticket run"). In a file, that means a Step whose success skips every Step after it. No Step can do that today: a Step either succeeds and the next one runs, or it fails. With Q2.4, a Custom process can use `implement` too. The options:
 - (a) **`implement` may end the Process successfully.** The Steps after it are skipped, the progress line and Ending say the bug was not reproduced, the Claim ends as a Ticket run's does today, and the Issue-branch worktree is cleaned up. This holds for a Custom process as well as the Ticket run.
@@ -90,7 +92,7 @@ Research: `docs/grill-with-docs/877-composable-by-file.md` (Q1.1, Q1.2, Q1.5, Q2
 
 *Recommended:* (a). The Ticket run's file needs it anyway, and with (b) a Custom process copied from `ticket-run` would quietly fix bugs it never reproduced. That loses the safeguard the bug path exists for.
 
-*Answer:* 
+*Answer:* agree
 
 **Q3.2 - How to slice the Spec.** No slice needs a release before a later one (see "Split a Spec at a release" in `docs/agents/triage-labels.md`), so one Spec works. The proposed Tickets:
 1. **The `processes/` folder, compiled into the binary,** with a README, plus `thirdshift process show <name>` for any Process. `process list` marks built-ins once there are any.
@@ -101,7 +103,7 @@ Research: `docs/grill-with-docs/877-composable-by-file.md` (Q1.1, Q1.2, Q1.5, Q2
 
 *Recommended:* this order. Tickets 1 to 4 each add something a Custom process can use on its own and leave the Ticket run untouched. Only 5 touches the Ticket run, and by then every Step it needs has been through a Custom process.
 
-*Answer:* 
+*Answer:* agreed I think, but we'll run the to-spec and to-tickets skills to finalize this. 
 
 **Q3.3 - How the move is proven before it merges.** The tests are the main proof (Q1.2), but the Ticket run is what every unattended Command ends in. The options:
 - (a) **The Spec PR is left ready for review, never Self-merged.** Before merging, you run real Ticket runs from a build of the **Spec branch** on a test repository: a fresh issue, a Continuation, a `bug` issue that reproduces and one that doesn't. You also run a Pickup run and a Spec run that start Ticket runs.
@@ -109,7 +111,7 @@ Research: `docs/grill-with-docs/877-composable-by-file.md` (Q1.1, Q1.2, Q1.5, Q2
 
 *Recommended:* (a). This is the first Spec that rewires the path all other Commands depend on. A live check costs an afternoon, and a regression here would show up in every scheduled Pickup run.
 
-*Answer:* 
+*Answer:* agree
 
 ## Settled by earlier answers (shout if any is wrong)
 
@@ -129,6 +131,10 @@ Research: `docs/grill-with-docs/877-composable-by-file.md` (Q1.1, Q1.2, Q1.5, Q2
 - Every session Step gets Resume, within this Spec, as its own Ticket. GLOSSARY "Resume" now says so (Q2.3).
 - Custom processes can use `implement` on an Issue-branch worktree, with the same refusals as other editing Steps (Q2.4).
 - GLOSSARY "Built-in process" and "Step" now say a Built-in process's Command keeps its run type's name, its file can be copied, and every catalogue Step is open to Custom processes.
+- `implement` may end a Process successfully when a bug is not reproduced, skipping the Steps after it, in a Custom process as in the Ticket run (Q3.1).
+- One Spec with the five Tickets in Q3.2's order and blocking links, to be finalized with `to-spec` and `to-tickets` (Q3.2).
+- The Spec PR is left ready for review, never Self-merged. Live Ticket, Continuation, bug (reproduced and not), Pickup and Spec runs from a Spec-branch build come before the merge (Q3.3).
+- The frontier is empty: the grill is complete.
 
 ## Research results (2026-10-27)
 
