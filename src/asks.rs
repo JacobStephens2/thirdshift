@@ -517,6 +517,7 @@ mod tests {
     fn ticket() -> Kind {
         Kind::Ticket {
             spec_branch: "issue-20".to_string(),
+            spec_pr: None,
         }
     }
 

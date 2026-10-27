@@ -1913,8 +1913,10 @@ gh fake pr issue-20 body '"untouched"'"#
                 "/pull/2 was retargeted from main to develop under this Spec run"
             },
         );
-        assert_contains(&result.stderr, "#22 landed");
-        assert_eq!(scenario.gh_state()["issues"]["22"], "CLOSED");
+        // #22 started once the Spec PR was open, so its Self-merge checks it.
+        assert_contains(&result.stderr, "#22 failed");
+        assert_eq!(scenario.gh_state()["issues"]["22"], "OPEN");
+        assert_ne!(pr_from(&scenario, "issue-22").unwrap()["state"], "MERGED");
         if replacement {
             assert_eq!(spec_pr(&scenario)["isDraft"], false);
         }
@@ -3575,7 +3577,7 @@ fi
 }
 
 #[test]
-fn issue_1471_a_spec_pr_closed_mid_run_stops_dispatch_and_ticket_merges() {
+fn issue_1471_a_spec_pr_closed_mid_run_starts_no_further_ticket() {
     let scenario = spec_of(&[(21, &[]), (22, &[21]), (23, &[21])]);
     scenario.agent_does_for(22, "gh fake pr issue-20 state '\"CLOSED\"'\nexit 1");
 
@@ -3594,6 +3596,39 @@ fn issue_1471_a_spec_pr_closed_mid_run_stops_dispatch_and_ticket_merges() {
     assert_contains(
         &result.stderr,
         &format!("the Spec PR {spec_pr_url} was closed under this Spec run"),
+    );
+    assert!(
+        !result.stderr.contains("\nthirdshift: Recovery: "),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn issue_1471_a_ticket_running_when_the_spec_pr_closes_is_not_self_merged() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
+    scenario.agent_does_for(
+        22,
+        &format!(
+            "{}\ngh fake pr issue-20 state '\"CLOSED\"'\n",
+            agent_lands(22, "22.txt")
+        ),
+    );
+
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario)]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let ticket_pr = pr_from(&scenario, "issue-22").unwrap();
+    assert_ne!(ticket_pr["state"], "MERGED", "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["issues"]["22"], "OPEN");
+    let spec_pr_url = spec_pr(&scenario)["url"].as_str().unwrap().to_string();
+    assert_contains(
+        &result.stderr,
+        &format!("#22: the Spec PR {spec_pr_url} was closed under this Spec run"),
+    );
+    assert_contains(
+        &result.stderr,
+        &format!("thirdshift: the Spec PR {spec_pr_url} was closed under this Spec run"),
     );
     assert!(
         !result.stderr.contains("\nthirdshift: Recovery: "),

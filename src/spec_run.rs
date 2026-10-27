@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 
 use crate::base_fix::BaseFixAsk;
-use crate::child_run::{ChildAsks, Ended, Kind, Runs};
+use crate::child_run::{ChildAsks, Ended, Kind, Runs, SpecPr};
 use crate::delivery::{Delivery, Opening, OpeningSession};
 use crate::failed_run::{FailedRun, interrupted_or};
 use crate::github::{GitHub, Ticket};
@@ -231,7 +231,7 @@ trait Outside {
     /// Fails only on a Spec PR changed under the Spec run.
     fn show(&mut self, checklist: &str) -> Result<()>;
     /// Fail if the Spec PR, once captured, changed under the Spec run.
-    fn spec_pr_unchanged(&mut self) -> Result<()>;
+    fn ensure_spec_pr_unchanged(&mut self) -> Result<()>;
     /// A Ticket landed: open the Spec PR as a draft with `checklist`, or
     /// show it. Returns the Spec PR's URL.
     fn landed(&mut self, checklist: &str) -> Result<String>;
@@ -304,8 +304,17 @@ impl Outside for ChildRunsAndGitHub<'_> {
         if !self.spec.in_same_repo(ticket) {
             bail!("a Ticket outside the Spec's repository cannot start");
         }
+        let base = self
+            .delivery
+            .as_ref()
+            .expect("the Ticket loop runs before the Delivery")
+            .base;
         let kind = Kind::Ticket {
             spec_branch: self.worktree().branch().to_string(),
+            spec_pr: self.spec_pr.info().map(|pr| SpecPr {
+                number: pr.number,
+                base: base.to_string(),
+            }),
         };
         if let Some(check) = trust::ticket_trust(&GitHub::new(), ticket, self.spec)? {
             bail!("Ticket #{}: {check}", ticket.number);
@@ -346,8 +355,8 @@ impl Outside for ChildRunsAndGitHub<'_> {
         self.spec_pr.show_checklist(checklist)
     }
 
-    fn spec_pr_unchanged(&mut self) -> Result<()> {
-        self.spec_pr.ensure_spec_unchanged()
+    fn ensure_spec_pr_unchanged(&mut self) -> Result<()> {
+        self.spec_pr.ensure_spec_pr_unchanged()
     }
 
     fn landed(&mut self, checklist: &str) -> Result<String> {
@@ -456,8 +465,8 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
             let Some(ticket) = board.next_to_start() else {
                 break;
             };
-            if let Err(changed) = outside.spec_pr_unchanged() {
-                error = Some(changed);
+            if let Err(changed) = outside.ensure_spec_pr_unchanged() {
+                keep(&mut error, changed);
                 continue;
             }
             outside.step(format!("starting #{}", ticket.number));
@@ -471,7 +480,7 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
             }
         }
         if started && let Err(show_error) = outside.show(&board.checklist()) {
-            error.get_or_insert(show_error);
+            keep(&mut error, show_error);
         }
         if !board.any_running() {
             break;
@@ -500,10 +509,10 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
         outside.record_tickets(board);
         if landed {
             if let Err(open_error) = outside.landed(&list) {
-                error.get_or_insert(open_error);
+                keep(&mut error, open_error);
             }
         } else if let Err(show_error) = outside.show(&list) {
-            error.get_or_insert(show_error);
+            keep(&mut error, show_error);
         }
     }
     if let Some(error) = error {
@@ -515,6 +524,18 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
     Ok(())
 }
 
+/// Keep the first error as the Ticket loop's cause, unless `new` says the
+/// Spec PR changed under the Spec run: that decides the Recovery.
+fn keep(error: &mut Option<anyhow::Error>, new: anyhow::Error) {
+    let changed = |error: &anyhow::Error| error.is::<SpecPrChanged>();
+    if error
+        .as_ref()
+        .is_none_or(|kept| changed(&new) && !changed(kept))
+    {
+        *error = Some(new);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::VecDeque;
@@ -523,6 +544,7 @@ mod tests {
     use anyhow::anyhow;
 
     use super::*;
+    use crate::pull_request::SpecPrChange;
     use crate::run::Goal;
 
     /// The Spec PR's URL, once it is open.
@@ -600,9 +622,9 @@ mod tests {
         landed_fails: bool,
         /// Whether the Spec PR is open before any Ticket lands.
         spec_pr_open: bool,
-        /// How many Tickets start before the Spec PR is closed under the
-        /// Spec run.
-        spec_pr_closed_after: Option<usize>,
+        /// The check of the Spec PR, counting from 1, from which on it is
+        /// found closed under the Spec run.
+        spec_pr_closed_at_check: Option<usize>,
         /// Whether putting the checklist back fails.
         put_back_fails: bool,
         /// Whether the Delivery's opening session fails, before the step
@@ -628,6 +650,8 @@ mod tests {
         not_interrupted: usize,
         /// Whether the Spec PR is open.
         spec_pr_open: bool,
+        /// How many times the Spec PR was checked.
+        spec_pr_checks: usize,
     }
 
     impl Scripted {
@@ -639,6 +663,7 @@ mod tests {
                 started_urls: Vec::new(),
                 running: Vec::new(),
                 not_interrupted: 0,
+                spec_pr_checks: 0,
             }
         }
 
@@ -745,17 +770,21 @@ mod tests {
 
         fn show(&mut self, checklist: &str) -> Result<()> {
             self.did.push(Did::Show(checklist.to_string()));
-            self.spec_pr_unchanged()
+            self.ensure_spec_pr_unchanged()
         }
 
-        fn spec_pr_unchanged(&mut self) -> Result<()> {
-            let starts = self.did_only(|did| matches!(did, Did::Start(_))).len();
+        fn ensure_spec_pr_unchanged(&mut self) -> Result<()> {
+            self.spec_pr_checks += 1;
             if self
                 .script
-                .spec_pr_closed_after
-                .is_some_and(|after| starts >= after)
+                .spec_pr_closed_at_check
+                .is_some_and(|at| self.spec_pr_checks >= at)
             {
-                return Err(SpecPrChanged::new(SPEC_PR, "closed").into());
+                return Err(SpecPrChanged {
+                    url: SPEC_PR.to_string(),
+                    change: SpecPrChange::NotOpen(crate::github::PrState::Closed),
+                }
+                .into());
             }
             Ok(())
         }
@@ -765,7 +794,7 @@ mod tests {
             if self.script.landed_fails {
                 bail!("could not open the Spec PR");
             }
-            self.spec_pr_unchanged()?;
+            self.ensure_spec_pr_unchanged()?;
             self.spec_pr_open = true;
             Ok(SPEC_PR.to_string())
         }
@@ -1544,7 +1573,9 @@ mod tests {
     fn a_spec_pr_closed_under_the_spec_run_starts_no_further_ticket() {
         let mut outside = Scripted::new(Script {
             tickets: vec![open(21, &[]), open(22, &[21]), open(23, &[21])],
-            spec_pr_closed_after: Some(2),
+            // Checked before #21 starts, after it starts and as it lands,
+            // then before #22 starts; closed once #22 has started.
+            spec_pr_closed_at_check: Some(5),
             ..Script::default()
         });
 
@@ -1569,6 +1600,25 @@ mod tests {
                 .iter()
                 .any(|did| matches!(did, Did::Deliver { .. }))
         );
+    }
+
+    #[test]
+    fn a_spec_pr_closed_after_an_earlier_error_is_still_the_cause() {
+        let mut outside = Scripted::new(Script {
+            tickets: vec![open(21, &[]), open(22, &[])],
+            endings: VecDeque::from([
+                (21, Err(anyhow!("could not wait for #21"))),
+                (22, Ok(reached())),
+            ]),
+            // Checked before each start and after both start; closed as #21
+            // ends.
+            spec_pr_closed_at_check: Some(4),
+            ..Script::default()
+        });
+
+        let failed = failed_of(spec_run(&mut outside, 2));
+
+        assert!(failed.error.is::<SpecPrChanged>(), "{:#}", failed.error);
     }
 
     #[test]

@@ -1338,6 +1338,7 @@ mod tests {
         }
         let ticket = Kind::Ticket {
             spec_branch: "spec-3".to_string(),
+            spec_pr: None,
         };
         assert!(BaseFix::new(Some(&ticket), BaseFixAsk::Allow).sees_inherited_failures());
         assert!(asked(BaseFixAsk::Forbid).sees_inherited_failures());
