@@ -463,7 +463,8 @@ thirdshift pickup base &lt;branch&gt;     # do that with &lt;branch&gt; as the B
 thirdshift secure                   # audit the Base branch and record findings privately (see Security runs)
 thirdshift secure base &lt;branch&gt;     # do that with &lt;branch&gt; as the Base branch, from a clone on any branch
 thirdshift skill &lt;skill&gt; [issue &lt;issue&gt;]   # run one skill headlessly and print its final message
-thirdshift process                      # list Custom processes (experimental)
+thirdshift process list                 # list Processes, marking Built-in processes (experimental)
+thirdshift process show &lt;name&gt;           # print a Process file exactly (experimental)
 thirdshift process &lt;name&gt; [issue &lt;issue&gt;]   # run a Custom process, optionally on an issue; email, merge and no-merge match a Ticket run (experimental)
 thirdshift process check &lt;name&gt; [issue &lt;issue&gt;]   # validate one and print its plan (experimental)
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
@@ -771,6 +772,15 @@ Command record, Console entry or Session log is created for a standalone skill.<
 A Step is a skill session, a command, or a catalogue Step. It is
 experimental. Write <code>~/.thirdshift/processes/&lt;name&gt;.toml</code>. The name is the
 file&#39;s stem.</p>
+<p><code>thirdshift process list</code> (or just <code>thirdshift process</code>) lists Processes with
+their descriptions, marking compiled-in Built-in processes as <code>(built-in)</code>.
+<code>thirdshift process show &lt;name&gt;</code> prints the file exactly, so it can be saved
+under a new name in <code>~/.thirdshift/processes/</code> as a starting point.
+Built-in process files live in the repository&#39;s <a href="https://github.com/JacobStephens2/thirdshift/blob/main/processes/"><code>processes/</code></a>
+folder and are compiled into the binary, like Factory skills (ADR-0001).
+They use the same format and validation as Custom processes. This release
+provides the folder and catalog; no Built-in process file ships yet.
+A Custom process cannot take a reserved Built-in process name.</p>
 <p>Every skill Step gets one Resume if its session ends with background work
 still running that was killed with it, using the same Session prompt and
 rules as a Ticket run. If the Resume ends the same way, a progress line
@@ -966,14 +976,15 @@ cannot share a worktree. The same group name after a Step that is not in the
 group starts a new group. <code>optional = true</code> records that Step&#39;s failure and
 the Process carries on. Without <code>optional</code>, or with <code>optional = false</code>, a
 failure stops the Process once the other Steps in its group have finished.</p>
-<pre><code class="language-sh">thirdshift process
+<pre><code class="language-sh">thirdshift process list
+thirdshift process show gather-review
 thirdshift process check gather-review
 thirdshift process check ship issue 7
 thirdshift process gather-review
 thirdshift process gather-review --harness claude --model opus --effort high
 thirdshift process ship issue 7
 </code></pre>
-<p><code>thirdshift process</code> lists each Custom process and its description. <code>check</code>
+<p><code>thirdshift process list</code> lists each Process and its description. <code>check</code>
 validates the file and prints the plan: the description, the Command&#39;s Harness,
 Model and Effort, and each Step&#39;s choices, where each came from (<code>Step</code>,
 <code>command</code>, <code>User config</code> or <code>default</code>), and whether its Harness starts.

@@ -697,6 +697,30 @@ fn assert_no_session(scenario: &Scenario, result: &RunResult) {
 }
 
 #[test]
+fn process_show_prints_the_custom_file_exactly() {
+    let scenario = Scenario::new();
+    for text in [REVIEW, REVIEW.trim_end(), "# still being written\r\n", ""] {
+        write_process(&scenario, "notes", text);
+        let result = scenario.run(&["process", "show", "notes"]);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(result.stdout, text);
+        assert!(scenario.claude_calls().is_empty());
+    }
+}
+
+#[test]
+fn process_show_reports_an_unknown_name_without_starting_work() {
+    let scenario = Scenario::new();
+    let result = scenario.run(&["process", "show", "absent"]);
+    assert_no_session(&scenario, &result);
+    assert!(
+        result.stderr.contains("unknown process absent"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
 fn process_lists_custom_processes_with_their_descriptions() {
     let scenario = Scenario::new();
     let empty = scenario.run(&["process"]);
@@ -719,13 +743,14 @@ skill = \"to-spec\"
     write_process(&scenario, "broken", "description = \"not a process\"\n");
     write_process(&scenario, "check", REVIEW);
 
-    let result = scenario.run(&["process"]);
-
-    assert_eq!(result.code, Some(0), "{}", result.stderr);
-    assert_eq!(
-        result.stdout,
-        "gather: Gather notes\nreview: Review the diff\n"
-    );
+    for args in [vec!["process"], vec!["process", "list"]] {
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(0), "{}", result.stderr);
+        assert_eq!(
+            result.stdout,
+            "gather: Gather notes\nreview: Review the diff\n"
+        );
+    }
 }
 
 #[test]
@@ -1001,6 +1026,7 @@ fn a_reserved_name_is_refused_for_every_built_in() {
     for name in [
         "check",
         "list",
+        "show",
         "ticket-run",
         "spec-run",
         "architect-run",
@@ -1008,17 +1034,19 @@ fn a_reserved_name_is_refused_for_every_built_in() {
         "security-run",
     ] {
         let scenario = Scenario::new();
-        let result = if name == "check" {
-            scenario.run(&["process", "check", "check"])
-        } else {
-            scenario.run(&["process", name])
-        };
-        assert_no_session(&scenario, &result);
-        assert!(
-            result.stderr.contains("reserved name"),
-            "{name}: {}",
-            result.stderr
-        );
+        write_process(&scenario, name, REVIEW);
+        for args in [
+            vec!["process", "check", name],
+            vec!["process", "show", name],
+        ] {
+            let result = scenario.run(&args);
+            assert_no_session(&scenario, &result);
+            assert!(
+                result.stderr.contains("reserved name"),
+                "{name}: {}",
+                result.stderr
+            );
+        }
     }
 }
 
@@ -1030,6 +1058,11 @@ fn process_arguments_that_are_not_a_file_name_are_usage_errors() {
         vec!["process", "nested/name"],
         vec!["process", "check", "nested/name"],
         vec!["process", "check", "review", "extra"],
+        vec!["process", "show"],
+        vec!["process", "show", "nested/name"],
+        vec!["process", "show", "review", "extra"],
+        vec!["process", "show", "review", "--no-email"],
+        vec!["process", "list", "review"],
     ] {
         let result = scenario.run(&args);
         assert_eq!(result.code, Some(2), "{args:?}: {}", result.stderr);

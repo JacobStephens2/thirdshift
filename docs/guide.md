@@ -504,7 +504,8 @@ thirdshift pickup base <branch>     # do that with <branch> as the Base branch, 
 thirdshift secure                   # audit the Base branch and record findings privately (see Security runs)
 thirdshift secure base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
 thirdshift skill <skill> [issue <issue>]   # run one skill headlessly and print its final message
-thirdshift process                      # list Custom processes (experimental)
+thirdshift process list                 # list Processes, marking Built-in processes (experimental)
+thirdshift process show <name>           # print a Process file exactly (experimental)
 thirdshift process <name> [issue <issue>]   # run a Custom process, optionally on an issue; email, merge and no-merge match a Ticket run (experimental)
 thirdshift process check <name> [issue <issue>]   # validate one and print its plan (experimental)
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
@@ -848,6 +849,16 @@ A Step is a skill session, a command, or a catalogue Step. It is
 experimental. Write `~/.thirdshift/processes/<name>.toml`. The name is the
 file's stem.
 
+`thirdshift process list` (or just `thirdshift process`) lists Processes with
+their descriptions, marking compiled-in Built-in processes as `(built-in)`.
+`thirdshift process show <name>` prints the file exactly, so it can be saved
+under a new name in `~/.thirdshift/processes/` as a starting point.
+Built-in process files live in the repository's [`processes/`](../processes/)
+folder and are compiled into the binary, like Factory skills (ADR-0001).
+They use the same format and validation as Custom processes. This release
+provides the folder and catalog; no Built-in process file ships yet.
+A Custom process cannot take a reserved Built-in process name.
+
 Every skill Step gets one Resume if its session ends with background work
 still running that was killed with it, using the same Session prompt and
 rules as a Ticket run. If the Resume ends the same way, a progress line
@@ -1062,7 +1073,8 @@ the Process carries on. Without `optional`, or with `optional = false`, a
 failure stops the Process once the other Steps in its group have finished.
 
 ```sh
-thirdshift process
+thirdshift process list
+thirdshift process show gather-review
 thirdshift process check gather-review
 thirdshift process check ship issue 7
 thirdshift process gather-review
@@ -1070,7 +1082,7 @@ thirdshift process gather-review --harness claude --model opus --effort high
 thirdshift process ship issue 7
 ```
 
-`thirdshift process` lists each Custom process and its description. `check`
+`thirdshift process list` lists each Process and its description. `check`
 validates the file and prints the plan: the description, the Command's Harness,
 Model and Effort, and each Step's choices, where each came from (`Step`,
 `command`, `User config` or `default`), and whether its Harness starts.
