@@ -206,6 +206,39 @@ function showDismissal() {
   }
 }
 
+function removeDismissalNotice(command) {
+  for (const form of document.querySelectorAll('#dismissal-notices form')) {
+    if (form.elements.command.value === command) form.parentElement.remove();
+  }
+}
+
+function dismissalNotice(form, subject) {
+  const command = form.elements.command.value;
+  removeDismissalNotice(command);
+  const notices = document.querySelector('#dismissal-notices');
+  const notice = document.createElement('div');
+  notice.setAttribute('role', 'status');
+  const undo = document.createElement('form');
+  undo.method = 'post';
+  undo.action = '/dismiss/undo';
+  undo.dataset.dismiss = '';
+  for (const name of ['command', 'csrf']) undo.append(form.elements[name].cloneNode(true));
+  const button = document.createElement('button');
+  button.textContent = 'Undo';
+  const status = document.createElement('span');
+  status.setAttribute('role', 'status');
+  undo.append(button, status);
+  notices.append(notice);
+  notice.append(`Dismissed ${subject} · `, undo);
+  // Keep Undo reachable while someone is using it, saving it, or retrying it.
+  function expire() {
+    if (!notice.isConnected) return;
+    if (notice.matches(':hover, :focus-within') || dismissals.has(command)) setTimeout(expire, 10000);
+    else notice.remove();
+  }
+  setTimeout(expire, 10000);
+}
+
 function initializeSpanTree() { return initSpanTree({
   openDetails() {
     peekCommand = null;
@@ -463,6 +496,10 @@ document.addEventListener('submit', async event => {
   const command = form.elements.command.value;
   if (dismissals.get(command)?.pending) return;
   const undo = new URL(form.action).pathname === '/dismiss/undo';
+  const row = form.closest('.one-line .command');
+  const subject = row?.querySelector(':scope > .row-head > .subject').textContent;
+  const visible = row ? items().filter(item => item.matches('.command')) : [];
+  const next = visible[(visible.indexOf(row) + 1) % visible.length];
   const state = {
     action: form.action, pending: true,
     message: undo ? 'Taking back dismissal…' : 'Dismissing…'
@@ -476,6 +513,15 @@ document.addEventListener('submit', async event => {
     });
     if (!response.ok) throw new Error(await response.text());
     saved = true;
+    if (row && !undo) {
+      dismissalNotice(form, subject);
+      if (selected?.dataset.command === command) {
+        const nextRow = next !== row ? document.getElementById(next?.id) : null;
+        select(nextRow);
+        nextRow?.focus({ preventScroll: true });
+      }
+    }
+    if (undo) removeDismissalNotice(command);
     pendingPeek?.abort();
     pendingPeek = null;
     await refresh();
@@ -544,6 +590,11 @@ document.addEventListener('keydown', event => {
       : (index + (event.key === 'j' ? 1 : -1) + visible.length) % visible.length;
     select(visible[next] ?? null);
     if (!peek.hidden && selected?.matches('.one-line .command')) showPeek(selected);
+  } else if (event.key === 'd' && !event.shiftKey && selected) {
+    const form = selected.querySelector(':scope > .row-head form[data-dismiss]');
+    if (!form || !selected.matches('.one-line .command')) return;
+    event.preventDefault();
+    form.requestSubmit();
   } else if (event.key === ' ' && selected) {
     event.preventDefault();
     if (selected.tagName === 'SUMMARY') selected.parentElement.open = !selected.parentElement.open;

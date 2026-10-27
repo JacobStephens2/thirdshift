@@ -1,4 +1,5 @@
   <aside id="peek" hidden aria-label="Peek"><button type="button" data-close-peek>Close details (Esc)</button><div id="peek-content" aria-live="polite"></div></aside>
+  <div id="dismissal-notices" aria-label="Dismissals"></div>
   <dialog id="copy-context" aria-labelledby="copy-context-title">
     <h2 id="copy-context-title">Needs you information</h2>
     <p role="status">Clipboard unavailable. Selected; copy it with your keyboard.</p>
@@ -29,6 +30,7 @@
   <dialog id="keys" aria-labelledby="keys-title">
     <h2 id="keys-title">Keyboard</h2>
     <dl><dt>j / k</dt><dd>Next / previous row or heading, wrapping</dd>
+    <dt>d</dt><dd>Dismiss the selected row when available, then select the next row</dd>
     <dt>Space</dt><dd>Toggle a row's Details, or fold a heading</dd>
     <dt>Enter</dt><dd>Open the full Command log</dd>
     <dt>Esc</dt><dd>Close one layer, then clear selection</dd>
