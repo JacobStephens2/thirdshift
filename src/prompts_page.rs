@@ -331,7 +331,12 @@ fn prompts() -> Vec<Prompt> {
                 STEP,
                 SKILL_NAME,
                 std::path::Path::new(SKILL_PATH),
-                &[],
+                prompt::EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
+                None,
+                None,
             ),
         },
         Prompt {
@@ -344,10 +349,33 @@ fn prompts() -> Vec<Prompt> {
                 STEP,
                 SKILL_NAME,
                 std::path::Path::new(SKILL_PATH),
-                &[(
-                    EARLIER_STEP.to_string(),
-                    std::path::PathBuf::from(EARLIER_RESULT),
-                )],
+                prompt::EarlierSteps {
+                    results: &[(
+                        EARLIER_STEP.to_string(),
+                        std::path::PathBuf::from(EARLIER_RESULT),
+                    )],
+                    first: false,
+                },
+                None,
+                None,
+            ),
+        },
+        Prompt {
+            id: "prompt-process-step-issue",
+            title: "Custom process Step, on an issue",
+            when: "Starts the first Step of a Custom process that was given an issue. The worktree has the issue file, and the prompt names the issue.",
+            sender: Process,
+            text: prompt::process_step(
+                PROCESS,
+                STEP,
+                SKILL_NAME,
+                std::path::Path::new(SKILL_PATH),
+                prompt::EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
+                Some(&issue),
+                None,
             ),
         },
     ];
@@ -845,6 +873,7 @@ mod tests {
                     | "prompt-ci-fix-repair-inherited"
                     | "prompt-process-step"
                     | "prompt-process-step-later"
+                    | "prompt-process-step-issue"
             );
             for instruction in [
                 "For source edits, prefer an available structured patch/edit tool",

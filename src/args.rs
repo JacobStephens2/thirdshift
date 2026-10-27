@@ -24,11 +24,15 @@ pub enum ProcessAction {
     Run(ProcessRun),
 }
 
-/// A Custom process to check or run, and the Harness, Model and Effort the
-/// command asked for. A Step that names one of its own does not use these.
+/// A Custom process to check or run, with the Command's explicit choices.
 pub struct ProcessRun {
     pub name: String,
+    pub issue: Option<IssueInput>,
     pub asked: harness::Asked,
+    /// `email`, `email-unless-merged` or `no-email`, when the command gave one.
+    pub email: Option<NotificationAsk>,
+    /// `merge` or `no-merge`. Absent leaves the choice to the User config.
+    pub goal: Option<Goal>,
 }
 
 /// What thirdshift was asked to do.
@@ -839,32 +843,72 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
     Ok(asked)
 }
 
-const PROCESS_USAGE: &str = "\
-usage: thirdshift process [check] <name> [harness <name>] [model <model>] [effort <level>]";
+const PROCESS_USAGE: &str = "usage: thirdshift process [check] <name> [issue <issue>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge]";
 
 fn parse_process(args: &[String]) -> Result<ProcessAction> {
-    let mut check = false;
+    if args.is_empty() {
+        return Ok(ProcessAction::List);
+    }
     let mut name = None;
+    let mut issue = None;
+    let mut email = None;
+    let mut goal = None;
     let mut asked = harness::Asked::default();
-    let mut rest = args.iter();
-    while let Some(arg) = rest.next() {
-        if take_harness_flag(&mut asked, arg, &mut rest)? {
+    let mut check = false;
+    let mut expect_issue = false;
+    let mut words = args.iter().peekable();
+    while let Some(arg) = words.next() {
+        if take_harness_flag(&mut asked, arg, &mut words)? {
             continue;
         }
-        match arg.as_str() {
-            "check" if !check && name.is_none() => check = true,
-            _ if name.is_none() && !arg.starts_with('-') => name = Some(process_name(arg)?),
-            _ => bail!("{PROCESS_USAGE}"),
+        if take_email_flag(&mut email, arg, &mut words)? {
+            continue;
         }
+        if take_merge_flag(&mut goal, arg)? {
+            continue;
+        }
+        // `check` is the subcommand only before the name. A later `check` is
+        // the name, so a reserved file called check is still refused as one.
+        if arg == "check"
+            && !check
+            && name.is_none()
+            && issue.is_none()
+            && email.is_none()
+            && goal.is_none()
+        {
+            check = true;
+            continue;
+        }
+        if arg == "issue" {
+            if name.is_none() || expect_issue || issue.is_some() {
+                bail!(PROCESS_USAGE);
+            }
+            expect_issue = true;
+            continue;
+        }
+        if expect_issue {
+            issue = Some(IssueInput::parse(arg)?);
+            expect_issue = false;
+            continue;
+        }
+        if name.is_some() || arg.starts_with('-') {
+            bail!(PROCESS_USAGE);
+        }
+        name = Some(process_name(arg)?);
+    }
+    if expect_issue || ((email.is_some() || goal.is_some()) && (check || name.is_none())) {
+        bail!(PROCESS_USAGE);
     }
     let Some(name) = name else {
-        return if !check && asked == harness::Asked::default() {
-            Ok(ProcessAction::List)
-        } else {
-            bail!("{PROCESS_USAGE}")
-        };
+        bail!(PROCESS_USAGE);
     };
-    let command = ProcessRun { name, asked };
+    let command = ProcessRun {
+        name,
+        issue,
+        asked,
+        email,
+        goal,
+    };
     Ok(if check {
         ProcessAction::Check(command)
     } else {
@@ -872,11 +916,42 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
     })
 }
 
+/// Record a merge flag in `goal`. False, taking nothing, when `arg` is not one.
+fn take_merge_flag(goal: &mut Option<Goal>, arg: &str) -> Result<bool> {
+    let asked = match arg {
+        "merge" | "--merge" => Goal::Merged,
+        "no-merge" | "--no-merge" => Goal::ReadyForReview,
+        _ => return Ok(false),
+    };
+    ask_once(goal, asked, arg, MERGE_FLAGS)?;
+    Ok(true)
+}
+
+/// Record an email flag in `email`. False, taking nothing, when `arg` is not one.
+fn take_email_flag<'a>(
+    email: &mut Option<NotificationAsk>,
+    arg: &str,
+    rest: &mut Peekable<impl Iterator<Item = &'a String>>,
+) -> Result<bool> {
+    let asked = match arg {
+        "email" | "--email" => {
+            NotificationAsk::Send(rest.next_if(|next| is_address(next)).cloned())
+        }
+        "email-unless-merged" | "--email-unless-merged" => {
+            NotificationAsk::SendUnlessMerged(rest.next_if(|next| is_address(next)).cloned())
+        }
+        "no-email" | "--no-email" => NotificationAsk::Skip,
+        _ => return Ok(false),
+    };
+    ask_once(email, asked, arg, EMAIL_FLAGS)?;
+    Ok(true)
+}
+
 /// A process name is one path component. A slash is an argument error, not a
 /// file rule: the file is `~/.thirdshift/processes/<name>.toml`.
 fn process_name(name: &str) -> Result<String> {
     if !one_path_component(name) {
-        bail!("{PROCESS_USAGE}");
+        bail!(PROCESS_USAGE);
     }
     Ok(name.to_string())
 }
@@ -996,32 +1071,13 @@ fn take_flag<'a>(
     arg: &str,
     rest: &mut Peekable<impl Iterator<Item = &'a String>>,
 ) -> Result<bool> {
+    if take_email_flag(&mut flags.email, arg, rest)? {
+        return Ok(true);
+    }
+    if take_merge_flag(&mut flags.goal, arg)? {
+        return Ok(true);
+    }
     match arg {
-        "merge" | "--merge" => ask_once(&mut flags.goal, Goal::Merged, arg, MERGE_FLAGS)?,
-        "no-merge" | "--no-merge" => {
-            ask_once(&mut flags.goal, Goal::ReadyForReview, arg, MERGE_FLAGS)?
-        }
-        "email" | "--email" => {
-            let to = rest.next_if(|next| is_address(next)).cloned();
-            ask_once(
-                &mut flags.email,
-                NotificationAsk::Send(to),
-                arg,
-                EMAIL_FLAGS,
-            )?
-        }
-        "email-unless-merged" | "--email-unless-merged" => {
-            let to = rest.next_if(|next| is_address(next)).cloned();
-            ask_once(
-                &mut flags.email,
-                NotificationAsk::SendUnlessMerged(to),
-                arg,
-                EMAIL_FLAGS,
-            )?
-        }
-        "no-email" | "--no-email" => {
-            ask_once(&mut flags.email, NotificationAsk::Skip, arg, EMAIL_FLAGS)?
-        }
         "parallel" | "--parallel" => ask_parallel(&mut flags.parallel, arg, rest.next())?,
         BASE_FIX | "--base-fix" => {
             ask_once(&mut flags.base_fix, BaseFixAsk::Allow, arg, BASE_FIX_FLAGS)?

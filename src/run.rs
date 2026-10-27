@@ -34,6 +34,16 @@ pub enum Goal {
 }
 
 impl Goal {
+    /// The merge flag when the command gave one, otherwise a merge when
+    /// `merge_always` is set.
+    pub fn from_flag(asked: Option<Self>, merge_always: bool) -> Self {
+        asked.unwrap_or(if merge_always {
+            Self::Merged
+        } else {
+            Self::ReadyForReview
+        })
+    }
+
     /// What became of the PR once the Run reached this goal, as in
     /// "PR <url> is merged" and a Run notification's subject.
     pub fn outcome(self) -> &'static str {
@@ -80,7 +90,7 @@ pub struct Reached {
 /// How much earlier than its start a Run counts untrusted edits from. It
 /// covers the gap since the trust check that let it start, and GitHub's
 /// clock running behind this machine's: an edit in either is still caught.
-const STARTED_MARGIN: TimeDelta = TimeDelta::minutes(5);
+pub(crate) const STARTED_MARGIN: TimeDelta = TimeDelta::minutes(5);
 
 /// How a Run, or a Spec run, ended.
 pub struct Ended {
@@ -480,6 +490,8 @@ impl LaunchAndGitHub<'_> {
             base_fix: self.base_fix,
             logs: &self.logs,
             started: self.started,
+            repair_cap: crate::delivery::MAX_REPAIRS,
+            protected_paths: &[],
         }
     }
 }

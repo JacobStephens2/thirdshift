@@ -73,11 +73,7 @@ impl Asks {
     /// the command that retries `issue` is the one on its Issue URL with
     /// `flags`.
     pub fn of_run(issue: &IssueUrl, flags: &Flags, config: &UserConfig) -> Asks {
-        let goal = flags.goal.unwrap_or(if config.merge_always {
-            Goal::Merged
-        } else {
-            Goal::ReadyForReview
-        });
+        let goal = Goal::from_flag(flags.goal, config.merge_always);
         let base_fix = flags.base_fix.clone().unwrap_or_else(|| {
             if config.base_fix {
                 BaseFixAsk::Allow

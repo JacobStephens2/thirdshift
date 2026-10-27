@@ -282,6 +282,27 @@ impl<A: Adapter> PullRequest<A> {
         Ok(identified)
     }
 
+    /// Open a draft pull request from this Issue branch when the branch has
+    /// none. An existing pull request, draft or ready, is left to
+    /// [`PullRequest::mark_ready`].
+    pub fn open_if_absent(&mut self, title: &str, body: &str) -> Result<()> {
+        if self.observe(false)?.is_some() {
+            return Ok(());
+        }
+        progress::step(format!("opening a draft pull request into {}", self.base));
+        let url = self
+            .adapter
+            .create_draft(&self.issue, &self.branch, &self.base, title, body)?;
+        let url = url.trim().to_string();
+        let number = self.number_from_url(&url)?;
+        self.identified = Some(Identified { number, url });
+        let snapshot = self
+            .observe(false)?
+            .context("the pull request just opened is not found")?;
+        self.validate(&snapshot, false)?;
+        Ok(())
+    }
+
     /// Immutable information for Delivery's final accounting, including
     /// identity captured only by Failed run completion discovery.
     pub fn info(&self) -> Option<Identified> {

@@ -10,7 +10,7 @@ use anyhow::{Result, bail};
 use crate::pull_request::MergeAttempt;
 
 use crate::ci::{self, Ci, FailedChecks};
-use crate::failed_run::PolicyRefusal;
+use crate::failed_run::{MergeHold, PolicyRefusal};
 use crate::run::Goal;
 use crate::worktree::{ForeignCommits, Merge};
 
@@ -92,6 +92,11 @@ pub(super) trait Outside {
     fn ensure_pr_ready_and_mergeable(&mut self) -> Result<()>;
     /// Merge the pull request at `head`.
     fn merge(&mut self, head: &str) -> Result<MergeAttempt>;
+    /// A reason to hold Self-merge, checked on the head about to be merged.
+    /// None lets the merge proceed. The default holds nothing.
+    fn merge_hold(&mut self) -> Result<Option<String>> {
+        Ok(None)
+    }
 
     /// Whether an interrupt was requested.
     fn interrupt_requested(&mut self) -> bool;
@@ -107,13 +112,21 @@ pub(super) trait Outside {
 /// tried again on the new head; if that round finds nothing to fix, this
 /// fails with a [`PolicyRefusal`]. Returns once the pull request has
 /// reached `goal`; fails as interrupted if an interrupt was requested before
-/// the merge.
-pub(super) fn take_to_goal(outside: &mut impl Outside, base: &str, goal: Goal) -> Result<()> {
+/// the merge. `repair_cap` is the most Repair sessions this Delivery starts.
+pub(super) fn take_to_goal(
+    outside: &mut impl Outside,
+    base: &str,
+    goal: Goal,
+    repair_cap: usize,
+) -> Result<()> {
     let mut repair_loop = RepairLoop {
         outside,
         base,
         goal,
-        budgets: Budgets::default(),
+        budgets: Budgets {
+            repair_cap,
+            ..Budgets::default()
+        },
     };
     let mut watched = repair_loop.rounds()?;
     loop {
@@ -129,6 +142,9 @@ pub(super) fn take_to_goal(outside: &mut impl Outside, base: &str, goal: Goal) -
         }
         if goal == Goal::ReadyForReview {
             return Ok(());
+        }
+        if let Some(reason) = outside.merge_hold()? {
+            return Err(MergeHold { reason }.into());
         }
         outside.progress(format!("merging the PR into {base}"));
         outside.stage(Stage::SelfMerge);
@@ -150,8 +166,8 @@ pub(super) fn take_to_goal(outside: &mut impl Outside, base: &str, goal: Goal) -
 }
 
 /// The most Repair sessions a Delivery starts, conflict, CI-fix and review
-/// combined.
-const MAX_REPAIRS: usize = 5;
+/// combined. A Custom process may set a lower cap. It cannot set a higher one.
+pub(crate) const MAX_REPAIRS: usize = 5;
 
 /// The most times a Delivery goes round again because the Base branch moved while
 /// CI ran or since a merge was tried, or, in a Merge run, because Foreign
@@ -165,21 +181,36 @@ const MAX_UPSTREAM_MOVES: usize = 5;
 /// What a Delivery has spent of its Repair and upstream-move budgets,
 /// across every round of the Repair loop, those after a failed merge
 /// included.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Budgets {
     repairs: usize,
     upstream_moves: usize,
+    /// The most Repairs this Delivery may start.
+    repair_cap: usize,
+}
+
+impl Default for Budgets {
+    fn default() -> Self {
+        Self {
+            repairs: 0,
+            upstream_moves: 0,
+            repair_cap: MAX_REPAIRS,
+        }
+    }
 }
 
 impl Budgets {
     /// Counts the Repair about to start, returning its numbered kind and its
     /// progress line, or fails if it would be one too many.
     fn next_repair(&mut self, cause: &str) -> Result<(Kind, String)> {
-        if self.repairs == MAX_REPAIRS {
+        if self.repairs == self.repair_cap {
             bail!("repairs exhausted: {cause}");
         }
         self.repairs += 1;
-        let line = format!("{cause}; starting Repair {} of {MAX_REPAIRS}", self.repairs);
+        let line = format!(
+            "{cause}; starting Repair {} of {}",
+            self.repairs, self.repair_cap
+        );
         Ok((Kind::Repair(self.repairs), line))
     }
 
@@ -740,7 +771,7 @@ mod tests {
             did: Vec::new(),
             stages: Vec::new(),
         };
-        let delivered = take_to_goal(&mut outside, "main", goal);
+        let delivered = take_to_goal(&mut outside, "main", goal, MAX_REPAIRS);
         (delivered, outside.did, outside.stages)
     }
 
@@ -1977,7 +2008,8 @@ mod tests {
             budgets,
             Budgets {
                 repairs: MAX_REPAIRS,
-                upstream_moves: MAX_UPSTREAM_MOVES
+                upstream_moves: MAX_UPSTREAM_MOVES,
+                repair_cap: MAX_REPAIRS,
             }
         );
     }

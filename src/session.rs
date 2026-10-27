@@ -603,7 +603,7 @@ impl Outside for OnMachine {
 
 /// How a session ended whose `killed` background work, by description, was
 /// still running: what follows "implement session" or "the Resume".
-fn ending_with(killed: &[&str]) -> String {
+pub(crate) fn ending_with(killed: &[&str]) -> String {
     match killed {
         [task] => format!("ended with a background task still running ({task}), which was killed"),
         _ => format!(

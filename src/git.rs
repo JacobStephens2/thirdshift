@@ -55,6 +55,14 @@ impl Git {
         self.run_checked(args, || Ok(()))
     }
 
+    /// Run `git <args>` and return its raw stdout, failing exactly as
+    /// [`Git::run`] does. Neither decoded nor trimmed, so a NUL-delimited
+    /// listing (`-z`) keeps every byte of every name.
+    pub fn run_bytes(&self, args: &[&str]) -> Result<Vec<u8>> {
+        let output = self.retried_output(args)?;
+        command_result(args, &output).map(|_| output.stdout)
+    }
+
     /// Keep a caller's authority check around every subprocess, including
     /// retries. A completed helper cannot authorize its next command attempt.
     pub(crate) fn run_checked(

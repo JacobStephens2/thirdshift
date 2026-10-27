@@ -324,18 +324,7 @@ fn record_span(
         id,
         parent_id,
         kind,
-        name: format!(
-            "{} · {}{}",
-            command.record.kind,
-            subject(command),
-            command
-                .record
-                .issue
-                .as_ref()
-                .and_then(|issue| issue.title.as_ref())
-                .map(|title| format!(" · {title}"))
-                .unwrap_or_default()
-        ),
+        name: span_name(command),
         start,
         end,
         duration_ms: duration(start, end),
@@ -351,6 +340,20 @@ fn record_span(
         run: command.record.issue.as_ref().map(|issue| issue.number),
         session_kind: None,
     }
+}
+
+fn span_name(command: &Command) -> String {
+    let title = command
+        .record
+        .issue
+        .as_ref()
+        .and_then(|issue| issue.title.as_ref())
+        .map(|title| format!(" · {title}"))
+        .unwrap_or_default();
+    if let Some(heading) = command.record.process_heading() {
+        return format!("{heading}{title}");
+    }
+    format!("{} · {}{title}", command.record.kind, subject(command))
 }
 
 fn subject(command: &Command) -> String {

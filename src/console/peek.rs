@@ -97,13 +97,43 @@ impl Peek {
             issue_label,
             command,
             cli,
-            facts: Fact::children(value, false),
+            facts: {
+                let steps = step_facts(&value);
+                let mut facts = Fact::children(value, false);
+                facts.extend(steps);
+                facts
+            },
             logs,
         }
     }
     fn fact<'a>(&self, fact: &'a Fact) -> FactTemplate<'a> {
         FactTemplate { fact }
     }
+}
+
+fn step_facts(value: &Value) -> Vec<Fact> {
+    if value.get("kind").and_then(Value::as_str) != Some("Process") {
+        return Vec::new();
+    }
+    let Some(log) = value.get("command_log").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    crate::logs::status::inspect::process_steps(std::path::Path::new(log))
+        .into_iter()
+        .map(|step| Fact {
+            label: "step".into(),
+            value: step.message,
+            children: step
+                .result
+                .into_iter()
+                .map(|path| Fact {
+                    label: "result".into(),
+                    value: path.display().to_string(),
+                    children: Vec::new(),
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 impl Fact {
