@@ -327,7 +327,11 @@ insertions, keyboard access, Themes, 390 px and Stages at 1920 px.
 
 Waterfall chooses one retained Command with live, died and ended chips, keeping
 its exact selection in `command=`. The chips fold under a Runs line that names
-the Command shown; open it to choose another. A span tree replaces the old Run sections:
+the Command shown; open it to choose another. Each chip and the selected Runs
+line include the retained issue title when available, shortened with an ellipsis
+to keep the choice brief; hover the title to read it in full. Older records
+without a title and Commands without an issue keep their existing labels.
+A span tree replaces the old Run sections:
 Command → Runs → stages → Sessions → model calls, turns, tools and sub-agents.
 Child Runs sit under the stage that started them; reused Sessions appear only
 under their first stage. Commands, Runs and stages start expanded, Sessions

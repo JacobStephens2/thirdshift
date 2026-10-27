@@ -60,6 +60,7 @@ pub(crate) struct Tree {
 #[derive(Serialize)]
 pub(crate) struct Choice {
     pub subject: String,
+    pub title: Option<String>,
     pub state: String,
     pub url: String,
     pub selected: bool,
@@ -231,6 +232,13 @@ pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
             let choice = Observation::Record(command).selector().unwrap_or_default();
             Choice {
                 subject: subject(command),
+                title: command.record.issue.as_ref().and_then(|issue| {
+                    issue
+                        .title
+                        .as_ref()
+                        .filter(|title| !title.trim().is_empty())
+                        .cloned()
+                }),
                 state: command
                     .record
                     .outcome
