@@ -1601,6 +1601,7 @@ fn run_implement(run: &StepRun<'_>, worktree: &Path, step: &ResolvedStep) -> Res
         .filter(|_| run.issue_branch)
         .context("implement needs an Issue-branch worktree")?;
     let selection = run.selection.context("implement needs an Issue branch")?;
+    let labels = GitHub::new().issue_labels(issue)?;
     let opening = crate::implement::prepare(
         issue,
         run.base,
@@ -1609,7 +1610,7 @@ fn run_implement(run: &StepRun<'_>, worktree: &Path, step: &ResolvedStep) -> Res
             session: delivery::OpeningSession::Implementation,
             prompt: crate::implement::prompt(issue, run.base, selection),
         },
-        true,
+        Some(&labels),
     )?;
     let mut pr = PullRequest::new(issue, checkout.branch(), run.base, GitHub::new());
     run_session_step(run, worktree, step, |sessions, index| {
@@ -1621,6 +1622,7 @@ fn run_implement(run: &StepRun<'_>, worktree: &Path, step: &ResolvedStep) -> Res
         match completed {
             crate::implement::Completed::Implemented(message) => Ok(message.unwrap_or_default()),
             crate::implement::Completed::NotReproduced(comment_url) => {
+                crate::implement::confirm_needs_info(&GitHub::new().issue_labels(issue)?)?;
                 let mut completed = run.completed.lock().expect("completed Runs");
                 completed.unreproduced_bug = Some(comment_url.clone());
                 completed

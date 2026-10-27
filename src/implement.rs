@@ -5,8 +5,8 @@
 use anyhow::{Context, Result, ensure};
 
 use crate::delivery::{Opening, OpeningSession};
-use crate::github::GitHub;
 use crate::issue::IssueUrl;
+use crate::labels::Labels;
 use crate::{prompt, worktree::Worktree};
 
 pub fn prompt(issue: &IssueUrl, base: &str, selection: &crate::branch::Selection) -> String {
@@ -31,17 +31,15 @@ pub fn prepare(
     base: &str,
     worktree: &Worktree,
     mut opening: Opening,
-    diagnose_bugs: bool,
+    labels: Option<&Labels>,
 ) -> Result<Opening> {
-    if diagnose_bugs {
-        let labels = GitHub::new().issue_labels(issue)?;
-        if labels.has(crate::labels::Label::new("bug", "A reported bug"))
-            && !labels.has(crate::security::fixing::SECURITY_FIX)
-        {
-            opening.session = OpeningSession::BugDiagnosis;
-            let merge_base = worktree.ahead_merge_base(base)?;
-            opening.prompt = prompt::diagnosing_bugs(issue, &opening.prompt, merge_base.as_deref());
-        }
+    if let Some(labels) = labels
+        && labels.has(crate::labels::Label::new("bug", "A reported bug"))
+        && !labels.has(crate::security::fixing::SECURITY_FIX)
+    {
+        opening.session = OpeningSession::BugDiagnosis;
+        let merge_base = worktree.ahead_merge_base(base)?;
+        opening.prompt = prompt::diagnosing_bugs(issue, &opening.prompt, merge_base.as_deref());
     }
     Ok(opening)
 }
@@ -57,14 +55,18 @@ pub fn run(
     if opening.session == OpeningSession::BugDiagnosis
         && let Some(comment_url) = not_reproduced(issue, final_message.as_deref())?
     {
-        let labels = GitHub::new().issue_labels(issue)?;
-        ensure!(
-            labels.has(crate::labels::NEEDS_INFO) && !labels.has(crate::labels::READY_FOR_AGENT),
-            "bug not reproduced ending requires needs-info with ready-for-agent absent"
-        );
         return Ok(Completed::NotReproduced(comment_url));
     }
     Ok(Completed::Implemented(final_message))
+}
+
+/// Confirm the reporter handoff from label facts read by the caller's adapter.
+pub fn confirm_needs_info(labels: &Labels) -> Result<()> {
+    ensure!(
+        labels.has(crate::labels::NEEDS_INFO) && !labels.has(crate::labels::READY_FOR_AGENT),
+        "bug not reproduced ending requires needs-info with ready-for-agent absent"
+    );
+    Ok(())
 }
 
 /// Missing or malformed completion lines fail instead of publishing a PR.

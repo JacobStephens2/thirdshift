@@ -577,8 +577,8 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
         base: &str,
         opening: Opening,
     ) -> Result<Reached, FailedRun> {
-        let opening =
-            crate::implement::prepare(self.issue, base, &worktree, opening, self.diagnose_bugs)?;
+        let labels = self.diagnose_bugs.then(|| GitHub::new().issue_labels(self.issue)).transpose()?;
+        let opening = crate::implement::prepare(self.issue, base, &worktree, opening, labels.as_ref())?;
         let mut pull_request = crate::pull_request::PullRequest::new(
             self.issue,
             worktree.branch(),

@@ -431,6 +431,7 @@ impl Route<'_> {
                 outside.session(session.kind(), prompt)
             })?
         {
+            outside.confirm_needs_info()?;
             return Ok(Resolution::NotReproduced { comment_url });
         }
         let review = self
@@ -651,6 +652,7 @@ trait Outside {
     fn catch_up(&mut self) -> Result<()>;
     /// Run a session of `kind` given `prompt`.
     fn session(&mut self, kind: Kind, prompt: &str) -> Result<Option<String>>;
+    fn confirm_needs_info(&mut self) -> Result<()>;
     /// Run the Security review given `prompt`, with its Session trace, its
     /// Resume's if it got one, if it started a session.
     fn security_review(&mut self, prompt: &str) -> Result<SecurityOutcome>;
@@ -774,6 +776,10 @@ impl Outside for InWorktree<'_> {
         let final_message = self.sessions.run(kind, prompt)?;
         self.pull_request.ensure_actionable(false)?;
         Ok(final_message)
+    }
+
+    fn confirm_needs_info(&mut self) -> Result<()> {
+        crate::implement::confirm_needs_info(&GitHub::new().issue_labels(self.issue)?)
     }
 
     fn security_review(&mut self, prompt: &str) -> Result<SecurityOutcome> {
@@ -1261,6 +1267,9 @@ mod tests {
             self.calls.push(Call::Session(kind));
             self.log = Some(PathBuf::from(format!("/logs/{}.jsonl", kind.token())));
             self.check(Fails::Session).map(|()| None)
+        }
+        fn confirm_needs_info(&mut self) -> Result<()> {
+            Ok(())
         }
         fn push(&mut self) -> Result<()> {
             self.calls.push(Call::Push);
