@@ -152,26 +152,6 @@ impl Snapshot {
         Ok(snapshot)
     }
 
-    #[cfg(test)]
-    pub(super) fn load_details(
-        root: &Path,
-        now: DateTime<Local>,
-        silent: std::time::Duration,
-        input: &str,
-    ) -> Result<Self> {
-        let mut snapshot =
-            Self::capture_records(Arc::new(inventory::Native), root, now, silent, true)?;
-        if let Observation::Record(selected) = snapshot.resolve(input)?.observation {
-            let identity = CommandIdentity::of(selected);
-            for entry in &mut snapshot.commands {
-                if let Entry::Record(command) = entry {
-                    command.add_session_signals(Some(&identity));
-                }
-            }
-        }
-        Ok(snapshot)
-    }
-
     fn capture(
         files: Arc<dyn inventory::Files>,
         root: &Path,
