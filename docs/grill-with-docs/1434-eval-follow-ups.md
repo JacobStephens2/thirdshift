@@ -201,6 +201,7 @@ The research proposed six follow-ups: an admission rule for Eval tasks (#1434), 
 - The cost prompt (Q1.6, Q2.6) and the output format (Q1.7) are standalone `ready-for-agent` Tickets, and the implement suite (Q1.9) is a `needs-triage` idea issue. None of them is under the Spec (Q3.1).
 - #1434 isn't edited while Experiment `83721fbb…` runs. `to-tickets` links it to the Spec as a sub-issue that blocks the "judge only discriminating tasks" Ticket. After the A/A's results are posted, its body gains recording Difficulty, parking, and measuring Spec review, and keeps its existing criteria (Q3.2).
 - The frontier is empty. What's left was deferred on purpose: the regression/capability split (until Difficulty is measured), the implement suite's grill (after #1434), and the Bar's prior (only if growing the suite isn't enough).
+- **Published (2026-10-27):** Spec #1477, with Tickets #1478 → #1479 → #1480. Writing the Tickets changed Q3.2: `--record-difficulty` reaches the host only after #1477's Spec PR is released, so the host work was split out at that release, per `docs/agents/triage-labels.md`. #1434 stays standalone, and #1481 (`ready-for-human`, blocked by #1477) records Difficulty, runs the Spec-review A/A and parks out-of-band Eval tasks.
 
 ## Research results (2026-10-27)
 
