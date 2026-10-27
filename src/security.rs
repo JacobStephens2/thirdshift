@@ -273,6 +273,7 @@ fn fix(
             issue: &issue,
             is_spec: record.fix_size()? == reproduction::FixSize::Spec,
             base,
+            finding: &metadata,
         });
         if let Err(error) =
             outside.record_security_fix_ending(&record, &issue, ended.outcome.is_ok())
