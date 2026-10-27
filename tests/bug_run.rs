@@ -6,13 +6,91 @@ use support::Scenario;
 use support::resend::saved_notification;
 
 const IMPLEMENT: &str = r#"
-test -f .claude/skills/thirdshift-diagnosing-bugs/SKILL.md || exit 1
+test -f .claude/skills/thirdshift-diagnosing-bugs/SKILL.md || test -f .agents/skills/thirdshift-diagnosing-bugs/SKILL.md || exit 1
 echo feature > feature.txt
 git add feature.txt
 git commit -q -m 'Fix bug'
 gh pr create --base main --head issue-7 --title 'Fix bug' --body 'Closes #7'
 echo 'Bug reproduced: fixed' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#;
+
+fn late_background_reply(earlier: &str) -> String {
+    let earlier = serde_json::json!({
+        "type": "assistant", "message": {
+            "id": "earlier", "role": "assistant",
+            "content": [{"type": "text", "text": earlier}]
+        }
+    });
+    format!(
+        r#"
+cat <<'JSON'
+{earlier}
+{{"type":"system","subtype":"task_notification","task_id":"test","status":"failed","summary":"Earlier test failed"}}
+{{"type":"assistant","message":{{"id":"later","role":"assistant","content":[{{"type":"text","text":"The earlier background failure was handled. The PR is unchanged."}}]}}}}
+JSON
+echo 'The earlier background failure was handled. The PR is unchanged.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#
+    )
+}
+
+#[test]
+fn bug_diagnosis_survives_a_late_background_reply() {
+    for harness in ["claude", "grok"] {
+        for reproduced in [true, false] {
+            let scenario = Scenario::new();
+            scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
+            let script = if reproduced {
+                IMPLEMENT
+            } else {
+                r#"
+gh fake labels 7 '["bug", "needs-info", "in-progress"]'
+echo 'Bug not reproduced: https://github.com/acme/widgets/issues/7#issuecomment-42' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#
+            };
+            let earlier = if reproduced {
+                "Bug reproduced: fixed"
+            } else {
+                "Bug not reproduced: https://github.com/acme/widgets/issues/7#issuecomment-42"
+            };
+            scenario.agent_does(&format!("{script}\n{}", late_background_reply(earlier)));
+
+            let result = scenario.run(&["harness", harness, &scenario.issue_url(7)]);
+
+            assert_eq!(result.code, Some(0), "{}", result.stderr);
+            assert_eq!(
+                result.stdout,
+                if reproduced {
+                    "https://github.com/acme/widgets/pull/1\n"
+                } else {
+                    "https://github.com/acme/widgets/issues/7#issuecomment-42\n"
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn bug_diagnosis_without_any_completion_line_keeps_its_error_after_a_late_reply() {
+    for harness in ["claude", "grok"] {
+        let scenario = Scenario::new();
+        scenario.issue_labelled(7, &["bug"]);
+        scenario.agent_does(&format!(
+            "echo 'Done.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n{}",
+            late_background_reply("Done.")
+        ));
+
+        let result = scenario.run(&["harness", harness, &scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(
+            result.stderr.contains(
+                "bug diagnosis ended without a reproduced or not reproduced completion line"
+            ),
+            "{}",
+            result.stderr
+        );
+    }
+}
 
 /// Probes the checkout the way #1362 did, unless the prompt names a merge base.
 /// An already-fixed branch then goes on to review and the pull request.
