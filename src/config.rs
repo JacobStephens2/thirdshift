@@ -1840,7 +1840,7 @@ mod tests {
             base_fix: false,
             launch_pull: false,
             security_fix: false,
-            security_close: false,
+            security_close: true,
             security_review: false,
             notifications: Some(NotificationAddresses {
                 to: to.to_string(),
