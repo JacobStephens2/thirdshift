@@ -523,9 +523,10 @@ thirdshift evals touched <path>...  # select suites from their declared source d
 thirdshift evals prepare <suite> <task> <destination>  # prepare a throwaway repository at its base
 thirdshift evals verify <repository> <base>  # refuse history beyond the base commit
 thirdshift evals prepare-arms <repository> <baseline-commit> <baseline-harness> <candidate-commit> <candidate-harness> <record.json>  # cache builds and record fixed Harness paths
-thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--json]  # run or resume an Experiment
+thirdshift experiment <candidate> [--baseline <ref>] [--suite <name>] [--name <text>] [--json]  # run or resume an Experiment
 thirdshift experiment --release <commit> [--json]  # use the last release tag and touched suites
 thirdshift experiments [<id>] [--json]  # list Experiments or show one
+thirdshift experiments <id> --name <text> [--json]  # rename an Experiment; --name '' brings back its default name
 thirdshift experiments <id> --session <session-id> [--json]  # read a Trial's retained session from its inventory
 thirdshift recheck <id> <trial> <pass|fail> --reason <text> [--wrong-finding <true|false>] [--json]
 thirdshift update                   # update to the latest release (see Updating)
@@ -573,6 +574,17 @@ declarations; repeat `--suite <name>` to select them explicitly, including for a
 Harness, Model or Effort comparison with the same build in both Arms.
 Before building either Arm, an Experiment names every selected approved Eval
 task missing a `[trial]` table. This check also precedes the release Baseline probe.
+
+`--name <text>` saves a name with the Experiment: one line of at most 100
+characters, trimmed. An empty or over-long name is refused before any build.
+`thirdshift experiments <id> --name <text>` renames a saved Experiment in any
+state, even while it runs; `--name ''` clears the name. The name is not part of
+the Bar, so it never changes Trials, Scores or the Verdict and never stops a
+resume. Without a name, an Experiment is called "A/A at <ref>" when both Arms
+share their build, Harness, Model and Effort, "Release <ref>" after `--release`,
+and otherwise by what differs between its Arms. The CLI list, `experiments
+<id>` and the Console's Experiment pages and tab title show the name;
+`--json` gives it as `name`, with `name_set` saying whether you gave it.
 
 `thirdshift experiment --release <commit>` uses the last reachable `v<version>`
 tag as its Baseline and selects suites touched since that tag. `--baseline`

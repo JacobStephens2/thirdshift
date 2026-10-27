@@ -79,6 +79,8 @@ fn release_uses_the_last_tag_and_only_touched_suites_and_resumes() {
     assert_eq!(experiment["baseline"]["commit"], fixture.baseline);
     assert_eq!(experiment["candidate"]["commit"], fixture.candidate);
     assert_eq!(experiment["suites"], json!(["spec-review"]));
+    assert_eq!(experiment["name"], "Release candidate");
+    assert_eq!(experiment["name_set"], false);
     let calls = fixture.trial_calls().len();
     let resumed = fixture.scenario.run_with_env(&args, &NO_SANDBOX);
     assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);

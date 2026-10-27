@@ -6,6 +6,7 @@ mod execution;
 mod grading;
 mod integrity;
 mod model_grader;
+mod names;
 mod options;
 mod reading;
 mod rechecks;
@@ -241,6 +242,9 @@ pub fn run(options: Options) -> Result<()> {
             options.json,
         );
     };
+    if let Some(name) = options.name {
+        experiment.rename(Some(name))?;
+    }
     if experiment.state == State::Completed {
         retention::repositories(&experiment);
         println!("{}", experiment.render(options.json)?);
@@ -257,6 +261,7 @@ pub fn run(options: Options) -> Result<()> {
             &experiment.description.candidate.commit,
         ])?);
     }
+    experiment.details.release |= options.release;
     experiment.details.resume_command = Some(
         std::iter::once("thirdshift".to_owned())
             .chain(
@@ -357,6 +362,12 @@ pub fn run(options: Options) -> Result<()> {
 pub fn show(args: &[String]) -> Result<String> {
     let json = args.iter().any(|arg| arg == "--json");
     let positional: Vec<_> = args.iter().filter(|arg| arg.as_str() != "--json").collect();
+    let root = crate::config::home()?.join(".thirdshift/evals/experiments");
+    if let [id, flag, name] = positional.as_slice()
+        && flag.as_str() == "--name"
+    {
+        return store::rename(&root, id, names::parse(name)?, json);
+    }
     if let [id, flag, session] = positional.as_slice()
         && flag.as_str() == "--session"
     {
@@ -371,9 +382,8 @@ pub fn show(args: &[String]) -> Result<String> {
     }
     ensure!(
         positional.len() <= 1,
-        "usage: thirdshift experiments [<id>] [--json] or experiments <id> --session <session-id> [--json]"
+        "usage: thirdshift experiments [<id>] [--json], experiments <id> --name <text> [--json] or experiments <id> --session <session-id> [--json]"
     );
-    let root = crate::config::home()?.join(".thirdshift/evals/experiments");
     store::show(&root, positional.first().map(|id| id.as_str()), json)
 }
 

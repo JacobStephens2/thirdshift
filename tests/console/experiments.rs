@@ -416,3 +416,83 @@ fn experiment_detail_says_plainly_what_the_experiment_tests() {
         "{html}"
     );
 }
+
+#[test]
+fn experiment_pages_and_the_cli_show_the_name_or_its_default() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    // `fixture` writes a record from before names: it has no `name` key.
+    let edit = |id: &str, created: &str, change: &dyn Fn(&mut Value)| {
+        let directory = fixture(home.path(), id, created);
+        let mut record: Value =
+            serde_json::from_slice(&fs::read(directory.join("experiment.json")).unwrap()).unwrap();
+        change(&mut record);
+        fs::write(
+            directory.join("experiment.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+    };
+    let legacy = "1".repeat(64);
+    edit(&legacy, "2026-10-24T09:00:00-04:00", &|_| {});
+    let named = "2".repeat(64);
+    edit(&named, "2026-10-24T10:00:00-04:00", &|record| {
+        record["name"] = json!("Prompt <tweak>");
+    });
+    let same = "3".repeat(64);
+    edit(&same, "2026-10-24T11:00:00-04:00", &|record| {
+        record["candidate"] = record["baseline"].clone();
+        record["candidate_ref"] = json!("71c7a497");
+    });
+    let release = "4".repeat(64);
+    edit(&release, "2026-10-24T12:00:00-04:00", &|record| {
+        record["release"] = json!(true);
+        record["baseline_ref"] = json!("v0.16.0");
+        record["candidate_ref"] = json!("main");
+    });
+    let expected = [
+        (
+            &legacy,
+            "aaaaaaaaaa → bbbbbbbbbb",
+            false,
+            "aaaaaaaaaa → bbbbbbbbbb",
+        ),
+        (&named, "Prompt <tweak>", true, "Prompt &#60;tweak&#62;"),
+        (&same, "A/A at 71c7a497", false, "A/A at 71c7a497"),
+        (&release, "Release main", false, "Release main"),
+    ];
+
+    let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+        .env("HOME", home.path())
+        .args(["experiments", "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let listed: Vec<Value> = serde_json::from_slice(&output.stdout).unwrap();
+    for (id, name, set, _) in expected {
+        let view = listed.iter().find(|view| view["id"] == *id).unwrap();
+        assert_eq!(view["name"], name);
+        assert_eq!(view["name_set"], set);
+    }
+
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let list = console.get("/experiments").text().unwrap();
+    for (id, _, _, html) in expected {
+        assert!(
+            list.contains(&format!(
+                "<span class=\"subject\"><a href=\"/experiments/{id}\">{html}</a></span>"
+            )),
+            "{list}"
+        );
+        let detail = console.get(&format!("/experiments/{id}")).text().unwrap();
+        assert!(
+            detail.contains(&format!("<title>{html} · thirdshift</title>")),
+            "{detail}"
+        );
+        assert!(detail.contains(&format!("<h1>{html}</h1>")), "{detail}");
+    }
+}

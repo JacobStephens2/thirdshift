@@ -6,45 +6,6 @@ use crate::evals::experiment::{
 use crate::trial::Outcome;
 use crate::verdict::Decision;
 
-pub(super) fn name(view: &View) -> String {
-    let d = &view.description;
-    if d.baseline.commit == d.candidate.commit {
-        let changes: Vec<_> = [
-            (
-                "Harness",
-                d.baseline.harness.as_str(),
-                d.candidate.harness.as_str(),
-            ),
-            (
-                "Model",
-                d.baseline.model.as_deref().unwrap_or("default"),
-                d.candidate.model.as_deref().unwrap_or("default"),
-            ),
-            (
-                "Effort",
-                d.baseline.effort.as_deref().unwrap_or("default"),
-                d.candidate.effort.as_deref().unwrap_or("default"),
-            ),
-        ]
-        .into_iter()
-        .filter(|(_, b, c)| b != c)
-        .map(|(label, b, c)| format!("{label}: {b} → {c}"))
-        .collect();
-        if !changes.is_empty() {
-            return changes.join(" · ");
-        }
-    }
-    match (&view.details.baseline_ref, &view.details.candidate_ref) {
-        (Some(b), Some(c)) if b != c => format!("{b} → {c}"),
-        (_, Some(c)) => c.clone(),
-        _ => format!(
-            "{} → {}",
-            short(&d.baseline.commit),
-            short(&d.candidate.commit)
-        ),
-    }
-}
-
 /// An instant as people read it, escaped: this machine's zone, to the minute.
 fn when(text: &str) -> String {
     esc(&crate::local_time::readable(text))
@@ -218,7 +179,7 @@ pub(super) fn list(views: &[View]) -> String {
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            html.push_str(&format!("<li class=\"command experiment-row\" tabindex=\"0\" id=\"experiment-{id}\" data-tone=\"{}\" data-command=\"{}\" data-peek=\"{}\"><div class=\"row-head\">{} <span class=\"subject\"><a href=\"/experiments/{id}\">{}</a></span><span class=\"issue-title\">{}</span><time class=\"age\">{}</time></div><p class=\"now\">{}</p>{}<p class=\"harness\">{}</p><p><a href=\"/experiments/{id}\">Experiment</a> · {}</p></li>", tone(view), esc(&command), esc(&crate::logs::status::inspect::url("/peek", &command, None)), tag(view), esc(&name(view)), esc(view.details.title.as_deref().unwrap_or("")), when(view.details.ended_at.as_deref().unwrap_or(&view.created_at)), esc(&now(view)), list_intervals(view), builds(view), command_links(view)));
+            html.push_str(&format!("<li class=\"command experiment-row\" tabindex=\"0\" id=\"experiment-{id}\" data-tone=\"{}\" data-command=\"{}\" data-peek=\"{}\"><div class=\"row-head\">{} <span class=\"subject\"><a href=\"/experiments/{id}\">{}</a></span><span class=\"issue-title\">{}</span><time class=\"age\">{}</time></div><p class=\"now\">{}</p>{}<p class=\"harness\">{}</p><p><a href=\"/experiments/{id}\">Experiment</a> · {}</p></li>", tone(view), esc(&command), esc(&crate::logs::status::inspect::url("/peek", &command, None)), tag(view), esc(&view.name), esc(view.details.title.as_deref().unwrap_or("")), when(view.details.ended_at.as_deref().unwrap_or(&view.created_at)), esc(&now(view)), list_intervals(view), builds(view), command_links(view)));
         }
         html.push_str("</ul></details>");
     }
@@ -320,7 +281,7 @@ pub(super) fn detail(view: &View) -> String {
     );
     let mut html = format!(
         "<p><a href=\"/experiments\">← Experiments</a></p><div class=\"page-title\"><h1>{}</h1><code>thirdshift experiments {id} --json</code></div>{}<p>Started <time>{}</time>{} · {}</p><section class=\"experiment-lead\" aria-label=\"Experiment status\">{} <p>{}</p></section>",
-        esc(&name(view)),
+        esc(&view.name),
         question(view),
         when(&view.created_at),
         view.details
