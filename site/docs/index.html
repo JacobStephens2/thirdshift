@@ -780,6 +780,9 @@ command = &quot;printf &#39;notes for review\n&#39;&quot;
 [[steps]]
 name = &quot;review&quot;
 skill = &quot;thirdshift-code-review&quot;
+harness = &quot;codex&quot;
+model = &quot;gpt-6.1-sol&quot;
+effort = &quot;high&quot;
 
 [[steps]]
 name = &quot;extra&quot;
@@ -940,7 +943,8 @@ the reason, and starts no run. The child run is part of this Command. Its
 Tickets, when the issue is a Spec, run at once up to <code>spec.parallel</code> in the User
 config. The child run&#39;s outcome is the Step&#39;s outcome, and the Step&#39;s result is
 the pull request&#39;s URL. The run uses the Process&#39;s Base branch and the
-Command&#39;s Harness. <code>run-published-issue</code> is the Step immediately after a session
+Step&#39;s Harness, Model and Effort, defaulting to the Command&#39;s.
+<code>run-published-issue</code> is the Step immediately after a session
 Step, and it does not share that Step&#39;s <code>parallel</code> group. When the Process
 declares worktrees, every Step names one with <code>worktree</code>.
 Consecutive Steps with the same <code>parallel</code> name run at the same time. Every
@@ -953,11 +957,14 @@ failure stops the Process once the other Steps in its group have finished.</p>
 thirdshift process check gather-review
 thirdshift process check ship issue 7
 thirdshift process gather-review
+thirdshift process gather-review --harness claude --model opus --effort high
 thirdshift process ship issue 7
 </code></pre>
 <p><code>thirdshift process</code> lists each Custom process and its description. <code>check</code>
 validates the file and prints the plan: the description, the Command&#39;s Harness,
-Model and Effort, and each Step. A Process with no named worktrees prints one
+Model and Effort, and each Step&#39;s choices, where each came from (<code>Step</code>,
+<code>command</code>, <code>User config</code> or <code>default</code>), and whether its Harness starts.
+A Process with no named worktrees prints one
 throwaway worktree at the Base branch. A Process that declares worktrees prints
 each one, the worktree each Step uses, and a <code>together:</code> line for each group
 of Steps that run at the same time. A throwaway worktree is described as
@@ -967,7 +974,10 @@ repair cap out of 5, that self-merge is held, and the protected paths. A skill
 Step shows the skill and where it was found. A command
 Step shows its command, and <code>check</code> does not run it. A delivery Step shows
 <code>delivery</code>. A self-merge Step shows <code>self-merge</code>. A <code>run-published-issue</code> Step shows <code>run-published-issue</code>. An
-optional Step is marked <code>(optional)</code>. <code>check</code> starts no session. <code>check &lt;name&gt; issue &lt;issue&gt;</code> resolves the issue and still creates no Issue branch and makes
+optional Step is marked <code>(optional)</code>. <code>check</code> performs the same Harness
+preflight as running, including a minimal Model test when the Harness needs
+one, and runs no Step. <code>check &lt;name&gt; issue &lt;issue&gt;</code> resolves the issue and
+still creates no Issue branch and makes
 no Claim. Without an issue, an Issue-branch worktree is the refusal above, not
 a plan.</p>
 <p>Running the Process starts the Steps in its throwaway worktrees, detached at
@@ -980,9 +990,16 @@ when its work is on origin, as a Ticket run&#39;s is. The Base branch is the
 branch checked out in the launch directory, at its commit on origin, or the
 open pull request&#39;s base in a Continuation. The launch checkout stays
 untouched.</p>
-<p>Every session Step uses the Command&#39;s Harness, Model and Effort: the User
-config default, or the Harness default when that is unset. A command Step does
-not. Each finished Step&#39;s result is stored beside the Command log, one file
+<p><code>harness</code>, <code>model</code> and <code>effort</code> are optional on each Step. A Step that names
+nothing uses the Command&#39;s Harness, Model and Effort. Each omitted field
+inherits the Command&#39;s resolved value and where it came from, even when the
+Step names another Harness. The Command&#39;s choice comes from its command word,
+with or without <code>--</code>, then the User config for the Command&#39;s Harness, then
+the Harness&#39;s default. To use another Harness&#39;s configured Model or Effort,
+name those values on the Step. Every selected Harness is checked before the
+first session. One that can&#39;t start fails the Command, naming the Step and
+Harness, with no fallback and no session run. A command Step starts no session.
+Each finished Step&#39;s result is stored beside the Command log, one file
 per Step. A session&#39;s result is its final message. A command&#39;s result is its
 stdout followed by its stderr. A <code>run-published-issue</code> Step&#39;s result is the pull
 request URL of the run it started. The next session Step&#39;s prompt names the paths
@@ -1012,7 +1029,7 @@ as in a Ticket run. An edit to the title or body by an account that is not a
 Trusted account, made since a few minutes before the Process started, fails
 that Step instead of starting the session. The Command log names the cause.</p>
 <p><code>check</code> and running refuse a missing file, a file that is not valid TOML, a
-missing or wrong <code>version</code>, an unknown key, a Step without exactly one of
+missing or wrong <code>version</code>, an unknown key, an unknown Harness, a Step without exactly one of
 <code>skill</code>, <code>command</code> and <code>catalogue</code>, a command that is not a string or is empty,
 a catalogue value other than <code>delivery</code>, <code>run-published-issue</code> or <code>self-merge</code>, a
 <code>self-merge</code> Step that is not directly after <code>delivery</code>, a second self-merge

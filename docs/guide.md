@@ -858,6 +858,9 @@ command = "printf 'notes for review\n'"
 [[steps]]
 name = "review"
 skill = "thirdshift-code-review"
+harness = "codex"
+model = "gpt-6.1-sol"
+effort = "high"
 
 [[steps]]
 name = "extra"
@@ -1033,7 +1036,8 @@ the reason, and starts no run. The child run is part of this Command. Its
 Tickets, when the issue is a Spec, run at once up to `spec.parallel` in the User
 config. The child run's outcome is the Step's outcome, and the Step's result is
 the pull request's URL. The run uses the Process's Base branch and the
-Command's Harness. `run-published-issue` is the Step immediately after a session
+Step's Harness, Model and Effort, defaulting to the Command's.
+`run-published-issue` is the Step immediately after a session
 Step, and it does not share that Step's `parallel` group. When the Process
 declares worktrees, every Step names one with `worktree`.
 Consecutive Steps with the same `parallel` name run at the same time. Every
@@ -1048,12 +1052,15 @@ thirdshift process
 thirdshift process check gather-review
 thirdshift process check ship issue 7
 thirdshift process gather-review
+thirdshift process gather-review --harness claude --model opus --effort high
 thirdshift process ship issue 7
 ```
 
 `thirdshift process` lists each Custom process and its description. `check`
 validates the file and prints the plan: the description, the Command's Harness,
-Model and Effort, and each Step. A Process with no named worktrees prints one
+Model and Effort, and each Step's choices, where each came from (`Step`,
+`command`, `User config` or `default`), and whether its Harness starts.
+A Process with no named worktrees prints one
 throwaway worktree at the Base branch. A Process that declares worktrees prints
 each one, the worktree each Step uses, and a `together:` line for each group
 of Steps that run at the same time. A throwaway worktree is described as
@@ -1063,8 +1070,10 @@ repair cap out of 5, that self-merge is held, and the protected paths. A skill
 Step shows the skill and where it was found. A command
 Step shows its command, and `check` does not run it. A delivery Step shows
 `delivery`. A self-merge Step shows `self-merge`. A `run-published-issue` Step shows `run-published-issue`. An
-optional Step is marked `(optional)`. `check` starts no session. `check <name>
-issue <issue>` resolves the issue and still creates no Issue branch and makes
+optional Step is marked `(optional)`. `check` performs the same Harness
+preflight as running, including a minimal Model test when the Harness needs
+one, and runs no Step. `check <name> issue <issue>` resolves the issue and
+still creates no Issue branch and makes
 no Claim. Without an issue, an Issue-branch worktree is the refusal above, not
 a plan.
 
@@ -1079,9 +1088,16 @@ branch checked out in the launch directory, at its commit on origin, or the
 open pull request's base in a Continuation. The launch checkout stays
 untouched.
 
-Every session Step uses the Command's Harness, Model and Effort: the User
-config default, or the Harness default when that is unset. A command Step does
-not. Each finished Step's result is stored beside the Command log, one file
+`harness`, `model` and `effort` are optional on each Step. A Step that names
+nothing uses the Command's Harness, Model and Effort. Each omitted field
+inherits the Command's resolved value and where it came from, even when the
+Step names another Harness. The Command's choice comes from its command word,
+with or without `--`, then the User config for the Command's Harness, then
+the Harness's default. To use another Harness's configured Model or Effort,
+name those values on the Step. Every selected Harness is checked before the
+first session. One that can't start fails the Command, naming the Step and
+Harness, with no fallback and no session run. A command Step starts no session.
+Each finished Step's result is stored beside the Command log, one file
 per Step. A session's result is its final message. A command's result is its
 stdout followed by its stderr. A `run-published-issue` Step's result is the pull
 request URL of the run it started. The next session Step's prompt names the paths
@@ -1114,7 +1130,7 @@ Trusted account, made since a few minutes before the Process started, fails
 that Step instead of starting the session. The Command log names the cause.
 
 `check` and running refuse a missing file, a file that is not valid TOML, a
-missing or wrong `version`, an unknown key, a Step without exactly one of
+missing or wrong `version`, an unknown key, an unknown Harness, a Step without exactly one of
 `skill`, `command` and `catalogue`, a command that is not a string or is empty,
 a catalogue value other than `delivery`, `run-published-issue` or `self-merge`, a
 `self-merge` Step that is not directly after `delivery`, a second self-merge

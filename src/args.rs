@@ -20,19 +20,19 @@ use crate::run::Goal;
 /// What `thirdshift process` was asked to do.
 pub enum ProcessAction {
     List,
-    Check {
-        name: String,
-        issue: Option<IssueInput>,
-    },
-    Run {
-        name: String,
-        issue: Option<IssueInput>,
-        /// `email`, `email-unless-merged` or `no-email`, when the command gave one.
-        email: Option<NotificationAsk>,
-        /// `merge` or `no-merge`, when the command gave one. Absent leaves the
-        /// choice to the User config, as a Ticket run does.
-        goal: Option<Goal>,
-    },
+    Check(ProcessRun),
+    Run(ProcessRun),
+}
+
+/// A Custom process to check or run, with the Command's explicit choices.
+pub struct ProcessRun {
+    pub name: String,
+    pub issue: Option<IssueInput>,
+    pub asked: harness::Asked,
+    /// `email`, `email-unless-merged` or `no-email`, when the command gave one.
+    pub email: Option<NotificationAsk>,
+    /// `merge` or `no-merge`. Absent leaves the choice to the User config.
+    pub goal: Option<Goal>,
 }
 
 /// What thirdshift was asked to do.
@@ -843,7 +843,7 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
     Ok(asked)
 }
 
-const PROCESS_USAGE: &str = "usage: thirdshift process [check <name> [issue <issue>] | <name> [issue <issue>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge]]";
+const PROCESS_USAGE: &str = "usage: thirdshift process [check] <name> [issue <issue>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge]";
 
 fn parse_process(args: &[String]) -> Result<ProcessAction> {
     if args.is_empty() {
@@ -853,10 +853,14 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
     let mut issue = None;
     let mut email = None;
     let mut goal = None;
+    let mut asked = harness::Asked::default();
     let mut check = false;
     let mut expect_issue = false;
     let mut words = args.iter().peekable();
     while let Some(arg) = words.next() {
+        if take_harness_flag(&mut asked, arg, &mut words)? {
+            continue;
+        }
         if take_email_flag(&mut email, arg, &mut words)? {
             continue;
         }
@@ -895,17 +899,21 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
     if expect_issue || ((email.is_some() || goal.is_some()) && (check || name.is_none())) {
         bail!(PROCESS_USAGE);
     }
-    match (check, name) {
-        (true, Some(name)) => Ok(ProcessAction::Check { name, issue }),
-        (true, None) => bail!(PROCESS_USAGE),
-        (false, Some(name)) => Ok(ProcessAction::Run {
-            name,
-            issue,
-            email,
-            goal,
-        }),
-        (false, None) => bail!(PROCESS_USAGE),
-    }
+    let Some(name) = name else {
+        bail!(PROCESS_USAGE);
+    };
+    let command = ProcessRun {
+        name,
+        issue,
+        asked,
+        email,
+        goal,
+    };
+    Ok(if check {
+        ProcessAction::Check(command)
+    } else {
+        ProcessAction::Run(command)
+    })
 }
 
 /// Record a merge flag in `goal`. False, taking nothing, when `arg` is not one.
@@ -942,10 +950,15 @@ fn take_email_flag<'a>(
 /// A process name is one path component. A slash is an argument error, not a
 /// file rule: the file is `~/.thirdshift/processes/<name>.toml`.
 fn process_name(name: &str) -> Result<String> {
-    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\\', '\0']) {
+    if !one_path_component(name) {
         bail!(PROCESS_USAGE);
     }
     Ok(name.to_string())
+}
+
+/// One path component: not empty, not `.` or `..`, and no separator or line break.
+pub(crate) fn one_path_component(name: &str) -> bool {
+    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0', '\n', '\r'])
 }
 
 /// Parse the arguments after `architect`: at most one focus, and its flags,
@@ -1108,13 +1121,26 @@ fn take_flag<'a>(
             arg,
             SECURITY_REVIEW_FLAGS,
         )?,
-        "harness" | "--harness" => ask_harness(&mut flags.harness.harness, arg, rest.next())?,
+        _ => return take_harness_flag(&mut flags.harness, arg, rest),
+    }
+    Ok(true)
+}
+
+/// Take the Harness, Model and Effort words shared by Commands, consuming
+/// nothing when `arg` is not one of them.
+fn take_harness_flag<'a>(
+    asked: &mut harness::Asked,
+    arg: &str,
+    rest: &mut impl Iterator<Item = &'a String>,
+) -> Result<bool> {
+    match arg {
+        "harness" | "--harness" => ask_harness(&mut asked.harness, arg, rest.next())?,
         "model" | "--model" => {
-            let model = &mut flags.harness.model_and_effort.model;
+            let model = &mut asked.model_and_effort.model;
             ask_word(model, arg, rest.next(), "a model")?
         }
         "effort" | "--effort" => {
-            let effort = &mut flags.harness.model_and_effort.effort;
+            let effort = &mut asked.model_and_effort.effort;
             ask_word(effort, arg, rest.next(), "an effort level")?
         }
         _ => return Ok(false),

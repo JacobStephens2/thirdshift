@@ -32,7 +32,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use toml_edit::{Document, Item, Key, Table};
 
-use crate::args::ProcessAction;
+use crate::args::{ProcessAction, ProcessRun};
 use crate::asks::{Asks, Flags};
 use crate::base_fix::{BaseFix, BaseFixAsk};
 use crate::branch::{self, Selection};
@@ -41,7 +41,7 @@ use crate::claim::{self, Claim};
 use crate::config::UserConfig;
 use crate::git::Git;
 use crate::github::GitHub;
-use crate::harness::{Asked, Choice};
+use crate::harness::{self, Asked, Choice, ChosenBy, Harness};
 use crate::issue::{IssueInput, IssueUrl};
 use crate::logs::{self, Begin, Work};
 use crate::notification::{About, NotificationAsk, RunNotification};
@@ -116,6 +116,11 @@ struct StepDraft {
     worktree: Option<(String, usize)>,
     parallel: Option<(String, usize)>,
     kind: DraftKind,
+    harness: Option<Harness>,
+    /// The Step's `harness` line, or its name when it inherits the Harness.
+    report_line: usize,
+    model: Option<String>,
+    effort: Option<String>,
 }
 
 enum DraftKind {
@@ -137,6 +142,128 @@ struct ResolvedStep {
     worktree: Option<String>,
     parallel: Option<String>,
     kind: StepKind,
+    report_line: usize,
+    choice: Choice,
+    sources: Sources,
+    /// Why this Step's Harness can't start, when preflight failed.
+    start_failure: Option<String>,
+}
+
+impl ResolvedStep {
+    fn check(&mut self) {
+        self.start_failure = self.choice.check().err().map(|error| one_line(&error));
+    }
+}
+
+/// Where a Step's Harness, Model and Effort each came from.
+#[derive(Clone, Copy)]
+struct Sources {
+    harness: Source,
+    model: Source,
+    effort: Source,
+}
+
+/// The Command's resolved choice and its origins, inherited together by Steps.
+struct CommandChoice {
+    choice: Choice,
+    sources: Sources,
+}
+
+impl CommandChoice {
+    fn of(asked: &Asked, settings: &harness::Settings) -> Self {
+        let choice = Choice::of(asked, settings);
+        let sources = Sources {
+            harness: source_from(choice.chosen_by),
+            model: Source::word(&asked.model_and_effort.model, &choice.model),
+            effort: Source::word(&asked.model_and_effort.effort, &choice.effort),
+        };
+        Self { choice, sources }
+    }
+
+    /// Settle catalog aliases when the Command's Harness is actually used,
+    /// then check each Step's effective choice with the usual preflight.
+    fn check_steps(&mut self, steps: &mut [ResolvedStep]) {
+        if steps
+            .iter()
+            .any(|step| step.choice.harness == self.choice.harness)
+        {
+            let mut settled = self.choice.clone();
+            // A Step may replace a rejected Command field. Only its effective
+            // choice can fail the Process; this pass just resolves aliases.
+            if settled.check_without_probe().is_ok() {
+                self.choice = settled;
+            }
+        }
+        for step in steps {
+            if !matches!(step.sources.model, Source::Step) {
+                step.choice.model = self.choice.model.clone();
+            }
+            if !matches!(step.sources.effort, Source::Step) {
+                step.choice.effort = self.choice.effort.clone();
+            }
+            step.check();
+        }
+    }
+
+    /// Only fields explicitly named by the Step replace the Command's values.
+    fn step(&self, step: &StepDraft) -> (Choice, Sources) {
+        let mut choice = self.choice.clone();
+        let mut sources = self.sources;
+        if let Some(harness) = step.harness {
+            choice.harness = harness;
+            choice.chosen_by = ChosenBy::Step;
+            sources.harness = Source::Step;
+        }
+        if let Some(model) = &step.model {
+            choice.model = Some(model.clone());
+            sources.model = Source::Step;
+        }
+        if let Some(effort) = &step.effort {
+            choice.effort = Some(effort.clone());
+            sources.effort = Source::Step;
+        }
+        (choice, sources)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Source {
+    Step,
+    Command,
+    UserConfig,
+    Default,
+}
+
+impl Source {
+    fn word(asked: &Option<String>, chosen: &Option<String>) -> Self {
+        if asked.is_some() {
+            Self::Command
+        } else if chosen.is_some() {
+            Self::UserConfig
+        } else {
+            Self::Default
+        }
+    }
+}
+
+impl std::fmt::Display for Source {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(match self {
+            Source::Step => "Step",
+            Source::Command => "command",
+            Source::UserConfig => "User config",
+            Source::Default => "default",
+        })
+    }
+}
+
+fn source_from(chosen_by: ChosenBy) -> Source {
+    match chosen_by {
+        ChosenBy::Command => Source::Command,
+        ChosenBy::UserConfig | ChosenBy::SecurityConfig => Source::UserConfig,
+        ChosenBy::Default => Source::Default,
+        ChosenBy::Step => Source::Step,
+    }
 }
 
 enum StepKind {
@@ -153,6 +280,7 @@ struct OwnedWorktree {
 }
 
 struct Prepared {
+    path: PathBuf,
     worktrees: Vec<OwnedWorktree>,
     declared: Vec<DeclaredWorktree>,
     /// The Issue-branch worktree's name, when the file declares one.
@@ -240,13 +368,8 @@ impl Drop for WrittenGuard {
 pub fn execute(action: ProcessAction) -> Result<String> {
     match action {
         ProcessAction::List => list(),
-        ProcessAction::Check { name, issue } => check(&name, issue),
-        ProcessAction::Run {
-            name,
-            issue,
-            email,
-            goal,
-        } => run(&name, issue, email, goal),
+        ProcessAction::Check(command) => check(&command),
+        ProcessAction::Run(command) => run(&command),
     }
 }
 
@@ -269,7 +392,7 @@ fn list() -> Result<String> {
         else {
             continue;
         };
-        if !single_component(name) || reserved(name) {
+        if !crate::args::one_path_component(name) || reserved(name) {
             continue;
         }
         let path = entry.path();
@@ -288,17 +411,19 @@ fn list() -> Result<String> {
     Ok(lines.join("\n"))
 }
 
-fn check(name: &str, issue: Option<IssueInput>) -> Result<String> {
+fn check(command: &ProcessRun) -> Result<String> {
+    let name = &command.name;
     interrupt::install()?;
     let config = UserConfig::load()?;
     let (path, file) = load(name)?;
-    let issue = resolve_process_issue(issue)?;
+    let issue = resolve_process_issue(command.issue.clone())?;
     require_issue(&path, &file, issue.as_ref())?;
     let base = launch::checked_out_base()?;
     let launch = Git::new(std::env::current_dir()?);
     let prepared = prepare_from(
         &path,
         &config,
+        &command.asked,
         file,
         issue,
         Utc::now(),
@@ -309,25 +434,26 @@ fn check(name: &str, issue: Option<IssueInput>) -> Result<String> {
             base: base.name(),
         },
     )?;
-    Ok(plan(name, &prepared))
+    let text = plan(name, &prepared);
+    if let Err(error) = refuse_unstartable(&prepared) {
+        println!("{text}");
+        return Err(error);
+    }
+    Ok(text)
 }
 
-fn run(
-    name: &str,
-    issue: Option<IssueInput>,
-    email: Option<NotificationAsk>,
-    goal: Option<Goal>,
-) -> Result<String> {
+fn run(command: &ProcessRun) -> Result<String> {
+    let name = &command.name;
     interrupt::install()?;
     let config = UserConfig::load()?;
     // The same check as a Ticket run, before any worktree or Step: a missing
     // address or Resend key fails the Process before it starts. As for the
     // other Passes, the check is before a skip, so a Process that would be
     // skipped fails on it too.
-    let goal = Goal::from_flag(goal, config.merge_always);
+    let goal = Goal::from_flag(command.goal, config.merge_always);
     let notification = RunNotification::new(
         Flags {
-            email,
+            email: command.email.clone(),
             ..Flags::default()
         }
         .notification(&config),
@@ -344,7 +470,7 @@ fn run(
     // worktree with no issue is refused before the Pass log. A failure here
     // is still a failed Process, so it sends the Run notification a Ticket
     // run would send for the same kind of stop.
-    let issue = match resolve_process_issue(issue) {
+    let issue = match resolve_process_issue(command.issue.clone()) {
         Ok(issue) => issue,
         Err(error) => return Err(failed_before_steps(notification, error)),
     };
@@ -370,7 +496,7 @@ fn run(
         match launch::hold_pass(&repo) {
             Ok(Some(running)) => {
                 let reason = running.to_string();
-                let choice = Choice::of(&Asked::default(), &config.harness);
+                let choice = Choice::of(&command.asked, &config.harness);
                 progress::step(&reason);
                 logs::skipped_process(&repo, name, &choice, &reason);
                 return Ok(String::new());
@@ -386,6 +512,7 @@ fn run(
         let prepared = match prepare_from(
             &path,
             &config,
+            &command.asked,
             file,
             None,
             started,
@@ -404,7 +531,7 @@ fn run(
     let issue = issue.expect("an issue");
     let started = Utc::now() - crate::run::STARTED_MARGIN;
     if file_has_issue_branch(&file) {
-        return run_issue_branch(name, &config, &path, file, issue, started, notification);
+        return run_issue_branch(command, &config, &path, file, issue, started, notification);
     }
     let base = match launch::checked_out_base() {
         Ok(base) => base,
@@ -417,6 +544,7 @@ fn run(
     let prepared = match prepare_from(
         &path,
         &config,
+        &command.asked,
         file,
         Some(issue),
         started,
@@ -484,6 +612,9 @@ fn finish_run(
     prepared: Prepared,
     mut notification: RunNotification,
 ) -> Result<String> {
+    if let Err(error) = refuse_unstartable(&prepared) {
+        return Err(failed_before_steps(notification, error));
+    }
     logs::started(Work::Process { repo, name }, &prepared.choice);
     notification.built_with(&prepared.choice);
     let result = execute_steps(name, &prepared, None);
@@ -496,7 +627,7 @@ fn finish_run(
 }
 
 fn run_issue_branch(
-    name: &str,
+    command: &ProcessRun,
     config: &UserConfig,
     path: &Path,
     file: ProcessFile,
@@ -504,6 +635,7 @@ fn run_issue_branch(
     started: DateTime<Utc>,
     mut notification: RunNotification,
 ) -> Result<String> {
+    let name = &command.name;
     let base_branch = match launch::checked_out_base() {
         Ok(base) => base,
         Err(error) => return Err(failed_before_steps(notification, error)),
@@ -548,6 +680,7 @@ fn run_issue_branch(
     let prepared = match prepare_from(
         path,
         config,
+        &command.asked,
         file,
         Some(issue.clone()),
         started,
@@ -561,6 +694,9 @@ fn run_issue_branch(
         Ok(prepared) => prepared,
         Err(error) => return Err(failed_before_steps(notification, error)),
     };
+    if let Err(error) = refuse_unstartable(&prepared) {
+        return Err(failed_before_steps(notification, error));
+    }
     let repo = match launch::repo() {
         Ok(repo) => repo,
         Err(error) => return Err(failed_before_steps(notification, error)),
@@ -613,19 +749,53 @@ fn run_issue_branch(
     result
 }
 
+/// Link every distinct Harness's Factory skills before any session starts.
+fn link_harnesses(worktree: &Path, steps: &[ResolvedStep]) -> Result<()> {
+    let mut linked = Vec::new();
+    for step in steps {
+        if linked.contains(&step.choice.harness) {
+            continue;
+        }
+        linked.push(step.choice.harness);
+        let adapter = step.choice.harness.adapter();
+        skills::link_into(worktree, adapter)?;
+        adapter.link_instruction_fallback(worktree)?;
+    }
+    Ok(())
+}
+
+/// The first Step whose Harness can't start, before any session runs.
+fn refuse_unstartable(prepared: &Prepared) -> Result<()> {
+    let Some(step) = prepared
+        .steps
+        .iter()
+        .find(|step| step.start_failure.is_some())
+    else {
+        return Ok(());
+    };
+    let reason = step.start_failure.as_deref().unwrap_or_default();
+    Err(rule(
+        &prepared.path,
+        step.report_line,
+        "harness",
+        format!(
+            "step {}'s Harness {} can't start: {reason}",
+            step.name,
+            step.choice.harness.name()
+        ),
+    ))
+}
+
 fn execute_steps(
     process: &str,
     prepared: &Prepared,
     mut issue_run: Option<&mut IssueRun<'_>>,
 ) -> Result<String> {
-    let adapter = prepared.choice.harness.adapter();
     for worktree in &prepared.worktrees {
-        skills::link_into(worktree.checkout.path(), adapter)?;
-        adapter.link_instruction_fallback(worktree.checkout.path())?;
+        link_harnesses(worktree.checkout.path(), &prepared.steps)?;
     }
     if let Some(checkout) = issue_run.as_ref().and_then(|run| run.checkout.as_ref()) {
-        skills::link_into(checkout.path(), adapter)?;
-        adapter.link_instruction_fallback(checkout.path())?;
+        link_harnesses(checkout.path(), &prepared.steps)?;
     }
     let results = logs::command_log_path()
         .context("a Process has no Command log")?
@@ -776,7 +946,7 @@ fn run_parallel(
         let mut handles = Vec::with_capacity(group.len());
         for (offset, step) in group.iter().enumerate() {
             let cwd = step_dir(prepared, step, checkout).to_path_buf();
-            let choice = prepared.choice.clone();
+            let choice = step.choice.clone();
             let earlier = prior.results.to_vec();
             let began = prior.began.to_vec();
             let process = process.to_string();
@@ -862,7 +1032,7 @@ fn run_step(
     let (checkout, continuing) = held_issue_branch(issue_run);
     let run = StepRun {
         process,
-        choice: &prepared.choice,
+        choice: &step.choice,
         issue: prepared.issue.as_ref(),
         started: prepared.started,
         continuation: step_continuation(prepared, step, continuing.as_ref()),
@@ -943,7 +1113,7 @@ fn run_delivery(
     progress::step(format_args!(
         "running step {} with {choice}",
         step.name,
-        choice = prepared.choice
+        choice = step.choice
     ));
     if merge {
         let merge_step = prepared
@@ -961,7 +1131,7 @@ fn run_delivery(
         GitHub::new(),
     );
     let child_asks = ChildAsks {
-        harness: prepared.choice.clone(),
+        harness: step.choice.clone(),
         ..ChildAsks::default()
     };
     let started = prepared.started;
@@ -1211,6 +1381,9 @@ fn run_published(run: &StepRun<'_>, step: &ResolvedStep, prior: &PriorSteps<'_>)
     let mut asks = Asks::of_run(&issue, &Flags::default(), &config);
     asks.notification = NotificationAsk::Skip;
     asks.harness = run.choice.clone();
+    // `of_run` resolved the review against the default choice. Resolve it
+    // again against this Step, so `security.harness` still wins (ADR-0021).
+    asks.security_review_harness = Flags::default().security_review_harness(&config, &asks.harness);
     let ended = crate::run::run_to_end(
         &issue,
         &mut asks,
@@ -1392,6 +1565,29 @@ fn plan(name: &str, prepared: &Prepared) -> String {
             .collect();
         for step in &prepared.steps[range.clone()] {
             let _ = writeln!(text, "{}", step_plan(step, named));
+            let _ = writeln!(
+                text,
+                "harness: {} ({})",
+                step.choice.harness.name(),
+                step.sources.harness
+            );
+            let _ = writeln!(
+                text,
+                "model: {} ({})",
+                step.choice.model.as_deref().unwrap_or("default"),
+                step.sources.model
+            );
+            let _ = writeln!(
+                text,
+                "effort: {} ({})",
+                step.choice.effort.as_deref().unwrap_or("default"),
+                step.sources.effort
+            );
+            let starts = match &step.start_failure {
+                None => "yes".to_string(),
+                Some(reason) => format!("no: {reason}"),
+            };
+            let _ = writeln!(text, "starts: {starts}");
         }
         if names.len() > 1 {
             let _ = writeln!(text, "together: {}", names.join(", "));
@@ -1448,6 +1644,7 @@ struct WorktreeSource<'a> {
 fn prepare_from(
     path: &Path,
     config: &UserConfig,
+    asked: &Asked,
     file: ProcessFile,
     issue: Option<IssueUrl>,
     started: DateTime<Utc>,
@@ -1467,6 +1664,7 @@ fn prepare_from(
         .collect();
     let skip = source.issue_checkout.and(issue_worktree.as_deref());
     let worktrees = create_worktrees(source.git, source.commit, &file, skip)?;
+    let mut command = CommandChoice::of(asked, &config.harness);
     let mut steps = Vec::new();
     for step in &file.steps {
         let checkout = resolve_dir(
@@ -1475,16 +1673,16 @@ fn prepare_from(
             issue_worktree.as_deref(),
             source.issue_checkout,
         );
-        steps.push(resolve(path, step, checkout)?);
+        steps.push(resolve(path, step, checkout, &command)?);
     }
-    let mut choice = Choice::of(&Asked::default(), &config.harness);
-    choice.check_without_probe()?;
+    command.check_steps(&mut steps);
     Ok(Prepared {
+        path: path.to_path_buf(),
         worktrees,
         declared,
         issue_worktree,
         _written: WrittenGuard,
-        choice,
+        choice: command.choice,
         description: file.description,
         steps,
         issue,
@@ -1839,7 +2037,12 @@ fn same_group(earlier: &StepDraft, step: &StepDraft) -> bool {
     }
 }
 
-fn resolve(path: &Path, step: &StepDraft, worktree: &Path) -> Result<ResolvedStep> {
+fn resolve(
+    path: &Path,
+    step: &StepDraft,
+    worktree: &Path,
+    command: &CommandChoice,
+) -> Result<ResolvedStep> {
     let kind = match &step.kind {
         DraftKind::Skill { skill, line } => match skills::find(worktree, skill) {
             Ok(skill) => StepKind::Skill {
@@ -1855,12 +2058,17 @@ fn resolve(path: &Path, step: &StepDraft, worktree: &Path) -> Result<ResolvedSte
         DraftKind::SelfMerge { .. } => StepKind::SelfMerge,
         DraftKind::RunPublishedIssue { .. } => StepKind::RunPublishedIssue,
     };
+    let (choice, sources) = command.step(step);
     Ok(ResolvedStep {
         name: step.name.clone(),
         optional: step.optional,
         worktree: step.worktree.as_ref().map(|(name, _)| name.clone()),
         parallel: step.parallel.as_ref().map(|(name, _)| name.clone()),
         kind,
+        report_line: step.report_line,
+        choice,
+        sources,
+        start_failure: None,
     })
 }
 
@@ -2078,7 +2286,7 @@ fn parse_worktrees(
     let mut worktrees = Vec::new();
     for (key, item) in table.iter() {
         let name_line = key_line(text, table.key(key));
-        if !single_component(key) {
+        if !crate::args::one_path_component(key) {
             return Err(rule(
                 path,
                 name_line,
@@ -2197,6 +2405,9 @@ fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Resu
     let mut worktree = None;
     let mut parallel = None;
     let mut optional = false;
+    let mut harness = None;
+    let mut model = None;
+    let mut effort = None;
     for (key, item) in table.iter() {
         let line = key_line(text, table.key(key));
         match key {
@@ -2213,6 +2424,9 @@ fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Resu
             "worktree" => worktree = Some(step_worktree(path, line, item)?),
             "parallel" => parallel = Some(step_parallel(path, line, item)?),
             "optional" => optional = step_optional(path, line, item)?,
+            "harness" => harness = Some(step_harness(path, line, item)?),
+            "model" => model = Some(step_word(path, line, item, "model")?),
+            "effort" => effort = Some(step_word(path, line, item, "effort")?),
             other => return Err(rule(path, line, "unknown key", other)),
         }
     }
@@ -2235,6 +2449,10 @@ fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Resu
             format!("step {name} has no kind"),
         ));
     };
+    let (harness, report_line) = match harness {
+        Some((harness, line)) => (Some(harness), line),
+        None => (None, name_line),
+    };
     Ok(StepDraft {
         name,
         name_line,
@@ -2242,14 +2460,46 @@ fn parse_step(path: &Path, text: &str, table_line: usize, table: &Table) -> Resu
         worktree,
         parallel,
         kind,
+        harness,
+        report_line,
+        model,
+        effort,
     })
+}
+
+fn step_harness(path: &Path, line: usize, item: &Item) -> Result<(Harness, usize)> {
+    let value = step_word(path, line, item, "harness")?;
+    let Some(harness) = Harness::named(&value) else {
+        return Err(rule(path, line, "unknown harness", &value));
+    };
+    Ok((harness, line))
+}
+
+fn step_word(path: &Path, line: usize, item: &Item, rule_name: &str) -> Result<String> {
+    let Some(value) = item.as_str() else {
+        return Err(rule(
+            path,
+            line,
+            rule_name,
+            format!("{rule_name} must be a string"),
+        ));
+    };
+    if value.trim().is_empty() {
+        return Err(rule(
+            path,
+            line,
+            rule_name,
+            format!("{rule_name} must not be empty"),
+        ));
+    }
+    Ok(value.to_string())
 }
 
 fn step_worktree(path: &Path, line: usize, item: &Item) -> Result<(String, usize)> {
     let Some(value) = item.as_str() else {
         return Err(rule(path, line, "worktree", "worktree must be a string"));
     };
-    if !single_component(value) {
+    if !crate::args::one_path_component(value) {
         return Err(rule(
             path,
             line,
@@ -2284,7 +2534,7 @@ fn step_name(path: &Path, line: usize, item: &Item) -> Result<(String, usize)> {
     let Some(value) = item.as_str() else {
         return Err(rule(path, line, "step name", "name must be a string"));
     };
-    if !single_component(value) {
+    if !crate::args::one_path_component(value) {
         return Err(rule(
             path,
             line,
@@ -2362,10 +2612,6 @@ fn process_path(name: &str) -> Result<PathBuf> {
 
 fn reserved(name: &str) -> bool {
     RESERVED.contains(&name)
-}
-
-fn single_component(name: &str) -> bool {
-    !name.is_empty() && name != "." && name != ".." && !name.contains(['/', '\\', '\0', '\n', '\r'])
 }
 
 fn line_of(text: &str, offset: usize) -> usize {
