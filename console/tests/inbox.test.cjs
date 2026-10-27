@@ -139,6 +139,7 @@ test('j then d dismisses and selects the next row, respecting typing, dialogs an
   await page.keyboard.press('Shift+T');
   await page.locator('#themes[open]').waitFor();
   await page.getByRole('button', { name: 'Make a Theme from this' }).click();
+  await page.waitForFunction(() => document.querySelector('#theme-document').value.includes('"tokens"'));
   await page.locator('#theme-document').fill('typing ');
   await page.locator('#theme-document').press('d');
   assert.equal(await page.locator('#theme-document').inputValue(), 'typing d');
