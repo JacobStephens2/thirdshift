@@ -75,7 +75,7 @@ pub struct UserConfig {
     pub security_harness: Option<Harness>,
     /// `security.fix`: off by default; None leaves the decision unmade.
     pub security_fix: Option<bool>,
-    /// `security.close`: off by default; None leaves the decision unmade.
+    /// `security.close`: on by default; None leaves the decision unmade.
     /// It takes effect only when fixing is also allowed.
     pub security_close: Option<bool>,
     pub security_review: bool,
@@ -1002,7 +1002,7 @@ effort = ""   # the Model's variant, passed as #effort; default blank, for OpenC
 
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
-close = false   # Security runs may close a finding their fix merged, when fixing is allowed; default false
+close = true   # Security runs may close a finding their fix merged, when fixing is allowed; default true
 review = false   # Ticket runs review their change for Security findings; default false
 harness = ""   # the Harness for Security runs, unless the command names one, and for every Security review; default blank; blank or missing leaves Security runs on harness.default, or Claude Code if that is missing, and Security reviews on their Command's Harness
 
@@ -1143,7 +1143,7 @@ mod tests {
         config.harness.default = None;
         assert_eq!(config.security_fix, Some(false));
         config.security_fix = None;
-        assert_eq!(config.security_close, Some(false));
+        assert_eq!(config.security_close, Some(true));
         config.security_close = None;
         assert_eq!(config, UserConfig::defaults(Path::new("/home/me")));
     }
@@ -1729,7 +1729,7 @@ mod tests {
             after.security_fix = None;
         }
         if before.security_close.is_none() {
-            assert_eq!(after.security_close, Some(false));
+            assert_eq!(after.security_close, Some(true));
             after.security_close = None;
         }
         assert_eq!(after, before, "{completed}");
