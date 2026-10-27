@@ -843,7 +843,7 @@ Command record, Console entry or Session log is created for a standalone skill.
 ### Custom processes
 
 A Custom process runs Steps in order, and can run consecutive Steps together.
-A Step is a skill session or a command. It is experimental. Write
+A Step is a skill session, a command, or a catalogue Step. It is experimental. Write
 `~/.thirdshift/processes/<name>.toml`. The name is the file's stem.
 
 ```toml
@@ -922,7 +922,21 @@ skills are
 ([ADR-0012](adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md)),
 under its own name, as a copy written out beside those skills, and kept out
 of git. A repository skill of the same name is not replaced. `command` is a command or script,
-run with `sh -c` in the Step's worktree. It starts no session. A declared
+run with `sh -c` in the Step's worktree. It starts no session. `catalogue` names a
+built-in Step. The only one is `run-published-issue`. It starts a Ticket run, or a
+Spec run when the issue has Tickets, on the issue the session Step before it
+published. That session's final message ends with the issue's URL on its last
+non-blank line. Before it starts a run, thirdshift checks that the issue is in
+this repository, which it checks before viewing the issue, that the issue is
+open, that a Trusted account published it, and that it was created since that
+session Step began. A final message without that URL, or an issue that fails a
+check, fails the Step, names the reason, and starts no run. The child run is
+part of this Command. Its Tickets, when the issue is a Spec, run at once up to
+`spec.parallel` in the User config. The child run's outcome is the Step's
+outcome, and the Step's result is the pull request's URL. The run uses the
+Process's Base branch and the Command's Harness. `run-published-issue` is the
+Step immediately after a session Step, and it does not share that Step's
+`parallel` group. A declared
 worktree's `kind` must be `throwaway`: it is detached at the Base branch. When
 the Process declares worktrees, every Step names one with `worktree`.
 Consecutive Steps with the same `parallel` name run at the same time. Every
@@ -944,7 +958,8 @@ Model and Effort, and each Step. A Process with no named worktrees prints one
 throwaway worktree at the Base branch. A Process that declares worktrees prints
 each one, the worktree each Step uses, and a `together:` line for each group
 of Steps that run at the same time. A skill Step shows the skill and where it
-was found. A command Step shows its command, and `check` does not run it. An
+was found. A command Step shows its command, and `check` does not run it. A
+catalogue Step shows `run-published-issue`. An
 optional Step is marked `(optional)`. `check` starts no session.
 
 Running the Process starts the Steps in its throwaway worktrees, detached at
@@ -958,7 +973,8 @@ Every session Step uses the Command's Harness, Model and Effort: the User
 config default, or the Harness default when that is unset. A command Step does
 not. Each finished Step's result is stored beside the Command log, one file
 per Step. A session's result is its final message. A command's result is its
-stdout followed by its stderr. The next session Step's prompt names the paths
+stdout followed by its stderr. A `run-published-issue` Step's result is the pull
+request URL of the run it started. The next session Step's prompt names the paths
 of those finished results. Members of a parallel group do not see one
 another's results; each member's result is passed on to the Steps after the
 group. A Step that fails has no result to pass on. The last finished Step's
@@ -989,7 +1005,9 @@ that Step instead of starting the session. The Command log names the cause.
 
 `check` and running refuse a missing file, a file that is not valid TOML, a
 missing or wrong `version`, an unknown key, a Step without exactly one of
-`skill` and `command`, a command that is not a string or is empty, an
+`skill`, `command` and `catalogue`, a command that is not a string or is empty,
+a catalogue value that is not the string `run-published-issue`, a
+`run-published-issue` Step that does not directly follow a session Step, an
 `optional` value that is not a boolean, a skill that cannot be found, an
 unknown worktree, a Step that does not name a worktree when the Process
 declares them, parallel Steps that share a worktree, a worktree whose kind is

@@ -225,6 +225,49 @@ skill = \"code-review\"
                 ),
                 ":6: optional: optional must be a boolean",
             ),
+            (
+                "review",
+                Some(
+                    "\
+version = 1
+description = \"Review the diff\"
+
+[[steps]]
+name = \"review\"
+catalogue = 1
+",
+                ),
+                ":6: exactly one kind: catalogue must be a string",
+            ),
+            (
+                "review",
+                Some(
+                    "\
+version = 1
+description = \"Review the diff\"
+
+[[steps]]
+name = \"review\"
+catalogue = \"delivery\"
+",
+                ),
+                ":6: exactly one kind: catalogue must be run-published-issue",
+            ),
+            (
+                "review",
+                Some(
+                    "\
+version = 1
+description = \"Review the diff\"
+
+[[steps]]
+name = \"review\"
+skill = \"code-review\"
+catalogue = \"run-published-issue\"
+",
+                ),
+                ":7: exactly one kind: step review has more than one kind",
+            ),
         ];
         for (name, body, expect) in cases {
             let scenario = Scenario::new();
@@ -3184,6 +3227,451 @@ command = \"printf ab\"
             shown.stdout
         );
     }
+}
+
+#[test]
+fn run_published_issue_must_directly_follow_a_session_step() {
+    let cases = [
+        (
+            "\
+version = 1
+description = \"Run what was published\"
+
+[[steps]]
+name = \"run\"
+catalogue = \"run-published-issue\"
+",
+            ":6: run-published-issue: run-published-issue must directly follow a session Step",
+        ),
+        (
+            "\
+version = 1
+description = \"Run what was published\"
+
+[[steps]]
+name = \"note\"
+command = \"printf noted\"
+
+[[steps]]
+name = \"run\"
+catalogue = \"run-published-issue\"
+",
+            ":10: run-published-issue: run-published-issue must directly follow a session Step",
+        ),
+        (
+            "\
+version = 1
+description = \"Run what was published\"
+
+[worktrees.publish]
+kind = \"throwaway\"
+
+[worktrees.run]
+kind = \"throwaway\"
+
+[[steps]]
+name = \"publish\"
+skill = \"to-spec\"
+worktree = \"publish\"
+parallel = \"both\"
+
+[[steps]]
+name = \"run\"
+catalogue = \"run-published-issue\"
+worktree = \"run\"
+parallel = \"both\"
+",
+            ":18: run-published-issue: run-published-issue must directly follow a session Step",
+        ),
+    ];
+    for check in [true, false] {
+        for (body, expect) in cases {
+            let scenario = Scenario::new();
+            write_process(&scenario, "publish", body);
+            let result = if check {
+                scenario.run(&["process", "check", "publish"])
+            } else {
+                scenario.run(&["process", "publish"])
+            };
+            assert_no_session(&scenario, &result);
+            assert!(
+                result.stderr.contains(expect),
+                "check={check} expected {expect} in {}",
+                result.stderr
+            );
+        }
+    }
+}
+
+#[test]
+fn check_names_run_published_issue_when_it_follows_a_session_step() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "publish",
+        "\
+version = 1
+description = \"Publish, then run\"
+
+[worktrees.review]
+kind = \"throwaway\"
+
+[worktrees.side]
+kind = \"throwaway\"
+
+[[steps]]
+name = \"publish\"
+skill = \"to-spec\"
+worktree = \"review\"
+
+[[steps]]
+name = \"run\"
+catalogue = \"run-published-issue\"
+worktree = \"review\"
+parallel = \"after\"
+
+[[steps]]
+name = \"side\"
+command = \"printf side\"
+worktree = \"side\"
+parallel = \"after\"
+",
+    );
+
+    let result = scenario.run(&["process", "check", "publish"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result
+            .stdout
+            .contains("run: run-published-issue (worktree review)"),
+        "{}",
+        result.stdout
+    );
+    assert!(
+        result.stdout.contains("together: run, side"),
+        "{}",
+        result.stdout
+    );
+    assert!(scenario.claude_calls().is_empty(), "a session started");
+}
+
+const PUBLISH_THEN_RUN: &str = "\
+version = 1
+description = \"Publish, then run\"
+
+[[steps]]
+name = \"publish\"
+skill = \"to-spec\"
+
+[[steps]]
+name = \"run\"
+catalogue = \"run-published-issue\"
+";
+
+fn publishes(script: &str) -> String {
+    format!("{script}\n")
+}
+
+fn assert_stopped_before_a_run(scenario: &Scenario, result: &RunResult, reason: &str) {
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains(reason),
+        "expected {reason} in {}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("dispatching "),
+        "a run was dispatched: {}",
+        result.stderr
+    );
+    assert_eq!(
+        scenario.claude_calls().len(),
+        1,
+        "more than the publishing session ran"
+    );
+    let record = process_record(scenario);
+    let dispatched = record["dispatched"].as_array().map(Vec::len).unwrap_or(0);
+    assert_eq!(dispatched, 0, "{record}");
+    assert_eq!(record["outcome"], "failed", "{record}");
+    for (name, branches) in [
+        ("origin", scenario.origin_git(&["branch", "--list"])),
+        ("launch", scenario.launch_git(&["branch", "--list"])),
+    ] {
+        assert!(
+            !branches.contains("issue-"),
+            "{name} has an issue branch: {branches}"
+        );
+    }
+}
+
+#[test]
+fn a_final_message_without_the_issue_url_fails_without_a_run() {
+    let messages = [
+        "Published the plan.",
+        "https://github.com/acme/widgets/issues/8 (a Spec)",
+        "The plan: https://github.com/acme/widgets/issues/8",
+        "https://github.com/acme/widgets/pull/8",
+    ];
+    for message in messages {
+        let scenario = Scenario::new();
+        write_process(&scenario, "publish", PUBLISH_THEN_RUN);
+        scenario.agent_does_in_session(
+            1,
+            &publishes(&format!(
+                "printf '%s\\n' '{message}' > \"$FAKE_CLAUDE_FINAL_MESSAGE\""
+            )),
+        );
+
+        let result = scenario.run(&["process", "publish"]);
+
+        assert_stopped_before_a_run(
+            &scenario,
+            &result,
+            "the session Step ended without the issue's URL on its last line",
+        );
+    }
+}
+
+#[test]
+fn a_session_that_published_nothing_fails_without_a_run() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "publish",
+        "\
+version = 1
+description = \"Publish, then run\"
+
+[[steps]]
+name = \"publish\"
+skill = \"to-spec\"
+optional = true
+
+[[steps]]
+name = \"run\"
+catalogue = \"run-published-issue\"
+",
+    );
+    scenario.agent_does_in_session(1, "exit 1");
+
+    let result = scenario.run(&["process", "publish"]);
+
+    assert_stopped_before_a_run(
+        &scenario,
+        &result,
+        "the session Step ended without a final message",
+    );
+}
+
+#[test]
+fn an_issue_outside_this_repository_fails_before_it_is_viewed() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "publish", PUBLISH_THEN_RUN);
+    scenario.agent_does_in_session(
+        1,
+        &publishes(
+            "printf '%s\\n' 'https://github.com/other/widgets/issues/1' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+        ),
+    );
+
+    let result = scenario.run(&["process", "publish"]);
+
+    assert_stopped_before_a_run(
+        &scenario,
+        &result,
+        "https://github.com/other/widgets/issues/1 is not in the repository at origin",
+    );
+}
+
+#[test]
+fn a_closed_untrusted_or_already_created_issue_fails_without_a_run() {
+    let cases: &[(&str, &str)] = &[
+        (
+            "\
+url=$(gh issue create --title Closed --body Closed)
+gh issue close \"${url##*/}\"
+printf '%s\\n' \"$url\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
+",
+            "is closed",
+        ),
+        (
+            "\
+url=$(gh issue create --title Stranger --body Stranger)
+printf '%s\\n' \"$url\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
+",
+            "author is not a Trusted account",
+        ),
+        (
+            "\
+url=$(gh issue create --title Old --body Old)
+gh fake created \"${url##*/}\" 2020-01-01T00:00:00Z
+printf '%s\\n' \"$url\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
+",
+            "was created before the session Step began",
+        ),
+    ];
+    for (script, reason) in cases {
+        let scenario = Scenario::new();
+        write_process(&scenario, "publish", PUBLISH_THEN_RUN);
+        if reason.contains("Trusted") {
+            let mut state = scenario.gh_state();
+            state["author_associations"] = serde_json::json!({"8": "NONE"});
+            scenario.write_gh_state(&state);
+        }
+        scenario.agent_does_in_session(1, script);
+
+        let result = scenario.run(&["process", "publish"]);
+
+        assert_stopped_before_a_run(&scenario, &result, reason);
+    }
+}
+
+fn agent_lands_ticket(issue: u32, base: &str) -> String {
+    format!(
+        r#"
+echo "{issue}" > issue-{issue}.txt
+git add issue-{issue}.txt
+git commit -q -m "Ticket {issue}"
+gh pr create --base {base} --head issue-{issue} --title "Ticket {issue}" --body "Closes #{issue}"
+"#
+    )
+}
+
+fn pr_from(scenario: &Scenario, head: &str) -> serde_json::Value {
+    scenario.gh_state()["prs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .rfind(|pr| pr["head"] == head)
+        .unwrap_or_else(|| panic!("no PR from {head}"))
+        .clone()
+}
+
+#[test]
+fn a_published_ticket_gets_a_ticket_run_under_the_process() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "publish", PUBLISH_THEN_RUN);
+    scenario.agent_does_in_session(
+        1,
+        "\
+url=$(gh issue create --title Ticket --body 'Do the thing')
+printf '%s\\n\\n' \"$url\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
+",
+    );
+    scenario.agent_does_for(8, &agent_lands_ticket(8, "main"));
+
+    let result = scenario.run(&["process", "publish"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let pr = pr_from(&scenario, "issue-8");
+    assert_eq!(result.stdout.trim(), pr["url"].as_str().unwrap());
+    let record = process_record(&scenario);
+    assert_eq!(record["outcome"], "succeeded", "{record}");
+    assert_eq!(record["dispatched"][0]["kind"], "Run", "{record}");
+    assert_eq!(record["dispatched"][0]["issue"]["number"], 8, "{record}");
+    assert_eq!(
+        record["dispatched"][0]["outcome"], "ready for review",
+        "{record}"
+    );
+    assert_eq!(
+        record["dispatched"][0]["issue_branch"], "issue-8",
+        "{record}"
+    );
+    assert_eq!(
+        record["dispatched"][0]["pull_request"], pr["url"],
+        "{record}"
+    );
+    assert!(
+        result.stderr.contains(&format!(
+            "dispatching {}, as thirdshift {} would",
+            scenario.issue_url(8),
+            scenario.issue_url(8)
+        )),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_failed_child_run_fails_the_step() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "publish", PUBLISH_THEN_RUN);
+    scenario.agent_does_in_session(
+        1,
+        "\
+url=$(gh issue create --title Ticket --body 'Do the thing')
+printf '%s\\n' \"$url\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
+",
+    );
+    scenario.agent_does_for(8, "exit 1");
+
+    let result = scenario.run(&["process", "publish"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let record = process_record(&scenario);
+    assert_eq!(record["outcome"], "failed", "{record}");
+    assert_eq!(record["dispatched"][0]["kind"], "Run", "{record}");
+    assert_eq!(record["dispatched"][0]["issue"]["number"], 8, "{record}");
+    assert_eq!(record["dispatched"][0]["outcome"], "failed", "{record}");
+    assert!(
+        result.stderr.contains("dispatching "),
+        "the run was not started: {}",
+        result.stderr
+    );
+    assert_eq!(record["cause"], "claude exited 1", "{record}");
+    assert!(
+        result.stderr.contains("claude exited 1"),
+        "{}",
+        result.stderr
+    );
+}
+
+#[test]
+fn a_published_spec_runs_its_tickets_one_at_a_time_when_spec_parallel_is_1() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[spec]\nparallel = 1\n");
+    write_process(&scenario, "publish", PUBLISH_THEN_RUN);
+    scenario.agent_does_in_session(
+        1,
+        "\
+spec=$(gh issue create --title Spec --body 'Widgets, all of them')
+one=$(gh issue create --title One --body First)
+two=$(gh issue create --title Two --body Second)
+gh api --method POST repos/acme/widgets/issues/${spec##*/}/sub_issues -F sub_issue_id=${one##*/}
+gh api --method POST repos/acme/widgets/issues/${spec##*/}/sub_issues -F sub_issue_id=${two##*/}
+printf '%s\\n' \"$spec\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
+",
+    );
+    scenario.agent_does_for(9, &agent_lands_ticket(9, "issue-8"));
+    scenario.agent_does_for(
+        10,
+        &format!("test -f issue-9.txt\n{}", agent_lands_ticket(10, "issue-8")),
+    );
+
+    let result = scenario.run(&["process", "publish"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let landed = result.stderr.find("#9 landed\n").expect("ticket 9 landed");
+    let started = result
+        .stderr
+        .find("starting #10\n")
+        .expect("ticket 10 started");
+    assert!(
+        landed < started,
+        "ticket 10 started before ticket 9 landed: {}",
+        result.stderr
+    );
+    let pr = pr_from(&scenario, "issue-8");
+    assert_eq!(result.stdout.trim(), pr["url"].as_str().unwrap());
+    let record = process_record(&scenario);
+    assert_eq!(record["dispatched"][0]["kind"], "Spec run", "{record}");
+    assert_eq!(record["dispatched"][0]["issue"]["number"], 8, "{record}");
+    assert_eq!(
+        record["dispatched"][0]["outcome"], "ready for review",
+        "{record}"
+    );
+    assert_eq!(record["outcome"], "succeeded", "{record}");
 }
 
 #[test]
