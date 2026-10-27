@@ -66,6 +66,80 @@ async function pageFor(t, options) {
   return page;
 }
 
+test('Inbox keeps issue numbers visible for long repository and Process subjects', async t => {
+  const path = join(home, '.thirdshift/logs/acme/widgets/commands/issue/1-fixture.command.json');
+  const original = await readFile(path, 'utf8');
+  const fixture = JSON.parse(original);
+  fixture.repository = 'Educational-Travel-Adventures/some-long-repository-name';
+  fixture.issue = { number: 123, url: `https://github.com/${fixture.repository}/issues/123`, title: 'Keep the issue number visible' };
+  const page = await pageFor(t, { viewport: { width: 1440, height: 900 } });
+  try {
+    for (const process of [null, 'nightly']) {
+      await t.test(process ? 'Process issue' : 'ordinary issue', async () => {
+        fixture.kind = process ? 'Process' : 'Spec run';
+        fixture.process_name = process;
+        await replaceRecord(path, JSON.stringify(fixture));
+        await page.goto(`${origin}/?section=needs-you`);
+        await page.evaluate(() => document.fonts.ready);
+        const subject = page.locator('#inbox .row-head > .subject').filter({ has: page.locator(`a[href="${fixture.issue.url}"]`) });
+        const visibility = await subject.evaluate(node => {
+          const texts = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+          let text;
+          while ((text = texts.nextNode()) && !text.textContent.endsWith('#123')) {}
+          const range = document.createRange();
+          range.setStart(text, text.length - 4);
+          range.setEnd(text, text.length);
+          const number = range.getBoundingClientRect();
+          const subject = node.getBoundingClientRect();
+          return { left: number.left, right: number.right, subjectLeft: subject.left, subjectRight: subject.right };
+        });
+        assert.ok(visibility.left >= visibility.subjectLeft && visibility.right <= visibility.subjectRight + 1,
+          `#123 must be visible inside its subject: ${JSON.stringify(visibility)}`);
+        const full = `${process ? 'Process nightly · ' : ''}${fixture.repository}#123`;
+        assert.equal(await subject.textContent(), full);
+        assert.equal(await subject.getAttribute('title'), full);
+        assert.equal(await subject.locator('a').getAttribute('href'), fixture.issue.url);
+        // Check the shared layout with an Other-account Command's tag as well.
+        await subject.evaluate(node => {
+          const tag = document.createElement('span');
+          tag.className = 'account-tag';
+          tag.textContent = 'conductor';
+          node.prepend(tag, ' ');
+        });
+        const tagged = await subject.evaluate(node => {
+          const subject = node.getBoundingClientRect();
+          const account = node.querySelector('.account-tag').getBoundingClientRect();
+          const issue = node.querySelector('.subject-issue').getBoundingClientRect();
+          return { left: account.left, right: issue.right, subjectLeft: subject.left, subjectRight: subject.right,
+            accountTop: account.top, accountBottom: account.bottom, issueTop: issue.top, issueBottom: issue.bottom };
+        });
+        assert.ok(tagged.left >= tagged.subjectLeft && tagged.right <= tagged.subjectRight + 1,
+          `account and #123 must fit inside the subject: ${JSON.stringify(tagged)}`);
+        assert.ok(tagged.accountTop < tagged.issueBottom && tagged.issueTop < tagged.accountBottom,
+          `account and #123 must share one line: ${JSON.stringify(tagged)}`);
+      });
+    }
+    fixture.issue = null;
+    fixture.name = 'fixture';
+    for (const process of [null, 'nightly']) {
+      await t.test(process ? 'Process without an issue' : 'Command without an issue', async () => {
+        fixture.kind = process ? 'Process' : 'Spec run';
+        fixture.process_name = process;
+        await replaceRecord(path, JSON.stringify(fixture));
+        await page.goto(`${origin}/?section=needs-you`);
+        const full = `${process ? 'Process nightly' : 'fixture'} on ${fixture.repository}`;
+        const subject = page.locator('#inbox .row-head > .subject', { hasText: full });
+        assert.equal(await subject.textContent(), full);
+        assert.equal(await subject.getAttribute('title'), full);
+        assert.equal(await subject.locator('a').count(), 0);
+        assert.equal(await subject.evaluate(node => getComputedStyle(node).textOverflow), 'ellipsis');
+      });
+    }
+  } finally {
+    await replaceRecord(path, original);
+  }
+});
+
 test('Command details times out a held request and can be opened again', async t => {
   const page = await pageFor(t);
   await page.clock.install();

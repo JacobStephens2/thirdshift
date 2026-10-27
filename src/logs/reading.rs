@@ -495,7 +495,7 @@ fn confine_other_account_sessions(command: &mut Command) {
             stage.session_log = None;
         }
     }
-    command.activity.drop_session_unless(&keep);
+    command.activity.drop_session_unless(keep);
 }
 
 fn contained_trace(root: &Path, path: &Path) -> bool {

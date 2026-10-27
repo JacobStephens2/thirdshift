@@ -237,6 +237,13 @@ body:is(.mailbox, .archive-page).peek-open { max-width: 1600px; grid-template-co
   .one-line .row-head [data-copy-status] { font-size: 12px; }
   .one-line .row-head [data-copy-status]:empty { display: none; }
 }
+@media (scripting: enabled) and (min-width: 761px) {
+  .one-line .row-head > .subject:has(> a) { display: flex; align-items: baseline; gap: .6em; }
+  .one-line .subject > .account-tag { flex: none; }
+  .one-line .row-head > .subject > a { display: flex; min-width: 0; }
+  .one-line .subject-repository { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .one-line .subject-issue { flex: none; }
+}
 @media (max-width: 760px) {
   #inbox { display: block; }
   #inbox > .folders { position: static; flex-direction: row; overflow-x: auto; margin: 12px 0 0; padding-bottom: 4px; border-bottom: 1px solid var(--rule); }
