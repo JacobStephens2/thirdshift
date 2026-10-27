@@ -87,7 +87,7 @@ How hard the **Model** reasons in a session, such as `high` or `max`. One per **
 _Avoid_: reasoning level, thinking budget
 
 **Resume**:
-A continuation of the same agent session, started once when that session ended its turn with background work still running, which was killed with it: thirdshift takes it as work the session was waiting on. Its **Session prompt** asks the agent to re-run that work in the foreground and finish. A Resume that ends the same way gets no second Resume and does not fail the **Ticket run**: the work may have been abandoned rather than awaited, so thirdshift names it in a progress line and carries on, and the steps that follow decide the outcome. If the Ticket run is then a **Failed ticket run**, its cause names the killed work ahead of the step that failed. A Resume is not a **Repair** and does not count against the Repair cap.
+A continuation of the same agent session, started once when that session ended its turn with background work still running, which was killed with it: thirdshift takes it as work the session was waiting on. Its **Session prompt** asks the agent to re-run that work in the foreground and finish. Any session **Step** of a **Process** can get one, a **Ticket run**'s implement session included. A Resume that ends the same way gets no second Resume and does not fail the Process: the work may have been abandoned rather than awaited, so thirdshift names it in a progress line and carries on, and the Steps that follow decide the outcome. If the Process then fails, as a **Failed ticket run** for instance, its cause names the killed work ahead of the Step that failed. A Resume is not a **Repair** and does not count against the Repair cap.
 
 ### Factory work
 
@@ -124,14 +124,14 @@ A named sequence of **Steps** that a **Command** carries out: a **Built-in proce
 _Avoid_: workflow, pipeline, recipe, run type
 
 **Built-in process**:
-A **Process** that ships inside thirdshift, such as the one a **Ticket run** carries out.
+A **Process** that ships inside thirdshift, such as the one a **Ticket run** carries out. A **Command** that carries one out keeps its run type's name, such as Ticket run, and anyone can read its file and copy it as the start of a **Custom process**. Which Built-in process runs, and whether it holds a **Claim**, is decided before its first Step.
 
 **Custom process**:
 A **Process** a person defines on their own machine and starts by name. It can't take a **Built-in process**'s name. Started with no issue and no Issue-branch worktree, it is a **Pass**. A file that declares an Issue-branch worktree is refused when no issue is given. Started with an issue, it is not a Pass. Its `self-merge` catalogue Step, directly after `delivery`, is the **Self-merge**, and only when the command or the **User config** asks. A file can only tighten limits, never loosen them.
 _Avoid_: workflow, pipeline
 
 **Step**:
-One entry in a **Process**: a skill session, a command, or a catalogue Step whose rules stay in thirdshift.
+One entry in a **Process**: a skill session, a command, or a catalogue Step whose rules stay in thirdshift, such as the implement session, the **Security review** or **Delivery**. Every catalogue Step is open to a **Custom process** as well as a **Built-in process**.
 _Avoid_: task, stage
 
 ### Architecture
