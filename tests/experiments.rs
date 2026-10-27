@@ -153,6 +153,7 @@ fn legacy_resume_commands_keep_literal_model_arguments_and_the_recorded_levels()
         saved["verdict"] = Value::Null;
         saved["bar"].as_object_mut().unwrap().remove("pass_level");
         saved["bar"].as_object_mut().unwrap().remove("fail_level");
+        saved["bar"].as_object_mut().unwrap().remove("pass_rule");
         saved["bar"]["credible_level"] = json!(0.8);
         saved["resume_command"] = json!(format!(
             "thirdshift 'experiment' 'candidate' '--candidate-model' '{}' '--credible-level' '0.8' '--json'",

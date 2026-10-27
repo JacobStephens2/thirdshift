@@ -252,7 +252,7 @@ impl From<Decision> for Conclusion {
 
 impl Verdict {
     /// Passing metrics whose pass-level interval lies wholly below zero.
-    pub fn worse_within_margin(&self) -> Vec<String> {
+    pub fn worse_within_margin_metrics(&self) -> Vec<String> {
         self.suites
             .iter()
             .flat_map(|(suite, verdict)| {

@@ -19,7 +19,7 @@ mod prediction;
 pub(crate) use levels::decimal;
 pub use levels::{Intervals, Levels, PassRule};
 
-const METHOD: &str =
+const MARGIN_METHOD: &str =
     "paired-dirichlet-v3; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles";
 const REACHES_ZERO_METHOD: &str =
     "paired-dirichlet-v2; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles";
@@ -132,7 +132,7 @@ pub struct Assessment {
     pub verdict: Decision,
     /// A pass whose pass-level interval lies wholly below zero: statistically
     /// worse, but within the margin. It never changes the decision.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub worse_within_margin: bool,
     pub more_tasks: Option<MoreTasks>,
 }
@@ -196,7 +196,7 @@ fn evaluate(scores: &[TaskScores], bar: &Bar, predictions: bool) -> Result<Verdi
             Levels::Separate {
                 pass_rule: PassRule::Margin,
                 ..
-            } => METHOD,
+            } => MARGIN_METHOD,
             Levels::Separate {
                 pass_rule: PassRule::ReachesZero,
                 ..
@@ -214,6 +214,10 @@ fn evaluate(scores: &[TaskScores], bar: &Bar, predictions: bool) -> Result<Verdi
             candidate: candidate_all_passed as f64 / retained_tasks as f64,
         }),
     })
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 fn validate(scores: &[TaskScores], bar: &Bar) -> Result<()> {

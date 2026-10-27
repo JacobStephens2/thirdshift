@@ -600,7 +600,8 @@ ADR-0024's rule, whose pass also needed the pass-level upper bound to reach zero
 the A/A pass rates were 0% and 13%.
 
 Both suites fall short at today's size. `code-review` needs about 20 Eval tasks
-to reach 80% at 70%, and #1434 grows it. `spec-review` needs about 80. Under
+(between today's 10 and the table's 40) to reach 80% at 70%, and #1434 grows
+it. `spec-review` needs about 80. Under
 ADR-0024's rule `spec-review` could not reach 80% at 70% at any size: for
 identical Arms a 70% interval's upper bound falls below zero about 15% of the
 time per noisy metric, capping the pass rate near 72%.

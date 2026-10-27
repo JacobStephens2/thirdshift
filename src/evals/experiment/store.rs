@@ -405,7 +405,7 @@ impl Stored {
                     .replace('_', " "),
                 self.verdict
                     .as_ref()
-                    .map(super::grading::Verdict::worse_within_margin)
+                    .map(super::grading::Verdict::worse_within_margin_metrics)
                     .filter(|metrics| !metrics.is_empty())
                     .map_or(String::new(), |metrics| format!(
                         " ({}: worse, within the margin)",
