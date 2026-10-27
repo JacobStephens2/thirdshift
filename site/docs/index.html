@@ -771,6 +771,12 @@ Command record, Console entry or Session log is created for a standalone skill.<
 A Step is a skill session, a command, or a catalogue Step. It is
 experimental. Write <code>~/.thirdshift/processes/&lt;name&gt;.toml</code>. The name is the
 file&#39;s stem.</p>
+<p>Every skill Step gets one Resume if its session ends with background work
+still running that was killed with it, using the same Session prompt and
+rules as a Ticket run. If the Resume ends the same way, a progress line
+names the killed work and the Process carries on. Following Steps decide
+the outcome; if the Process then fails, its cause names that work ahead of
+the failing Step. A Resume does not count against the Process&#39;s Repair cap.</p>
 <pre><code class="language-toml">version = 1
 description = &quot;Gather notes, then review them&quot;
 
