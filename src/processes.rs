@@ -1381,6 +1381,9 @@ fn run_published(run: &StepRun<'_>, step: &ResolvedStep, prior: &PriorSteps<'_>)
     let mut asks = Asks::of_run(&issue, &Flags::default(), &config);
     asks.notification = NotificationAsk::Skip;
     asks.harness = run.choice.clone();
+    // `of_run` resolved the review against the default choice. Resolve it
+    // again against this Step, so `security.harness` still wins (ADR-0021).
+    asks.security_review_harness = Flags::default().security_review_harness(&config, &asks.harness);
     let ended = crate::run::run_to_end(
         &issue,
         &mut asks,
