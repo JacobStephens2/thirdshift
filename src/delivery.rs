@@ -199,6 +199,113 @@ impl Delivery<'_> {
         crate::logs::unaddressed_findings(pull_request.unaddressed_findings());
         result
     }
+
+    /// Publish the Issue branch already produced by a Custom process and
+    /// leave its pull request ready for review. There is no opening session
+    /// and no Security review: the Process's Steps did the work. Push, open
+    /// a draft pull request when the branch has none, write the Built-with
+    /// line, mark it ready, and keep it mergeable and its CI green through
+    /// the Repair loop. The goal is ready for review, so this does not
+    /// Self-merge. Repairs run on [`Delivery::child_asks`]'s Harness. Any
+    /// failure goes through the Failed run path.
+    pub fn publish(
+        self,
+        worktree: Worktree,
+        pull_request: &mut PullRequest,
+    ) -> Result<String, FailedRun> {
+        let tracker = Tracker::new(Stage::Push, CommandLog);
+        pull_request.begin_delivery();
+        let (issue, started, path) = (self.issue, self.started, worktree.path().to_path_buf());
+        let before_each = move || {
+            no_untrusted_edit_since(issue, started)?;
+            hand_over_issue(issue, &path)
+        };
+        let (delivered, log) = Sessions::checked_within(
+            self.logs,
+            worktree.path(),
+            &self.child_asks.harness,
+            self.child_asks.security_review_harness.as_ref(),
+            self.child_asks.security_review_default.as_ref(),
+            &before_each,
+            |sessions| {
+                publish_steps(
+                    &tracker,
+                    self.issue,
+                    self.base,
+                    self.child_asks,
+                    self.base_fix,
+                    &worktree,
+                    pull_request,
+                    sessions,
+                )
+            },
+        );
+        let result = match delivered {
+            Ok(url) => Ok(url),
+            Err(error) => {
+                if let Some(merged) = error.downcast_ref::<AlreadyMerged>()
+                    && worktree.fully_landed_at(&merged.head).unwrap_or(false)
+                {
+                    progress::step("the pull request was merged while Delivery was running");
+                    Ok(merged.pr.url.clone())
+                } else {
+                    let stopped_at = stopped_at(&tracker, &error);
+                    let path = worktree.path().to_path_buf();
+                    let mut outside = OnFailure {
+                        base: self.base,
+                        worktree,
+                        pull_request,
+                    };
+                    Err(fail(&mut outside, stopped_at, path, log, error))
+                }
+            }
+        };
+        crate::logs::unaddressed_findings(pull_request.unaddressed_findings());
+        result
+    }
+}
+
+/// [`Delivery::publish`]'s steps: push, open a draft when none exists, write
+/// what it was built with, mark the pull request ready, and take it to ready
+/// for review through the Repair loop.
+fn publish_steps<'a>(
+    tracker: &Tracker,
+    issue: &'a IssueUrl,
+    base: &'a str,
+    child_asks: &'a ChildAsks,
+    base_fix: &'a mut BaseFix,
+    worktree: &'a Worktree,
+    pull_request: &'a mut PullRequest,
+    sessions: &'a Sessions<'a>,
+) -> Result<String> {
+    tracker.enter(Stage::Push);
+    pull_request.ensure_actionable(false)?;
+    worktree.push_if_actionable(&mut || pull_request.ensure_actionable(false))?;
+    let title = GitHub::new().issue_title(issue)?;
+    let body = format!("Closes #{}", issue.number);
+    pull_request.open_if_absent(&title, &body)?;
+    if let Err(error) = pull_request.write_built_with(&child_asks.harness) {
+        progress::warn(
+            &error,
+            format_args!("could not write the Built-with line in the pull request's body"),
+        );
+    }
+    tracker.enter(Stage::PullRequestReadiness);
+    let pr = pull_request.mark_ready(None)?;
+    let mut outside = RunOutside {
+        tracker,
+        issue,
+        worktree,
+        base,
+        pr_url: &pr.url,
+        base_fix,
+        child_asks,
+        sessions,
+        pull_request,
+        ci_watch: ci::Watch::new(issue),
+    };
+    repair_loop::take_to_goal(&mut outside, base, Goal::ReadyForReview)?;
+    Ok(pr.url)
 }
 
 /// The steps of a Delivery of the pull request for `issue`, from `branch`

@@ -20,7 +20,10 @@ use crate::run::Goal;
 /// What `thirdshift process` was asked to do.
 pub enum ProcessAction {
     List,
-    Check(String),
+    Check {
+        name: String,
+        issue: Option<IssueInput>,
+    },
     Run {
         name: String,
         issue: Option<IssueInput>,
@@ -837,7 +840,7 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
     Ok(asked)
 }
 
-const PROCESS_USAGE: &str = "usage: thirdshift process [check <name> | <name> [issue <issue>] [email [address] | email-unless-merged [address] | no-email]]";
+const PROCESS_USAGE: &str = "usage: thirdshift process [check <name> [issue <issue>] | <name> [issue <issue>] [email [address] | email-unless-merged [address] | no-email]]";
 
 fn parse_process(args: &[String]) -> Result<ProcessAction> {
     if args.is_empty() {
@@ -860,7 +863,7 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
             continue;
         }
         if arg == "issue" {
-            if check || name.is_none() || expect_issue || issue.is_some() {
+            if name.is_none() || expect_issue || issue.is_some() {
                 bail!(PROCESS_USAGE);
             }
             expect_issue = true;
@@ -880,8 +883,8 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
         bail!(PROCESS_USAGE);
     }
     match (check, name) {
-        (true, Some(name)) if issue.is_none() => Ok(ProcessAction::Check(name)),
-        (true, _) => bail!(PROCESS_USAGE),
+        (true, Some(name)) => Ok(ProcessAction::Check { name, issue }),
+        (true, None) => bail!(PROCESS_USAGE),
         (false, Some(name)) => Ok(ProcessAction::Run { name, issue, email }),
         (false, None) => bail!(PROCESS_USAGE),
     }

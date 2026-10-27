@@ -465,7 +465,7 @@ thirdshift secure base &lt;branch&gt;     # do that with &lt;branch&gt; as the B
 thirdshift skill &lt;skill&gt; [issue &lt;issue&gt;]   # run one skill headlessly and print its final message
 thirdshift process                      # list Custom processes (experimental)
 thirdshift process &lt;name&gt; [issue &lt;issue&gt;]   # run a Custom process, optionally on an issue; email flags match a Ticket run (experimental)
-thirdshift process check &lt;name&gt;         # validate one and print its plan (experimental)
+thirdshift process check &lt;name&gt; [issue &lt;issue&gt;]   # validate one and print its plan (experimental)
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
 thirdshift scores [&lt;pull request&gt;] [--json] # show Scores and calibration
 thirdshift scores &lt;pull request&gt; --mine [--json] # enter your five Scores
@@ -767,8 +767,9 @@ Command record, Console entry or Session log is created for a standalone skill.<
 <details class="fold"><summary><h3>Custom processes</h3></summary>
 <div class="manual-content" id="custom-processes">
 <p>A Custom process runs Steps in order, and can run consecutive Steps together.
-A Step is a skill session or a command. It is experimental. Write
-<code>~/.thirdshift/processes/&lt;name&gt;.toml</code>. The name is the file&#39;s stem.</p>
+A Step is a skill session, a command, or the catalogue Step <code>delivery</code>. It is
+experimental. Write <code>~/.thirdshift/processes/&lt;name&gt;.toml</code>. The name is the
+file&#39;s stem.</p>
 <pre><code class="language-toml">version = 1
 description = &quot;Gather notes, then review them&quot;
 
@@ -827,6 +828,54 @@ name = &quot;judge&quot;
 skill = &quot;thirdshift-to-spec&quot;
 worktree = &quot;judge&quot;
 </code></pre>
+<p>One worktree may instead be an Issue branch, and one Step may publish it:</p>
+<pre><code class="language-toml">version = 1
+description = &quot;Ship a fix&quot;
+
+[worktrees.fix]
+kind = &quot;issue-branch&quot;
+
+[[steps]]
+name = &quot;implement&quot;
+skill = &quot;thirdshift-implement&quot;
+worktree = &quot;fix&quot;
+
+[[steps]]
+name = &quot;ship&quot;
+catalogue = &quot;delivery&quot;
+worktree = &quot;fix&quot;
+</code></pre>
+<pre><code class="language-sh">thirdshift process check ship issue 7
+thirdshift process ship issue 7
+</code></pre>
+<p>A declared worktree&#39;s <code>kind</code> is <code>throwaway</code> or <code>issue-branch</code>. A throwaway
+worktree is detached at the Base branch. An Issue-branch worktree is the
+Issue branch a Ticket run would use for the issue the command names:
+<code>issue-&lt;n&gt;</code>, then <code>issue-&lt;n&gt;-branch-&lt;k&gt;</code> for k ≥ 2. A Continuation reuses
+the existing branch, and an open pull request&#39;s base is the Base branch. A
+Process has at most one Issue-branch worktree. The Steps that name it run in
+that checkout. Any other declared worktree stays throwaway.</p>
+<p><code>catalogue = &quot;delivery&quot;</code> publishes that Issue branch. It is Delivery with no
+opening session and no Security review: push, open a draft pull request when
+the branch has none, write the Built-with line, mark the pull request ready
+for review, and keep it mergeable with green or absent CI through the Repair
+loop. It does not Self-merge, even when the User config asks Ticket runs to.
+When thirdshift opens the pull request, its title is the issue&#39;s and its body
+starts <code>Closes #&lt;n&gt;</code>. Repairs run on the Command&#39;s Harness, Model and Effort.
+A Process has at most one delivery Step. It names the Issue-branch worktree,
+it is not optional, and it is not in a parallel group. It comes after the
+last Step that uses that worktree. The only catalogue value is <code>delivery</code>.</p>
+<p>An Issue-branch worktree needs an issue. <code>thirdshift process &lt;name&gt;</code> and
+<code>thirdshift process check &lt;name&gt;</code> refuse the file before any session, any
+Claim and any branch, naming the <code>issue</code> rule and the file line. With an
+issue, the run makes the Claim when it starts, labelling the issue
+<code>in-progress</code> in place of <code>ready-for-agent</code>, and holds it until the end. A
+pull request left ready for review removes the Claim and does not put
+<code>ready-for-agent</code> back, so Pickup does not take an issue that already has an
+open pull request. A Step that fails before Delivery keeps the Issue-branch
+work as a Failed ticket run does, and the failure says where it stopped, what
+was preserved and the command <code>thirdshift process &lt;name&gt; issue &lt;url&gt;</code>. The
+Claim stays when that work reached origin, and is released when it did not.</p>
 <p><code>version</code> must be <code>1</code>. Each Step has a <code>name</code> and exactly one kind. <code>skill</code> is
 looked up the same way as <code>thirdshift skill</code>. First a Factory skill whose
 directory is exactly that name. Then the repository&#39;s committed
@@ -840,9 +889,8 @@ skills are
 (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md">ADR-0012</a>),
 under its own name, as a copy written out beside those skills, and kept out
 of git. A repository skill of the same name is not replaced. <code>command</code> is a command or script,
-run with <code>sh -c</code> in the Step&#39;s worktree. It starts no session. A declared
-worktree&#39;s <code>kind</code> must be <code>throwaway</code>: it is detached at the Base branch. When
-the Process declares worktrees, every Step names one with <code>worktree</code>.
+run with <code>sh -c</code> in the Step&#39;s worktree. It starts no session. When the
+Process declares worktrees, every Step names one with <code>worktree</code>.
 Consecutive Steps with the same <code>parallel</code> name run at the same time. Every
 session or command Step edits the worktree it runs in, so Steps in one group
 cannot share a worktree. The same group name after a Step that is not in the
@@ -851,22 +899,33 @@ the Process carries on. Without <code>optional</code>, or with <code>optional = 
 failure stops the Process once the other Steps in its group have finished.</p>
 <pre><code class="language-sh">thirdshift process
 thirdshift process check gather-review
+thirdshift process check ship issue 7
 thirdshift process gather-review
+thirdshift process ship issue 7
 </code></pre>
 <p><code>thirdshift process</code> lists each Custom process and its description. <code>check</code>
 validates the file and prints the plan: the description, the Command&#39;s Harness,
 Model and Effort, and each Step. A Process with no named worktrees prints one
 throwaway worktree at the Base branch. A Process that declares worktrees prints
 each one, the worktree each Step uses, and a <code>together:</code> line for each group
-of Steps that run at the same time. A skill Step shows the skill and where it
-was found. A command Step shows its command, and <code>check</code> does not run it. An
-optional Step is marked <code>(optional)</code>. <code>check</code> starts no session.</p>
+of Steps that run at the same time. A throwaway worktree is described as
+throwaway at the Base branch. An Issue-branch worktree is described as an
+Issue branch. A skill Step shows the skill and where it was found. A command
+Step shows its command, and <code>check</code> does not run it. A delivery Step shows
+<code>delivery</code>. An optional Step is marked <code>(optional)</code>. <code>check</code> starts no
+session. <code>check &lt;name&gt; issue &lt;issue&gt;</code> resolves the issue and still creates no
+Issue branch and makes no Claim. Without an issue, an Issue-branch worktree
+is the refusal above, not a plan.</p>
 <p>Running the Process starts the Steps in its throwaway worktrees, detached at
 the Base branch and cleaned up as a standalone skill&#39;s worktree is. Every
 throwaway worktree is removed at the end, including after a failure, unless
 uncommitted changes, commits absent from every remote-tracking branch, or
-uncertain ownership keep it. The Base branch is the branch checked out in the
-launch directory, at its commit on origin. The launch checkout stays untouched.</p>
+uncertain ownership keep it. The Issue-branch worktree is a real checkout of
+the Issue branch, beside the launch repository, and is removed at the end
+when its work is on origin, as a Ticket run&#39;s is. The Base branch is the
+branch checked out in the launch directory, at its commit on origin, or the
+open pull request&#39;s base in a Continuation. The launch checkout stays
+untouched.</p>
 <p>Every session Step uses the Command&#39;s Harness, Model and Effort: the User
 config default, or the Harness default when that is unset. A command Step does
 not. Each finished Step&#39;s result is stored beside the Command log, one file
@@ -898,14 +957,19 @@ as in a Ticket run. An edit to the title or body by an account that is not a
 Trusted account, made since a few minutes before the Process started, fails
 that Step instead of starting the session. The Command log names the cause.</p>
 <p><code>check</code> and running refuse a missing file, a file that is not valid TOML, a
-missing or wrong <code>version</code>, an unknown key, a Step without exactly one of
-<code>skill</code> and <code>command</code>, a command that is not a string or is empty, an
-<code>optional</code> value that is not a boolean, a skill that cannot be found, an
-unknown worktree, a Step that does not name a worktree when the Process
-declares them, parallel Steps that share a worktree, a worktree whose kind is
-not <code>throwaway</code>, and a reserved name (<code>check</code>, <code>list</code>, <code>ticket-run</code>,
-<code>spec-run</code>, <code>architect-run</code>, <code>pickup-run</code>, <code>security-run</code>). The refusal names
-the rule and the file line, and starts no session.</p>
+missing or wrong <code>version</code>, an unknown key, a Step without exactly one kind,
+a command that is not a string or is empty, an <code>optional</code> value that is not a
+boolean, a skill that cannot be found, an unknown worktree, a Step that does
+not name a worktree when the Process declares them, parallel Steps that share
+a worktree, a worktree kind other than <code>throwaway</code> or <code>issue-branch</code>, a
+second Issue-branch worktree, a catalogue value other than <code>delivery</code>, a
+delivery Step with no Issue-branch worktree or on a different worktree, a
+second delivery Step, an optional delivery Step, a delivery Step in a
+parallel group, an Issue-branch worktree with no delivery Step after the last
+Step that uses it, an Issue-branch worktree with no issue, and a reserved
+name (<code>check</code>, <code>list</code>, <code>ticket-run</code>, <code>spec-run</code>, <code>architect-run</code>,
+<code>pickup-run</code>, <code>security-run</code>). The refusal names the rule and the file line,
+and starts no session.</p>
 <p>The Command is recorded as kind <code>Process</code>, with the process name. Its Command
 log has one line per Step: the Step&#39;s name, duration, outcome and cause. A
 command that exits non-zero is failed, and the line names its exit status.
@@ -921,7 +985,9 @@ says Process <code>&lt;name&gt;</code>. A succeeded, failed or interrupted Proce
 notification under the same <code>email</code>, <code>email-unless-merged</code> and <code>no-email</code>
 flags and the same User config rules as a Ticket run. A missing address or
 Resend key stops the Process before any Step. A skipped Process sends none.</p>
-<p>A Custom process started with no issue is a <a href="#one-at-a-time">Pass</a>. While another Pass on the repository is still running, its Spec run or Ticket run included, <code>thirdshift process &lt;name&gt;</code> is skipped: it prints <code>another Pass is already running on &lt;owner&gt;/&lt;repo&gt;</code>, prints nothing on stdout, exits <code>0</code> and sends no Run notification. It creates no worktree and starts no Step. While it runs, a Pickup run on the same repository is skipped. It does not take an Architect run&#39;s Ready-issue or Architect-idea gates, so a Ready issue or an Architect idea waiting for triage does not skip it. The Command record&#39;s outcome is <code>skipped</code>, and its cause is that reason. The Activity log records <code>Process &lt;name&gt; skipped: &lt;reason&gt;</code> when that is not already the last Process line. With <code>activity.quiet_skips</code> set, a skipped Process prints nothing. <code>thirdshift process &lt;name&gt; issue &lt;issue&gt;</code> is not a Pass: this rule does not skip it, and it does not hold the lock.</p>
+<p>A Custom process started with no issue is a <a href="#one-at-a-time">Pass</a>, except one
+that declares an Issue-branch worktree: that is refused, as above, rather than
+skipped. While another Pass on the repository is still running, its Spec run or Ticket run included, <code>thirdshift process &lt;name&gt;</code> is skipped: it prints <code>another Pass is already running on &lt;owner&gt;/&lt;repo&gt;</code>, prints nothing on stdout, exits <code>0</code> and sends no Run notification. It creates no worktree and starts no Step. While it runs, a Pickup run on the same repository is skipped. It does not take an Architect run&#39;s Ready-issue or Architect-idea gates, so a Ready issue or an Architect idea waiting for triage does not skip it. The Command record&#39;s outcome is <code>skipped</code>, and its cause is that reason. The Activity log records <code>Process &lt;name&gt; skipped: &lt;reason&gt;</code> when that is not already the last Process line. With <code>activity.quiet_skips</code> set, a skipped Process prints nothing. <code>thirdshift process &lt;name&gt; issue &lt;issue&gt;</code> is not a Pass: this rule does not skip it, and it does not hold the lock.</p>
 </div></details>
 <details class="fold"><summary><h3>User config</h3></summary>
 <div class="manual-content" id="user-config">
