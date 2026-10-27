@@ -203,12 +203,13 @@ impl Stored {
                     .causes
                     .clone_from(&stored.description.bar.void_rules.causes);
             }
-            if let crate::verdict::Levels::Legacy { credible_level } = stored.description.bar.levels
-                && description.bar.levels.pass() == credible_level
-                && description.bar.levels.fail() == credible_level
+            let stored_levels = stored.description.bar.levels;
+            if description.bar.levels.pass() == stored_levels.pass()
+                && description.bar.levels.fail() == stored_levels.fail()
             {
-                // Equivalent CLI settings resume the original method and JSON.
-                description.bar.levels = stored.description.bar.levels;
+                // Equivalent CLI settings resume the original method and JSON,
+                // including a single-level Bar or ADR-0024's pass rule.
+                description.bar.levels = stored_levels;
             }
             if stored.description.bar != description.bar {
                 ensure!(!started, "Bar cannot change after the first Trial");
@@ -392,7 +393,7 @@ impl Stored {
             Ok(serde_json::to_string(&view)?)
         } else {
             Ok(format!(
-                "{} · {} · {} → {} · {} Trial results · Verdict: {} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}\nBaseline: {}\nCandidate: {}{}",
+                "{} · {} · {} → {} · {} Trial results · Verdict: {}{} · Baseline: {:.3} minutes{} · Candidate: {:.3} minutes{}\nBaseline: {}\nCandidate: {}{}",
                 self.description.id,
                 self.state,
                 self.description.baseline.commit,
@@ -402,6 +403,14 @@ impl Stored {
                     .as_ref()
                     .map_or("pending", |verdict| verdict.outcome())
                     .replace('_', " "),
+                self.verdict
+                    .as_ref()
+                    .map(super::grading::Verdict::worse_within_margin_metrics)
+                    .filter(|metrics| !metrics.is_empty())
+                    .map_or(String::new(), |metrics| format!(
+                        " ({}: worse, within the margin)",
+                        metrics.join(", ")
+                    )),
                 view.minutes.baseline,
                 view.usage.baseline(),
                 view.minutes.candidate,

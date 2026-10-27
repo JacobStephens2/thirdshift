@@ -579,22 +579,32 @@ rates, as paired task differences:
 | `code-review` | 10 tasks × 3 Trials | 2 of 10 tasks (one by two Trials, one by one) | none |
 | `spec-review` | 30 tasks × 1 Trial | 5 of 30 tasks | 2 of 30 tasks |
 
-No pass level from 70% to 95% reaches 80% on either suite, so the default is
-the 70% floor. Simulated A/A Experiments at those rates, each judged by the
-Verdict, pass this often:
+No pass level from 70% to 95% reaches 80% on either suite at today's size, so
+the default is the 70% floor; without ADR-0024's upper-bound clause a higher
+pass level only lowers the pass rate. Simulated A/A Experiments at those rates,
+each judged by the Verdict at a 70% pass level, pass this often under the
+current rule ([ADR-0025](adr/0025-a-pass-needs-only-the-margin.md)) and
+ADR-0024's rule, whose pass also needed the pass-level upper bound to reach zero:
 
-| Suite | At 70% | At 95% (before #1268) | 70% intervals of #1370's own counts |
-| --- | --- | --- | --- |
-| `code-review` | 67% | 0% | accuracy [−0.171, −0.018], wrong findings [−0.039, +0.039] |
-| `spec-review` | 46% | 13% | accuracy [−0.042, +0.108], wrong findings [−0.047, +0.048] |
+| Suite size | `code-review`, ADR-0025 | `code-review`, ADR-0024 | `spec-review`, ADR-0025 | `spec-review`, ADR-0024 |
+| --- | --- | --- | --- | --- |
+| Today (10 / 30) | 67% | 67% | 56% | 46% |
+| 40 | 94% | 86% | 67% | 53% |
+| 60 | 97% | 85% | 76% | 61% |
+| 80 | 98% | 86% | 84% | 68% |
+| 100 | 98% | 86% | 89% | 71% |
 
-Both suites fall short. `code-review` would need about 20 to 30 Eval tasks to
-reach 80% at 70%; #1434 grows it. `spec-review` can't reach 80% at 70% at any
-size: a pass also needs the pass-level interval to reach zero, and for
+#1370's own counts give these 70% intervals: `code-review` accuracy
+[−0.171, −0.018] and wrong findings [−0.039, +0.039]; `spec-review` accuracy
+[−0.042, +0.108] and wrong findings [−0.047, +0.048]. At 95% (before #1268),
+the A/A pass rates were 0% and 13%.
+
+Both suites fall short at today's size. `code-review` needs about 20 Eval tasks
+(between today's 10 and the table's 40) to reach 80% at 70%, and #1434 grows
+it. `spec-review` needs about 80. Under
+ADR-0024's rule `spec-review` could not reach 80% at 70% at any size: for
 identical Arms a 70% interval's upper bound falls below zero about 15% of the
-time per noisy metric, so its pass rate levels off near 72%. At an 80% pass
-level it would need about 160 Eval tasks. A lower pass level is not always
-better: at 30 Spec-review tasks, 72% passes more A/A Experiments than 70% does.
+time per noisy metric, capping the pass rate near 72%.
 
 `--void-retries` accepts zero, one or two. A sandbox that cannot start, a
 provider connection or login failure, a provider server error before work, a
@@ -695,8 +705,11 @@ so check the updated pending list afterwards. Rechecks stay in the CLI.
 
 Each suite gets a paired Verdict using its recorded Trials per Eval task (one
 or three). For each metric, fail when the upper bound at the fail level is below
-zero. Otherwise pass when the lower bound at the pass level is above the margin
-and its upper bound is at least zero; otherwise the metric is inconclusive.
+zero. Otherwise pass when the lower bound at the pass level is above the margin;
+otherwise the metric is inconclusive. A pass whose whole pass-level interval is
+below zero is reported as worse, within the margin: in JSON as
+`worse_within_margin: true` on that metric, in the text view after the Verdict
+and in the Console. It doesn't change the decision.
 One set of draws supplies both intervals. Both accuracy and wrong findings must
 pass; either can fail the suite. The prediction of how many more Eval tasks
 would settle an inconclusive metric uses the same two-level decision.
@@ -709,9 +722,14 @@ Spec-review suite runs one. For three-Trial suites, `experiments --json` reports
 `pass_cubed`: the share of retained Eval tasks where all three Trials passed,
 separately for each Arm.
 The Bar's JSON carries `pass_level` and `fail_level`; each metric carries
-`pass_interval` and `fail_interval`. New Verdicts use `paired-dirichlet-v2`.
-Saved Experiments under `paired-dirichlet-v1` remain readable with their stored
-single-level Bar and Verdict unchanged. See [ADR-0024](adr/0024-pass-and-fail-use-separate-levels.md).
+`pass_interval` and `fail_interval`. New Verdicts use `paired-dirichlet-v3`, and
+their Bar records `"pass_rule": "margin"`. Saved Experiments under
+`paired-dirichlet-v2`, whose pass also needed the pass-level upper bound to
+reach zero, keep that rule and their stored Bar and Verdict when read, and
+when resumed with the same levels. Saved Experiments under `paired-dirichlet-v1`
+remain readable with their stored single-level Bar and Verdict unchanged. See
+[ADR-0024](adr/0024-pass-and-fail-use-separate-levels.md) and
+[ADR-0025](adr/0025-a-pass-needs-only-the-margin.md).
 For a paused single-level Experiment, its saved view and Console show a resume
 command using both recorded levels in place of the removed `--credible-level`
 flag. Reading that command does not rewrite its stored Bar or Verdict.

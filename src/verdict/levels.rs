@@ -13,6 +13,12 @@ pub enum Levels {
         pass_level: f64,
         #[serde(deserialize_with = "decimal")]
         fail_level: f64,
+        /// Saved two-level Bars without this field keep ADR-0024's rule.
+        #[serde(
+            default = "PassRule::reaches_zero",
+            skip_serializing_if = "PassRule::is_reaches_zero"
+        )]
+        pass_rule: PassRule,
     },
     Legacy {
         #[serde(deserialize_with = "decimal")]
@@ -25,7 +31,29 @@ impl Default for Levels {
         Self::Separate {
             pass_level: 0.70,
             fail_level: 0.95,
+            pass_rule: PassRule::Margin,
         }
+    }
+}
+
+/// What a pass needs once the pass-level lower bound clears the margin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PassRule {
+    /// Nothing more (`paired-dirichlet-v3`, ADR-0025).
+    Margin,
+    /// The pass-level upper bound must also reach zero (`paired-dirichlet-v1`
+    /// and `-v2`, ADR-0024).
+    ReachesZero,
+}
+
+impl PassRule {
+    fn reaches_zero() -> Self {
+        Self::ReachesZero
+    }
+
+    fn is_reaches_zero(&self) -> bool {
+        *self == Self::ReachesZero
     }
 }
 
@@ -41,6 +69,13 @@ impl Levels {
         match self {
             Self::Separate { fail_level, .. } => fail_level,
             Self::Legacy { credible_level } => credible_level,
+        }
+    }
+
+    pub fn pass_rule(self) -> PassRule {
+        match self {
+            Self::Separate { pass_rule, .. } => pass_rule,
+            Self::Legacy { .. } => PassRule::ReachesZero,
         }
     }
 
@@ -99,10 +134,12 @@ impl Intervals {
         }
     }
 
-    pub(super) fn decide(self, margin: f64) -> Decision {
+    pub(super) fn decide(self, margin: f64, rule: PassRule) -> Decision {
         if self.fail().upper < 0.0 {
             Decision::Fail
-        } else if self.pass().lower > margin && self.pass().upper >= 0.0 {
+        } else if self.pass().lower > margin
+            && (rule == PassRule::Margin || self.pass().upper >= 0.0)
+        {
             Decision::Pass
         } else {
             Decision::Inconclusive

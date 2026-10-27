@@ -174,6 +174,7 @@ pub fn parse(args: &[String]) -> Result<Options> {
     bar.levels = crate::verdict::Levels::Separate {
         pass_level,
         fail_level,
+        pass_rule: crate::verdict::PassRule::Margin,
     };
     number!("--prior", bar.prior);
     number!("--seed", bar.seed);
