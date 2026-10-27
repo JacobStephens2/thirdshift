@@ -60,6 +60,9 @@ mod experiments;
 #[path = "console/scoring.rs"]
 mod scoring;
 
+#[path = "console/security_fixes.rs"]
+mod security_fixes;
+
 struct Console {
     child: Child,
     address: String,
