@@ -243,7 +243,7 @@ mod tests {
         assert!(!html.contains(">Issue #7</a>"));
     }
 
-    fn details(details: Value) -> String {
+    fn render_peek(details: Value) -> String {
         let inspection = crate::logs::stop::Inspection {
             details,
             dismissal: None,
@@ -259,7 +259,7 @@ mod tests {
 
     #[test]
     fn experiment_record_links_its_experiment_page() {
-        let html = details(json!({
+        let html = render_peek(json!({
             "kind": "Experiment", "outcome": "fail",
             "experiment": {"id": "exp-1<b>"}
         }));
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn other_records_carry_no_experiment_link() {
-        let html = details(json!({
+        let html = render_peek(json!({
             "kind": "Run", "experiment": {"id": "exp-1"}
         }));
         assert!(!html.contains("/experiments/"), "{html}");
@@ -282,7 +282,7 @@ mod tests {
 
     #[test]
     fn experiment_record_without_an_id_carries_no_experiment_link() {
-        let html = details(json!({"kind": "Experiment"}));
+        let html = render_peek(json!({"kind": "Experiment"}));
         assert!(!html.contains("/experiments/"), "{html}");
     }
 }
