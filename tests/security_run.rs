@@ -503,9 +503,23 @@ fn status_tracks_security_stages_and_nests_the_dispatched_fix() {
         let held = scenario.run_until(&["secure", "security-fix"], &[], "started");
         let result = scenario.run(&["status", "--json"]);
         let text = scenario.run(&["status"]);
+        let shown = (held_session == 4)
+            .then(|| scenario.run(&["show", "https://github.com/acme/widgets/issues/8", "--json"]));
         fs::write(scenario.path("release"), "").unwrap();
         let ended = held.finish();
         assert_eq!(ended.code, Some(0), "{}", ended.stderr);
+        if let Some(shown) = shown {
+            assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+            let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
+            assert_eq!(shown["command"]["state"], "live");
+            assert_eq!(
+                shown["command"]["security_fix_findings"],
+                json!([{
+                    "title": "Unchecked input size", "severity": "high",
+                    "url": "https://github.com/acme/widgets/security/advisories/GHSA-test-test-0001"
+                }])
+            );
+        }
         let status: Value = serde_json::from_str(&result.stdout).unwrap();
         let pass = &status["commands"][0];
         assert_eq!(pass["kind"], "Security run", "{status}");
@@ -1068,6 +1082,16 @@ fn fixing_selects_the_most_severe_record_then_dispatches_one_ticket_before_audit
             .as_str()
             .unwrap()
             .contains("https://github.com/acme/widgets/issues/8")
+    );
+    let shown = scenario.run(&["show", "https://github.com/acme/widgets/issues/8", "--json"]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let shown: Value = serde_json::from_str(&shown.stdout).unwrap();
+    assert_eq!(
+        shown["command"]["security_fix_findings"],
+        json!([{
+            "title": "Finding 1", "severity": "critical",
+            "url": "https://github.com/acme/widgets/security/advisories/GHSA-finding-1"
+        }])
     );
 }
 

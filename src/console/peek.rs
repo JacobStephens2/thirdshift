@@ -19,6 +19,7 @@ pub(super) struct Peek {
     pub csrf: String,
     pub branches: Vec<String>,
     pub pull_requests: Vec<String>,
+    pub advisories: Vec<Advisory>,
     pub issue_url: Option<String>,
     /// The Experiment page of an Experiment record that names its id.
     pub experiment_url: Option<String>,
@@ -29,6 +30,23 @@ pub(super) struct Peek {
 pub(super) struct Log {
     pub name: String,
     pub url: String,
+}
+
+pub(super) struct Advisory {
+    label: &'static str,
+    finding: crate::security::RecordedFinding,
+}
+
+impl Advisory {
+    fn of(record: &Value, label: &'static str) -> Vec<Self> {
+        serde_json::from_value::<Vec<crate::security::RecordedFinding>>(
+            record["security_fix_findings"].clone(),
+        )
+        .unwrap_or_default()
+        .into_iter()
+        .map(|finding| Self { label, finding })
+        .collect()
+    }
 }
 
 pub(super) struct DismissAction {
@@ -63,6 +81,12 @@ impl Peek {
             .then(|| value["experiment"]["id"].as_str())
             .flatten()
             .map(|id| format!("/experiments/{id}"));
+        let mut advisories = Advisory::of(&value, "Fixes advisory");
+        if let Some(dispatched) = value["dispatched"].as_array() {
+            for run in dispatched {
+                advisories.extend(Advisory::of(run, "Fix dispatched for advisory"));
+            }
+        }
         let mut logs = Vec::new();
         if let Some(sessions) = value["session_logs"].as_array() {
             for session in sessions.iter().filter_map(Value::as_str) {
@@ -102,6 +126,7 @@ impl Peek {
             stopping: inspection.stopping,
             branches: inspection.branches,
             pull_requests: inspection.pull_requests,
+            advisories,
             issue_url,
             experiment_url,
             subject,

@@ -318,8 +318,12 @@ pub fn dispatch_ended(ended: &crate::run::Ended) {
 }
 
 /// Keep a Pass's dispatch before the Run's fallible launch checks.
-pub fn dispatching(work: Work, harness: &Choice) {
-    record().dispatching(work, harness);
+pub fn dispatching(
+    work: Work,
+    harness: &Choice,
+    security_fix_findings: &[crate::security::RecordedFinding],
+) {
+    record().dispatching(work, harness, security_fix_findings);
 }
 
 /// Print the lines held from the terminal, as before a failure, and print
