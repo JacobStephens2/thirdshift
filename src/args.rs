@@ -34,6 +34,8 @@ pub struct ProcessRun {
     pub email: Option<NotificationAsk>,
     /// `merge` or `no-merge`. Absent leaves the choice to the User config.
     pub goal: Option<Goal>,
+    /// Whether this Process's Security review Step is requested.
+    pub security_review: Option<crate::security::review::Ask>,
 }
 
 /// What thirdshift was asked to do.
@@ -844,7 +846,7 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
     Ok(asked)
 }
 
-const PROCESS_USAGE: &str = "usage: thirdshift process list | show <name> | [check] <name> [issue <issue>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge]";
+const PROCESS_USAGE: &str = "usage: thirdshift process list | show <name> | [check] <name> [issue <issue>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge] [security-review | no-security-review]";
 
 fn parse_process(args: &[String]) -> Result<ProcessAction> {
     if args.is_empty() || matches!(args, [word] if word == "list") {
@@ -863,6 +865,7 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
     let mut issue = None;
     let mut email = None;
     let mut goal = None;
+    let mut review_flags = Flags::default();
     let mut asked = harness::Asked::default();
     let mut check = false;
     let mut expect_issue = false;
@@ -875,6 +878,14 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
             continue;
         }
         if take_merge_flag(&mut goal, arg)? {
+            continue;
+        }
+        if matches!(
+            arg.as_str(),
+            "security-review" | "--security-review" | "no-security-review" | "--no-security-review"
+        ) && (name.is_some() || arg.starts_with("--"))
+        {
+            take_flag(&mut review_flags, arg, &mut words)?;
             continue;
         }
         // `check` is the subcommand only before the name. A later `check` is
@@ -906,7 +917,10 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
         }
         name = Some(process_name(arg)?);
     }
-    if expect_issue || ((email.is_some() || goal.is_some()) && (check || name.is_none())) {
+    if expect_issue
+        || ((email.is_some() || goal.is_some() || review_flags.security_review.is_some())
+            && (check || name.is_none()))
+    {
         bail!(PROCESS_USAGE);
     }
     let Some(name) = name else {
@@ -918,6 +932,7 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
         asked,
         email,
         goal,
+        security_review: review_flags.security_review,
     };
     Ok(if check {
         ProcessAction::Check(command)

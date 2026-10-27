@@ -1,5 +1,7 @@
 //! Custom processes through the CLI, real Git and fake Harnesses.
 
+#[path = "process/security_review.rs"]
+mod security_review;
 mod support;
 
 use std::fs;
@@ -915,7 +917,7 @@ name = \"review\"
 catalogue = \"publish\"
 ",
                 ),
-                ":6: catalogue: catalogue must be delivery, run-published-issue or self-merge",
+                ":6: catalogue: catalogue must be delivery, run-published-issue, security-review or self-merge",
             ),
             (
                 "review",

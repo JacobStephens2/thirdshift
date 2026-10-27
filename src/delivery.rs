@@ -55,7 +55,7 @@ use crate::prompt;
 use crate::recovery::{self, Preservation, Recovery};
 use crate::run::{Goal, Reached, Resolution};
 use crate::run_ending::Cause;
-use crate::security::review::{Hold as SecurityHold, Outcome as SecurityOutcome, Review};
+use crate::security::review::{Hold as SecurityHold, Outcome as SecurityOutcome, step};
 use crate::session::{Kind, Logs, Sessions};
 use crate::skills;
 use crate::trust::{self, IssueText};
@@ -218,8 +218,9 @@ impl Delivery<'_> {
     }
 
     /// Publish the Issue branch already produced by a Custom process. There
-    /// is no opening session and no Security review: the Process's Steps did
-    /// the work. Push, open a draft pull request when the branch has none,
+    /// is no opening or Security review session: the Process's Steps did
+    /// the work. Carry their review outcome into readiness and Self-merge.
+    /// Push, open a draft pull request when the branch has none,
     /// write the Built-with line, mark it ready, and keep it mergeable and
     /// its CI green through the Repair loop. For [`Goal::Merged`], Self-merge
     /// it, unless a protected path holds that merge. Repairs run on
@@ -229,6 +230,7 @@ impl Delivery<'_> {
         self,
         worktree: Worktree,
         pull_request: &mut PullRequest,
+        reviews: &[SecurityOutcome],
     ) -> Result<String, FailedRun> {
         let tracker = Tracker::new(Stage::Push, CommandLog);
         let logs = self.logs;
@@ -270,8 +272,7 @@ impl Delivery<'_> {
                         protected_paths,
                     },
                     goal,
-                    repair_cap,
-                    protected_paths,
+                    reviews,
                 )
             },
         )
@@ -315,7 +316,7 @@ fn run_checked<T, S>(
     pull_request.begin_delivery();
     let path = worktree.path().to_path_buf();
     let before_each = move || {
-        no_untrusted_edit_since(issue, started)?;
+        no_untrusted_edit_since(issue, started, "Ticket run")?;
         hand_over_issue(issue, &path)
     };
     let (delivered, log) = Sessions::checked_within(
@@ -358,8 +359,7 @@ fn run_checked<T, S>(
 fn publish_steps(
     outside: &mut InWorktree<'_>,
     goal: Goal,
-    repair_cap: usize,
-    protected_paths: &[String],
+    reviews: &[SecurityOutcome],
 ) -> Result<String> {
     outside.tracker.enter(Stage::Push);
     outside.pull_request.ensure_actionable(false)?;
@@ -379,28 +379,8 @@ fn publish_steps(
         );
     }
     outside.tracker.enter(Stage::PullRequestReadiness);
-    let tracker = outside.tracker;
-    let issue = outside.issue;
-    let worktree = outside.worktree;
-    let base = outside.base;
-    let child_asks = outside.child_asks;
-    let sessions = outside.sessions;
     let pr = outside.pull_request.mark_ready(None)?;
-    let mut repair = RunOutside {
-        tracker,
-        issue,
-        worktree,
-        base,
-        pr_url: &pr.url,
-        base_fix: outside.base_fix,
-        child_asks,
-        sessions,
-        pull_request: outside.pull_request,
-        ci_watch: ci::Watch::new(issue),
-        protected_paths,
-    };
-    repair_loop::take_to_goal(&mut repair, base, goal, repair_cap)?;
-    drop(repair);
+    take_reviewed_to_goal(outside, &pr.url, goal, reviews)?;
     if goal == Goal::Merged {
         let branch = outside.worktree.branch().to_string();
         Route {
@@ -478,43 +458,23 @@ impl Route<'_> {
             outside.confirm_needs_info()?;
             return Ok(Resolution::NotReproduced { comment_url });
         }
-        let review = match self.security_review.then(|| {
-            outside.stage(Stage::SecurityReview);
-            outside.security_review(&prompt::security_review(self.issue, self.base, self.branch))
-        }) {
-            // Not a Security review outcome: the Run itself must stop.
-            Some((Err(error), _)) if error.is::<UntrustedEdit>() => return Err(error),
-            review => review.map(|(result, log)| SecurityOutcome::of(result, log)),
-        };
+        let review = self
+            .security_review
+            .then(|| {
+                outside.stage(Stage::SecurityReview);
+                outside.security_review(&prompt::security_review(
+                    self.issue,
+                    self.base,
+                    self.branch,
+                ))
+            })
+            .transpose()?;
         outside.stage(Stage::Push);
         outside.push()?;
         self.write_built_with(outside);
         outside.stage(Stage::PullRequestReadiness);
         let pr = outside.mark_pr_ready(checklist)?;
-        let hold = review.as_ref().and_then(SecurityOutcome::hold);
-        if let Some(review) = &review
-            && let Err(error) = outside.record_security_review(review)
-        {
-            outside.warn(
-                &error,
-                "could not write the Security review outcome in the pull request's body"
-                    .to_string(),
-            );
-        }
-        // A Security hold prevents Self-merge, while ordinary readiness still
-        // includes repairing conflicts and watching the branch's CI.
-        let goal = if hold.is_some() {
-            Goal::ReadyForReview
-        } else {
-            self.goal
-        };
-        outside.take_to_goal(&pr.url, goal)?;
-        if let Some(hold) = hold {
-            outside.step(hold.to_string());
-            if self.goal == Goal::Merged {
-                return Err(hold.into());
-            }
-        }
+        take_reviewed_to_goal(outside, &pr.url, self.goal, review.as_slice())?;
         if self.goal == Goal::Merged {
             self.after_merge(outside, &pr);
         }
@@ -668,6 +628,45 @@ fn stopped_at(tracker: &Tracker<impl CommandRecord>, error: &anyhow::Error) -> r
     tracker.stopped_at()
 }
 
+/// Every review's public outcome reaches the PR. Any Security hold prevents
+/// Self-merge, while readiness still includes repairing conflicts and CI.
+fn take_reviewed_to_goal(
+    outside: &mut impl Outside,
+    pr_url: &str,
+    goal: Goal,
+    reviews: &[SecurityOutcome],
+) -> Result<()> {
+    let entry = reviews
+        .iter()
+        .map(SecurityOutcome::entry)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if !reviews.is_empty()
+        && let Err(error) = outside.record_security_review(&entry)
+    {
+        outside.warn(
+            &error,
+            "could not write the Security review outcome in the pull request's body".to_string(),
+        );
+    }
+    let hold = reviews.iter().find_map(SecurityOutcome::hold);
+    outside.take_to_goal(
+        pr_url,
+        if hold.is_some() {
+            Goal::ReadyForReview
+        } else {
+            goal
+        },
+    )?;
+    if let Some(hold) = hold {
+        outside.step(hold.to_string());
+        if goal == Goal::Merged {
+            return Err(hold.into());
+        }
+    }
+    Ok(())
+}
+
 /// What a Delivery's steps do or read outside the Delivery, within its
 /// sessions' scope.
 trait Outside {
@@ -681,8 +680,8 @@ trait Outside {
     fn confirm_needs_info(&mut self) -> Result<()>;
     /// Run the Security review given `prompt`, with its Session trace, its
     /// Resume's if it got one, if it started a session.
-    fn security_review(&mut self, prompt: &str) -> (Result<Review>, Option<PathBuf>);
-    fn record_security_review(&mut self, review: &SecurityOutcome) -> Result<()>;
+    fn security_review(&mut self, prompt: &str) -> Result<SecurityOutcome>;
+    fn record_security_review(&mut self, entry: &str) -> Result<()>;
     /// Push the Issue branch.
     fn push(&mut self) -> Result<()>;
     /// Write the annotation through the captured pull request module.
@@ -725,11 +724,16 @@ trait FailedOutside {
 /// title, since its Run `started`, by an account that is not a Trusted
 /// account: a session started now would work from text no Trusted account
 /// wrote.
-fn no_untrusted_edit_since(issue: &IssueUrl, started: DateTime<Utc>) -> Result<()> {
+pub(crate) fn no_untrusted_edit_since(
+    issue: &IssueUrl,
+    started: DateTime<Utc>,
+    run_name: &'static str,
+) -> Result<()> {
     match trust::untrusted_edit(&GitHub::new(), issue, Some(started))? {
         Some(text) => Err(UntrustedEdit {
             number: issue.number,
             text,
+            run_name,
         }
         .into()),
         None => Ok(()),
@@ -750,17 +754,18 @@ pub(crate) fn hand_over_issue(issue: &IssueUrl, worktree: &Path) -> Result<()> {
 /// Issue `number`'s `text` was edited during its Run by an account that is
 /// not a Trusted account, so the Run starts no further session.
 #[derive(Debug)]
-struct UntrustedEdit {
+pub(crate) struct UntrustedEdit {
     number: u64,
     text: IssueText,
+    run_name: &'static str,
 }
 
 impl std::fmt::Display for UntrustedEdit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "#{} {} edited since the Ticket run started by an account that is not a Trusted account; starting no further session",
-            self.number, self.text
+            "#{} {} edited since the {} started by an account that is not a Trusted account; starting no further session",
+            self.number, self.text, self.run_name
         )
     }
 }
@@ -807,21 +812,18 @@ impl Outside for InWorktree<'_> {
         Ok(())
     }
 
-    fn security_review(&mut self, prompt: &str) -> (Result<Review>, Option<PathBuf>) {
-        let review = self.review_while_actionable(prompt);
-        if !review
-            .as_ref()
-            .err()
-            .is_some_and(|error| error.is::<UntrustedEdit>())
-        {
-            self.pull_request
-                .security_reviewed(review.as_ref().map_or(1, |review| review.findings.len()));
+    fn security_review(&mut self, prompt: &str) -> Result<SecurityOutcome> {
+        step::Step {
+            sessions: self.sessions,
+            worktree: self.worktree,
+            issue: self.issue,
+            base: self.base,
         }
-        (review, self.sessions.last_log_of(Kind::SecurityReview))
+        .run(self.pull_request, prompt)
     }
 
-    fn record_security_review(&mut self, review: &SecurityOutcome) -> Result<()> {
-        self.pull_request.record_security_review(&review.entry())
+    fn record_security_review(&mut self, entry: &str) -> Result<()> {
+        self.pull_request.record_security_review(entry)
     }
 
     fn push(&mut self) -> Result<()> {
@@ -880,22 +882,7 @@ impl Outside for InWorktree<'_> {
     }
 }
 
-impl InWorktree<'_> {
-    /// Run the Security review given `prompt`, failing unless the pull
-    /// request is still actionable both before and after it.
-    fn review_while_actionable(&mut self, prompt: &str) -> Result<Review> {
-        self.pull_request.ensure_actionable(false)?;
-        let review = crate::security::review::run(
-            self.sessions,
-            self.worktree,
-            self.issue,
-            self.base,
-            prompt,
-        )?;
-        self.pull_request.ensure_actionable(false)?;
-        Ok(review)
-    }
-}
+impl InWorktree<'_> {}
 
 /// A failed Delivery's worktree and its pull request on GitHub. Worktree
 /// owns preservation and the cleanup decision when this is dropped.
@@ -1283,13 +1270,14 @@ mod tests {
     }
 
     impl Outside for Scripted {
-        fn record_security_review(&mut self, _: &SecurityOutcome) -> Result<()> {
+        fn record_security_review(&mut self, _: &str) -> Result<()> {
             Ok(())
         }
         fn stage(&mut self, stage: Stage) {
             self.stages.push(stage);
         }
-        fn security_review(&mut self, _: &str) -> (Result<Review>, Option<PathBuf>) {
+        fn security_review(&mut self, _: &str) -> Result<SecurityOutcome> {
+            use crate::security::review::Review;
             let log = PathBuf::from("/logs/security-review.jsonl");
             self.log = Some(log.clone());
             let review = if self.security_held {
@@ -1299,7 +1287,7 @@ mod tests {
                     "Security review: {\"unaddressed_count\":0,\"findings\":[],\"pre_existing_count\":0}",
                 ))
             };
-            (review, Some(log))
+            Ok(SecurityOutcome::of(review, Some(log)))
         }
         fn catch_up(&mut self) -> Result<()> {
             self.calls.push(Call::CatchUp);
