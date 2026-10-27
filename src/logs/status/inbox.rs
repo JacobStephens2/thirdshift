@@ -346,7 +346,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
     })
 }
 
-fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, String) {
+pub(crate) fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, String) {
     match issue {
         Some(issue) => (
             format!("{repository}#{}", issue.number),
@@ -362,7 +362,7 @@ fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, Stri
     }
 }
 
-fn issue_url(issue: Option<&Issue>) -> Option<String> {
+pub(crate) fn issue_url(issue: Option<&Issue>) -> Option<String> {
     issue
         .map(|issue| issue.url.clone())
         .filter(|url| url.starts_with("https://"))

@@ -101,6 +101,38 @@ async function showDetails(page, row) {
   await row.locator(':scope > .row-head > .state').click();
 }
 
+test('Command details opens with the Inbox subject and full title above its actions', async t => {
+  for (const width of [1280, 390]) {
+    const page = await pageFor(t, { viewport: { width, height: 844 } });
+    await page.goto(origin);
+    const row = page.locator('#inbox > [data-group="needs you"] .command').first();
+    const subject = await row.locator(':scope > .row-head > .subject').textContent();
+    const title = await row.locator(':scope > .row-head > .issue-title').textContent();
+    await showDetails(page, row);
+    const pane = page.getByRole('region', { name: 'Command details', exact: true });
+    const heading = pane.getByRole('heading', { level: 2 });
+    await heading.getByText(title, { exact: true }).waitFor();
+    assert.equal(await heading.getByRole('link').textContent(), subject);
+    assert.equal(await heading.getByRole('link').getAttribute('href'),
+      await row.locator(':scope > .row-head > .subject a').getAttribute('href'));
+    assert.equal(await heading.textContent(), `${subject} ${title}`);
+    assert.equal(await heading.locator('script').count(), 0);
+    assert.equal(await pane.getByRole('link', { name: /^Issue #/ }).count(), 0);
+    assert.equal(await heading.evaluate(el => Boolean(el.compareDocumentPosition(
+      el.parentElement.querySelector('form[data-dismiss]')) & Node.DOCUMENT_POSITION_FOLLOWING)), true);
+    const wrapped = await heading.locator('span').evaluate(el => ({
+      height: el.getBoundingClientRect().height,
+      lineHeight: parseFloat(getComputedStyle(el).lineHeight),
+      fits: el.scrollWidth <= el.clientWidth,
+      whiteSpace: getComputedStyle(el).whiteSpace,
+    }));
+    assert.ok(wrapped.height > wrapped.lineHeight, JSON.stringify({ width, wrapped }));
+    assert.equal(wrapped.fits, true);
+    assert.equal(wrapped.whiteSpace, 'normal');
+    await page.close();
+  }
+});
+
 test('inline Dismiss leaves Needs you without opening details and offers Undo on a phone', async t => {
   const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
   await page.goto(origin);

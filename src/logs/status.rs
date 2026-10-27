@@ -5,7 +5,7 @@ pub mod inspect;
 pub(crate) mod time;
 mod watching;
 pub(crate) use inbox::{Archive, ArchivePage, archive};
-pub(crate) use inbox::{Inbox, Row, inbox};
+pub(crate) use inbox::{Inbox, Row, inbox, issue_url, subject};
 pub(crate) use watching::{Process, watching};
 
 use anyhow::Result;

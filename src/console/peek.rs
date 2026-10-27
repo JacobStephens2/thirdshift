@@ -20,7 +20,8 @@ pub(super) struct Peek {
     pub branches: Vec<String>,
     pub pull_requests: Vec<String>,
     pub issue_url: Option<String>,
-    pub issue_label: String,
+    pub subject: String,
+    pub title: String,
 }
 
 pub(super) struct Log {
@@ -46,18 +47,16 @@ pub(super) struct Fact {
 impl Peek {
     pub fn new(command: String, inspection: crate::logs::stop::Inspection, csrf: String) -> Self {
         let value = inspection.details;
-        let (issue_url, issue_label) = match value.get("issue") {
-            Some(Value::Object(issue)) => match (
-                issue.get("url").and_then(Value::as_str),
-                issue.get("number").and_then(Value::as_u64),
-            ) {
-                (Some(url), Some(number)) if url.starts_with("https://") => {
-                    (Some(url.to_owned()), format!("Issue #{number}"))
-                }
-                _ => (None, String::new()),
-            },
-            _ => (None, String::new()),
-        };
+        let issue = serde_json::from_value::<crate::logs::Issue>(value["issue"].clone()).ok();
+        let (subject, title) = crate::logs::status::subject(
+            value["repository"].as_str().unwrap_or_default(),
+            value["name"]
+                .as_str()
+                .or_else(|| value["kind"].as_str())
+                .unwrap_or_default(),
+            issue.as_ref(),
+        );
+        let issue_url = crate::logs::status::issue_url(issue.as_ref());
         let mut logs = Vec::new();
         if let Some(sessions) = value["session_logs"].as_array() {
             for session in sessions.iter().filter_map(Value::as_str) {
@@ -98,7 +97,8 @@ impl Peek {
             branches: inspection.branches,
             pull_requests: inspection.pull_requests,
             issue_url,
-            issue_label,
+            subject,
+            title,
             command,
             cli,
             facts: Fact::children(value, false, ""),
@@ -188,5 +188,51 @@ struct FactTemplate<'a> {
 impl FactTemplate<'_> {
     fn child<'a>(&self, fact: &'a Fact) -> FactTemplate<'a> {
         FactTemplate { fact }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn command_heading_precedes_stop_and_dismiss() {
+        let inspection = crate::logs::stop::Inspection {
+            details: json!({
+                "repository": "acme/widgets", "name": "acme/widgets#7", "state": "live",
+                "issue": {"number": 7, "url": "https://github.com/acme/widgets/issues/7",
+                    "title": "Widgets <script>alert(1)</script>"}
+            }),
+            dismissal: Some(crate::logs::dismiss::Action::Dismiss),
+            can_stop: true,
+            stopping: false,
+            branches: vec![],
+            pull_requests: vec![],
+        };
+        let html = Peek::new("widgets#7".into(), inspection, "csrf".into())
+            .render()
+            .unwrap();
+        let heading = html
+            .split("<h2")
+            .nth(1)
+            .unwrap()
+            .split("</h2>")
+            .next()
+            .unwrap();
+        assert!(
+            heading.contains(
+                "<a href=\"https://github.com/acme/widgets/issues/7\">acme/widgets#7</a>"
+            ),
+            "{heading}"
+        );
+        assert!(
+            heading.contains("Widgets &#60;script&#62;alert(1)&#60;/script&#62;"),
+            "{heading}"
+        );
+        assert!(html.find("</h2>").unwrap() < html.find(">Stop</button>").unwrap());
+        assert!(html.find("</h2>").unwrap() < html.find(">Dismiss</button>").unwrap());
+        assert!(html.contains("aria-label=\"Command details\""));
+        assert!(!html.contains(">Issue #7</a>"));
     }
 }
