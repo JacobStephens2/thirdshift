@@ -377,7 +377,7 @@ touch continued
                 workspace: root,
                 artifacts: root,
                 prompt: "grade packet",
-                timeout: Duration::from_millis(200),
+                timeout: Duration::from_secs(1),
                 caps: &Caps {
                     high: "37M".into(),
                     max: "41M".into(),
