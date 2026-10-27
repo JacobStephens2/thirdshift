@@ -3369,10 +3369,6 @@ name = \"run\"
 catalogue = \"run-published-issue\"
 ";
 
-fn publishes(script: &str) -> String {
-    format!("{script}\n")
-}
-
 fn assert_stopped_before_a_run(scenario: &Scenario, result: &RunResult, reason: &str) {
     assert_eq!(result.code, Some(1), "{}", result.stderr);
     assert!(
@@ -3418,9 +3414,7 @@ fn a_final_message_without_the_issue_url_fails_without_a_run() {
         write_process(&scenario, "publish", PUBLISH_THEN_RUN);
         scenario.agent_does_in_session(
             1,
-            &publishes(&format!(
-                "printf '%s\\n' '{message}' > \"$FAKE_CLAUDE_FINAL_MESSAGE\""
-            )),
+            &format!("printf '%s\\n' '{message}' > \"$FAKE_CLAUDE_FINAL_MESSAGE\""),
         );
 
         let result = scenario.run(&["process", "publish"]);
@@ -3470,9 +3464,7 @@ fn an_issue_outside_this_repository_fails_before_it_is_viewed() {
     write_process(&scenario, "publish", PUBLISH_THEN_RUN);
     scenario.agent_does_in_session(
         1,
-        &publishes(
-            "printf '%s\\n' 'https://github.com/other/widgets/issues/1' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
-        ),
+        "printf '%s\\n' 'https://github.com/other/widgets/issues/1' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
     );
 
     let result = scenario.run(&["process", "publish"]);
