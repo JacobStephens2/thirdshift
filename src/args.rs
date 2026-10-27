@@ -29,6 +29,9 @@ pub enum ProcessAction {
         issue: Option<IssueInput>,
         /// `email`, `email-unless-merged` or `no-email`, when the command gave one.
         email: Option<NotificationAsk>,
+        /// `merge` or `no-merge`, when the command gave one. Absent leaves the
+        /// choice to the User config, as a Ticket run does.
+        goal: Option<Goal>,
     },
 }
 
@@ -840,7 +843,7 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
     Ok(asked)
 }
 
-const PROCESS_USAGE: &str = "usage: thirdshift process [check <name> [issue <issue>] | <name> [issue <issue>] [email [address] | email-unless-merged [address] | no-email]]";
+const PROCESS_USAGE: &str = "usage: thirdshift process [check <name> [issue <issue>] | <name> [issue <issue>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge]]";
 
 fn parse_process(args: &[String]) -> Result<ProcessAction> {
     if args.is_empty() {
@@ -849,6 +852,7 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
     let mut name = None;
     let mut issue = None;
     let mut email = None;
+    let mut goal = None;
     let mut check = false;
     let mut expect_issue = false;
     let mut words = args.iter().peekable();
@@ -856,9 +860,18 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
         if take_email_flag(&mut email, arg, &mut words)? {
             continue;
         }
+        if take_merge_flag(&mut goal, arg)? {
+            continue;
+        }
         // `check` is the subcommand only before the name. A later `check` is
         // the name, so a reserved file called check is still refused as one.
-        if arg == "check" && !check && name.is_none() && issue.is_none() && email.is_none() {
+        if arg == "check"
+            && !check
+            && name.is_none()
+            && issue.is_none()
+            && email.is_none()
+            && goal.is_none()
+        {
             check = true;
             continue;
         }
@@ -879,15 +892,31 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
         }
         name = Some(process_name(arg)?);
     }
-    if expect_issue || (email.is_some() && (check || name.is_none())) {
+    if expect_issue || ((email.is_some() || goal.is_some()) && (check || name.is_none())) {
         bail!(PROCESS_USAGE);
     }
     match (check, name) {
         (true, Some(name)) => Ok(ProcessAction::Check { name, issue }),
         (true, None) => bail!(PROCESS_USAGE),
-        (false, Some(name)) => Ok(ProcessAction::Run { name, issue, email }),
+        (false, Some(name)) => Ok(ProcessAction::Run {
+            name,
+            issue,
+            email,
+            goal,
+        }),
         (false, None) => bail!(PROCESS_USAGE),
     }
+}
+
+/// Record a merge flag in `goal`. False, taking nothing, when `arg` is not one.
+fn take_merge_flag(goal: &mut Option<Goal>, arg: &str) -> Result<bool> {
+    let asked = match arg {
+        "merge" | "--merge" => Goal::Merged,
+        "no-merge" | "--no-merge" => Goal::ReadyForReview,
+        _ => return Ok(false),
+    };
+    ask_once(goal, asked, arg, MERGE_FLAGS)?;
+    Ok(true)
 }
 
 /// Record an email flag in `email`. False, taking nothing, when `arg` is not one.
@@ -1032,11 +1061,10 @@ fn take_flag<'a>(
     if take_email_flag(&mut flags.email, arg, rest)? {
         return Ok(true);
     }
+    if take_merge_flag(&mut flags.goal, arg)? {
+        return Ok(true);
+    }
     match arg {
-        "merge" | "--merge" => ask_once(&mut flags.goal, Goal::Merged, arg, MERGE_FLAGS)?,
-        "no-merge" | "--no-merge" => {
-            ask_once(&mut flags.goal, Goal::ReadyForReview, arg, MERGE_FLAGS)?
-        }
         "parallel" | "--parallel" => ask_parallel(&mut flags.parallel, arg, rest.next())?,
         BASE_FIX | "--base-fix" => {
             ask_once(&mut flags.base_fix, BaseFixAsk::Allow, arg, BASE_FIX_FLAGS)?

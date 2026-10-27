@@ -464,7 +464,7 @@ thirdshift secure                   # audit the Base branch and record findings 
 thirdshift secure base &lt;branch&gt;     # do that with &lt;branch&gt; as the Base branch, from a clone on any branch
 thirdshift skill &lt;skill&gt; [issue &lt;issue&gt;]   # run one skill headlessly and print its final message
 thirdshift process                      # list Custom processes (experimental)
-thirdshift process &lt;name&gt; [issue &lt;issue&gt;]   # run a Custom process, optionally on an issue; email flags match a Ticket run (experimental)
+thirdshift process &lt;name&gt; [issue &lt;issue&gt;]   # run a Custom process, optionally on an issue; email, merge and no-merge match a Ticket run (experimental)
 thirdshift process check &lt;name&gt; [issue &lt;issue&gt;]   # validate one and print its plan (experimental)
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
 thirdshift scores [&lt;pull request&gt;] [--json] # show Scores and calibration
@@ -844,9 +844,15 @@ worktree = &quot;fix&quot;
 name = &quot;ship&quot;
 catalogue = &quot;delivery&quot;
 worktree = &quot;fix&quot;
+
+[[steps]]
+name = &quot;land&quot;
+catalogue = &quot;self-merge&quot;
+worktree = &quot;fix&quot;
 </code></pre>
 <pre><code class="language-sh">thirdshift process check ship issue 7
 thirdshift process ship issue 7
+thirdshift process ship issue 7 merge
 </code></pre>
 <p>A declared worktree&#39;s <code>kind</code> is <code>throwaway</code> or <code>issue-branch</code>. A throwaway
 worktree is detached at the Base branch. An Issue-branch worktree is the
@@ -860,12 +866,43 @@ that checkout. Any other declared worktree stays throwaway.</p>
 opening session and no Security review: push, open a draft pull request when
 the branch has none, write the Built-with line, mark the pull request ready
 for review, and keep it mergeable with green or absent CI through the Repair
-loop. It does not Self-merge, even when the User config asks Ticket runs to.
-When thirdshift opens the pull request, its title is the issue&#39;s and its body
+loop. When thirdshift opens the pull request, its title is the issue&#39;s and its body
 starts <code>Closes #&lt;n&gt;</code>. Repairs run on the Command&#39;s Harness, Model and Effort.
 A Process has at most one delivery Step. It names the Issue-branch worktree,
 it is not optional, and it is not in a parallel group. It comes after the
-last Step that uses that worktree.</p>
+last Step that uses that worktree. A <code>self-merge</code> Step is not one of those
+editing Steps.</p>
+<p><code>catalogue = &quot;self-merge&quot;</code> is the Self-merge, and it has to be the Step
+directly after <code>delivery</code>. With <code>merge</code> (or <code>--merge</code>) on the command, or
+with <code>merge.always</code> in the User config, it merges as a Ticket run asked to
+merge does: <code>gh pr merge --merge --match-head-commit</code> on the head whose CI
+was watched, then the same close comment, and the Issue branch deleted. The
+pull request URL is the Step&#39;s result. Without that ask, and with <code>no-merge</code>
+even when <code>merge.always</code> is set, the pull request stays ready for review and
+the Process succeeds. <code>merge</code> on a Process with no <code>self-merge</code> Step does not
+merge. The Step names the Issue-branch worktree, it is not optional, it is
+not in a parallel group, and a Process has at most one. One anywhere else is
+refused. <code>merge</code> and <code>no-merge</code> are not accepted by <code>check</code>.</p>
+<p>A file can only tighten limits, never loosen them. <code>[limits]</code> may set:</p>
+<ul>
+<li><code>repair_cap</code>, a whole number from 0 to 5. 5 is the effective cap. A lower
+one stops the Repair loop there, including when the Process is not merging.
+A higher one is refused as a loosening limit, before any session.</li>
+<li><code>self_merge = false</code>, which holds the Self-merge even when the command or
+the User config asked for one. The Process fails, the outcome says
+<code>self_merge = false holds the Self-merge</code>, and the pull request stays ready
+for review. <code>self_merge = true</code> is refused as a loosening limit.</li>
+<li><code>protected_paths</code>, an array of globs. A change that touches one holds the
+Self-merge the way an unaddressed Security finding does: the pull request
+stays ready for review, the Process fails, and the outcome names the path.
+<code>*</code> stays inside one path segment, <code>**</code> crosses segments, and <code>?</code> is one
+character other than <code>/</code>.</li>
+</ul>
+<pre><code class="language-toml">[limits]
+repair_cap = 2
+self_merge = false
+protected_paths = [&quot;secrets/**&quot;, &quot;**/*.pem&quot;]
+</code></pre>
 <p>An Issue-branch worktree needs an issue. <code>thirdshift process &lt;name&gt;</code> and
 <code>thirdshift process check &lt;name&gt;</code> refuse the file before any session, any
 Claim and any branch, naming the <code>issue</code> rule and the file line. With an
@@ -891,7 +928,7 @@ skills are
 under its own name, as a copy written out beside those skills, and kept out
 of git. A repository skill of the same name is not replaced. <code>command</code> is a command or script,
 run with <code>sh -c</code> in the Step&#39;s worktree. It starts no session. <code>catalogue</code> names a
-built-in Step: <code>delivery</code>, described above, or <code>run-published-issue</code>.
+built-in Step: <code>delivery</code> or <code>self-merge</code>, described above, or <code>run-published-issue</code>.
 <code>run-published-issue</code> starts a Ticket run, or a Spec run when the issue has
 Tickets, on the issue the session Step before it published. That session&#39;s final
 message ends with the issue&#39;s URL on its last non-blank line. Before it starts a
@@ -925,9 +962,11 @@ throwaway worktree at the Base branch. A Process that declares worktrees prints
 each one, the worktree each Step uses, and a <code>together:</code> line for each group
 of Steps that run at the same time. A throwaway worktree is described as
 throwaway at the Base branch. An Issue-branch worktree is described as an
-Issue branch. A skill Step shows the skill and where it was found. A command
+Issue branch. When a limit tightens a built-in rule, <code>check</code> prints it: the
+repair cap out of 5, that self-merge is held, and the protected paths. A skill
+Step shows the skill and where it was found. A command
 Step shows its command, and <code>check</code> does not run it. A delivery Step shows
-<code>delivery</code>. A <code>run-published-issue</code> Step shows <code>run-published-issue</code>. An
+<code>delivery</code>. A self-merge Step shows <code>self-merge</code>. A <code>run-published-issue</code> Step shows <code>run-published-issue</code>. An
 optional Step is marked <code>(optional)</code>. <code>check</code> starts no session. <code>check &lt;name&gt; issue &lt;issue&gt;</code> resolves the issue and still creates no Issue branch and makes
 no Claim. Without an issue, an Issue-branch worktree is the refusal above, not
 a plan.</p>
@@ -975,7 +1014,10 @@ that Step instead of starting the session. The Command log names the cause.</p>
 <p><code>check</code> and running refuse a missing file, a file that is not valid TOML, a
 missing or wrong <code>version</code>, an unknown key, a Step without exactly one of
 <code>skill</code>, <code>command</code> and <code>catalogue</code>, a command that is not a string or is empty,
-a catalogue value other than <code>delivery</code> or <code>run-published-issue</code>, a
+a catalogue value other than <code>delivery</code>, <code>run-published-issue</code> or <code>self-merge</code>, a
+<code>self-merge</code> Step that is not directly after <code>delivery</code>, a second self-merge
+Step, an optional self-merge Step, a self-merge Step in a parallel group, a
+self-merge Step on a worktree other than the Issue branch, a
 <code>run-published-issue</code> Step that does not directly follow a session Step, an
 <code>optional</code> value that is not a boolean, a skill that cannot be found, an
 unknown worktree, a Step that does not name a worktree when the Process
@@ -984,7 +1026,10 @@ than <code>throwaway</code> or <code>issue-branch</code>, a second Issue-branch 
 Step with no Issue-branch worktree or on a different worktree, a second
 delivery Step, an optional delivery Step, a delivery Step in a parallel group,
 an Issue-branch worktree with no delivery Step after the last Step that uses
-it, an Issue-branch worktree with no issue, and a reserved name (<code>check</code>,
+it, a limit above the built-in rule (<code>repair_cap</code> above 5, or <code>self_merge = true</code>),
+a <code>repair_cap</code> that is not a whole number from 0 to 5, a <code>self_merge</code> value other
+than false, a <code>protected_paths</code> value that is not an array of globs, an empty
+protected-path glob, an Issue-branch worktree with no issue, and a reserved name (<code>check</code>,
 <code>list</code>, <code>ticket-run</code>, <code>spec-run</code>, <code>architect-run</code>, <code>pickup-run</code>,
 <code>security-run</code>). The refusal names the rule and the file line, and starts no
 session.</p>

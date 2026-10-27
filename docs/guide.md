@@ -505,7 +505,7 @@ thirdshift secure                   # audit the Base branch and record findings 
 thirdshift secure base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
 thirdshift skill <skill> [issue <issue>]   # run one skill headlessly and print its final message
 thirdshift process                      # list Custom processes (experimental)
-thirdshift process <name> [issue <issue>]   # run a Custom process, optionally on an issue; email flags match a Ticket run (experimental)
+thirdshift process <name> [issue <issue>]   # run a Custom process, optionally on an issue; email, merge and no-merge match a Ticket run (experimental)
 thirdshift process check <name> [issue <issue>]   # validate one and print its plan (experimental)
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
 thirdshift scores [<pull request>] [--json] # show Scores and calibration
@@ -928,11 +928,17 @@ worktree = "fix"
 name = "ship"
 catalogue = "delivery"
 worktree = "fix"
+
+[[steps]]
+name = "land"
+catalogue = "self-merge"
+worktree = "fix"
 ```
 
 ```sh
 thirdshift process check ship issue 7
 thirdshift process ship issue 7
+thirdshift process ship issue 7 merge
 ```
 
 A declared worktree's `kind` is `throwaway` or `issue-branch`. A throwaway
@@ -948,12 +954,46 @@ that checkout. Any other declared worktree stays throwaway.
 opening session and no Security review: push, open a draft pull request when
 the branch has none, write the Built-with line, mark the pull request ready
 for review, and keep it mergeable with green or absent CI through the Repair
-loop. It does not Self-merge, even when the User config asks Ticket runs to.
-When thirdshift opens the pull request, its title is the issue's and its body
+loop. When thirdshift opens the pull request, its title is the issue's and its body
 starts `Closes #<n>`. Repairs run on the Command's Harness, Model and Effort.
 A Process has at most one delivery Step. It names the Issue-branch worktree,
 it is not optional, and it is not in a parallel group. It comes after the
-last Step that uses that worktree.
+last Step that uses that worktree. A `self-merge` Step is not one of those
+editing Steps.
+
+`catalogue = "self-merge"` is the Self-merge, and it has to be the Step
+directly after `delivery`. With `merge` (or `--merge`) on the command, or
+with `merge.always` in the User config, it merges as a Ticket run asked to
+merge does: `gh pr merge --merge --match-head-commit` on the head whose CI
+was watched, then the same close comment, and the Issue branch deleted. The
+pull request URL is the Step's result. Without that ask, and with `no-merge`
+even when `merge.always` is set, the pull request stays ready for review and
+the Process succeeds. `merge` on a Process with no `self-merge` Step does not
+merge. The Step names the Issue-branch worktree, it is not optional, it is
+not in a parallel group, and a Process has at most one. One anywhere else is
+refused. `merge` and `no-merge` are not accepted by `check`.
+
+A file can only tighten limits, never loosen them. `[limits]` may set:
+
+- `repair_cap`, a whole number from 0 to 5. 5 is the effective cap. A lower
+  one stops the Repair loop there, including when the Process is not merging.
+  A higher one is refused as a loosening limit, before any session.
+- `self_merge = false`, which holds the Self-merge even when the command or
+  the User config asked for one. The Process fails, the outcome says
+  `self_merge = false holds the Self-merge`, and the pull request stays ready
+  for review. `self_merge = true` is refused as a loosening limit.
+- `protected_paths`, an array of globs. A change that touches one holds the
+  Self-merge the way an unaddressed Security finding does: the pull request
+  stays ready for review, the Process fails, and the outcome names the path.
+  `*` stays inside one path segment, `**` crosses segments, and `?` is one
+  character other than `/`.
+
+```toml
+[limits]
+repair_cap = 2
+self_merge = false
+protected_paths = ["secrets/**", "**/*.pem"]
+```
 
 An Issue-branch worktree needs an issue. `thirdshift process <name>` and
 `thirdshift process check <name>` refuse the file before any session, any
@@ -981,7 +1021,7 @@ skills are
 under its own name, as a copy written out beside those skills, and kept out
 of git. A repository skill of the same name is not replaced. `command` is a command or script,
 run with `sh -c` in the Step's worktree. It starts no session. `catalogue` names a
-built-in Step: `delivery`, described above, or `run-published-issue`.
+built-in Step: `delivery` or `self-merge`, described above, or `run-published-issue`.
 `run-published-issue` starts a Ticket run, or a Spec run when the issue has
 Tickets, on the issue the session Step before it published. That session's final
 message ends with the issue's URL on its last non-blank line. Before it starts a
@@ -1018,9 +1058,11 @@ throwaway worktree at the Base branch. A Process that declares worktrees prints
 each one, the worktree each Step uses, and a `together:` line for each group
 of Steps that run at the same time. A throwaway worktree is described as
 throwaway at the Base branch. An Issue-branch worktree is described as an
-Issue branch. A skill Step shows the skill and where it was found. A command
+Issue branch. When a limit tightens a built-in rule, `check` prints it: the
+repair cap out of 5, that self-merge is held, and the protected paths. A skill
+Step shows the skill and where it was found. A command
 Step shows its command, and `check` does not run it. A delivery Step shows
-`delivery`. A `run-published-issue` Step shows `run-published-issue`. An
+`delivery`. A self-merge Step shows `self-merge`. A `run-published-issue` Step shows `run-published-issue`. An
 optional Step is marked `(optional)`. `check` starts no session. `check <name>
 issue <issue>` resolves the issue and still creates no Issue branch and makes
 no Claim. Without an issue, an Issue-branch worktree is the refusal above, not
@@ -1074,7 +1116,10 @@ that Step instead of starting the session. The Command log names the cause.
 `check` and running refuse a missing file, a file that is not valid TOML, a
 missing or wrong `version`, an unknown key, a Step without exactly one of
 `skill`, `command` and `catalogue`, a command that is not a string or is empty,
-a catalogue value other than `delivery` or `run-published-issue`, a
+a catalogue value other than `delivery`, `run-published-issue` or `self-merge`, a
+`self-merge` Step that is not directly after `delivery`, a second self-merge
+Step, an optional self-merge Step, a self-merge Step in a parallel group, a
+self-merge Step on a worktree other than the Issue branch, a
 `run-published-issue` Step that does not directly follow a session Step, an
 `optional` value that is not a boolean, a skill that cannot be found, an
 unknown worktree, a Step that does not name a worktree when the Process
@@ -1083,7 +1128,10 @@ than `throwaway` or `issue-branch`, a second Issue-branch worktree, a delivery
 Step with no Issue-branch worktree or on a different worktree, a second
 delivery Step, an optional delivery Step, a delivery Step in a parallel group,
 an Issue-branch worktree with no delivery Step after the last Step that uses
-it, an Issue-branch worktree with no issue, and a reserved name (`check`,
+it, a limit above the built-in rule (`repair_cap` above 5, or `self_merge = true`),
+a `repair_cap` that is not a whole number from 0 to 5, a `self_merge` value other
+than false, a `protected_paths` value that is not an array of globs, an empty
+protected-path glob, an Issue-branch worktree with no issue, and a reserved name (`check`,
 `list`, `ticket-run`, `spec-run`, `architect-run`, `pickup-run`,
 `security-run`). The refusal names the rule and the file line, and starts no
 session.
