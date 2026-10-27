@@ -373,3 +373,29 @@ fn optional_security_review_does_not_ignore_an_untrusted_issue_edit() {
         result.stderr
     );
 }
+
+#[test]
+fn security_flag_words_remain_usable_custom_process_names() {
+    for name in ["security-review", "no-security-review"] {
+        let scenario = Scenario::new();
+        write_process(
+            &scenario,
+            name,
+            "version = 1\ndescription = \"Named process\"\n\n[[steps]]\nname = \"print\"\ncommand = \"printf inspected\"\n",
+        );
+        let listed = scenario.run(&["process", "list"]);
+        assert_eq!(listed.code, Some(0), "{}", listed.stderr);
+        assert!(
+            listed.stdout.contains(&format!("{name}: Named process")),
+            "{}",
+            listed.stdout
+        );
+        let shown = scenario.run(&["process", "show", name]);
+        assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+        let checked = scenario.run(&["process", "check", name]);
+        assert_eq!(checked.code, Some(0), "{name}: {}", checked.stderr);
+        let ran = scenario.run(&["process", name]);
+        assert_eq!(ran.code, Some(0), "{name}: {}", ran.stderr);
+        assert_eq!(ran.stdout, "inspected\n");
+    }
+}

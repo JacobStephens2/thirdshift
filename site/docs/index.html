@@ -887,7 +887,8 @@ Place it on the Issue-branch worktree after its editing Steps and before
 <code>delivery</code>, outside any parallel group. The Step runs when <code>security-review</code>
 (or <code>--security-review</code>) on the command or <code>[security] review = true</code> asks;
 <code>no-security-review</code> overrides the config. Otherwise it prints that the review
-was skipped. It uses <code>security.harness</code> when configured, including that
+was skipped. Before the Process name, spell these flags with <code>--</code>; the bare
+words remain valid Custom process names. It uses <code>security.harness</code> when configured, including that
 Harness&#39;s Model and Effort, and keeps the Ticket run&#39;s default-Harness fallback.
 A Harness explicitly named by the Step must start at preflight, with no
 fallback. A refused or incomplete review, or unaddressed introduced findings,

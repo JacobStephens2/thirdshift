@@ -883,7 +883,8 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
         if matches!(
             arg.as_str(),
             "security-review" | "--security-review" | "no-security-review" | "--no-security-review"
-        ) {
+        ) && (name.is_some() || arg.starts_with("--"))
+        {
             take_flag(&mut review_flags, arg, &mut words)?;
             continue;
         }
