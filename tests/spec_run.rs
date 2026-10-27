@@ -3636,3 +3636,31 @@ fn issue_1471_a_ticket_running_when_the_spec_pr_closes_is_not_self_merged() {
         result.stderr
     );
 }
+
+#[test]
+fn issue_1471_a_base_fix_into_the_spec_branch_is_not_self_merged_once_the_spec_pr_closes() {
+    let scenario = spec_of(&[(21, &[]), (22, &[21])]);
+    scenario.agent_does_for(22, &agent_lands_with_an_inherited_failure(22, "22.txt"));
+    scenario.agent_does_for(
+        23,
+        &format!(
+            r#"
+gh fake pr issue-20 state '"CLOSED"'
+echo "fixed" > ci-fix.txt
+git add ci-fix.txt
+git commit -q -m "Fix CI on the Spec branch"
+gh pr create --base issue-20 --head issue-23 --title "Fix CI" --body "Closes #23"
+{}"#,
+            checks_on_head(GREEN)
+        ),
+    );
+
+    let result = scenario.run(&["parallel", "1", &spec_url(&scenario), "base-fix"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_contains(&result.stderr, "#22: starting Base fix #23 into issue-20");
+    let fix = pr_from(&scenario, "issue-23").expect("the Base fix's PR");
+    assert_ne!(fix["state"], "MERGED", "{}", result.stderr);
+    assert_ne!(pr_from(&scenario, "issue-22").unwrap()["state"], "MERGED");
+    assert!(scenario.origin_file("issue-20", "ci-fix.txt").is_none());
+}

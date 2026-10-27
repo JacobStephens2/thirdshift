@@ -44,9 +44,13 @@ pub enum Kind {
         spec_branch: String,
         spec_pr: Option<SpecPr>,
     },
-    /// A Base fix, into the Base branch of the Run that started it. It sees
-    /// no Inherited failures and starts no Base fix of its own.
-    BaseFix { base: String },
+    /// A Base fix, into the Base branch of the Run that started it, with
+    /// that Run's Spec PR when it is a Ticket's Run. It sees no Inherited
+    /// failures and starts no Base fix of its own.
+    BaseFix {
+        base: String,
+        spec_pr: Option<SpecPr>,
+    },
 }
 
 impl Kind {
@@ -54,7 +58,14 @@ impl Kind {
     pub fn base(&self) -> &str {
         match self {
             Kind::Ticket { spec_branch, .. } => spec_branch,
-            Kind::BaseFix { base } => base,
+            Kind::BaseFix { base, .. } => base,
+        }
+    }
+
+    /// The Spec PR a Self-merge into a Spec branch depends on, if any.
+    pub fn spec_pr(&self) -> Option<&SpecPr> {
+        match self {
+            Kind::Ticket { spec_pr, .. } | Kind::BaseFix { spec_pr, .. } => spec_pr.as_ref(),
         }
     }
 
@@ -97,7 +108,7 @@ pub struct Given {
 /// this module writes them and reads them back.
 const SPEC_BRANCH: &str = "--spec-branch";
 
-/// The hidden argument that gives a [`Kind::Ticket`] its [`SpecPr`], followed
+/// The hidden argument that gives a child Run its [`SpecPr`], followed
 /// by the Spec PR's number and the Spec run's Base branch.
 const SPEC_PR: &str = "--spec-pr";
 
@@ -184,11 +195,7 @@ impl Given {
             append_choice(&mut args, security, REVIEW_FLAGS);
         }
         let mut args: Vec<String> = args.into_iter().map(str::to_string).collect();
-        if let Kind::Ticket {
-            spec_pr: Some(spec_pr),
-            ..
-        } = &self.kind
-        {
+        if let Some(spec_pr) = self.kind.spec_pr() {
             args.extend([
                 SPEC_PR.to_string(),
                 spec_pr.number.to_string(),
@@ -351,7 +358,10 @@ impl Reader {
                         spec_pr: None,
                     }
                 } else {
-                    Kind::BaseFix { base }
+                    Kind::BaseFix {
+                        base,
+                        spec_pr: None,
+                    }
                 });
             }
             SPEC_PR => {
@@ -409,7 +419,11 @@ impl Reader {
                 spec_branch,
                 spec_pr: Some(spec_pr),
             }),
-            (_, Some(_)) => bail!("only a child Ticket run is given {SPEC_PR}"),
+            (Some(Kind::BaseFix { base, .. }), Some(spec_pr)) => Some(Kind::BaseFix {
+                base,
+                spec_pr: Some(spec_pr),
+            }),
+            (None, Some(_)) => bail!("only a child Run is given {SPEC_PR}"),
             (kind, None) => kind,
         };
         let Some(kind) = kind else {
@@ -946,6 +960,17 @@ mod tests {
     fn base_fix() -> Kind {
         Kind::BaseFix {
             base: "main".to_string(),
+            spec_pr: None,
+        }
+    }
+
+    fn base_fix_into_a_spec_branch() -> Kind {
+        Kind::BaseFix {
+            base: "issue-237".to_string(),
+            spec_pr: Some(SpecPr {
+                number: 240,
+                base: "main".to_string(),
+            }),
         }
     }
 
@@ -986,11 +1011,15 @@ mod tests {
         let harnesses = [on_claude, on_opus];
         let reviews = [None, Some(reviewed_on_codex), Some(reviewed_on_claude)];
         let securities = [(false, false), (true, false), (false, true), (true, true)];
-        for ((kind, harness), security_review_harness) in
-            [ticket(), ticket_with_its_spec_pr(), base_fix()]
-                .into_iter()
-                .zip(harnesses.iter().cycle())
-                .flat_map(|kind| reviews.clone().map(|review| (kind.clone(), review)))
+        for ((kind, harness), security_review_harness) in [
+            ticket(),
+            ticket_with_its_spec_pr(),
+            base_fix(),
+            base_fix_into_a_spec_branch(),
+        ]
+        .into_iter()
+        .zip(harnesses.iter().cycle())
+        .flat_map(|kind| reviews.clone().map(|review| (kind.clone(), review)))
         {
             for (base_fix, (security_fix, security_review)) in
                 [BaseFixAsk::Allow, BaseFixAsk::Forbid, offer.clone()]

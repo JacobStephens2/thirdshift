@@ -524,6 +524,7 @@ mod tests {
     fn base_fix() -> Kind {
         Kind::BaseFix {
             base: "main".to_string(),
+            spec_pr: None,
         }
     }
 

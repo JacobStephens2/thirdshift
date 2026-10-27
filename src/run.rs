@@ -220,10 +220,7 @@ fn run(
         issue_branch: None,
         child: started_by.child().is_some(),
         diagnose_bugs: !matches!(started_by.child(), Some(Kind::BaseFix { .. })),
-        spec_pr: match started_by.child() {
-            Some(Kind::Ticket { spec_pr, .. }) => spec_pr.clone(),
-            _ => None,
-        },
+        spec_pr: started_by.child().and_then(Kind::spec_pr).cloned(),
         started: Utc::now() - STARTED_MARGIN,
     };
     let outcome = start(
@@ -602,7 +599,7 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
             GitHub::new(),
         );
         if let Some(spec_pr) = self.spec_pr.clone() {
-            pull_request.merge_only_while(spec_pr);
+            pull_request.gate_self_merge_on(spec_pr);
         }
         self.delivery(base)
             .deliver(worktree, opening, &mut pull_request, None)

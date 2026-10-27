@@ -173,8 +173,24 @@ impl<A: Adapter> PullRequest<A> {
 
     /// A Ticket's PR into its Spec branch: every Self-merge first reobserves
     /// `spec_pr`, and one changed under the Spec run is [`SpecPrChanged`].
-    pub fn merge_only_while(&mut self, spec_pr: SpecPr) {
+    pub fn gate_self_merge_on(&mut self, spec_pr: SpecPr) {
         self.spec_pr = Some(spec_pr);
+    }
+
+    /// The Spec PR Ticket accounting captured, as a Ticket started now is
+    /// given it to check before its Self-merge.
+    pub fn captured_spec_pr(&self) -> Option<SpecPr> {
+        let pr = self.identified.as_ref()?;
+        (self.scope == CaptureScope::TicketAccounting).then(|| SpecPr {
+            number: pr.number,
+            base: self.base.clone(),
+        })
+    }
+
+    /// The Spec PR this PR's Self-merge depends on, for a Base fix it starts
+    /// into the same Spec branch.
+    pub fn spec_pr(&self) -> Option<&SpecPr> {
+        self.spec_pr.as_ref()
     }
 
     /// Before a Ticket starts, reobserve the captured Spec PR: one changed
@@ -258,7 +274,7 @@ impl<A: Adapter> PullRequest<A> {
     /// A Ticket's Self-merge into its Spec branch, this PR's Base branch,
     /// needs the Spec PR still open from that branch into the Spec run's
     /// Base branch. Any failure to show that holds the merge.
-    fn ensure_spec_pr_open(&mut self) -> Result<()> {
+    fn ensure_spec_pr_allows_merge(&mut self) -> Result<()> {
         let Some(spec_pr) = &self.spec_pr else {
             return Ok(());
         };
@@ -267,13 +283,8 @@ impl<A: Adapter> PullRequest<A> {
             .adapter
             .observe(&self.issue, &selector, false)?
             .with_context(|| format!("the Spec PR #{selector} is not found"))?;
+        self.check_ownership(&snapshot, &self.base, Some(spec_pr.number))?;
         let pr = &snapshot.pr;
-        if pr.number != spec_pr.number || pr.head != self.base || snapshot.from_fork {
-            bail!("PR {} is not the Spec PR from {}", pr.url, self.base);
-        }
-        if self.number_from_url(&pr.url)? != pr.number {
-            bail!("PR URL does not match observed number #{}", pr.number);
-        }
         if let Some(change) = SpecPrChange::of(pr, &spec_pr.base) {
             return Err(SpecPrChanged {
                 url: pr.url.clone(),
@@ -503,7 +514,7 @@ impl<A: Adapter> PullRequest<A> {
     /// race because the request has no expected-base precondition.
     pub fn merge(&mut self, watched: &str) -> Result<MergeAttempt> {
         self.ensure_ready_and_mergeable()?;
-        self.ensure_spec_pr_open()?;
+        self.ensure_spec_pr_allows_merge()?;
         let number = self
             .identified
             .as_ref()
@@ -571,18 +582,36 @@ impl<A: Adapter> PullRequest<A> {
     }
 
     fn capture(&mut self, snapshot: &PrSnapshot) -> Result<()> {
+        let number = self.identified.as_ref().map(|pr| pr.number);
+        self.check_ownership(snapshot, &self.branch, number)?;
+        if self.identified.is_none() {
+            self.identified = Some(Identified {
+                number: snapshot.pr.number,
+                url: snapshot.pr.url.clone(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Whether `snapshot` is this repository's own PR from `head`, numbered
+    /// `number` when that is known.
+    fn check_ownership(
+        &self,
+        snapshot: &PrSnapshot,
+        head: &str,
+        number: Option<u64>,
+    ) -> Result<()> {
         if snapshot.from_fork {
             bail!("PR {} is from a fork", snapshot.pr.url);
         }
-        if snapshot.pr.head != self.branch {
-            bail!("PR head is {}, not {}", snapshot.pr.head, self.branch);
+        if snapshot.pr.head != head {
+            bail!("PR head is {}, not {head}", snapshot.pr.head);
         }
-        if let Some(pr) = &self.identified
-            && snapshot.pr.number != pr.number
+        if let Some(number) = number
+            && snapshot.pr.number != number
         {
             bail!(
-                "PR identity changed from #{} to #{}",
-                pr.number,
+                "PR identity changed from #{number} to #{}",
                 snapshot.pr.number
             );
         }
@@ -591,12 +620,6 @@ impl<A: Adapter> PullRequest<A> {
                 "PR URL does not match observed number #{}",
                 snapshot.pr.number
             );
-        }
-        if self.identified.is_none() {
-            self.identified = Some(Identified {
-                number: snapshot.pr.number,
-                url: snapshot.pr.url.clone(),
-            });
         }
         Ok(())
     }
@@ -1795,7 +1818,7 @@ mod tests {
             ),
             (
                 changed(|spec_pr| spec_pr.pr.head = "other".to_string()),
-                Some("PR https://github.com/acme/widgets/pull/20 is not the Spec PR from main"),
+                Some("PR head is other, not main"),
             ),
             (Ok(None), Some("the Spec PR #20 is not found")),
             (Err("unreadable"), Some("unreadable")),
@@ -1809,7 +1832,7 @@ mod tests {
                 ]),
                 ..World::default()
             });
-            pr.merge_only_while(SpecPr {
+            pr.gate_self_merge_on(SpecPr {
                 number: 20,
                 base: "release".to_string(),
             });

@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 
 use crate::base_fix::BaseFixAsk;
-use crate::child_run::{ChildAsks, Ended, Kind, Runs, SpecPr};
+use crate::child_run::{ChildAsks, Ended, Kind, Runs};
 use crate::delivery::{Delivery, Opening, OpeningSession};
 use crate::failed_run::{FailedRun, interrupted_or};
 use crate::github::{GitHub, Ticket};
@@ -304,17 +304,9 @@ impl Outside for ChildRunsAndGitHub<'_> {
         if !self.spec.in_same_repo(ticket) {
             bail!("a Ticket outside the Spec's repository cannot start");
         }
-        let base = self
-            .delivery
-            .as_ref()
-            .expect("the Ticket loop runs before the Delivery")
-            .base;
         let kind = Kind::Ticket {
             spec_branch: self.worktree().branch().to_string(),
-            spec_pr: self.spec_pr.info().map(|pr| SpecPr {
-                number: pr.number,
-                base: base.to_string(),
-            }),
+            spec_pr: self.spec_pr.captured_spec_pr(),
         };
         if let Some(check) = trust::ticket_trust(&GitHub::new(), ticket, self.spec)? {
             bail!("Ticket #{}: {check}", ticket.number);
@@ -466,7 +458,7 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
                 break;
             };
             if let Err(changed) = outside.ensure_spec_pr_unchanged() {
-                keep(&mut error, changed);
+                keep_cause(&mut error, changed);
                 continue;
             }
             outside.step(format!("starting #{}", ticket.number));
@@ -480,7 +472,7 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
             }
         }
         if started && let Err(show_error) = outside.show(&board.checklist()) {
-            keep(&mut error, show_error);
+            keep_cause(&mut error, show_error);
         }
         if !board.any_running() {
             break;
@@ -509,10 +501,10 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
         outside.record_tickets(board);
         if landed {
             if let Err(open_error) = outside.landed(&list) {
-                keep(&mut error, open_error);
+                keep_cause(&mut error, open_error);
             }
         } else if let Err(show_error) = outside.show(&list) {
-            keep(&mut error, show_error);
+            keep_cause(&mut error, show_error);
         }
     }
     if let Some(error) = error {
@@ -526,7 +518,7 @@ fn run_ready_tickets(outside: &mut impl Outside, board: &mut TicketBoard) -> Res
 
 /// Keep the first error as the Ticket loop's cause, unless `new` says the
 /// Spec PR changed under the Spec run: that decides the Recovery.
-fn keep(error: &mut Option<anyhow::Error>, new: anyhow::Error) {
+fn keep_cause(error: &mut Option<anyhow::Error>, new: anyhow::Error) {
     let changed = |error: &anyhow::Error| error.is::<SpecPrChanged>();
     if error
         .as_ref()
