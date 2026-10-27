@@ -71,7 +71,8 @@ pub(super) fn more_tasks(posterior: &Posterior, bar: &Bar, rng: &mut Pcg64) -> R
                 draw.weighted += increment * value;
                 means.push(draw.mean());
             }
-            if Intervals::from_draws(&mut means, bar.levels).decide(bar.margin)
+            if Intervals::from_draws(&mut means, bar.levels)
+                .decide(bar.margin, bar.levels.pass_rule())
                 != Decision::Inconclusive
             {
                 clear += 1;

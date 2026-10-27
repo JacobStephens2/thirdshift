@@ -251,6 +251,22 @@ impl From<Decision> for Conclusion {
 }
 
 impl Verdict {
+    /// Passing metrics whose pass-level interval lies wholly below zero.
+    pub fn worse_within_margin(&self) -> Vec<String> {
+        self.suites
+            .iter()
+            .flat_map(|(suite, verdict)| {
+                [
+                    ("accuracy", &verdict.accuracy),
+                    ("wrong findings", &verdict.wrong_findings),
+                ]
+                .into_iter()
+                .filter(|(_, assessment)| assessment.worse_within_margin)
+                .map(move |(metric, _)| format!("{suite} {metric}"))
+            })
+            .collect()
+    }
+
     pub fn outcome(&self) -> &'static str {
         match self.verdict {
             Conclusion::Pass => "pass",

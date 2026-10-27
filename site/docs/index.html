@@ -555,38 +555,67 @@ rates, as paired task differences:</p>
 <td>2 of 30 tasks</td>
 </tr>
 </tbody></table>
-<p>No pass level from 70% to 95% reaches 80% on either suite, so the default is
-the 70% floor. Simulated A/A Experiments at those rates, each judged by the
-Verdict, pass this often:</p>
+<p>No pass level from 70% to 95% reaches 80% on either suite at today&#39;s size, so
+the default is the 70% floor; without ADR-0024&#39;s upper-bound clause a higher
+pass level only lowers the pass rate. Simulated A/A Experiments at those rates,
+each judged by the Verdict at a 70% pass level, pass this often under the
+current rule (<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0025-a-pass-needs-only-the-margin.md">ADR-0025</a>) and
+ADR-0024&#39;s rule, whose pass also needed the pass-level upper bound to reach zero:</p>
 <table>
 <thead>
 <tr>
-<th>Suite</th>
-<th>At 70%</th>
-<th>At 95% (before #1268)</th>
-<th>70% intervals of #1370&#39;s own counts</th>
+<th>Suite size</th>
+<th><code>code-review</code>, ADR-0025</th>
+<th><code>code-review</code>, ADR-0024</th>
+<th><code>spec-review</code>, ADR-0025</th>
+<th><code>spec-review</code>, ADR-0024</th>
 </tr>
 </thead>
 <tbody><tr>
-<td><code>code-review</code></td>
+<td>Today (10 / 30)</td>
 <td>67%</td>
-<td>0%</td>
-<td>accuracy [−0.171, −0.018], wrong findings [−0.039, +0.039]</td>
+<td>67%</td>
+<td>56%</td>
+<td>46%</td>
 </tr>
 <tr>
-<td><code>spec-review</code></td>
-<td>46%</td>
-<td>13%</td>
-<td>accuracy [−0.042, +0.108], wrong findings [−0.047, +0.048]</td>
+<td>40</td>
+<td>94%</td>
+<td>86%</td>
+<td>67%</td>
+<td>53%</td>
+</tr>
+<tr>
+<td>60</td>
+<td>97%</td>
+<td>85%</td>
+<td>76%</td>
+<td>61%</td>
+</tr>
+<tr>
+<td>80</td>
+<td>98%</td>
+<td>86%</td>
+<td>84%</td>
+<td>68%</td>
+</tr>
+<tr>
+<td>100</td>
+<td>98%</td>
+<td>86%</td>
+<td>89%</td>
+<td>71%</td>
 </tr>
 </tbody></table>
-<p>Both suites fall short. <code>code-review</code> would need about 20 to 30 Eval tasks to
-reach 80% at 70%; #1434 grows it. <code>spec-review</code> can&#39;t reach 80% at 70% at any
-size: a pass also needs the pass-level interval to reach zero, and for
+<p>#1370&#39;s own counts give these 70% intervals: <code>code-review</code> accuracy
+[−0.171, −0.018] and wrong findings [−0.039, +0.039]; <code>spec-review</code> accuracy
+[−0.042, +0.108] and wrong findings [−0.047, +0.048]. At 95% (before #1268),
+the A/A pass rates were 0% and 13%.</p>
+<p>Both suites fall short at today&#39;s size. <code>code-review</code> needs about 20 Eval tasks
+to reach 80% at 70%, and #1434 grows it. <code>spec-review</code> needs about 80. Under
+ADR-0024&#39;s rule <code>spec-review</code> could not reach 80% at 70% at any size: for
 identical Arms a 70% interval&#39;s upper bound falls below zero about 15% of the
-time per noisy metric, so its pass rate levels off near 72%. At an 80% pass
-level it would need about 160 Eval tasks. A lower pass level is not always
-better: at 30 Spec-review tasks, 72% passes more A/A Experiments than 70% does.</p>
+time per noisy metric, capping the pass rate near 72%.</p>
 <p><code>--void-retries</code> accepts zero, one or two. A sandbox that cannot start, a
 provider connection or login failure, a provider server error before work, a
 plan-limit stop, or a host kill or Trial-only memory cap makes a Trial void.
@@ -672,8 +701,11 @@ only covers the reviewed list: its decisions may make other Scores decisive,
 so check the updated pending list afterwards. Rechecks stay in the CLI.</p>
 <p>Each suite gets a paired Verdict using its recorded Trials per Eval task (one
 or three). For each metric, fail when the upper bound at the fail level is below
-zero. Otherwise pass when the lower bound at the pass level is above the margin
-and its upper bound is at least zero; otherwise the metric is inconclusive.
+zero. Otherwise pass when the lower bound at the pass level is above the margin;
+otherwise the metric is inconclusive. A pass whose whole pass-level interval is
+below zero is reported as worse, within the margin: in JSON as
+<code>worse_within_margin: true</code> on that metric, in the text view after the Verdict
+and in the Console. It doesn&#39;t change the decision.
 One set of draws supplies both intervals. Both accuracy and wrong findings must
 pass; either can fail the suite. The prediction of how many more Eval tasks
 would settle an inconclusive metric uses the same two-level decision.
@@ -686,9 +718,14 @@ Spec-review suite runs one. For three-Trial suites, <code>experiments --json</co
 <code>pass_cubed</code>: the share of retained Eval tasks where all three Trials passed,
 separately for each Arm.
 The Bar&#39;s JSON carries <code>pass_level</code> and <code>fail_level</code>; each metric carries
-<code>pass_interval</code> and <code>fail_interval</code>. New Verdicts use <code>paired-dirichlet-v2</code>.
-Saved Experiments under <code>paired-dirichlet-v1</code> remain readable with their stored
-single-level Bar and Verdict unchanged. See <a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0024-pass-and-fail-use-separate-levels.md">ADR-0024</a>.
+<code>pass_interval</code> and <code>fail_interval</code>. New Verdicts use <code>paired-dirichlet-v3</code>, and
+their Bar records <code>&quot;pass_rule&quot;: &quot;margin&quot;</code>. Saved Experiments under
+<code>paired-dirichlet-v2</code>, whose pass also needed the pass-level upper bound to
+reach zero, keep that rule and their stored Bar and Verdict when read, and
+when resumed with the same levels. Saved Experiments under <code>paired-dirichlet-v1</code>
+remain readable with their stored single-level Bar and Verdict unchanged. See
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0024-pass-and-fail-use-separate-levels.md">ADR-0024</a> and
+<a href="https://github.com/JacobStephens2/thirdshift/blob/main/docs/adr/0025-a-pass-needs-only-the-margin.md">ADR-0025</a>.
 For a paused single-level Experiment, its saved view and Console show a resume
 command using both recorded levels in place of the removed <code>--credible-level</code>
 flag. Reading that command does not rewrite its stored Bar or Verdict.

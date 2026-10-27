@@ -4,7 +4,7 @@ use crate::evals::experiment::{
     Arm, Conclusion, Flip, Pending, State, TrialResult, View, trial_key,
 };
 use crate::trial::Outcome;
-use crate::verdict::Decision;
+use crate::verdict::{Decision, PassRule};
 
 pub(super) fn name(view: &View) -> String {
     let d = &view.description;
@@ -418,6 +418,10 @@ fn verdict(view: &View) -> String {
                 html.push_str(&format!("<div class=\"experiment-figure\"><span>{} <span class=\"experiment-tag\" data-tone=\"{}\">{}</span></span>{}</div>", esc(&label), decision(assessment.verdict), decision(assessment.verdict), interval(bounds, assessment.verdict, view.description.bar.margin, &label)));
             }
             let why = match assessment.verdict {
+                Decision::Pass if suite.bar.levels.pass_rule() == PassRule::Margin => format!(
+                    "At the pass level, the {metric} interval sits above the {}-point margin. The interval at the fail level reaches zero or above.",
+                    points(view.description.bar.margin)
+                ),
                 Decision::Pass => format!(
                     "At the pass level, the {metric} interval sits above the {}-point margin and reaches zero or above. The interval at the fail level reaches zero or above too.",
                     points(view.description.bar.margin)
@@ -430,6 +434,9 @@ fn verdict(view: &View) -> String {
                 ),
             };
             html.push_str(&format!("<p class=\"experiment-why\">{why}"));
+            if assessment.worse_within_margin {
+                html.push_str(&format!(" <span class=\"experiment-tag\" data-tone=\"inconclusive\">worse, within the margin</span> The whole {metric} interval at the pass level is below zero; the Bar's margin tolerates it."));
+            }
             if let Some(more) = &assessment.more_tasks {
                 if let Some(count) = more.additional_tasks {
                     html.push_str(&format!(
@@ -1082,10 +1089,17 @@ fn bar(view: &View) -> String {
         crate::verdict::Levels::Separate {
             pass_level,
             fail_level,
+            pass_rule,
         } => format!(
-            "<dt>Pass level</dt><dd>{:.0}%</dd><dt>Fail level</dt><dd>{:.0}%</dd>",
+            "<dt>Pass level</dt><dd>{:.0}%</dd><dt>Fail level</dt><dd>{:.0}%</dd><dt>Pass rule</dt><dd>{}</dd>",
             pass_level * 100.0,
-            fail_level * 100.0
+            fail_level * 100.0,
+            match pass_rule {
+                crate::verdict::PassRule::Margin =>
+                    "The pass-level interval's lower bound is above the margin.",
+                crate::verdict::PassRule::ReachesZero =>
+                    "The pass-level interval's lower bound is above the margin and its upper bound reaches zero.",
+            }
         ),
         crate::verdict::Levels::Legacy { credible_level } => format!(
             "<dt>Credible level</dt><dd>{:.0}%</dd>",

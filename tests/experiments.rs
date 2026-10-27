@@ -69,6 +69,7 @@ fn single_level_experiment(legacy: &mut Value) {
         let bar = bar.as_object_mut().unwrap();
         let level = bar.remove("pass_level").unwrap();
         bar.remove("fail_level");
+        bar.remove("pass_rule");
         bar.insert("credible_level".into(), level);
     };
     old_bar(&mut legacy["bar"]);
@@ -89,6 +90,45 @@ fn single_level_experiment(legacy: &mut Value) {
             metric.insert("interval".into(), interval);
         }
     }
+}
+
+#[test]
+fn saved_reaches_zero_experiments_keep_their_bar_and_verdict_when_read_and_resumed() {
+    let fixture = Fixture::new();
+    let run = fixture.run(&[]);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let id = fixture.experiment()["id"].as_str().unwrap().to_owned();
+    let path = fixture.scenario.path(&format!(
+        "home/.thirdshift/evals/experiments/{id}/experiment.json"
+    ));
+    let mut saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["bar"]["pass_rule"], "margin");
+    // A paired-dirichlet-v2 Experiment, saved before ADR-0025.
+    saved["bar"].as_object_mut().unwrap().remove("pass_rule");
+    for suite in saved["verdict"]["suites"]
+        .as_object_mut()
+        .unwrap()
+        .values_mut()
+    {
+        suite["bar"].as_object_mut().unwrap().remove("pass_rule");
+        suite["method"] = json!(
+            "paired-dirichlet-v2; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles"
+        );
+    }
+    fs::write(&path, serde_json::to_vec(&saved).unwrap()).unwrap();
+    let before = fs::read(&path).unwrap();
+    let shown = fixture.experiment();
+    assert_eq!(shown["bar"], saved["bar"]);
+    assert_eq!(shown["verdict"], saved["verdict"]);
+    assert_eq!(fs::read(&path).unwrap(), before);
+    let trials = fixture.trial_calls().len();
+    // Today's default levels match the saved ones, so it resumes under v2.
+    let resumed = fixture.run(&[]);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    let resumed: Value = serde_json::from_str(&resumed.stdout).unwrap();
+    assert_eq!(resumed["bar"], saved["bar"]);
+    assert_eq!(resumed["verdict"], saved["verdict"]);
+    assert_eq!(fixture.trial_calls().len(), trials);
 }
 
 #[test]
@@ -163,8 +203,9 @@ fn experiment_fixes_both_levels_before_trials_and_refuses_changes() {
         suite["method"]
             .as_str()
             .unwrap()
-            .starts_with("paired-dirichlet-v2;")
+            .starts_with("paired-dirichlet-v3;")
     );
+    assert_eq!(saved["bar"]["pass_rule"], "margin");
     for metric in ["accuracy", "wrong_findings"] {
         assert!(suite[metric]["pass_interval"]["lower"].is_number());
         assert!(suite[metric]["fail_interval"]["upper"].is_number());

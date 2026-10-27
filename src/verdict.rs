@@ -17,9 +17,11 @@ mod levels;
 mod prediction;
 
 pub(crate) use levels::decimal;
-pub use levels::{Intervals, Levels};
+pub use levels::{Intervals, Levels, PassRule};
 
 const METHOD: &str =
+    "paired-dirichlet-v3; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles";
+const REACHES_ZERO_METHOD: &str =
     "paired-dirichlet-v2; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles";
 const LEGACY_METHOD: &str =
     "paired-dirichlet-v1; Pcg64 0.10.2; rand 0.10.3; rand_distr 0.6.0; linear quantiles";
@@ -128,6 +130,10 @@ pub struct Assessment {
     #[serde(flatten)]
     pub intervals: Intervals,
     pub verdict: Decision,
+    /// A pass whose pass-level interval lies wholly below zero: statistically
+    /// worse, but within the margin. It never changes the decision.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub worse_within_margin: bool,
     pub more_tasks: Option<MoreTasks>,
 }
 
@@ -187,7 +193,14 @@ fn evaluate(scores: &[TaskScores], bar: &Bar, predictions: bool) -> Result<Verdi
         bar: bar.clone(),
         thirdshift_version: env!("CARGO_PKG_VERSION").to_owned(),
         method: match bar.levels {
-            Levels::Separate { .. } => METHOD,
+            Levels::Separate {
+                pass_rule: PassRule::Margin,
+                ..
+            } => METHOD,
+            Levels::Separate {
+                pass_rule: PassRule::ReachesZero,
+                ..
+            } => REACHES_ZERO_METHOD,
             Levels::Legacy { .. } => LEGACY_METHOD,
         }
         .to_owned(),
@@ -249,11 +262,12 @@ fn assess(counts: &[usize], bar: &Bar, seed: u64, predictions: bool) -> Result<A
         "posterior draws are outside floating-point range"
     );
     let intervals = Intervals::from_draws(&mut draws, bar.levels);
-    let verdict = intervals.decide(bar.margin);
+    let verdict = intervals.decide(bar.margin, bar.levels.pass_rule());
     Ok(Assessment {
         difference_counts: counts.to_vec(),
         intervals,
         verdict,
+        worse_within_margin: verdict == Decision::Pass && intervals.pass().upper < 0.0,
         more_tasks: (predictions && verdict == Decision::Inconclusive)
             .then(|| prediction::more_tasks(&posterior, bar, &mut rng))
             .transpose()?,

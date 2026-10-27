@@ -1,4 +1,4 @@
-use super::{Bar, Decision, Score, TaskScores, Verdict, judge};
+use super::{Bar, Decision, PassRule, Score, TaskScores, Verdict, judge};
 
 fn task(baseline_passes: usize, candidate_passes: usize, trials: usize) -> TaskScores {
     let arm = |passes| {
@@ -49,7 +49,7 @@ fn pass_and_fail_levels_judge_separately_with_an_inconclusive_between() {
 }
 
 #[test]
-fn fail_takes_precedence_and_a_pass_interval_must_reach_zero() {
+fn fail_takes_precedence_and_a_pass_interval_wholly_below_zero_passes_worse_within_the_margin() {
     let mut slight_loss = vec![task(3, 3, 3); 29];
     slight_loss.push(task(3, 2, 3));
     let bar = with_levels(&Bar::default(), 0.95, 0.1);
@@ -60,17 +60,62 @@ fn fail_takes_precedence_and_a_pass_interval_must_reach_zero() {
     assert!(accuracy.intervals.pass().upper >= 0.0);
     assert!(accuracy.intervals.fail().upper < 0.0);
     assert_eq!(accuracy.verdict, Decision::Fail);
+    assert!(!accuracy.worse_within_margin);
 
     let mut loss = vec![task(3, 3, 3); 27];
     loss.extend(vec![task(3, 2, 3); 3]);
     let bar = with_levels(&Bar::default(), 0.5, 0.999999);
-    let accuracy = super::judge_without_predictions(&loss, &bar)
-        .unwrap()
-        .accuracy;
+    let verdict = super::judge_without_predictions(&loss, &bar).unwrap();
+    let accuracy = &verdict.accuracy;
     assert!(accuracy.intervals.pass().lower > bar.margin);
     assert!(accuracy.intervals.pass().upper < 0.0);
     assert!(accuracy.intervals.fail().upper >= 0.0);
-    assert_eq!(accuracy.verdict, Decision::Inconclusive);
+    assert_eq!(accuracy.verdict, Decision::Pass);
+    assert!(accuracy.worse_within_margin);
+    assert!(!verdict.wrong_findings.worse_within_margin);
+    let json = serde_json::to_value(&verdict).unwrap();
+    assert_eq!(json["accuracy"]["worse_within_margin"], true);
+    assert!(json["wrong_findings"].get("worse_within_margin").is_none());
+}
+
+fn reaches_zero(bar: &Bar) -> Bar {
+    let mut json = serde_json::to_value(bar).unwrap();
+    json.as_object_mut().unwrap().remove("pass_rule");
+    serde_json::from_value(json).unwrap()
+}
+
+// A Bar saved before ADR-0025 has no pass_rule and keeps ADR-0024's rule.
+#[test]
+fn a_saved_two_level_bar_keeps_the_rule_that_a_pass_interval_must_reach_zero() {
+    let mut loss = vec![task(3, 3, 3); 27];
+    loss.extend(vec![task(3, 2, 3); 3]);
+    let bar = reaches_zero(&with_levels(&Bar::default(), 0.5, 0.999999));
+    assert_eq!(bar.levels.pass_rule(), PassRule::ReachesZero);
+    let verdict = super::judge_without_predictions(&loss, &bar).unwrap();
+    assert!(verdict.accuracy.intervals.pass().upper < 0.0);
+    assert_eq!(verdict.accuracy.verdict, Decision::Inconclusive);
+    assert!(!verdict.accuracy.worse_within_margin);
+    assert!(verdict.method.starts_with("paired-dirichlet-v2;"));
+    let json = serde_json::to_value(&verdict).unwrap();
+    assert!(json["bar"].get("pass_rule").is_none());
+    assert!(json["accuracy"].get("worse_within_margin").is_none());
+    let decoded: Verdict = serde_json::from_value(json.clone()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), json);
+
+    // The prediction of additional Eval tasks follows the Bar's rule too.
+    let mut scores = vec![task(3, 3, 3); 4];
+    scores.extend(vec![task(3, 2, 3); 2]);
+    let mut current = Bar::default();
+    current.prediction.max_additional_tasks = 20;
+    let clear = |bar: &Bar| {
+        judge(&scores, bar)
+            .unwrap()
+            .accuracy
+            .more_tasks
+            .unwrap()
+            .clear_probabilities
+    };
+    assert_ne!(clear(&current), clear(&reaches_zero(&current)));
 }
 
 #[test]
@@ -81,6 +126,8 @@ fn the_default_pass_level_is_the_seventy_percent_floor() {
 
 #[test]
 fn the_smallest_identical_code_review_suite_passing_the_default_bar_is_four_tasks() {
+    // Identical Arms give an interval symmetric about zero, so only the
+    // margin decides; ADR-0025 leaves this pin where ADR-0024 put it.
     let bar = Bar::default();
     for count in 1..=4 {
         let verdict = super::judge_without_predictions(&vec![task(3, 3, 3); count], &bar).unwrap();
@@ -138,7 +185,10 @@ fn a_code_review_a_a_experiment_passes_the_default_bar_only_when_its_disagreemen
     measured.extend([task(2, 0, 3), task(3, 2, 3)]);
     let verdict = super::judge_without_predictions(&measured, &bar).unwrap();
     assert_eq!(verdict.accuracy.difference_counts, [0, 1, 1, 8, 0, 0, 0]);
+    // Ten Eval tasks leave the pass-level lower bound below the margin;
+    // dropping ADR-0024's upper-bound clause does not settle it.
     assert!(verdict.accuracy.intervals.pass().upper < 0.0);
+    assert!(verdict.accuracy.intervals.pass().lower <= bar.margin);
     assert_eq!(verdict.verdict, Decision::Inconclusive);
 
     let mut balanced = vec![task(0, 0, 3); 8];
@@ -339,6 +389,7 @@ fn json_preserves_the_bar_intervals_counts_and_implementation() {
         levels: super::Levels::Separate {
             pass_level: 0.8,
             fail_level: 0.9,
+            pass_rule: PassRule::Margin,
         },
         prior: 1.5,
         ..Bar::default()
@@ -356,9 +407,10 @@ fn json_preserves_the_bar_intervals_counts_and_implementation() {
         json["method"]
             .as_str()
             .unwrap()
-            .starts_with("paired-dirichlet-v2;")
+            .starts_with("paired-dirichlet-v3;")
     );
     assert_eq!(json["bar"]["pass_level"], 0.8);
+    assert_eq!(json["bar"]["pass_rule"], "margin");
     assert_eq!(json["bar"]["fail_level"], 0.9);
     for metric in ["accuracy", "wrong_findings"] {
         let pass = &json[metric]["pass_interval"];
@@ -407,10 +459,12 @@ fn invalid_bars_and_incomplete_retained_pairs_are_rejected() {
             super::Levels::Separate {
                 pass_level: invalid,
                 fail_level: 0.95,
+                pass_rule: PassRule::Margin,
             },
             super::Levels::Separate {
                 pass_level: 0.95,
                 fail_level: invalid,
+                pass_rule: PassRule::Margin,
             },
         ] {
             assert!(
