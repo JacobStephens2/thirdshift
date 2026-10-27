@@ -42,11 +42,11 @@ use crate::logs::{self, Begin, Work};
 use crate::notification::{About, NotificationAsk, RunNotification};
 use crate::process::{self, Control, Interruption};
 use crate::pull_request::PullRequest;
-use crate::recovery::{self, Preservation, Recovery};
+use crate::recovery::{self, Recovery};
 use crate::run::Goal;
 use crate::run_ending::{Account, Cause};
 use crate::skill;
-use crate::worktree::{Preserved, SkillWorktree, Worktree};
+use crate::worktree::{SkillWorktree, Worktree};
 use crate::{delivery, interrupt, launch, progress, prompt, session, skills, trust};
 
 /// The issue URL when the Process has an issue; unset otherwise.
@@ -174,6 +174,8 @@ struct StepRun<'a> {
     choice: &'a Choice,
     issue: Option<&'a IssueUrl>,
     started: DateTime<Utc>,
+    /// Branch and Base branch when this Step continues an Issue branch.
+    continuation: Option<(String, String)>,
 }
 
 struct WrittenGuard;
@@ -510,10 +512,12 @@ fn run_issue_branch(
             process: name,
         };
         let result = execute_steps(name, &prepared, Some(&mut issue_run));
+        let context = continuation(&issue_run);
+        let kept_on_origin = issue_run.on_origin;
         if let Err(error) = &result
             && let Some(checkout) = issue_run.checkout.as_mut()
         {
-            preserve_step_failure(checkout, name, &issue, &base, &branch, on_origin, error);
+            preserve_step_failure(checkout, context, kept_on_origin, error);
         }
         result
     };
@@ -552,6 +556,10 @@ fn execute_steps(
         .with_context(|| format!("could not create {}", results.display()))?;
     let mut earlier = Vec::new();
     let mut last = String::new();
+    let continuing = issue_run.as_ref().and_then(|run| {
+        run.on_origin
+            .then(|| (run.branch.to_string(), run.base.to_string()))
+    });
     for range in group_ranges(&prepared.steps) {
         let group = &prepared.steps[range.clone()];
         if group.len() == 1 && matches!(group[0].kind, StepKind::Delivery) {
@@ -581,6 +589,7 @@ fn execute_steps(
                 &results,
                 range.start == 0,
                 checkout,
+                step_continuation(prepared, &group[0], continuing.as_ref()),
             );
             vec![(started.elapsed(), outcome)]
         } else {
@@ -592,6 +601,7 @@ fn execute_steps(
                 &results,
                 range.start,
                 checkout,
+                continuing.as_ref(),
             )
         };
         let mut group_error = None;
@@ -643,6 +653,7 @@ fn run_parallel(
     results: &Path,
     group_start: usize,
     checkout: Option<&Worktree>,
+    continuing: Option<&(String, String)>,
 ) -> Vec<(Duration, Result<String>)> {
     thread::scope(|scope| {
         let mut handles = Vec::with_capacity(group.len());
@@ -655,6 +666,7 @@ fn run_parallel(
             let first = group_start + offset == 0;
             let issue = prepared.issue.clone();
             let started_at = prepared.started;
+            let continuation = step_continuation(prepared, step, continuing);
             handles.push(scope.spawn(move || {
                 let started = Instant::now();
                 let run = StepRun {
@@ -662,6 +674,7 @@ fn run_parallel(
                     choice: &choice,
                     issue: issue.as_ref(),
                     started: started_at,
+                    continuation,
                 };
                 let outcome = run_step_in(&run, &cwd, step, &earlier, &results, first);
                 (started.elapsed(), outcome)
@@ -717,12 +730,14 @@ fn run_step(
     results: &Path,
     first: bool,
     checkout: Option<&Worktree>,
+    continuation: Option<(String, String)>,
 ) -> Result<String> {
     let run = StepRun {
         process,
         choice: &prepared.choice,
         issue: prepared.issue.as_ref(),
         started: prepared.started,
+        continuation,
     };
     run_step_in(
         &run,
@@ -740,12 +755,26 @@ fn step_dir<'a>(
     checkout: Option<&'a Worktree>,
 ) -> &'a Path {
     if let Some(checkout) = checkout
-        && step.worktree.is_some()
-        && prepared.issue_worktree.as_deref() == step.worktree.as_deref()
+        && names_issue_worktree(step.worktree.as_deref(), prepared.issue_worktree.as_deref())
     {
         return checkout.path();
     }
     worktree_path(&prepared.worktrees, step.worktree.as_deref())
+}
+
+/// Branch and Base branch for a Step whose checkout continues the Issue branch.
+fn step_continuation(
+    prepared: &Prepared,
+    step: &ResolvedStep,
+    continuing: Option<&(String, String)>,
+) -> Option<(String, String)> {
+    let (branch, base) = continuing?;
+    names_issue_worktree(step.worktree.as_deref(), prepared.issue_worktree.as_deref())
+        .then(|| (branch.clone(), base.clone()))
+}
+
+fn names_issue_worktree(step: Option<&str>, issue: Option<&str>) -> bool {
+    matches!((step, issue), (Some(step), Some(issue)) if step == issue)
 }
 
 fn run_delivery(
@@ -812,35 +841,16 @@ fn continuation(issue_run: &IssueRun<'_>) -> recovery::Continuation {
 
 fn preserve_step_failure(
     checkout: &mut Worktree,
-    process: &str,
-    issue: &IssueUrl,
-    base: &str,
-    branch: &str,
+    context: recovery::Continuation,
     on_origin: bool,
     error: &anyhow::Error,
 ) {
     let reason = Cause::of(error).first_line().to_string();
-    let preservation = match checkout.preserve_failed_run(base, &reason, &mut || Ok(())) {
-        Ok(Preserved::Pushed) => Preservation::Remote,
-        Ok(Preserved::NoChanges) => Preservation::None,
-        Err(problem) => {
-            progress::step(format!(
-                "could not push the failed ticket run's work, so it may exist only locally: {problem:#}"
-            ));
-            Preservation::Local
-        }
-    };
+    let preserved = checkout.preserve_failed_run(&context.base, &reason, &mut || Ok(()));
+    let preservation = recovery::preservation_of(preserved, |line| progress::step(line));
     let mut recovery = Recovery::new(recovery::Stage::Implementation, preservation);
     recovery.record_worktree(checkout.path().to_path_buf());
-    recovery.add_command_context(
-        recovery::Continuation {
-            command: format!("thirdshift process {process} issue {}", issue.url),
-            launch: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
-            base: base.to_string(),
-            branch: branch.to_string(),
-        },
-        on_origin,
-    );
+    recovery.add_command_context(context, on_origin);
     for line in recovery.lines() {
         progress::step(line);
     }
@@ -870,6 +880,9 @@ fn run_step_in(
                 earlier,
                 first,
                 run.issue,
+                run.continuation
+                    .as_ref()
+                    .map(|(branch, base)| prompt::ProcessContinuation { branch, base }),
             );
             match run.issue {
                 Some(issue) => {
@@ -1173,8 +1186,10 @@ fn resolve_dir<'a>(
     issue_checkout: Option<&'a Path>,
 ) -> &'a Path {
     if let Some(checkout) = issue_checkout
-        && step.worktree.as_ref().map(|(name, _)| name.as_str()) == issue_worktree
-        && issue_worktree.is_some()
+        && names_issue_worktree(
+            step.worktree.as_ref().map(|(name, _)| name.as_str()),
+            issue_worktree,
+        )
     {
         return checkout;
     }

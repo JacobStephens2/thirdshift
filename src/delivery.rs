@@ -130,74 +130,60 @@ impl Delivery<'_> {
         checklist: Option<&str>,
     ) -> Result<Reached, FailedRun> {
         let tracker = Tracker::new(opening.session.stage(), CommandLog);
-        let route = Route {
-            security_review: self.security_review,
-            issue: self.issue,
-            base: self.base,
-            branch: worktree.branch(),
-            goal: self.goal,
-            harness: &self.child_asks.harness,
-        };
-        pull_request.begin_delivery();
-        let (issue, started, path) = (self.issue, self.started, worktree.path());
-        let before_each = move || {
-            no_untrusted_edit_since(issue, started)?;
-            hand_over_issue(issue, path)
-        };
-        let (delivered, log) = Sessions::checked_within(
-            self.logs,
-            worktree.path(),
-            &self.child_asks.harness,
-            self.child_asks.security_review_harness.as_ref(),
-            self.child_asks.security_review_default.as_ref(),
-            &before_each,
-            |sessions| {
+        let logs = self.logs;
+        let issue = self.issue;
+        let started = self.started;
+        let base = self.base;
+        let goal = self.goal;
+        let security_review = self.security_review;
+        let child_asks = self.child_asks;
+        let base_fix = self.base_fix;
+        run_checked(
+            logs,
+            issue,
+            started,
+            &child_asks.harness,
+            child_asks.security_review_harness.as_ref(),
+            child_asks.security_review_default.as_ref(),
+            base,
+            worktree,
+            pull_request,
+            &tracker,
+            |resolution, log| Reached {
+                resolution,
+                log,
+                ticket_lines: Vec::new(),
+            },
+            |merged, log| Reached {
+                resolution: Resolution::PullRequest {
+                    url: merged.pr.url.clone(),
+                    goal: Goal::Merged,
+                },
+                log,
+                ticket_lines: Vec::new(),
+            },
+            |tracker, worktree, pull_request, sessions| {
+                let route = Route {
+                    security_review,
+                    issue,
+                    base,
+                    branch: worktree.branch(),
+                    goal,
+                    harness: &child_asks.harness,
+                };
                 let mut outside = InWorktree {
-                    tracker: &tracker,
-                    issue: self.issue,
-                    worktree: &worktree,
-                    base: self.base,
-                    base_fix: self.base_fix,
-                    child_asks: self.child_asks,
+                    tracker,
+                    issue,
+                    worktree,
+                    base,
+                    base_fix,
+                    child_asks,
                     sessions,
                     pull_request,
                 };
                 route.steps(&mut outside, &opening, checklist)
             },
-        );
-        let result = match delivered {
-            Ok(resolution) => Ok(Reached {
-                resolution,
-                log,
-                ticket_lines: Vec::new(),
-            }),
-            Err(error) => {
-                if let Some(merged) = error.downcast_ref::<AlreadyMerged>()
-                    && worktree.fully_landed_at(&merged.head).unwrap_or(false)
-                {
-                    progress::step("the pull request was merged while Delivery was running");
-                    Ok(Reached {
-                        resolution: Resolution::PullRequest {
-                            url: merged.pr.url.clone(),
-                            goal: Goal::Merged,
-                        },
-                        log,
-                        ticket_lines: Vec::new(),
-                    })
-                } else {
-                    let stopped_at = stopped_at(&tracker, &error);
-                    let path = worktree.path().to_path_buf();
-                    let mut outside = OnFailure {
-                        base: self.base,
-                        worktree,
-                        pull_request,
-                    };
-                    Err(fail(&mut outside, stopped_at, path, log, error))
-                }
-            }
-        };
-        crate::logs::unaddressed_findings(pull_request.unaddressed_findings());
-        result
+        )
     }
 
     /// Publish the Issue branch already produced by a Custom process and
@@ -214,55 +200,96 @@ impl Delivery<'_> {
         pull_request: &mut PullRequest,
     ) -> Result<String, FailedRun> {
         let tracker = Tracker::new(Stage::Push, CommandLog);
-        pull_request.begin_delivery();
-        let (issue, started, path) = (self.issue, self.started, worktree.path().to_path_buf());
-        let before_each = move || {
-            no_untrusted_edit_since(issue, started)?;
-            hand_over_issue(issue, &path)
-        };
-        let (delivered, log) = Sessions::checked_within(
-            self.logs,
-            worktree.path(),
-            &self.child_asks.harness,
-            self.child_asks.security_review_harness.as_ref(),
-            self.child_asks.security_review_default.as_ref(),
-            &before_each,
-            |sessions| {
+        let logs = self.logs;
+        let issue = self.issue;
+        let started = self.started;
+        let base = self.base;
+        let child_asks = self.child_asks;
+        let base_fix = self.base_fix;
+        run_checked(
+            logs,
+            issue,
+            started,
+            &child_asks.harness,
+            child_asks.security_review_harness.as_ref(),
+            child_asks.security_review_default.as_ref(),
+            base,
+            worktree,
+            pull_request,
+            &tracker,
+            |url, _log| url,
+            |merged, _log| merged.pr.url.clone(),
+            |tracker, worktree, pull_request, sessions| {
                 publish_steps(
-                    &tracker,
-                    self.issue,
-                    self.base,
-                    self.child_asks,
-                    self.base_fix,
-                    &worktree,
+                    tracker,
+                    issue,
+                    base,
+                    child_asks,
+                    base_fix,
+                    worktree,
                     pull_request,
                     sessions,
                 )
             },
-        );
-        let result = match delivered {
-            Ok(url) => Ok(url),
-            Err(error) => {
-                if let Some(merged) = error.downcast_ref::<AlreadyMerged>()
-                    && worktree.fully_landed_at(&merged.head).unwrap_or(false)
-                {
-                    progress::step("the pull request was merged while Delivery was running");
-                    Ok(merged.pr.url.clone())
-                } else {
-                    let stopped_at = stopped_at(&tracker, &error);
-                    let path = worktree.path().to_path_buf();
-                    let mut outside = OnFailure {
-                        base: self.base,
-                        worktree,
-                        pull_request,
-                    };
-                    Err(fail(&mut outside, stopped_at, path, log, error))
-                }
-            }
-        };
-        crate::logs::unaddressed_findings(pull_request.unaddressed_findings());
-        result
+        )
     }
+}
+
+/// The shared Delivery envelope: check for an untrusted edit before each
+/// session, run `steps`, and on failure either accept an already-merged pull
+/// request whose head includes the local work or take the Failed run path.
+fn run_checked<T, S>(
+    logs: &Logs,
+    issue: &IssueUrl,
+    started: DateTime<Utc>,
+    harness: &Choice,
+    security_review: Option<&Choice>,
+    security_review_default: Option<&Choice>,
+    base: &str,
+    worktree: Worktree,
+    pull_request: &mut PullRequest,
+    tracker: &Tracker,
+    on_ok: impl FnOnce(T, Option<PathBuf>) -> S,
+    on_merged: impl FnOnce(&AlreadyMerged, Option<PathBuf>) -> S,
+    steps: impl FnOnce(&Tracker, &Worktree, &mut PullRequest, &Sessions) -> Result<T>,
+) -> Result<S, FailedRun> {
+    pull_request.begin_delivery();
+    let path = worktree.path().to_path_buf();
+    let before_each = move || {
+        no_untrusted_edit_since(issue, started)?;
+        hand_over_issue(issue, &path)
+    };
+    let (delivered, log) = Sessions::checked_within(
+        logs,
+        worktree.path(),
+        harness,
+        security_review,
+        security_review_default,
+        &before_each,
+        |sessions| steps(tracker, &worktree, pull_request, sessions),
+    );
+    let result = match delivered {
+        Ok(value) => Ok(on_ok(value, log)),
+        Err(error) => {
+            if let Some(merged) = error.downcast_ref::<AlreadyMerged>()
+                && worktree.fully_landed_at(&merged.head).unwrap_or(false)
+            {
+                progress::step("the pull request was merged while Delivery was running");
+                Ok(on_merged(merged, log))
+            } else {
+                let stopped_at = stopped_at(&tracker, &error);
+                let path = worktree.path().to_path_buf();
+                let mut outside = OnFailure {
+                    base,
+                    worktree,
+                    pull_request,
+                };
+                Err(fail(&mut outside, stopped_at, path, log, error))
+            }
+        }
+    };
+    crate::logs::unaddressed_findings(pull_request.unaddressed_findings());
+    result
 }
 
 /// [`Delivery::publish`]'s steps: push, open a draft when none exists, write
@@ -527,16 +554,8 @@ fn fail(
     let preservation = if keep_ready {
         Preservation::Remote
     } else {
-        match outside.preserve_failed_run(&reason) {
-            Ok(Preserved::Pushed) => Preservation::Remote,
-            Ok(Preserved::NoChanges) => Preservation::None,
-            Err(problem) => {
-                outside.step(format!(
-                    "could not push the failed ticket run's work, so it may exist only locally: {problem:#}"
-                ));
-                Preservation::Local
-            }
-        }
+        let preserved = outside.preserve_failed_run(&reason);
+        recovery::preservation_of(preserved, |line| outside.step(line))
     };
     let pr_url = match outside.finish_pr(keep_ready) {
         Ok(pr_url) => pr_url,

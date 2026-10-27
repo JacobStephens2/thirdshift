@@ -17,7 +17,7 @@ A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, 
 - **[Pickup run](#pickup-runs)**, `thirdshift pickup`: takes the lowest-numbered **Ready issue** by default, the highest-numbered with `pickup.order = "highest-first"` or `highest-first` on the command, and runs it.
 - **[Security run](#security-runs)**, `thirdshift secure`: audits the **Base branch** and records each **Security finding** privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.
 
-Architect, Pickup and Security runs are **Passes**, as is a Custom process started with no issue: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
+Architect, Pickup and Security runs are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
 
 Every session runs on the **Harness** you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode. See [Harness, Model and Effort](#harness-model-and-effort).
 
@@ -939,7 +939,8 @@ A declared worktree's `kind` is `throwaway` or `issue-branch`. A throwaway
 worktree is detached at the Base branch. An Issue-branch worktree is the
 Issue branch a Ticket run would use for the issue the command names:
 `issue-<n>`, then `issue-<n>-branch-<k>` for k ≥ 2. A Continuation reuses
-the existing branch, and an open pull request's base is the Base branch. A
+the existing branch, and an open pull request's base is the Base branch.
+Session Steps in that checkout are told to build on its commits. A
 Process has at most one Issue-branch worktree. The Steps that name it run in
 that checkout. Any other declared worktree stays throwaway.
 
@@ -1740,7 +1741,7 @@ The rule doesn't ask whether anything will take the Ready issue. A `ready-for-ag
 
 A **Pass** is a command started with no Issue URL that decides before any work whether it is skipped. Only one Pass per repository runs at a time on a machine. A Pass started while another on the same repository is still running, the Spec run or Ticket run it dispatched included, is **skipped**: it prints `another Pass is already running on <owner>/<repo>` as a progress line on stderr, prints nothing on stdout, and exits `0`. Skipped is not a failure. A skipped Pass does nothing else: no launch pull, no worktree, no agent session, and no issue filed or labelled. This holds for every Pass, however it was started, so two never build one repository at once.
 
-The repository is the one `origin` names, so two clones of one repository count as the same, and Passes on different repositories run at the same time. A Ticket run or a Spec run started on an **Issue URL** is never skipped this way, and never makes a Pass skip. A Custom process started with an issue is the same. A Custom process started with no issue is a Pass for this rule only: it does not take an Architect run's Ready-issue or Architect-idea gates. Its skip keeps a Command record whose outcome is `skipped`.
+The repository is the one `origin` names, so two clones of one repository count as the same, and Passes on different repositories run at the same time. A Ticket run or a Spec run started on an **Issue URL** is never skipped this way, and never makes a Pass skip. A Custom process started with an issue is the same. A Custom process started with no issue, and whose file declares no Issue-branch worktree, is a Pass for this rule only: it does not take an Architect run's Ready-issue or Architect-idea gates. Its skip keeps a Command record whose outcome is `skipped`. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped.
 
 thirdshift holds the rule with an operating-system lock on a file under `~/.thirdshift/architect-locks/`, shared by every kind of Pass, which the Pass's process takes without waiting, after its checks in step 1, and holds until it exits. The directory keeps its original name so older thirdshift versions share the lock too. The operating system releases the lock when that process ends for any reason, a crash, a kill or a reboot included, so there is never a stale lock to clear: the next Pass on the repository runs normally. The file itself stays, and means nothing on its own. A review worktree that a killed Architect run left behind is removed by the next one.
 

@@ -334,6 +334,7 @@ fn prompts() -> Vec<Prompt> {
                 &[],
                 true,
                 None,
+                None,
             ),
         },
         Prompt {
@@ -352,6 +353,7 @@ fn prompts() -> Vec<Prompt> {
                 )],
                 false,
                 None,
+                None,
             ),
         },
         Prompt {
@@ -367,6 +369,7 @@ fn prompts() -> Vec<Prompt> {
                 &[],
                 true,
                 Some(&issue),
+                None,
             ),
         },
     ];

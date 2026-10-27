@@ -116,7 +116,7 @@ One invocation of the factory with no **Issue URL**: a **Security audit** of the
 _Avoid_: Fencing (former name), Secure run (it reads as a run that is secure), audit run, security pass
 
 **Pass**:
-An **Architect run**, a **Pickup run**, a **Security run**, or a **Custom process** started with no issue: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. A Custom process started with no issue is skipped while another Pass on the same repository is still running on the machine, its Spec run or Ticket run included, and it does not take an Architect run's Ready-issue or Architect-idea gates. A Custom process started with an issue is not a Pass.
+An **Architect run**, a **Pickup run**, a **Security run**, or a **Custom process** started with no issue and no Issue-branch worktree: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. A Custom process started with no issue and no Issue-branch worktree is skipped while another Pass on the same repository is still running on the machine, its Spec run or Ticket run included, and it does not take an Architect run's Ready-issue or Architect-idea gates. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, and is not a Pass. A Custom process started with an issue is not a Pass.
 _Avoid_: tick, cycle
 
 ### Architecture

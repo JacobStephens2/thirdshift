@@ -3772,3 +3772,38 @@ printf 'continued' > "$FAKE_CLAUDE_FINAL_MESSAGE"
     assert_eq!(scenario.issue_labels(7), Vec::<String>::new());
     scenario.assert_cleaned_up("issue-7");
 }
+
+#[test]
+fn a_continuation_prompt_differs_from_a_fresh_start() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "ship", SHIP);
+    scenario.origin_has_branch("issue-7", "main", &["Earlier work"]);
+    let _url = scenario.github_has_pr("issue-7", "main", "OPEN");
+    scenario.issue_labelled(7, &["in-progress"]);
+    scenario.agent_does_for_in_session(
+        7,
+        1,
+        "printf 'continued' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+    );
+    scenario.agent_does_for_in_session(
+        7,
+        2,
+        "printf 'reviewed' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n",
+    );
+
+    let result = scenario.run(&["process", "ship", "issue", "7"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let calls = scenario.claude_calls();
+    let prompt = calls[0]["prompt"].as_str().unwrap();
+    assert!(
+        prompt.contains("already has commits")
+            || prompt.contains("Build on them")
+            || prompt.contains("don't start over"),
+        "continuation prompt should differ from a fresh start: {prompt}"
+    );
+    assert!(
+        !prompt.contains("This is the first Step. No earlier Step has a result."),
+        "continuation prompt still denies earlier work: {prompt}"
+    );
+}
