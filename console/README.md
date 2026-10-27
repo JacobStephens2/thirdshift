@@ -189,8 +189,12 @@ command, without opening Command details. If clipboard access is unavailable,
 a dialog selects the same text for copying by keyboard. The dialog keeps that
 snapshot through live updates.
 
-Dismiss is in Command details, and on Needs you and Ready for review rows
-without JavaScript. Undo remains in Command details. Both immediately
+Dismiss is always visible on the row in Needs you and Ready for review,
+beside Copy where available. `d` dismisses the selected row and selects the next
+one, without opening Command details. An inline dismissal shows a temporary
+`Dismissed <subject> · Undo` notice; Undo restores that Command's row. Notices
+stay while hovered, focused, saving or showing an error. Command details also
+keeps Dismiss and Undo. Both immediately
 show “Dismissing…” or
 “Taking back dismissal…” while the request is pending. The button stays disabled
 through live updates to prevent duplicate submissions. A failed request shows
@@ -409,7 +413,8 @@ Experiment keeps its fixed Eval tasks on resume.
 
 `j` / `k` select headings and visible rows, wrapping at either end; on the
 Inbox, open Command details follow the selection. `Space` toggles a row's
-peek, or folds a heading; `Enter` opens that row's full Command log. `z` folds
+peek, or folds a heading; `Enter` opens that row's full Command log. `d` dismisses
+a selected dismissible row and selects the next row. `z` folds
 the current History or Security section. `Escape` closes help, jumps or the
 peek, one layer at a time, then clears selection. `?` opens the key list. `g`
 opens the jump list: `i` Inbox, `b` Lanes, `t` Stages, `f` Waterfall, `h` History, `o` Logs, `s` Security, `j` Cron jobs,

@@ -1172,11 +1172,15 @@ Command, its issue, labels, Claim and pull request stay as they are, and nothing
 is written to GitHub. The Activity log records each dismissal and each one taken
 back, naming the Unix user and the CLI. `dismiss --json` reports what it did.
 
-In the Console, any signed-in account can click **Dismiss** in a waiting row's
-Command details, beside Stop when available, or on the row itself when
-JavaScript is off. One click
-dismisses, with no confirmation page. A dismissed row offers **Undo** in Command
-details. While either request is pending, its buttons show “Dismissing…” or
+In the Console, any signed-in account can click **Dismiss** on the row in Needs
+you or Ready for review, or in Command details beside Stop when available.
+With JavaScript, `d` dismisses the selected row and selects the next row; text
+fields and open dialogs keep their keys. An inline dismissal shows a temporary
+`Dismissed <subject> · Undo` notice. Undo restores that Command's row. Notices
+stay while hovered, focused, saving or showing an error. Without JavaScript,
+rows retain their full Dismiss form. One click dismisses, with no confirmation
+page. A dismissed row also offers **Undo** in Command details.
+While either request is pending, its buttons show “Dismissing…” or
 “Taking back dismissal…” and stay disabled, including through live updates.
 A failed request shows the error and lets you retry. Command details shows each
 button's CLI form beside it. Both posts require a session and a valid CSRF token, open

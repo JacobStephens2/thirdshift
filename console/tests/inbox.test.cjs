@@ -101,6 +101,122 @@ async function showDetails(page, row) {
   await row.locator(':scope > .row-head > .state').click();
 }
 
+test('inline Dismiss leaves Needs you without opening details and offers Undo on a phone', async t => {
+  const page = await pageFor(t, { viewport: { width: 390, height: 844 } });
+  await page.goto(origin);
+  const waiting = '#inbox > [data-group="needs you"] .command';
+  const row = page.locator(waiting).first();
+  const command = await row.getAttribute('data-command');
+  const subject = await row.locator(':scope > .row-head > .subject').textContent();
+  const count = await page.locator(waiting).count();
+  await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
+  await page.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count - 1, { waiting, count });
+  assert.equal(await page.locator('#peek').isVisible(), false);
+  const notice = page.locator('#dismissal-notices > [role="status"]').filter({ hasText: `Dismissed ${subject}` });
+  await notice.waitFor();
+  assert.equal(await notice.locator('[name="command"]').inputValue(), command);
+  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  await notice.getByRole('button', { name: 'Undo', exact: true }).click();
+  await page.waitForFunction(({ waiting, count }) => document.querySelectorAll(waiting).length === count, { waiting, count });
+  await notice.waitFor({ state: 'detached' });
+  assert.equal(await page.locator('#peek').isVisible(), false);
+});
+
+test('j then d dismisses and selects the next row, respecting typing, dialogs and modifiers', async t => {
+  const page = await pageFor(t);
+  await page.goto(origin);
+  const rows = page.locator('#inbox > [data-group="needs you"] .command');
+  const count = await rows.count();
+  const next = await rows.nth(1).getAttribute('data-command');
+  await page.keyboard.press('j');
+  const command = await page.locator('.command[aria-current="true"]').getAttribute('data-command');
+  for (const key of ['Control+d', 'Meta+d', 'Alt+d', 'Shift+d']) await page.keyboard.press(key);
+  await page.keyboard.press('?');
+  await page.locator('#keys[open]').waitFor();
+  assert.equal(await page.locator('#keys dt').getByText('d', { exact: true }).count(), 1);
+  await page.keyboard.press('d');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('Shift+T');
+  await page.locator('#themes[open]').waitFor();
+  await page.getByRole('button', { name: 'Make a Theme from this' }).click();
+  await page.locator('#theme-document').fill('typing ');
+  await page.locator('#theme-document').press('d');
+  assert.equal(await page.locator('#theme-document').inputValue(), 'typing d');
+  await page.getByRole('button', { name: 'Close Themes' }).click();
+  assert.equal(await rows.count(), count);
+  await rows.first().focus();
+  await page.keyboard.press('d');
+  await page.waitForFunction(next => document.querySelector('.command[aria-current="true"]')?.dataset.command === next, next);
+  await page.waitForFunction(count => document.querySelectorAll('#inbox > [data-group="needs you"] .command').length === count - 1, count);
+  assert.equal(await page.locator('#peek').isVisible(), false);
+  await folder(page, 'done').click();
+  const doneRow = page.locator(`#inbox > [data-group="done"] .command[data-command="${command}"]`);
+  await doneRow.focus();
+  assert.equal(await doneRow.getByRole('button', { name: 'Dismiss', exact: true }).count(), 0);
+  await page.keyboard.press('d');
+  assert.equal(await page.locator('#dismissal-notices form').count(), 1);
+  await page.locator('#dismissal-notices').getByRole('button', { name: 'Undo', exact: true }).click();
+  await folder(page, 'needs you').click();
+  await page.waitForFunction(count => document.querySelectorAll('#inbox > [data-group="needs you"] .command').length === count, count);
+});
+
+test('inline Dismiss and notice Undo keep pending and error feedback through live updates and retry', async t => {
+  const page = await pageFor(t);
+  await page.clock.install();
+  await page.goto(origin);
+  const row = page.locator('#inbox > [data-group="needs you"] .command').first();
+  await showDetails(page, row);
+  const form = row.locator(':scope > .row-head form[data-dismiss]');
+  const recordPath = await form.locator('[name="command"]').inputValue();
+  const original = await readFile(recordPath, 'utf8');
+  await page.route(`${origin}/dismiss`, route => route.fulfill({ status: 409, body: 'Please retry Dismiss' }));
+  try {
+    await form.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    await form.getByText('Could not save the dismissal: Please retry Dismiss', { exact: true }).waitFor();
+    assert.equal(await form.locator('button').isEnabled(), true);
+    assert.equal(await page.locator('#dismissal-notices form').count(), 0);
+    await page.unrouteAll({ behavior: 'wait' });
+    await form.getByRole('button', { name: 'Dismiss', exact: true }).click();
+    const notice = page.locator('#dismissal-notices > [role="status"]');
+    await notice.waitFor();
+    await page.locator('#peek-content').getByRole('button', { name: 'Undo', exact: true }).waitFor();
+    await page.route(`${origin}/dismiss/undo`, route => route.fulfill({ status: 409, body: 'Please retry Undo' }));
+    await notice.getByRole('button', { name: 'Undo', exact: true }).click();
+    await notice.getByText('Could not save the dismissal: Please retry Undo', { exact: true }).waitFor();
+    await page.mouse.move(0, 0);
+    await page.clock.fastForward(30000);
+    assert.equal(await notice.isVisible(), true);
+    assert.equal(await notice.locator('button').isEnabled(), true);
+    await page.unrouteAll({ behavior: 'wait' });
+    let release;
+    const held = new Promise(resolve => { release = resolve; });
+    let requests = 0;
+    await page.route(`${origin}/dismiss/undo`, async route => {
+      requests++;
+      await held;
+      await route.continue();
+    });
+    try {
+      await notice.getByRole('button', { name: 'Undo', exact: true }).click();
+      await notice.getByText('Taking back dismissal…', { exact: true }).waitFor();
+      assert.equal(await notice.locator('button').isDisabled(), true);
+      const updated = JSON.parse(original);
+      updated.cause = 'Live refresh while notice Undo is pending';
+      await replaceRecord(recordPath, JSON.stringify(updated));
+      await page.locator('#peek-content').getByText(updated.cause, { exact: true }).waitFor();
+      assert.equal(await notice.locator('button').isDisabled(), true);
+      await notice.locator('form').evaluate(form => form.requestSubmit());
+      release();
+      await notice.waitFor({ state: 'detached' });
+      await page.locator('#peek-content').getByRole('button', { name: 'Dismiss', exact: true }).waitFor();
+      assert.equal(requests, 1);
+    } finally { release(); }
+  } finally {
+    await page.unrouteAll({ behavior: 'wait' });
+    await replaceRecord(recordPath, original);
+  }
+});
+
 test('the Inbox opens with Details closed, and Dismiss works by keyboard from Details beside a clicked row', async t => {
   const page = await pageFor(t);
   const observer = await pageFor(t);
@@ -127,35 +243,55 @@ test('the Inbox opens with Details closed, and Dismiss works by keyboard from De
 });
 
 for (const [outcome, group] of [['failed', 'needs you'], ['ready for review', 'ready for review']]) {
-  test(`Inbox row Dismiss works in ${group} without JavaScript on a phone`, async t => {
-    const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
-    const recordPath = join(directory, '223-fixture.command.json');
-    const fixture = JSON.parse(await readFile(join(directory, '1-fixture.command.json'), 'utf8'));
-    fixture.issue = { number: 223, url: 'https://github.com/acme/widgets/issues/223', title: 'Dismiss from the Inbox' };
-    fixture.outcome = outcome;
-    fixture.cause = null;
-    fixture.pull_request = outcome === 'ready for review' ? 'https://github.com/acme/widgets/pull/224' : null;
-    await writeFile(recordPath, JSON.stringify(fixture));
-    t.after(async () => {
-      await rm(recordPath, { force: true });
-      await rm(join(directory, '223-fixture.command.dismiss.json'), { force: true });
+  for (const javaScriptEnabled of [false, true]) {
+    test(`Inbox row Dismiss works in ${group} ${javaScriptEnabled ? 'with' : 'without'} JavaScript on a phone`, async t => {
+      const directory = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
+      const recordPath = join(directory, '223-fixture.command.json');
+      const fixture = JSON.parse(await readFile(join(directory, '1-fixture.command.json'), 'utf8'));
+      fixture.issue = { number: 223, url: 'https://github.com/acme/widgets/issues/223', title: 'Dismiss from the Inbox' };
+      fixture.outcome = outcome;
+      fixture.cause = null;
+      fixture.pull_request = outcome === 'ready for review' ? 'https://github.com/acme/widgets/pull/224' : null;
+      await writeFile(recordPath, JSON.stringify(fixture));
+      t.after(async () => {
+        await rm(recordPath, { force: true });
+        await rm(join(directory, '223-fixture.command.dismiss.json'), { force: true });
+      });
+      const page = await pageFor(t, { javaScriptEnabled, viewport: { width: 390, height: 844 } });
+      if (javaScriptEnabled) await page.clock.install();
+      await page.goto(`${origin}/?page=inbox`);
+      const section = page.locator(`#inbox > [data-group="${group}"]`);
+      if (group === 'ready for review') await folder(page, group).click();
+      const row = section.locator('.command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
+      await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
+      if (javaScriptEnabled) {
+        await row.waitFor({ state: 'detached' });
+        const notice = page.locator('#dismissal-notices > [role="status"]');
+        await notice.waitFor();
+        await notice.getByRole('button', { name: 'Undo', exact: true }).click();
+        await row.waitFor();
+        await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
+        await row.waitFor({ state: 'detached' });
+        await page.waitForFunction(() => !document.querySelector('#dismissal-notices button').disabled);
+        await page.mouse.move(0, 0);
+        await page.clock.fastForward(10001);
+        await notice.waitFor({ state: 'detached' });
+      } else await page.waitForURL(`${origin}/`);
+      assert.equal(await section.locator('.subject a[href$="/issues/223"]').count(), 0);
+      assert.equal(await page.locator('#peek').isVisible(), false);
+      await folder(page, 'done').click();
+      const dismissed = page.locator('#inbox > [data-group="done"] .command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
+      assert.equal(await dismissed.getByRole('button', { name: 'Dismiss', exact: true }).count(), 0);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+      if (javaScriptEnabled) {
+        await showDetails(page, dismissed);
+        await page.locator('#peek-content').getByRole('button', { name: 'Undo', exact: true }).waitFor();
+      } else {
+        await dismissed.locator('.peek-link').click();
+        await page.getByRole('button', { name: 'Undo', exact: true }).waitFor();
+      }
     });
-    const page = await pageFor(t, { javaScriptEnabled: false, viewport: { width: 390, height: 844 } });
-    await page.goto(`${origin}/?page=inbox`);
-    const section = page.locator(`#inbox > [data-group="${group}"]`);
-    if (group === 'ready for review') await folder(page, group).click();
-    const row = section.locator('.command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
-    await row.getByRole('button', { name: 'Dismiss', exact: true }).click();
-    await page.waitForURL(`${origin}/`);
-    assert.equal(await section.locator('.subject a[href$="/issues/223"]').count(), 0);
-    assert.equal(await page.locator('#peek').isVisible(), false);
-    await folder(page, 'done').click();
-    const dismissed = page.locator('#inbox > [data-group="done"] .command').filter({ has: page.locator('.subject a[href$="/issues/223"]') });
-    assert.equal(await dismissed.getByRole('button', { name: 'Dismiss', exact: true }).count(), 0);
-    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
-    await dismissed.locator('.peek-link').click();
-    await page.getByRole('button', { name: 'Undo', exact: true }).waitFor();
-  });
+  }
 }
 
 test('Dismiss keeps Undo in Command details and updates another open Inbox', async t => {

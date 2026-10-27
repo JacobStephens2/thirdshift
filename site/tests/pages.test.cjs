@@ -93,6 +93,18 @@ async function unfoldGuide(page) {
   }
 }
 
+test('Console documentation explains row Dismiss, d and the Undo notice', async t => {
+  const page = await pageForTest(t, { javaScriptEnabled: false });
+  for (const path of ['/', '/how-it-works/', '/architecture/', '/docs/']) {
+    await page.goto(`${origin}${path}`);
+    const text = await page.locator('main p').filter({ hasText: /[Ii]nline [Dd]ismissal/ }).textContent();
+    assert.match(text, /Dismiss[^.]*on (?:the |its |each )?row/);
+    assert.match(text, /\bd\b[^.]*dismiss/i);
+    assert.match(text, /notice/);
+    assert.match(text, /Undo/);
+  }
+});
+
 test("the guide starts with a folded overview and its sections toggle independently without JavaScript", async (t) => {
   const page = await pageForTest(t, { javaScriptEnabled: false });
   await page.goto(`${origin}/how-it-works/`);
