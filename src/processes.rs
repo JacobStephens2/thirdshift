@@ -2,6 +2,11 @@
 //!
 //! Steps run in order. Consecutive Steps that name the same `parallel` group
 //! run at the same time, each in a throwaway worktree the Process declares.
+//!
+//! A Process started with no issue is a Pass. It takes the repository's Pass
+//! lock and is skipped, before any worktree, while another Pass holds it. It
+//! does not take an Architect run's Ready-issue or Architect-idea gates. A
+//! Process started with an issue is not a Pass and does not take the lock.
 
 use std::collections::BTreeSet;
 use std::fmt::Write;
@@ -173,10 +178,10 @@ fn check(name: &str) -> Result<String> {
 fn run(name: &str, issue: Option<IssueInput>, email: Option<NotificationAsk>) -> Result<String> {
     interrupt::install()?;
     let config = UserConfig::load()?;
-    logs::begin(Begin::Process(name));
-    logs::configured(&config);
     // The same check as a Ticket run, before any worktree or Step: a missing
-    // address or Resend key fails the Process before it starts.
+    // address or Resend key fails the Process before it starts. As for the
+    // other Passes, the check is before a skip, so a Process that would be
+    // skipped fails on it too.
     let mut notification = RunNotification::new(
         Flags {
             email,
@@ -194,6 +199,33 @@ fn run(name: &str, issue: Option<IssueInput>, email: Option<NotificationAsk>) ->
         Ok(issue) => issue,
         Err(error) => return Err(failed_before_steps(notification, error)),
     };
+    // No issue: a Pass. The Base branch is checked before the lock, so a bad
+    // checkout fails instead of being skipped, and a skip creates no worktree.
+    // The lock is then held until this process exits, through every Step.
+    // `pass` holds the first lines, so a quiet skip prints nothing. A skip
+    // sends no Run notification.
+    if issue.is_none() {
+        logs::begin(Begin::Process { name, pass: true });
+        logs::configured(&config);
+        let repo = match (|| {
+            let _base = launch::checked_out_base()?;
+            launch::repo()
+        })() {
+            Ok(repo) => repo,
+            Err(error) => return Err(failed_before_steps(notification, error)),
+        };
+        match launch::hold_pass(&repo) {
+            Ok(Some(running)) => {
+                let reason = running.to_string();
+                let choice = Choice::of(&Asked::default(), &config.harness);
+                progress::step(&reason);
+                logs::skipped_process(&repo, name, &choice, &reason);
+                return Ok(String::new());
+            }
+            Ok(None) => {}
+            Err(error) => return Err(failed_before_steps(notification, error)),
+        }
+    }
     // The same margin as a Ticket run. Edits in the gap since this moment,
     // or dated by a slow GitHub clock, still count.
     let started = Utc::now() - crate::run::STARTED_MARGIN;
@@ -207,6 +239,10 @@ fn run(name: &str, issue: Option<IssueInput>, email: Option<NotificationAsk>) ->
         Ok(repo) => repo,
         Err(error) => return Err(failed_before_steps(notification, error)),
     };
+    if prepared.issue.is_some() {
+        logs::begin(Begin::Process { name, pass: false });
+        logs::configured(&config);
+    }
     logs::started(Work::Process { repo: &repo, name }, &prepared.choice);
     notification.built_with(&prepared.choice);
     let result = execute_steps(name, &prepared);

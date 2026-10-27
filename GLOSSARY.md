@@ -116,7 +116,7 @@ One invocation of the factory with no **Issue URL**: a **Security audit** of the
 _Avoid_: Fencing (former name), Secure run (it reads as a run that is secure), audit run, security pass
 
 **Pass**:
-An **Architect run**, a **Pickup run** or a **Security run**: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped.
+An **Architect run**, a **Pickup run**, a **Security run**, or a **Custom process** started with no issue: a **Command** started with no **Issue URL**, which decides before any work whether it is skipped. A Custom process started with no issue is skipped while another Pass on the same repository is still running on the machine, its Spec run or Ticket run included, and it does not take an Architect run's Ready-issue or Architect-idea gates. A Custom process started with an issue is not a Pass.
 _Avoid_: tick, cycle
 
 ### Architecture
@@ -259,7 +259,7 @@ _Avoid_: cron log, output log, run log (a **Ticket run** is one kind of command)
 The retained Command logs and Session traces available to list on a machine, each naming an exact file under the User config's log folder. A Command's referenced Session traces may include files outside that inventory.
 
 **Activity log**:
-One running record per repository of what the factory did there: a line when a **Ticket run**, **Spec run**, **Architect run**, **Pickup run** or **Security run** starts work, naming its **Command log**, a line when it is given a **Stop** or a **Dismissal**, or a Dismissal is taken back, naming who asked and whether from the CLI or the **Console**, and a line when it ends, with its outcome. A skipped Architect run, Pickup run or Security run writes a line only when its reason differs from the last one recorded for its kind, so a repository that sits idle shows one line, not one per pass. It is what thirdshift writes about a scheduled pass, in place of output to the scheduler.
+One running record per repository of what the factory did there: a line when a **Ticket run**, **Spec run**, **Architect run**, **Pickup run** or **Security run** starts work, naming its **Command log**, a line when it is given a **Stop** or a **Dismissal**, or a Dismissal is taken back, naming who asked and whether from the CLI or the **Console**, and a line when it ends, with its outcome. A skipped Architect run, Pickup run or Security run writes a line only when its reason differs from the last one recorded for its kind, so a repository that sits idle shows one line, not one per pass. A skipped Custom process started with no issue writes `Process <name> skipped: <reason>` when that is not already the last Process line. It is what thirdshift writes about a scheduled pass, in place of output to the scheduler.
 _Avoid_: cron log, pass log, history
 
 **Command record**:

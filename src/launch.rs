@@ -367,13 +367,9 @@ pub fn start(base: Option<&str>) -> Result<Start> {
     crate::logs::pass_fired(&repo);
     directory.check_identity()?;
     let base = directory.prepare_base_branch(base)?;
-    let Some(lock) = try_pass_lock(&repo)? else {
-        return Ok(Start::AlreadyRunning(AlreadyRunning(repo)));
-    };
-    // Never closed, so the lock is held for as long as this process lives,
-    // through the Spec run or Run it dispatches, and the operating system
-    // releases it however the process ends.
-    std::mem::forget(lock);
+    if let Some(running) = hold_pass(&repo)? {
+        return Ok(Start::AlreadyRunning(running));
+    }
     Ok(Start::Clear(Launch {
         directory,
         repo,
@@ -419,6 +415,23 @@ pub fn resolve_issue(input: IssueInput) -> Result<IssueUrl> {
         repo: repo.name,
         number: number.get(),
     })
+}
+
+/// Take the lock that makes this process the one Pass on `repo`, and hold it
+/// until this process exits. `Some` when another Pass already holds it: this
+/// call took nothing. A Custom process started with no issue uses this; one
+/// started with an issue does not. `start` calls this after the preflight a
+/// Pickup run, Architect run or Security run does.
+pub fn hold_pass(repo: &Repo) -> Result<Option<AlreadyRunning>> {
+    match try_pass_lock(repo)? {
+        Some(lock) => {
+            // Never closed, so the lock is held for as long as this process
+            // lives. The operating system releases it however the process ends.
+            std::mem::forget(lock);
+            Ok(None)
+        }
+        None => Ok(Some(AlreadyRunning(repo.clone()))),
+    }
 }
 
 /// Try, without waiting, for the lock that makes its holder the one Pass on

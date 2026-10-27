@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use support::resend::{ResendStandIn, saved_notification};
-use support::{RunResult, Scenario, leaves_running};
+use support::{RunResult, Scenario, after_start, leaves_running};
 
 const REVIEW: &str = "\
 version = 1
@@ -2172,6 +2172,290 @@ fn a_missing_issue_value_or_extra_argument_is_a_usage_error() {
         );
         assert!(!process_dir(&scenario).exists(), "{args:?}");
     }
+}
+
+/// What a skipped Pass says when another Pass is running on the scenario's
+/// repository. The same words a skipped Pickup run uses.
+const ALREADY_RUNNING: &str = "thirdshift: another Pass is already running on acme/widgets\n";
+
+/// The reason kept on the Command record and in the Activity log, without
+/// the progress prefix.
+const ALREADY_RUNNING_REASON: &str = "another Pass is already running on acme/widgets";
+
+/// A script in which the agent touches `started` in the scenario root, then
+/// waits there until the test touches `release`.
+const AGENT_WAITS_FOR_RELEASE: &str = r#"
+root=$(dirname "$FAKE_CLAUDE_RECORD")
+touch "$root/started"
+while [ -d "$root" ] && [ ! -e "$root/release" ]; do sleep 0.05; done
+"#;
+
+/// The User config of a machine where every Run and every Pickup run that
+/// takes an issue sends a Run notification.
+const EMAIL_ALWAYS: &str = "[email]\nalways = true\nto = \"config@example.com\"\n";
+
+fn release(scenario: &Scenario) {
+    fs::write(scenario.path("release"), "").unwrap();
+}
+
+fn ready_issue(scenario: &Scenario, number: u32) {
+    scenario.issue_is(number, "OPEN");
+    scenario.issue_labelled(number, &["ready-for-agent"]);
+}
+
+/// A script in which the agent for issue `issue` commits its work and opens
+/// its PR into `main`, leaving the pushing to thirdshift.
+fn agent_opens_pr(issue: u32) -> String {
+    format!(
+        r#"
+echo "{issue}" > issue-{issue}.txt
+git add issue-{issue}.txt
+git commit -q -m "Work on {issue}"
+gh pr create --base main --head issue-{issue} --title "Work on {issue}" --body "Closes #{issue}"
+"#
+    )
+}
+
+fn command_process(scenario: &Scenario, name: &str, command: &str) {
+    write_process(
+        scenario,
+        name,
+        &format!(
+            "\
+version = 1
+description = \"Run a command\"
+
+[[steps]]
+name = \"act\"
+command = \"{command}\"
+"
+        ),
+    );
+}
+
+/// A command Step that touches `started`, waits for `release`, then prints.
+fn waiting_process(scenario: &Scenario, name: &str) {
+    let started = scenario.path("started");
+    let release = scenario.path("release");
+    command_process(
+        scenario,
+        name,
+        &format!(
+            "touch '{}' && while [ ! -e '{}' ]; do sleep 0.05; done && printf held",
+            started.display(),
+            release.display()
+        ),
+    );
+}
+
+fn activity(scenario: &Scenario) -> String {
+    fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log"))
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_process_with_no_issue_is_skipped_while_a_pickup_run_is_still_running() {
+    let scenario = Scenario::new();
+    let marker = scenario.path("step-ran");
+    command_process(
+        &scenario,
+        "review",
+        &format!("touch '{}' && printf ran", marker.display()),
+    );
+    ready_issue(&scenario, 7);
+    scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
+    let pickup = scenario.run_until(&["pickup"], &[], "started");
+    let work = scenario.entries("work");
+    let calls = scenario.claude_calls().len();
+    scenario.user_config_is(EMAIL_ALWAYS);
+    let resend = ResendStandIn::replying(200, r#"{"id":"49a3999c-0ce1-4ea6-ab68-afcd6dc2e794"}"#);
+
+    let result = scenario.run_with_env(
+        &["process", "review"],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", "re_test_123"),
+        ],
+    );
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert_eq!(
+        after_start(&result.stderr, "Process review starting"),
+        ALREADY_RUNNING
+    );
+    assert!(!marker.exists(), "the step ran");
+    assert_eq!(scenario.entries("work"), work);
+    assert_eq!(scenario.claude_calls().len(), calls, "a session started");
+    assert!(resend.requests().is_empty(), "{:?}", resend.requests());
+    let record = process_record(&scenario);
+    assert_eq!(record["kind"], "Process");
+    assert_eq!(record["outcome"], "skipped");
+    assert_eq!(record["cause"], ALREADY_RUNNING_REASON);
+    assert!(
+        record["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("process-review-"),
+        "{}",
+        record["name"]
+    );
+    let (_, log) = command_log(&scenario);
+    assert!(log.contains(ALREADY_RUNNING_REASON), "{log}");
+    assert!(
+        activity(&scenario).contains(&format!("Process review skipped: {ALREADY_RUNNING_REASON}")),
+        "{}",
+        activity(&scenario)
+    );
+    release(&scenario);
+    pickup.finish();
+}
+
+#[test]
+fn a_pickup_run_is_skipped_while_a_process_with_no_issue_is_still_running() {
+    let scenario = Scenario::new();
+    waiting_process(&scenario, "review");
+    ready_issue(&scenario, 7);
+    scenario.agent_does(&agent_opens_pr(7));
+    let process = scenario.run_until(&["process", "review"], &[], "started");
+    let (github, gh_calls) = (scenario.gh_state(), scenario.gh_calls());
+
+    let skipped = scenario.run(&["pickup"]);
+
+    assert_eq!(skipped.code, Some(0), "{}", skipped.stderr);
+    assert_eq!(skipped.stdout, "");
+    assert_eq!(
+        after_start(&skipped.stderr, "Pickup run starting"),
+        ALREADY_RUNNING
+    );
+    assert!(scenario.claude_calls().is_empty(), "a session started");
+    assert_eq!(scenario.gh_state(), github);
+    assert_eq!(scenario.gh_calls(), gh_calls);
+    assert_eq!(scenario.issue_labels(7), ["ready-for-agent"]);
+    release(&scenario);
+    let process = process.finish();
+    assert_eq!(process.code, Some(0), "{}", process.stderr);
+    assert_eq!(process.stdout, "held\n");
+}
+
+#[test]
+fn a_process_started_with_an_issue_runs_while_a_pickup_run_holds_the_repository() {
+    let scenario = Scenario::new();
+    command_process(&scenario, "notes", "printf ran");
+    ready_issue(&scenario, 7);
+    scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
+    let pickup = scenario.run_until(&["pickup"], &[], "started");
+
+    let result = scenario.run(&["process", "notes", "issue", "7"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "ran\n");
+    assert!(
+        !result.stderr.contains("another Pass is already running"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(process_record(&scenario)["outcome"], "succeeded");
+    release(&scenario);
+    pickup.finish();
+}
+
+#[test]
+fn a_pickup_run_takes_a_ready_issue_while_a_process_with_an_issue_is_running() {
+    let scenario = Scenario::new();
+    waiting_process(&scenario, "notes");
+    ready_issue(&scenario, 9);
+    scenario.agent_does_for(9, &agent_opens_pr(9));
+    let process = scenario.run_until(&["process", "notes", "issue", "7"], &[], "started");
+
+    let pickup = scenario.run(&["pickup"]);
+
+    assert_eq!(pickup.code, Some(0), "{}", pickup.stderr);
+    assert!(
+        pickup
+            .stdout
+            .contains("https://github.com/acme/widgets/pull/"),
+        "{}",
+        pickup.stdout
+    );
+    assert!(
+        !pickup.stderr.contains("another Pass is already running"),
+        "{}",
+        pickup.stderr
+    );
+    assert_eq!(
+        scenario.claude_calls().len(),
+        1,
+        "pickup started no session"
+    );
+    assert_ne!(scenario.issue_labels(9), ["ready-for-agent"]);
+    release(&scenario);
+    let process = process.finish();
+    assert_eq!(process.code, Some(0), "{}", process.stderr);
+    assert_eq!(process.stdout, "held\n");
+}
+
+#[test]
+fn a_process_with_no_issue_does_not_stop_for_a_ready_issue_or_an_architect_idea() {
+    let scenario = Scenario::new();
+    command_process(&scenario, "review", "printf ran");
+    ready_issue(&scenario, 7);
+    scenario.issue_is(8, "OPEN");
+    scenario.issue_labelled(8, &["architect-idea", "needs-triage"]);
+
+    let result = scenario.run(&["process", "review"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "ran\n");
+    assert!(
+        !result.stderr.contains("another Pass is already running"),
+        "{}",
+        result.stderr
+    );
+    assert!(!result.stderr.contains("goes first"), "{}", result.stderr);
+    assert!(
+        !result.stderr.contains("Architect idea"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.claude_calls().is_empty(), "a session started");
+    assert_eq!(process_record(&scenario)["outcome"], "succeeded");
+    assert_eq!(scenario.issue_labels(7), ["ready-for-agent"]);
+    assert_eq!(scenario.issue_labels(8), ["architect-idea", "needs-triage"]);
+}
+
+#[test]
+fn a_quiet_skip_of_a_process_with_no_issue_prints_nothing_and_keeps_the_record() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[activity]\nquiet_skips = true\n");
+    let marker = scenario.path("step-ran");
+    command_process(
+        &scenario,
+        "review",
+        &format!("touch '{}' && printf ran", marker.display()),
+    );
+    ready_issue(&scenario, 7);
+    scenario.agent_does(AGENT_WAITS_FOR_RELEASE);
+    let pickup = scenario.run_until(&["pickup"], &[], "started");
+
+    let result = scenario.run(&["process", "review"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "");
+    assert_eq!(result.stderr, "");
+    assert!(!marker.exists(), "the step ran");
+    let record = process_record(&scenario);
+    assert_eq!(record["outcome"], "skipped");
+    assert_eq!(record["cause"], ALREADY_RUNNING_REASON);
+    let (_, log) = command_log(&scenario);
+    assert!(log.contains(ALREADY_RUNNING_REASON), "{log}");
+    assert!(
+        activity(&scenario).contains(&format!("Process review skipped: {ALREADY_RUNNING_REASON}")),
+        "{}",
+        activity(&scenario)
+    );
+    release(&scenario);
+    pickup.finish();
 }
 
 fn family_sessions(members: &str, judge: &str) -> String {
