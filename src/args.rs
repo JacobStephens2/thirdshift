@@ -1061,11 +1061,10 @@ fn take_flag<'a>(
     if take_email_flag(&mut flags.email, arg, rest)? {
         return Ok(true);
     }
+    if take_merge_flag(&mut flags.goal, arg)? {
+        return Ok(true);
+    }
     match arg {
-        "merge" | "--merge" => ask_once(&mut flags.goal, Goal::Merged, arg, MERGE_FLAGS)?,
-        "no-merge" | "--no-merge" => {
-            ask_once(&mut flags.goal, Goal::ReadyForReview, arg, MERGE_FLAGS)?
-        }
         "parallel" | "--parallel" => ask_parallel(&mut flags.parallel, arg, rest.next())?,
         BASE_FIX | "--base-fix" => {
             ask_once(&mut flags.base_fix, BaseFixAsk::Allow, arg, BASE_FIX_FLAGS)?

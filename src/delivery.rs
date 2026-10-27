@@ -1105,10 +1105,18 @@ fn glob_match(pattern: &[u8], path: &[u8]) -> bool {
             if pattern_at == pattern.len() {
                 return true;
             }
+            // The rest of the pattern starts at a segment boundary. `**` does
+            // not match inside a name, so `**/key.txt` is not `mykey.txt`.
             let mut rest = path_at;
             loop {
                 if glob_match(&pattern[pattern_at..], &path[rest..]) {
                     return true;
+                }
+                if rest >= path.len() {
+                    return false;
+                }
+                while rest < path.len() && path[rest] != b'/' {
+                    rest += 1;
                 }
                 if rest == path.len() {
                     return false;
@@ -1131,7 +1139,7 @@ fn glob_match(pattern: &[u8], path: &[u8]) -> bool {
                 return false;
             }
             pattern_at += 1;
-            path_at += 1;
+            path_at += utf8_char_len(&path[path_at..]);
         } else {
             if path_at == path.len() || pattern[pattern_at] != path[path_at] {
                 return false;
@@ -1141,6 +1149,23 @@ fn glob_match(pattern: &[u8], path: &[u8]) -> bool {
         }
     }
     path_at == path.len()
+}
+
+/// Bytes of the UTF-8 character at the start of `bytes`. A lone non-UTF-8
+/// byte counts as one, so `?` still advances.
+fn utf8_char_len(bytes: &[u8]) -> usize {
+    let width = match bytes[0] {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => return 1,
+    };
+    if bytes.len() >= width && bytes[1..width].iter().all(|byte| byte & 0xC0 == 0x80) {
+        width
+    } else {
+        1
+    }
 }
 
 #[cfg(test)]
@@ -1663,5 +1688,29 @@ mod tests {
             hold.into(),
         );
         assert_eq!(failed.log, Some(PathBuf::from("/logs/repair-1.jsonl")));
+    }
+
+    #[test]
+    fn protected_path_globs_match_on_segment_boundaries() {
+        assert!(
+            !glob_matches("**/key.txt", "mykey.txt"),
+            "**/key.txt matched inside a segment"
+        );
+        assert!(
+            !glob_matches("src/**/config.toml", "src/myconfig.toml"),
+            "src/**/config.toml matched inside a segment"
+        );
+        assert!(glob_matches("src/**/config.toml", "src/pkg/config.toml"));
+        assert!(glob_matches("src/**/config.toml", "src/config.toml"));
+        assert!(glob_matches("**/key.txt", "dir/key.txt"));
+        assert!(glob_matches("**/key.txt", "key.txt"));
+        assert!(glob_matches("secrets/**", "secrets/key.txt"));
+        assert!(glob_matches("**/*.pem", "keys/id.pem"));
+        assert!(!glob_matches("*.txt", "notes/plain.txt"));
+        assert!(
+            glob_matches("caf?.txt", "café.txt"),
+            "? should be one character"
+        );
+        assert!(!glob_matches("a?c", "a/c"));
     }
 }

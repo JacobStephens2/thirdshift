@@ -324,11 +324,7 @@ fn run(
     // address or Resend key fails the Process before it starts. As for the
     // other Passes, the check is before a skip, so a Process that would be
     // skipped fails on it too.
-    let goal = goal.unwrap_or(if config.merge_always {
-        Goal::Merged
-    } else {
-        Goal::ReadyForReview
-    });
+    let goal = Goal::from_flag(goal, config.merge_always);
     let notification = RunNotification::new(
         Flags {
             email,

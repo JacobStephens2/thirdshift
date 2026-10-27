@@ -34,6 +34,16 @@ pub enum Goal {
 }
 
 impl Goal {
+    /// The merge flag when the command gave one, otherwise a merge when
+    /// `merge_always` is set.
+    pub fn from_flag(asked: Option<Self>, merge_always: bool) -> Self {
+        asked.unwrap_or(if merge_always {
+            Self::Merged
+        } else {
+            Self::ReadyForReview
+        })
+    }
+
     /// What became of the PR once the Run reached this goal, as in
     /// "PR <url> is merged" and a Run notification's subject.
     pub fn outcome(self) -> &'static str {
