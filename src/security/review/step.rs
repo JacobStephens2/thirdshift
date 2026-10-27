@@ -26,17 +26,12 @@ impl Step<'_> {
             pull_request.ensure_actionable(false)?;
             Ok(review)
         })();
-        if review
-            .as_ref()
-            .err()
-            .is_some_and(|error| error.is::<UntrustedEdit>())
-        {
-            return Err(review.err().expect("an untrusted edit"));
-        }
-        pull_request.security_reviewed(review.as_ref().map_or(1, |review| review.findings.len()));
-        Ok(Outcome::of(
-            review,
-            self.sessions.last_log_of(Kind::SecurityReview),
-        ))
+        let review = match review {
+            Err(error) if error.is::<UntrustedEdit>() => return Err(error),
+            review => review,
+        };
+        let outcome = Outcome::of(review, self.sessions.last_log_of(Kind::SecurityReview));
+        pull_request.security_reviewed(outcome.unaddressed_count());
+        Ok(outcome)
     }
 }

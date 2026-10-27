@@ -93,6 +93,14 @@ impl Logs {
         }
     }
 
+    /// A Custom process's review keeps the Security review session kind for
+    /// fallback and Resume, with a distinct trace for each one-based Step.
+    pub fn of_process_review(repo: &Repo, step_index: usize) -> Self {
+        let mut logs = Self::of_process(repo);
+        logs.name = format!("process-step-{step_index}");
+        logs
+    }
+
     /// The logs of the Architect run on `repo`.
     pub fn of_architect_run(repo: &Repo) -> Self {
         Logs {

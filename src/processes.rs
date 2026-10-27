@@ -387,7 +387,7 @@ struct IssueRun<'a> {
     /// Delivery left a pull request ready for review, or merged it.
     delivered: bool,
     pull_request: PullRequest,
-    review: Option<crate::security::review::Outcome>,
+    reviews: Vec<crate::security::review::Outcome>,
 }
 
 /// Ends the Claim on drop unless the run removed it or ended it already.
@@ -846,7 +846,7 @@ fn run_issue_branch(
             process: name,
             delivered: false,
             pull_request: PullRequest::new(&issue, &branch, &base, GitHub::new()),
-            review: None,
+            reviews: Vec::new(),
         };
         let result = execute_steps(name, &prepared, Some(&mut issue_run));
         let context = continuation(&issue_run);
@@ -1312,8 +1312,9 @@ fn run_security_review(
         .context("the Issue-branch worktree is gone")?;
     let before_each = || prepare_for_session(issue_run.issue, prepared.started, checkout.path());
     let text = prompt::security_review(issue_run.issue, issue_run.base, issue_run.branch);
+    let logs = session::Logs::of_process_review(&issue_run.issue.repo(), index + 1);
     let (review, _) = session::Sessions::checked_within(
-        issue_run.logs,
+        &logs,
         checkout.path(),
         &step.choice,
         None,
@@ -1340,7 +1341,14 @@ fn run_security_review(
     );
     let review = review?;
     let entry = review.entry();
-    issue_run.review = Some(review);
+    issue_run.reviews.push(review);
+    issue_run.pull_request.security_reviewed(
+        issue_run
+            .reviews
+            .iter()
+            .map(crate::security::review::Outcome::unaddressed_count)
+            .sum(),
+    );
     Ok(entry)
 }
 
@@ -1403,11 +1411,7 @@ fn run_delivery(
         repair_cap: prepared.limits.repair_cap,
         protected_paths: protected,
     })
-    .publish(
-        checkout,
-        &mut issue_run.pull_request,
-        issue_run.review.as_ref(),
-    );
+    .publish(checkout, &mut issue_run.pull_request, &issue_run.reviews);
     match published {
         Ok(url) => {
             issue_run.delivered = true;
@@ -1543,7 +1547,7 @@ fn run_step_in(
 /// Check the issue, then write it into the worktree for the session about
 /// to start. An untrusted edit fails the Step instead of starting it.
 fn prepare_for_session(issue: &IssueUrl, started: DateTime<Utc>, worktree: &Path) -> Result<()> {
-    delivery::no_untrusted_edit_since(issue, started)?;
+    delivery::no_untrusted_edit_since(issue, started, "Process")?;
     delivery::hand_over_issue(issue, worktree)
 }
 

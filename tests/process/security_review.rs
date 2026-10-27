@@ -256,3 +256,74 @@ fi
     );
     assert_eq!(scenario.codex_calls().len(), 2);
 }
+
+#[test]
+fn later_clean_security_review_does_not_clear_an_earlier_refusal_hold() {
+    let body = reviewed_process().replace(
+        "name = \"ship\"",
+        "name = \"security-again\"\ncatalogue = \"security-review\"\nworktree = \"fix\"\n\n[[steps]]\nname = \"ship\"",
+    );
+    let scenario = prepare_ship(&body);
+    scenario.agent_does_for_in_session(
+        7,
+        2,
+        r#"printf '%s' 'API Error: [cyber] Private refusal evidence' > "$FAKE_CLAUDE_FINAL_MESSAGE""#,
+    );
+    scenario.agent_does_for_in_session(7, 3, CLEAN_REVIEW);
+    let result = scenario.run(&["process", "ship", "issue", "7", "security-review", "merge"]);
+    assert_eq!(scenario.claude_calls().len(), 3, "{}", result.stderr);
+    assert!(
+        scenario.gh_calls_of("pr", "merge").is_empty(),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
+    assert!(
+        scenario.gh_state()["prs"][0]["body"]
+            .as_str()
+            .unwrap()
+            .contains("Security review refused")
+    );
+    let review_logs: Vec<_> = result
+        .stderr
+        .lines()
+        .filter_map(|line| {
+            line.split_once("logging the session to ")
+                .map(|(_, path)| path)
+        })
+        .filter(|path| path.ends_with("-security-review.logs.jsonl"))
+        .collect();
+    assert_eq!(review_logs.len(), 2, "{}", result.stderr);
+    assert_ne!(
+        review_logs[0], review_logs[1],
+        "Each review must retain its own Session trace"
+    );
+}
+
+#[test]
+fn show_lists_every_custom_security_review_trace() {
+    let body = reviewed_process().replace(
+        "name = \"ship\"",
+        "name = \"security-again\"\ncatalogue = \"security-review\"\nworktree = \"fix\"\n\n[[steps]]\nname = \"ship\"",
+    );
+    let scenario = prepare_ship(&body);
+    scenario.agent_does_for_in_session(7, 2, CLEAN_REVIEW);
+    scenario.agent_does_for_in_session(7, 3, CLEAN_REVIEW);
+    let result = scenario.run(&["process", "ship", "issue", "7", "security-review"]);
+    assert_left_ready(&scenario, &result);
+    assert_eq!(scenario.claude_calls().len(), 3, "{}", result.stderr);
+    let status = status_json(&scenario);
+    let name = process_command(&status)["name"].as_str().unwrap();
+    let shown = scenario.run(&["show", name, "--json"]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    let shown: serde_json::Value = serde_json::from_str(&shown.stdout).unwrap();
+    let reviews: Vec<_> = shown["command"]["session_logs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .filter(|path| path.ends_with("-security-review.logs.jsonl"))
+        .collect();
+    assert_eq!(reviews.len(), 2, "{}", shown);
+}

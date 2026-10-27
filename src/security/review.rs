@@ -185,6 +185,14 @@ enum Ended {
 }
 
 impl Outcome {
+    /// Incomplete reviews count as an unaddressed finding, as in Delivery.
+    pub fn unaddressed_count(&self) -> usize {
+        match &self.ended {
+            Ended::Complete(review) => review.findings.len(),
+            Ended::Incomplete(_) | Ended::HarnessFailed { .. } => 1,
+        }
+    }
+
     /// The review that came to `result`, its session traceged to `log`, its
     /// Resume's if it got one, if it started one.
     pub fn of(result: Result<Review>, log: Option<PathBuf>) -> Self {
