@@ -843,7 +843,7 @@ Command record, Console entry or Session log is created for a standalone skill.
 ### Custom processes
 
 A Custom process runs Steps in order, and can run consecutive Steps together.
-A Step is a skill session, a command, or the catalogue Step `delivery`. It is
+A Step is a skill session, a command, or a catalogue Step. It is
 experimental. Write `~/.thirdshift/processes/<name>.toml`. The name is the
 file's stem.
 
@@ -953,7 +953,7 @@ When thirdshift opens the pull request, its title is the issue's and its body
 starts `Closes #<n>`. Repairs run on the Command's Harness, Model and Effort.
 A Process has at most one delivery Step. It names the Issue-branch worktree,
 it is not optional, and it is not in a parallel group. It comes after the
-last Step that uses that worktree. The only catalogue value is `delivery`.
+last Step that uses that worktree.
 
 An Issue-branch worktree needs an issue. `thirdshift process <name>` and
 `thirdshift process check <name>` refuse the file before any session, any
@@ -980,8 +980,22 @@ skills are
 ([ADR-0012](adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md)),
 under its own name, as a copy written out beside those skills, and kept out
 of git. A repository skill of the same name is not replaced. `command` is a command or script,
-run with `sh -c` in the Step's worktree. It starts no session. When the
-Process declares worktrees, every Step names one with `worktree`.
+run with `sh -c` in the Step's worktree. It starts no session. `catalogue` names a
+built-in Step: `delivery`, described above, or `run-published-issue`.
+`run-published-issue` starts a Ticket run, or a Spec run when the issue has
+Tickets, on the issue the session Step before it published. That session's final
+message ends with the issue's URL on its last non-blank line. Before it starts a
+run, thirdshift checks that the issue is in this repository, which it checks
+before viewing the issue, that the issue is open, that a Trusted account
+published it, and that it was created since that session Step began. A final
+message without that URL, or an issue that fails a check, fails the Step, names
+the reason, and starts no run. The child run is part of this Command. Its
+Tickets, when the issue is a Spec, run at once up to `spec.parallel` in the User
+config. The child run's outcome is the Step's outcome, and the Step's result is
+the pull request's URL. The run uses the Process's Base branch and the
+Command's Harness. `run-published-issue` is the Step immediately after a session
+Step, and it does not share that Step's `parallel` group. When the Process
+declares worktrees, every Step names one with `worktree`.
 Consecutive Steps with the same `parallel` name run at the same time. Every
 session or command Step edits the worktree it runs in, so Steps in one group
 cannot share a worktree. The same group name after a Step that is not in the
@@ -1006,10 +1020,11 @@ of Steps that run at the same time. A throwaway worktree is described as
 throwaway at the Base branch. An Issue-branch worktree is described as an
 Issue branch. A skill Step shows the skill and where it was found. A command
 Step shows its command, and `check` does not run it. A delivery Step shows
-`delivery`. An optional Step is marked `(optional)`. `check` starts no
-session. `check <name> issue <issue>` resolves the issue and still creates no
-Issue branch and makes no Claim. Without an issue, an Issue-branch worktree
-is the refusal above, not a plan.
+`delivery`. A `run-published-issue` Step shows `run-published-issue`. An
+optional Step is marked `(optional)`. `check` starts no session. `check <name>
+issue <issue>` resolves the issue and still creates no Issue branch and makes
+no Claim. Without an issue, an Issue-branch worktree is the refusal above, not
+a plan.
 
 Running the Process starts the Steps in its throwaway worktrees, detached at
 the Base branch and cleaned up as a standalone skill's worktree is. Every
@@ -1026,7 +1041,8 @@ Every session Step uses the Command's Harness, Model and Effort: the User
 config default, or the Harness default when that is unset. A command Step does
 not. Each finished Step's result is stored beside the Command log, one file
 per Step. A session's result is its final message. A command's result is its
-stdout followed by its stderr. The next session Step's prompt names the paths
+stdout followed by its stderr. A `run-published-issue` Step's result is the pull
+request URL of the run it started. The next session Step's prompt names the paths
 of those finished results. Members of a parallel group do not see one
 another's results; each member's result is passed on to the Steps after the
 group. A Step that fails has no result to pass on. The last finished Step's
@@ -1056,19 +1072,21 @@ Trusted account, made since a few minutes before the Process started, fails
 that Step instead of starting the session. The Command log names the cause.
 
 `check` and running refuse a missing file, a file that is not valid TOML, a
-missing or wrong `version`, an unknown key, a Step without exactly one kind,
-a command that is not a string or is empty, an `optional` value that is not a
-boolean, a skill that cannot be found, an unknown worktree, a Step that does
-not name a worktree when the Process declares them, parallel Steps that share
-a worktree, a worktree kind other than `throwaway` or `issue-branch`, a
-second Issue-branch worktree, a catalogue value other than `delivery`, a
-delivery Step with no Issue-branch worktree or on a different worktree, a
-second delivery Step, an optional delivery Step, a delivery Step in a
-parallel group, an Issue-branch worktree with no delivery Step after the last
-Step that uses it, an Issue-branch worktree with no issue, and a reserved
-name (`check`, `list`, `ticket-run`, `spec-run`, `architect-run`,
-`pickup-run`, `security-run`). The refusal names the rule and the file line,
-and starts no session.
+missing or wrong `version`, an unknown key, a Step without exactly one of
+`skill`, `command` and `catalogue`, a command that is not a string or is empty,
+a catalogue value other than `delivery` or `run-published-issue`, a
+`run-published-issue` Step that does not directly follow a session Step, an
+`optional` value that is not a boolean, a skill that cannot be found, an
+unknown worktree, a Step that does not name a worktree when the Process
+declares them, parallel Steps that share a worktree, a worktree kind other
+than `throwaway` or `issue-branch`, a second Issue-branch worktree, a delivery
+Step with no Issue-branch worktree or on a different worktree, a second
+delivery Step, an optional delivery Step, a delivery Step in a parallel group,
+an Issue-branch worktree with no delivery Step after the last Step that uses
+it, an Issue-branch worktree with no issue, and a reserved name (`check`,
+`list`, `ticket-run`, `spec-run`, `architect-run`, `pickup-run`,
+`security-run`). The refusal names the rule and the file line, and starts no
+session.
 
 The Command is recorded as kind `Process`, with the process name. Its Command
 log has one line per Step: the Step's name, duration, outcome and cause. A
