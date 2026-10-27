@@ -1,6 +1,6 @@
 //! The Run notification: saved beside the Command log when a Run, a Spec
-//! run or a Pass ends, unless the Pass was skipped, and optionally emailed
-//! through the same checks and the same send as `email-test`.
+//! run, a Pass or a Process ends, unless the Pass or Process was skipped,
+//! and optionally emailed through the same checks and the same send as `email-test`.
 
 use std::path::Path;
 use std::time::{Duration, Instant};
@@ -43,6 +43,10 @@ pub enum About<'a> {
     /// A Security run, from the Launch directory.
     SecurityRun,
     ScoringRun,
+    /// A Custom process, named by its file, from the Launch directory.
+    Process {
+        name: &'a str,
+    },
 }
 
 /// What a Run notification's subject names.
@@ -64,16 +68,23 @@ enum Subject {
     ScoringRun,
     /// A Pass whose notification subject has not been established yet.
     Pending,
+    /// A Custom process, with the repository the Launch directory's `origin`
+    /// names, if it names one.
+    Process {
+        name: String,
+        repo: Option<Repo>,
+    },
 }
 
 impl Subject {
     /// The Command a notification about an Architect or Security run is
     /// about, by name, with its repository if known.
-    fn command(&self) -> Option<(&'static str, Option<&Repo>)> {
+    fn command(&self) -> Option<(String, Option<&Repo>)> {
         match self {
-            Subject::ArchitectRun(repo) => Some(("Architect run", repo.as_ref())),
-            Subject::SecurityRun(repo) => Some(("Security run", repo.as_ref())),
-            Subject::ScoringRun => Some(("Scoring run", None)),
+            Subject::ArchitectRun(repo) => Some(("Architect run".into(), repo.as_ref())),
+            Subject::SecurityRun(repo) => Some(("Security run".into(), repo.as_ref())),
+            Subject::ScoringRun => Some(("Scoring run".into(), None)),
+            Subject::Process { name, repo } => Some((format!("Process {name}"), repo.as_ref())),
             Subject::Issue { .. } | Subject::Pending => None,
         }
     }
@@ -129,6 +140,11 @@ impl RunNotification {
             About::PickupRun => Subject::Pending,
             About::SecurityRun => Subject::SecurityRun(launch::repo().ok()),
             About::ScoringRun => Subject::ScoringRun,
+            // The command subject names the process. No issue title is read.
+            About::Process { name } => Subject::Process {
+                name: name.to_string(),
+                repo: launch::repo().ok(),
+            },
         };
         Ok(RunNotification {
             resend,
@@ -223,14 +239,18 @@ impl RunNotification {
 }
 
 /// The subject of a notification about `subject` for a command whose
-/// outcome is `outcome`: none about a Pickup run that took no issue.
+/// outcome is `outcome`: none about a Pickup run that took no issue, and
+/// none about a skipped Process.
 fn subject_line(subject: &Subject, outcome: &str) -> Option<String> {
+    if matches!(subject, Subject::Process { .. }) && outcome == "skipped" {
+        return None;
+    }
     if let Subject::Issue { issue, title, .. } = subject {
         return Some(issue_subject(issue, title.as_deref(), outcome));
     }
     subject
         .command()
-        .map(|(command, repo)| command_subject(command, repo, outcome))
+        .map(|(command, repo)| command_subject(&command, repo, outcome))
 }
 
 /// `[thirdshift] <owner>/<repo>#<n> <title>: <outcome>`, without the title
@@ -292,7 +312,7 @@ fn body(
         text += &command_lines(command, None);
     }
     if let Some((command, repo)) = subject.command() {
-        text += &command_lines(command, repo);
+        text += &command_lines(&command, repo);
     }
     if let Some(findings) = account.security_findings {
         // A fix's ending is told by the Result and Pull request lines.
@@ -1083,5 +1103,32 @@ mod tests {
             command_subject("Architect run", None, "review failed"),
             "[thirdshift] Architect run: review failed"
         );
+    }
+
+    fn about_process(outcome: &'static str) -> (Subject, Account<'static>) {
+        let subject = Subject::Process {
+            name: "notes".into(),
+            repo: Repo::of_origin("https://github.com/acme/widgets.git"),
+        };
+        let account = Account {
+            outcome,
+            interrupted: outcome == "interrupted",
+            ..failed("exit status 1")
+        };
+        (subject, account)
+    }
+
+    #[test]
+    fn a_skipped_process_sends_nothing() {
+        let (subject, skipped) = about_process("skipped");
+        assert_eq!(told(&subject, &skipped), None);
+        let (subject, failed_process) = about_process("failed");
+        let (line, text) = told(&subject, &failed_process).unwrap();
+        assert_eq!(line, "[thirdshift] acme/widgets Process notes: failed");
+        assert!(text.contains("Command:      Process notes\n"), "{text}");
+        assert!(text.contains("Cause:        exit status 1\n"), "{text}");
+        let (subject, interrupted) = about_process("interrupted");
+        let (_, text) = told(&subject, &interrupted).unwrap();
+        assert!(!text.contains("Cause:"), "{text}");
     }
 }

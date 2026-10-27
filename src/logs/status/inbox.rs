@@ -292,11 +292,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     let Observation::Record(command) = item.command else {
                         return None;
                     };
-                    let (subject, _) = subject(
-                        &command.record.repository,
-                        &command.record.name,
-                        command.record.issue.as_ref(),
-                    );
+                    let (subject, _) = row_subject(&command.record);
                     Some(format!(
                         "{subject} · {} · see Needs you",
                         item.needs_you_kind.expect("Needs you has a kind").title()
@@ -331,6 +327,26 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
     })
 }
 
+fn row_subject(facts: &crate::logs::command_record::CommandRecord) -> (String, String) {
+    if facts.kind == "Process" {
+        let name = facts.process_name.as_deref().unwrap_or(facts.name.as_str());
+        return match facts.issue.as_ref() {
+            Some(issue) => (
+                format!("Process {name} · {}#{}", facts.repository, issue.number),
+                issue
+                    .title
+                    .clone()
+                    .unwrap_or_else(|| "(title unavailable)".into()),
+            ),
+            None => (
+                format!("Process {name} on {}", facts.repository),
+                String::new(),
+            ),
+        };
+    }
+    subject(&facts.repository, &facts.name, facts.issue.as_ref())
+}
+
 fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, String) {
     match issue {
         Some(issue) => (
@@ -357,7 +373,7 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
     let facts = &command.record;
     let (log_length, session_length) = command.activity_lengths();
     let live = command.state == "live";
-    let (subject, title) = subject(&facts.repository, &facts.name, facts.issue.as_ref());
+    let (subject, title) = row_subject(facts);
     Ok(Row {
         // A Pass's dispatched Runs share its storage path. Their immutable
         // Command facts distinguish them without tying identity to ordering.

@@ -40,6 +40,60 @@ pub(crate) fn url(route: &str, command: &str, session: Option<&std::path::Path>)
     format!("{}?{}", url.path(), url.query().unwrap_or_default())
 }
 
+fn shown_heading(command: &Command) -> String {
+    if command.record.kind == "Process" {
+        return format!(
+            "Process {}",
+            command
+                .record
+                .process_name
+                .as_deref()
+                .unwrap_or(command.record.name.as_str())
+        );
+    }
+    format!(
+        "{} {}",
+        crate::logs::display_name(&command.record.kind),
+        command.record.name
+    )
+}
+
+/// Each Process Step's Command log line, and the result file when the Step wrote one.
+fn print_steps(command: &Command, indent: &str) {
+    if command.record.kind != "Process" {
+        return;
+    }
+    let Ok(log) = std::fs::read_to_string(&command.command_log) else {
+        return;
+    };
+    let results = command.command_log.with_extension("steps");
+    for line in log.lines() {
+        let Some(message) = step_message(line) else {
+            continue;
+        };
+        println!("{indent}{message}");
+        let Some(name) = step_name(message) else {
+            continue;
+        };
+        let path = results.join(format!("{name}.txt"));
+        if path.is_file() {
+            println!("{indent}result: {}", path.display());
+        }
+    }
+}
+
+fn step_message(line: &str) -> Option<&str> {
+    let rest = line.strip_prefix("thirdshift: ")?;
+    let (_, message) = rest.split_once(' ')?;
+    message.starts_with("step ").then_some(message)
+}
+
+fn step_name(message: &str) -> Option<&str> {
+    let rest = message.strip_prefix("step ")?;
+    let (name, _) = rest.split_once(':')?;
+    (!name.is_empty() && !name.contains(' ')).then_some(name)
+}
+
 fn print(command: Observation<'_>) -> Result<()> {
     match command {
         Observation::Record(command) => print_details(command, "")?,
@@ -58,9 +112,8 @@ fn print(command: Observation<'_>) -> Result<()> {
 
 fn print_details(command: &Command, indent: &str) -> Result<()> {
     println!(
-        "{indent}{} {} · {}",
-        crate::logs::display_name(&command.record.kind),
-        command.record.name,
+        "{indent}{} · {}",
+        shown_heading(command),
         super::stage_text(command)
     );
     if let Some(issue) = &command.record.issue {
@@ -87,6 +140,7 @@ fn print_details(command: &Command, indent: &str) -> Result<()> {
     if let Some(event) = command.latest_event() {
         println!("{indent}{event}");
     }
+    print_steps(command, indent);
     super::print_tickets(&command.record, &format!("{indent}  "));
     for child in command.dispatched.iter().chain(&command.children) {
         print_details(child, &format!("{indent}  "))?;

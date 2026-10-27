@@ -17,12 +17,15 @@ use chrono::{DateTime, Utc};
 use toml_edit::{Document, Item, Key, Table};
 
 use crate::args::ProcessAction;
+use crate::asks::Flags;
 use crate::config::UserConfig;
 use crate::git::Git;
 use crate::harness::{Asked, Choice};
 use crate::issue::{IssueInput, IssueUrl};
 use crate::logs::{self, Begin, Work};
+use crate::notification::{About, NotificationAsk, RunNotification};
 use crate::process::{self, Control, Interruption};
+use crate::run_ending::{Account, Cause};
 use crate::skill;
 use crate::worktree::SkillWorktree;
 use crate::{delivery, interrupt, launch, progress, prompt, session, skills, trust};
@@ -118,7 +121,7 @@ pub fn execute(action: ProcessAction) -> Result<String> {
     match action {
         ProcessAction::List => list(),
         ProcessAction::Check(name) => check(&name),
-        ProcessAction::Run { name, issue } => run(&name, issue),
+        ProcessAction::Run { name, issue, email } => run(&name, issue, email),
     }
 }
 
@@ -167,9 +170,22 @@ fn check(name: &str) -> Result<String> {
     Ok(plan(name, &prepared))
 }
 
-fn run(name: &str, issue: Option<IssueInput>) -> Result<String> {
+fn run(name: &str, issue: Option<IssueInput>, email: Option<NotificationAsk>) -> Result<String> {
     interrupt::install()?;
     let config = UserConfig::load()?;
+    logs::begin(Begin::Process(name));
+    logs::configured(&config);
+    // The same check as a Ticket run, before any worktree or Step: a missing
+    // address or Resend key fails the Process before it starts.
+    let mut notification = RunNotification::new(
+        Flags {
+            email,
+            ..Flags::default()
+        }
+        .notification(&config),
+        &config.email,
+        About::Process { name },
+    )?;
     // Before any worktree: a foreign Issue URL is an origin mismatch, and a
     // number that cannot be resolved stops the same way.
     let issue = resolve_process_issue(issue)?;
@@ -180,15 +196,47 @@ fn run(name: &str, issue: Option<IssueInput>) -> Result<String> {
     prepared.issue = issue;
     prepared.started = started;
     let repo = launch::repo()?;
-    logs::begin(Begin::Process(name));
-    logs::configured(&config);
     logs::started(Work::Process { repo: &repo, name }, &prepared.choice);
+    notification.built_with(&prepared.choice);
     let result = execute_steps(name, &prepared);
     let (outcome, cause) = classify(&result);
     drop(prepared);
-    logs::ended(&outcome);
-    logs::complete(&outcome, cause.as_deref());
+    logs::ended(outcome);
+    logs::complete(outcome, cause.as_deref());
+    notify(notification, outcome, cause.as_deref());
     result
+}
+
+/// Save and, when asked, send the Run notification. A skipped Process sends none.
+fn notify(notification: RunNotification, outcome: &'static str, cause: Option<&str>) {
+    if outcome == "skipped" {
+        return;
+    }
+    let ended = if outcome == "succeeded" {
+        Ok(outcome.to_string())
+    } else {
+        Err(Cause::of(&anyhow!("{}", cause.unwrap_or(outcome))))
+    };
+    let account = Account {
+        recovery: None,
+        outcome,
+        ended,
+        interrupted: outcome == "interrupted",
+        pr_url: None,
+        advice: &[],
+        base_fix: None,
+        log: None,
+        ticket_lines: &[],
+        review: None,
+        failed_reproduction: None,
+        pre_audit_failure: None,
+        security_findings: None,
+        security_findings_waiting: false,
+        security_fix: None,
+        security_close: None,
+        urls: Vec::new(),
+    };
+    notification.finish(&account);
 }
 
 fn execute_steps(process: &str, prepared: &Prepared) -> Result<String> {
@@ -539,10 +587,10 @@ fn worktree_path<'a>(worktrees: &'a [OwnedWorktree], name: Option<&str>) -> &'a 
         .path()
 }
 
-fn classify(result: &Result<String>) -> (String, Option<String>) {
+fn classify(result: &Result<String>) -> (&'static str, Option<String>) {
     match result {
-        Ok(_) => ("succeeded".to_string(), None),
-        Err(error) => (failure_outcome().to_string(), Some(one_line(error))),
+        Ok(_) => ("succeeded", None),
+        Err(error) => (failure_outcome(), Some(one_line(error))),
     }
 }
 

@@ -3,9 +3,13 @@
 mod support;
 
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::os::unix::fs::symlink;
 use std::path::Path;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
+use support::resend::{ResendStandIn, saved_notification};
 use support::{RunResult, Scenario, leaves_running};
 
 const REVIEW: &str = "\
@@ -2236,4 +2240,555 @@ fn step_line<'a>(log: &'a str, name: &str) -> &'a str {
     log.lines()
         .find(|line| line.contains(&format!("step {name}:")))
         .unwrap_or_else(|| panic!("no step {name} in {log}"))
+}
+
+const NOTES: &str = "\
+version = 1
+description = \"Notes\"
+
+[[steps]]
+name = \"gather\"
+command = \"printf gather\"
+
+[[steps]]
+name = \"review\"
+command = \"printf review\"
+";
+
+const KEY: &str = "re_test_123";
+const ACCEPTED: &str = r#"{"id":"49a3999c-0ce1-4ea6-ab68-afcd6dc2e794"}"#;
+
+fn process_command(status: &serde_json::Value) -> &serde_json::Value {
+    status["commands"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|command| command["kind"] == "Process")
+        .unwrap_or_else(|| panic!("no Process in {status}"))
+}
+
+fn status_json(scenario: &Scenario) -> serde_json::Value {
+    let json = scenario.run(&["status", "--json"]);
+    assert_eq!(json.code, Some(0), "{}", json.stderr);
+    serde_json::from_str(&json.stdout).unwrap()
+}
+
+/// The step message after its `thirdshift: HH:MM:SS` stamp.
+fn step_message(line: &str) -> &str {
+    let rest = line.strip_prefix("thirdshift: ").unwrap_or(line);
+    rest.split_once(' ')
+        .map(|(_, message)| message)
+        .unwrap_or(rest)
+}
+
+fn activity_log(scenario: &Scenario) -> String {
+    fs::read_to_string(scenario.path("home/.thirdshift/logs/acme/widgets/activity.log")).unwrap()
+}
+
+struct Console {
+    child: std::process::Child,
+    address: String,
+}
+
+impl Console {
+    fn start(scenario: &Scenario) -> Self {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+            .args(["console", "--no-sign-in"])
+            .env("HOME", scenario.path("home"))
+            .env_remove("RESEND_API_KEY")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .unwrap();
+        let stdout = child.stdout.take().unwrap();
+        let mut lines = BufReader::new(stdout).lines();
+        let address = lines
+            .next()
+            .expect("Console startup")
+            .expect("Console address");
+        assert!(address.starts_with("http://127.0.0.1:"), "{address}");
+        // Keep the pipe reader alive so the Console can keep writing.
+        std::thread::spawn(move || while lines.next().is_some() {});
+        Self { child, address }
+    }
+
+    fn get(&self, path: &str) -> String {
+        reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap()
+            .get(format!("{}{path}", self.address))
+            .send()
+            .unwrap()
+            .text()
+            .unwrap()
+    }
+}
+
+impl Drop for Console {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn status_and_show_name_a_finished_process_and_where_each_step_result_is() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "notes", NOTES);
+
+    let result = scenario.run(&["process", "notes"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "review\n");
+    let text = scenario.run(&["status"]);
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    assert!(
+        text.stdout.contains("Done:\nProcess notes on acme/widgets"),
+        "{}",
+        text.stdout
+    );
+    assert!(text.stdout.contains("· succeeded"), "{}", text.stdout);
+    let status = status_json(&scenario);
+    let command = process_command(&status);
+    assert_eq!(command["kind"], "Process");
+    assert_eq!(command["process_name"], "notes");
+    assert!(
+        command["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("process-notes-"),
+        "{}",
+        command["name"]
+    );
+    assert_eq!(command["outcome"], "succeeded");
+    assert_eq!(command["state"], "ended");
+    assert_eq!(command["group"], "done");
+    let name = command["name"].as_str().unwrap();
+    let shown = scenario.run(&["show", name]);
+    assert_eq!(shown.code, Some(0), "{}", shown.stderr);
+    assert!(
+        shown.stdout.starts_with("Process notes · succeeded\n"),
+        "{}",
+        shown.stdout
+    );
+    let (log_path, log) = command_log(&scenario);
+    for step in ["gather", "review"] {
+        assert!(
+            shown.stdout.contains(step_message(step_line(&log, step))),
+            "{step}: {}",
+            shown.stdout
+        );
+        let result_path = log_path.with_extension("steps").join(format!("{step}.txt"));
+        assert!(
+            shown
+                .stdout
+                .contains(&format!("result: {}", result_path.display())),
+            "{step}: {}",
+            shown.stdout
+        );
+    }
+    let activity = activity_log(&scenario);
+    assert!(activity.contains("Process notes started:"), "{activity}");
+    assert!(
+        activity.contains("Process notes ended: succeeded"),
+        "{activity}"
+    );
+    assert_eq!(process_record(&scenario)["kind"], "Process");
+}
+
+#[test]
+fn status_lists_a_running_process_by_name_until_it_is_interrupted() {
+    let scenario = Scenario::new();
+    let started = scenario.path("started");
+    write_process(
+        &scenario,
+        "notes",
+        &format!(
+            "\
+version = 1
+description = \"Loop until stopped\"
+
+[[steps]]
+name = \"wait\"
+command = \"touch '{}'; while true; do sleep 0.05; done\"
+",
+            started.display()
+        ),
+    );
+    let mut held = scenario.run_until(&["process", "notes"], &[], "started");
+    let text = scenario.run(&["status"]);
+    let status = status_json(&scenario);
+    let command = process_command(&status);
+    let name = command["name"].as_str().unwrap().to_string();
+    let stopped = scenario.run(&["stop", &name]);
+    if stopped.code != Some(0) {
+        held.signal("TERM");
+    }
+    let ended = held.finish();
+
+    assert_eq!(text.code, Some(0), "{}", text.stderr);
+    assert!(
+        text.stdout
+            .contains("Working:\nProcess notes on acme/widgets"),
+        "{}",
+        text.stdout
+    );
+    assert!(text.stdout.contains("· live ·"), "{}", text.stdout);
+    assert_eq!(command["kind"], "Process");
+    assert_eq!(command["process_name"], "notes");
+    assert!(name.starts_with("process-notes-"), "{name}");
+    assert!(command["outcome"].is_null(), "{command}");
+    assert_eq!(command["state"], "live");
+    assert_eq!(command["group"], "working");
+    assert_eq!(stopped.code, Some(0), "{}", stopped.stderr);
+    assert_eq!(ended.code, Some(1), "{}", ended.stderr);
+    let after = scenario.run(&["status"]);
+    assert!(
+        after.stdout.contains("Process notes on acme/widgets")
+            && after.stdout.contains("· interrupted"),
+        "{}",
+        after.stdout
+    );
+    let finished_status = status_json(&scenario);
+    let finished = process_command(&finished_status);
+    assert_eq!(finished["outcome"], "interrupted");
+    assert_eq!(finished["process_name"], "notes");
+    let (_, saved) = saved_notification(&scenario, "process");
+    assert!(
+        saved.starts_with("Subject: [thirdshift] acme/widgets Process notes: interrupted\n"),
+        "{saved}"
+    );
+    assert!(saved.contains("\nCommand:      Process notes\n"), "{saved}");
+    assert!(!saved.contains("\nCause:"), "{saved}");
+    let activity = activity_log(&scenario);
+    assert!(
+        activity.contains("Process notes ended: interrupted"),
+        "{activity}"
+    );
+}
+
+#[test]
+fn show_prints_a_failed_step_line_without_a_result_path() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "notes",
+        "\
+version = 1
+description = \"Fail the second step\"
+
+[[steps]]
+name = \"gather\"
+command = \"printf gather\"
+
+[[steps]]
+name = \"review\"
+command = \"exit 1\"
+",
+    );
+
+    let result = scenario.run(&["process", "notes"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let text = scenario.run(&["status"]);
+    assert!(
+        text.stdout
+            .contains("Needs you:\nProcess notes on acme/widgets")
+            && text.stdout.contains("· Failed ·")
+            && text.stdout.contains("· failed"),
+        "{}",
+        text.stdout
+    );
+    let status = status_json(&scenario);
+    let command = process_command(&status);
+    assert_eq!(command["group"], "needs you");
+    assert_eq!(command["outcome"], "failed");
+    assert_eq!(command["process_name"], "notes");
+    let shown = scenario.run(&["show", command["name"].as_str().unwrap()]);
+    let (log_path, log) = command_log(&scenario);
+    assert!(
+        shown
+            .stdout
+            .contains(step_message(step_line(&log, "review"))),
+        "{}",
+        shown.stdout
+    );
+    let missing = log_path.with_extension("steps").join("review.txt");
+    assert!(!missing.exists(), "{}", missing.display());
+    assert!(
+        !shown
+            .stdout
+            .contains(&format!("result: {}", missing.display())),
+        "{}",
+        shown.stdout
+    );
+    let kept = log_path.with_extension("steps").join("gather.txt");
+    assert!(
+        shown
+            .stdout
+            .contains(&format!("result: {}", kept.display())),
+        "{}",
+        shown.stdout
+    );
+}
+
+#[test]
+fn the_console_lists_a_failed_process_in_needs_you() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[console]\nport = 0\n");
+    write_process(
+        &scenario,
+        "notes",
+        "\
+version = 1
+description = \"Fail\"
+
+[[steps]]
+name = \"review\"
+command = \"exit 1\"
+",
+    );
+
+    let result = scenario.run(&["process", "notes"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let console = Console::start(&scenario);
+    let html = console.get("/");
+    let section = html
+        .split("data-group=\"needs you\"")
+        .nth(1)
+        .unwrap_or_else(|| panic!("{html}"))
+        .split("</details>")
+        .next()
+        .unwrap();
+    assert!(
+        section.contains("Process notes on acme/widgets"),
+        "{section}"
+    );
+    assert!(section.contains("data-state=\"Failed\""), "{section}");
+}
+
+#[test]
+fn a_finished_process_saves_a_run_notification_without_emailing_it() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "notes", NOTES);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = scenario.run_with_env(
+        &["process", "notes"],
+        &[("THIRDSHIFT_RESEND_URL", resend.url())],
+    );
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(resend.requests().is_empty());
+    let (log_path, saved) = saved_notification(&scenario, "process");
+    assert!(
+        saved.starts_with("Subject: [thirdshift] acme/widgets Process notes: succeeded\n"),
+        "{saved}"
+    );
+    assert!(saved.contains("\nResult:       succeeded\n"), "{saved}");
+    assert!(saved.contains("\nCommand:      Process notes\n"), "{saved}");
+    assert!(saved.contains("\nRepository:   acme/widgets\n"), "{saved}");
+    assert!(
+        saved.contains(&format!("\nCommand log:  {}\n", log_path.display())),
+        "{saved}"
+    );
+}
+
+#[test]
+fn a_failed_process_emails_its_run_notification_when_asked() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "notes",
+        "\
+version = 1
+description = \"Fail\"
+
+[[steps]]
+name = \"review\"
+command = \"exit 1\"
+",
+    );
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = scenario.run_with_env(
+        &["process", "--email", "me@example.com", "notes"],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", KEY),
+        ],
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let request = &requests[0];
+    assert_eq!(request.body["to"], "me@example.com");
+    assert_eq!(
+        request.body["subject"],
+        "[thirdshift] acme/widgets Process notes: failed"
+    );
+    let text = request.body["text"].as_str().unwrap();
+    assert!(text.contains("Result:       failed\n"), "{text}");
+    assert!(text.contains("Command:      Process notes\n"), "{text}");
+    assert!(text.contains("Repository:   acme/widgets\n"), "{text}");
+    assert!(text.contains("Cause:        exit status 1\n"), "{text}");
+    let (log_path, _) = saved_notification(&scenario, "process");
+    assert!(
+        text.contains(&format!("Command log:  {}\n", log_path.display())),
+        "{text}"
+    );
+    support::resend::assert_saved_notification(&scenario, "process", request);
+}
+
+#[test]
+fn email_unless_merged_still_emails_a_process_because_it_does_not_merge() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[email]\nto = \"config@example.com\"\n");
+    write_process(&scenario, "notes", NOTES);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = scenario.run_with_env(
+        &["process", "notes", "email-unless-merged"],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", KEY),
+        ],
+    );
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(requests[0].body["to"], "config@example.com");
+    assert_eq!(
+        requests[0].body["subject"],
+        "[thirdshift] acme/widgets Process notes: succeeded"
+    );
+}
+
+#[test]
+fn the_user_config_emails_a_failed_process_under_the_ticket_run_rules() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[email]\nunless_merged = true\nto = \"config@example.com\"\n");
+    write_process(
+        &scenario,
+        "notes",
+        "\
+version = 1
+description = \"Fail\"
+
+[[steps]]
+name = \"review\"
+command = \"exit 1\"
+",
+    );
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = scenario.run_with_env(
+        &["process", "notes"],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", KEY),
+        ],
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let requests = resend.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(requests[0].body["to"], "config@example.com");
+    assert!(
+        requests[0].body["subject"]
+            .as_str()
+            .unwrap()
+            .ends_with("Process notes: failed"),
+        "{}",
+        requests[0].body["subject"]
+    );
+}
+
+#[test]
+fn no_email_saves_a_failed_process_notification_without_sending_it() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[email]\nalways = true\nto = \"config@example.com\"\n");
+    write_process(
+        &scenario,
+        "notes",
+        "\
+version = 1
+description = \"Fail\"
+
+[[steps]]
+name = \"review\"
+command = \"exit 1\"
+",
+    );
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = scenario.run_with_env(
+        &["process", "notes", "--no-email"],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", KEY),
+        ],
+    );
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(resend.requests().is_empty());
+    let (_, saved) = saved_notification(&scenario, "process");
+    assert!(saved.contains("Process notes: failed"), "{saved}");
+}
+
+#[test]
+fn a_missing_resend_key_stops_a_process_before_any_step() {
+    let scenario = Scenario::new();
+    let marker = scenario.path("step-ran");
+    write_process(
+        &scenario,
+        "notes",
+        &format!(
+            "\
+version = 1
+description = \"Must not run\"
+
+[[steps]]
+name = \"review\"
+command = \"touch '{}'\"
+",
+            marker.display()
+        ),
+    );
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+
+    let result = scenario.run_with_env(
+        &["process", "notes", "email", "me@example.com"],
+        &[("THIRDSHIFT_RESEND_URL", resend.url())],
+    );
+
+    scenario.assert_rejected_before_any_work(&result, "RESEND_API_KEY");
+    assert!(!marker.exists(), "a step ran");
+    assert!(resend.requests().is_empty());
+    assert!(!process_dir(&scenario).exists());
+}
+
+#[test]
+fn process_email_flags_are_usage_errors_on_check_and_ticket_flags_are_rejected() {
+    for args in [
+        vec!["process", "notes", "merge"],
+        vec!["process", "notes", "harness", "codex"],
+        vec!["process", "check", "notes", "--no-email"],
+        vec!["process", "--email"],
+    ] {
+        let scenario = Scenario::new();
+        write_process(&scenario, "notes", NOTES);
+        let result = scenario.run(&args);
+        assert_eq!(result.code, Some(2), "{args:?}: {}", result.stderr);
+        assert!(
+            result.stderr.contains("usage: thirdshift process"),
+            "{args:?}: {}",
+            result.stderr
+        );
+        assert!(!process_dir(&scenario).exists(), "{args:?}");
+    }
 }
