@@ -3,6 +3,7 @@
 mod support;
 
 use std::fs;
+use std::os::unix::fs::symlink;
 use std::path::Path;
 
 use support::{RunResult, Scenario, leaves_running};
@@ -893,6 +894,273 @@ fn stop_interrupts_a_running_process() {
     assert!(name.starts_with("process-notes-"), "{name}");
     let record = process_record(&scenario);
     assert_eq!(record["outcome"], "interrupted");
+}
+
+#[test]
+fn a_home_skill_runs_and_the_session_finds_it_in_the_worktree() {
+    let scenario = Scenario::new();
+    let house = scenario.path("home/.thirdshift/skills/house-style");
+    let other = scenario.path("home/.thirdshift/skills/other-notes");
+    fs::create_dir_all(&house).unwrap();
+    fs::create_dir_all(&other).unwrap();
+    fs::write(house.join("SKILL.md"), "# House style\n").unwrap();
+    fs::write(other.join("SKILL.md"), "# Other notes\n").unwrap();
+    write_process(
+        &scenario,
+        "style",
+        "\
+version = 1
+description = \"Apply the house style\"
+
+[[steps]]
+name = \"style\"
+skill = \"house-style\"
+",
+    );
+    scenario.agent_does(
+        "test \"$(cat .claude/skills/house-style/SKILL.md)\" = '# House style'\n\
+         test \"$(cat .claude/skills/other-notes/SKILL.md)\" = '# Other notes'\n\
+         test -z \"$(git status --porcelain --untracked-files=all)\"\n\
+         printf 'styled' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+
+    let result = scenario.run(&["process", "style"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "styled\n");
+    let calls = scenario.claude_calls();
+    assert_eq!(calls.len(), 1, "{}", result.stderr);
+    let prompt = calls[0]["prompt"].as_str().unwrap();
+    let found = scenario.path("home/.thirdshift/skills/house-style/SKILL.md");
+    assert!(
+        prompt.contains(&format!(
+            "house-style skill. Read and follow `{}`",
+            found.display()
+        )),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("thirdshift-house-style"), "{prompt}");
+    let cwd = Path::new(calls[0]["cwd"].as_str().unwrap());
+    assert!(!cwd.exists(), "worktree was kept: {}", result.stderr);
+}
+
+#[test]
+fn a_home_skill_link_is_readable_in_the_trial_sandbox() {
+    let scenario = Scenario::new();
+    let house = scenario.path("home/.thirdshift/skills/house-style");
+    let outside = scenario.path("outside-notes");
+    fs::create_dir_all(&house).unwrap();
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(house.join("SKILL.md"), "# House style\n").unwrap();
+    fs::write(house.join("notes.md"), "# Notes\n").unwrap();
+    fs::write(outside.join("secret.md"), "secret\n").unwrap();
+    symlink(outside.join("secret.md"), house.join("secret.md")).unwrap();
+    write_process(
+        &scenario,
+        "style",
+        "\
+version = 1
+description = \"Apply the house style\"
+
+[[steps]]
+name = \"style\"
+skill = \"house-style\"
+",
+    );
+    // The Trial sandbox binds the repository, the Factory skills folder and a
+    // fresh home. It does not mount ~/.thirdshift/skills. The worktree link
+    // has to name a plain copy in that folder: a symlink back to the home
+    // directory is readable in this session and absent in the sandbox.
+    scenario.agent_does(
+        "test \"$(cat .claude/skills/house-style/SKILL.md)\" = '# House style'\n\
+         test \"$(cat .claude/skills/house-style/notes.md)\" = '# Notes'\n\
+         test ! -e .claude/skills/house-style/secret.md\n\
+         factory=$(dirname \"$(readlink .claude/skills/thirdshift-implement)\")\n\
+         published=$(readlink .claude/skills/house-style)\n\
+         case \"$published\" in\n\
+           \"$factory\"/*) ;;\n\
+           *) printf 'home skill link is outside the Factory skills folder\n' >&2; exit 1 ;;\n\
+         esac\n\
+         case \"$published\" in\n\
+           *.thirdshift/skills/*) printf 'home skill link points at the home directory\n' >&2; exit 1 ;;\n\
+         esac\n\
+         test -f \"$published/SKILL.md\"\n\
+         test ! -L \"$published/SKILL.md\"\n\
+         test \"$(cat \"$published/SKILL.md\")\" = '# House style'\n\
+         test -f \"$published/notes.md\"\n\
+         test ! -L \"$published/notes.md\"\n\
+         test \"$(cat \"$published/notes.md\")\" = '# Notes'\n\
+         test ! -e \"$published/secret.md\"\n\
+         test -z \"$(git status --porcelain --untracked-files=all)\"\n\
+         printf 'readable' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"",
+    );
+
+    let result = scenario.run(&["process", "style"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "readable\n");
+    let calls = scenario.claude_calls();
+    let prompt = calls[0]["prompt"].as_str().unwrap();
+    let found = scenario.path("home/.thirdshift/skills/house-style/SKILL.md");
+    assert!(
+        prompt.contains(&format!(
+            "house-style skill. Read and follow `{}`",
+            found.display()
+        )),
+        "{prompt}"
+    );
+}
+
+#[test]
+fn a_repository_skill_wins_over_the_home_skill() {
+    for folder in [".agents/skills", ".claude/skills"] {
+        let scenario = Scenario::new();
+        let relative = format!("{folder}/house-style/SKILL.md");
+        fs::create_dir_all(scenario.launch_dir().join(format!("{folder}/house-style"))).unwrap();
+        scenario.commit_locally(&relative, "# Repository style\n", "Add repository skill");
+        scenario.launch_git(&["push", "origin", "main"]);
+        let home = scenario.path("home/.thirdshift/skills/house-style");
+        let other = scenario.path("home/.thirdshift/skills/other-notes");
+        fs::create_dir_all(&home).unwrap();
+        fs::create_dir_all(&other).unwrap();
+        fs::write(home.join("SKILL.md"), "# House style\n").unwrap();
+        fs::write(other.join("SKILL.md"), "# Other notes\n").unwrap();
+        write_process(
+            &scenario,
+            "style",
+            "\
+version = 1
+description = \"Apply the house style\"
+
+[[steps]]
+name = \"style\"
+skill = \"house-style\"
+",
+        );
+        let preserved = if folder == ".claude/skills" {
+            "test ! -L .claude/skills/house-style"
+        } else {
+            "test ! -e .claude/skills/house-style"
+        };
+        scenario.agent_does(&format!(
+            "test \"$(cat {relative})\" = '# Repository style'\n\
+             {preserved}\n\
+             test \"$(cat .claude/skills/other-notes/SKILL.md)\" = '# Other notes'\n\
+             printf 'repo' > \"$FAKE_CLAUDE_FINAL_MESSAGE\""
+        ));
+
+        let result = scenario.run(&["process", "style"]);
+
+        assert_eq!(result.code, Some(0), "{folder}: {}", result.stderr);
+        assert_eq!(result.stdout, "repo\n");
+        let calls = scenario.claude_calls();
+        let prompt = calls[0]["prompt"].as_str().unwrap();
+        assert!(prompt.contains(&relative), "{folder}: {prompt}");
+        assert!(
+            !prompt.contains(".thirdshift/skills/house-style"),
+            "{folder}: {prompt}"
+        );
+    }
+}
+
+#[test]
+fn check_prints_where_each_steps_skill_was_found() {
+    let scenario = Scenario::new();
+    let relative = ".claude/skills/house-style/SKILL.md";
+    fs::create_dir_all(scenario.launch_dir().join(".claude/skills/house-style")).unwrap();
+    scenario.commit_locally(relative, "# Repository style\n", "Add repository skill");
+    scenario.launch_git(&["push", "origin", "main"]);
+    let home = scenario.path("home/.thirdshift/skills/code-review");
+    let hidden = scenario.path("home/.thirdshift/skills/house-style");
+    fs::create_dir_all(&home).unwrap();
+    fs::create_dir_all(&hidden).unwrap();
+    fs::write(home.join("SKILL.md"), "# Home review\n").unwrap();
+    fs::write(hidden.join("SKILL.md"), "# House style\n").unwrap();
+    write_process(
+        &scenario,
+        "style",
+        "\
+version = 1
+description = \"Style, review, then plan\"
+
+[[steps]]
+name = \"house\"
+skill = \"house-style\"
+
+[[steps]]
+name = \"review\"
+skill = \"code-review\"
+
+[[steps]]
+name = \"plan\"
+skill = \"to-spec\"
+",
+    );
+
+    let result = scenario.run(&["process", "check", "style"]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(scenario.claude_calls().is_empty(), "a session started");
+    let house = result
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("house:"))
+        .unwrap_or_else(|| panic!("no house step in {}", result.stdout));
+    assert!(house.contains("house-style"), "{house}");
+    assert!(house.contains(relative), "{house}");
+    assert!(!house.contains(".thirdshift/skills"), "{house}");
+    let review = result
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("review:"))
+        .unwrap_or_else(|| panic!("no review step in {}", result.stdout));
+    let found = scenario.path("home/.thirdshift/skills/code-review/SKILL.md");
+    assert!(
+        review.contains(&format!("code-review {}", found.display())),
+        "{review}"
+    );
+    assert!(!review.contains("thirdshift-code-review"), "{review}");
+    let plan = result
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("plan:"))
+        .unwrap_or_else(|| panic!("no plan step in {}", result.stdout));
+    assert!(plan.contains("thirdshift-to-spec"), "{plan}");
+    assert!(plan.contains("SKILL.md"), "{plan}");
+    assert!(!plan.contains(".thirdshift/skills"), "{plan}");
+}
+
+#[test]
+fn a_home_skill_outside_its_directory_is_not_used() {
+    let scenario = Scenario::new();
+    let outside = scenario.path("outside-skill");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("SKILL.md"), "# Outside\n").unwrap();
+    let skills = scenario.path("home/.thirdshift/skills");
+    fs::create_dir_all(&skills).unwrap();
+    symlink(&outside, skills.join("escaped")).unwrap();
+    write_process(
+        &scenario,
+        "style",
+        "\
+version = 1
+description = \"Use an escaped skill\"
+
+[[steps]]
+name = \"style\"
+skill = \"escaped\"
+",
+    );
+
+    let result = scenario.run(&["process", "check", "style"]);
+
+    assert_no_session(&scenario, &result);
+    assert!(
+        result.stderr.contains("skill not found"),
+        "{}",
+        result.stderr
+    );
+    assert!(result.stderr.contains("unknown skill"), "{}", result.stderr);
 }
 
 const FAMILIES: &str = "\
