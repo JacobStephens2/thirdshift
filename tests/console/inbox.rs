@@ -390,9 +390,10 @@ fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status()
         (4, "ready for review", "Ready", false, false),
         (5, "needs you", "Failed", false, false),
     ] {
+        let issue_link = format!("href=\"https://github.com/acme/widgets/issues/{number}\"");
         let row = html
             .split("<li class=\"command\"")
-            .find(|row| row.contains(&format!(">acme/widgets#{number}<")))
+            .find(|row| row.contains(&issue_link))
             .expect(&html);
         assert!(row.contains(&format!("data-live=\"{live}\"")), "{row}");
         assert!(row.contains(&format!("data-state=\"{state}\"")), "{row}");
@@ -401,10 +402,7 @@ fn landing_ready_and_stopping_rows_carry_their_state_in_the_console_and_status()
             "{row}"
         );
         let section = section(&html, group);
-        assert!(
-            section.contains(&format!(">acme/widgets#{number}<")),
-            "{section}"
-        );
+        assert!(section.contains(&issue_link), "{section}");
         let item = json["commands"]
             .as_array()
             .unwrap()
