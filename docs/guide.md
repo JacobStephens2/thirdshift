@@ -561,14 +561,41 @@ axis reports without fixing or publishing anything. Spec review Trials keep
 the production Spec review prompt. They have no PR service: `gh` calls fail
 inside the sandbox and only their reports are graded.
 
-The Bar is saved before the first Trial: margin `-0.10`, pass level `0.95`, fail level `0.95`,
+The Bar is saved before the first Trial: margin `-0.10`, pass level `0.70`, fail level `0.95`,
 prior `1`, seed `0`, `20000` draws, each suite's Trials per Eval task, an
 `1800`-second per-Trial timeout, and up to two fresh retries for Void Trials.
 Override these with `--margin`, `--pass-level`, `--fail-level`, `--prior`, `--seed`,
 `--draws`, `--trials-per-task`, `--timeout` (seconds), or `--void-retries`.
-Both levels are credible levels strictly between zero and one. They stay at
-95% by default until the pass level is set from the A/A measurement. Changing
+Both levels are credible levels strictly between zero and one. Changing
 either level after the first Trial is refused, as with the rest of the Bar.
+
+The default pass level is the highest at which an A/A Experiment at the
+measured disagreement rate passes at least 80% of the time on each suite at
+its size, but never below 70% (#1268). #1370's A/A Experiment measured these
+rates, as paired task differences:
+
+| Suite | Size | Accuracy disagreements | Wrong-finding disagreements |
+| --- | --- | --- | --- |
+| `code-review` | 10 tasks × 3 Trials | 2 of 10 tasks (one by two Trials, one by one) | none |
+| `spec-review` | 30 tasks × 1 Trial | 5 of 30 tasks | 2 of 30 tasks |
+
+No pass level from 70% to 95% reaches 80% on either suite, so the default is
+the 70% floor. Simulated A/A Experiments at those rates, each judged by the
+Verdict, pass this often:
+
+| Suite | At 70% | At 95% (before #1268) | 70% intervals of #1370's own counts |
+| --- | --- | --- | --- |
+| `code-review` | 67% | 0% | accuracy [−0.171, −0.018], wrong findings [−0.039, +0.039] |
+| `spec-review` | 46% | 13% | accuracy [−0.042, +0.108], wrong findings [−0.047, +0.048] |
+
+Both suites fall short. `code-review` would need about 20 to 30 Eval tasks to
+reach 80% at 70%; #1434 grows it. `spec-review` can't reach 80% at 70% at any
+size: a pass also needs the pass-level interval to reach zero, and for
+identical Arms a 70% interval's upper bound falls below zero about 15% of the
+time per noisy metric, so its pass rate levels off near 72%. At an 80% pass
+level it would need about 160 Eval tasks. A lower pass level is not always
+better: at 30 Spec-review tasks, 72% passes more A/A Experiments than 70% does.
+
 `--void-retries` accepts zero, one or two. A sandbox that cannot start, a
 provider connection or login failure, a provider server error before work, a
 plan-limit stop, or a host kill or Trial-only memory cap makes a Trial void.

@@ -53,7 +53,9 @@ fn saved_single_level_experiments_keep_their_bar_and_verdict_when_read_and_resum
         assert_eq!(shown["verdict"], legacy["verdict"]);
         assert_eq!(fs::read(&path).unwrap(), before);
         let trials = fixture.trial_calls().len();
-        let resumed = fixture.run(&[]);
+        // A paused single-level Experiment resumes with both recorded levels.
+        let level = legacy["bar"]["credible_level"].to_string();
+        let resumed = fixture.run(&["--pass-level", &level, "--fail-level", &level]);
         assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
         let resumed: Value = serde_json::from_str(&resumed.stdout).unwrap();
         assert_eq!(resumed["bar"], legacy["bar"]);
@@ -1279,7 +1281,7 @@ fn experiment_records_both_arms_the_bar_logs_stages_and_each_trial() {
     assert_eq!(experiment["candidate"]["commit"], fixture.candidate);
     assert_eq!(experiment["suites"], json!(["spec-review"]));
     assert_eq!(experiment["bar"]["margin"], -0.1);
-    assert_eq!(experiment["bar"]["pass_level"], 0.95);
+    assert_eq!(experiment["bar"]["pass_level"], 0.7);
     assert_eq!(experiment["bar"]["fail_level"], 0.95);
     assert_eq!(experiment["bar"]["trials_per_task"]["spec-review"], 1);
     assert_eq!(experiment["results"].as_array().unwrap().len(), 2);
