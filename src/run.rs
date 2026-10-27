@@ -20,6 +20,7 @@ use crate::issue::IssueUrl;
 use crate::launch::LaunchDirectory;
 use crate::logs::{self, Work};
 use crate::progress;
+#[cfg(test)]
 use crate::prompt;
 use crate::session::Logs;
 use crate::spec_run;
@@ -348,13 +349,11 @@ fn start_in_worktree<O: Outside>(
     parallel: NonZeroUsize,
 ) -> Result<Reached, FailedRun> {
     let branch = selection.branch();
-    let (checkout, prompt) = match selection {
-        Selection::Fresh { .. } => (Checkout::Fresh, prompt::fresh(issue, base, branch)),
-        Selection::Continuation { pr, .. } => (
-            Checkout::Continuation,
-            prompt::continuation(issue, base, branch, pr.as_ref().map(|pr| pr.url.as_str())),
-        ),
+    let checkout = match selection {
+        Selection::Fresh { .. } => Checkout::Fresh,
+        Selection::Continuation { .. } => Checkout::Continuation,
     };
+    let prompt = crate::implement::prompt(issue, base, selection);
     let worktree = outside.worktree(checkout, branch, base)?;
     if !tickets.is_empty() {
         return outside.spec_run(tickets, worktree, base, parallel);
@@ -576,19 +575,14 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
         &mut self,
         worktree: Worktree,
         base: &str,
-        mut opening: Opening,
+        opening: Opening,
     ) -> Result<Reached, FailedRun> {
-        if self.diagnose_bugs {
-            let labels = GitHub::new().issue_labels(self.issue)?;
-            if labels.has(crate::labels::Label::new("bug", "A reported bug"))
-                && !labels.has(crate::security::fixing::SECURITY_FIX)
-            {
-                opening.session = OpeningSession::BugDiagnosis;
-                let merge_base = worktree.ahead_merge_base(base)?;
-                opening.prompt =
-                    prompt::diagnosing_bugs(self.issue, &opening.prompt, merge_base.as_deref());
-            }
-        }
+        let labels = self
+            .diagnose_bugs
+            .then(|| GitHub::new().issue_labels(self.issue))
+            .transpose()?;
+        let opening =
+            crate::implement::prepare(self.issue, base, &worktree, opening, labels.as_ref())?;
         let mut pull_request = crate::pull_request::PullRequest::new(
             self.issue,
             worktree.branch(),
