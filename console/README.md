@@ -173,7 +173,11 @@ open for the selected row as you move with `j` / `k` or switch folders. On a
 phone the folders are a row of tabs and Command details open as a bottom sheet. Without
 JavaScript, rows show in full, with their own Dismiss and logs links.
 
-Command details give the high-level view first: one line per recorded fact,
+Command details open with the Inbox subject and the full issue title, before
+Stop and Dismiss. The subject links to the issue, and long titles wrap. A
+Command without an issue shows its Inbox subject alone; an unknown issue title
+says “(title unavailable)”. The same recorded title is in
+`thirdshift show <command> --json`. Below the heading is one line per recorded fact,
 label then value. A long value, or a fact with its own facts, such as stages,
 the dispatched Run or run metrics, starts folded behind a one-line preview (a
 title, a name or a count); open it to drill down, as deep as the record goes.

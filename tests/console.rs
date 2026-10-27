@@ -798,6 +798,7 @@ fn peek_and_full_logs_use_the_exact_selected_command_and_share_show_details() {
     );
     let shown: Value = serde_json::from_slice(&shown.stdout).unwrap();
     assert_eq!(shown["command"]["cause"], "Old failure");
+    assert_eq!(shown["command"]["issue"]["title"], "Older Command <unsafe>");
     let console = Console::start(binary, home.path());
     let mut url = reqwest::Url::parse("http://localhost/peek").unwrap();
     url.query_pairs_mut()
@@ -806,6 +807,12 @@ fn peek_and_full_logs_use_the_exact_selected_command_and_share_show_details() {
         .get(&format!("/peek?{}", url.query().unwrap()))
         .text()
         .unwrap();
+    let heading = peek.split("</h2>").next().unwrap();
+    assert!(heading.contains("acme/widgets#7</a>"), "{heading}");
+    assert!(
+        heading.contains("Older Command &#60;unsafe&#62;"),
+        "{heading}"
+    );
     for expected in [
         "Older Command &#60;unsafe&#62;",
         "Old failure",
@@ -1964,7 +1971,57 @@ fn stages_and_command_details_link_the_github_issue() {
         .text()
         .unwrap();
     assert!(
-        peek.contains("<a href=\"https://github.com/acme/widgets/issues/7\">Issue #7</a>"),
+        peek.contains("<a href=\"https://github.com/acme/widgets/issues/7\">acme/widgets#7</a>"),
         "Command details links the Issue URL: {peek}"
     );
+}
+
+#[test]
+fn command_details_and_inbox_share_subject_and_title_fallbacks() {
+    for (issue, name, subject, title) in [
+        (
+            Value::Null,
+            "architect-fixture",
+            "architect-fixture on acme/widgets",
+            "",
+        ),
+        (
+            json!({"number": 7, "url": "https://github.com/acme/widgets/issues/7"}),
+            "acme/widgets#7",
+            "acme/widgets#7",
+            "(title unavailable)",
+        ),
+    ] {
+        let home = tempfile::tempdir().unwrap();
+        configure(home.path());
+        let mut facts = record(home.path(), 7, Some("failed"), 0);
+        facts["issue"] = issue;
+        facts["name"] = name.into();
+        write_record(home.path(), 7, &facts);
+        let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+        let inbox = console.get("/").text().unwrap();
+        assert!(inbox.contains(subject), "{inbox}");
+        assert!(
+            inbox.contains(&format!("class=\"issue-title\">{title}</span>")),
+            "{inbox}"
+        );
+        let selector = home
+            .path()
+            .join(".thirdshift/logs/acme/widgets/commands/issue/7-fixture.command.json");
+        let mut url = reqwest::Url::parse("http://localhost/peek").unwrap();
+        url.query_pairs_mut()
+            .append_pair("command", selector.to_str().unwrap());
+        let peek = console
+            .get(&format!("/peek?{}", url.query().unwrap()))
+            .text()
+            .unwrap();
+        let heading = peek.split("</h2>").next().unwrap();
+        assert!(heading.contains(subject), "{heading}");
+        if title.is_empty() {
+            assert!(!heading.contains("<span>"), "{heading}");
+            assert!(!heading.contains("<a "), "{heading}");
+        } else {
+            assert!(heading.contains(title), "{heading}");
+        }
+    }
 }
