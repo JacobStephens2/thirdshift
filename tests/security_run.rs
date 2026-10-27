@@ -1575,6 +1575,7 @@ fn the_setting_allows_a_merge_fix_and_the_command_can_override_either_setting() 
         scenario.user_config_is(config);
         scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
         scenario.agent_does_for(8, implement_fix());
+        scenario.agent_does_in_session(3, &close_check_script("passes"));
         let mut args = vec!["secure"];
         args.extend(word);
         let result = scenario.run(&args);
@@ -1583,7 +1584,7 @@ fn the_setting_allows_a_merge_fix_and_the_command_can_override_either_setting() 
             scenario.gh_state()["prs"][0]["state"],
             if merged { "MERGED" } else { "OPEN" }
         );
-        assert_eq!(scenario.claude_calls().len(), 2);
+        assert_eq!(scenario.claude_calls().len(), if merged { 3 } else { 2 });
     }
 }
 
@@ -1599,7 +1600,7 @@ printf '%s\n' 'Command: bounded-fixture; exit 0' 'Security close check: {outcome
 }
 
 #[test]
-fn a_merged_fix_with_closing_allowed_closes_the_advisory_naming_its_pull_request() {
+fn a_merged_fix_closes_the_advisory_by_default_naming_its_pull_request() {
     let scenario = with_reproduced_findings(&["high"]);
     scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
     scenario.agent_does_for(8, implement_fix());
@@ -1609,7 +1610,6 @@ fn a_merged_fix_with_closing_allowed_closes_the_advisory_naming_its_pull_request
         &[
             "secure",
             "security-fix",
-            "security-close",
             "merge",
             "email",
             "day@example.com",
@@ -1644,7 +1644,7 @@ fn a_merged_fix_with_closing_allowed_closes_the_advisory_naming_its_pull_request
 }
 
 #[test]
-fn a_merged_fix_with_closing_allowed_closes_the_finding_issue_naming_its_pull_request() {
+fn a_merged_fix_closes_the_finding_issue_by_default_naming_its_pull_request() {
     let scenario = with_reproduced_findings(&["high"]);
     let mut state = scenario.gh_state();
     state["private"] = json!(true);
@@ -1658,7 +1658,7 @@ fn a_merged_fix_with_closing_allowed_closes_the_finding_issue_naming_its_pull_re
             .replace("#8", "#7"),
     );
     scenario.agent_does_in_session(2, &close_check_script("passes"));
-    let result = scenario.run(&["secure", "security-fix", "security-close", "merge"]);
+    let result = scenario.run(&["secure", "security-fix", "merge"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let state = scenario.gh_state();
     let pr_url = state["prs"][0]["url"].as_str().unwrap().to_string();
@@ -1687,7 +1687,7 @@ fn a_failing_close_check_leaves_the_advisory_open_with_a_note_and_tells_the_day_
     scenario.agent_does_in_session(1, &stage_fix("GHSA-finding-0"));
     scenario.agent_does_for(8, implement_fix());
     scenario.agent_does_in_session(3, &close_check_script("fails: the bound still overflows"));
-    let result = scenario.run(&["secure", "security-fix", "security-close", "merge"]);
+    let result = scenario.run(&["secure", "security-fix", "merge"]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let state = scenario.gh_state();
     assert_eq!(state["prs"][0]["state"], "MERGED");
@@ -1761,6 +1761,31 @@ fn email_unless_merged_emails_nothing_for_a_merged_fix_that_closed_its_finding()
 #[test]
 fn closing_follows_the_setting_unless_the_command_overrides_it() {
     for (config, words, merged, closed) in [
+        ("", vec!["security-fix", "merge"], true, true),
+        (
+            "[security]\nfix = true\n[merge]\nalways = true\n",
+            Vec::new(),
+            true,
+            true,
+        ),
+        (
+            "[security]\nfix = true\nclose = false\n[merge]\nalways = true\n",
+            Vec::new(),
+            true,
+            false,
+        ),
+        (
+            "[security]\nfix = true\n[merge]\nalways = true\n",
+            vec!["no-security-close"],
+            true,
+            false,
+        ),
+        (
+            "[security]\nfix = true\nclose = false\n[merge]\nalways = true\n",
+            vec!["security-close"],
+            true,
+            true,
+        ),
         (
             "[security]\nfix = true\nclose = true\n[merge]\nalways = true\n",
             Vec::new(),
@@ -1794,18 +1819,24 @@ fn closing_follows_the_setting_unless_the_command_overrides_it() {
         let mut args = vec!["secure"];
         args.extend(words.clone());
         let result = scenario.run(&args);
-        assert_eq!(result.code, Some(0), "{words:?}: {}", result.stderr);
+        assert_eq!(
+            result.code,
+            Some(0),
+            "{config:?} {words:?}: {}",
+            result.stderr
+        );
         let state = scenario.gh_state();
         assert_eq!(
             state["prs"][0]["state"].as_str().unwrap(),
             if merged { "MERGED" } else { "OPEN" },
-            "{words:?}"
+            "{config:?} {words:?}"
         );
         assert_eq!(
             state["advisories"][0]["state"].as_str().unwrap(),
             if closed { "closed" } else { "draft" },
-            "{words:?}"
+            "{config:?} {words:?}"
         );
+        assert_eq!(scenario.claude_calls().len(), if closed { 3 } else { 2 });
     }
 }
 

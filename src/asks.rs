@@ -204,7 +204,7 @@ impl Flags {
 
     /// Whether a Security run whose fix merged may close the finding it
     /// fixed: as `security-close` or `no-security-close` asked, else as
-    /// `config` says, and only when fixing is also allowed.
+    /// `config` says, defaulting to closing, and only when fixing is also allowed.
     pub fn security_close_allowed(&self, config: &UserConfig) -> bool {
         if !self.security_fix_allowed(config) {
             return false;
@@ -212,7 +212,7 @@ impl Flags {
         match self.security_close {
             Some(crate::security::CloseAsk::Allow) => true,
             Some(crate::security::CloseAsk::Forbid) => false,
-            None => config.security_close.unwrap_or(false),
+            None => config.security_close.unwrap_or(true),
         }
     }
     /// Whether any flag here is for the Spec run or Run that a Pass
@@ -569,7 +569,22 @@ mod tests {
         for (fix_word, fix_setting, close_word, close_setting, expected) in [
             (Some(FixAsk::Allow), None, Some(CloseAsk::Allow), None, true),
             (Some(FixAsk::Allow), None, None, Some(true), true),
-            (Some(FixAsk::Allow), None, None, None, false),
+            (Some(FixAsk::Allow), None, None, None, true),
+            (Some(FixAsk::Allow), None, None, Some(false), false),
+            (
+                Some(FixAsk::Allow),
+                None,
+                Some(CloseAsk::Forbid),
+                None,
+                false,
+            ),
+            (
+                Some(FixAsk::Allow),
+                None,
+                Some(CloseAsk::Allow),
+                Some(false),
+                true,
+            ),
             (
                 Some(FixAsk::Allow),
                 None,
@@ -578,9 +593,10 @@ mod tests {
                 false,
             ),
             (None, Some(true), None, Some(true), true),
-            (None, Some(true), None, None, false),
+            (None, Some(true), None, None, true),
             (None, Some(true), Some(CloseAsk::Forbid), Some(true), false),
             // Closing never takes effect when fixing is not allowed.
+            (None, None, None, None, false),
             (
                 Some(FixAsk::Allow),
                 Some(false),
