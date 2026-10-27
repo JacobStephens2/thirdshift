@@ -9,6 +9,7 @@ const { createInterface } = require('node:readline');
 const { chromium } = require('./playwright.cjs');
 
 let home, server, exited, browser, origin;
+const longTitle = 'Display retained issue titles with Unicode 界 and <script>unsafe()</script> ' + 'throughout the Waterfall '.repeat(10);
 before(async () => {
   home = await mkdtemp(join(tmpdir(), 'thirdshift-waterfall-'));
   const folder = join(home, '.thirdshift/logs/acme/widgets/commands/issue');
@@ -29,6 +30,9 @@ before(async () => {
   };
   const parent = join(folder, '7-fixture.command.json');
   await writeFile(parent, JSON.stringify(record));
+  await writeFile(join(folder, '11-fixture.command.json'), JSON.stringify({
+    ...record, name: 'run-11', issue: { ...record.issue, number: 11, title: longTitle }
+  }));
   const session = join(folder, '99-20261001T120000+0000-implement.logs.jsonl');
   const spans = [
     ['a', 'first <unsafe>', '1790856015000000000', '1790856030000000000'],
@@ -69,7 +73,7 @@ before(async () => {
   }] }] }] }) + '\n');
   for (const number of [8, 9]) {
     await writeFile(join(folder, `${number}-fixture.command.json`), JSON.stringify({
-      ...record, kind: 'Run', name: `run-${number}`, issue: { ...record.issue, number },
+      ...record, kind: 'Run', name: `run-${number}`, issue: { ...record.issue, number, title: number === 8 ? null : record.issue.title },
       process_id: number === 9 ? process.pid : 0, process_start: number === 9 ? processStart : 'gone',
       outcome: null, ended_at: null,
       ...(number === 9 ? { started_at: liveStart, session_log: liveSession,
@@ -162,13 +166,13 @@ test('Waterfall chips, nested scale and unknown tools work at desktop and 390 px
     await page.goto(`${origin}/?page=waterfall`);
     const runs = page.locator('details.command-choices');
     assert.equal(await runs.evaluate(node => node.open), false, 'runs start folded');
-    assert.match(await runs.locator('summary').textContent(), /^Runs \d+ · acme\/widgets#\d+ · \w+$/);
+    assert.match(await runs.locator('summary').textContent(), /^Runs \d+ · acme\/widgets#\d+ · Widgets <script>unsafe\(\)<\/script> · \w+$/);
     await runs.locator('summary').click();
     const chips = page.getByRole('navigation', { name: 'Choose a Command' });
     assert.match(await chips.textContent(), /acme\/widgets#8 · died/);
-    if (process.platform === 'linux') assert.match(await chips.textContent(), /acme\/widgets#9 · live/);
-    await chips.getByRole('link', { name: 'acme/widgets#7 · merged' }).click();
-    await runs.locator('summary', { hasText: / · acme\/widgets#7 · merged$/ }).waitFor({ state: 'attached' });
+    if (process.platform === 'linux') assert.match(await chips.textContent(), /acme\/widgets#9 · Widgets <script>unsafe\(\)<\/script> · live/);
+    await chips.getByRole('link', { name: 'acme/widgets#7 · Widgets <script>unsafe()</script> · merged', exact: true }).click();
+    await runs.locator('summary', { hasText: / · acme\/widgets#7 · Widgets <script>unsafe\(\)<\/script> · merged$/ }).waitFor({ state: 'attached' });
     await page.getByRole('button', { name: 'Every call', exact: true }).click();
     assert.equal(await page.locator('.span-item[data-kind="run"]').count(), 2);
     const child = page.locator('.span-item[data-kind="run"]').nth(1);
@@ -198,4 +202,53 @@ test('Waterfall chips, nested scale and unknown tools work at desktop and 390 px
     await page.waitForURL('**page=waterfall');
   }
   assert.deepEqual(errors, []);
+});
+
+test('Waterfall issue titles stay brief, selectable and current at desktop and 390 px', async t => {
+  const context = await browser.newContext();
+  t.after(() => context.close());
+  const page = await context.newPage();
+  for (const width of [1200, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.goto(`${origin}/waterfall?command=widgets%237`);
+    const runs = page.locator('details.command-choices');
+    assert.equal(await runs.locator('.chosen .command-title').textContent(), 'Widgets <script>unsafe()</script>');
+    await runs.locator('summary').click();
+    const chips = page.getByRole('navigation', { name: 'Choose a Command' });
+    const long = chips.getByRole('link', { name: `acme/widgets#11 · ${longTitle} · merged`, exact: true });
+    await long.waitFor();
+    const title = long.locator('.command-title');
+    assert.equal(await title.getAttribute('title'), longTitle);
+    await page.waitForFunction(text => [...document.querySelectorAll('.command-chips .command-title')].some(node =>
+      node.textContent === text && node.scrollWidth > node.clientWidth && getComputedStyle(node).textOverflow === 'ellipsis'
+    ), longTitle);
+    assert.equal(await chips.locator('script').count(), 0, 'issue titles remain text');
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+    const untitled = chips.getByRole('link', { name: 'acme/widgets#8 · died', exact: true });
+    const untitledUrl = new URL(await untitled.getAttribute('href'), origin).href;
+    await untitled.click();
+    await page.waitForURL(untitledUrl);
+    await runs.locator('summary', { hasText: /acme\/widgets#8 · died$/ }).waitFor();
+    await runs.locator('summary').click();
+    const longChoice = page.getByRole('link', { name: `acme/widgets#11 · ${longTitle} · merged`, exact: true });
+    const longUrl = new URL(await longChoice.getAttribute('href'), origin).href;
+    await longChoice.click();
+    await page.waitForURL(longUrl);
+    const selected = runs.locator('.chosen .command-title');
+    await selected.waitFor();
+    assert.equal(await selected.textContent(), longTitle);
+    assert.equal(await selected.getAttribute('title'), longTitle);
+    await page.waitForFunction(() => {
+      const title = document.querySelector('.chosen .command-title');
+      return title?.isConnected && title.scrollWidth > title.clientWidth;
+    });
+    assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
+  }
+  const recordPath = join(home, '.thirdshift/logs/acme/widgets/commands/issue/11-fixture.command.json');
+  const record = JSON.parse(await readFile(recordPath, 'utf8'));
+  record.issue.title = 'Updated retained title';
+  await writeFile(recordPath, JSON.stringify(record));
+  await page.locator('.chosen .command-title', { hasText: 'Updated retained title' }).waitFor({ state: 'attached' });
+  await page.locator('details.command-choices > summary').click();
+  await page.getByRole('link', { name: 'acme/widgets#11 · Updated retained title · merged', exact: true }).waitFor();
 });

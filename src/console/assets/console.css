@@ -172,6 +172,8 @@ header::after { content: ""; display: block; height: 4px; background: var(--acti
 .command-choices { margin: 16px 0; }
 .command-choices > summary { cursor: pointer; }
 .command-choices .command-chips { margin: 12px 0 0; }
+.command-choices .command-chips a { max-width: 100%; box-sizing: border-box; }
+.command-title { display: inline-block; max-width: min(40ch, 100%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .stage-section { min-width: 0; margin: 20px 0; }
 .stage-section h3 { display: inline; margin-right: 16px; }
 .stage-scroll { overflow-x: auto; max-width: 100%; margin-top: 10px; overflow-anchor: none; }
