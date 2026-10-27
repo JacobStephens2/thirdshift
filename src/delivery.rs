@@ -427,33 +427,6 @@ struct Route<'a> {
     harness: &'a Choice,
 }
 
-/// Read one of the two explicit diagnosis completion lines. Missing or
-/// malformed handoffs fail instead of falling through to publication.
-fn not_reproduced(issue: &IssueUrl, final_message: Option<&str>) -> Result<Option<String>> {
-    let line = final_message
-        .and_then(|message| message.trim_end().lines().last())
-        .unwrap_or("");
-    if line == prompt::BUG_REPRODUCED_LINE {
-        return Ok(None);
-    }
-    let url = line
-        .strip_prefix(prompt::BUG_NOT_REPRODUCED_LINE)
-        .context("bug diagnosis ended without a reproduced or not reproduced completion line")?;
-    anyhow::ensure!(
-        url.split_once("#issuecomment-")
-            .is_some_and(|(comment_issue, id)| {
-                IssueUrl::parse(comment_issue)
-                    .is_ok_and(|comment_issue| comment_issue.identity() == issue.identity())
-                    && !id.is_empty()
-                    && id.bytes().all(|b| b.is_ascii_digit())
-                    && id.parse::<u64>().is_ok_and(|n| n > 0)
-            }),
-        "bug not reproduced ending must link a comment on {}",
-        issue.url
-    );
-    Ok(Some(url.to_string()))
-}
-
 impl Route<'_> {
     /// [`Delivery::deliver`]'s steps, through `outside`, in order: catch up
     /// from origin if `opening` says to, the opening session, the push, the
@@ -471,11 +444,13 @@ impl Route<'_> {
             outside.catch_up()?;
         }
         outside.stage(session.stage());
-        let final_message = outside.session(session.kind(), &opening.prompt)?;
-        if session == OpeningSession::BugDiagnosis
-            && let Some(comment_url) = not_reproduced(self.issue, final_message.as_deref())?
+        if session == OpeningSession::SpecReview {
+            outside.session(session.kind(), &opening.prompt)?;
+        } else if let crate::implement::Completed::NotReproduced(comment_url) =
+            crate::implement::run(self.issue, opening, |prompt| {
+                outside.session(session.kind(), prompt)
+            })?
         {
-            outside.confirm_needs_info()?;
             return Ok(Resolution::NotReproduced { comment_url });
         }
         let review = match self.security_review.then(|| {
@@ -677,8 +652,6 @@ trait Outside {
     fn catch_up(&mut self) -> Result<()>;
     /// Run a session of `kind` given `prompt`.
     fn session(&mut self, kind: Kind, prompt: &str) -> Result<Option<String>>;
-    /// The diagnosis session completed its label handoff.
-    fn confirm_needs_info(&mut self) -> Result<()>;
     /// Run the Security review given `prompt`, with its Session trace, its
     /// Resume's if it got one, if it started a session.
     fn security_review(&mut self, prompt: &str) -> (Result<Review>, Option<PathBuf>);
@@ -796,15 +769,6 @@ impl Outside for InWorktree<'_> {
         let final_message = self.sessions.run(kind, prompt)?;
         self.pull_request.ensure_actionable(false)?;
         Ok(final_message)
-    }
-
-    fn confirm_needs_info(&mut self) -> Result<()> {
-        let labels = GitHub::new().issue_labels(self.issue)?;
-        anyhow::ensure!(
-            labels.has(crate::labels::NEEDS_INFO) && !labels.has(crate::labels::READY_FOR_AGENT),
-            "bug not reproduced ending requires needs-info with ready-for-agent absent"
-        );
-        Ok(())
     }
 
     fn security_review(&mut self, prompt: &str) -> (Result<Review>, Option<PathBuf>) {
@@ -1309,9 +1273,6 @@ mod tests {
             self.calls.push(Call::Session(kind));
             self.log = Some(PathBuf::from(format!("/logs/{}.jsonl", kind.token())));
             self.check(Fails::Session).map(|()| None)
-        }
-        fn confirm_needs_info(&mut self) -> Result<()> {
-            Ok(())
         }
         fn push(&mut self) -> Result<()> {
             self.calls.push(Call::Push);

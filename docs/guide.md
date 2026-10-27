@@ -943,7 +943,7 @@ kind = "issue-branch"
 
 [[steps]]
 name = "implement"
-skill = "thirdshift-implement"
+catalogue = "implement"
 worktree = "fix"
 
 [[steps]]
@@ -971,6 +971,17 @@ the existing branch, and an open pull request's base is the Base branch.
 Session Steps in that checkout are told to build on its commits. A
 Process has at most one Issue-branch worktree. The Steps that name it run in
 that checkout. Any other declared worktree stays throwaway.
+
+`catalogue = "implement"` runs the same implementation session as a Ticket
+run, using its fresh or Continuation prompt. It must name the Issue-branch
+worktree, and takes its own Harness, Model and Effort like other Steps.
+On a `bug` issue it diagnoses before fixing, reproducing at the merge base
+when the Issue branch is ahead of the Base branch. A reproduced bug goes on
+to the later Steps. An unreproduced bug ends the Process successfully with
+triage notes and `needs-info`, skips all later Steps, ends the Claim and
+cleans up the Issue-branch worktree. Its result is the triage comment URL;
+the progress line and Ending say the bug was not reproduced. Only
+`implement` can end a Process early; there is no file setting for this.
 
 `catalogue = "delivery"` publishes that Issue branch. It is Delivery with no
 opening session and no Security review: push, open a draft pull request when
@@ -1047,7 +1058,7 @@ contain newlines and tabs. Any other control character in the command, the
 description, a step or worktree name, a skill, a model, an effort, a parallel
 group or a protected-path glob is refused before a step runs, so the plan
 `check` prints cannot hide the command. `catalogue` names a
-built-in Step: `delivery` or `self-merge`, described above, or `run-published-issue`.
+built-in Step: `implement`, `delivery` or `self-merge`, described above, or `run-published-issue`.
 `run-published-issue` starts a Ticket run, or a Spec run when the issue has
 Tickets, on the issue the session Step before it published. That session's final
 message ends with the issue's URL on its last non-blank line. Before it starts a
@@ -1159,7 +1170,8 @@ that Step instead of starting the session. The Command log names the cause.
 `check` and running refuse a missing file, a file that is not valid TOML, a
 missing or wrong `version`, an unknown key, an unknown Harness, a Step without exactly one of
 `skill`, `command` and `catalogue`, a command that is not a string or is empty,
-a catalogue value other than `delivery`, `run-published-issue` or `self-merge`, a
+a catalogue value other than `implement`, `delivery`, `run-published-issue` or `self-merge`, an
+`implement` Step outside an Issue-branch worktree, a
 `self-merge` Step that is not directly after `delivery`, a second self-merge
 Step, an optional self-merge Step, a self-merge Step in a parallel group, a
 self-merge Step on a worktree other than the Issue branch, a

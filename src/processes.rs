@@ -119,6 +119,7 @@ struct StepDraft {
 enum DraftKind {
     Skill { skill: String, line: usize },
     Command { command: String },
+    Implement { line: usize },
     Delivery { line: usize },
     SelfMerge { line: usize },
     RunPublishedIssue { line: usize },
@@ -147,6 +148,7 @@ impl ResolvedStep {
         let kind = match self.kind {
             StepKind::Skill { .. } => "skill",
             StepKind::Command(_) => "command",
+            StepKind::Implement => "implement",
             StepKind::Delivery => "delivery",
             StepKind::SelfMerge => "self-merge",
             StepKind::RunPublishedIssue => "run-published-issue",
@@ -286,6 +288,7 @@ fn source_from(chosen_by: ChosenBy) -> Source {
 enum StepKind {
     Skill { name: String, path: PathBuf },
     Command(String),
+    Implement,
     Delivery,
     SelfMerge,
     RunPublishedIssue,
@@ -325,6 +328,8 @@ struct Prepared {
 struct CompletedRuns {
     resolutions: Vec<crate::run::Resolution>,
     failed: bool,
+    /// Only this Process's implement Step can end the Process early.
+    unreproduced_bug: Option<String>,
 }
 
 /// The Issue branch a run is delivering, beside the throwaway worktrees.
@@ -334,6 +339,7 @@ struct IssueRun<'a> {
     branch: &'a str,
     base: &'a str,
     on_origin: bool,
+    selection: &'a Selection,
     logs: &'a session::Logs,
     base_fix: &'a mut BaseFix,
     process: &'a str,
@@ -347,6 +353,12 @@ struct HeldClaim<'a> {
 }
 
 impl HeldClaim<'_> {
+    fn needs_info(&mut self) {
+        if let Some(claim) = self.claim.take() {
+            claim.needs_info();
+        }
+    }
+
     fn remove(&mut self) {
         if let Some(claim) = self.claim.take() {
             claim.remove();
@@ -379,6 +391,8 @@ struct StepRun<'a> {
     started: DateTime<Utc>,
     /// Branch and Base branch when this Step continues an Issue branch.
     continuation: Option<(String, String)>,
+    checkout: Option<&'a Worktree>,
+    selection: Option<&'a Selection>,
     /// The Base branch checked out in the Launch directory.
     base: &'a str,
     steps: &'a [ResolvedStep],
@@ -592,13 +606,19 @@ fn notify(
             .resolutions
             .iter()
             .all(|resolution| resolution.goal() == Some(Goal::Merged));
-    let account_outcome = if merged {
+    let not_reproduced = completed.unreproduced_bug.as_ref();
+    let account_outcome = if outcome == "succeeded" && not_reproduced.is_some() {
+        "bug not reproduced"
+    } else if merged {
         Goal::Merged.outcome()
     } else {
         outcome
     };
     let ended = if outcome == "succeeded" {
-        Ok(account_outcome.to_string())
+        Ok(match not_reproduced {
+            Some(url) => format!("bug not reproduced: {url}"),
+            None => account_outcome.to_string(),
+        })
     } else {
         Err(Cause::of(&anyhow!("{}", cause.unwrap_or(outcome))))
     };
@@ -718,7 +738,7 @@ fn run_issue_branch(
             git: &launch_git,
             commit: &commit,
             issue_checkout: Some(checkout.path()),
-            base: base_branch.name(),
+            base: &base,
         },
     ) {
         Ok(prepared) => prepared,
@@ -749,6 +769,7 @@ fn run_issue_branch(
             branch: &branch,
             base: &base,
             on_origin,
+            selection: &selection,
             logs: &logs,
             base_fix: &mut base_fix,
             process: name,
@@ -765,7 +786,15 @@ fn run_issue_branch(
         delivered = issue_run.delivered;
         result
     };
-    if result.is_ok() || delivered {
+    let not_reproduced = prepared
+        .completed
+        .lock()
+        .expect("completed Runs")
+        .unreproduced_bug
+        .is_some();
+    if result.is_ok() && not_reproduced {
+        claim.needs_info();
+    } else if result.is_ok() || delivered {
         claim.remove();
     } else {
         claim.release();
@@ -775,7 +804,17 @@ fn run_issue_branch(
     drop(prepared);
     drop(held);
     logs::ended(outcome);
-    logs::complete(outcome, cause.as_deref());
+    if result.is_ok() && not_reproduced {
+        logs::complete(
+            "bug not reproduced",
+            Some(&format!(
+                "bug not reproduced: {}",
+                result.as_ref().expect("successful ending")
+            )),
+        );
+    } else {
+        logs::complete(outcome, cause.as_deref());
+    }
     notify(notification, outcome, cause.as_deref(), &completed);
     result
 }
@@ -955,6 +994,19 @@ fn execute_groups(
         if let Some((name, error)) = group_error {
             return Err(skip_remaining(&prepared.steps[range.end..], name, error));
         }
+        let completed = prepared.completed.lock().expect("completed Runs");
+        if let Some(comment_url) = &completed.unreproduced_bug {
+            let message = format!("bug not reproduced: {comment_url}");
+            progress::step(&message);
+            for step in &prepared.steps[range.end..] {
+                progress::step(format_args!(
+                    "step {}: 0s skipped: {message} ({})",
+                    step.log_name(),
+                    step.log_context()
+                ));
+            }
+            return Ok(comment_url.clone());
+        }
         index += 1;
     }
     Ok(last)
@@ -1015,6 +1067,7 @@ fn run_parallel(
     let limits = &prepared.limits;
     let completed = &prepared.completed;
     let killed_work = &prepared.killed_work;
+    let selection = issue_run.map(|run| run.selection);
     thread::scope(|scope| {
         let mut handles = Vec::with_capacity(group.len());
         for (offset, step) in group.iter().enumerate() {
@@ -1048,6 +1101,8 @@ fn run_parallel(
                     issue: issue.as_ref(),
                     started: started_at,
                     continuation,
+                    checkout,
+                    selection,
                     base,
                     steps,
                 };
@@ -1136,6 +1191,8 @@ fn run_step(
         issue: prepared.issue.as_ref(),
         started: prepared.started,
         continuation: step_continuation(prepared, step, continuing.as_ref()),
+        checkout,
+        selection: issue_run.map(|run| run.selection),
         base: &prepared.base,
         steps: &prepared.steps,
     };
@@ -1342,6 +1399,7 @@ fn run_step_in(
 ) -> Result<String> {
     crate::resources::wait()?;
     match &step.kind {
+        StepKind::Implement => run_implement(run, cwd, step),
         StepKind::RunPublishedIssue => run_published(run, step, prior),
         StepKind::Skill { name, path } => {
             progress::step(format_args!(
@@ -1407,6 +1465,64 @@ fn run_skill(
     step: &ResolvedStep,
     prompt: &str,
 ) -> Result<String> {
+    run_session_step(run, worktree, step, |sessions, index| {
+        sessions
+            .run_to_final_message(
+                session::Purpose::Ordinary,
+                session::Kind::ProcessStep(index),
+                prompt,
+            )?
+            .filter(|message| !message.trim().is_empty())
+            .with_context(|| format!("Step {} ended without a final message", step.name))
+    })
+}
+
+fn run_implement(run: &StepRun<'_>, worktree: &Path, step: &ResolvedStep) -> Result<String> {
+    let issue = run.issue.context("implement needs an issue")?;
+    let checkout = run
+        .checkout
+        .filter(|_| run.issue_branch)
+        .context("implement needs an Issue-branch worktree")?;
+    let selection = run.selection.context("implement needs an Issue branch")?;
+    let opening = crate::implement::prepare(
+        issue,
+        run.base,
+        checkout,
+        delivery::Opening {
+            session: delivery::OpeningSession::Implementation,
+            prompt: crate::implement::prompt(issue, run.base, selection),
+        },
+        true,
+    )?;
+    let mut pr = PullRequest::new(issue, checkout.branch(), run.base, GitHub::new());
+    run_session_step(run, worktree, step, |sessions, index| {
+        let completed = crate::implement::run(issue, &opening, |prompt| {
+            let message = sessions.run(session::Kind::ProcessStep(index), prompt)?;
+            pr.ensure_actionable(false)?;
+            Ok(message)
+        })?;
+        match completed {
+            crate::implement::Completed::Implemented(message) => Ok(message.unwrap_or_default()),
+            crate::implement::Completed::NotReproduced(comment_url) => {
+                let mut completed = run.completed.lock().expect("completed Runs");
+                completed.unreproduced_bug = Some(comment_url.clone());
+                completed
+                    .resolutions
+                    .push(crate::run::Resolution::NotReproduced {
+                        comment_url: comment_url.clone(),
+                    });
+                Ok(comment_url)
+            }
+        }
+    })
+}
+
+fn run_session_step(
+    run: &StepRun<'_>,
+    worktree: &Path,
+    step: &ResolvedStep,
+    action: impl FnOnce(&session::Sessions<'_>, usize) -> Result<String>,
+) -> Result<String> {
     let index = run
         .steps
         .iter()
@@ -1426,11 +1542,7 @@ fn run_skill(
         None,
         &before_each,
         |sessions| {
-            let result = sessions.run_to_final_message(
-                session::Purpose::Ordinary,
-                session::Kind::ProcessStep(index),
-                prompt,
-            );
+            let result = action(sessions, index);
             let endings = sessions.take_killed_work();
             if !endings.is_empty() {
                 run.killed_work
@@ -1438,9 +1550,7 @@ fn run_skill(
                     .expect("killed work")
                     .insert(index, endings);
             }
-            result?
-                .filter(|message| !message.trim().is_empty())
-                .with_context(|| format!("Step {} ended without a final message", step.name))
+            result
         },
     )
     .0
@@ -1748,6 +1858,7 @@ fn step_plan(step: &ResolvedStep, named: bool) -> String {
             format!("{}: command {shown}", step.name)
         }
         StepKind::Delivery => format!("{}: delivery", step.name),
+        StepKind::Implement => format!("{}: implement", step.name),
         StepKind::SelfMerge => format!("{}: self-merge", step.name),
         StepKind::RunPublishedIssue => format!("{}: run-published-issue", step.name),
     };
@@ -1764,6 +1875,7 @@ fn load(name: &str) -> Result<(PathBuf, ProcessFile)> {
     let (path, text) = Catalog::installed()?.custom(name)?;
     let file = parse(&path, &text)?;
     refuse_worktrees(&path, &file)?;
+    refuse_implement(&path, &file)?;
     refuse_self_merge(&path, &file)?;
     refuse_issue_branch(&path, &file)?;
     refuse_published(&path, &file.steps)?;
@@ -1957,6 +2069,30 @@ fn file_has_issue_branch(file: &ProcessFile) -> bool {
     file.worktrees
         .iter()
         .any(|worktree| worktree.issue_branch_line.is_some())
+}
+
+fn refuse_implement(path: &Path, file: &ProcessFile) -> Result<()> {
+    let issue = file
+        .worktrees
+        .iter()
+        .find(|worktree| worktree.issue_branch_line.is_some());
+    for step in &file.steps {
+        if let DraftKind::Implement { line } = step.kind
+            && !issue.is_some_and(|issue| {
+                step.worktree
+                    .as_ref()
+                    .is_some_and(|(name, _)| name == &issue.name)
+            })
+        {
+            return Err(rule(
+                path,
+                line,
+                "implement",
+                "implement needs an Issue-branch worktree",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn require_issue(path: &Path, file: &ProcessFile, issue: Option<&IssueUrl>) -> Result<()> {
@@ -2196,6 +2332,7 @@ fn resolve(
             }
         },
         DraftKind::Command { command } => StepKind::Command(command.clone()),
+        DraftKind::Implement { .. } => StepKind::Implement,
         DraftKind::Delivery { .. } => StepKind::Delivery,
         DraftKind::SelfMerge { .. } => StepKind::SelfMerge,
         DraftKind::RunPublishedIssue { .. } => StepKind::RunPublishedIssue,
@@ -2688,6 +2825,7 @@ fn step_catalogue(path: &Path, line: usize, item: &Item) -> Result<(DraftKind, u
         ));
     };
     let kind = match value {
+        "implement" => DraftKind::Implement { line },
         "delivery" => DraftKind::Delivery { line },
         "run-published-issue" => DraftKind::RunPublishedIssue { line },
         "self-merge" => DraftKind::SelfMerge { line },
@@ -2696,7 +2834,7 @@ fn step_catalogue(path: &Path, line: usize, item: &Item) -> Result<(DraftKind, u
                 path,
                 line,
                 "catalogue",
-                "catalogue must be delivery, run-published-issue or self-merge",
+                "catalogue must be implement, delivery, run-published-issue or self-merge",
             ));
         }
     };

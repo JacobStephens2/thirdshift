@@ -18,6 +18,7 @@ mod git;
 mod github;
 mod harness;
 mod host;
+mod implement;
 mod interrupt;
 mod issue;
 mod labels;

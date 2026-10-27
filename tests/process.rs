@@ -1,5 +1,7 @@
 //! Custom processes through the CLI, real Git and fake Harnesses.
 
+#[path = "process/implement.rs"]
+mod implement;
 mod support;
 
 use std::fs;
@@ -915,7 +917,7 @@ name = \"review\"
 catalogue = \"publish\"
 ",
                 ),
-                ":6: catalogue: catalogue must be delivery, run-published-issue or self-merge",
+                ":6: catalogue: catalogue must be implement, delivery, run-published-issue or self-merge",
             ),
             (
                 "review",
