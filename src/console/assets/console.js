@@ -206,12 +206,16 @@ function showDismissal() {
   }
 }
 
+function removeDismissalNotice(command) {
+  for (const form of document.querySelectorAll('#dismissal-notices form')) {
+    if (form.elements.command.value === command) form.parentElement.remove();
+  }
+}
+
 function dismissalNotice(form, subject) {
   const command = form.elements.command.value;
+  removeDismissalNotice(command);
   const notices = document.querySelector('#dismissal-notices');
-  for (const previous of notices.querySelectorAll('form')) {
-    if (previous.elements.command.value === command) previous.parentElement.remove();
-  }
   const notice = document.createElement('div');
   notice.setAttribute('role', 'status');
   const undo = document.createElement('form');
@@ -517,11 +521,7 @@ document.addEventListener('submit', async event => {
         nextRow?.focus({ preventScroll: true });
       }
     }
-    if (undo) {
-      for (const noticeForm of document.querySelectorAll('#dismissal-notices form')) {
-        if (noticeForm.elements.command.value === command) noticeForm.parentElement.remove();
-      }
-    }
+    if (undo) removeDismissalNotice(command);
     pendingPeek?.abort();
     pendingPeek = null;
     await refresh();
