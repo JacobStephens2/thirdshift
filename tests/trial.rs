@@ -453,7 +453,7 @@ printf '{{"type":"session_meta","payload":{{"id":"fake-thread-1","cwd":"%s"}}}}\
 sleep 1.1
 timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 printf '{{"timestamp":"%s","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"secondary":{{"used_percent":85}}}}}}}}\n' "$timestamp" >> "$native"
-sleep 0.5
+sleep 5
 touch '{}'
 "#, escaped.display()));
     let result = run_trial(&scenario, &request, &[]);
@@ -487,7 +487,7 @@ sleep 1.1
 touch '{}'
 timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 printf '{{"timestamp":"%s","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"secondary":{{"used_percent":85}}}}}}}}\n' "$timestamp" >> "$native"
-sleep 0.5
+sleep 5
 touch '{}'
 "#, scenario.launch_dir().join("ignored-old-native-warning").display(), escaped.display()));
 
