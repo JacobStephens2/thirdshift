@@ -517,12 +517,14 @@ mod tests {
     fn ticket() -> Kind {
         Kind::Ticket {
             spec_branch: "issue-20".to_string(),
+            spec_pr: None,
         }
     }
 
     fn base_fix() -> Kind {
         Kind::BaseFix {
             base: "main".to_string(),
+            spec_pr: None,
         }
     }
 

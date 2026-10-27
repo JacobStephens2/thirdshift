@@ -164,6 +164,7 @@ impl Fixture {
             &Given {
                 kind: Kind::Ticket {
                     spec_branch: "issue-237".to_string(),
+                    spec_pr: None,
                 },
                 stamp: "20261003T120000-0400".to_string(),
                 command: logs::CommandKind::Issue,

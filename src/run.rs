@@ -10,7 +10,7 @@ use chrono::{DateTime, TimeDelta, Utc};
 use crate::asks::Asks;
 use crate::base_fix::{Advice, BaseFix};
 use crate::branch::{self, Selection};
-use crate::child_run::{ChildAsks, Kind};
+use crate::child_run::{ChildAsks, Kind, SpecPr};
 use crate::claim::{self, Claim};
 use crate::delivery::{Delivery, Opening, OpeningSession};
 use crate::failed_run::FailedRun;
@@ -220,6 +220,7 @@ fn run(
         issue_branch: None,
         child: started_by.child().is_some(),
         diagnose_bugs: !matches!(started_by.child(), Some(Kind::BaseFix { .. })),
+        spec_pr: started_by.child().and_then(Kind::spec_pr).cloned(),
         started: Utc::now() - STARTED_MARGIN,
     };
     let outcome = start(
@@ -444,6 +445,8 @@ struct LaunchAndGitHub<'a> {
     child: bool,
     /// Base fixes have their own reproduction flow.
     diagnose_bugs: bool,
+    /// The Spec PR a Ticket's Self-merge into its Spec branch depends on.
+    spec_pr: Option<SpecPr>,
     /// When the Run began, less [`STARTED_MARGIN`], for its sessions' check
     /// for untrusted edits.
     started: DateTime<Utc>,
@@ -595,6 +598,9 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
             base,
             GitHub::new(),
         );
+        if let Some(spec_pr) = self.spec_pr.clone() {
+            pull_request.gate_self_merge_on(spec_pr);
+        }
         self.delivery(base)
             .deliver(worktree, opening, &mut pull_request, None)
     }
@@ -944,6 +950,7 @@ mod tests {
     fn a_child_run_reads_no_tickets_and_makes_no_claim() {
         let kind = Kind::Ticket {
             spec_branch: "issue-3".to_string(),
+            spec_pr: None,
         };
         let mut outside = Scripted::new(Script::default());
 

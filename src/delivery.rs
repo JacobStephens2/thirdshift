@@ -1048,6 +1048,7 @@ impl repair_loop::Outside for RunOutside<'_> {
             launch: self.worktree.launch(),
             issue: self.issue,
             asks: self.child_asks,
+            spec_pr: self.pull_request.spec_pr().cloned(),
         };
         let result = self
             .base_fix
