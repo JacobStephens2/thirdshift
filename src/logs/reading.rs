@@ -94,6 +94,7 @@ impl Snapshot {
             };
             fn mark(command: &mut Command, account: &Option<String>) {
                 command.account = account.clone();
+                confine_other_account_sessions(command);
                 for child in command.children.iter_mut().chain(&mut command.dispatched) {
                     mark(child, account);
                 }
@@ -468,6 +469,47 @@ fn read_records(
         records.insert(path.clone(), tree);
     }
     Ok(records)
+}
+
+/// Another account's record names its Session path. Keep a trace only when it
+/// is a regular file inside that record's own directory. A lexical prefix is
+/// not enough: `..` and a symlink can leave the directory.
+fn confine_other_account_sessions(command: &mut Command) {
+    let root = command.record_path.parent();
+    let keep = |path: &Path| {
+        let Some(root) = root else {
+            return false;
+        };
+        contained_trace(root, path)
+    };
+    if command
+        .record
+        .session_log
+        .as_deref()
+        .is_some_and(|path| !keep(path))
+    {
+        command.record.session_log = None;
+    }
+    for stage in &mut command.record.stages {
+        if stage.session_log.as_deref().is_some_and(|path| !keep(path)) {
+            stage.session_log = None;
+        }
+    }
+    command.activity.drop_session_unless(&keep);
+}
+
+fn contained_trace(root: &Path, path: &Path) -> bool {
+    let Ok(relative) = path.strip_prefix(root) else {
+        return false;
+    };
+    if relative.as_os_str().is_empty()
+        || relative
+            .components()
+            .any(|component| !matches!(component, std::path::Component::Normal(_)))
+    {
+        return false;
+    }
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_file())
 }
 
 fn command_log(path: &Path) -> PathBuf {

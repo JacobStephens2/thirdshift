@@ -460,6 +460,56 @@ fn readable_accounts_merge_needs_you_and_all_readers_without_foreign_writes() {
     );
 }
 
+/// Another account chooses the Session path in its Command record. The serving
+/// process must not open a trace outside that account's log directory.
+#[cfg(target_os = "linux")]
+#[test]
+fn other_account_session_references_stay_inside_their_log_directory() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let outside = machine
+        .home("serving")
+        .parent()
+        .unwrap()
+        .join("outside-secret.logs.jsonl");
+    let secret = "CANARY-OUTSIDE-SESSION";
+    let spans = super::support::session_trace::artifact(&outside, "spans.jsonl");
+    let attr = |key: &str, value: &str| json!({"key": key, "value": {"stringValue": value}});
+    fs::write(
+        &spans,
+        serde_json::to_vec(&json!({
+            "resourceSpans": [{"scopeSpans": [{"spans": [{
+                "spanId": "1111111111111111",
+                "name": "invoke_agent implement",
+                "startTimeUnixNano": "1790856010000000000",
+                "endTimeUnixNano": "1790856050000000000",
+                "attributes": [
+                    attr("gen_ai.operation.name", "invoke_agent"),
+                    attr("thirdshift.session.prompt", secret)
+                ]
+            }]}]}]
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let mut command = record(&home, 7, Some("failed"), 0);
+    command["session_log"] = json!(outside);
+    command["stages"][0]["session_log"] = command["session_log"].clone();
+    write_record(&home, 7, &command);
+    machine.setting("readable");
+    let output = machine.run(&["show", "widgets#7", "--spans", "--json"]);
+    let shown = String::from_utf8_lossy(&output.stdout);
+    assert!(output.status.success(), "{output:?}");
+    assert!(
+        shown.contains("conductor"),
+        "the other account's Command was not loaded: {shown}"
+    );
+    assert!(
+        !shown.contains(secret),
+        "session trace outside the other account's logs was read:\n{shown}"
+    );
+}
+
 /// Another account's Command record is untrusted. Its issue URL and repository
 /// must not be interpolated into the serving account's `gh` requests.
 #[cfg(target_os = "linux")]
