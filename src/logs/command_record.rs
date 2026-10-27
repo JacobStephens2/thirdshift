@@ -268,6 +268,22 @@ impl StageName {
 }
 
 impl CommandRecord {
+    /// The Custom process's own name. An older record with no `process_name`
+    /// falls back to the selector in `name`.
+    pub(super) fn process_label(&self) -> Option<&str> {
+        (self.kind == "Process").then(|| self.process_name.as_deref().unwrap_or(self.name.as_str()))
+    }
+
+    /// `Process <name> on <repo>`, or `Process <name> · <repo>#<n>` when the
+    /// record names an issue. Status text adds the kind word itself.
+    pub(super) fn process_heading(&self) -> Option<String> {
+        let name = self.process_label()?;
+        Some(match self.issue.as_ref() {
+            Some(issue) => format!("Process {name} · {}#{}", self.repository, issue.number),
+            None => format!("Process {name} on {}", self.repository),
+        })
+    }
+
     /// The next transition closes a stage; only a recorded outcome closes the
     /// final stage. A live caller can supply its single sampled observation time.
     pub fn stage_times(

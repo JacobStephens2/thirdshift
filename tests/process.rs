@@ -2792,3 +2792,140 @@ fn process_email_flags_are_usage_errors_on_check_and_ticket_flags_are_rejected()
         assert!(!process_dir(&scenario).exists(), "{args:?}");
     }
 }
+
+#[test]
+fn show_prints_the_result_path_when_the_step_name_has_a_space() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "notes",
+        "\
+version = 1
+description = \"Spaced step name\"
+
+[[steps]]
+name = \"gather notes\"
+command = \"printf gather\"
+",
+    );
+    let result = scenario.run(&["process", "notes"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let (log_path, _) = command_log(&scenario);
+    let kept = log_path.with_extension("steps").join("gather notes.txt");
+    assert!(kept.is_file(), "{}", kept.display());
+    let status = status_json(&scenario);
+    let shown = scenario.run(&["show", process_command(&status)["name"].as_str().unwrap()]);
+    assert!(
+        shown
+            .stdout
+            .contains(&format!("result: {}", kept.display())),
+        "{}",
+        shown.stdout
+    );
+}
+
+#[test]
+fn lanes_and_spans_name_the_process() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[console]\nport = 0\n");
+    write_process(&scenario, "notes", NOTES);
+    assert_eq!(scenario.run(&["process", "notes"]).code, Some(0));
+    let status = status_json(&scenario);
+    let name = process_command(&status)["name"].as_str().unwrap();
+    let console = Console::start(&scenario);
+    let lanes = console.get("/?page=lanes");
+    assert!(lanes.contains("Process notes"), "{lanes}");
+    let stages = console.get("/?page=stages");
+    assert!(stages.contains("Process notes"), "{stages}");
+    let spans = scenario.run(&["show", name, "--spans"]);
+    assert!(spans.stdout.contains("Process notes"), "{}", spans.stdout);
+}
+
+#[test]
+fn peek_shows_each_step_line_and_result_path() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[console]\nport = 0\n");
+    write_process(&scenario, "notes", NOTES);
+    assert_eq!(scenario.run(&["process", "notes"]).code, Some(0));
+    let status = status_json(&scenario);
+    let name = process_command(&status)["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (log_path, _) = command_log(&scenario);
+    let result = log_path.with_extension("steps").join("gather.txt");
+    // `urlencoding` is not a crate here. The query is the one the finding wrote.
+    let mut url = reqwest::Url::parse("http://localhost/peek").unwrap();
+    url.query_pairs_mut().append_pair("command", &name);
+    let html = Console::start(&scenario).get(&format!("{}?{}", url.path(), url.query().unwrap()));
+    assert!(html.contains("step gather:"), "{html}");
+    assert!(html.contains(&result.display().to_string()), "{html}");
+}
+
+#[test]
+fn show_prints_the_result_path_when_the_step_name_has_a_space_or_a_colon() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "notes",
+        "\
+version = 1
+description = \"Names\"
+
+[[steps]]
+name = \"gather notes\"
+command = \"printf gather\"
+
+[[steps]]
+name = \"a:b\"
+command = \"printf ab\"
+",
+    );
+    assert_eq!(scenario.run(&["process", "notes"]).code, Some(0));
+    let status = status_json(&scenario);
+    let name = process_command(&status)["name"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (log_path, _) = command_log(&scenario);
+    let shown = scenario.run(&["show", &name]);
+    for step in ["gather notes", "a:b"] {
+        let path = log_path.with_extension("steps").join(format!("{step}.txt"));
+        assert!(path.is_file(), "{}", path.display());
+        assert!(
+            shown
+                .stdout
+                .contains(&format!("result: {}", path.display())),
+            "{step}: {}",
+            shown.stdout
+        );
+    }
+}
+
+#[test]
+fn an_origin_mismatch_still_sends_the_run_notification() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "notes", NOTES);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let result = scenario.run_with_env(
+        &[
+            "process",
+            "--email",
+            "me@example.com",
+            "notes",
+            "issue",
+            "https://github.com/Other/Widgets/issues/7",
+        ],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", KEY),
+        ],
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("origin mismatch"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(resend.requests().len(), 1, "{:?}", resend.requests());
+}

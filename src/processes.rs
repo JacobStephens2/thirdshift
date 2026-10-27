@@ -187,15 +187,26 @@ fn run(name: &str, issue: Option<IssueInput>, email: Option<NotificationAsk>) ->
         About::Process { name },
     )?;
     // Before any worktree: a foreign Issue URL is an origin mismatch, and a
-    // number that cannot be resolved stops the same way.
-    let issue = resolve_process_issue(issue)?;
+    // number that cannot be resolved stops the same way. A failure here is
+    // still a failed Process, so it sends the Run notification a Ticket run
+    // would send for the same kind of stop.
+    let issue = match resolve_process_issue(issue) {
+        Ok(issue) => issue,
+        Err(error) => return Err(failed_before_steps(notification, error)),
+    };
     // The same margin as a Ticket run. Edits in the gap since this moment,
     // or dated by a slow GitHub clock, still count.
     let started = Utc::now() - crate::run::STARTED_MARGIN;
-    let mut prepared = prepare(name, &config)?;
+    let mut prepared = match prepare(name, &config) {
+        Ok(prepared) => prepared,
+        Err(error) => return Err(failed_before_steps(notification, error)),
+    };
     prepared.issue = issue;
     prepared.started = started;
-    let repo = launch::repo()?;
+    let repo = match launch::repo() {
+        Ok(repo) => repo,
+        Err(error) => return Err(failed_before_steps(notification, error)),
+    };
     logs::started(Work::Process { repo: &repo, name }, &prepared.choice);
     notification.built_with(&prepared.choice);
     let result = execute_steps(name, &prepared);
@@ -205,6 +216,13 @@ fn run(name: &str, issue: Option<IssueInput>, email: Option<NotificationAsk>) ->
     logs::complete(outcome, cause.as_deref());
     notify(notification, outcome, cause.as_deref());
     result
+}
+
+/// A stop after the email check and before any Step is still a failed Process.
+fn failed_before_steps(notification: RunNotification, error: anyhow::Error) -> anyhow::Error {
+    let cause = format!("{error:#}");
+    notify(notification, "failed", Some(&cause));
+    error
 }
 
 /// Save and, when asked, send the Run notification. A skipped Process sends none.

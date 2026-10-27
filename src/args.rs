@@ -1026,31 +1026,13 @@ fn take_flag<'a>(
     arg: &str,
     rest: &mut Peekable<impl Iterator<Item = &'a String>>,
 ) -> Result<bool> {
+    if take_email_flag(&mut flags.email, arg, rest)? {
+        return Ok(true);
+    }
     match arg {
         "merge" | "--merge" => ask_once(&mut flags.goal, Goal::Merged, arg, MERGE_FLAGS)?,
         "no-merge" | "--no-merge" => {
             ask_once(&mut flags.goal, Goal::ReadyForReview, arg, MERGE_FLAGS)?
-        }
-        "email" | "--email" => {
-            let to = rest.next_if(|next| is_address(next)).cloned();
-            ask_once(
-                &mut flags.email,
-                NotificationAsk::Send(to),
-                arg,
-                EMAIL_FLAGS,
-            )?
-        }
-        "email-unless-merged" | "--email-unless-merged" => {
-            let to = rest.next_if(|next| is_address(next)).cloned();
-            ask_once(
-                &mut flags.email,
-                NotificationAsk::SendUnlessMerged(to),
-                arg,
-                EMAIL_FLAGS,
-            )?
-        }
-        "no-email" | "--no-email" => {
-            ask_once(&mut flags.email, NotificationAsk::Skip, arg, EMAIL_FLAGS)?
         }
         "parallel" | "--parallel" => ask_parallel(&mut flags.parallel, arg, rest.next())?,
         BASE_FIX | "--base-fix" => {

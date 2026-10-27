@@ -37,8 +37,7 @@ struct Status<'a> {
 fn print_command(command: &Command, state_word: &str, indent: &str) {
     let facts = &command.record;
     let stage = stage_text(command);
-    let mut subject = if facts.kind == "Process" {
-        let name = facts.process_name.as_deref().unwrap_or(facts.name.as_str());
+    let mut subject = if let Some(name) = facts.process_label() {
         match &facts.issue {
             Some(issue) => format!(
                 "{name} {}#{} {}",

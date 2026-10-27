@@ -328,21 +328,15 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
 }
 
 fn row_subject(facts: &crate::logs::command_record::CommandRecord) -> (String, String) {
-    if facts.kind == "Process" {
-        let name = facts.process_name.as_deref().unwrap_or(facts.name.as_str());
-        return match facts.issue.as_ref() {
-            Some(issue) => (
-                format!("Process {name} · {}#{}", facts.repository, issue.number),
-                issue
-                    .title
-                    .clone()
-                    .unwrap_or_else(|| "(title unavailable)".into()),
-            ),
-            None => (
-                format!("Process {name} on {}", facts.repository),
-                String::new(),
-            ),
+    if let Some(heading) = facts.process_heading() {
+        let title = match facts.issue.as_ref() {
+            Some(issue) => issue
+                .title
+                .clone()
+                .unwrap_or_else(|| "(title unavailable)".into()),
+            None => String::new(),
         };
+        return (heading, title);
     }
     subject(&facts.repository, &facts.name, facts.issue.as_ref())
 }
