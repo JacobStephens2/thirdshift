@@ -1055,7 +1055,9 @@ impl repair_loop::Outside for RunOutside<'_> {
             Git::new(self.worktree.path()).run_bytes(&["diff", "--name-only", "-z", &spec])?;
         Ok(protected_hold(
             self.protected_paths,
-            listed.split(|byte| *byte == 0).filter(|name| !name.is_empty()),
+            listed
+                .split(|byte| *byte == 0)
+                .filter(|name| !name.is_empty()),
         ))
     }
 
