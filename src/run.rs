@@ -114,6 +114,8 @@ pub enum StartedBy<'a> {
     /// A Pass, dispatching an issue: the Base branch is that Pass's, whatever the
     /// Launch directory has checked out.
     Dispatch { base: &'a str },
+    /// A Pickup run, using the compiled Ticket process on its Base branch.
+    Pickup { base: &'a str },
     /// Another thirdshift, as this child Run, a Ticket's Run in a Spec run or
     /// a Base fix: the Base branch is the one the child Run was given.
     Child(&'a Kind),
@@ -124,7 +126,7 @@ impl<'a> StartedBy<'a> {
     fn child(self) -> Option<&'a Kind> {
         match self {
             StartedBy::Child(kind) => Some(kind),
-            StartedBy::Command | StartedBy::Dispatch { .. } => None,
+            StartedBy::Command | StartedBy::Dispatch { .. } | StartedBy::Pickup { .. } => None,
         }
     }
 
@@ -139,7 +141,7 @@ impl<'a> StartedBy<'a> {
     fn given_base(self) -> Option<&'a str> {
         match self {
             StartedBy::Command => None,
-            StartedBy::Dispatch { base } => Some(base),
+            StartedBy::Dispatch { base } | StartedBy::Pickup { base } => Some(base),
             StartedBy::Child(kind) => Some(kind.base()),
         }
     }
@@ -221,6 +223,7 @@ fn run(
         issue_branch: None,
         child: started_by.child().is_some(),
         diagnose_bugs: !matches!(started_by.child(), Some(Kind::BaseFix { .. })),
+        file_defined: matches!(started_by, StartedBy::Command | StartedBy::Pickup { .. }),
         started: Utc::now() - STARTED_MARGIN,
     };
     let outcome = start(
@@ -443,6 +446,9 @@ struct LaunchAndGitHub<'a> {
     child: bool,
     /// Base fixes have their own reproduction flow.
     diagnose_bugs: bool,
+    /// Issue URL and Pickup Ticket runs use the Built-in process. Other
+    /// starters keep their existing path until the next Ticket of #1456.
+    file_defined: bool,
     /// When the Run began, less [`STARTED_MARGIN`], for its sessions' check
     /// for untrusted edits.
     started: DateTime<Utc>,
@@ -589,8 +595,13 @@ impl<'a> Outside for LaunchAndGitHub<'a> {
             base,
             GitHub::new(),
         );
-        self.delivery(base)
-            .deliver(worktree, opening, &mut pull_request, None)
+        if self.file_defined {
+            self.delivery(base)
+                .ticket_run(worktree, opening, &mut pull_request)
+        } else {
+            self.delivery(base)
+                .deliver(worktree, opening, &mut pull_request, None)
+        }
     }
 
     fn step(&mut self, line: String) {

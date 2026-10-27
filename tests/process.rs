@@ -5,6 +5,8 @@ mod implement;
 #[path = "process/security_review.rs"]
 mod security_review;
 mod support;
+#[path = "process/ticket_run.rs"]
+mod ticket_run;
 
 use std::fs;
 use std::io::{BufRead, BufReader};
@@ -729,7 +731,10 @@ fn process_lists_custom_processes_with_their_descriptions() {
     let scenario = Scenario::new();
     let empty = scenario.run(&["process"]);
     assert_eq!(empty.code, Some(0), "{}", empty.stderr);
-    assert_eq!(empty.stdout, "");
+    assert_eq!(
+        empty.stdout,
+        "ticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
+    );
 
     write_process(&scenario, "review", REVIEW);
     write_process(
@@ -752,7 +757,7 @@ skill = \"to-spec\"
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         assert_eq!(
             result.stdout,
-            "gather: Gather notes\nreview: Review the diff\n"
+            "gather: Gather notes\nreview: Review the diff\nticket-run (built-in): Take a Ticket to a ready or merged pull request\n"
         );
     }
 }
@@ -817,9 +822,9 @@ bogus = \"echo hi\"
                 ":7: unknown harness: nope",
             ),
             (
-                "ticket-run",
+                "spec-run",
                 None,
-                "processes/ticket-run.toml:1: reserved name: ticket-run",
+                "processes/spec-run.toml:1: reserved name: spec-run",
             ),
             (
                 "review",
@@ -1039,10 +1044,14 @@ fn a_reserved_name_is_refused_for_every_built_in() {
     ] {
         let scenario = Scenario::new();
         write_process(&scenario, name, REVIEW);
-        for args in [
-            vec!["process", "check", name],
-            vec!["process", "show", name],
-        ] {
+        let mut actions = vec![vec!["process", name]];
+        if name != "ticket-run" {
+            actions.extend([
+                vec!["process", "check", name],
+                vec!["process", "show", name],
+            ]);
+        }
+        for args in actions {
             let result = scenario.run(&args);
             assert_no_session(&scenario, &result);
             assert!(

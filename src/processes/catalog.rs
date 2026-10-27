@@ -36,13 +36,18 @@ impl Catalog<'_> {
     }
 
     pub(super) fn show(&self, name: &str) -> Result<String> {
+        self.source(name).map(|(_, text)| text)
+    }
+
+    pub(super) fn source(&self, name: &str) -> Result<(PathBuf, String)> {
         if let Some(file) = self.built_in.get_file(format!("{name}.toml")) {
-            return file
+            let text = file
                 .contents_utf8()
                 .map(str::to_owned)
-                .with_context(|| format!("built-in process {name} is not UTF-8"));
+                .with_context(|| format!("built-in process {name} is not UTF-8"))?;
+            return Ok((PathBuf::from("processes").join(file.path()), text));
         }
-        self.custom(name).map(|(_, text)| text)
+        self.custom(name)
     }
 
     pub(super) fn custom(&self, name: &str) -> Result<(PathBuf, String)> {

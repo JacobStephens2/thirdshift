@@ -55,6 +55,7 @@ use crate::worktree::{SkillWorktree, Worktree};
 use crate::{delivery, interrupt, launch, progress, prompt, session, skills, trust};
 
 mod catalog;
+pub(crate) mod ticket;
 use catalog::Catalog;
 
 /// The issue URL when the Process has an issue; unset otherwise.
@@ -467,7 +468,8 @@ fn check(command: &ProcessRun) -> Result<String> {
     let name = &command.name;
     interrupt::install()?;
     let config = UserConfig::load()?;
-    let (path, mut file) = load(name)?;
+    let (path, text) = Catalog::installed()?.source(name)?;
+    let mut file = validated(&path, &text)?;
     file.security_review = config.security_review;
     let issue = resolve_process_issue(command.issue.clone())?;
     require_issue(&path, &file, issue.as_ref())?;
@@ -1992,14 +1994,19 @@ fn step_plan(step: &ResolvedStep, named: bool) -> String {
 
 fn load(name: &str) -> Result<(PathBuf, ProcessFile)> {
     let (path, text) = Catalog::installed()?.custom(name)?;
-    let file = parse(&path, &text)?;
-    refuse_security_review(&path, &file)?;
-    refuse_worktrees(&path, &file)?;
-    refuse_implement(&path, &file)?;
-    refuse_self_merge(&path, &file)?;
-    refuse_issue_branch(&path, &file)?;
-    refuse_published(&path, &file.steps)?;
+    let file = validated(&path, &text)?;
     Ok((path, file))
+}
+
+fn validated(path: &Path, text: &str) -> Result<ProcessFile> {
+    let file = parse(path, text)?;
+    refuse_security_review(path, &file)?;
+    refuse_worktrees(path, &file)?;
+    refuse_implement(path, &file)?;
+    refuse_self_merge(path, &file)?;
+    refuse_issue_branch(path, &file)?;
+    refuse_published(path, &file.steps)?;
+    Ok(file)
 }
 
 /// The launch checkout a Process's worktrees are created from, and the
