@@ -447,10 +447,11 @@ fn taken_up_rows_say_why_they_left_on_the_console_row() {
     let console = Console::start(binary, home.path());
     let html = console.get("/").text().unwrap();
     let resolved = section(&html, "resolved");
-    assert!(resolved.contains(">acme/widgets#40<"), "{resolved}");
+    let issue_link = "href=\"https://github.com/acme/widgets/issues/40\"";
+    assert!(resolved.contains(issue_link), "{resolved}");
     let row = resolved
         .split("<li class=\"command\"")
-        .find(|row| row.contains(">acme/widgets#40<"))
+        .find(|row| row.contains(issue_link))
         .expect(resolved);
     assert!(
         row.contains("<p class=\"left\">left needs you: taken up by a later Command started at"),

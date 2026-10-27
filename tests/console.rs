@@ -1690,10 +1690,9 @@ fn inbox_over_http_matches_status_and_embeds_only_local_resources() {
         ]
     );
     let subjects: Vec<_> = html
-        .split("<span class=\"subject\">")
+        .split("<span class=\"subject\" title=\"")
         .skip(1)
-        .map(|rest| rest.split("</a></span>").next().unwrap())
-        .map(|subject| subject.rsplit('>').next().unwrap())
+        .map(|rest| rest.split('"').next().unwrap())
         .collect();
     let expected: Vec<_> = status["commands"]
         .as_array()
@@ -1924,7 +1923,7 @@ fn urls_in_inbox_and_peek_text_are_links_and_other_text_stays_escaped() {
     let html = console.get("/").text().unwrap();
     let pr = "<a href=\"https://github.com/acme/widgets/pull/834\">https://github.com/acme/widgets/pull/834</a>";
     for expected in [
-        "<span class=\"subject\"><a href=\"https://github.com/acme/widgets/issues/812\">acme/widgets#812</a></span>",
+        "<a href=\"https://github.com/acme/widgets/issues/812\"><span class=\"subject-repository\">acme/widgets</span><span class=\"subject-issue\">#812</span></a>",
         &format!("<p class=\"pr\">{pr}</p>"),
         &format!("<p>PR {pr} is a draft. &#60;b&#62;javascript:alert(1)&#60;/b&#62;</p>"),
         "waiting on <a href=\"https://github.com/other/repo/issues/98\">https://github.com/other/repo/issues/98</a>",
