@@ -155,7 +155,7 @@ The **Issue branch** of the **Spec** in a **Spec run**, branched off the **Base 
 _Avoid_: integration branch, feature branch
 
 **Spec PR**:
-The pull request from the **Spec branch** into the **Base branch** that closes the **Spec**. It is left ready for review once every **Ticket** is done, or merged by a **Self-merge** when the **Spec run** was asked to merge; a draft listing what is missing otherwise. It opens as a draft once the first Ticket lands, with the **Tickets checklist** in its body. Ticket accounting captures the resumed or created PR by number in the Spec's repository. Every draft or checklist operation reobserves that number and checks its open state, Spec branch, Base branch and repository ownership; an invalid or missing PR is never replaced during accounting. A landing must pass those checks before the Spec review can start. Delivery explicitly ends this accounting capture before the Spec review and captures its own PR afterward.
+The pull request from the **Spec branch** into the **Base branch** that closes the **Spec**. It is left ready for review once every **Ticket** is done, or merged by a **Self-merge** when the **Spec run** was asked to merge; a draft listing what is missing otherwise. It opens as a draft once the first Ticket lands, with the **Tickets checklist** in its body. Ticket accounting captures the resumed or created PR by number in the Spec's repository. Every draft or checklist operation reobserves that number and checks its open state, Spec branch, Base branch and repository ownership; an invalid or missing PR is never replaced during accounting. When the Spec PR is closed, merged or retargeted while the **Spec run** is running, the Spec run starts no further **Ticket**, a running Ticket started after the Spec PR opened, or its **Base fix**, makes no **Self-merge**, and the Spec run ends as a **Failed spec run** whose **Recovery** offers no command. A landing must pass those checks before the Spec review can start. Delivery explicitly ends this accounting capture before the Spec review and captures its own PR afterward.
 
 **Tickets checklist**:
 The part of the **Spec PR**'s body, between fixed markers, that thirdshift writes: one line per **Ticket**, ticked once it is done, with its pull request, or saying whether it is not started, running, failed, interrupted, blocked, in a cycle or unready. It is rewritten as each Ticket starts and ends, and put back after the **Spec review** rewrites the body.
@@ -236,7 +236,7 @@ A **Ticket run** that ends, including by interruption, without an open pull requ
 _Avoid_: Failed run (former name)
 
 **Recovery**:
-The lines a **Failed ticket run** ends with, saying where it stopped, what work was preserved and where, and the command that continues or retries it; built only from factory-owned facts, never agent output.
+The lines a **Failed ticket run** ends with, saying where it stopped, what work was preserved and where, and the command that continues or retries it, except after a **Spec PR** changed under its **Spec run**, when no command would be safe; built only from factory-owned facts, never agent output.
 
 **Continuation**:
 A **Ticket run** that picks up an existing **Issue branch**, one with no pull request or an open one, instead of starting fresh. When a pull request is open, its base is the **Base branch**.
@@ -348,6 +348,14 @@ _Avoid_: dataset, golden dataset, test set
 **Eval task**:
 One past situation in an **Eval suite**: a repository as it once was, the kind of session to run on it, and what success means there, such as a bug the review must catch.
 _Avoid_: task, case, test case, example, sample
+
+**Difficulty**:
+How often an **Eval task** passes on the **Baseline arm**'s setup, measured over a stated number of **Trials**. An Eval task is **discriminating** when its Difficulty lies inside the band an **Eval suite** admits, so that one **Arm** doing better or worse on it can show.
+_Avoid_: pass rate, calibration, hardness
+
+**Advisory suite**:
+An **Eval suite** with too few discriminating **Eval tasks** for its **Verdict** to pass or block a release. Its Verdict is still shown.
+_Avoid_: non-gating suite, informational suite
 
 **Arm**:
 One setup that an **Experiment** compares: a build of thirdshift, with its **Factory skills** and **Session prompts**, and a **Harness**, **Model** and **Effort**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.

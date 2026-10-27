@@ -205,7 +205,7 @@ thirdshift stop &lt;command&gt; --requeue</code></pre>
         </ol>
       </figure>
       <p>Each Ticket gets a Ticket run that Self-merges into the <strong>Spec branch</strong>, not directly into <code>main</code>. The <strong>Spec PR</strong> gathers the result into the Base branch. A Ticket closing means its work landed on the Spec branch; the whole Spec has not shipped yet.</p>
-      <p>A failed Ticket stops only its dependents; other reachable Tickets can still run. Tickets marked for human work or triage also hold their dependents. An incomplete Spec leaves a draft Spec PR with a Tickets checklist. An Unready Ticket's checklist and Command log line name its open blockers, marking those outside the Spec and those labelled <code>ready-for-agent</code>; outside blockers are reported but never run. Rerunning continues existing branches. <a href="/docs/#spec-runs">Spec run controls and limits</a>.</p>
+      <p>A failed Ticket stops only its dependents; other reachable Tickets can still run. Tickets marked for human work or triage also hold their dependents. An incomplete Spec leaves a draft Spec PR with a Tickets checklist. A Spec PR closed, merged or retargeted mid-run starts no further Ticket, holds the Self-merge of a running Ticket started after it opened, and ends the Spec run without a Recovery command. An Unready Ticket's checklist and Command log line name its open blockers, marking those outside the Spec and those labelled <code>ready-for-agent</code>; outside blockers are reported but never run. Rerunning continues existing branches. <a href="/docs/#spec-runs">Spec run controls and limits</a>.</p>
       </div>
     </details>
   </section>
