@@ -27,6 +27,15 @@ target or doctests. For a focused iteration, use
 `cargo test --bin thirdshift <module>::tests` or `cargo test --test <file>`
 (the file name without `.rs`).
 
+Some tests give a Trial, grader or Harness a deadline of a second or less, and
+that deadline covers setup as well as the fake agent. On a busy many-core host,
+running every test at once can use up the deadline before the fake agent starts.
+On an 18-core Mac, `cargo test --test experiments` failed three such tests, and
+`cargo test --bin thirdshift` failed four. CI runners have about three cores and
+pass (#1472). If timeout tests fail locally but pass alone, rerun with fewer
+threads, for example `cargo test -- --test-threads=3` or
+`cargo nextest run --test-threads 3`.
+
 Set up browser dependencies following [the site instructions](../site/tests/README.md)
 before selecting site checks. A missing dependency fails visibly rather than
 dropping that check. Site generation checks remain part of `npm test`; regenerate
