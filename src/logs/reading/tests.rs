@@ -838,6 +838,33 @@ fn a_pass_counts_once(kind: &str) {
 }
 
 #[test]
+fn a_ready_pass_and_its_ready_dispatch_on_one_pull_request_are_one_row() {
+    let ready_rows = |pass_pull: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let mut pass = ended(record(7), "ready for review");
+        pass["kind"] = "Pickup run".into();
+        pass["name"] = "pass-20261019T110000-0400".into();
+        pass["pull_request"] = pass_pull.into();
+        let mut spec = ended(record(30), "ready for review");
+        spec["kind"] = "Spec run".into();
+        spec["pull_request"] = "https://github.com/acme/widgets/pull/30".into();
+        pass["dispatched"] = json!([spec]);
+        write(dir.path(), "pickup.command.json", &pass);
+        Snapshot::load(dir.path(), now())
+            .unwrap()
+            .evaluate_inbox(7, &crate::logs::github::Kept::default())
+            .into_rows(false)
+            .iter()
+            .filter(|row| row.group == Group::ReadyForReview)
+            .count()
+    };
+    // The Pass's row carries its dispatched run, so the same pull request
+    // is not a second row; a different one still is.
+    assert_eq!(ready_rows("https://github.com/acme/widgets/pull/30"), 1);
+    assert_eq!(ready_rows("https://github.com/acme/widgets/pull/31"), 2);
+}
+
+#[test]
 fn live_work_under_an_ended_or_died_outer_record_counts_and_ended_work_does_not() {
     let dir = tempfile::tempdir().unwrap();
     for number in [1, 2] {
