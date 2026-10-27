@@ -20,7 +20,7 @@
 //! gates. A Process started with an issue is not a Pass and does not take the
 //! lock.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -315,6 +315,9 @@ struct Prepared {
     /// `Merged` only when this run was asked to Self-merge.
     goal: Goal,
     completed: Mutex<CompletedRuns>,
+    /// Killed work retained across session Steps, ordered by Step even when
+    /// a parallel group completes out of order.
+    killed_work: Mutex<BTreeMap<usize, Vec<String>>>,
 }
 
 /// Actual published outcomes, including dispatched Runs in parallel groups.
@@ -369,6 +372,7 @@ struct StepRun<'a> {
     goal: Goal,
     limits: &'a Limits,
     completed: &'a Mutex<CompletedRuns>,
+    killed_work: &'a Mutex<BTreeMap<usize, Vec<String>>>,
     issue_branch: bool,
     choice: &'a Choice,
     issue: Option<&'a IssueUrl>,
@@ -816,6 +820,23 @@ fn refuse_unstartable(prepared: &Prepared) -> Result<()> {
 fn execute_steps(
     process: &str,
     prepared: &Prepared,
+    issue_run: Option<&mut IssueRun<'_>>,
+) -> Result<String> {
+    let result = execute_groups(process, prepared, issue_run);
+    let endings: Vec<_> = prepared
+        .killed_work
+        .lock()
+        .expect("killed work")
+        .values()
+        .flatten()
+        .cloned()
+        .collect();
+    session::with_killed_work(result, &endings)
+}
+
+fn execute_groups(
+    process: &str,
+    prepared: &Prepared,
     mut issue_run: Option<&mut IssueRun<'_>>,
 ) -> Result<String> {
     for worktree in &prepared.worktrees {
@@ -993,6 +1014,7 @@ fn run_parallel(
     let goal = prepared.goal;
     let limits = &prepared.limits;
     let completed = &prepared.completed;
+    let killed_work = &prepared.killed_work;
     thread::scope(|scope| {
         let mut handles = Vec::with_capacity(group.len());
         for (offset, step) in group.iter().enumerate() {
@@ -1020,6 +1042,7 @@ fn run_parallel(
                     goal,
                     limits,
                     completed,
+                    killed_work,
                     issue_branch,
                     choice: &choice,
                     issue: issue.as_ref(),
@@ -1104,6 +1127,7 @@ fn run_step(
         goal: prepared.goal,
         limits: &prepared.limits,
         completed: &prepared.completed,
+        killed_work: &prepared.killed_work,
         issue_branch: names_issue_worktree(
             step.worktree.as_deref(),
             prepared.issue_worktree.as_deref(),
@@ -1402,12 +1426,19 @@ fn run_skill(
         None,
         &before_each,
         |sessions| {
-            sessions
-                .run_to_final_message(
-                    session::Purpose::Ordinary,
-                    session::Kind::ProcessStep(index),
-                    prompt,
-                )?
+            let result = sessions.run_to_final_message(
+                session::Purpose::Ordinary,
+                session::Kind::ProcessStep(index),
+                prompt,
+            );
+            let endings = sessions.take_killed_work();
+            if !endings.is_empty() {
+                run.killed_work
+                    .lock()
+                    .expect("killed work")
+                    .insert(index, endings);
+            }
+            result?
                 .filter(|message| !message.trim().is_empty())
                 .with_context(|| format!("Step {} ended without a final message", step.name))
         },
@@ -1800,6 +1831,7 @@ fn prepare_from(
         limits: file.limits,
         goal: file.goal,
         completed: Mutex::new(CompletedRuns::default()),
+        killed_work: Mutex::default(),
     })
 }
 

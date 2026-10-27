@@ -267,13 +267,14 @@ impl<'a> Sessions<'a> {
         let taken = steps(&sessions);
         let log = sessions.last_log.into_inner().map(|(_, log)| log);
         let endings = sessions.endings_with_killed_work.into_inner();
-        if endings.is_empty() {
-            return (taken, log);
-        }
-        let taken = taken.map_err(|error| {
-            error.context(format!("{}, and a later step failed", endings.join("; ")))
-        });
-        (taken, log)
+        (with_killed_work(taken, &endings), log)
+    }
+
+    /// Transfer killed-work context to a caller whose Steps outlive this
+    /// session scope. That caller must apply [`with_killed_work`] to its
+    /// final outcome; taking it prevents annotating the same failure twice.
+    pub fn take_killed_work(&self) -> Vec<String> {
+        std::mem::take(&mut *self.endings_with_killed_work.borrow_mut())
     }
 
     /// Run a session of `kind` given `prompt`, logged and labelled by its
@@ -608,6 +609,14 @@ impl Outside for OnMachine {
     fn step(&mut self, line: String) {
         progress::step(line);
     }
+}
+
+/// Name earlier killed work ahead of a later failure, leaving success alone.
+pub fn with_killed_work<T>(taken: Result<T>, endings: &[String]) -> Result<T> {
+    if endings.is_empty() {
+        return taken;
+    }
+    taken.map_err(|error| error.context(format!("{}, and a later step failed", endings.join("; "))))
 }
 
 /// How a session ended whose `killed` background work, by description, was

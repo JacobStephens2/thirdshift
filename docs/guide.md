@@ -859,6 +859,13 @@ They use the same format and validation as Custom processes. This release
 provides the folder and catalog; no Built-in process file ships yet.
 A Custom process cannot take a reserved Built-in process name.
 
+Every skill Step gets one Resume if its session ends with background work
+still running that was killed with it, using the same Session prompt and
+rules as a Ticket run. If the Resume ends the same way, a progress line
+names the killed work and the Process carries on. Following Steps decide
+the outcome; if the Process then fails, its cause names that work ahead of
+the failing Step. A Resume does not count against the Process's Repair cap.
+
 ```toml
 version = 1
 description = "Gather notes, then review them"
