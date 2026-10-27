@@ -546,6 +546,7 @@ fn other_account_records_cannot_shape_the_serving_accounts_github_requests() {
     );
 }
 
+#[cfg(target_os = "linux")]
 fn shell_quote(path: &Path) -> String {
     format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
 }

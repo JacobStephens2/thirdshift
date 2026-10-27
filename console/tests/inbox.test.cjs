@@ -99,14 +99,13 @@ test('Inbox keeps issue numbers visible for long repository and Process subjects
         assert.equal(await subject.textContent(), full);
         assert.equal(await subject.getAttribute('title'), full);
         assert.equal(await subject.locator('a').getAttribute('href'), fixture.issue.url);
-        // Check the shared layout with an Other-account Command's tag as well.
-        await subject.evaluate(node => {
+        // Insert and measure in one browser task so a live refresh cannot
+        // remove the fixture tag before its layout is checked.
+        const tagged = await subject.evaluate(node => {
           const tag = document.createElement('span');
           tag.className = 'account-tag';
           tag.textContent = 'conductor';
           node.prepend(tag, ' ');
-        });
-        const tagged = await subject.evaluate(node => {
           const subject = node.getBoundingClientRect();
           const account = node.querySelector('.account-tag').getBoundingClientRect();
           const issue = node.querySelector('.subject-issue').getBoundingClientRect();
