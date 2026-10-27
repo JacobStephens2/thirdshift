@@ -345,6 +345,14 @@ _Avoid_: dataset, golden dataset, test set
 One past situation in an **Eval suite**: a repository as it once was, the kind of session to run on it, and what success means there, such as a bug the review must catch.
 _Avoid_: task, case, test case, example, sample
 
+**Difficulty**:
+How often an **Eval task** passes on the **Baseline arm**'s setup, measured over a stated number of **Trials**. An Eval task is **discriminating** when its Difficulty lies inside the band an **Eval suite** admits, so that one **Arm** doing better or worse on it can show.
+_Avoid_: pass rate, calibration, hardness
+
+**Advisory suite**:
+An **Eval suite** with too few discriminating **Eval tasks** for its **Verdict** to pass or block a release. Its Verdict is still shown.
+_Avoid_: non-gating suite, informational suite
+
 **Arm**:
 One setup that an **Experiment** compares: a build of thirdshift, with its **Factory skills** and **Session prompts**, and a **Harness**, **Model** and **Effort**. The **Baseline arm** is the current setup, and the **Candidate arm** holds the change being weighed.
 _Avoid_: variant, provider, configuration
