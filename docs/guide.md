@@ -505,7 +505,7 @@ thirdshift secure                   # audit the Base branch and record findings 
 thirdshift secure base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
 thirdshift skill <skill> [issue <issue>]   # run one skill headlessly and print its final message
 thirdshift process                      # list Custom processes (experimental)
-thirdshift process <name> [issue <issue>]   # run a Custom process, optionally on an issue (experimental)
+thirdshift process <name> [issue <issue>]   # run a Custom process, optionally on an issue; email flags match a Ticket run (experimental)
 thirdshift process check <name>         # validate one and print its plan (experimental)
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
 thirdshift scores [<pull request>] [--json] # show Scores and calibration
@@ -1002,6 +1002,17 @@ log has one line per Step: the Step's name, duration, outcome and cause. A
 command that exits non-zero is failed, and the line names its exit status.
 Stop and Ctrl-C interrupt a command Step the way they interrupt a session,
 and `[resources]` is checked before each Step.
+
+`thirdshift status` and `status --json` list a running or finished Process as
+Process `<name>`, with the ending succeeded, failed, skipped or interrupted.
+The stored kind stays `Process`, and the selector used by `show` and `stop`
+stays `process-<name>-<stamp>`. `thirdshift show` prints each Step's Command
+log line and, when that Step wrote a result, the path of the result file. The
+Console lists the Process, and a failed one is in Needs you. The Activity log
+says Process `<name>`. A succeeded, failed or interrupted Process sends a Run
+notification under the same `email`, `email-unless-merged` and `no-email`
+flags and the same User config rules as a Ticket run. A missing address or
+Resend key stops the Process before any Step. A skipped Process sends none.
 
 A Custom process started with no issue is a [Pass](#one-at-a-time). While another Pass on the repository is still running, its Spec run or Ticket run included, `thirdshift process <name>` is skipped: it prints `another Pass is already running on <owner>/<repo>`, prints nothing on stdout, exits `0` and sends no Run notification. It creates no worktree and starts no Step. While it runs, a Pickup run on the same repository is skipped. It does not take an Architect run's Ready-issue or Architect-idea gates, so a Ready issue or an Architect idea waiting for triage does not skip it. The Command record's outcome is `skipped`, and its cause is that reason. The Activity log records `Process <name> skipped: <reason>` when that is not already the last Process line. With `activity.quiet_skips` set, a skipped Process prints nothing. `thirdshift process <name> issue <issue>` is not a Pass: this rule does not skip it, and it does not hold the lock.
 

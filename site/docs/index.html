@@ -464,7 +464,7 @@ thirdshift secure                   # audit the Base branch and record findings 
 thirdshift secure base &lt;branch&gt;     # do that with &lt;branch&gt; as the Base branch, from a clone on any branch
 thirdshift skill &lt;skill&gt; [issue &lt;issue&gt;]   # run one skill headlessly and print its final message
 thirdshift process                      # list Custom processes (experimental)
-thirdshift process &lt;name&gt; [issue &lt;issue&gt;]   # run a Custom process, optionally on an issue (experimental)
+thirdshift process &lt;name&gt; [issue &lt;issue&gt;]   # run a Custom process, optionally on an issue; email flags match a Ticket run (experimental)
 thirdshift process check &lt;name&gt;         # validate one and print its plan (experimental)
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
 thirdshift scores [&lt;pull request&gt;] [--json] # show Scores and calibration
@@ -911,6 +911,16 @@ log has one line per Step: the Step&#39;s name, duration, outcome and cause. A
 command that exits non-zero is failed, and the line names its exit status.
 Stop and Ctrl-C interrupt a command Step the way they interrupt a session,
 and <code>[resources]</code> is checked before each Step.</p>
+<p><code>thirdshift status</code> and <code>status --json</code> list a running or finished Process as
+Process <code>&lt;name&gt;</code>, with the ending succeeded, failed, skipped or interrupted.
+The stored kind stays <code>Process</code>, and the selector used by <code>show</code> and <code>stop</code>
+stays <code>process-&lt;name&gt;-&lt;stamp&gt;</code>. <code>thirdshift show</code> prints each Step&#39;s Command
+log line and, when that Step wrote a result, the path of the result file. The
+Console lists the Process, and a failed one is in Needs you. The Activity log
+says Process <code>&lt;name&gt;</code>. A succeeded, failed or interrupted Process sends a Run
+notification under the same <code>email</code>, <code>email-unless-merged</code> and <code>no-email</code>
+flags and the same User config rules as a Ticket run. A missing address or
+Resend key stops the Process before any Step. A skipped Process sends none.</p>
 <p>A Custom process started with no issue is a <a href="#one-at-a-time">Pass</a>. While another Pass on the repository is still running, its Spec run or Ticket run included, <code>thirdshift process &lt;name&gt;</code> is skipped: it prints <code>another Pass is already running on &lt;owner&gt;/&lt;repo&gt;</code>, prints nothing on stdout, exits <code>0</code> and sends no Run notification. It creates no worktree and starts no Step. While it runs, a Pickup run on the same repository is skipped. It does not take an Architect run&#39;s Ready-issue or Architect-idea gates, so a Ready issue or an Architect idea waiting for triage does not skip it. The Command record&#39;s outcome is <code>skipped</code>, and its cause is that reason. The Activity log records <code>Process &lt;name&gt; skipped: &lt;reason&gt;</code> when that is not already the last Process line. With <code>activity.quiet_skips</code> set, a skipped Process prints nothing. <code>thirdshift process &lt;name&gt; issue &lt;issue&gt;</code> is not a Pass: this rule does not skip it, and it does not hold the lock.</p>
 </div></details>
 <details class="fold"><summary><h3>User config</h3></summary>

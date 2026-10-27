@@ -22,12 +22,15 @@ use chrono::{DateTime, Utc};
 use toml_edit::{Document, Item, Key, Table};
 
 use crate::args::ProcessAction;
+use crate::asks::Flags;
 use crate::config::UserConfig;
 use crate::git::Git;
 use crate::harness::{Asked, Choice};
 use crate::issue::{IssueInput, IssueUrl};
 use crate::logs::{self, Begin, Work};
+use crate::notification::{About, NotificationAsk, RunNotification};
 use crate::process::{self, Control, Interruption};
+use crate::run_ending::{Account, Cause};
 use crate::skill;
 use crate::worktree::SkillWorktree;
 use crate::{delivery, interrupt, launch, progress, prompt, session, skills, trust};
@@ -123,7 +126,7 @@ pub fn execute(action: ProcessAction) -> Result<String> {
     match action {
         ProcessAction::List => list(),
         ProcessAction::Check(name) => check(&name),
-        ProcessAction::Run { name, issue } => run(&name, issue),
+        ProcessAction::Run { name, issue, email } => run(&name, issue, email),
     }
 }
 
@@ -172,46 +175,122 @@ fn check(name: &str) -> Result<String> {
     Ok(plan(name, &prepared))
 }
 
-fn run(name: &str, issue: Option<IssueInput>) -> Result<String> {
+fn run(name: &str, issue: Option<IssueInput>, email: Option<NotificationAsk>) -> Result<String> {
     interrupt::install()?;
     let config = UserConfig::load()?;
+    // The same check as a Ticket run, before any worktree or Step: a missing
+    // address or Resend key fails the Process before it starts. As for the
+    // other Passes, the check is before a skip, so a Process that would be
+    // skipped fails on it too.
+    let mut notification = RunNotification::new(
+        Flags {
+            email,
+            ..Flags::default()
+        }
+        .notification(&config),
+        &config.email,
+        About::Process { name },
+    )?;
     // Before any worktree: a foreign Issue URL is an origin mismatch, and a
-    // number that cannot be resolved stops the same way.
-    let issue = resolve_process_issue(issue)?;
+    // number that cannot be resolved stops the same way. A failure here is
+    // still a failed Process, so it sends the Run notification a Ticket run
+    // would send for the same kind of stop.
+    let issue = match resolve_process_issue(issue) {
+        Ok(issue) => issue,
+        Err(error) => return Err(failed_before_steps(notification, error)),
+    };
     // No issue: a Pass. The Base branch is checked before the lock, so a bad
     // checkout fails instead of being skipped, and a skip creates no worktree.
     // The lock is then held until this process exits, through every Step.
+    // `pass` holds the first lines, so a quiet skip prints nothing. A skip
+    // sends no Run notification.
     if issue.is_none() {
         logs::begin(Begin::Process { name, pass: true });
         logs::configured(&config);
-        let _base = launch::checked_out_base()?;
-        let repo = launch::repo()?;
-        if let Some(running) = launch::hold_pass(&repo)? {
-            let reason = running.to_string();
-            let choice = Choice::of(&Asked::default(), &config.harness);
-            progress::step(&reason);
-            logs::skipped_process(&repo, name, &choice, &reason);
-            return Ok(String::new());
+        let repo = match (|| {
+            let _base = launch::checked_out_base()?;
+            launch::repo()
+        })() {
+            Ok(repo) => repo,
+            Err(error) => return Err(failed_before_steps(notification, error)),
+        };
+        match launch::hold_pass(&repo) {
+            Ok(Some(running)) => {
+                let reason = running.to_string();
+                let choice = Choice::of(&Asked::default(), &config.harness);
+                progress::step(&reason);
+                logs::skipped_process(&repo, name, &choice, &reason);
+                return Ok(String::new());
+            }
+            Ok(None) => {}
+            Err(error) => return Err(failed_before_steps(notification, error)),
         }
     }
     // The same margin as a Ticket run. Edits in the gap since this moment,
     // or dated by a slow GitHub clock, still count.
     let started = Utc::now() - crate::run::STARTED_MARGIN;
-    let mut prepared = prepare(name, &config)?;
+    let mut prepared = match prepare(name, &config) {
+        Ok(prepared) => prepared,
+        Err(error) => return Err(failed_before_steps(notification, error)),
+    };
     prepared.issue = issue;
     prepared.started = started;
-    let repo = launch::repo()?;
+    let repo = match launch::repo() {
+        Ok(repo) => repo,
+        Err(error) => return Err(failed_before_steps(notification, error)),
+    };
     if prepared.issue.is_some() {
         logs::begin(Begin::Process { name, pass: false });
         logs::configured(&config);
     }
     logs::started(Work::Process { repo: &repo, name }, &prepared.choice);
+    notification.built_with(&prepared.choice);
     let result = execute_steps(name, &prepared);
     let (outcome, cause) = classify(&result);
     drop(prepared);
-    logs::ended(&outcome);
-    logs::complete(&outcome, cause.as_deref());
+    logs::ended(outcome);
+    logs::complete(outcome, cause.as_deref());
+    notify(notification, outcome, cause.as_deref());
     result
+}
+
+/// A stop after the email check and before any Step is still a failed Process.
+fn failed_before_steps(notification: RunNotification, error: anyhow::Error) -> anyhow::Error {
+    let cause = format!("{error:#}");
+    notify(notification, "failed", Some(&cause));
+    error
+}
+
+/// Save and, when asked, send the Run notification. A skipped Process sends none.
+fn notify(notification: RunNotification, outcome: &'static str, cause: Option<&str>) {
+    if outcome == "skipped" {
+        return;
+    }
+    let ended = if outcome == "succeeded" {
+        Ok(outcome.to_string())
+    } else {
+        Err(Cause::of(&anyhow!("{}", cause.unwrap_or(outcome))))
+    };
+    let account = Account {
+        recovery: None,
+        outcome,
+        ended,
+        interrupted: outcome == "interrupted",
+        pr_url: None,
+        advice: &[],
+        base_fix: None,
+        log: None,
+        ticket_lines: &[],
+        review: None,
+        failed_reproduction: None,
+        pre_audit_failure: None,
+        security_findings: None,
+        security_findings_waiting: false,
+        security_fix: None,
+        security_close: None,
+        urls: Vec::new(),
+    };
+    notification.finish(&account);
 }
 
 fn execute_steps(process: &str, prepared: &Prepared) -> Result<String> {
@@ -562,10 +641,10 @@ fn worktree_path<'a>(worktrees: &'a [OwnedWorktree], name: Option<&str>) -> &'a 
         .path()
 }
 
-fn classify(result: &Result<String>) -> (String, Option<String>) {
+fn classify(result: &Result<String>) -> (&'static str, Option<String>) {
     match result {
-        Ok(_) => ("succeeded".to_string(), None),
-        Err(error) => (failure_outcome().to_string(), Some(one_line(error))),
+        Ok(_) => ("succeeded", None),
+        Err(error) => (failure_outcome(), Some(one_line(error))),
     }
 }
 
