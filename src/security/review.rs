@@ -14,6 +14,8 @@ use crate::session::{Kind, Purpose, Sessions};
 use crate::worktree::Worktree;
 use crate::{logs, progress, prompt};
 
+pub(crate) mod step;
+
 /// A fresh report outside the worktree, retained even when the session or
 /// private recording fails. Only the introduced titles reach Delivery.
 pub(crate) fn run(

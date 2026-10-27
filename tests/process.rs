@@ -1,5 +1,7 @@
 //! Custom processes through the CLI, real Git and fake Harnesses.
 
+#[path = "process/security_review.rs"]
+mod security_review;
 mod support;
 
 use std::fs;
