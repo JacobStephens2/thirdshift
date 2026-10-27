@@ -104,6 +104,9 @@ pub(super) struct CommandRecord {
     pub security_fix_findings: Vec<crate::security::RecordedFinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experiment: Option<crate::evals::experiment::Description>,
+    /// The Custom process name. The selector in `name` stays `process-<name>-<stamp>`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_name: Option<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -191,6 +194,7 @@ macro_rules! stage_names {
 }
 
 stage_names! {
+    ProcessStep => "Process Step",
     Implement => "implement",
     CodeReview => "Code review",
     Resume => "Resume",
@@ -231,7 +235,8 @@ impl StageName {
             | Work::ArchitectRun(_)
             | Work::SecurityRun(_)
             | Work::ScoringRun(_)
-            | Work::Experiment(_) => Self::DispatchedRun,
+            | Work::Experiment(_)
+            | Work::Process { .. } => Self::DispatchedRun,
         }
     }
 
@@ -267,6 +272,22 @@ impl StageName {
 }
 
 impl CommandRecord {
+    /// The Custom process's own name. An older record with no `process_name`
+    /// falls back to the selector in `name`.
+    pub(super) fn process_label(&self) -> Option<&str> {
+        (self.kind == "Process").then(|| self.process_name.as_deref().unwrap_or(self.name.as_str()))
+    }
+
+    /// `Process <name> on <repo>`, or `Process <name> · <repo>#<n>` when the
+    /// record names an issue. Status text adds the kind word itself.
+    pub(super) fn process_heading(&self) -> Option<String> {
+        let name = self.process_label()?;
+        Some(match self.issue.as_ref() {
+            Some(issue) => format!("Process {name} · {}#{}", self.repository, issue.number),
+            None => format!("Process {name} on {}", self.repository),
+        })
+    }
+
     /// The next transition closes a stage; only a recorded outcome closes the
     /// final stage. A live caller can supply its single sampled observation time.
     pub fn stage_times(
@@ -349,6 +370,7 @@ impl CommandRecord {
             Work::ScoringRun(_) => format!("scoring-{stamp}"),
             Work::PickupRun(_) => format!("pickup-{stamp}"),
             Work::Experiment(_) => format!("experiment-{stamp}"),
+            Work::Process { name, .. } => format!("process-{name}-{stamp}"),
             Work::Run(issue) | Work::BaseFix(issue) | Work::SpecRun(issue) => {
                 format!("{}#{}", issue.repo_slug(), issue.number)
             }
@@ -386,6 +408,10 @@ impl CommandRecord {
             security_findings: Vec::new(),
             security_fix_findings: Vec::new(),
             experiment: None,
+            process_name: match work {
+                Work::Process { name, .. } => Some(name.to_string()),
+                _ => None,
+            },
         }
     }
 

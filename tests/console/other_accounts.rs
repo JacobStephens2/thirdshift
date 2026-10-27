@@ -103,6 +103,44 @@ fn retained_files(root: &Path) -> std::collections::BTreeMap<std::path::PathBuf,
 
 #[cfg(target_os = "linux")]
 #[test]
+fn foreign_process_names_and_accounts_survive_across_console_views() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let mut process = record(&home, 7, Some("failed"), 0);
+    process["kind"] = json!("Process");
+    process["process_name"] = json!("notes");
+    process["name"] = json!("process-fixture");
+    process["issue"] = Value::Null;
+    write_record(&home, 7, &process);
+    machine.setting("readable");
+    let console = Console::start_command({
+        let mut command = machine.command();
+        command.args(["console", "--no-sign-in"]);
+        command
+    });
+    for page in ["inbox", "lanes", "stages", "waterfall"] {
+        let html = console.get(&format!("/?page={page}")).text().unwrap();
+        assert!(
+            html.contains("Process notes on acme/widgets") && html.contains("conductor"),
+            "{page}: {html}"
+        );
+    }
+    let spans: Value = console.get("/spans").json().unwrap();
+    assert!(
+        spans["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|span| span["name"]
+                .as_str()
+                .is_some_and(|name| name.contains("Process notes on acme/widgets")
+                    && name.contains("conductor"))),
+        "{spans}"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn foreign_only_status_keeps_github_answers_under_the_serving_account() {
     let machine = Machine::new();
     record(&machine.home("conductor"), 7, Some("failed"), 0);

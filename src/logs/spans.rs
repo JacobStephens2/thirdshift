@@ -332,18 +332,7 @@ fn record_span(
         id,
         parent_id,
         kind,
-        name: format!(
-            "{} · {}{}",
-            command.record.kind,
-            subject(command),
-            command
-                .record
-                .issue
-                .as_ref()
-                .and_then(|issue| issue.title.as_ref())
-                .map(|title| format!(" · {title}"))
-                .unwrap_or_default()
-        ),
+        name: span_name(command),
         start,
         end,
         duration_ms: duration(start, end),
@@ -361,6 +350,23 @@ fn record_span(
     }
 }
 
+fn span_name(command: &Command) -> String {
+    let title = command
+        .record
+        .issue
+        .as_ref()
+        .and_then(|issue| issue.title.as_ref())
+        .map(|title| format!(" · {title}"))
+        .unwrap_or_default();
+    if let Some(heading) = command.record.process_heading() {
+        return format!(
+            "{}{title}",
+            account_subject(heading, command.account.as_deref())
+        );
+    }
+    format!("{} · {}{title}", command.record.kind, subject(command))
+}
+
 fn subject(command: &Command) -> String {
     let subject = command
         .record
@@ -368,7 +374,11 @@ fn subject(command: &Command) -> String {
         .as_ref()
         .map(|issue| format!("{}#{}", command.record.repository, issue.number))
         .unwrap_or_else(|| command.record.name.clone());
-    match &command.account {
+    account_subject(subject, command.account.as_deref())
+}
+
+fn account_subject(subject: String, account: Option<&str>) -> String {
+    match account {
         Some(account) => format!("{subject} · [{account}]"),
         None => subject,
     }

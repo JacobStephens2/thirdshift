@@ -93,12 +93,15 @@ fn timestamp(value: &str) -> Option<i64> {
         .map(|time| time.timestamp())
 }
 
-fn subject(kind: &str, repository: &str, issue: Option<&Issue>, account: Option<&str>) -> String {
+fn subject(kind: &str, repository: &str, issue: Option<&Issue>) -> String {
     let kind = crate::logs::display_name(kind);
-    let subject = issue.map_or_else(
+    issue.map_or_else(
         || format!("{kind} on {repository}"),
         |issue| format!("{kind} · {repository}#{}", issue.number),
-    );
+    )
+}
+
+fn account_subject(subject: String, account: Option<&str>) -> String {
     match account {
         Some(account) => format!("[{account}] {subject}"),
         None => subject,
@@ -178,16 +181,17 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
         .collect();
     let (issue_url, issue_label) = issue_link(record.issue.as_ref());
     Run {
-        subject: subject(
-            &record.kind,
-            &record.repository,
-            record.issue.as_ref(),
+        subject: account_subject(
+            record.process_heading().unwrap_or_else(|| {
+                subject(&record.kind, &record.repository, record.issue.as_ref())
+            }),
             command.account.as_deref(),
         ),
         title: record
             .issue
             .as_ref()
             .and_then(|issue| issue.title.clone())
+            .or_else(|| record.process_label().map(str::to_string))
             .unwrap_or_else(|| record.name.clone()),
         state: if command.state == "ended" {
             record.outcome.clone().unwrap_or_else(|| "ended".into())
@@ -237,10 +241,12 @@ fn collect(
         groups.push(Group::new(current, &command.record.started_at));
         (command.record.kind == "Spec run").then_some(index)
     };
-    let parent = subject(
-        &command.record.kind,
-        &command.record.repository,
-        command.record.issue.as_ref(),
+    let parent = account_subject(
+        subject(
+            &command.record.kind,
+            &command.record.repository,
+            command.record.issue.as_ref(),
+        ),
         command.account.as_deref(),
     );
     for dispatched in &command.dispatched {
@@ -352,10 +358,8 @@ pub(crate) fn load(config: &UserConfig, hours: f64, by_repository: bool) -> Resu
                 let selector = Observation::History(command).selector().unwrap_or_default();
                 let (issue_url, issue_label) = issue_link(command.issue.as_ref());
                 runs.push(Run {
-                    subject: subject(
-                        &command.kind,
-                        &command.repository,
-                        command.issue.as_ref(),
+                    subject: account_subject(
+                        subject(&command.kind, &command.repository, command.issue.as_ref()),
                         command.account.as_deref(),
                     ),
                     title: String::new(),

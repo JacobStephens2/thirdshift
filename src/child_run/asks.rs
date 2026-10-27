@@ -9,6 +9,7 @@ use crate::harness::Choice;
 /// Run is given them.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ChildAsks {
+    pub delivery_limits: crate::delivery::Limits,
     /// The Harness, Model and Effort a child Run's sessions run on, as the
     /// Command's checks settled them.
     pub harness: Choice,
@@ -31,6 +32,7 @@ impl ChildAsks {
     /// command that started it.
     pub fn of(asks: &Asks) -> ChildAsks {
         ChildAsks {
+            delivery_limits: asks.delivery_limits.clone(),
             harness: asks.harness.clone(),
             security_review_harness: asks.security_review_harness.clone(),
             security_review_default: asks.security_review_default.clone(),

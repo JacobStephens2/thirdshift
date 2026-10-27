@@ -20,12 +20,31 @@ use chrono::{DateTime, Utc};
 mod repair_loop;
 mod stage;
 
+pub(crate) use repair_loop::MAX_REPAIRS;
+
+/// Tightening policies inherited by dispatched Runs and their child Tickets.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Limits {
+    pub repair_cap: usize,
+    pub protected_paths: Vec<String>,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            repair_cap: MAX_REPAIRS,
+            protected_paths: Vec::new(),
+        }
+    }
+}
+
 use crate::pull_request::{AlreadyMerged, Identified, MergeAttempt, PullRequest};
 
 use crate::base_fix::{self, BaseFix};
 use crate::child_run::ChildAsks;
 use crate::ci::{self, Ci, FailedChecks};
-use crate::failed_run::{FailedRun, PolicyRefusal, interrupted_or};
+use crate::failed_run::{FailedRun, MergeHold, PolicyRefusal, interrupted_or};
 use crate::git::Git;
 use crate::github::GitHub;
 use crate::harness::Choice;
@@ -63,6 +82,12 @@ pub struct Delivery<'a> {
     /// When the Run began: an untrusted edit to `issue` made since then
     /// starts no further session.
     pub started: DateTime<Utc>,
+    /// The most Repair sessions this Delivery starts. A Ticket run uses
+    /// [`MAX_REPAIRS`]. A Custom process may set a lower cap.
+    pub repair_cap: usize,
+    /// Globs checked against the change before a Self-merge. A match holds
+    /// the merge. Empty for a Ticket run.
+    pub protected_paths: &'a [String],
 }
 
 /// The session a Delivery opens with, given its prompt.
@@ -130,75 +155,265 @@ impl Delivery<'_> {
         checklist: Option<&str>,
     ) -> Result<Reached, FailedRun> {
         let tracker = Tracker::new(opening.session.stage(), CommandLog);
-        let route = Route {
-            security_review: self.security_review,
-            issue: self.issue,
-            base: self.base,
-            branch: worktree.branch(),
-            goal: self.goal,
-            harness: &self.child_asks.harness,
-        };
-        pull_request.begin_delivery();
-        let (issue, started, path) = (self.issue, self.started, worktree.path());
-        let before_each = move || {
-            no_untrusted_edit_since(issue, started)?;
-            hand_over_issue(issue, path)
-        };
-        let (delivered, log) = Sessions::checked_within(
-            self.logs,
-            worktree.path(),
-            &self.child_asks.harness,
-            self.child_asks.security_review_harness.as_ref(),
-            self.child_asks.security_review_default.as_ref(),
-            &before_each,
-            |sessions| {
-                let mut outside = InWorktree {
-                    tracker: &tracker,
-                    issue: self.issue,
-                    worktree: &worktree,
-                    base: self.base,
-                    base_fix: self.base_fix,
-                    child_asks: self.child_asks,
-                    sessions,
-                    pull_request,
-                };
-                route.steps(&mut outside, &opening, checklist)
+        let logs = self.logs;
+        let issue = self.issue;
+        let started = self.started;
+        let base = self.base;
+        let goal = self.goal;
+        let security_review = self.security_review;
+        let repair_cap = self.repair_cap;
+        let protected_paths = self.protected_paths;
+        let child_asks = self.child_asks;
+        let base_fix = self.base_fix;
+        run_checked(
+            CheckedRun {
+                logs,
+                issue,
+                started,
+                harness: &child_asks.harness,
+                security_review: child_asks.security_review_harness.as_ref(),
+                security_review_default: child_asks.security_review_default.as_ref(),
+                base,
             },
-        );
-        let result = match delivered {
-            Ok(resolution) => Ok(Reached {
+            worktree,
+            pull_request,
+            &tracker,
+            |resolution, log| Reached {
                 resolution,
                 log,
                 ticket_lines: Vec::new(),
-            }),
-            Err(error) => {
-                if let Some(merged) = error.downcast_ref::<AlreadyMerged>()
-                    && worktree.fully_landed_at(&merged.head).unwrap_or(false)
-                {
-                    progress::step("the pull request was merged while Delivery was running");
-                    Ok(Reached {
-                        resolution: Resolution::PullRequest {
-                            url: merged.pr.url.clone(),
-                            goal: Goal::Merged,
-                        },
-                        log,
-                        ticket_lines: Vec::new(),
-                    })
-                } else {
-                    let stopped_at = stopped_at(&tracker, &error);
-                    let path = worktree.path().to_path_buf();
-                    let mut outside = OnFailure {
-                        base: self.base,
-                        worktree,
-                        pull_request,
-                    };
-                    Err(fail(&mut outside, stopped_at, path, log, error))
-                }
-            }
-        };
-        crate::logs::unaddressed_findings(pull_request.unaddressed_findings());
-        result
+            },
+            |merged, log| Reached {
+                resolution: Resolution::PullRequest {
+                    url: merged.pr.url.clone(),
+                    goal: Goal::Merged,
+                },
+                log,
+                ticket_lines: Vec::new(),
+            },
+            |tracker, worktree, pull_request, sessions| {
+                let route = Route {
+                    security_review,
+                    issue,
+                    base,
+                    branch: worktree.branch(),
+                    goal,
+                    harness: &child_asks.harness,
+                };
+                let mut outside = InWorktree {
+                    tracker,
+                    issue,
+                    worktree,
+                    base,
+                    base_fix,
+                    child_asks,
+                    sessions,
+                    pull_request,
+                    repair_cap,
+                    protected_paths,
+                };
+                route.steps(&mut outside, &opening, checklist)
+            },
+        )
     }
+
+    /// Publish the Issue branch already produced by a Custom process. There
+    /// is no opening session and no Security review: the Process's Steps did
+    /// the work. Push, open a draft pull request when the branch has none,
+    /// write the Built-with line, mark it ready, and keep it mergeable and
+    /// its CI green through the Repair loop. For [`Goal::Merged`], Self-merge
+    /// it, unless a protected path holds that merge. Repairs run on
+    /// [`Delivery::child_asks`]'s Harness, up to [`Delivery::repair_cap`].
+    /// Any failure goes through the Failed run path.
+    pub fn publish(
+        self,
+        worktree: Worktree,
+        pull_request: &mut PullRequest,
+    ) -> Result<String, FailedRun> {
+        let tracker = Tracker::new(Stage::Push, CommandLog);
+        let logs = self.logs;
+        let issue = self.issue;
+        let started = self.started;
+        let base = self.base;
+        let goal = self.goal;
+        let repair_cap = self.repair_cap;
+        let protected_paths = self.protected_paths;
+        let child_asks = self.child_asks;
+        let base_fix = self.base_fix;
+        run_checked(
+            CheckedRun {
+                logs,
+                issue,
+                started,
+                harness: &child_asks.harness,
+                security_review: child_asks.security_review_harness.as_ref(),
+                security_review_default: child_asks.security_review_default.as_ref(),
+                base,
+            },
+            worktree,
+            pull_request,
+            &tracker,
+            |url, _log| url,
+            |merged, _log| merged.pr.url.clone(),
+            |tracker, worktree, pull_request, sessions| {
+                publish_steps(
+                    &mut InWorktree {
+                        tracker,
+                        issue,
+                        worktree,
+                        base,
+                        base_fix,
+                        child_asks,
+                        sessions,
+                        pull_request,
+                        repair_cap,
+                        protected_paths,
+                    },
+                    goal,
+                    repair_cap,
+                    protected_paths,
+                )
+            },
+        )
+    }
+}
+
+/// What the shared Delivery envelope checks before each session and names
+/// when a failure preserves the work: the issue, when the run began, where
+/// its sessions are logged, the harnesses they run on, and the Base branch.
+struct CheckedRun<'a> {
+    logs: &'a Logs,
+    issue: &'a IssueUrl,
+    started: DateTime<Utc>,
+    harness: &'a Choice,
+    security_review: Option<&'a Choice>,
+    security_review_default: Option<&'a Choice>,
+    base: &'a str,
+}
+
+/// The shared Delivery envelope: check for an untrusted edit before each
+/// session, run `steps`, and on failure either accept an already-merged pull
+/// request whose head includes the local work or take the Failed run path.
+fn run_checked<T, S>(
+    checked: CheckedRun<'_>,
+    worktree: Worktree,
+    pull_request: &mut PullRequest,
+    tracker: &Tracker,
+    on_ok: impl FnOnce(T, Option<PathBuf>) -> S,
+    on_merged: impl FnOnce(&AlreadyMerged, Option<PathBuf>) -> S,
+    steps: impl FnOnce(&Tracker, &Worktree, &mut PullRequest, &Sessions) -> Result<T>,
+) -> Result<S, FailedRun> {
+    let CheckedRun {
+        logs,
+        issue,
+        started,
+        harness,
+        security_review,
+        security_review_default,
+        base,
+    } = checked;
+    pull_request.begin_delivery();
+    let path = worktree.path().to_path_buf();
+    let before_each = move || {
+        no_untrusted_edit_since(issue, started)?;
+        hand_over_issue(issue, &path)
+    };
+    let (delivered, log) = Sessions::checked_within(
+        logs,
+        worktree.path(),
+        harness,
+        security_review,
+        security_review_default,
+        &before_each,
+        |sessions| steps(tracker, &worktree, pull_request, sessions),
+    );
+    let result = match delivered {
+        Ok(value) => Ok(on_ok(value, log)),
+        Err(error) => {
+            if let Some(merged) = error.downcast_ref::<AlreadyMerged>()
+                && worktree.fully_landed_at(&merged.head).unwrap_or(false)
+            {
+                progress::step("the pull request was merged while Delivery was running");
+                Ok(on_merged(merged, log))
+            } else {
+                let stopped_at = stopped_at(tracker, &error);
+                let path = worktree.path().to_path_buf();
+                let mut outside = OnFailure {
+                    base,
+                    worktree,
+                    pull_request,
+                };
+                Err(fail(&mut outside, stopped_at, path, log, error))
+            }
+        }
+    };
+    crate::logs::unaddressed_findings(pull_request.unaddressed_findings());
+    result
+}
+
+/// [`Delivery::publish`]'s steps: push, open a draft when none exists, write
+/// what it was built with, mark the pull request ready, and take it to `goal`
+/// through the Repair loop. A merged goal then deletes the branch and closes
+/// the issue, as a Ticket run's Self-merge does.
+fn publish_steps(
+    outside: &mut InWorktree<'_>,
+    goal: Goal,
+    repair_cap: usize,
+    protected_paths: &[String],
+) -> Result<String> {
+    outside.tracker.enter(Stage::Push);
+    outside.pull_request.ensure_actionable(false)?;
+    outside
+        .worktree
+        .push_if_actionable(&mut || outside.pull_request.ensure_actionable(false))?;
+    let title = GitHub::new().issue_title(outside.issue)?;
+    let body = format!("Closes #{}", outside.issue.number);
+    outside.pull_request.open_if_absent(&title, &body)?;
+    if let Err(error) = outside
+        .pull_request
+        .write_built_with(&outside.child_asks.harness)
+    {
+        progress::warn(
+            &error,
+            format_args!("could not write the Built-with line in the pull request's body"),
+        );
+    }
+    outside.tracker.enter(Stage::PullRequestReadiness);
+    let tracker = outside.tracker;
+    let issue = outside.issue;
+    let worktree = outside.worktree;
+    let base = outside.base;
+    let child_asks = outside.child_asks;
+    let sessions = outside.sessions;
+    let pr = outside.pull_request.mark_ready(None)?;
+    let mut repair = RunOutside {
+        tracker,
+        issue,
+        worktree,
+        base,
+        pr_url: &pr.url,
+        base_fix: outside.base_fix,
+        child_asks,
+        sessions,
+        pull_request: outside.pull_request,
+        ci_watch: ci::Watch::new(issue),
+        protected_paths,
+    };
+    repair_loop::take_to_goal(&mut repair, base, goal, repair_cap)?;
+    drop(repair);
+    if goal == Goal::Merged {
+        let branch = outside.worktree.branch().to_string();
+        Route {
+            security_review: false,
+            issue: outside.issue,
+            base: outside.base,
+            branch: &branch,
+            goal,
+            harness: &outside.child_asks.harness,
+        }
+        .after_merge(outside, &pr);
+    }
+    Ok(pr.url)
 }
 
 /// The steps of a Delivery of the pull request for `issue`, from `branch`
@@ -389,7 +604,7 @@ fn retry_if_interrupted<O: Outside>(
 /// sessions have ended with `error`: commit and push the work, and send an
 /// open PR back to draft. An interrupt, if one was requested, is the error
 /// instead: it can surface as some other error, such as a killed git. A
-/// `PolicyRefusal` or `SecurityHold` neither pushes nor converts, so the PR stays ready on the
+/// `PolicyRefusal`, `SecurityHold` or `MergeHold` neither pushes nor converts, so the PR stays ready on the
 /// head whose CI was watched. Problems along the way are reported, not
 /// raised, so the error is what the Run fails with. Worktree owns preservation
 /// and retains work that may not have reached origin. `log` is the most recent
@@ -411,7 +626,8 @@ fn fail(
     // to its first line: the reason goes in the failure commit's subject.
     let reason = Cause::of(&error).first_line().to_string();
     // Everything is already on origin: the Repair loop pushed the head.
-    let keep_ready = error.is::<PolicyRefusal>() || error.is::<SecurityHold>();
+    let keep_ready =
+        error.is::<PolicyRefusal>() || error.is::<SecurityHold>() || error.is::<MergeHold>();
     let log = error
         .downcast_ref::<SecurityHold>()
         .and_then(SecurityHold::log)
@@ -420,16 +636,8 @@ fn fail(
     let preservation = if keep_ready {
         Preservation::Remote
     } else {
-        match outside.preserve_failed_run(&reason) {
-            Ok(Preserved::Pushed) => Preservation::Remote,
-            Ok(Preserved::NoChanges) => Preservation::None,
-            Err(problem) => {
-                outside.step(format!(
-                    "could not push the failed ticket run's work, so it may exist only locally: {problem:#}"
-                ));
-                Preservation::Local
-            }
-        }
+        let preserved = outside.preserve_failed_run(&reason);
+        recovery::preservation_of(preserved, |line| outside.step(line))
     };
     let pr_url = match outside.finish_pr(keep_ready) {
         Ok(pr_url) => pr_url,
@@ -571,6 +779,8 @@ struct InWorktree<'a> {
     child_asks: &'a ChildAsks,
     sessions: &'a Sessions<'a>,
     pull_request: &'a mut PullRequest,
+    repair_cap: usize,
+    protected_paths: &'a [String],
 }
 
 impl Outside for InWorktree<'_> {
@@ -640,8 +850,9 @@ impl Outside for InWorktree<'_> {
             sessions: self.sessions,
             pull_request: self.pull_request,
             ci_watch: ci::Watch::new(self.issue),
+            protected_paths: self.protected_paths,
         };
-        repair_loop::take_to_goal(&mut outside, self.base, goal)
+        repair_loop::take_to_goal(&mut outside, self.base, goal, self.repair_cap)
     }
 
     fn delete_branch(&mut self) -> Result<()> {
@@ -733,6 +944,9 @@ struct RunOutside<'a> {
     sessions: &'a Sessions<'a>,
     pull_request: &'a mut PullRequest,
     ci_watch: ci::Watch<'a>,
+    /// Globs that hold Self-merge when a changed path matches. Empty when
+    /// this Delivery has nothing to hold.
+    protected_paths: &'a [String],
 }
 
 impl RunOutside<'_> {
@@ -854,12 +1068,148 @@ impl repair_loop::Outside for RunOutside<'_> {
         self.pull_request.merge(head)
     }
 
+    fn merge_hold(&mut self) -> Result<Option<String>> {
+        if self.protected_paths.is_empty() {
+            return Ok(None);
+        }
+        let spec = format!("origin/{}...HEAD", self.base);
+        // `--no-renames`: include both endpoints of a move, because removing
+        // a protected source still touches it. `-z`: names stay unquoted,
+        // so `secrets/kéy.txt` still matches `secrets/**`.
+        // Line splitting would also cut a name holding a newline in two.
+        let listed = Git::new(self.worktree.path()).run_bytes(&[
+            "diff",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            &spec,
+        ])?;
+        Ok(protected_hold(
+            self.protected_paths,
+            listed
+                .split(|byte| *byte == 0)
+                .filter(|name| !name.is_empty()),
+        ))
+    }
+
     fn interrupt_requested(&mut self) -> bool {
         interrupt::requested()
     }
 
     fn progress(&mut self, line: String) {
         progress::step(line);
+    }
+}
+
+/// The protected paths among `paths`, named in the hold a Self-merge reports.
+/// None when nothing matches. Paths are raw diff bytes, so names git would
+/// quote still match. `*` stays inside one path segment, `**` crosses
+/// segments, and `?` is one character other than `/`.
+fn protected_hold<'a>(
+    patterns: &[String],
+    paths: impl Iterator<Item = &'a [u8]>,
+) -> Option<String> {
+    let mut matched: Vec<&[u8]> = paths
+        .filter(|path| {
+            patterns
+                .iter()
+                .any(|pattern| glob_match(pattern.as_bytes(), path))
+        })
+        .collect();
+    if matched.is_empty() {
+        return None;
+    }
+    matched.sort_unstable();
+    matched.dedup();
+    let listed = matched
+        .iter()
+        .map(|path| String::from_utf8_lossy(path))
+        .collect::<Vec<_>>()
+        .join(", ");
+    Some(if matched.len() == 1 {
+        format!(
+            "protected path {listed} holds the Self-merge; the pull request stays ready for review"
+        )
+    } else {
+        format!(
+            "protected paths {listed} hold the Self-merge; the pull request stays ready for review"
+        )
+    })
+}
+
+/// Whether `pattern` matches the whole of `path`.
+fn glob_match(pattern: &[u8], path: &[u8]) -> bool {
+    let mut pattern_at = 0;
+    let mut path_at = 0;
+    while pattern_at < pattern.len() {
+        if pattern[pattern_at] == b'*' && pattern.get(pattern_at + 1) == Some(&b'*') {
+            pattern_at += 2;
+            if pattern.get(pattern_at) == Some(&b'/') {
+                pattern_at += 1;
+            }
+            if pattern_at == pattern.len() {
+                return true;
+            }
+            // The rest of the pattern starts at a segment boundary. `**` does
+            // not match inside a name, so `**/key.txt` is not `mykey.txt`.
+            let mut rest = path_at;
+            loop {
+                if glob_match(&pattern[pattern_at..], &path[rest..]) {
+                    return true;
+                }
+                if rest >= path.len() {
+                    return false;
+                }
+                while rest < path.len() && path[rest] != b'/' {
+                    rest += 1;
+                }
+                if rest == path.len() {
+                    return false;
+                }
+                rest += 1;
+            }
+        } else if pattern[pattern_at] == b'*' {
+            pattern_at += 1;
+            loop {
+                if glob_match(&pattern[pattern_at..], &path[path_at..]) {
+                    return true;
+                }
+                if path_at == path.len() || path[path_at] == b'/' {
+                    return false;
+                }
+                path_at += 1;
+            }
+        } else if pattern[pattern_at] == b'?' {
+            if path_at == path.len() || path[path_at] == b'/' {
+                return false;
+            }
+            pattern_at += 1;
+            path_at += utf8_char_len(&path[path_at..]);
+        } else {
+            if path_at == path.len() || pattern[pattern_at] != path[path_at] {
+                return false;
+            }
+            pattern_at += 1;
+            path_at += 1;
+        }
+    }
+    path_at == path.len()
+}
+
+/// Bytes of the UTF-8 character at the start of `bytes`. A lone non-UTF-8
+/// byte counts as one, so `?` still advances.
+fn utf8_char_len(bytes: &[u8]) -> usize {
+    let width = match bytes[0] {
+        0x00..=0x7F => 1,
+        0xC0..=0xDF => 2,
+        0xE0..=0xEF => 3,
+        0xF0..=0xF7 => 4,
+        _ => return 1,
+    };
+    if bytes.len() >= width && bytes[1..width].iter().all(|byte| byte & 0xC0 == 0x80) {
+        width
+    } else {
+        1
     }
 }
 
@@ -1383,5 +1733,29 @@ mod tests {
             hold.into(),
         );
         assert_eq!(failed.log, Some(PathBuf::from("/logs/repair-1.jsonl")));
+    }
+
+    #[test]
+    fn protected_path_globs_match_on_segment_boundaries() {
+        fn matches(pattern: &str, path: &str) -> bool {
+            glob_match(pattern.as_bytes(), path.as_bytes())
+        }
+        assert!(
+            !matches("**/key.txt", "mykey.txt"),
+            "**/key.txt matched inside a segment"
+        );
+        assert!(
+            !matches("src/**/config.toml", "src/myconfig.toml"),
+            "src/**/config.toml matched inside a segment"
+        );
+        assert!(matches("src/**/config.toml", "src/pkg/config.toml"));
+        assert!(matches("src/**/config.toml", "src/config.toml"));
+        assert!(matches("**/key.txt", "dir/key.txt"));
+        assert!(matches("**/key.txt", "key.txt"));
+        assert!(matches("secrets/**", "secrets/key.txt"));
+        assert!(matches("**/*.pem", "keys/id.pem"));
+        assert!(!matches("*.txt", "notes/plain.txt"));
+        assert!(matches("caf?.txt", "café.txt"), "? should be one character");
+        assert!(!matches("a?c", "a/c"));
     }
 }

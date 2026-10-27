@@ -57,6 +57,24 @@ pub enum Preservation {
     None,
 }
 
+/// Where a preserve attempt left the work. A push that fails is local, and
+/// `report` receives the failed-ticket-run line.
+pub fn preservation_of(
+    result: Result<crate::worktree::Preserved, anyhow::Error>,
+    report: impl FnOnce(String),
+) -> Preservation {
+    match result {
+        Ok(crate::worktree::Preserved::Pushed) => Preservation::Remote,
+        Ok(crate::worktree::Preserved::NoChanges) => Preservation::None,
+        Err(problem) => {
+            report(format!(
+                "could not push the failed ticket run's work, so it may exist only locally: {problem:#}"
+            ));
+            Preservation::Local
+        }
+    }
+}
+
 /// Public command context, filled after Base branch and effective asks settle.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Continuation {

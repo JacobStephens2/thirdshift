@@ -37,14 +37,26 @@ struct Status<'a> {
 fn print_command(command: &Command, state_word: &str, indent: &str) {
     let facts = &command.record;
     let stage = stage_text(command);
-    let mut subject = match &facts.issue {
-        Some(issue) => format!(
-            "{}#{} {}",
-            facts.repository,
-            issue.number,
-            issue.title.as_deref().unwrap_or("(title unavailable)")
-        ),
-        None => format!("{} on {}", facts.name, facts.repository),
+    let mut subject = if let Some(name) = facts.process_label() {
+        match &facts.issue {
+            Some(issue) => format!(
+                "{name} {}#{} {}",
+                facts.repository,
+                issue.number,
+                issue.title.as_deref().unwrap_or("(title unavailable)")
+            ),
+            None => format!("{name} on {}", facts.repository),
+        }
+    } else {
+        match &facts.issue {
+            Some(issue) => format!(
+                "{}#{} {}",
+                facts.repository,
+                issue.number,
+                issue.title.as_deref().unwrap_or("(title unavailable)")
+            ),
+            None => format!("{} on {}", facts.name, facts.repository),
+        }
     };
     if let Some(pull_request) = &facts.pull_request {
         subject.push_str(&format!(" · {pull_request}"));

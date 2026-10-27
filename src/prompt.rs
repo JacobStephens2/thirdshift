@@ -1,5 +1,7 @@
 //! The prompts agent sessions are started with.
 
+use std::fmt::Write;
+
 use crate::ci::{self, FailedChecks};
 use crate::issue::IssueUrl;
 use crate::labels::{NEEDS_TRIAGE, READY_FOR_AGENT};
@@ -79,13 +81,21 @@ fn issue_file_instruction(issue: &IssueUrl) -> String {
     )
 }
 
-/// A standalone skill, optionally working on the issue handed to it.
-pub fn skill(name: &str, path: &std::path::Path, issue: Option<&IssueUrl>) -> String {
+/// The Factory-skill sigil, when `name` is one, and the instruction to read it.
+fn skill_preamble(name: &str, path: &std::path::Path) -> String {
     let invocation = if name.starts_with("thirdshift-") {
         format!("/{name}\n")
     } else {
         String::new()
     };
+    format!(
+        "{invocation}Use the {name} skill. Read and follow `{path}`.\n",
+        path = path.display(),
+    )
+}
+
+/// A standalone skill, optionally working on the issue handed to it.
+pub fn skill(name: &str, path: &std::path::Path, issue: Option<&IssueUrl>) -> String {
     let task = issue.map_or_else(String::new, |issue| {
         format!(
             "Run the skill on issue {}.\n{}",
@@ -94,8 +104,86 @@ pub fn skill(name: &str, path: &std::path::Path, issue: Option<&IssueUrl>) -> St
         )
     });
     format!(
-        "{invocation}Use the {name} skill. Read and follow `{path}`.\n{task}{SOURCE_EDITS}{HEADLESS}",
-        path = path.display(),
+        "{preamble}{task}{SOURCE_EDITS}{HEADLESS}",
+        preamble = skill_preamble(name, path),
+    )
+}
+
+/// Branch and Base branch of a Step that continues an existing Issue branch.
+pub struct ProcessContinuation<'a> {
+    pub branch: &'a str,
+    pub base: &'a str,
+}
+
+/// A Step's checkout kind and, on an Issue branch, any existing commits.
+pub enum ProcessWorktree<'a> {
+    Throwaway,
+    IssueBranch(Option<ProcessContinuation<'a>>),
+}
+
+/// Finished Steps named in a later Step's prompt, and whether that Step is
+/// the Process's first. A later Step with no finished result is not the first.
+pub struct EarlierSteps<'a> {
+    pub results: &'a [(String, std::path::PathBuf)],
+    pub first: bool,
+}
+
+/// The sentence a Continuation uses so the session builds on existing commits.
+fn continuing_work(branch: &str, base: &str) -> String {
+    format!(
+        "You are continuing work on branch {branch}, which already has commits (see git log {base}..HEAD). Build on them; don't start over."
+    )
+}
+
+/// One Step of a Custom process. `earlier` names each finished Step and
+/// whether this is the Process's first Step. `issue`, when the Process has
+/// one, is named for the session to work from its file. `worktree` names the
+/// checkout kind and tells a Continuation to build on the existing commits.
+pub fn process_step(
+    process: &str,
+    step: &str,
+    skill_name: &str,
+    skill_path: &std::path::Path,
+    earlier: EarlierSteps<'_>,
+    issue: Option<&IssueUrl>,
+    worktree: ProcessWorktree<'_>,
+) -> String {
+    let (kind, continuation) = match worktree {
+        ProcessWorktree::Throwaway => ("throwaway", None),
+        ProcessWorktree::IssueBranch(continuation) => ("Issue-branch", continuation),
+    };
+    let continuing = continuation
+        .as_ref()
+        .map(|note| format!("{}\n", continuing_work(note.branch, note.base)))
+        .unwrap_or_default();
+    let mut earlier_text = if earlier.results.is_empty() {
+        if earlier.first && continuation.is_none() {
+            "This is the first Step. No earlier Step has a result.\n".to_string()
+        } else {
+            "No earlier Step has a result.\n".to_string()
+        }
+    } else {
+        String::new()
+    };
+    for (name, path) in earlier.results {
+        let _ = writeln!(
+            earlier_text,
+            "Earlier Step result {name}: {}",
+            path.display()
+        );
+    }
+    let issue_text = issue.map_or(String::new(), |issue| {
+        format!(
+            "Run this Step on issue {}.\n{}",
+            issue.url,
+            issue_file_instruction(issue)
+        )
+    });
+    format!(
+        "{preamble}This is Step {step} of the Custom process {process}.\n\
+         This Step works in the {kind} worktree.\n\
+         {issue_text}{continuing}{earlier_text}{SOURCE_EDITS}{HEADLESS}",
+        preamble = skill_preamble(skill_name, skill_path),
     )
 }
 
@@ -195,7 +283,7 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
     format!(
         "/thirdshift-implement {url}\n\
          \n\
-         You are continuing work on branch {branch}, which already has commits (see git log {base}..HEAD). Build on them; don't start over.\n\
+         {continuing}\n\
          \n\
          The base branch is {base}. Review with the `thirdshift-code-review` skill using {base} as the fixed point.\n\
          \n\
@@ -214,6 +302,7 @@ pub fn continuation(issue: &IssueUrl, base: &str, branch: &str, pr_url: Option<&
          {PR_LIFECYCLE}\n\
          {HEADLESS}",
         url = issue.url,
+        continuing = continuing_work(branch, base),
         issue_file_instruction = issue_file_instruction(issue),
         number = issue.number,
         address_findings = review.address_findings(),
@@ -648,6 +737,18 @@ mod tests {
             ci_fix_repair(&issue, "main", "issue-7", "<pr>", &failed),
             review_repair(&issue, "issue-7", "<pr>", "abc123"),
             security_review(&issue, "main", "issue-7"),
+            process_step(
+                "notes",
+                "gather",
+                "to-spec",
+                std::path::Path::new("skills/to-spec/SKILL.md"),
+                EarlierSteps {
+                    results: &[],
+                    first: true,
+                },
+                Some(&issue),
+                ProcessWorktree::Throwaway,
+            ),
         ] {
             for instruction in [
                 "thirdshift has written issue https://github.com/acme/widgets/issues/7 to `.thirdshift-issue.md`",
@@ -662,6 +763,36 @@ mod tests {
                 );
             }
         }
+        let on_issue = process_step(
+            "notes",
+            "gather",
+            "to-spec",
+            std::path::Path::new("skills/to-spec/SKILL.md"),
+            EarlierSteps {
+                results: &[],
+                first: true,
+            },
+            Some(&issue),
+            ProcessWorktree::Throwaway,
+        );
+        assert!(
+            on_issue.contains("Run this Step on issue https://github.com/acme/widgets/issues/7."),
+            "{on_issue}"
+        );
+        let without = process_step(
+            "notes",
+            "gather",
+            "to-spec",
+            std::path::Path::new("skills/to-spec/SKILL.md"),
+            EarlierSteps {
+                results: &[],
+                first: true,
+            },
+            None,
+            ProcessWorktree::Throwaway,
+        );
+        assert!(!without.contains(".thirdshift-issue.md"), "{without}");
+        assert!(!without.contains("Run this Step on issue"), "{without}");
     }
 
     #[test]

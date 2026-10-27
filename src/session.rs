@@ -66,6 +66,15 @@ pub struct Logs {
 }
 
 impl Logs {
+    /// A Custom process Step, under its owning Command's log directory.
+    pub fn of_process(repo: &Repo) -> Self {
+        Logs {
+            name: "process".to_string(),
+            dir: logs::session_dir(repo),
+            recording: OnceCell::new(),
+        }
+    }
+
     /// An isolated Trial's artifacts, with no Command owner or factory logs.
     pub fn of_trial(dir: &Path) -> Self {
         Logs {
@@ -603,7 +612,7 @@ impl Outside for OnMachine {
 
 /// How a session ended whose `killed` background work, by description, was
 /// still running: what follows "implement session" or "the Resume".
-fn ending_with(killed: &[&str]) -> String {
+pub(crate) fn ending_with(killed: &[&str]) -> String {
     match killed {
         [task] => format!("ended with a background task still running ({task}), which was killed"),
         _ => format!(

@@ -215,8 +215,12 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
     match entry {
         Observation::Record(command) => row(command, now, root),
         Observation::History(command) => {
-            let (subject, title) =
-                subject(&command.repository, &command.kind, command.issue.as_ref());
+            let (subject, title) = subject(
+                &command.repository,
+                &command.kind,
+                command.issue.as_ref(),
+                None,
+            );
             Ok(Row {
                 account: command.account.clone(),
                 id: identity(&match &command.account {
@@ -316,11 +320,7 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     let Observation::Record(command) = item.command else {
                         return None;
                     };
-                    let (subject, _) = subject(
-                        &command.record.repository,
-                        &command.record.name,
-                        command.record.issue.as_ref(),
-                    );
+                    let (subject, _) = row_subject(&command.record);
                     let subject = match &command.account {
                         Some(account) => format!("[{account}] {subject}"),
                         None => subject,
@@ -358,8 +358,22 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
     })
 }
 
-pub(crate) fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, String) {
-    match issue {
+fn row_subject(facts: &crate::logs::command_record::CommandRecord) -> (String, String) {
+    subject(
+        &facts.repository,
+        &facts.name,
+        facts.issue.as_ref(),
+        facts.process_label(),
+    )
+}
+
+pub(crate) fn subject(
+    repository: &str,
+    name: &str,
+    issue: Option<&Issue>,
+    process: Option<&str>,
+) -> (String, String) {
+    let (subject, title) = match issue {
         Some(issue) => (
             format!("{repository}#{}", issue.number),
             issue
@@ -371,7 +385,13 @@ pub(crate) fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (S
             format!("{} on {repository}", crate::logs::display_name(name)),
             String::new(),
         ),
-    }
+    };
+    let subject = match (process, issue) {
+        (Some(process), Some(_)) => format!("Process {process} · {subject}"),
+        (Some(process), None) => format!("Process {process} on {repository}"),
+        (None, _) => subject,
+    };
+    (subject, title)
 }
 
 pub(crate) fn issue_url(issue: Option<&Issue>) -> Option<String> {
@@ -384,7 +404,7 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
     let facts = &command.record;
     let (log_length, session_length) = command.activity_lengths();
     let live = command.state == "live";
-    let (subject, title) = subject(&facts.repository, &facts.name, facts.issue.as_ref());
+    let (subject, title) = row_subject(facts);
     Ok(Row {
         account: command.account.clone(),
         // A Pass's dispatched Runs share its storage path. Their immutable

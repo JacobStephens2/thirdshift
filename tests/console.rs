@@ -1984,18 +1984,41 @@ fn stages_and_command_details_link_the_github_issue() {
 
 #[test]
 fn command_details_and_inbox_share_subject_and_title_fallbacks() {
-    for (issue, name, subject, title) in [
+    for (issue, name, process, subject, title) in [
         (
             Value::Null,
             "architect-fixture",
+            None,
             "architect-fixture on acme/widgets",
             "",
         ),
         (
             json!({"number": 7, "url": "https://github.com/acme/widgets/issues/7"}),
             "acme/widgets#7",
+            None,
             "acme/widgets#7",
             "(title unavailable)",
+        ),
+        (
+            Value::Null,
+            "process-notes-fixture",
+            Some("notes"),
+            "Process notes on acme/widgets",
+            "",
+        ),
+        (
+            json!({"number": 7, "url": "https://github.com/acme/widgets/issues/7"}),
+            "process-notes-fixture",
+            Some("notes"),
+            "Process notes · acme/widgets#7",
+            "(title unavailable)",
+        ),
+        (
+            json!({"number": 7, "url": "https://github.com/acme/widgets/issues/7", "title": "Review notes"}),
+            "process-notes-fixture",
+            Some("notes"),
+            "Process notes · acme/widgets#7",
+            "Review notes",
         ),
     ] {
         let home = tempfile::tempdir().unwrap();
@@ -2003,6 +2026,10 @@ fn command_details_and_inbox_share_subject_and_title_fallbacks() {
         let mut facts = record(home.path(), 7, Some("failed"), 0);
         facts["issue"] = issue;
         facts["name"] = name.into();
+        if let Some(process) = process {
+            facts["kind"] = "Process".into();
+            facts["process_name"] = process.into();
+        }
         write_record(home.path(), 7, &facts);
         let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
         let inbox = console.get("/").text().unwrap();
