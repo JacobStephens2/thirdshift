@@ -14,10 +14,21 @@ pub struct SkillWorktree {
 }
 
 impl SkillWorktree {
+    /// A throwaway checkout at the Launch directory's committed HEAD.
     pub fn create(launch: &Git) -> Result<Self> {
         let _lock = lock_launch(launch)?;
-        let root = launch.run(&["rev-parse", "--show-toplevel"])?;
         let commit = launch.run(&["rev-parse", "--verify", "HEAD"])?;
+        Self::checkout(launch, &commit)
+    }
+
+    /// A throwaway checkout at `commit`, cleaned up like [`Self::create`].
+    pub fn at(launch: &Git, commit: &str) -> Result<Self> {
+        let _lock = lock_launch(launch)?;
+        Self::checkout(launch, commit)
+    }
+
+    fn checkout(launch: &Git, commit: &str) -> Result<Self> {
+        let root = launch.run(&["rev-parse", "--show-toplevel"])?;
         // Cleanup belongs to the captured checkout, never TempDir's recursive Drop.
         let path = tempfile::Builder::new()
             .prefix("thirdshift-skill-")
@@ -27,7 +38,7 @@ impl SkillWorktree {
             "creating skill worktree {} at {commit}",
             path.display()
         ));
-        let checkout = acquisition::add(launch, None, &path, &commit)?;
+        let checkout = acquisition::add(launch, None, &path, commit)?;
         Ok(Self {
             launch: Git::new(root),
             checkout,

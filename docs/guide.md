@@ -17,7 +17,7 @@ A [Ticket run](#what-a-ticket-run-does), one issue in and one pull request out, 
 - **[Pickup run](#pickup-runs)**, `thirdshift pickup`: takes the lowest-numbered **Ready issue** by default, the highest-numbered with `pickup.order = "highest-first"` or `highest-first` on the command, and runs it.
 - **[Security run](#security-runs)**, `thirdshift secure`: audits the **Base branch** and records each **Security finding** privately. It is report-only by default; with fixing allowed, it fixes one finding it reproduced.
 
-Architect, Pickup and Security runs are **Passes**: they take no Issue URL, so your operating system's scheduler can start them. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
+Architect, Pickup and Security runs are **Passes**, as is a Custom process started with no issue and no Issue-branch worktree: they take no Issue URL, so your operating system's scheduler can start them. A Custom process started with an issue is not a Pass. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped. See [A Pickup run on a schedule](#a-pickup-run-on-a-schedule), [Architect runs every few minutes](#architect-runs-every-few-minutes) for Architect runs, and [Security runs on a schedule, with fixing allowed](#security-runs-on-a-schedule-with-fixing-allowed) for Security runs.
 
 Every session runs on the **Harness** you choose: Claude Code by default, or Codex, Antigravity CLI, Grok Build, Muse Code or OpenCode. See [Harness, Model and Effort](#harness-model-and-effort).
 
@@ -425,7 +425,7 @@ Every factory session on Claude Code, Repairs, reviews and Resumes included, als
 
 ### What sessions leave behind
 
-Cleanup removes only thirdshift's own worktree, local Issue branch and the temporary directory it wrote the Factory skills out to. The `.git/info/exclude` entry that keeps the linked skills out of git, `/.claude/skills/thirdshift-*`, or `/.agents/skills/thirdshift-*` on the other Harnesses, is added once and left in place, as every worktree of the repository shares the file. Anything else an agent does as your user stays. For example, one Ticket run downloaded a JDK to `~/.local/jdk/` because the server had no Java, installed Playwright in `/tmp/pw`, and left a pull request body draft in `/tmp/`. This is by design, but worth knowing:
+Cleanup removes only thirdshift's own worktree, local Issue branch and the temporary directory it wrote the Factory skills out to. The `.git/info/exclude` entry that keeps the linked skills out of git, `/.claude/skills/thirdshift-*`, or `/.agents/skills/thirdshift-*` on the other Harnesses, is added once and left in place, as every worktree of the repository shares the file. Each home skill linked from `~/.thirdshift/skills` adds its own entry for that name, and that entry is left in place too. Anything else an agent does as your user stays. For example, one Ticket run downloaded a JDK to `~/.local/jdk/` because the server had no Java, installed Playwright in `/tmp/pw`, and left a pull request body draft in `/tmp/`. This is by design, but worth knowing:
 
 - **Install the target repository's toolchains up front** (language runtimes, package managers, test tools), so the agents don't download their own on every Ticket run.
 - **For UI work, install the headless browser dependencies**, e.g. `libgbm1` on Ubuntu server, which headless Chromium needs. Without it, agents can't take screenshots to check a UI change and fall back to reading the code.
@@ -504,6 +504,9 @@ thirdshift pickup base <branch>     # do that with <branch> as the Base branch, 
 thirdshift secure                   # audit the Base branch and record findings privately (see Security runs)
 thirdshift secure base <branch>     # do that with <branch> as the Base branch, from a clone on any branch
 thirdshift skill <skill> [issue <issue>]   # run one skill headlessly and print its final message
+thirdshift process                      # list Custom processes (experimental)
+thirdshift process <name> [issue <issue>]   # run a Custom process, optionally on an issue; email, merge and no-merge match a Ticket run (experimental)
+thirdshift process check <name> [issue <issue>]   # validate one and print its plan (experimental)
 thirdshift score                    # sample merged factory pull requests (see Scoring runs)
 thirdshift scores [<pull request>] [--json] # show Scores and calibration
 thirdshift scores <pull request> --mine [--json] # enter your five Scores
@@ -807,24 +810,382 @@ thirdshift skill thirdshift-code-review
 thirdshift skill my-repository-skill
 ```
 
-The command uses the User config's default Harness, Model and Effort. It first
-looks for the exact name among the Factory skills and the repository's committed
-`.agents/skills/<name>/SKILL.md` and `.claude/skills/<name>/SKILL.md` files. If none
-matches, it tries the Factory skill `thirdshift-<name>`. A skill file that
-resolves outside the worktree is not a match. An unknown name lists the
-available skills and starts no session. The optional issue is an Issue URL or a
-positive number resolved from `origin`. An Issue URL from another repository
-is an origin mismatch and stops the command before any work.
+The command uses the User config's default Harness, Model and Effort. It looks
+up `<name>` in order. First a Factory skill whose directory is exactly
+`<name>`. Then the repository's committed `.agents/skills/<name>/SKILL.md`, or
+`.claude/skills/<name>/SKILL.md` when only that copy exists; `.agents/skills`
+wins when both exist. Then `~/.thirdshift/skills/<name>/SKILL.md`. Then the
+Factory skill `thirdshift-<name>`. A skill file that resolves outside the
+directory being searched is not a match, so a symlink cannot select
+instructions from somewhere else. A repository skill wins over the home skill
+of the same name. An unknown name lists the available skills and starts no
+session. The optional issue is an Issue URL or a positive number resolved from
+`origin`. An Issue URL from another repository is an origin mismatch and stops
+the command before any work.
 
 The session runs in a temporary worktree at the head of the checked-out branch,
-with the Factory skills available. Uncommitted changes in your checkout stay out
-of it. Your checkout stays untouched. The final message goes to stdout; progress,
+with the Factory skills available, and with each home skill linked under its
+own name in that same project skills directory. The link points at a copy
+written out beside the Factory skills. A Trial binds that folder and not
+`~/.thirdshift/skills`, so the session reads the copy; the prompt still names
+the home file, which is where the skill was found. A repository skill of the
+same name is left in place. Each linked home skill is kept out of git by its own
+`.git/info/exclude` entry, added once and left there, as the Factory
+`thirdshift-*` pattern is ([ADR-0012](adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md)).
+Uncommitted changes in your checkout stay out of it. Your checkout stays
+untouched. The final message goes to stdout; progress,
 failure causes and the path of any retained worktree go to stderr. A completed
 session exits `0`; a failed or incomplete session exits non-zero.
 
 The worktree is kept when it has uncommitted changes, commits absent from all
 remote-tracking branches, or uncertain ownership. Otherwise it is removed. No
 Command record, Console entry or Session log is created for a standalone skill.
+
+### Custom processes
+
+A Custom process runs Steps in order, and can run consecutive Steps together.
+A Step is a skill session, a command, or a catalogue Step. It is
+experimental. Write `~/.thirdshift/processes/<name>.toml`. The name is the
+file's stem.
+
+```toml
+version = 1
+description = "Gather notes, then review them"
+
+[[steps]]
+name = "gather"
+command = "printf 'notes for review\n'"
+
+[[steps]]
+name = "review"
+skill = "thirdshift-code-review"
+harness = "codex"
+model = "gpt-6.1-sol"
+effort = "high"
+
+[[steps]]
+name = "extra"
+command = "false"
+optional = true
+```
+
+With no `[worktrees]` table, every Step shares one throwaway worktree. To run
+Steps at the same time, declare a throwaway worktree for each and give
+consecutive Steps the same `parallel` group:
+
+```toml
+version = 1
+description = "Three families, then a judge"
+
+[worktrees.claude]
+kind = "throwaway"
+
+[worktrees.codex]
+kind = "throwaway"
+
+[worktrees.grok]
+kind = "throwaway"
+
+[worktrees.judge]
+kind = "throwaway"
+
+[[steps]]
+name = "claude"
+skill = "thirdshift-code-review"
+worktree = "claude"
+parallel = "families"
+
+[[steps]]
+name = "codex"
+skill = "thirdshift-code-review"
+worktree = "codex"
+parallel = "families"
+
+[[steps]]
+name = "grok"
+skill = "thirdshift-code-review"
+worktree = "grok"
+parallel = "families"
+optional = true
+
+[[steps]]
+name = "judge"
+skill = "thirdshift-to-spec"
+worktree = "judge"
+```
+
+One worktree may instead be an Issue branch, and one Step may publish it:
+
+```toml
+version = 1
+description = "Ship a fix"
+
+[worktrees.fix]
+kind = "issue-branch"
+
+[[steps]]
+name = "implement"
+skill = "thirdshift-implement"
+worktree = "fix"
+
+[[steps]]
+name = "ship"
+catalogue = "delivery"
+worktree = "fix"
+
+[[steps]]
+name = "land"
+catalogue = "self-merge"
+worktree = "fix"
+```
+
+```sh
+thirdshift process check ship issue 7
+thirdshift process ship issue 7
+thirdshift process ship issue 7 merge
+```
+
+A declared worktree's `kind` is `throwaway` or `issue-branch`. A throwaway
+worktree is detached at the Base branch. An Issue-branch worktree is the
+Issue branch a Ticket run would use for the issue the command names:
+`issue-<n>`, then `issue-<n>-branch-<k>` for k ≥ 2. A Continuation reuses
+the existing branch, and an open pull request's base is the Base branch.
+Session Steps in that checkout are told to build on its commits. A
+Process has at most one Issue-branch worktree. The Steps that name it run in
+that checkout. Any other declared worktree stays throwaway.
+
+`catalogue = "delivery"` publishes that Issue branch. It is Delivery with no
+opening session and no Security review: push, open a draft pull request when
+the branch has none, write the Built-with line, mark the pull request ready
+for review, and keep it mergeable with green or absent CI through the Repair
+loop. When thirdshift opens the pull request, its title is the issue's and its body
+starts `Closes #<n>`. Repairs run on the Command's Harness, Model and Effort.
+A Process has at most one delivery Step. It names the Issue-branch worktree,
+it is not optional, and it is not in a parallel group. It comes after the
+last Step that uses that worktree. A `self-merge` Step is not one of those
+editing Steps.
+
+`catalogue = "self-merge"` is the Self-merge, and it has to be the Step
+directly after `delivery`. With `merge` (or `--merge`) on the command, or
+with `merge.always` in the User config, it merges as a Ticket run asked to
+merge does: `gh pr merge --merge --match-head-commit` on the head whose CI
+was watched, then the same close comment, and the Issue branch deleted. The
+pull request URL is the Step's result. Without that ask, and with `no-merge`
+even when `merge.always` is set, the pull request stays ready for review and
+the Process succeeds. `merge` on a Process with no `self-merge` Step does not
+merge. The Step names the Issue-branch worktree, it is not optional, it is
+not in a parallel group, and a Process has at most one. One anywhere else is
+refused. `merge` and `no-merge` are not accepted by `check`.
+
+A file can only tighten limits, never loosen them. `[limits]` may set:
+
+- `repair_cap`, a whole number from 0 to 5. 5 is the effective cap. A lower
+  one stops the Repair loop there, including when the Process is not merging.
+  A higher one is refused as a loosening limit, before any session.
+- `self_merge = false`, which holds the Self-merge even when the command or
+  the User config asked for one. The Process fails, the outcome says
+  `self_merge = false holds the Self-merge`, and the pull request stays ready
+  for review. `self_merge = true` is refused as a loosening limit.
+- `protected_paths`, an array of globs. A change that touches one holds the
+  Self-merge the way an unaddressed Security finding does: the pull request
+  stays ready for review, the Process fails, and the outcome names the path.
+  `*` stays inside one path segment, `**` crosses segments, and `?` is one
+  character other than `/`.
+
+```toml
+[limits]
+repair_cap = 2
+self_merge = false
+protected_paths = ["secrets/**", "**/*.pem"]
+```
+
+An Issue-branch worktree needs an issue. `thirdshift process <name>` and
+`thirdshift process check <name>` refuse the file before any session, any
+Claim and any branch, naming the `issue` rule and the file line. With an
+issue, the run makes the Claim when it starts, labelling the issue
+`in-progress` in place of `ready-for-agent`, and holds it until the end. A
+pull request left ready for review removes the Claim and does not put
+`ready-for-agent` back, so Pickup does not take an issue that already has an
+open pull request. A Step that fails before Delivery keeps the Issue-branch
+work as a Failed ticket run does, and the failure says where it stopped, what
+was preserved and the command `thirdshift process <name> issue <url>`. The
+Claim stays when that work reached origin, and is released when it did not.
+
+`version` must be `1`. Each Step has a `name` and exactly one kind. `skill` is
+looked up the same way as `thirdshift skill`. First a Factory skill whose
+directory is exactly that name. Then the repository's committed
+`.agents/skills/<name>/SKILL.md`, or `.claude/skills/<name>/SKILL.md` when
+only that copy exists; `.agents/skills` wins when both exist. Then
+`~/.thirdshift/skills/<name>/SKILL.md`. Then the Factory skill
+`thirdshift-<name>`. A repository skill wins over the home skill of the same
+name. A skill file that resolves outside the directory being searched is not
+a match. The home skill is linked into the Step's worktree the way the Factory
+skills are
+([ADR-0012](adr/0012-factory-skills-linked-into-the-worktree-codex-unsandboxed.md)),
+under its own name, as a copy written out beside those skills, and kept out
+of git. A repository skill of the same name is not replaced. `command` is a command or script,
+run with `sh -c` in the Step's worktree. It starts no session. A command may
+contain newlines and tabs. Any other control character in the command, the
+description, a step or worktree name, a skill, a model, an effort, a parallel
+group or a protected-path glob is refused before a step runs, so the plan
+`check` prints cannot hide the command. `catalogue` names a
+built-in Step: `delivery` or `self-merge`, described above, or `run-published-issue`.
+`run-published-issue` starts a Ticket run, or a Spec run when the issue has
+Tickets, on the issue the session Step before it published. That session's final
+message ends with the issue's URL on its last non-blank line. Before it starts a
+run, thirdshift checks that the issue is in this repository, which it checks
+before viewing the issue, that the issue is open, that a Trusted account
+published it, and that it was created since that session Step began. A final
+message without that URL, or an issue that fails a check, fails the Step, names
+the reason, and starts no run. The child run is part of this Command. Its
+Tickets, when the issue is a Spec, run at once up to `spec.parallel` in the User
+config. The child run's outcome is the Step's outcome, and the Step's result is
+the pull request's URL. The run uses the Process's Base branch and the
+Step's Harness, Model and Effort, defaulting to the Command's.
+It inherits the Command's merge choice and the Process file's restrictions.
+Protected paths and the Repair cap also apply to a Spec's child Tickets.
+`run-published-issue` is the Step immediately after a session
+Step, and it does not share that Step's `parallel` group. When the Process
+declares worktrees, every Step names one with `worktree`.
+Consecutive Steps with the same `parallel` name run at the same time. Every
+session or command Step edits the worktree it runs in, so Steps in one group
+cannot share a worktree. The same group name after a Step that is not in the
+group starts a new group. `optional = true` records that Step's failure and
+the Process carries on. Without `optional`, or with `optional = false`, a
+failure stops the Process once the other Steps in its group have finished.
+
+```sh
+thirdshift process
+thirdshift process check gather-review
+thirdshift process check ship issue 7
+thirdshift process gather-review
+thirdshift process gather-review --harness claude --model opus --effort high
+thirdshift process ship issue 7
+```
+
+`thirdshift process` lists each Custom process and its description. `check`
+validates the file and prints the plan: the description, the Command's Harness,
+Model and Effort, and each Step's choices, where each came from (`Step`,
+`command`, `User config` or `default`), and whether its Harness starts.
+A Process with no named worktrees prints one
+throwaway worktree at the Base branch. A Process that declares worktrees prints
+each one, the worktree each Step uses, and a `together:` line for each group
+of Steps that run at the same time. A throwaway worktree is described as
+throwaway at the Base branch. An Issue-branch worktree is described as an
+Issue branch. When a limit tightens a built-in rule, `check` prints it: the
+repair cap out of 5, that self-merge is held, and the protected paths. A skill
+Step shows the skill and where it was found. A command
+Step shows its command, and `check` does not run it. A delivery Step shows
+`delivery`. A self-merge Step shows `self-merge`. A `run-published-issue` Step shows `run-published-issue`. An
+optional Step is marked `(optional)`. `check` performs the same Harness
+preflight as running, including a minimal Model test when the Harness needs
+one, and runs no Step. `check <name> issue <issue>` resolves the issue and
+still creates no Issue branch and makes
+no Claim. Without an issue, an Issue-branch worktree is the refusal above, not
+a plan.
+
+Running the Process starts the Steps in its throwaway worktrees, detached at
+the Base branch and cleaned up as a standalone skill's worktree is. Every
+throwaway worktree is removed at the end, including after a failure, unless
+uncommitted changes, commits absent from every remote-tracking branch, or
+uncertain ownership keep it. The Issue-branch worktree is a real checkout of
+the Issue branch, beside the launch repository, and is removed at the end
+when its work is on origin, as a Ticket run's is. The Base branch is the
+branch checked out in the launch directory, at its commit on origin, or the
+open pull request's base in a Continuation. The launch checkout stays
+untouched.
+
+`harness`, `model` and `effort` are optional on each Step. A Step that names
+nothing uses the Command's Harness, Model and Effort. Each omitted field
+inherits the Command's resolved value and where it came from, even when the
+Step names another Harness. The Command's choice comes from its command word,
+with or without `--`, then the User config for the Command's Harness, then
+the Harness's default. To use another Harness's configured Model or Effort,
+name those values on the Step. Every selected Harness is checked before the
+first session. One that can't start fails the Command, naming the Step and
+Harness, with no fallback and no session run. A command Step starts no session.
+Each finished Step's result is stored beside the Command log, one file
+per Step. A session's result is its final message. A command's result is its
+stdout followed by its stderr. A `run-published-issue` Step's result is the pull
+request URL of the run it started. The next session Step's prompt names the paths
+of those finished results. Members of a parallel group do not see one
+another's results; each member's result is passed on to the Steps after the
+group. A failed command's stdout and stderr are retained too; an optional
+failed command passes that result on to later Steps. The last finished Step's
+result goes to stdout. Progress and failure causes go to stderr. When one
+Step in a group fails, the others finish and record their results first. The
+group then fails unless every failed Step is optional, and later Steps do not
+run. A failed Step outside a group stops the Process immediately, unless that
+Step is optional. Exit codes match `thirdshift skill`: `0` when the Process
+finishes, including when the only failures were optional Steps, `1` when a
+required Step or a check fails, `2` when the arguments are wrong.
+
+A command Step's environment sets `THIRDSHIFT_RESULTS_DIR` to the folder of
+Step result files and `THIRDSHIFT_STEP_RESULT` to the path of that Step's own
+result file. thirdshift writes the combined output to that path when the Step
+finishes. `THIRDSHIFT_ISSUE_URL` is set to the issue's URL when the Process
+has an issue, and is unset when it does not.
+
+`thirdshift process <name> issue <issue>` gives the Process an issue.
+`<issue>` is an issue number or an Issue URL, resolved as `thirdshift skill`
+resolves it. An Issue URL from another repository is an origin mismatch and
+stops before any work. Every session Step's worktree gets `.thirdshift-issue.md`
+before the session starts, and again before a Resume: the issue's title, body
+and only the comments of Trusted accounts. The Session prompt names the issue.
+Before each of those sessions, a Resume included, the issue is checked again,
+as in a Ticket run. An edit to the title or body by an account that is not a
+Trusted account, made since a few minutes before the Process started, fails
+that Step instead of starting the session. The Command log names the cause.
+
+`check` and running refuse a missing file, a file that is not valid TOML, a
+missing or wrong `version`, an unknown key, an unknown Harness, a Step without exactly one of
+`skill`, `command` and `catalogue`, a command that is not a string or is empty,
+a catalogue value other than `delivery`, `run-published-issue` or `self-merge`, a
+`self-merge` Step that is not directly after `delivery`, a second self-merge
+Step, an optional self-merge Step, a self-merge Step in a parallel group, a
+self-merge Step on a worktree other than the Issue branch, a
+`run-published-issue` Step that does not directly follow a session Step, an
+`optional` value that is not a boolean, a skill that cannot be found, an
+unknown worktree, a Step that does not name a worktree when the Process
+declares them, parallel Steps that share a worktree, a worktree kind other
+than `throwaway` or `issue-branch`, a second Issue-branch worktree, a delivery
+Step with no Issue-branch worktree or on a different worktree, a second
+delivery Step, an optional delivery Step, a delivery Step in a parallel group,
+an Issue-branch worktree with no delivery Step after the last Step that uses
+it, a limit above the built-in rule (`repair_cap` above 5, or `self_merge = true`),
+a `repair_cap` that is not a whole number from 0 to 5, a `self_merge` value other
+than false, a `protected_paths` value that is not an array of globs, an empty
+protected-path glob, an Issue-branch worktree with no issue, and a reserved name (`check`,
+`list`, `ticket-run`, `spec-run`, `architect-run`, `pickup-run`,
+`security-run`). The refusal names the rule and the file line, and starts no
+session.
+
+The Command is recorded as kind `Process`, with the process name. Its Command
+log has one line per Step: its name, kind, worktree, Harness, Model, Effort,
+duration, outcome and cause. Steps that cannot start after a required failure
+are recorded as skipped, naming the failed Step. A
+command that exits non-zero is failed, and the line names its exit status.
+Stop and Ctrl-C interrupt a command Step the way they interrupt a session,
+and `[resources]` is checked before each Step and each session's Resume.
+Every skill Step keeps a Session trace and Model evidence. Its prompt names
+the worktree kind, and it gets the usual one Resume with or without an issue.
+
+`thirdshift status` and `status --json` list a running or finished Process as
+Process `<name>`, with the ending succeeded, failed, skipped or interrupted.
+The stored kind stays `Process`, and the selector used by `show` and `stop`
+stays `process-<name>-<stamp>`. `thirdshift show` prints each Step's Command
+log line and, when that Step wrote a result, the path of the result file. The
+Console lists the Process, and a failed one is in Needs you. The Activity log
+says Process `<name>`. A succeeded, failed or interrupted Process sends a Run
+notification under the same `email`, `email-unless-merged` and `no-email`
+flags and the same User config rules as a Ticket run. A missing address or
+Resend key stops the Process before any Step. A skipped Process sends none.
+`email-unless-merged` saves the notification without emailing it when all
+published pull requests merged and no dispatched run failed.
+
+A Custom process started with no issue is a [Pass](#one-at-a-time), except one
+that declares an Issue-branch worktree: that is refused, as above, rather than
+skipped. While another Pass on the repository is still running, its Spec run or Ticket run included, `thirdshift process <name>` is skipped: it prints `another Pass is already running on <owner>/<repo>`, prints nothing on stdout, exits `0` and sends no Run notification. It creates no worktree and starts no Step. While it runs, a Pickup run on the same repository is skipped. It does not take an Architect run's Ready-issue or Architect-idea gates, so a Ready issue or an Architect idea waiting for triage does not skip it. The Command record's outcome is `skipped`, and its cause is that reason. The Activity log records `Process <name> skipped: <reason>` when that is not already the last Process line. With `activity.quiet_skips` set, a skipped Process prints nothing. `thirdshift process <name> issue <issue>` is not a Pass: this rule does not skip it, and it does not hold the lock.
 
 ### User config
 
@@ -1239,7 +1600,7 @@ When a Command that produces a [Run notification](#run-notifications) ends, its 
 
 A Resume is logged as its session's kind plus `-resume`, e.g. `implement-resume.logs.jsonl`.
 
-A **Command log** is everything one command printed, stderr and stdout in the order printed, while the terminal still shows all of it. Its folder is the command typed: `thirdshift <Issue URL>`, a Ticket run or a Spec run, in `issue/`, `thirdshift pickup` in `pickup/`, named for the issue it took, and `thirdshift architect` in `architect/`. A Spec run's covers its Tickets' runs, a Ticket run's covers its [Base fix](#base-fix), and a Pass's covers the Spec run or Ticket run it dispatched: none of those keeps one of its own. So `ls -t ~/.thirdshift/logs/acme/widgets/commands/pickup/*.log | head` lists the recent passes on acme/widgets that took an issue. A command keeps its Command log once it starts work: a Pass skipped before doing any work keeps none, nor does a Ticket run that fails before it starts work, as on the [Origin match](#what-a-ticket-run-does), and `setup`, `email-test`, `update`, `version` and `help` never keep one. Lines printed before the Command log's name is known, such as a Pickup run's lines on the issues it [passed over](#why-an-issue-was-passed-over) before it took one, are written first, and once it is created a progress line says `logging this command to <path>`. A Command log that can't be written produces one `warning:` line on stderr. A failure confined to the Command log leaves the outcome, stdout and exit code unchanged; if the shared folder also prevents writing a Session trace, the Ticket run fails before starting that session.
+A **Command log** is everything one command printed, stderr and stdout in the order printed, while the terminal still shows all of it. Its folder is the command typed: `thirdshift <Issue URL>`, a Ticket run or a Spec run, in `issue/`, `thirdshift pickup` in `pickup/`, named for the issue it took, and `thirdshift architect` in `architect/`. A Spec run's covers its Tickets' runs, a Ticket run's covers its [Base fix](#base-fix), and a Pass's covers the Spec run or Ticket run it dispatched: none of those keeps one of its own. So `ls -t ~/.thirdshift/logs/acme/widgets/commands/pickup/*.log | head` lists the recent passes on acme/widgets that took an issue. A command keeps its Command log once it starts work: a Pickup run, Architect run or Security run skipped before doing any work keeps none, nor does a Ticket run that fails before it starts work, as on the [Origin match](#what-a-ticket-run-does). A Custom process started with no issue that is skipped keeps a Command record whose outcome is `skipped`, beside the Command log of the lines it held. `setup`, `email-test`, `update`, `version` and `help` never keep one. Lines printed before the Command log's name is known, such as a Pickup run's lines on the issues it [passed over](#why-an-issue-was-passed-over) before it took one, are written first, and once it is created a progress line says `logging this command to <path>`. A Command log that can't be written produces one `warning:` line on stderr. A failure confined to the Command log leaves the outcome, stdout and exit code unchanged; if the shared folder also prevents writing a Session trace, the Ticket run fails before starting that session.
 
 The stamp is the local time the command started, with its UTC offset, as in `20261003T120000-0400`, in the machine's time zone, or `TZ`'s if set, so it agrees with `date` and `ls -l`. A command's Command log and all of its Session traces, its Tickets' runs' and its Base fix's included, share that one stamp, so they sort together and each can be found from the other. When a Ticket run fails, stderr ends with the path of the Session trace of the session its cause came from, the place to start looking, then that of its Command log. A failed implement session, Spec review or Repair names its own log, as does a [Security review](#security-review) whose hold is reported only after later Repairs. A cause that came from no session, such as red CI with the Repairs used up, a Declined CI fix, the upstream-move budget, a Harness check or a git or GitHub error, names the most recent Session trace. A Spec run whose Tickets are not done names the Session trace of the one Ticket whose Ticket run failed, and none if several did, as no single session caused it; each failed Ticket's line gives its own. The Command log's closing `session trace:` line and the [Run notification](#run-notifications) give the same path.
 
@@ -1481,7 +1842,7 @@ The rule doesn't ask whether anything will take the Ready issue. A `ready-for-ag
 
 A **Pass** is a command started with no Issue URL that decides before any work whether it is skipped. Only one Pass per repository runs at a time on a machine. A Pass started while another on the same repository is still running, the Spec run or Ticket run it dispatched included, is **skipped**: it prints `another Pass is already running on <owner>/<repo>` as a progress line on stderr, prints nothing on stdout, and exits `0`. Skipped is not a failure. A skipped Pass does nothing else: no launch pull, no worktree, no agent session, and no issue filed or labelled. This holds for every Pass, however it was started, so two never build one repository at once.
 
-The repository is the one `origin` names, so two clones of one repository count as the same, and Passes on different repositories run at the same time. A Ticket run or a Spec run started on an **Issue URL** is never skipped this way, and never makes a Pass skip.
+The repository is the one `origin` names, so two clones of one repository count as the same, and Passes on different repositories run at the same time. A Ticket run or a Spec run started on an **Issue URL** is never skipped this way, and never makes a Pass skip. A Custom process started with an issue is the same. A Custom process started with no issue, and whose file declares no Issue-branch worktree, is a Pass for this rule only: it does not take an Architect run's Ready-issue or Architect-idea gates. Its skip keeps a Command record whose outcome is `skipped`. A file that declares an Issue-branch worktree is refused when no issue is given, before any session, rather than skipped.
 
 thirdshift holds the rule with an operating-system lock on a file under `~/.thirdshift/architect-locks/`, shared by every kind of Pass, which the Pass's process takes without waiting, after its checks in step 1, and holds until it exits. The directory keeps its original name so older thirdshift versions share the lock too. The operating system releases the lock when that process ends for any reason, a crash, a kill or a reboot included, so there is never a stale lock to clear: the next Pass on the repository runs normally. The file itself stays, and means nothing on its own. A review worktree that a killed Architect run left behind is removed by the next one.
 

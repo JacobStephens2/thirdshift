@@ -50,6 +50,22 @@ impl fmt::Display for PolicyRefusal {
     }
 }
 
+/// A Self-merge held before the merge request, with the pull request already
+/// ready. The run fails without drafting the pull request. A protected path
+/// in a Custom process is one; `reason` names the path.
+#[derive(Debug)]
+pub struct MergeHold {
+    pub reason: String,
+}
+
+impl std::error::Error for MergeHold {}
+
+impl fmt::Display for MergeHold {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.reason)
+    }
+}
+
 /// A failure with nothing to push or clean up, as before the worktree exists.
 impl From<anyhow::Error> for FailedRun {
     fn from(error: anyhow::Error) -> Self {

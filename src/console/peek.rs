@@ -68,13 +68,17 @@ impl Peek {
     pub fn new(command: String, inspection: crate::logs::stop::Inspection, csrf: String) -> Self {
         let value = inspection.details;
         let issue = serde_json::from_value::<crate::logs::Issue>(value["issue"].clone()).ok();
+        let name = value["name"]
+            .as_str()
+            .or_else(|| value["kind"].as_str())
+            .unwrap_or_default();
+        let process =
+            (value["kind"] == "Process").then(|| value["process_name"].as_str().unwrap_or(name));
         let (subject, title) = crate::logs::status::subject(
             value["repository"].as_str().unwrap_or_default(),
-            value["name"]
-                .as_str()
-                .or_else(|| value["kind"].as_str())
-                .unwrap_or_default(),
+            name,
             issue.as_ref(),
+            process,
         );
         let issue_url = crate::logs::status::issue_url(issue.as_ref());
         let experiment_url = (value["kind"] == "Experiment")
@@ -133,13 +137,52 @@ impl Peek {
             title,
             command,
             cli,
-            facts: Fact::children(value, false, ""),
+            facts: {
+                let steps = step_facts(&value);
+                let mut facts = Fact::children(value, false, "");
+                facts.extend(steps);
+                facts
+            },
             logs,
         }
     }
     fn fact<'a>(&self, fact: &'a Fact) -> FactTemplate<'a> {
         FactTemplate { fact }
     }
+}
+
+fn step_facts(value: &Value) -> Vec<Fact> {
+    if value.get("kind").and_then(Value::as_str) != Some("Process") {
+        return Vec::new();
+    }
+    let Some(log) = value.get("command_log").and_then(Value::as_str) else {
+        return Vec::new();
+    };
+    crate::logs::status::inspect::process_steps(std::path::Path::new(log))
+        .into_iter()
+        .enumerate()
+        .map(|(index, step)| {
+            let path = format!("process steps/{}", index + 1);
+            Fact {
+                label: "step".into(),
+                preview: step.message.clone(),
+                value: step.message,
+                children: step
+                    .result
+                    .into_iter()
+                    .map(|result| {
+                        Fact::new(
+                            "result".into(),
+                            Value::String(result.display().to_string()),
+                            false,
+                            &path,
+                        )
+                    })
+                    .collect(),
+                path,
+            }
+        })
+        .collect()
 }
 
 impl Fact {

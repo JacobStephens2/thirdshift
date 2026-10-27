@@ -174,11 +174,14 @@ fn run(command: &Command, now: DateTime<Local>, cutoff: i64) -> Run {
         .collect();
     let (issue_url, issue_label) = issue_link(record.issue.as_ref());
     Run {
-        subject: subject(&record.kind, &record.repository, record.issue.as_ref()),
+        subject: record
+            .process_heading()
+            .unwrap_or_else(|| subject(&record.kind, &record.repository, record.issue.as_ref())),
         title: record
             .issue
             .as_ref()
             .and_then(|issue| issue.title.clone())
+            .or_else(|| record.process_label().map(str::to_string))
             .unwrap_or_else(|| record.name.clone()),
         state: if command.state == "ended" {
             record.outcome.clone().unwrap_or_else(|| "ended".into())

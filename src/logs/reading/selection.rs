@@ -46,6 +46,7 @@ impl Name {
             "secure-",
             "scoring-",
             "experiment-",
+            "process-",
         ]
         .iter()
         .any(|prefix| name.starts_with(prefix))
@@ -229,6 +230,7 @@ pub(in crate::logs) fn pass_prefix(kind: &str) -> Option<&'static str> {
         "Security run" => Some("secure"),
         "Scoring run" => Some("scoring"),
         "Experiment" => Some("experiment"),
+        "Process" => Some("process"),
         _ => None,
     }
 }

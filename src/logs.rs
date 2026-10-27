@@ -84,6 +84,7 @@ pub enum CommandKind {
     Secure,
     Scoring,
     Experiment,
+    Process,
 }
 
 impl CommandKind {
@@ -95,6 +96,7 @@ impl CommandKind {
             Self::Secure => "secure",
             Self::Scoring => "scoring",
             Self::Experiment => "experiment",
+            Self::Process => "process",
         }
     }
 
@@ -106,6 +108,7 @@ impl CommandKind {
             "secure" => Some(Self::Secure),
             "scoring" => Some(Self::Scoring),
             "experiment" => Some(Self::Experiment),
+            "process" => Some(Self::Process),
             _ => None,
         }
     }
@@ -126,6 +129,13 @@ pub enum Begin<'a> {
     SecurityRun,
     ScoringRun,
     Experiment,
+    /// `thirdshift process <name> [issue <issue>]`, a Custom process.
+    /// `pass` holds the first lines, as the other Passes do, when it was
+    /// started with no issue.
+    Process {
+        name: &'a str,
+        pass: bool,
+    },
 }
 
 /// The work a command starts.
@@ -145,6 +155,11 @@ pub enum Work<'a> {
     SecurityRun(&'a Repo),
     ScoringRun(&'a Repo),
     Experiment(&'a Repo),
+    /// A Custom process, named by its file.
+    Process {
+        repo: &'a Repo,
+        name: &'a str,
+    },
 }
 
 /// A Pass, a command that may be skipped before it starts work.
@@ -252,6 +267,21 @@ pub fn skipped(pass: Pass, repo: &Repo, reason: impl Display) {
     record().skipped(pass, repo, reason);
 }
 
+/// Record that the Custom process `name`, started with no issue, was skipped
+/// on `repo` for `reason`. The Activity log keeps `Process <name> skipped:
+/// <reason>` unless that is already its last Process line. Unlike the other
+/// Passes, it also keeps a Command record whose outcome is `skipped`: the
+/// Process's record shows that ending. `harness` is the choice it would have
+/// run on; the skip does not check that it can run.
+pub fn skipped_process(
+    repo: &Repo,
+    name: &str,
+    harness: &crate::harness::Choice,
+    reason: impl Display,
+) {
+    record().skipped_process(repo, name, harness, &reason.to_string());
+}
+
 /// Add an observation to the running command's repository Activity log.
 pub(crate) fn activity(message: impl Display) {
     record().activity(message);
@@ -301,7 +331,12 @@ pub(crate) fn experiment(description: &crate::evals::experiment::Description) {
 }
 
 pub(crate) fn experiment_finished(outcome: &str, cause: Option<&str>) {
-    record().experiment_finished(outcome, cause);
+    complete(outcome, cause);
+}
+
+/// Record how a Command with no Run account ended, such as a Process.
+pub fn complete(outcome: &str, cause: Option<&str>) {
+    record().outcome(outcome, cause);
 }
 
 /// The Stop given to this Command, if interruption is being handled.
@@ -408,7 +443,7 @@ impl<'a> Work<'a> {
             Work::SpecRun(_) => Some(Stage::Tickets),
             Work::ArchitectRun(_) => Some(Stage::ArchitectureReview),
             Work::ScoringRun(_) => Some(Stage::Sampling),
-            Work::PickupRun(_) | Work::SecurityRun(_) => None,
+            Work::PickupRun(_) | Work::SecurityRun(_) | Work::Process { .. } => None,
             Work::Experiment(_) => Some(Stage::ArmBuilds),
         }
     }
@@ -421,7 +456,8 @@ impl<'a> Work<'a> {
             Work::ArchitectRun(repo)
             | Work::SecurityRun(repo)
             | Work::ScoringRun(repo)
-            | Work::Experiment(repo) => repo.clone(),
+            | Work::Experiment(repo)
+            | Work::Process { repo, .. } => repo.clone(),
         }
     }
 
@@ -435,6 +471,7 @@ impl<'a> Work<'a> {
             Work::SecurityRun(_) => Kind::Pass(Pass::Security),
             Work::ScoringRun(_) => Kind::ScoringRun,
             Work::Experiment(_) => Kind::Experiment,
+            Work::Process { .. } => Kind::Process,
         }
     }
 
@@ -446,7 +483,8 @@ impl<'a> Work<'a> {
             Work::ArchitectRun(_)
             | Work::SecurityRun(_)
             | Work::ScoringRun(_)
-            | Work::Experiment(_) => None,
+            | Work::Experiment(_)
+            | Work::Process { .. } => None,
         }
     }
 

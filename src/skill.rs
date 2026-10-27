@@ -1,6 +1,7 @@
 //! One headless skill session, outside the Run/Command logging lifecycle.
 
 use std::io::{BufRead, BufReader};
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Result, bail};
@@ -40,27 +41,51 @@ pub fn run(name: &str, issue: Option<IssueInput>) -> Result<String> {
         let prompt = prompt::skill(&skill.name, &skill.path, issue.as_ref());
         crate::resources::wait()?;
         progress::step(format_args!("running {} with {choice}", skill.name));
-        let invocation = adapter.session(&choice, None, &prompt);
-        let executed = process::streaming(
-            adapter,
-            Command::new(adapter.name())
-                .args(invocation.args)
-                .current_dir(worktree.path()),
-            invocation.stdin.as_deref(),
-            None,
-            adapter.interpretation(worktree.path(), &prompt),
-            |output, interpretation| {
-                for line in BufReader::new(output).lines() {
-                    for progress in interpretation.condense(&line?) {
-                        progress::step(progress);
-                    }
-                }
-                Ok(())
-            },
-        )?;
-        let ended = executed.state.finish(executed.execution).outcome?;
-        ended.require_final_message("the skill session")
+        run_session(worktree.path(), &choice, "the skill session", &prompt)
     })();
     skills::remove_written();
     result
+}
+
+/// One headless session in `worktree` on `choice`. `label` names the session
+/// in a missing-final-message error. The caller waits for host resources.
+pub(crate) fn run_session(
+    worktree: &Path,
+    choice: &Choice,
+    label: &str,
+    prompt: &str,
+) -> Result<String> {
+    let ended = run_session_ending(worktree, choice, None, prompt)?;
+    ended.require_final_message(label)
+}
+
+/// One headless session in `worktree` on `choice`, continuing `resume` when
+/// it names a session. The caller decides what an ending with killed
+/// background work means, and waits for host resources.
+pub(crate) fn run_session_ending(
+    worktree: &Path,
+    choice: &Choice,
+    resume: Option<&str>,
+    prompt: &str,
+) -> Result<crate::harness::interpretation::Ended> {
+    let adapter = choice.harness.adapter();
+    let invocation = adapter.session(choice, resume, prompt);
+    let executed = process::streaming(
+        adapter,
+        Command::new(adapter.name())
+            .args(invocation.args)
+            .current_dir(worktree),
+        invocation.stdin.as_deref(),
+        None,
+        adapter.interpretation(worktree, prompt),
+        |output, interpretation| {
+            for line in BufReader::new(output).lines() {
+                for progress in interpretation.condense(&line?) {
+                    progress::step(progress);
+                }
+            }
+            Ok(())
+        },
+    )?;
+    executed.state.finish(executed.execution).outcome
 }

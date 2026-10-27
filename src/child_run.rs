@@ -105,6 +105,7 @@ const SECURITY_REVIEW_DEFAULT: &str = "--security-review-default";
 const SECURITY_REVIEW_DEFAULT_MODEL: &str = "--security-review-default-model";
 const SECURITY_REVIEW_DEFAULT_EFFORT: &str = "--security-review-default-effort";
 const ALLOW_SECURITY_FIX: &str = "--allow-security-fix";
+const DELIVERY_LIMITS: &str = "--delivery-limits";
 
 /// The hidden argument followed by the command that starts the Spec run
 /// again with a Base fix allowed, for the child Run to offer: it asks
@@ -139,7 +140,7 @@ const SECURITY_REVIEW_EFFORT: &str = "--security-review-effort";
 impl Given {
     /// The hidden arguments that give a child Run this, as [`Reader`] reads
     /// them back.
-    fn to_args(&self) -> Vec<&str> {
+    fn to_args(&self) -> Vec<String> {
         let mut args = vec![
             self.kind.hidden_argument(),
             self.kind.base(),
@@ -165,6 +166,14 @@ impl Given {
         append_choice(&mut args, &self.asks.harness, SESSION_FLAGS);
         if let Some(security) = &self.asks.security_review_harness {
             append_choice(&mut args, security, REVIEW_FLAGS);
+        }
+        let mut args: Vec<String> = args.into_iter().map(str::to_string).collect();
+        if self.asks.delivery_limits != crate::delivery::Limits::default() {
+            args.extend([
+                DELIVERY_LIMITS.to_string(),
+                serde_json::to_string(&self.asks.delivery_limits)
+                    .expect("Delivery limits serialize"),
+            ]);
         }
         args
     }
@@ -252,6 +261,7 @@ impl PendingChoice {
 /// takes itself.
 #[derive(Default)]
 pub struct Reader {
+    delivery_limits: Option<crate::delivery::Limits>,
     kind: Option<Kind>,
     stamp: Option<String>,
     command: Option<logs::CommandKind>,
@@ -283,6 +293,15 @@ impl Reader {
             None => bail!("missing {missing}"),
         };
         match arg {
+            DELIVERY_LIMITS => {
+                not_yet_given(&self.delivery_limits, arg)?;
+                let limits: crate::delivery::Limits =
+                    serde_json::from_str(&value("Delivery limits")?)?;
+                if limits.repair_cap > crate::delivery::MAX_REPAIRS {
+                    bail!("Delivery limits cannot raise the Repair cap");
+                }
+                self.delivery_limits = Some(limits);
+            }
             SECURITY_REVIEW => {
                 if self.security_review {
                     bail!("repeated argument: {arg}");
@@ -341,6 +360,7 @@ impl Reader {
     pub fn finish(self) -> Result<Option<Given>> {
         let Some(kind) = self.kind else {
             if self.command.is_some()
+                || self.delivery_limits.is_some()
                 || self.stamp.is_some()
                 || self.base_fix.is_some()
                 || self.security_review
@@ -376,6 +396,7 @@ impl Reader {
                 .with_context(|| format!("missing {LOGS_COMMAND}"))?,
             base_fix: self.base_fix.unwrap_or(BaseFixAsk::Forbid),
             asks: ChildAsks {
+                delivery_limits: self.delivery_limits.unwrap_or_default(),
                 harness,
                 security_review_harness,
                 security_review_default,
@@ -865,8 +886,8 @@ mod tests {
 
     /// What a child Run started with `args` reads back that it was given, as
     /// the argument parser takes each argument it doesn't recognise itself.
-    fn read(args: &[&str]) -> Result<Option<Given>> {
-        let args: Vec<String> = args.iter().map(|arg| arg.to_string()).collect();
+    fn read(args: &[impl AsRef<str>]) -> Result<Option<Given>> {
+        let args: Vec<String> = args.iter().map(|arg| arg.as_ref().to_string()).collect();
         match crate::args::parse(&args)? {
             crate::args::Command::Run(run) => Ok(run.given),
             _ => panic!("{args:?}: not a Run"),
@@ -916,6 +937,7 @@ mod tests {
                     command: logs::CommandKind::Issue,
                     base_fix,
                     asks: ChildAsks {
+                        delivery_limits: crate::delivery::Limits::default(),
                         harness: harness.clone(),
                         security_review_harness: security_review_harness.clone(),
                         security_review_default: security_review.then(|| Choice {
@@ -933,8 +955,8 @@ mod tests {
                 // which is a name and, but for `--allow-base-fix`, its value.
                 for at in [0, 2, 4, written.len()] {
                     let mut args = written.clone();
-                    args.insert(at, URL);
-                    args.insert(at, "no-merge");
+                    args.insert(at, URL.to_string());
+                    args.insert(at, "no-merge".to_string());
 
                     assert_eq!(read(&args).unwrap(), Some(given.clone()), "{args:?}");
                 }
