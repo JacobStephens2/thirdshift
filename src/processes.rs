@@ -854,13 +854,12 @@ fn run_issue_branch(
     drop(prepared);
     drop(held);
     logs::ended(outcome);
-    if result.is_ok() && not_reproduced {
+    if let Ok(comment_url) = &result
+        && not_reproduced
+    {
         logs::complete(
             "bug not reproduced",
-            Some(&format!(
-                "bug not reproduced: {}",
-                result.as_ref().expect("successful ending")
-            )),
+            Some(&format!("bug not reproduced: {comment_url}")),
         );
     } else {
         logs::complete(outcome, cause.as_deref());
