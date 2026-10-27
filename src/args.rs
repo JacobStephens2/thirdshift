@@ -848,20 +848,10 @@ fn parse_process(args: &[String]) -> Result<ProcessAction> {
     let mut asked = harness::Asked::default();
     let mut rest = args.iter();
     while let Some(arg) = rest.next() {
+        if take_harness_flag(&mut asked, arg, &mut rest)? {
+            continue;
+        }
         match arg.as_str() {
-            "harness" | "--harness" => ask_harness(&mut asked.harness, arg, rest.next())?,
-            "model" | "--model" => ask_word(
-                &mut asked.model_and_effort.model,
-                arg,
-                rest.next(),
-                "a model",
-            )?,
-            "effort" | "--effort" => ask_word(
-                &mut asked.model_and_effort.effort,
-                arg,
-                rest.next(),
-                "an effort level",
-            )?,
             "check" if !check && name.is_none() => check = true,
             _ if name.is_none() && !arg.starts_with('-') => name = Some(process_name(arg)?),
             _ => bail!("{PROCESS_USAGE}"),
@@ -1075,13 +1065,26 @@ fn take_flag<'a>(
             arg,
             SECURITY_REVIEW_FLAGS,
         )?,
-        "harness" | "--harness" => ask_harness(&mut flags.harness.harness, arg, rest.next())?,
+        _ => return take_harness_flag(&mut flags.harness, arg, rest),
+    }
+    Ok(true)
+}
+
+/// Take the Harness, Model and Effort words shared by Commands, consuming
+/// nothing when `arg` is not one of them.
+fn take_harness_flag<'a>(
+    asked: &mut harness::Asked,
+    arg: &str,
+    rest: &mut impl Iterator<Item = &'a String>,
+) -> Result<bool> {
+    match arg {
+        "harness" | "--harness" => ask_harness(&mut asked.harness, arg, rest.next())?,
         "model" | "--model" => {
-            let model = &mut flags.harness.model_and_effort.model;
+            let model = &mut asked.model_and_effort.model;
             ask_word(model, arg, rest.next(), "a model")?
         }
         "effort" | "--effort" => {
-            let effort = &mut flags.harness.model_and_effort.effort;
+            let effort = &mut asked.model_and_effort.effort;
             ask_word(effort, arg, rest.next(), "an effort level")?
         }
         _ => return Ok(false),

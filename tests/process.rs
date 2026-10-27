@@ -1020,7 +1020,7 @@ harness = \"claude\"
     );
     assert!(
         configured.stdout.contains(
-            "harness: claude (Step)\nmodel: opus (User config)\neffort: high (User config)\nstarts: yes"
+            "harness: claude (Step)\nmodel: gpt-6-luna (User config)\neffort: high (User config)\nstarts: yes"
         ),
         "{}",
         configured.stdout

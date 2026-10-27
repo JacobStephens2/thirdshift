@@ -80,7 +80,7 @@ The headless agent CLI that runs an agent session, named as its CLI is: Claude C
 _Avoid_: agent, provider, backend
 
 **Model**:
-The model a **Harness** runs a session on, such as Opus 5.5 or GPT-6.1-Sol. One per **Step**, defaulting to the **Command**'s, chosen by the Step, else the command, else the **User config**'s choice for that Harness, else the Harness's own default.
+The model a **Harness** runs a session on, such as Opus 5.5 or GPT-6.1-Sol. One per **Step**, defaulting to the **Command**'s resolved choice even when the Step names another Harness; the Command's choice comes from the command, else the **User config** for the Command's Harness, else the Harness's own default.
 
 **Effort**:
 How hard the **Model** reasons in a session, such as `high` or `max`. One per **Step**, defaulting to the **Command**'s, chosen the way the Model is.

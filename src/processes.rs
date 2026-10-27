@@ -65,6 +65,44 @@ struct Sources {
     effort: Source,
 }
 
+/// The Command's resolved choice and its origins, inherited together by Steps.
+struct CommandChoice {
+    choice: Choice,
+    sources: Sources,
+}
+
+impl CommandChoice {
+    fn of(asked: &Asked, settings: &harness::Settings) -> Self {
+        let choice = Choice::of(asked, settings);
+        let sources = Sources {
+            harness: source_from(choice.chosen_by),
+            model: Source::word(&asked.model_and_effort.model, &choice.model),
+            effort: Source::word(&asked.model_and_effort.effort, &choice.effort),
+        };
+        Self { choice, sources }
+    }
+
+    /// Only fields explicitly named by the Step replace the Command's values.
+    fn step(&self, step: &StepDraft) -> (Choice, Sources) {
+        let mut choice = self.choice.clone();
+        let mut sources = self.sources;
+        if let Some(harness) = step.harness {
+            choice.harness = harness;
+            choice.chosen_by = ChosenBy::Step;
+            sources.harness = Source::Step;
+        }
+        if let Some(model) = &step.model {
+            choice.model = Some(model.clone());
+            sources.model = Source::Step;
+        }
+        if let Some(effort) = &step.effort {
+            choice.effort = Some(effort.clone());
+            sources.effort = Source::Step;
+        }
+        (choice, sources)
+    }
+}
+
 /// Where one of a Step's Harness, Model or Effort came from.
 #[derive(Clone, Copy)]
 enum Source {
@@ -72,6 +110,18 @@ enum Source {
     Command,
     UserConfig,
     Default,
+}
+
+impl Source {
+    fn word(asked: &Option<String>, chosen: &Option<String>) -> Self {
+        if asked.is_some() {
+            Self::Command
+        } else if chosen.is_some() {
+            Self::UserConfig
+        } else {
+            Self::Default
+        }
+    }
 }
 
 impl std::fmt::Display for Source {
@@ -354,23 +404,16 @@ fn prepare(name: &str, asked: &Asked, config: &UserConfig) -> Result<Prepared> {
     let base = launch::checked_out_base()?;
     let worktree = SkillWorktree::at(&Git::new(std::env::current_dir()?), base.origin_commit())?;
     let written = WrittenGuard;
-    let command = Choice::of(asked, &config.harness);
+    let command = CommandChoice::of(asked, &config.harness);
     let mut steps = Vec::new();
     for step in &file.steps {
-        steps.push(resolve(
-            &path,
-            step,
-            worktree.path(),
-            &command,
-            asked,
-            config,
-        )?);
+        steps.push(resolve(&path, step, worktree.path(), &command)?);
     }
     Ok(Prepared {
         path,
         worktree,
         _written: written,
-        command,
+        command: command.choice,
         description: file.description,
         steps,
     })
@@ -380,9 +423,7 @@ fn resolve(
     path: &Path,
     step: &StepDraft,
     worktree: &Path,
-    command: &Choice,
-    asked: &Asked,
-    config: &UserConfig,
+    command: &CommandChoice,
 ) -> Result<ResolvedStep> {
     let skill = match skills::find(worktree, &step.skill) {
         Ok(skill) => skill,
@@ -395,7 +436,7 @@ fn resolve(
             ));
         }
     };
-    let (mut choice, sources) = step_choice(step, command, asked, &config.harness);
+    let (mut choice, sources) = command.step(step);
     let start_failure = match choice.check_without_probe() {
         Ok(()) => None,
         Err(error) => Some(one_line(&error)),
@@ -411,75 +452,12 @@ fn resolve(
     })
 }
 
-/// The Step's Harness, Model and Effort. One it leaves out uses the
-/// Command's for that setting: the command's word, else the User config for
-/// this Step's Harness, else that Harness's default. A command model or
-/// effort applies even when the Step names a different Harness.
-fn step_choice(
-    step: &StepDraft,
-    command: &Choice,
-    asked: &Asked,
-    settings: &harness::Settings,
-) -> (Choice, Sources) {
-    let (harness, harness_source, chosen_by) = match step.harness {
-        Some(harness) => (harness, Source::Step, ChosenBy::Step),
-        None => (
-            command.harness,
-            source_from(command.chosen_by),
-            command.chosen_by,
-        ),
-    };
-    let configured = settings.of(harness);
-    let (model, model_source) = left_out(
-        step.model.clone(),
-        asked.model_and_effort.model.as_deref(),
-        command.model.clone(),
-        configured.model.clone(),
-    );
-    let (effort, effort_source) = left_out(
-        step.effort.clone(),
-        asked.model_and_effort.effort.as_deref(),
-        command.effort.clone(),
-        configured.effort.clone(),
-    );
-    (
-        Choice {
-            harness,
-            model,
-            effort,
-            chosen_by,
-        },
-        Sources {
-            harness: harness_source,
-            model: model_source,
-            effort: effort_source,
-        },
-    )
-}
-
-/// A Step value, else the command's word, else the User config, else default.
-fn left_out(
-    named: Option<String>,
-    command_asked: Option<&str>,
-    command_value: Option<String>,
-    configured: Option<String>,
-) -> (Option<String>, Source) {
-    if let Some(value) = named {
-        (Some(value), Source::Step)
-    } else if command_asked.is_some() {
-        (command_value, Source::Command)
-    } else if let Some(value) = configured {
-        (Some(value), Source::UserConfig)
-    } else {
-        (None, Source::Default)
-    }
-}
-
 fn source_from(chosen_by: ChosenBy) -> Source {
     match chosen_by {
         ChosenBy::Command => Source::Command,
         ChosenBy::UserConfig | ChosenBy::SecurityConfig => Source::UserConfig,
-        ChosenBy::Default | ChosenBy::Step => Source::Default,
+        ChosenBy::Default => Source::Default,
+        ChosenBy::Step => Source::Step,
     }
 }
 

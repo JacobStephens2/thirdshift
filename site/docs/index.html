@@ -788,13 +788,15 @@ cleaned up as a standalone skill&#39;s worktree is. The Base branch is the branc
 checked out in the launch directory, at its commit on origin. The launch
 checkout stays untouched.</p>
 <p>A Step that names nothing uses the Command&#39;s Harness, Model and Effort. A Step
-that leaves one of the three out uses the Command&#39;s for that setting: the
-command&#39;s <code>harness</code>, <code>model</code> or <code>effort</code> word when it set one, with or without
-dashes, then the User config&#39;s choice for that Step&#39;s Harness, then the
-Harness&#39;s default. A command model or effort applies even when the Step names
-a different Harness. Each distinct Harness is checked before the first
+that leaves one of the three out inherits the Command&#39;s resolved value and
+where it came from, even when the Step names a different Harness. The Command&#39;s
+choice comes from its <code>harness</code>, <code>model</code> or <code>effort</code> word, with or without
+dashes, then the User config for the Command&#39;s Harness, then the Harness&#39;s
+default. To use a different Harness&#39;s configured Model or Effort, name those
+values on the Step. Each distinct Harness is checked before the first
 session. One that can&#39;t start fails the Command before any session, naming
-the Step and the Harness, and is not replaced with another. Each Step&#39;s final message is stored beside the Command log.
+the Step and the Harness, and is not replaced with another. Each Step&#39;s final
+message is stored beside the Command log.
 The next Step&#39;s session prompt names those paths. The last Step&#39;s final
 message goes to stdout. Progress and failure causes go to stderr. A failed
 Step fails the process and later Steps do not run. Exit codes match

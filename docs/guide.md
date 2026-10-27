@@ -871,13 +871,15 @@ checked out in the launch directory, at its commit on origin. The launch
 checkout stays untouched.
 
 A Step that names nothing uses the Command's Harness, Model and Effort. A Step
-that leaves one of the three out uses the Command's for that setting: the
-command's `harness`, `model` or `effort` word when it set one, with or without
-dashes, then the User config's choice for that Step's Harness, then the
-Harness's default. A command model or effort applies even when the Step names
-a different Harness. Each distinct Harness is checked before the first
+that leaves one of the three out inherits the Command's resolved value and
+where it came from, even when the Step names a different Harness. The Command's
+choice comes from its `harness`, `model` or `effort` word, with or without
+dashes, then the User config for the Command's Harness, then the Harness's
+default. To use a different Harness's configured Model or Effort, name those
+values on the Step. Each distinct Harness is checked before the first
 session. One that can't start fails the Command before any session, naming
-the Step and the Harness, and is not replaced with another. Each Step's final message is stored beside the Command log.
+the Step and the Harness, and is not replaced with another. Each Step's final
+message is stored beside the Command log.
 The next Step's session prompt names those paths. The last Step's final
 message goes to stdout. Progress and failure causes go to stderr. A failed
 Step fails the process and later Steps do not run. Exit codes match
