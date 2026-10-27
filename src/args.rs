@@ -1250,6 +1250,7 @@ mod tests {
                     },
                 ] {
                     let asks = Asks {
+                        delivery_limits: crate::delivery::Limits::default(),
                         security_review_harness: None,
                         security_review_default: None,
                         goal,

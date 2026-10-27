@@ -50,23 +50,7 @@ url=$(gh issue create --title Ticket --body 'Do the thing')
 printf '%s\\n' \"$url\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
 ",
     );
-    scenario.agent_does_for(
-        8,
-        r#"
-if printf '%s' "$FAKE_CLAUDE_PROMPT" | grep -q 'guidance mode'; then
-  printf '%s' "$FAKE_CLAUDE_PROMPT" > review-prompt.txt
-  report=$(sed -n 's/^Private report file: `\(.*\)`\.$/\1/p' review-prompt.txt)
-  test -n "$report"
-  printf '%s\n' '[]' > "$report"
-  printf '%s\n' 'Security review: {"unaddressed_count":0,"findings":[],"pre_existing_count":0}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
-else
-  echo 8 > issue-8.txt
-  git add issue-8.txt
-  git commit -q -m 'Ticket 8'
-  gh pr create --base main --head issue-8 --title 'Ticket 8' --body 'Closes #8'
-fi
-"#,
-    );
+    scenario.agent_does_for(8, &review_or_land());
 
     let result = scenario.run(&["process", "publish"]);
 

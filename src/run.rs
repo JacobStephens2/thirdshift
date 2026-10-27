@@ -490,8 +490,8 @@ impl LaunchAndGitHub<'_> {
             base_fix: self.base_fix,
             logs: &self.logs,
             started: self.started,
-            repair_cap: crate::delivery::MAX_REPAIRS,
-            protected_paths: &[],
+            repair_cap: self.child_asks.delivery_limits.repair_cap,
+            protected_paths: &self.child_asks.delivery_limits.protected_paths,
         }
     }
 }
@@ -857,6 +857,7 @@ mod tests {
     /// What a Run started by its command is asked, by default.
     fn asks() -> Asks {
         Asks {
+            delivery_limits: crate::delivery::Limits::default(),
             security_review_harness: None,
             security_review_default: None,
             security_fix: false,

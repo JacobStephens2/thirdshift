@@ -39,6 +39,7 @@ pub struct Flags {
 /// Everything a Run, or a Spec run, is asked, resolved.
 #[derive(Debug, PartialEq, Eq)]
 pub struct Asks {
+    pub delivery_limits: crate::delivery::Limits,
     /// Whether it is a Merge run.
     pub goal: Goal,
     /// What it is asked about its Run notification.
@@ -85,6 +86,7 @@ impl Asks {
         let harness = flags.harness(config);
         Asks {
             goal,
+            delivery_limits: crate::delivery::Limits::default(),
             notification: flags.notification(config),
             tickets_at_once: flags.parallel.unwrap_or(config.spec_parallel),
             parallel_asked: flags.parallel.is_some(),
@@ -110,6 +112,7 @@ impl Asks {
     pub fn of_child_run(given: &Given, config: &UserConfig) -> Asks {
         Asks {
             goal: Goal::Merged,
+            delivery_limits: given.asks.delivery_limits.clone(),
             notification: NotificationAsk::Skip,
             tickets_at_once: config.spec_parallel,
             parallel_asked: false,
@@ -395,6 +398,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                delivery_limits: crate::delivery::Limits::default(),
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,
@@ -417,6 +421,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                delivery_limits: crate::delivery::Limits::default(),
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,
@@ -448,6 +453,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                delivery_limits: crate::delivery::Limits::default(),
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,
@@ -477,6 +483,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                delivery_limits: crate::delivery::Limits::default(),
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,
@@ -632,6 +639,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                delivery_limits: crate::delivery::Limits::default(),
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,
@@ -652,6 +660,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                delivery_limits: crate::delivery::Limits::default(),
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,
@@ -674,6 +683,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                delivery_limits: crate::delivery::Limits::default(),
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,
@@ -694,6 +704,7 @@ mod tests {
         assert_eq!(
             asks,
             Asks {
+                delivery_limits: crate::delivery::Limits::default(),
                 security_review_harness: None,
                 security_review_default: None,
                 security_fix: false,

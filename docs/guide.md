@@ -1037,6 +1037,8 @@ Tickets, when the issue is a Spec, run at once up to `spec.parallel` in the User
 config. The child run's outcome is the Step's outcome, and the Step's result is
 the pull request's URL. The run uses the Process's Base branch and the
 Step's Harness, Model and Effort, defaulting to the Command's.
+It inherits the Command's merge choice and the Process file's restrictions.
+Protected paths and the Repair cap also apply to a Spec's child Tickets.
 `run-published-issue` is the Step immediately after a session
 Step, and it does not share that Step's `parallel` group. When the Process
 declares worktrees, every Step names one with `worktree`.
@@ -1103,7 +1105,8 @@ stdout followed by its stderr. A `run-published-issue` Step's result is the pull
 request URL of the run it started. The next session Step's prompt names the paths
 of those finished results. Members of a parallel group do not see one
 another's results; each member's result is passed on to the Steps after the
-group. A Step that fails has no result to pass on. The last finished Step's
+group. A failed command's stdout and stderr are retained too; an optional
+failed command passes that result on to later Steps. The last finished Step's
 result goes to stdout. Progress and failure causes go to stderr. When one
 Step in a group fails, the others finish and record their results first. The
 group then fails unless every failed Step is optional, and later Steps do not
@@ -1153,10 +1156,14 @@ protected-path glob, an Issue-branch worktree with no issue, and a reserved name
 session.
 
 The Command is recorded as kind `Process`, with the process name. Its Command
-log has one line per Step: the Step's name, duration, outcome and cause. A
+log has one line per Step: its name, kind, worktree, Harness, Model, Effort,
+duration, outcome and cause. Steps that cannot start after a required failure
+are recorded as skipped, naming the failed Step. A
 command that exits non-zero is failed, and the line names its exit status.
 Stop and Ctrl-C interrupt a command Step the way they interrupt a session,
-and `[resources]` is checked before each Step.
+and `[resources]` is checked before each Step and each session's Resume.
+Every skill Step keeps a Session trace and Model evidence. Its prompt names
+the worktree kind, and it gets the usual one Resume with or without an issue.
 
 `thirdshift status` and `status --json` list a running or finished Process as
 Process `<name>`, with the ending succeeded, failed, skipped or interrupted.
@@ -1168,6 +1175,8 @@ says Process `<name>`. A succeeded, failed or interrupted Process sends a Run
 notification under the same `email`, `email-unless-merged` and `no-email`
 flags and the same User config rules as a Ticket run. A missing address or
 Resend key stops the Process before any Step. A skipped Process sends none.
+`email-unless-merged` saves the notification without emailing it when all
+published pull requests merged and no dispatched run failed.
 
 A Custom process started with no issue is a [Pass](#one-at-a-time), except one
 that declares an Issue-branch worktree: that is refused, as above, rather than

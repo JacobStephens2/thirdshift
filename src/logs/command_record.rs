@@ -191,6 +191,7 @@ macro_rules! stage_names {
 }
 
 stage_names! {
+    ProcessStep => "Process Step",
     Implement => "implement",
     CodeReview => "Code review",
     Resume => "Resume",

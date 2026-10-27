@@ -22,6 +22,23 @@ mod stage;
 
 pub(crate) use repair_loop::MAX_REPAIRS;
 
+/// Tightening policies inherited by dispatched Runs and their child Tickets.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Limits {
+    pub repair_cap: usize,
+    pub protected_paths: Vec<String>,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            repair_cap: MAX_REPAIRS,
+            protected_paths: Vec::new(),
+        }
+    }
+}
+
 use crate::pull_request::{AlreadyMerged, Identified, MergeAttempt, PullRequest};
 
 use crate::base_fix::{self, BaseFix};
@@ -144,6 +161,8 @@ impl Delivery<'_> {
         let base = self.base;
         let goal = self.goal;
         let security_review = self.security_review;
+        let repair_cap = self.repair_cap;
+        let protected_paths = self.protected_paths;
         let child_asks = self.child_asks;
         let base_fix = self.base_fix;
         run_checked(
@@ -190,6 +209,8 @@ impl Delivery<'_> {
                     child_asks,
                     sessions,
                     pull_request,
+                    repair_cap,
+                    protected_paths,
                 };
                 route.steps(&mut outside, &opening, checklist)
             },
@@ -245,6 +266,8 @@ impl Delivery<'_> {
                         child_asks,
                         sessions,
                         pull_request,
+                        repair_cap,
+                        protected_paths,
                     },
                     goal,
                     repair_cap,
@@ -756,6 +779,8 @@ struct InWorktree<'a> {
     child_asks: &'a ChildAsks,
     sessions: &'a Sessions<'a>,
     pull_request: &'a mut PullRequest,
+    repair_cap: usize,
+    protected_paths: &'a [String],
 }
 
 impl Outside for InWorktree<'_> {
@@ -825,9 +850,9 @@ impl Outside for InWorktree<'_> {
             sessions: self.sessions,
             pull_request: self.pull_request,
             ci_watch: ci::Watch::new(self.issue),
-            protected_paths: &[],
+            protected_paths: self.protected_paths,
         };
-        repair_loop::take_to_goal(&mut outside, self.base, goal, MAX_REPAIRS)
+        repair_loop::take_to_goal(&mut outside, self.base, goal, self.repair_cap)
     }
 
     fn delete_branch(&mut self) -> Result<()> {
@@ -1048,11 +1073,17 @@ impl repair_loop::Outside for RunOutside<'_> {
             return Ok(None);
         }
         let spec = format!("origin/{}...HEAD", self.base);
-        // `-z`: names stay NUL-delimited and unquoted, so a name git would
-        // quote (`"secrets/k\303\251y.txt"`) still matches `secrets/**`.
+        // `--no-renames`: include both endpoints of a move, because removing
+        // a protected source still touches it. `-z`: names stay unquoted,
+        // so `secrets/kéy.txt` still matches `secrets/**`.
         // Line splitting would also cut a name holding a newline in two.
-        let listed =
-            Git::new(self.worktree.path()).run_bytes(&["diff", "--name-only", "-z", &spec])?;
+        let listed = Git::new(self.worktree.path()).run_bytes(&[
+            "diff",
+            "--no-renames",
+            "--name-only",
+            "-z",
+            &spec,
+        ])?;
         Ok(protected_hold(
             self.protected_paths,
             listed

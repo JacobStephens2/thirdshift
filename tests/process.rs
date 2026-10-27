@@ -21,6 +21,531 @@ name = \"review\"
 skill = \"code-review\"
 ";
 
+#[test]
+fn each_process_skill_step_retains_its_session_trace() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "notes", REVIEW);
+    scenario.agent_does("printf Done > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let result = scenario.run(&["process", "notes"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let files: Vec<_> = fs::read_dir(process_dir(&scenario))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .collect();
+    let logs: Vec<_> = files
+        .iter()
+        .filter(|path| {
+            path.file_name()
+                .unwrap()
+                .to_string_lossy()
+                .ends_with(".logs.jsonl")
+        })
+        .collect();
+    assert_eq!(
+        logs.len(),
+        1,
+        "one Process skill Step needs one OTLP log trace; files: {files:?}"
+    );
+    assert!(
+        files.iter().any(|path| path
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .ends_with(".spans.jsonl")),
+        "missing span trace: {files:?}"
+    );
+    assert!(!support::session_trace::events(logs[0]).is_empty());
+}
+
+#[test]
+fn review_spec_optional_failure_retains_output() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "partial",
+        r#"
+version = 1
+description = "Retain partial findings"
+[[steps]]
+name = "flaky"
+command = "printf 'partial finding'; printf 'diagnostic' >&2; exit 9"
+optional = true
+[[steps]]
+name = "after"
+command = "printf after"
+"#,
+    );
+    let result = scenario.run(&["process", "partial"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let (log_path, _) = command_log(&scenario);
+    let result_path = log_path.with_extension("steps").join("flaky.txt");
+    assert_eq!(
+        fs::read_to_string(&result_path).expect("failed command output must be retained"),
+        "partial findingdiagnostic"
+    );
+}
+
+#[test]
+fn review_spec_protected_rename_is_held() {
+    let scenario = Scenario::new();
+    fs::create_dir_all(scenario.launch_dir().join("secrets")).unwrap();
+    scenario.commit_locally("secrets/key.txt", "sensitive\n", "Seed protected file");
+    scenario.launch_git(&["push", "origin", "main"]);
+    scenario.launch_git(&["config", "diff.renames", "true"]);
+    let body = LAND.replace(
+        "[worktrees.fix]",
+        "[limits]\nprotected_paths = [\"secrets/**\"]\n\n[worktrees.fix]",
+    );
+    write_process(&scenario, "ship", &body);
+    scenario.issue_labelled(7, &["ready-for-agent"]);
+    scenario.agent_does_for_in_session(
+        7,
+        1,
+        r#"
+git mv secrets/key.txt public.txt
+git commit -q -m 'Move protected file'
+printf implemented > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let result = scenario.run(&["process", "merge", "ship", "issue", "7"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "OPEN");
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+}
+
+#[test]
+fn show_keeps_a_duration_shaped_step_name() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "notes",
+        r#"
+version = 1
+description = "Duration-shaped name"
+[[steps]]
+name = "gather: 1s succeeded"
+command = "printf gather"
+"#,
+    );
+    let result = scenario.run(&["process", "notes"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let status = status_json(&scenario);
+    let name = process_command(&status)["name"].as_str().unwrap();
+    let (log_path, _) = command_log(&scenario);
+    let kept = log_path
+        .with_extension("steps")
+        .join("gather: 1s succeeded.txt");
+    assert!(kept.is_file());
+    let shown = scenario.run(&["show", name]);
+    assert!(
+        shown
+            .stdout
+            .contains(&format!("result: {}", kept.display())),
+        "{}",
+        shown.stdout
+    );
+}
+
+#[test]
+fn review_spec_step_log_retains_context() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "context",
+        r#"
+version = 1
+description = "Retain execution context"
+[worktrees.scratch]
+kind = "throwaway"
+[[steps]]
+name = "gather"
+command = "printf gathered"
+worktree = "scratch"
+"#,
+    );
+    let result = scenario.run(&["process", "context"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let (_, log) = command_log(&scenario);
+    let line = step_line(&log, "gather");
+    for field in ["command", "scratch", "claude", "model", "effort"] {
+        assert!(line.contains(field), "missing {field} in {line}");
+    }
+}
+
+#[test]
+fn review_spec_sessions_have_traces() {
+    fn traces(path: &Path) -> usize {
+        fs::read_dir(path)
+            .unwrap()
+            .map(|entry| {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    traces(&path)
+                } else {
+                    usize::from(
+                        path.file_name()
+                            .unwrap()
+                            .to_string_lossy()
+                            .ends_with(".logs.jsonl"),
+                    )
+                }
+            })
+            .sum()
+    }
+    let scenario = Scenario::new();
+    let mut body = String::from("version = 1\ndescription = \"Parallel issue Steps\"\n");
+    for n in 0..3 {
+        body.push_str(&format!("[worktrees.w{n}]\nkind = \"throwaway\"\n"));
+    }
+    for n in 0..3 {
+        body.push_str(&format!("[[steps]]\nname = \"s{n}\"\nskill = \"code-review\"\nworktree = \"w{n}\"\nparallel = \"checks\"\n"));
+    }
+    write_process(&scenario, "notes", &body);
+    scenario.agent_does("printf done > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let result = scenario.run(&["process", "notes", "issue", "7"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(traces(&scenario.path("home/.thirdshift/logs")), 3);
+}
+
+#[test]
+fn review_spec_resume_waits_for_resources() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "notes", ON_ISSUE);
+    scenario.agent_does_in_session(1, &format!("cat > \"$HOME/.thirdshift/config.toml\" <<'CONFIG'\n[resources]\nmin_available_memory_mb = 9007199254740991\nCONFIG\nprintf gathered > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n{}", leaves_running("resource fixture work")));
+    scenario.agent_does_in_session(2, "printf resumed > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let release = |_: u32| {
+        assert_eq!(
+            scenario.claude_calls().len(),
+            1,
+            "Resume started before admission"
+        );
+        scenario.user_config_is("");
+    };
+    let result = scenario.run_terminal(
+        &["process", "notes", "issue", "7"],
+        &[],
+        &[support::TerminalStep::inspect(
+            "waiting for host resources:",
+            &release,
+        )],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("waiting for host resources:"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 2);
+}
+
+#[test]
+fn review_spec_no_issue_step_resumes_once() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "notes", REVIEW);
+    scenario.agent_does_in_session(
+        1,
+        &format!(
+            "printf first > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n{}",
+            leaves_running("fixture work")
+        ),
+    );
+    scenario.agent_does_in_session(2, "printf resumed > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let result = scenario.run(&["process", "notes"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(result.stdout, "resumed\n");
+    assert_eq!(scenario.claude_calls().len(), 2);
+}
+
+#[test]
+fn review_spec_later_step_is_recorded_skipped() {
+    let scenario = Scenario::new();
+    write_process(
+        &scenario,
+        "skip",
+        r#"
+version = 1
+description = "Record all outcomes"
+[[steps]]
+name = "fail"
+command = "exit 9"
+[[steps]]
+name = "later"
+command = "printf later"
+"#,
+    );
+    let result = scenario.run(&["process", "skip"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    let (_, log) = command_log(&scenario);
+    let skipped = step_line(&log, "later");
+    assert!(skipped.contains("skipped"), "{skipped}");
+    assert!(skipped.contains("fail"), "missing skip cause: {skipped}");
+}
+
+#[test]
+fn review_spec_published_run_honors_no_merge() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[merge]\nalways = true\n");
+    write_process(&scenario, "publish", PUBLISH_THEN_RUN);
+    scenario.agent_does_in_session(
+        1,
+        r#"
+url=$(gh issue create --title Ticket --body 'Do the thing')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for(8, &agent_lands_ticket(8, "main"));
+    let result = scenario.run(&["process", "no-merge", "publish"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert!(
+        scenario.gh_calls_of("pr", "merge").is_empty(),
+        "no-merge was overridden: {}",
+        result.stderr
+    );
+    let pr = pr_from(&scenario, "issue-8");
+    assert_eq!(pr["state"], "OPEN");
+    assert_eq!(pr["isDraft"], false);
+}
+
+#[test]
+fn review_spec_published_run_honors_self_merge_limit() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[merge]\nalways = true\n");
+    let body =
+        PUBLISH_THEN_RUN.replacen("[[steps]]", "[limits]\nself_merge = false\n\n[[steps]]", 1);
+    write_process(&scenario, "publish", &body);
+    scenario.agent_does_in_session(
+        1,
+        r#"
+url=$(gh issue create --title Ticket --body 'Do the thing')
+printf '%s\n' "$url" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for(8, &agent_lands_ticket(8, "main"));
+    let result = scenario.run(&["process", "publish"]);
+    assert!(
+        scenario.gh_calls_of("pr", "merge").is_empty(),
+        "file's self_merge=false was ignored: {}",
+        result.stderr
+    );
+    let pr = pr_from(&scenario, "issue-8");
+    assert_eq!(pr["state"], "OPEN");
+    assert_eq!(pr["isDraft"], false);
+}
+
+#[test]
+fn published_run_keeps_the_process_protected_paths() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[merge]\nalways = true\n");
+    let body = PUBLISH_THEN_RUN.replacen(
+        "[[steps]]",
+        "[limits]\nprotected_paths = [\"issue-8.txt\"]\n\n[[steps]]",
+        1,
+    );
+    write_process(&scenario, "publish", &body);
+    scenario.agent_does_in_session(1, "url=$(gh issue create --title Ticket --body 'Do the thing')\nprintf '%s\\n' \"$url\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    scenario.agent_does_for(8, &agent_lands_ticket(8, "main"));
+    let result = scenario.run(&["process", "publish"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("protected path issue-8.txt"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+    let pr = pr_from(&scenario, "issue-8");
+    assert_eq!(pr["state"], "OPEN");
+    assert_eq!(pr["isDraft"], false);
+}
+
+#[test]
+fn review_spec_email_unless_merged_suppresses_merged_process() {
+    let scenario = prepare_ship(LAND);
+    let resend = ResendStandIn::replying(200, ACCEPTED);
+    let result = scenario.run_with_env(
+        &[
+            "process",
+            "ship",
+            "issue",
+            "7",
+            "merge",
+            "email-unless-merged",
+            "me@example.com",
+        ],
+        &[
+            ("THIRDSHIFT_RESEND_URL", resend.url()),
+            ("RESEND_API_KEY", KEY),
+        ],
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["state"], "MERGED");
+    assert!(
+        resend.requests().is_empty(),
+        "merged Process sent an email: {:?}",
+        resend.requests()
+    );
+    let (_, saved) = saved_notification(&scenario, "process");
+    assert!(saved.contains("Process ship"), "{saved}");
+}
+
+#[test]
+fn review_spec_session_prompt_names_worktree_kind() {
+    let scenario = Scenario::new();
+    write_process(&scenario, "notes", REVIEW);
+    scenario.agent_does("printf done > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    let result = scenario.run(&["process", "notes"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let calls = scenario.claude_calls();
+    let prompt = calls[0]["prompt"].as_str().unwrap();
+    assert!(
+        prompt.contains("throwaway"),
+        "worktree kind missing from prompt: {prompt}"
+    );
+}
+
+#[test]
+fn published_specs_keep_protected_paths_on_their_child_tickets() {
+    let scenario = Scenario::new();
+    scenario.user_config_is("[merge]\nalways = true\n");
+    let body = PUBLISH_THEN_RUN.replacen(
+        "[[steps]]",
+        "[limits]\nprotected_paths = [\"issue-9.txt\"]\n\n[[steps]]",
+        1,
+    );
+    write_process(&scenario, "publish", &body);
+    scenario.agent_does_in_session(
+        1,
+        r#"
+spec=$(gh issue create --title Spec --body 'Build widgets')
+one=$(gh issue create --title One --body First)
+gh api --method POST repos/acme/widgets/issues/${spec##*/}/sub_issues -F sub_issue_id=${one##*/}
+printf '%s\n' "$spec" > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    scenario.agent_does_for(9, &agent_lands_ticket(9, "issue-8"));
+    let result = scenario.run(&["process", "publish"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("protected path issue-9.txt"),
+        "{}",
+        result.stderr
+    );
+    assert!(scenario.gh_calls_of("pr", "merge").is_empty());
+    let pr = pr_from(&scenario, "issue-9");
+    assert_eq!(pr["state"], "OPEN");
+    assert_eq!(pr["isDraft"], false);
+}
+
+#[test]
+fn published_runs_keep_the_process_repair_cap() {
+    let scenario = Scenario::new();
+    let body = PUBLISH_THEN_RUN.replacen("[[steps]]", "[limits]\nrepair_cap = 0\n\n[[steps]]", 1);
+    write_process(&scenario, "publish", &body);
+    scenario.agent_does_in_session(1, "url=$(gh issue create --title Ticket --body 'Do the thing')\nprintf '%s\\n' \"$url\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    scenario.agent_does_for(8, &format!("{}\ngh fake checks \"$(git rev-parse HEAD)\" '[{{\"name\":\"test\",\"conclusion\":\"failure\",\"url\":\"https://ci.example/test\"}}]'", agent_lands_ticket(8, "main")));
+    let result = scenario.run(&["process", "publish"]);
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("repairs exhausted"),
+        "{}",
+        result.stderr
+    );
+    assert!(
+        !result.stderr.contains("starting Repair"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.claude_calls().len(), 2);
+}
+
+#[test]
+fn review_spec_unfinished_resume_does_not_fail_step() {
+    for issue in [false, true] {
+        let scenario = Scenario::new();
+        write_process(&scenario, "notes", REVIEW);
+        scenario.agent_does_in_session(
+            1,
+            &format!(
+                "printf first > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n{}",
+                leaves_running("first fixture work")
+            ),
+        );
+        scenario.agent_does_in_session(
+            2,
+            &format!(
+                "printf resumed > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n{}",
+                leaves_running("abandoned fixture work")
+            ),
+        );
+        let args: &[&str] = if issue {
+            &["process", "notes", "issue", "7"]
+        } else {
+            &["process", "notes"]
+        };
+        let result = scenario.run(args);
+        assert_eq!(result.code, Some(0), "issue={issue}: {}", result.stderr);
+        assert_eq!(result.stdout, "resumed\n");
+        assert_eq!(scenario.claude_calls().len(), 2);
+    }
+}
+
+#[test]
+fn parallel_sessions_publish_home_skills_once() {
+    let scenario = Scenario::new();
+    let home_skill = scenario.path("home/.thirdshift/skills/house-style");
+    fs::create_dir_all(&home_skill).unwrap();
+    fs::write(home_skill.join("SKILL.md"), "# House style\n").unwrap();
+    for n in 0..512 {
+        fs::write(home_skill.join(format!("note-{n}.md")), "notes\n").unwrap();
+    }
+    let mut body = String::from("version = 1\ndescription = \"Parallel home skills\"\n");
+    for n in 0..6 {
+        body.push_str(&format!("\n[worktrees.w{n}]\nkind = \"throwaway\"\n"));
+    }
+    for n in 0..6 {
+        body.push_str(&format!("\n[[steps]]\nname = \"s{n}\"\nskill = \"house-style\"\nworktree = \"w{n}\"\nparallel = \"all\"\n"));
+    }
+    write_process(&scenario, "home-parallel", &body);
+    scenario.agent_does("test -s .claude/skills/house-style/SKILL.md\nfor n in $(seq 0 511); do test -f .claude/skills/house-style/note-$n.md || exit 1; done\nprintf done > \"$FAKE_CLAUDE_FINAL_MESSAGE\"");
+    for attempt in 0..8 {
+        let result = scenario.run(&["process", "home-parallel"]);
+        assert_eq!(result.code, Some(0), "attempt {attempt}: {}", result.stderr);
+    }
+}
+
+#[test]
+fn review_spec_parallel_home_skills_remain_available() {
+    let scenario = Scenario::new();
+    let home_skill = scenario.path("home/.thirdshift/skills/parallel-check");
+    fs::create_dir_all(&home_skill).unwrap();
+    fs::write(
+        home_skill.join("SKILL.md"),
+        "Read the supporting data files and finish.\n",
+    )
+    .unwrap();
+    for i in 0..400 {
+        fs::write(home_skill.join(format!("data-{i}.txt")), "x".repeat(1024)).unwrap();
+    }
+    let mut body = String::from("version = 1\ndescription = \"Parallel home skills\"\n");
+    for i in 0..6 {
+        body.push_str(&format!("[worktrees.w{i}]\nkind = \"throwaway\"\n"));
+    }
+    for i in 0..6 {
+        body.push_str(&format!("[[steps]]\nname = \"s{i}\"\nskill = \"parallel-check\"\nworktree = \"w{i}\"\nparallel = \"checks\"\n"));
+    }
+    write_process(&scenario, "parallel-home", &body);
+    scenario.agent_does(
+        r#"
+test -r .claude/skills/parallel-check/SKILL.md
+test -r .claude/skills/parallel-check/data-399.txt
+printf done > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+    let result = scenario.run(&["process", "parallel-home"]);
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(scenario.claude_calls().len(), 6);
+}
+
 fn write_process(scenario: &Scenario, name: &str, body: &str) {
     let dir = scenario.path("home/.thirdshift/processes");
     fs::create_dir_all(&dir).unwrap();
@@ -680,9 +1205,10 @@ skill = "code-review"
     );
     scenario.agent_does(
         r#"
-printf '%s\n' "$FAKE_CLAUDE_PROMPT" | grep -q 'Earlier Step result flaky:' && exit 1
+path=$(printf '%s\n' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Earlier Step result flaky: //p')
+test "$(cat "$path")" = partial
 printf '%s\n' "$FAKE_CLAUDE_PROMPT" | grep -q 'This is the first Step' && exit 1
-printf '%s\n' "$FAKE_CLAUDE_PROMPT" | grep -q 'No earlier Step has a result.'
+printf '%s\n' "$FAKE_CLAUDE_PROMPT" | grep -q 'No earlier Step has a result.' && exit 1
 printf 'kept' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#,
     );
@@ -742,8 +1268,8 @@ skill = \"code-review\"
     let failed = step_line(&log, "fail");
     assert!(failed.contains("failed"), "{log}");
     assert!(failed.contains("exit status 4"), "{failed}");
-    assert!(!log.contains("step later:"), "{log}");
-    assert!(!log.contains("step read:"), "{log}");
+    assert!(step_line(&log, "later").contains("skipped"), "{log}");
+    assert!(step_line(&log, "read").contains("skipped"), "{log}");
     let record = process_record(&scenario);
     assert_eq!(record["outcome"], "failed");
 }
@@ -785,7 +1311,7 @@ skill = \"pr\"
     let (log_path, log) = command_log(&scenario);
     assert!(step_line(&log, "gather").contains("succeeded"), "{log}");
     assert!(step_line(&log, "judge").contains("failed"), "{log}");
-    assert!(!log.contains("step publish:"), "{log}");
+    assert!(step_line(&log, "publish").contains("skipped"), "{log}");
     assert_eq!(
         fs::read_to_string(log_path.with_extension("steps").join("gather.txt")).unwrap(),
         "gathered"
@@ -928,7 +1454,7 @@ command = \"touch '{}'\"
     assert_eq!(record["outcome"], "interrupted");
     let (_, log) = command_log(&scenario);
     assert!(step_line(&log, "wait").contains("interrupted"), "{log}");
-    assert!(!log.contains("step later:"), "{log}");
+    assert!(step_line(&log, "later").contains("skipped"), "{log}");
 }
 
 #[test]
@@ -1530,7 +2056,7 @@ printf '%s\\n' \"$name\" > \"$FAKE_CLAUDE_FINAL_MESSAGE\"
     assert!(step_line(&log, "claude").contains("succeeded"), "{log}");
     assert!(step_line(&log, "grok").contains("succeeded"), "{log}");
     assert!(step_line(&log, "codex").contains("failed"), "{log}");
-    assert!(!log.contains("step judge:"), "{log}");
+    assert!(step_line(&log, "judge").contains("skipped"), "{log}");
     let steps = log_path.with_extension("steps");
     assert_eq!(
         fs::read_to_string(steps.join("claude.txt")).unwrap(),
@@ -2817,7 +3343,7 @@ command = \"touch '{}'; while true; do sleep 0.05; done\"
 }
 
 #[test]
-fn show_prints_a_failed_step_line_without_a_result_path() {
+fn show_prints_a_failed_command_step_and_its_result_path() {
     let scenario = Scenario::new();
     write_process(
         &scenario,
@@ -2862,12 +3388,12 @@ command = \"exit 1\"
         "{}",
         shown.stdout
     );
-    let missing = log_path.with_extension("steps").join("review.txt");
-    assert!(!missing.exists(), "{}", missing.display());
+    let failed = log_path.with_extension("steps").join("review.txt");
+    assert!(failed.is_file(), "{}", failed.display());
     assert!(
-        !shown
+        shown
             .stdout
-            .contains(&format!("result: {}", missing.display())),
+            .contains(&format!("result: {}", failed.display())),
         "{}",
         shown.stdout
     );

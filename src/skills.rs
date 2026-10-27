@@ -281,18 +281,31 @@ fn factory_skill(name: &str) -> bool {
     SKILLS.dirs().any(|dir| dir.path().to_str() == Some(name))
 }
 
-/// Copy `source` into `destination`, which lives in the Factory skills folder.
+static HOME_SKILL_PUBLICATION: Mutex<()> = Mutex::new(());
+
+/// Publish one immutable copy per Command in the Factory skills folder.
+/// Parallel Sessions may link it again while another Session reads it.
 /// A symlink is kept only by copying the file it names when that file stays
 /// inside `root`, so the published tree does not point at the operator's home.
 fn publish_home_skill(root: &Path, name: &str, source: &Path, destination: &Path) -> Result<()> {
-    if destination.exists() {
-        fs::remove_dir_all(destination)
-            .with_context(|| format!("could not replace {}", destination.display()))?;
+    let _publication = HOME_SKILL_PUBLICATION
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if destination.join("SKILL.md").is_file() {
+        return Ok(());
     }
-    copy_inside(source, destination, root, 0)?;
-    if !destination.join("SKILL.md").is_file() {
+    let staged = tempfile::tempdir_in(
+        destination
+            .parent()
+            .context("home skill destination has no parent")?,
+    )
+    .with_context(|| format!("could not stage home skill {name}"))?;
+    copy_inside(source, staged.path(), root, 0)?;
+    if !staged.path().join("SKILL.md").is_file() {
         bail!("could not publish home skill {name}");
     }
+    fs::rename(staged.path(), destination)
+        .with_context(|| format!("could not publish home skill {name}"))?;
     Ok(())
 }
 

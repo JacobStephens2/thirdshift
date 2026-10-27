@@ -115,6 +115,12 @@ pub struct ProcessContinuation<'a> {
     pub base: &'a str,
 }
 
+/// A Step's checkout kind and, on an Issue branch, any existing commits.
+pub enum ProcessWorktree<'a> {
+    Throwaway,
+    IssueBranch(Option<ProcessContinuation<'a>>),
+}
+
 /// Finished Steps named in a later Step's prompt, and whether that Step is
 /// the Process's first. A later Step with no finished result is not the first.
 pub struct EarlierSteps<'a> {
@@ -131,9 +137,8 @@ fn continuing_work(branch: &str, base: &str) -> String {
 
 /// One Step of a Custom process. `earlier` names each finished Step and
 /// whether this is the Process's first Step. `issue`, when the Process has
-/// one, is named for the session to work from its file. `continuation`, when
-/// the Step's checkout is an existing Issue branch, tells the session to
-/// build on that branch's commits.
+/// one, is named for the session to work from its file. `worktree` names the
+/// checkout kind and tells a Continuation to build on the existing commits.
 pub fn process_step(
     process: &str,
     step: &str,
@@ -141,8 +146,12 @@ pub fn process_step(
     skill_path: &std::path::Path,
     earlier: EarlierSteps<'_>,
     issue: Option<&IssueUrl>,
-    continuation: Option<ProcessContinuation<'_>>,
+    worktree: ProcessWorktree<'_>,
 ) -> String {
+    let (kind, continuation) = match worktree {
+        ProcessWorktree::Throwaway => ("throwaway", None),
+        ProcessWorktree::IssueBranch(continuation) => ("Issue-branch", continuation),
+    };
     let continuing = continuation
         .as_ref()
         .map(|note| format!("{}\n", continuing_work(note.branch, note.base)))
@@ -172,6 +181,7 @@ pub fn process_step(
     });
     format!(
         "{preamble}This is Step {step} of the Custom process {process}.\n\
+         This Step works in the {kind} worktree.\n\
          {issue_text}{continuing}{earlier_text}{SOURCE_EDITS}{HEADLESS}",
         preamble = skill_preamble(skill_name, skill_path),
     )
@@ -725,7 +735,7 @@ mod tests {
                     first: true,
                 },
                 Some(&issue),
-                None,
+                ProcessWorktree::Throwaway,
             ),
         ] {
             for instruction in [
@@ -751,7 +761,7 @@ mod tests {
                 first: true,
             },
             Some(&issue),
-            None,
+            ProcessWorktree::Throwaway,
         );
         assert!(
             on_issue.contains("Run this Step on issue https://github.com/acme/widgets/issues/7."),
@@ -767,7 +777,7 @@ mod tests {
                 first: true,
             },
             None,
-            None,
+            ProcessWorktree::Throwaway,
         );
         assert!(!without.contains(".thirdshift-issue.md"), "{without}");
         assert!(!without.contains("Run this Step on issue"), "{without}");

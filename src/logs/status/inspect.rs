@@ -96,13 +96,20 @@ fn step_message(line: &str) -> Option<&str> {
     }
 }
 
-/// The Step name in `step <name>: <duration> ...`. A name may contain spaces
-/// and colons; the duration `finish_step` writes is what separates it.
-fn step_name(message: &str) -> Option<&str> {
+/// New ambiguous names are JSON strings. Keep reading earlier plain names
+/// for Command logs written before quoted Step identities were introduced.
+fn step_name(message: &str) -> Option<String> {
     let rest = message.strip_prefix("step ")?;
+    if rest.starts_with('"') {
+        let mut names = serde_json::Deserializer::from_str(rest).into_iter::<String>();
+        let name = names.next()?.ok()?;
+        return rest[names.byte_offset()..]
+            .starts_with(": ")
+            .then_some(name);
+    }
     let colon = duration_separator(rest)?;
     let name = &rest[..colon];
-    (!name.is_empty()).then_some(name)
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 fn duration_separator(rest: &str) -> Option<usize> {

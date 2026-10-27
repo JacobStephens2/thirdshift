@@ -25,6 +25,7 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -50,7 +51,6 @@ use crate::pull_request::PullRequest;
 use crate::recovery::{self, Recovery};
 use crate::run::Goal;
 use crate::run_ending::{Account, Cause};
-use crate::skill;
 use crate::worktree::{SkillWorktree, Worktree};
 use crate::{delivery, interrupt, launch, progress, prompt, session, skills, trust};
 
@@ -150,6 +150,30 @@ struct ResolvedStep {
 }
 
 impl ResolvedStep {
+    fn log_context(&self) -> String {
+        let kind = match self.kind {
+            StepKind::Skill { .. } => "skill",
+            StepKind::Command(_) => "command",
+            StepKind::Delivery => "delivery",
+            StepKind::SelfMerge => "self-merge",
+            StepKind::RunPublishedIssue => "run-published-issue",
+        };
+        format!(
+            "{kind}; worktree {}; {}",
+            self.worktree.as_deref().unwrap_or("throwaway"),
+            self.choice
+        )
+    }
+
+    /// Quote names whose colons could be mistaken for the outcome separator.
+    fn log_name(&self) -> String {
+        if self.name.contains(": ") || self.name.starts_with('"') {
+            serde_json::to_string(&self.name).expect("a Step name is a JSON string")
+        } else {
+            self.name.clone()
+        }
+    }
+
     fn check(&mut self) {
         self.start_failure = self.choice.check().err().map(|error| one_line(&error));
     }
@@ -297,6 +321,14 @@ struct Prepared {
     limits: Limits,
     /// `Merged` only when this run was asked to Self-merge.
     goal: Goal,
+    completed: Mutex<CompletedRuns>,
+}
+
+/// Actual published outcomes, including dispatched Runs in parallel groups.
+#[derive(Default)]
+struct CompletedRuns {
+    resolutions: Vec<crate::run::Resolution>,
+    failed: bool,
 }
 
 /// The Issue branch a run is delivering, beside the throwaway worktrees.
@@ -341,6 +373,10 @@ impl Drop for HeldClaim<'_> {
 /// What one Step needs from the Process, shared by a parallel group.
 struct StepRun<'a> {
     process: &'a str,
+    goal: Goal,
+    limits: &'a Limits,
+    completed: &'a Mutex<CompletedRuns>,
+    issue_branch: bool,
     choice: &'a Choice,
     issue: Option<&'a IssueUrl>,
     started: DateTime<Utc>,
@@ -570,26 +606,55 @@ fn run(command: &ProcessRun) -> Result<String> {
 /// A stop after the email check and before any Step is still a failed Process.
 fn failed_before_steps(notification: RunNotification, error: anyhow::Error) -> anyhow::Error {
     let cause = format!("{error:#}");
-    notify(notification, "failed", Some(&cause));
+    notify(
+        notification,
+        "failed",
+        Some(&cause),
+        &CompletedRuns::default(),
+    );
     error
 }
 
 /// Save and, when asked, send the Run notification. A skipped Process sends none.
-fn notify(notification: RunNotification, outcome: &'static str, cause: Option<&str>) {
+fn notify(
+    notification: RunNotification,
+    outcome: &'static str,
+    cause: Option<&str>,
+    completed: &CompletedRuns,
+) {
     if outcome == "skipped" {
         return;
     }
+    let merged = outcome == "succeeded"
+        && !completed.failed
+        && !completed.resolutions.is_empty()
+        && completed
+            .resolutions
+            .iter()
+            .all(|resolution| resolution.goal() == Some(Goal::Merged));
+    let account_outcome = if merged {
+        Goal::Merged.outcome()
+    } else {
+        outcome
+    };
     let ended = if outcome == "succeeded" {
-        Ok(outcome.to_string())
+        Ok(account_outcome.to_string())
     } else {
         Err(Cause::of(&anyhow!("{}", cause.unwrap_or(outcome))))
     };
     let account = Account {
         recovery: None,
-        outcome,
+        outcome: account_outcome,
         ended,
         interrupted: outcome == "interrupted",
-        pr_url: None,
+        pr_url: completed
+            .resolutions
+            .iter()
+            .rev()
+            .find_map(|resolution| match resolution {
+                crate::run::Resolution::PullRequest { url, .. } => Some(url.as_str()),
+                _ => None,
+            }),
         advice: &[],
         base_fix: None,
         log: None,
@@ -601,7 +666,11 @@ fn notify(notification: RunNotification, outcome: &'static str, cause: Option<&s
         security_findings_waiting: false,
         security_fix: None,
         security_close: None,
-        urls: Vec::new(),
+        urls: completed
+            .resolutions
+            .iter()
+            .map(|resolution| resolution.url())
+            .collect(),
     };
     notification.finish(&account);
 }
@@ -619,10 +688,11 @@ fn finish_run(
     notification.built_with(&prepared.choice);
     let result = execute_steps(name, &prepared, None);
     let (outcome, cause) = classify(&result);
+    let completed = std::mem::take(&mut *prepared.completed.lock().expect("completed Runs"));
     drop(prepared);
     logs::ended(outcome);
     logs::complete(outcome, cause.as_deref());
-    notify(notification, outcome, cause.as_deref());
+    notify(notification, outcome, cause.as_deref(), &completed);
     result
 }
 
@@ -741,11 +811,12 @@ fn run_issue_branch(
         claim.release();
     }
     let (outcome, cause) = classify(&result);
+    let completed = std::mem::take(&mut *prepared.completed.lock().expect("completed Runs"));
     drop(prepared);
     drop(held);
     logs::ended(outcome);
     logs::complete(outcome, cause.as_deref());
-    notify(notification, outcome, cause.as_deref());
+    notify(notification, outcome, cause.as_deref(), &completed);
     result
 }
 
@@ -830,7 +901,8 @@ fn execute_steps(
                 &mut earlier,
                 &mut began,
                 &mut last,
-            )?;
+            )
+            .map_err(|error| skip_remaining(&prepared.steps[range.end..], &group[0].name, error))?;
             if let Some(step_index) = merge_at {
                 let started = Instant::now();
                 let began_at = Utc::now();
@@ -845,7 +917,14 @@ fn execute_steps(
                     &mut earlier,
                     &mut began,
                     &mut last,
-                )?;
+                )
+                .map_err(|error| {
+                    skip_remaining(
+                        &prepared.steps[step_index + 1..],
+                        &prepared.steps[step_index].name,
+                        error,
+                    )
+                })?;
                 index += 1;
             }
             index += 1;
@@ -892,16 +971,29 @@ fn execute_steps(
                 &mut last,
             ) {
                 Ok(()) => {}
-                Err(error) if group_error.is_none() => group_error = Some(error),
+                Err(error) if group_error.is_none() => group_error = Some((&step.name, error)),
                 Err(_) => {}
             }
         }
-        if let Some(error) = group_error {
-            return Err(error);
+        if let Some((name, error)) = group_error {
+            return Err(skip_remaining(&prepared.steps[range.end..], name, error));
         }
         index += 1;
     }
     Ok(last)
+}
+
+/// Account for Steps that cannot start after a required Step failed.
+fn skip_remaining(steps: &[ResolvedStep], failed: &str, error: anyhow::Error) -> anyhow::Error {
+    for step in steps {
+        progress::step(format_args!(
+            "step {}: 0s skipped: Step {failed} did not complete: {} ({})",
+            step.log_name(),
+            one_line(&error),
+            step.log_context(),
+        ));
+    }
+    error
 }
 
 /// Consecutive items that share a group name. An item with no group, and a
@@ -942,6 +1034,9 @@ fn run_parallel(
     let (checkout, continuing) = held_issue_branch(issue_run);
     let steps = &prepared.steps;
     let base = prepared.base.as_str();
+    let goal = prepared.goal;
+    let limits = &prepared.limits;
+    let completed = &prepared.completed;
     thread::scope(|scope| {
         let mut handles = Vec::with_capacity(group.len());
         for (offset, step) in group.iter().enumerate() {
@@ -955,6 +1050,8 @@ fn run_parallel(
             let issue = prepared.issue.clone();
             let started_at = prepared.started;
             let continuation = step_continuation(prepared, step, continuing.as_ref());
+            let issue_branch =
+                names_issue_worktree(step.worktree.as_deref(), prepared.issue_worktree.as_deref());
             handles.push(scope.spawn(move || {
                 let started = Instant::now();
                 let began_at = Utc::now();
@@ -964,6 +1061,10 @@ fn run_parallel(
                 };
                 let run = StepRun {
                     process: &process,
+                    goal,
+                    limits,
+                    completed,
+                    issue_branch,
                     choice: &choice,
                     issue: issue.as_ref(),
                     started: started_at,
@@ -995,7 +1096,11 @@ fn finish_step(
     let duration = progress::duration(elapsed);
     match outcome {
         Ok(message) => {
-            progress::step(format_args!("step {}: {duration} succeeded", step.name));
+            progress::step(format_args!(
+                "step {}: {duration} succeeded ({})",
+                step.log_name(),
+                step.log_context()
+            ));
             let path = results.join(format!("{}.txt", step.name));
             fs::write(&path, &message)
                 .with_context(|| format!("could not write {}", path.display()))?;
@@ -1006,12 +1111,20 @@ fn finish_step(
         }
         Err(error) => {
             progress::step(format_args!(
-                "step {}: {duration} {}: {}",
-                step.name,
+                "step {}: {duration} {}: {} ({})",
+                step.log_name(),
                 failure_outcome(),
-                one_line(&error)
+                one_line(&error),
+                step.log_context()
             ));
             if step.optional && !interrupt::requested() {
+                let path = results.join(format!("{}.txt", step.name));
+                if path.is_file() {
+                    *last = fs::read_to_string(&path)
+                        .with_context(|| format!("could not read {}", path.display()))?;
+                    earlier.push((step.name.clone(), path));
+                    began.push((step.name.clone(), began_at));
+                }
                 Ok(())
             } else {
                 Err(error)
@@ -1032,6 +1145,13 @@ fn run_step(
     let (checkout, continuing) = held_issue_branch(issue_run);
     let run = StepRun {
         process,
+        goal: prepared.goal,
+        limits: &prepared.limits,
+        completed: &prepared.completed,
+        issue_branch: names_issue_worktree(
+            step.worktree.as_deref(),
+            prepared.issue_worktree.as_deref(),
+        ),
         choice: &step.choice,
         issue: prepared.issue.as_ref(),
         started: prepared.started,
@@ -1160,6 +1280,19 @@ fn run_delivery(
     match published {
         Ok(url) => {
             issue_run.delivered = true;
+            prepared
+                .completed
+                .lock()
+                .expect("completed Runs")
+                .resolutions
+                .push(crate::run::Resolution::PullRequest {
+                    url: url.clone(),
+                    goal: if merge {
+                        Goal::Merged
+                    } else {
+                        Goal::ReadyForReview
+                    },
+                });
             let merge_result = if !merge_follows {
                 None
             } else if asked && forbid {
@@ -1246,18 +1379,17 @@ fn run_step_in(
                     first,
                 },
                 run.issue,
-                run.continuation
-                    .as_ref()
-                    .map(|(branch, base)| prompt::ProcessContinuation { branch, base }),
+                if run.issue_branch {
+                    prompt::ProcessWorktree::IssueBranch(
+                        run.continuation
+                            .as_ref()
+                            .map(|(branch, base)| prompt::ProcessContinuation { branch, base }),
+                    )
+                } else {
+                    prompt::ProcessWorktree::Throwaway
+                },
             );
-            match run.issue {
-                Some(issue) => {
-                    run_skill_on_issue(cwd, run.choice, &step.name, &prompt, issue, run.started)
-                }
-                None => {
-                    skill::run_session(cwd, run.choice, &format!("Step {}", step.name), &prompt)
-                }
-            }
+            run_skill(run, cwd, step, &prompt)
         }
         StepKind::Delivery => bail!("delivery cannot be in a parallel group"),
         StepKind::SelfMerge => bail!("self-merge must be directly after delivery"),
@@ -1287,46 +1419,44 @@ fn prepare_for_session(issue: &IssueUrl, started: DateTime<Utc>, worktree: &Path
     }
 }
 
-/// A session Step on an issue: the trust check and issue file before the
-/// session, and again before its one Resume.
-fn run_skill_on_issue(
+/// Record a Step through the shared session lifecycle, including resource
+/// admission and the issue trust check before its session and Resume.
+fn run_skill(
+    run: &StepRun<'_>,
     worktree: &Path,
-    choice: &Choice,
-    step: &str,
+    step: &ResolvedStep,
     prompt: &str,
-    issue: &IssueUrl,
-    started: DateTime<Utc>,
 ) -> Result<String> {
-    let label = format!("Step {step}");
-    prepare_for_session(issue, started, worktree)?;
-    let ended = skill::run_session_ending(worktree, choice, None, prompt)?;
-    let (ended, ended_last) = if ended.killed.is_empty() {
-        (ended, "session")
-    } else if let Some(session_id) = ended.session_id.clone() {
-        progress::step(format_args!(
-            "{label}: background work was killed as the session ended; resuming it once"
-        ));
-        prepare_for_session(issue, started, worktree)?;
-        let resume_prompt = prompt::resume(&ended.killed_work());
-        let resumed =
-            skill::run_session_ending(worktree, choice, Some(&session_id), &resume_prompt)?;
-        (resumed, "Resume")
-    } else {
-        (ended, "session")
+    let index = run
+        .steps
+        .iter()
+        .position(|other| other.name == step.name)
+        .expect("the Step belongs to this Process")
+        + 1;
+    let logs = session::Logs::of_process(&launch::repo()?);
+    let before_each = || match run.issue {
+        Some(issue) => prepare_for_session(issue, run.started, worktree),
+        None => Ok(()),
     };
-    if !ended.killed.is_empty()
-        && let Some(message) = ended
-            .final_message
-            .clone()
-            .filter(|text| !text.trim().is_empty())
-    {
-        let ending = session::ending_with(&ended.killed_work());
-        progress::step(format_args!(
-            "{label}: the {ended_last} {ending}; carrying on, as it may have been abandoned"
-        ));
-        return Ok(message);
-    }
-    ended.require_final_message(&label)
+    session::Sessions::checked_within(
+        &logs,
+        worktree,
+        run.choice,
+        None,
+        None,
+        &before_each,
+        |sessions| {
+            sessions
+                .run_to_final_message(
+                    session::Purpose::Ordinary,
+                    session::Kind::ProcessStep(index),
+                    prompt,
+                )?
+                .filter(|message| !message.trim().is_empty())
+                .with_context(|| format!("Step {} ended without a final message", step.name))
+        },
+    )
+    .0
 }
 
 /// Start a Ticket run, or a Spec run, on the issue the session Step before
@@ -1378,7 +1508,19 @@ fn run_published(run: &StepRun<'_>, step: &ResolvedStep, prior: &PriorSteps<'_>)
     ));
     logs::dispatching(Work::Run(&issue), run.choice);
     let config = UserConfig::load()?;
-    let mut asks = Asks::of_run(&issue, &Flags::default(), &config);
+    let flags = Flags {
+        goal: Some(if run.limits.forbid_self_merge {
+            Goal::ReadyForReview
+        } else {
+            run.goal
+        }),
+        ..Flags::default()
+    };
+    let mut asks = Asks::of_run(&issue, &flags, &config);
+    asks.delivery_limits = delivery::Limits {
+        repair_cap: run.limits.repair_cap,
+        protected_paths: run.limits.protected_paths.clone(),
+    };
     asks.notification = NotificationAsk::Skip;
     asks.harness = run.choice.clone();
     // `of_run` resolved the review against the default choice. Resolve it
@@ -1391,8 +1533,19 @@ fn run_published(run: &StepRun<'_>, step: &ResolvedStep, prior: &PriorSteps<'_>)
     );
     logs::dispatch_ended(&ended);
     match ended.outcome {
-        Ok(reached) => Ok(reached.resolution.url().to_string()),
-        Err(failed) => Err(failed.error),
+        Ok(reached) => {
+            let url = reached.resolution.url().to_string();
+            run.completed
+                .lock()
+                .expect("completed Runs")
+                .resolutions
+                .push(reached.resolution);
+            Ok(url)
+        }
+        Err(failed) => {
+            run.completed.lock().expect("completed Runs").failed = true;
+            Err(failed.error)
+        }
     }
 }
 
@@ -1459,6 +1612,8 @@ fn run_command(
         },
     )?;
     if !output.status.success() {
+        fs::write(result_file, combined(&output.stdout, &output.stderr))
+            .with_context(|| format!("could not write {}", result_file.display()))?;
         bail!("{}", exit_status(output.status));
     }
     Ok(combined(&output.stdout, &output.stderr))
@@ -1690,6 +1845,7 @@ fn prepare_from(
         base: source.base.to_string(),
         limits: file.limits,
         goal: file.goal,
+        completed: Mutex::new(CompletedRuns::default()),
     })
 }
 

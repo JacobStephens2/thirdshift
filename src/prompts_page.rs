@@ -336,7 +336,7 @@ fn prompts() -> Vec<Prompt> {
                     first: true,
                 },
                 None,
-                None,
+                prompt::ProcessWorktree::Throwaway,
             ),
         },
         Prompt {
@@ -357,7 +357,7 @@ fn prompts() -> Vec<Prompt> {
                     first: false,
                 },
                 None,
-                None,
+                prompt::ProcessWorktree::Throwaway,
             ),
         },
         Prompt {
@@ -375,7 +375,7 @@ fn prompts() -> Vec<Prompt> {
                     first: true,
                 },
                 Some(&issue),
-                None,
+                prompt::ProcessWorktree::IssueBranch(None),
             ),
         },
     ];

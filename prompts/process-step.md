@@ -7,6 +7,7 @@ Starts the first Step of a Custom process. No earlier Step has a result.
 ```
 Use the <skill> skill. Read and follow `<skill path>`.
 This is Step <step> of the Custom process <process>.
+This Step works in the throwaway worktree.
 This is the first Step. No earlier Step has a result.
 For source edits, prefer an available structured patch/edit tool that makes the intended context and changed regions explicit (for example, `apply_patch` on Codex). Use the Harness's equivalent when available. Normal language-specific code generation and narrowly justified scripts remain appropriate; scope scripted replacements to the intended region and check the diff for unrelated changes.
 You run headless: nobody is watching, and ending your turn ends the session. Run tests and other long commands in the foreground, raising the command's timeout if needed. If a command is moved to the background, wait for that task by its own task id or output file, never by process names or patterns (`pgrep`, `ps | grep`, and the like): other sessions on this machine run the same commands. Never end your turn while a background task you depend on is still running: ending the turn kills it. Before ending your turn, stop every background task you no longer need, by its task id (with the `TaskStop` tool, if you have it): a task still running when your turn ends is taken as work you were waiting on. thirdshift records this session as a Session trace, with Model evidence and any review reports beside it.
