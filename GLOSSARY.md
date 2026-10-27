@@ -96,7 +96,7 @@ One invocation of thirdshift that does factory work: a **Ticket run** or **Spec 
 _Avoid_: invocation, job
 
 **Ticket run**:
-One invocation of the factory on a single issue that is not a **Spec**, from launch to cleanup, normally ending in one pull request ready for review, or a **Self-merge** when its command or the **User config** asks for one. A Ticket run on an issue labelled `bug` reproduces the bug before fixing it, in a fresh Ticket run or a **Continuation**, except for Security fixes and **Base fixes**, which have their own flow. If the bug is not reproduced, the Ticket run ends successfully with triage notes and `needs-info` on the issue, without opening or merging a pull request. Started directly on an **Issue URL**, by a **Spec run** for one of its **Tickets**, by an **Architect run** for the Ticket its **Architecture review** published, by a **Pickup run** for the **Ready issue** it took, or by a **Security run** for a **Security finding** it fixes.
+One invocation of the factory on a single issue that is not a **Spec**, from launch to cleanup, normally ending in one pull request ready for review, or a **Self-merge** when its command or the **User config** asks for one. A Ticket run on an issue labelled `bug` reproduces the bug before fixing it, in a fresh Ticket run or a **Continuation**, except for Security fixes and **Base fixes**, which have their own flow. A Continuation whose **Issue branch** has commits beyond the **Base branch** reproduces at their merge base, then checks the fix on the branch; a fix already there still goes on to review and the pull request. If the bug is not reproduced, including when it is absent at that merge base, the Ticket run ends successfully with triage notes and `needs-info` on the issue, without opening or merging a pull request. Started directly on an **Issue URL**, by a **Spec run** for one of its **Tickets**, by an **Architect run** for the Ticket its **Architecture review** published, by a **Pickup run** for the **Ready issue** it took, or by a **Security run** for a **Security finding** it fixes.
 _Avoid_: Run, Merge run (former names), auto-merge (GitHub's own feature)
 
 **Spec run**:
@@ -120,11 +120,14 @@ An **Architect run**, a **Pickup run**, a **Security run**, or a **Custom proces
 _Avoid_: tick, cycle
 
 **Process**:
-A named sequence of **Steps** that a **Command** carries out. The one a person writes is a **Custom process**.
-_Avoid_: workflow, pipeline, recipe
+A named sequence of **Steps** that a **Command** carries out: a **Built-in process**, which ships with thirdshift, or a **Custom process**.
+_Avoid_: workflow, pipeline, recipe, run type
+
+**Built-in process**:
+A **Process** that ships inside thirdshift, such as the one a **Ticket run** carries out.
 
 **Custom process**:
-A **Process** a person defines on their own machine and starts by name. Started with no issue and no Issue-branch worktree, it is a **Pass**. A file that declares an Issue-branch worktree is refused when no issue is given. Started with an issue, it is not a Pass. Its `self-merge` catalogue Step, directly after `delivery`, is the **Self-merge**, and only when the command or the **User config** asks. A file can only tighten limits, never loosen them.
+A **Process** a person defines on their own machine and starts by name. It can't take a **Built-in process**'s name. Started with no issue and no Issue-branch worktree, it is a **Pass**. A file that declares an Issue-branch worktree is refused when no issue is given. Started with an issue, it is not a Pass. Its `self-merge` catalogue Step, directly after `delivery`, is the **Self-merge**, and only when the command or the **User config** asks. A file can only tighten limits, never loosen them.
 _Avoid_: workflow, pipeline
 
 **Step**:

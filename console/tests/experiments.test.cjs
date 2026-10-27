@@ -6,8 +6,12 @@ const { mkdtemp, mkdir, writeFile, rm } = require('node:fs/promises');
 const { tmpdir } = require('node:os');
 const { join, resolve } = require('node:path');
 const { createInterface } = require('node:readline');
-const { chromium } = require('playwright');
+const { chromium } = require('./playwright.cjs');
 const fixture = require('./fixtures/experiments.cjs');
+// Trial suites open folded; a reader opens each one to see its Trials.
+async function openSuites(page) {
+  for (const summary of await page.locator('details.trial-suite > summary').all()) if (!await summary.evaluate(node => node.parentElement.open)) await summary.click();
+}
 let home, server, exited, browser, origin;
 before(async () => {
   home = await mkdtemp(join(tmpdir(), 'thirdshift-experiments-'));
@@ -50,6 +54,52 @@ test('proposed Eval tasks can be approved from Experiment pages on a phone', asy
   assert.deepEqual(listed.map(suite => suite.tasks[0].state), ['approved', 'approved']);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
 });
+test('Experiment Details stay beside the Trials grid on desktop', async t => {
+  const context = await browser.newContext({ viewport: { width: 1400, height: 900 } });
+  t.after(() => context.close());
+  const page = await context.newPage();
+  await page.goto(`${origin}/experiments/${fixture.id}`);
+  await openSuites(page);
+  await page.getByRole('button', { name: 'alpha', exact: true }).click();
+  await page.locator('#peek-content').getByRole('heading', { name: 'alpha', exact: true }).waitFor();
+  async function assertLayout() {
+    const layout = await page.evaluate(() => Object.fromEntries(
+      ['main', '#experiment-trials', '#experiment-live-status', '#peek'].map(selector => {
+        const { x, y, width, height } = document.querySelector(selector).getBoundingClientRect();
+        return [selector, { x, y, width, height }];
+      })
+    ));
+    assert.ok(layout['#peek'].y >= 0 && layout['#peek'].y + layout['#peek'].height <= 900,
+      `Details must be inside the viewport: ${JSON.stringify(layout)}`);
+    assert.ok(layout['#peek'].x >= layout.main.x + layout.main.width, 'Details must be to the right of the Trials grid');
+  }
+  await assertLayout();
+  await page.evaluate(() => window.scrollBy(0, 200));
+  assert.ok(await page.evaluate(() => scrollY) >= 100, 'scroll the page to exercise sticky Details');
+  await assertLayout();
+  await page.screenshot({ path: '/tmp/thirdshift-1435-desktop.png' });
+  await page.keyboard.press('Escape');
+  await page.locator('.trial-row[data-task="alpha"]').getByRole('button', { name: 'Candidate Trial 1: Queued', exact: true }).click();
+  assert.match(await page.locator('#peek-content').textContent(), /Queued/);
+  await assertLayout();
+
+  const view = `${origin}/experiments/${fixture.id}`;
+  await page.route(view, route => route.fulfill({ status: 503, body: 'Experiment view unavailable' }));
+  const status = page.getByRole('status').filter({ hasText: 'Updates unavailable. Retrying…' });
+  await status.waitFor();
+  await status.scrollIntoViewIfNeeded();
+  const statusBox = await status.boundingBox();
+  const mainBox = await page.locator('main').boundingBox();
+  assert.ok(statusBox.x >= mainBox.x && statusBox.x + statusBox.width <= mainBox.x + mainBox.width,
+    'the refresh warning must stay in the main column');
+  assert.ok(statusBox.y >= 0 && statusBox.y + statusBox.height <= 900, 'the refresh warning must remain visible');
+  await assertLayout();
+  await page.screenshot({ path: '/tmp/thirdshift-1435-refresh-warning.png' });
+  await page.unroute(view);
+  await page.waitForFunction(() => document.getElementById('experiment-live-status').textContent === '');
+  assert.match(await page.locator('#peek-content').textContent(), /Queued/);
+  await assertLayout();
+});
 test('Experiments update live through Trials, Verdict and rechecks and fit a 390 px phone', async t => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, permissions: ['clipboard-read', 'clipboard-write'] });
   t.after(() => context.close());
@@ -61,6 +111,7 @@ test('Experiments update live through Trials, Verdict and rechecks and fit a 390
   await page.getByRole('link', { name: 'Experiments', exact: true }).click();
   await page.locator(`a[href="/experiments/${fixture.id}"]`).first().click();
   await page.getByRole('heading', { name: 'Trials', exact: true }).waitFor();
+  await openSuites(page);
   const layout = await page.locator('.trial-row').first().evaluate(row => ({
     columns: getComputedStyle(row).gridTemplateColumns,
     tops: [...row.children].map(cell => Math.round(cell.getBoundingClientRect().top))
@@ -135,6 +186,7 @@ test('Paused, dropped, ungraded and rechecked Trials retain their details across
   assert.match(await page.locator('#experiment-group-1').textContent(), /Paused/);
   await page.locator(`a[href="/experiments/${fixture.id}"]`).first().click();
   assert.match(await page.locator('main').textContent(), /thirdshift experiment issue-1020 --baseline v1.0 --suite code-review/);
+  await openSuites(page);
   await page.locator('#experiment-bar > summary').click();
   await page.getByRole('button', { name: 'alpha', exact: true }).click();
   assert.match(await page.locator('#peek-content').textContent(), /Baseline/);

@@ -1506,7 +1506,7 @@ fn run_published(run: &StepRun<'_>, step: &ResolvedStep, prior: &PriorSteps<'_>)
         "dispatching {url}, as thirdshift {url} would",
         url = issue.url
     ));
-    logs::dispatching(Work::Run(&issue), run.choice);
+    logs::dispatching(Work::Run(&issue), run.choice, &[]);
     let config = UserConfig::load()?;
     let flags = Flags {
         goal: Some(if run.limits.forbid_self_merge {

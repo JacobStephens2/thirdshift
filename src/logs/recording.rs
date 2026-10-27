@@ -447,7 +447,12 @@ impl<O: Outside> Record<O> {
         }
     }
 
-    pub(super) fn dispatching(&mut self, work: Work, harness: &Choice) {
+    pub(super) fn dispatching(
+        &mut self,
+        work: Work,
+        harness: &Choice,
+        security_fix_findings: &[crate::security::RecordedFinding],
+    ) {
         // Entered while the pass is still the active record, timing the
         // dispatch. An Architect run keeps its Architecture review stage,
         // as #889 asked only for Pickup runs and Security runs.
@@ -456,6 +461,7 @@ impl<O: Outside> Record<O> {
         }
         let stamp = self.stamp();
         let mut facts = CommandRecord::new(work, &stamp, harness, self.outside.now());
+        facts.security_fix_findings = security_fix_findings.to_vec();
         if let Some((_, tree)) = &mut self.command_record {
             facts.hostname = tree.command.hostname.clone();
             facts.process_start = tree.command.process_start.clone();

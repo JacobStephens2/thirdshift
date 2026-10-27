@@ -3546,10 +3546,10 @@ command = \"exit 1\"
     let console = Console::start(&scenario);
     let html = console.get("/");
     let section = html
-        .split("data-group=\"needs you\"")
+        .split("class=\"group\" data-group=\"needs you\"")
         .nth(1)
         .unwrap_or_else(|| panic!("{html}"))
-        .split("</details>")
+        .split("</section>")
         .next()
         .unwrap();
     assert!(
@@ -3848,7 +3848,20 @@ fn peek_shows_each_step_line_and_result_path() {
     let mut url = reqwest::Url::parse("http://localhost/peek").unwrap();
     url.query_pairs_mut().append_pair("command", &name);
     let html = Console::start(&scenario).get(&format!("{}?{}", url.path(), url.query().unwrap()));
-    assert!(html.contains("step gather:"), "{html}");
+    let heading = html.split("</h2>").next().unwrap();
+    assert!(
+        heading.contains("Process notes on acme/widgets"),
+        "{heading}"
+    );
+    for (index, step) in ["gather", "review"].into_iter().enumerate() {
+        assert!(
+            html.contains(&format!(
+                "data-fact=\"process steps/{}\"><summary>step {step}:",
+                index + 1
+            )),
+            "{html}"
+        );
+    }
     assert!(html.contains(&result.display().to_string()), "{html}");
 }
 

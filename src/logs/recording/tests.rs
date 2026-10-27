@@ -1430,7 +1430,7 @@ fn a_pickup_or_security_run_enters_a_stage_naming_what_it_dispatched_and_when() 
         } else {
             Work::Run(&dispatched)
         };
-        record.dispatching(child, &harness());
+        record.dispatching(child, &harness(), &[]);
         // The dispatched Command's own stages are its own, not the pass's.
         memory.0.lock().unwrap().now =
             Some(DateTime::parse_from_rfc3339("2026-10-03T13:31:00-04:00").unwrap());
@@ -1466,7 +1466,7 @@ fn a_dispatch_found_to_be_a_spec_by_its_launch_checks_renames_the_pass_stage() {
     record.begin(Begin::PickupRun);
     record.configured(&config(true));
     record.started(Work::PickupRun(&ready), &harness());
-    record.dispatching(Work::Run(&dispatched), &harness());
+    record.dispatching(Work::Run(&dispatched), &harness(), &[]);
     record.started(Work::SpecRun(&dispatched), &harness());
     let tree = command_tree(&memory);
     assert_eq!(tree["stages"][0]["name"], "dispatched Spec run");
@@ -1482,7 +1482,7 @@ fn an_architect_run_keeps_its_own_stage_while_its_plan_is_dispatched() {
     record.begin(Begin::ArchitectRun);
     record.configured(&config(true));
     record.started(Work::ArchitectRun(&repo), &harness());
-    record.dispatching(Work::Run(&plan), &harness());
+    record.dispatching(Work::Run(&plan), &harness(), &[]);
     record.started(Work::Run(&plan), &harness());
     let tree = command_tree(&memory);
     let stages: Vec<_> = tree["stages"]

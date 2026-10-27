@@ -134,23 +134,17 @@ fn status_shows_each_idle_pass_until_its_own_kind_starts_work() {
         let result = scenario.run(flags);
         assert_eq!(result.code, Some(0), "{}", result.stderr);
         let status: Value = serde_json::from_str(&result.stdout).unwrap();
+        // The Pass is ready on its dispatched Run's pull request, so it
+        // carries that Run: one row, not a second for the Run (#1428).
         let commands = status["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 2, "{status}");
-        let pass = commands
-            .iter()
-            .find(|command| command["kind"] == "Pickup run")
-            .unwrap();
+        assert_eq!(commands.len(), 1, "{status}");
+        let pass = &commands[0];
         assert_eq!(pass["kind"], "Pickup run");
+        assert_eq!(pass["group"], "ready for review");
         let dispatched = &pass["dispatched"][0];
         assert_eq!(dispatched["issue"]["number"], 7);
         assert_eq!(dispatched["command_log"], pass["command_log"]);
-        let ready = commands
-            .iter()
-            .find(|command| command["kind"] == "Run")
-            .unwrap();
-        assert_eq!(ready["group"], "ready for review");
-        assert_eq!(ready["issue"]["number"], 7);
-        assert_eq!(ready["command_log"], dispatched["command_log"]);
+        assert_eq!(dispatched["pull_request"], pass["pull_request"]);
         for command in [pass, dispatched] {
             assert_eq!(command["source"], "command_record");
             assert_eq!(command["state"], "ended");
@@ -3232,7 +3226,12 @@ fn github_failures_warn_with_last_answer_and_clear_after_recovery() {
             "{}",
             text.stdout
         );
-        assert!(text.stdout.contains(answered), "{}", text.stdout);
+        // The plain view reads the instant in this machine's zone, to the minute.
+        assert!(
+            text.stdout.contains(&support::local_minute(answered)),
+            "{}",
+            text.stdout
+        );
         assert!(text.stdout.contains(diagnostic), "{}", text.stdout);
         gh["failing"] = serde_json::json!([]);
         scenario.write_gh_state(&gh);
@@ -3414,7 +3413,11 @@ fn legacy_github_answer_time_survives_a_failed_refresh() {
         "a failed refresh must preserve the last successful read time: {second}"
     );
     let text = scenario.run(&["status"]);
-    assert!(text.stdout.contains(&answered), "{}", text.stdout);
+    assert!(
+        text.stdout.contains(&support::local_minute(&answered)),
+        "{}",
+        text.stdout
+    );
     assert!(!text.stdout.contains("GitHub has not answered yet"));
 }
 

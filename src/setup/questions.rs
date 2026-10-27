@@ -160,10 +160,10 @@ pub fn ask(
         yes_or_no(
             outside,
             "Security runs may close a finding their fix merged?",
-            current.security_close.unwrap_or(false),
+            current.security_close.unwrap_or(true),
         )?
     } else {
-        current.security_close.unwrap_or(false)
+        current.security_close.unwrap_or(true)
     };
     let security_review = yes_or_no(
         outside,

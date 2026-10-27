@@ -328,7 +328,7 @@ To open this machine's Inbox locally, run:
 thirdshift console --no-sign-in
 ```
 
-Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. Ended rows show their recorded finish date and time in UTC and an explicit relative age, for example **Ended Oct 23, 2026 at 23:03:17 UTC · 52 min ago**. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. The Console never starts work; start Commands from the CLI or the operating system's scheduler.
+Open the localhost address it prints. The Console shows the same Inbox as `thirdshift status`, with live stages, logs and Session traces. Like a mailbox, its sections are folders beside a list of one-line rows, and a clicked row's Command details open alongside on a wide screen; `/?section=done` opens Done. Ended rows show their relative age, with the recorded finish in this machine's time zone on hover, or in full without JavaScript, for example **Ended 2026-10-23 19:03 EDT · 52 min ago**. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command's own finish time; missing or invalid finish times say **End time unknown**. The finish information also works without JavaScript. The Console never starts work; start Commands from the CLI or the operating system's scheduler.
 
 #### Console on a server
 
@@ -741,8 +741,9 @@ read the retained evidence. Pruning failures print a `warning:` without changing
 the Verdict or exit status.
 
 The Console's **Experiments** link opens `/experiments`, grouped into Running,
-Needs you and Done, newest first within each. Open an Experiment for its live
-Trial grid, per-suite Verdict intervals, Arm comparison and folded Bar. Select
+Needs you and Done, newest first within each, one line apiece with its accuracy.
+Open an Experiment for what it tests, then its live Trial grid, per-suite
+Verdict intervals, Arm comparison and Bar, each folded to a one-line gist. Select
 a Trial or Eval task to open its Peek, including Grader reasons, rechecks,
 Void causes and links to retained Session logs or Session traces. Both pages
 pair with `experiments --json`; its view includes task names, active Trial start
@@ -1314,7 +1315,7 @@ effort = ""   # the Model's variant, passed as #effort; default blank, for OpenC
 
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
-close = false   # Security runs may close a finding their fix merged, when fixing is allowed; default false
+close = true   # Security runs may close a finding their fix merged, when fixing is allowed; default true
 review = false   # Ticket runs review their change for Security findings; default false
 harness = ""   # the Harness for Security runs, unless the command names one, and for every Security review; default blank; blank or missing leaves Security runs on harness.default, or Claude Code if that is missing, and Security reviews on their Command's Harness
 
@@ -1331,7 +1332,7 @@ Every key holds its real value, so a Ticket run reading it does exactly what it 
 3. `Every Ticket run may start a Base fix when the Base branch's CI is red?` (`base.fix`), whatever the Self-merge answer. Pressing Enter keeps the current `base.fix` value.
 4. `Every Ticket run first fast-forwards your checkout of the Base branch?` (`launch.pull`)
 5. Security runs may fix reproduced findings? (`security.fix`), off by default.
-6. When fixing is on, Security runs may close a finding their fix merged? (`security.close`), off by default.
+6. When fixing is on, Security runs may close a finding their fix merged? (`security.close`), on by default.
 7. `Ticket runs review their change for Security findings?` (`security.review`), off by default.
 8. Run notifications? (`email.always`). If yes, the address (`email.to`), asked again until it has an `@`, then the sender (`email.from`).
 9. With notifications on, the Resend API key, with input hidden. With none saved it asks `Resend API key (input hidden, Enter to skip):`; with one in the [Credentials](#email), `Resend API key (input hidden, Enter keeps the saved one):`, and a new one replaces it. Surrounding spaces are trimmed, and anything that doesn't start with `re_` is asked again. A key you give is saved in the Credentials, `~/.thirdshift/credentials.toml`, created with mode 600 (and `~/.thirdshift` with it) or edited in place, keeping its comments and anything else in it and changing only `resend.key`; `setup` then prints `wrote the Credentials <path>`. The key is never printed, nor written to the User config. Skipping writes no Credentials and says how to add a key later: rerun `thirdshift setup`, or set `RESEND_API_KEY`. With `RESEND_API_KEY` set and not empty, which wins over the Credentials, nothing is asked, and it says the key comes from `RESEND_API_KEY`. With a key found or given, it offers to send a test email (default No), as `thirdshift email-test` does, once the files are written.
@@ -1532,10 +1533,15 @@ Command, its issue, labels, Claim and pull request stay as they are, and nothing
 is written to GitHub. The Activity log records each dismissal and each one taken
 back, naming the Unix user and the CLI. `dismiss --json` reports what it did.
 
-In the Console, any signed-in account can click **Dismiss** directly on a waiting
-Inbox row or in its Command details, beside Stop when available. One click
-dismisses, with no confirmation page. A dismissed row offers **Undo** in Command
-details. While either request is pending, its buttons show “Dismissing…” or
+In the Console, any signed-in account can click **Dismiss** on the row in Needs
+you or Ready for review, or in Command details beside Stop when available.
+With JavaScript, `d` dismisses the selected row and selects the next row; text
+fields and open dialogs keep their keys. An inline dismissal shows a temporary
+`Dismissed <subject> · Undo` notice. Undo restores that Command's row. Notices
+stay while hovered, focused, saving or showing an error. Without JavaScript,
+rows retain their full Dismiss form. One click dismisses, with no confirmation
+page. A dismissed row also offers **Undo** in Command details.
+While either request is pending, its buttons show “Dismissing…” or
 “Taking back dismissal…” and stay disabled, including through live updates.
 A failed request shows the error and lets you retry. Command details shows each
 button's CLI form beside it. Both posts require a session and a valid CSRF token, open
@@ -1925,7 +1931,7 @@ The command takes the Harness, Model and Effort words and the shared Pass words 
 
 Fixing is off by default. `security-fix` on the command or `fix = true` under `[security]` allows one fix; `no-security-fix` overrides the setting. Both words are accepted on every command that starts Ticket runs and passed to those Ticket runs. With fixing allowed, a Security run takes the most severe reproduced finding still awaiting a fix before auditing, with ties in private-record order. After an audit reproduces findings, it goes on to the most severe one.
 
-Closing is off by default too. `security-close` on the command or `close = true` under `[security]` lets a Security run close the finding its fix merged, naming the merged pull request; `no-security-close` overrides the setting. The words take effect only when fixing is also allowed. After a dispatched fix ends merged, the run re-runs the private record's proof-of-concept test against the merged Base branch in the reproduction sandbox. When the test now passes, the run names the merged pull request in the private record and closes it: a draft advisory through its description and state, a finding issue with a comment naming the pull request before it is closed. A fix left ready for review closes nothing, and a test that still fails, or cannot run, leaves the record open with a private note of what happened; a failed close never changes the fix's outcome. A closed record is never picked up as waiting or as the next fix.
+Closing is on by default when fixing is allowed. `no-security-close` on the command or `close = false` under `[security]` leaves the finding open after fixing; `security-close` overrides that setting. After a dispatched fix ends merged, the run re-runs the private record's proof-of-concept test against the merged Base branch in the reproduction sandbox. When the test now passes, the run names the merged pull request in the private record and closes it: a draft advisory through its description and state, a finding issue with a comment naming the pull request before it is closed. A fix left ready for review closes nothing, and a test that still fails, or cannot run, leaves the record open with a private note of what happened; a failed close never changes the fix's outcome. A closed record is never picked up as waiting or as the next fix.
 
 A publishing session reads the private record and follows the reproduction's fix-size decision: a single **Ticket**, or a **Spec** with **Tickets** through `thirdshift-to-spec` and `thirdshift-to-tickets`. Every new issue is terse, saying only what the fix changes and linking the private record. thirdshift checks all the issues, swaps the top issue's `needs-triage` for `ready-for-agent`, adds `security-fix` to every fix issue (creating the label when missing), records the fix link privately and dispatches its **Ticket run** or **Spec run**. The Security run ends as that run ends, including a **Ticket run** that Self-merges when asked by the command or the User config.
 
@@ -2362,8 +2368,12 @@ cargo test
 
 ## Releasing
 
-Before pushing anything, the release script runs `thirdshift experiment
---release <commit>` using this checkout's runner and private Eval suites.
+The release script skips Experiments by default, printing a note. Opt in with
+`scripts/release.sh --with-experiment 0.4.0`, adding `--with-experiment` again
+on each resume that should run an Experiment.
+
+With `--with-experiment`, before pushing anything, the script runs
+`thirdshift experiment --release <commit>` using this checkout's runner and private Eval suites.
 It evaluates the content commit beneath the version-only bump, so reruns use
 the same Experiment even before a bump branch exists. It pins that commit in a
 local Git ref before starting, so a merge to `main` during interruption does
@@ -2374,18 +2384,15 @@ intervals and asks `release anyway? [y/N]`, including without `--review`.
 Only `y` or `yes` continues; EOF or any other answer stops. Pending borderline
 and decisive Scores are listed with their recheck commands and polled until
 you have rechecked them. No touched suite or a last release with no Trial flag
-prints a note and carries on. `--no-experiment` skips the release Experiment
-outright, on the first run and on every resume, and prints a line saying so:
-use it only when an Experiment can't give a Verdict worth its Trials, such as
-while every Trial is known to be void. An interrupted invocation resumes its saved
+prints a note and carries on. An interrupted invocation resumes its saved
 Trials. A pushed bump branch is checked again before opening its PR, and an
 open or merged bump PR before merging or tagging. An already pushed tag only
 resumes the release workflow. Python 3 is needed to read the Experiment results.
 
 If `main` gains different content after the Candidate was selected, the script
-refuses to push or merge that release under its old Experiment; choose a fresh
-release version to measure current `main`. It also checks the merged tree before
-tagging, so a concurrent merge cannot publish unmeasured content.
+refuses to push or merge that release; choose a fresh release version for current
+`main`. It also checks the merged tree before tagging, so a concurrent merge
+cannot publish different content. These checks apply even without an Experiment.
 
 From a clone of this repo, signed in to `gh` and the User config's default Harness, run the release script with the new version:
 

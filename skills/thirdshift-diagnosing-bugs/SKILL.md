@@ -11,9 +11,21 @@ Run headless: make routine choices yourself and finish with one of the two endin
 
 Redact secrets from commands, output and captured artifacts. Build loops against environment variables so credentials stay out of the evidence.
 
+## Where to reproduce
+
+The Session prompt says which checkout the bug is reproduced on.
+
+When it names a merge base, this is a Continuation whose Issue branch already has commits beyond the Base branch. Reproduce at that merge base. Use the commit the prompt names; do not choose another from git history. Then check the fix on the Issue branch.
+
+- The bug reproduces at the merge base and the branch already fixes it: take the reproduced ending. Do not rewrite the fix. Continue to the Session prompt's implementation steps, including review and the pull request.
+- The bug reproduces at the merge base and the branch does not fix it: take the reproduced ending, finish the fix, then continue to those steps.
+- The bug does not reproduce at the merge base: take the not reproduced ending. A passing check on the branch is not enough to hand the issue back.
+
+A fresh bug Ticket run, or a Continuation whose Session prompt names no merge base, reproduces against the checkout you are in.
+
 ## 1. Build a tight feedback loop
 
-Spend most of the diagnosis effort here. Read enough code to find a seam that reaches the reported symptom, then run an unattended pass/fail command against the current code. Prefer a focused test; a CLI fixture, HTTP replay, headless browser script or throwaway harness can help establish reproduction. Assert the exact reported symptom, rather than simply checking that execution succeeds. A setup or compilation failure is not reproduction.
+Spend most of the diagnosis effort here. Read enough code to find a seam that reaches the reported symptom, then run an unattended pass/fail command against the checkout named under Where to reproduce. Prefer a focused test; a CLI fixture, HTTP replay, headless browser script or throwaway harness can help establish reproduction. Assert the exact reported symptom, rather than simply checking that execution succeeds. A setup or compilation failure is not reproduction.
 
 Tighten the loop: narrow inputs, pin time and seeds, and remove unrelated setup. For intermittent bugs, repeat the trigger and establish a reproducible failure rate. Record the command, output and conditions. Proceed only once the loop actually fails for the reported reason. If it does not, take the not reproduced ending.
 

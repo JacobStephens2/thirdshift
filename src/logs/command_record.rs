@@ -99,6 +99,9 @@ pub(super) struct CommandRecord {
     pub security_findings_waiting: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub security_findings: Vec<crate::security::RecordedFinding>,
+    /// Findings this dispatched Security fix addresses, kept before launch.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub security_fix_findings: Vec<crate::security::RecordedFinding>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub experiment: Option<crate::evals::experiment::Description>,
     /// The Custom process name. The selector in `name` stays `process-<name>-<stamp>`.
@@ -403,6 +406,7 @@ impl CommandRecord {
             tickets: Vec::new(),
             security_findings_waiting: false,
             security_findings: Vec::new(),
+            security_fix_findings: Vec::new(),
             experiment: None,
             process_name: match work {
                 Work::Process { name, .. } => Some(name.to_string()),

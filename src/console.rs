@@ -1,6 +1,7 @@
 //! The machine's Console. Async execution is confined to this module.
 mod account_commands;
 mod accounts;
+mod assets;
 mod auth;
 mod bug_origins;
 pub(crate) mod conversation;
@@ -401,6 +402,7 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
         accounts::Accounts::load()?;
     }
     let executable = restart::Executable::current()?;
+    let assets = assets::Development::from_environment()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
@@ -409,14 +411,16 @@ pub fn serve(no_sign_in: bool) -> Result<()> {
             .await
             .context("can't listen for the Console on localhost")?;
         let watched = executable.clone();
-        let (changes, notifier, observer) = changes::observe(&config, &executable)?;
+        let (changes, notifier, observer) = changes::observe(&config, &executable, &assets)?;
         let github = github::follow();
         let mut control = changes.clone();
         println!("http://{}", listener.local_addr()?);
         std::io::stdout().flush()?;
         axum::serve(
             listener,
-            router(no_sign_in, changes).layer(axum::Extension(notifier)),
+            router(no_sign_in, changes)
+                .layer(axum::Extension(notifier))
+                .layer(axum::Extension(assets)),
         )
         .with_graceful_shutdown(async move {
             let mut accounts_revision = 0;
@@ -527,13 +531,35 @@ struct InboxPage {
     archive: Option<status::Archive>,
     outcome: String,
     repository: String,
+    /// The `section` the URL asked for, as its slug.
+    section: String,
 }
 
 impl InboxPage {
     fn hidden(&self, group: &str) -> bool {
         self.hidden_sections
             .iter()
-            .any(|section| section == &group.replace(' ', "-"))
+            .any(|section| section == &slug(group))
+    }
+
+    /// The one section the Inbox shows, like a mail folder: the one the URL
+    /// names if it is visible, otherwise the first visible one with rows.
+    fn folder(&self) -> &'static str {
+        let visible = || {
+            self.inbox
+                .sections
+                .iter()
+                .filter(|section| !self.hidden(section.group))
+        };
+        visible()
+            .find(|section| slug(section.group) == self.section)
+            .or_else(|| visible().find(|section| !section.rows.is_empty()))
+            .or_else(|| visible().next())
+            .map_or("", |section| section.group)
+    }
+
+    fn slug(&self, group: &str) -> String {
+        slug(group)
     }
     fn needs_you(&self) -> usize {
         self.inbox.sections[0].rows.len()
@@ -583,6 +609,11 @@ impl RowTemplate<'_> {
             can_copy: false,
         }
     }
+}
+
+/// A section's name as config and URLs spell it: `needs you` is `needs-you`.
+fn slug(group: &str) -> String {
+    group.replace(' ', "-")
 }
 
 fn query_value(query: &Option<String>, key: &str) -> String {
@@ -656,6 +687,7 @@ async fn render_page(
                 .transpose()?,
             outcome,
             repository,
+            section: query_value(&query, "section"),
         }
         .render()?)
     })
@@ -716,15 +748,28 @@ fn page(result: std::result::Result<Result<String>, tokio::task::JoinError>) -> 
     }
 }
 
-async fn asset(Path(path): Path<String>) -> Response {
+async fn asset(
+    axum::Extension(assets): axum::Extension<assets::Development>,
+    Path(path): Path<String>,
+) -> Response {
     if path == "user-themes.css" || path.starts_with("user-fonts/") {
         return match tokio::task::spawn_blocking(move || user_asset(&path)).await {
             Ok(response) => response,
             Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
         };
     }
-    let Some(file) = ASSETS.get_file(&path) else {
-        return StatusCode::NOT_FOUND.into_response();
+    let body = if assets.directory().is_some() {
+        let requested = path.clone();
+        match tokio::task::spawn_blocking(move || assets.read(&requested)).await {
+            Ok(Ok(bytes)) => axum::body::Body::from(bytes),
+            Ok(Err(_)) => return StatusCode::NOT_FOUND.into_response(),
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        }
+    } else {
+        let Some(file) = ASSETS.get_file(&path) else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        axum::body::Body::from(file.contents())
     };
     let content_type = match std::path::Path::new(&path)
         .extension()
@@ -741,7 +786,7 @@ async fn asset(Path(path): Path<String>) -> Response {
             (header::CONTENT_TYPE, content_type),
             (header::X_CONTENT_TYPE_OPTIONS, "nosniff"),
         ],
-        file.contents(),
+        body,
     )
         .into_response()
 }

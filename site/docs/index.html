@@ -320,7 +320,7 @@ thirdshift metrics --from 2026-10-05 --through 2026-10-19 --repo acme/widgets --
 <p>To open this machine&#39;s Inbox locally, run:</p>
 <pre><code class="language-sh">thirdshift console --no-sign-in
 </code></pre>
-<p>Open the localhost address it prints. The Console shows the same Inbox as <code>thirdshift status</code>, with live stages, logs and Session traces. Ended rows show their recorded finish date and time in UTC and an explicit relative age, for example <strong>Ended Oct 23, 2026 at 23:03:17 UTC · 52 min ago</strong>. This is time since finish, not run duration. Nested Ticket runs and History use each Command&#39;s own finish time; missing or invalid finish times say <strong>End time unknown</strong>. The finish information also works without JavaScript. The Console never starts work; start Commands from the CLI or the operating system&#39;s scheduler.</p>
+<p>Open the localhost address it prints. The Console shows the same Inbox as <code>thirdshift status</code>, with live stages, logs and Session traces. Like a mailbox, its sections are folders beside a list of one-line rows, and a clicked row&#39;s Command details open alongside on a wide screen; <code>/?section=done</code> opens Done. Ended rows show their relative age, with the recorded finish in this machine&#39;s time zone on hover, or in full without JavaScript, for example <strong>Ended 2026-10-23 19:03 EDT · 52 min ago</strong>. Every date and time the Console shows reads this way, to the minute. This is time since finish, not run duration. Nested Ticket runs and History use each Command&#39;s own finish time; missing or invalid finish times say <strong>End time unknown</strong>. The finish information also works without JavaScript. The Console never starts work; start Commands from the CLI or the operating system&#39;s scheduler.</p>
 <details class="fold"><summary><h4>Console on a server</h4></summary>
 <div class="manual-content" id="console-on-a-server">
 <p>Set the machine&#39;s address, fixed localhost port and sign-in allowlist in <code>~/.thirdshift/config.toml</code>:</p>
@@ -679,8 +679,9 @@ packets and Scores stay in place, and <code>experiments &lt;id&gt;</code> and <c
 read the retained evidence. Pruning failures print a <code>warning:</code> without changing
 the Verdict or exit status.</p>
 <p>The Console&#39;s <strong>Experiments</strong> link opens <code>/experiments</code>, grouped into Running,
-Needs you and Done, newest first within each. Open an Experiment for its live
-Trial grid, per-suite Verdict intervals, Arm comparison and folded Bar. Select
+Needs you and Done, newest first within each, one line apiece with its accuracy.
+Open an Experiment for what it tests, then its live Trial grid, per-suite
+Verdict intervals, Arm comparison and Bar, each folded to a one-line gist. Select
 a Trial or Eval task to open its Peek, including Grader reasons, rechecks,
 Void causes and links to retained Session logs or Session traces. Both pages
 pair with <code>experiments --json</code>; its view includes task names, active Trial start
@@ -1204,7 +1205,7 @@ effort = &quot;&quot;   # the Model&#39;s variant, passed as #effort; default bl
 
 [security]
 fix = false   # Security runs may fix reproduced findings; default false
-close = false   # Security runs may close a finding their fix merged, when fixing is allowed; default false
+close = true   # Security runs may close a finding their fix merged, when fixing is allowed; default true
 review = false   # Ticket runs review their change for Security findings; default false
 harness = &quot;&quot;   # the Harness for Security runs, unless the command names one, and for every Security review; default blank; blank or missing leaves Security runs on harness.default, or Claude Code if that is missing, and Security reviews on their Command&#39;s Harness
 
@@ -1220,7 +1221,7 @@ memory_swap_max = &quot;1G&quot;   # swap each Trial and Grader scope may use; d
 <li><code>Every Ticket run may start a Base fix when the Base branch&#39;s CI is red?</code> (<code>base.fix</code>), whatever the Self-merge answer. Pressing Enter keeps the current <code>base.fix</code> value.</li>
 <li><code>Every Ticket run first fast-forwards your checkout of the Base branch?</code> (<code>launch.pull</code>)</li>
 <li>Security runs may fix reproduced findings? (<code>security.fix</code>), off by default.</li>
-<li>When fixing is on, Security runs may close a finding their fix merged? (<code>security.close</code>), off by default.</li>
+<li>When fixing is on, Security runs may close a finding their fix merged? (<code>security.close</code>), on by default.</li>
 <li><code>Ticket runs review their change for Security findings?</code> (<code>security.review</code>), off by default.</li>
 <li>Run notifications? (<code>email.always</code>). If yes, the address (<code>email.to</code>), asked again until it has an <code>@</code>, then the sender (<code>email.from</code>).</li>
 <li>With notifications on, the Resend API key, with input hidden. With none saved it asks <code>Resend API key (input hidden, Enter to skip):</code>; with one in the <a href="#email">Credentials</a>, <code>Resend API key (input hidden, Enter keeps the saved one):</code>, and a new one replaces it. Surrounding spaces are trimmed, and anything that doesn&#39;t start with <code>re_</code> is asked again. A key you give is saved in the Credentials, <code>~/.thirdshift/credentials.toml</code>, created with mode 600 (and <code>~/.thirdshift</code> with it) or edited in place, keeping its comments and anything else in it and changing only <code>resend.key</code>; <code>setup</code> then prints <code>wrote the Credentials &lt;path&gt;</code>. The key is never printed, nor written to the User config. Skipping writes no Credentials and says how to add a key later: rerun <code>thirdshift setup</code>, or set <code>RESEND_API_KEY</code>. With <code>RESEND_API_KEY</code> set and not empty, which wins over the Credentials, nothing is asked, and it says the key comes from <code>RESEND_API_KEY</code>. With a key found or given, it offers to send a test email (default No), as <code>thirdshift email-test</code> does, once the files are written.</li>
@@ -1365,10 +1366,15 @@ the Console, which of the record&#39;s rows it covers, and every kind it covered
 Command, its issue, labels, Claim and pull request stay as they are, and nothing
 is written to GitHub. The Activity log records each dismissal and each one taken
 back, naming the Unix user and the CLI. <code>dismiss --json</code> reports what it did.</p>
-<p>In the Console, any signed-in account can click <strong>Dismiss</strong> directly on a waiting
-Inbox row or in its Command details, beside Stop when available. One click
-dismisses, with no confirmation page. A dismissed row offers <strong>Undo</strong> in Command
-details. While either request is pending, its buttons show “Dismissing…” or
+<p>In the Console, any signed-in account can click <strong>Dismiss</strong> on the row in Needs
+you or Ready for review, or in Command details beside Stop when available.
+With JavaScript, <code>d</code> dismisses the selected row and selects the next row; text
+fields and open dialogs keep their keys. An inline dismissal shows a temporary
+<code>Dismissed &lt;subject&gt; · Undo</code> notice. Undo restores that Command&#39;s row. Notices
+stay while hovered, focused, saving or showing an error. Without JavaScript,
+rows retain their full Dismiss form. One click dismisses, with no confirmation
+page. A dismissed row also offers <strong>Undo</strong> in Command details.
+While either request is pending, its buttons show “Dismissing…” or
 “Taking back dismissal…” and stay disabled, including through live updates.
 A failed request shows the error and lets you retry. Command details shows each
 button&#39;s CLI form beside it. Both posts require a session and a valid CSRF token, open
@@ -1670,7 +1676,7 @@ thirdshift secure base main harness codex model gpt-6.1-sol effort high
 </code></pre>
 <p>The command takes the Harness, Model and Effort words and the shared Pass words (<code>merge</code>, <code>no-merge</code>, <code>base-fix</code>, <code>no-base-fix</code>, <code>parallel</code>, <code>email</code>, <code>email-unless-merged</code>, <code>no-email</code>, <code>security-fix</code>, <code>no-security-fix</code>, <code>security-close</code> and <code>no-security-close</code>, with or without dashes). After recording findings, it tries to reproduce each untriaged one in a fresh throwaway worktree at the recorded audited commit, and keeps the outcome, severity when reproduced, notes and test in the private record. It preserves findings already triaged by the Day shift. It never publishes an advisory.</p>
 <p>Fixing is off by default. <code>security-fix</code> on the command or <code>fix = true</code> under <code>[security]</code> allows one fix; <code>no-security-fix</code> overrides the setting. Both words are accepted on every command that starts Ticket runs and passed to those Ticket runs. With fixing allowed, a Security run takes the most severe reproduced finding still awaiting a fix before auditing, with ties in private-record order. After an audit reproduces findings, it goes on to the most severe one.</p>
-<p>Closing is off by default too. <code>security-close</code> on the command or <code>close = true</code> under <code>[security]</code> lets a Security run close the finding its fix merged, naming the merged pull request; <code>no-security-close</code> overrides the setting. The words take effect only when fixing is also allowed. After a dispatched fix ends merged, the run re-runs the private record&#39;s proof-of-concept test against the merged Base branch in the reproduction sandbox. When the test now passes, the run names the merged pull request in the private record and closes it: a draft advisory through its description and state, a finding issue with a comment naming the pull request before it is closed. A fix left ready for review closes nothing, and a test that still fails, or cannot run, leaves the record open with a private note of what happened; a failed close never changes the fix&#39;s outcome. A closed record is never picked up as waiting or as the next fix.</p>
+<p>Closing is on by default when fixing is allowed. <code>no-security-close</code> on the command or <code>close = false</code> under <code>[security]</code> leaves the finding open after fixing; <code>security-close</code> overrides that setting. After a dispatched fix ends merged, the run re-runs the private record&#39;s proof-of-concept test against the merged Base branch in the reproduction sandbox. When the test now passes, the run names the merged pull request in the private record and closes it: a draft advisory through its description and state, a finding issue with a comment naming the pull request before it is closed. A fix left ready for review closes nothing, and a test that still fails, or cannot run, leaves the record open with a private note of what happened; a failed close never changes the fix&#39;s outcome. A closed record is never picked up as waiting or as the next fix.</p>
 <p>A publishing session reads the private record and follows the reproduction&#39;s fix-size decision: a single <strong>Ticket</strong>, or a <strong>Spec</strong> with <strong>Tickets</strong> through <code>thirdshift-to-spec</code> and <code>thirdshift-to-tickets</code>. Every new issue is terse, saying only what the fix changes and linking the private record. thirdshift checks all the issues, swaps the top issue&#39;s <code>needs-triage</code> for <code>ready-for-agent</code>, adds <code>security-fix</code> to every fix issue (creating the label when missing), records the fix link privately and dispatches its <strong>Ticket run</strong> or <strong>Spec run</strong>. The Security run ends as that run ends, including a <strong>Ticket run</strong> that Self-merges when asked by the command or the User config.</p>
 <p>On a public repository, thirdshift checks issues created during the publishing session&#39;s window before creating the staged issue or Spec, and again after linking a Spec&#39;s Tickets. The second sweep skips the staged Spec and its Tickets. Each other issue&#39;s title and body face the same public-text check as staged text: they must link the private record and include none of its private write-up lines or test text. Issues that fail are closed and fail the Security run. Issues that pass are left open, named in the <strong>Activity log</strong>, and do not fail the run. The time window alone does not establish who created an issue.</p>
 <p>On a private repository, the finding&#39;s own issue is the fix&#39;s Ticket or Spec, keeping its write-up and proof-of-concept. A one-session fix needs no publishing session or second issue: thirdshift marks the finding&#39;s issue ready and dispatches it. For a bigger fix, the publishing session adds terse Tickets as that issue&#39;s native sub-issues, with their blocking links.</p>
@@ -2018,7 +2024,11 @@ cargo test
 </div></details>
 <details class="fold"><summary><h2>Releasing</h2></summary>
 <div class="manual-content" id="releasing">
-<p>Before pushing anything, the release script runs <code>thirdshift experiment --release &lt;commit&gt;</code> using this checkout&#39;s runner and private Eval suites.
+<p>The release script skips Experiments by default, printing a note. Opt in with
+<code>scripts/release.sh --with-experiment 0.4.0</code>, adding <code>--with-experiment</code> again
+on each resume that should run an Experiment.</p>
+<p>With <code>--with-experiment</code>, before pushing anything, the script runs
+<code>thirdshift experiment --release &lt;commit&gt;</code> using this checkout&#39;s runner and private Eval suites.
 It evaluates the content commit beneath the version-only bump, so reruns use
 the same Experiment even before a bump branch exists. It pins that commit in a
 local Git ref before starting, so a merge to <code>main</code> during interruption does
@@ -2029,17 +2039,14 @@ intervals and asks <code>release anyway? [y/N]</code>, including without <code>-
 Only <code>y</code> or <code>yes</code> continues; EOF or any other answer stops. Pending borderline
 and decisive Scores are listed with their recheck commands and polled until
 you have rechecked them. No touched suite or a last release with no Trial flag
-prints a note and carries on. <code>--no-experiment</code> skips the release Experiment
-outright, on the first run and on every resume, and prints a line saying so:
-use it only when an Experiment can&#39;t give a Verdict worth its Trials, such as
-while every Trial is known to be void. An interrupted invocation resumes its saved
+prints a note and carries on. An interrupted invocation resumes its saved
 Trials. A pushed bump branch is checked again before opening its PR, and an
 open or merged bump PR before merging or tagging. An already pushed tag only
 resumes the release workflow. Python 3 is needed to read the Experiment results.</p>
 <p>If <code>main</code> gains different content after the Candidate was selected, the script
-refuses to push or merge that release under its old Experiment; choose a fresh
-release version to measure current <code>main</code>. It also checks the merged tree before
-tagging, so a concurrent merge cannot publish unmeasured content.</p>
+refuses to push or merge that release; choose a fresh release version for current
+<code>main</code>. It also checks the merged tree before tagging, so a concurrent merge
+cannot publish different content. These checks apply even without an Experiment.</p>
 <p>From a clone of this repo, signed in to <code>gh</code> and the User config&#39;s default Harness, run the release script with the new version:</p>
 <pre><code class="language-sh">scripts/release.sh 0.4.0
 </code></pre>

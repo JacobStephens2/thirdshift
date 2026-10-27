@@ -6,13 +6,152 @@ use support::Scenario;
 use support::resend::saved_notification;
 
 const IMPLEMENT: &str = r#"
-test -f .claude/skills/thirdshift-diagnosing-bugs/SKILL.md || exit 1
+test -f .claude/skills/thirdshift-diagnosing-bugs/SKILL.md || test -f .agents/skills/thirdshift-diagnosing-bugs/SKILL.md || exit 1
 echo feature > feature.txt
 git add feature.txt
 git commit -q -m 'Fix bug'
 gh pr create --base main --head issue-7 --title 'Fix bug' --body 'Closes #7'
 echo 'Bug reproduced: fixed' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 "#;
+
+fn late_background_reply(earlier: &str) -> String {
+    let earlier = serde_json::json!({
+        "type": "assistant", "message": {
+            "id": "earlier", "role": "assistant",
+            "content": [{"type": "text", "text": earlier}]
+        }
+    });
+    format!(
+        r#"
+cat <<'JSON'
+{earlier}
+{{"type":"system","subtype":"task_notification","task_id":"test","status":"failed","summary":"Earlier test failed"}}
+{{"type":"assistant","message":{{"id":"later","role":"assistant","content":[{{"type":"text","text":"The earlier background failure was handled. The PR is unchanged."}}]}}}}
+JSON
+echo 'The earlier background failure was handled. The PR is unchanged.' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#
+    )
+}
+
+#[test]
+fn bug_diagnosis_survives_a_late_background_reply() {
+    for harness in ["claude", "grok"] {
+        for reproduced in [true, false] {
+            let scenario = Scenario::new();
+            scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
+            let script = if reproduced {
+                IMPLEMENT
+            } else {
+                r#"
+gh fake labels 7 '["bug", "needs-info", "in-progress"]'
+echo 'Bug not reproduced: https://github.com/acme/widgets/issues/7#issuecomment-42' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#
+            };
+            let earlier = if reproduced {
+                "Bug reproduced: fixed"
+            } else {
+                "Bug not reproduced: https://github.com/acme/widgets/issues/7#issuecomment-42"
+            };
+            scenario.agent_does(&format!("{script}\n{}", late_background_reply(earlier)));
+
+            let result = scenario.run(&["harness", harness, &scenario.issue_url(7)]);
+
+            assert_eq!(result.code, Some(0), "{}", result.stderr);
+            assert_eq!(
+                result.stdout,
+                if reproduced {
+                    "https://github.com/acme/widgets/pull/1\n"
+                } else {
+                    "https://github.com/acme/widgets/issues/7#issuecomment-42\n"
+                }
+            );
+        }
+    }
+}
+
+#[test]
+fn bug_diagnosis_without_any_completion_line_keeps_its_error_after_a_late_reply() {
+    for harness in ["claude", "grok"] {
+        let scenario = Scenario::new();
+        scenario.issue_labelled(7, &["bug"]);
+        scenario.agent_does(&format!(
+            "echo 'Done.' > \"$FAKE_CLAUDE_FINAL_MESSAGE\"\n{}",
+            late_background_reply("Done.")
+        ));
+
+        let result = scenario.run(&["harness", harness, &scenario.issue_url(7)]);
+
+        assert_eq!(result.code, Some(1), "{}", result.stderr);
+        assert!(
+            result.stderr.contains(
+                "bug diagnosis ended without a reproduced or not reproduced completion line"
+            ),
+            "{}",
+            result.stderr
+        );
+    }
+}
+
+/// Probes the checkout the way #1362 did, unless the prompt names a merge base.
+/// An already-fixed branch then goes on to review and the pull request.
+const DIAGNOSE_AT_NAMED_MERGE_BASE: &str = r#"
+hand_back() {
+  gh fake labels 7 '["bug", "needs-info", "in-progress"]'
+  gh issue comment 7 --body '## Triage Notes'
+  printf '%s\n' 'Bug not reproduced: https://github.com/acme/widgets/issues/7#issuecomment-42' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+}
+deliver_fix() {
+  reports=$(printf '%s\n' "$FAKE_CLAUDE_PROMPT" | sed -n 's/.*`\([^`]*\)\/standards\.md`.*/\1/p')
+  test -n "$reports"
+  printf 'Standards\n\nFiles read:\n- behavior.txt\n' > "$reports/standards.md"
+  printf 'Spec\n\nFiles read:\n- behavior.txt\n' > "$reports/spec.md"
+  printf '%s\n' '{"standards":0,"spec":0}' > "$reports/summary.json"
+  gh pr create --base main --head issue-7 --title 'Fix bug' --body 'Closes #7'
+  printf '%s\n' 'Bug reproduced: fixed' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+}
+merge_base=$(printf '%s\n' "$FAKE_CLAUDE_PROMPT" | sed -n 's/^Merge base commit: `\(.*\)`\.$/\1/p')
+if [ -n "$merge_base" ]; then
+  baseline=$(git show "$merge_base:behavior.txt")
+  if [ "$baseline" != broken ]; then
+    hand_back
+    exit 0
+  fi
+  if [ "$(cat behavior.txt)" != fixed ]; then
+    printf '%s\n' fixed > behavior.txt
+    git add behavior.txt
+    git commit -q -m 'Fix bug'
+  fi
+  deliver_fix
+  exit 0
+fi
+if [ "$(cat behavior.txt 2>/dev/null || true)" = broken ]; then
+  printf '%s\n' fixed > behavior.txt
+  git add behavior.txt
+  git commit -q -m 'Fix bug'
+  deliver_fix
+  exit 0
+fi
+hand_back
+"#;
+
+fn origin_merge_base(scenario: &Scenario, base: &str, branch: &str) -> String {
+    let output = std::process::Command::new("git")
+        .args([
+            "-C",
+            &scenario.origin_dir().to_string_lossy(),
+            "merge-base",
+            &format!("refs/heads/{base}"),
+            &format!("refs/heads/{branch}"),
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
 
 #[test]
 fn bug_runs_diagnose_before_implementation_in_fresh_runs_and_continuations() {
@@ -217,4 +356,163 @@ echo 'Bug not reproduced: {url}' > "$FAKE_CLAUDE_FINAL_MESSAGE"
         );
         assert_eq!(scenario.gh_state()["prs"], serde_json::json!([]));
     }
+}
+
+#[test]
+fn a_continuation_reproduces_at_the_merge_base_and_delivers_the_existing_fix() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
+    scenario.origin_has_commit("main", "behavior.txt", "broken\n", "Bug is present");
+    scenario.origin_has_branch("issue-7", "main", &[]);
+    scenario.origin_has_commit("issue-7", "behavior.txt", "fixed\n", "Fix the bug");
+    let merge_base = origin_merge_base(&scenario, "main", "issue-7");
+    let history = scenario.origin_log("issue-7");
+    scenario.agent_does(DIAGNOSE_AT_NAMED_MERGE_BASE);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(
+        result.stdout, "https://github.com/acme/widgets/pull/1\n",
+        "{}",
+        result.stderr
+    );
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    let prompt = scenario.first_prompt();
+    assert!(
+        prompt.contains(&format!("Merge base commit: `{merge_base}`.")),
+        "{prompt}"
+    );
+    let calls = scenario.claude_calls();
+    let skill = calls[0]["skill_files"]["thirdshift-diagnosing-bugs/SKILL.md"]
+        .as_str()
+        .unwrap();
+    assert!(skill.contains("Reproduce at that merge base"), "{skill}");
+    assert!(!scenario.issue_labels(7).contains(&"needs-info".to_string()));
+    assert!(scenario.gh_calls_of("issue", "comment").is_empty());
+    assert!(
+        !result.stderr.contains("no review reports were left"),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(scenario.origin_log("issue-7"), history);
+}
+
+#[test]
+fn a_continuation_whose_merge_base_lacks_the_bug_still_needs_info() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
+    scenario.origin_has_commit("main", "behavior.txt", "fine\n", "No bug");
+    scenario.origin_has_branch("issue-7", "main", &[]);
+    scenario.origin_has_commit("issue-7", "notes.txt", "still fine\n", "Unrelated");
+    let history = scenario.origin_log("issue-7");
+    scenario.agent_does(DIAGNOSE_AT_NAMED_MERGE_BASE);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        result.stdout,
+        "https://github.com/acme/widgets/issues/7#issuecomment-42\n"
+    );
+    assert!(
+        result.stderr.contains("bug not reproduced"),
+        "{}",
+        result.stderr
+    );
+    let prompt = scenario.first_prompt();
+    let merge_base = origin_merge_base(&scenario, "main", "issue-7");
+    assert!(
+        prompt.contains(&format!("Merge base commit: `{merge_base}`.")),
+        "{prompt}"
+    );
+    assert_eq!(scenario.gh_state()["prs"], serde_json::json!([]));
+    assert_eq!(scenario.origin_log("issue-7"), history);
+    assert_eq!(scenario.issue_labels(7), ["bug", "needs-info"]);
+    assert!(
+        scenario
+            .gh_calls_of("issue", "comment")
+            .iter()
+            .any(|call| call.iter().any(|arg| arg.contains("Triage Notes")))
+    );
+}
+
+#[test]
+fn a_fresh_bug_run_reproduces_on_its_checkout_without_a_merge_base() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
+    scenario.origin_has_commit("main", "behavior.txt", "broken\n", "Bug is present");
+    scenario.agent_does(DIAGNOSE_AT_NAMED_MERGE_BASE);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        result.stdout, "https://github.com/acme/widgets/pull/1\n",
+        "{}",
+        result.stderr
+    );
+    let prompt = scenario.first_prompt();
+    assert!(!prompt.contains("Merge base commit:"), "{prompt}");
+    assert_eq!(
+        scenario.origin_file("issue-7", "behavior.txt").as_deref(),
+        Some("fixed\n")
+    );
+}
+
+#[test]
+fn a_continuation_with_nothing_beyond_the_base_reproduces_on_its_checkout() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
+    scenario.origin_has_commit("main", "behavior.txt", "broken\n", "Bug is present");
+    scenario.origin_has_branch("issue-7", "main", &[]);
+    scenario.agent_does(DIAGNOSE_AT_NAMED_MERGE_BASE);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        result.stdout, "https://github.com/acme/widgets/pull/1\n",
+        "{}",
+        result.stderr
+    );
+    let prompt = scenario.first_prompt();
+    assert!(
+        prompt.contains("You are continuing work on branch issue-7"),
+        "{prompt}"
+    );
+    assert!(!prompt.contains("Merge base commit:"), "{prompt}");
+    assert_eq!(
+        scenario.origin_file("issue-7", "behavior.txt").as_deref(),
+        Some("fixed\n")
+    );
+}
+
+#[test]
+fn a_continuation_finishes_a_fix_the_branch_does_not_have_yet() {
+    let scenario = Scenario::new();
+    scenario.issue_labelled(7, &["bug", "ready-for-agent"]);
+    scenario.origin_has_commit("main", "behavior.txt", "broken\n", "Bug is present");
+    scenario.origin_has_branch("issue-7", "main", &[]);
+    scenario.origin_has_commit("issue-7", "notes.txt", "not a fix\n", "Earlier work");
+    scenario.agent_does(DIAGNOSE_AT_NAMED_MERGE_BASE);
+
+    let result = scenario.run(&[&scenario.issue_url(7)]);
+
+    assert_eq!(result.code, Some(0), "{}", result.stderr);
+    assert_eq!(
+        result.stdout, "https://github.com/acme/widgets/pull/1\n",
+        "{}",
+        result.stderr
+    );
+    let prompt = scenario.first_prompt();
+    let merge_base = origin_merge_base(&scenario, "main", "issue-7");
+    assert!(
+        prompt.contains(&format!("Merge base commit: `{merge_base}`.")),
+        "{prompt}"
+    );
+    assert_eq!(
+        scenario.origin_file("issue-7", "behavior.txt").as_deref(),
+        Some("fixed\n")
+    );
+    assert_eq!(scenario.origin_log("issue-7").unwrap()[0], "Fix bug");
 }

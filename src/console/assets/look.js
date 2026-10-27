@@ -12,35 +12,55 @@ let paused = false;
 let themeInventory = '';
 let themeRevision = '';
 let styleRequest = 0;
-async function refreshThemeStyles() {
-  const requestedStyle = ++styleRequest;
-  const requestedRevision = revision;
-  const link = document.createElement('link');
-  link.rel = 'stylesheet';
+async function refreshStylesheet(previous, link, isCurrent, preserveUnchanged = false) {
+  const id = link.id;
+  const media = link.media;
+  link.removeAttribute('id');
   // Load without applying: a stale response must never replace current fonts.
   link.media = 'not all';
-  link.href = `/assets/user-themes.css?revision=${Date.now()}`;
+  const url = new URL(link.href);
+  url.searchParams.set('revision', Date.now());
+  link.href = url.href;
   const loaded = new Promise((resolve, reject) => { link.onload = resolve; link.onerror = reject; });
   document.head.append(link);
   try {
     await loaded;
-    if (requestedStyle !== styleRequest || requestedRevision !== revision) {
+    if (!isCurrent() || (previous && !previous.isConnected)) {
       link.remove();
       return;
     }
-    const previous = document.querySelector('#user-theme-styles');
     const rules = sheet => [...sheet.cssRules].map(rule => rule.cssText).join('\n');
     // Selecting a Theme changes /look's revision without changing its CSS.
     // Preserve the loaded font faces when the stylesheet is already current.
-    if (previous?.sheet && rules(previous.sheet) === rules(link.sheet)) {
+    if (preserveUnchanged && previous?.sheet && rules(previous.sheet) === rules(link.sheet)) {
       link.remove();
       return;
     }
-    link.media = '';
+    link.media = media;
+    link.id = id;
     previous?.remove();
-    link.id = 'user-theme-styles';
   }
   catch (error) { link.remove(); throw error; }
+}
+
+async function refreshThemeStyles() {
+  const requestedStyle = ++styleRequest;
+  const requestedRevision = revision;
+  const link = Object.assign(document.createElement('link'), {
+    rel: 'stylesheet', href: '/assets/user-themes.css', id: 'user-theme-styles',
+  });
+  await refreshStylesheet(document.querySelector('#user-theme-styles'), link,
+    () => requestedStyle === styleRequest && requestedRevision === revision, true);
+}
+
+let assetStyleRequest = 0;
+export async function refreshAssetStyles() {
+  const requested = ++assetStyleRequest;
+  const links = [...document.querySelectorAll('link[rel="stylesheet"][href]')]
+    .filter(link => new URL(link.href).pathname.startsWith('/assets/') && link.id !== 'user-theme-styles' && link.media !== 'not all');
+  // Reload the containing sheet too: console.css imports themes.css.
+  await Promise.all(links.map(link => refreshStylesheet(link, link.cloneNode(), () => requested === assetStyleRequest)
+    .catch(() => { /* Keep the loaded stylesheet if an edit cannot be loaded. */ })));
 }
 try { paused = localStorage.getItem('thirdshift:console:pause-motion') === 'true'; } catch { /* optional storage */ }
 
@@ -64,8 +84,12 @@ export function activity() {
 
 function apply(settings) {
   root.dataset.theme = settings.theme;
-  for (const section of document.querySelectorAll('#inbox > details[data-group]')) {
-    section.hidden = settings.hidden_sections.includes(section.dataset.group.replaceAll(' ', '-'));
+  const hide = group => settings.hidden_sections.includes(group.replaceAll(' ', '-'));
+  for (const link of document.querySelectorAll('#inbox .folders a[data-group]')) link.hidden = hide(link.dataset.group);
+  for (const section of document.querySelectorAll('#inbox > .group[data-group]')) if (hide(section.dataset.group)) section.hidden = true;
+  // Hiding the open folder opens the first one left with rows, as the server would.
+  if (document.querySelector('#inbox .folders') && !document.querySelector('#inbox > .group:not([hidden])')) {
+    (document.querySelector('#inbox .folders a:not([hidden]):not([data-empty])') ?? document.querySelector('#inbox .folders a:not([hidden])'))?.click();
   }
   if (!sections.open) for (const checkbox of document.querySelectorAll('#section-options input')) checkbox.checked = !settings.hidden_sections.includes(checkbox.value);
   if (!themes.open) document.querySelector('#theme-name').value = settings.theme;
@@ -73,11 +97,15 @@ function apply(settings) {
 }
 
 export async function loadLook() {
-  if (!themes || saving) return;
+  if (saving) return;
   const requestedRevision = revision;
   try {
     const response = await fetch('/look', { cache: 'no-store' });
     if (!response.ok || response.redirected) throw new Error('Look unavailable');
+    if (response.headers.get('x-thirdshift-console-assets') === 'development') {
+      document.dispatchEvent(new Event('console-development-assets'));
+    }
+    if (!themes) return;
     const settings = await response.json();
     if (requestedRevision !== revision || saving) return;
     csrf = settings.csrf;
@@ -102,7 +130,7 @@ export async function loadLook() {
       }
     }
     apply(settings);
-  } catch { message.textContent = 'Could not load the Console look. Reload to try again.'; }
+  } catch { if (message) message.textContent = 'Could not load the Console look. Reload to try again.'; }
 }
 
 async function save(path, values) {
@@ -165,6 +193,6 @@ if (themes) {
     const options = [...document.querySelectorAll('#section-options input')];
     save('/sections', { hide: options.filter(c => !c.checked).map(c => c.value).join(','), show: options.filter(c => c.checked).map(c => c.value).join(',') });
   });
-  loadLook();
 }
+loadLook();
 activity();

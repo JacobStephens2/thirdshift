@@ -32,11 +32,23 @@ function openPeek(id, source = document) {
   content.scrollTop = position;
 }
 
+// A list row opens its Experiment page, as its headline link does.
+document.addEventListener('click', event => {
+  const row = event.target.closest('.experiment-row');
+  if (!row || event.target.closest('a, button, input, select, textarea')) return;
+  row.querySelector('.row-head .subject a')?.click();
+});
+
 document.addEventListener('click', async event => {
   const target = event.target.closest('[data-experiment-peek], [data-pending-only], [data-all-rechecks], [data-copy], [data-close-peek], .peek-link');
   if (!target) return;
   if (target.matches('[data-experiment-peek]')) openPeek(target.dataset.experimentPeek);
-  else if (target.matches('[data-pending-only]')) { pendingOnly = !pendingOnly; controls(); }
+  else if (target.matches('[data-pending-only]')) {
+    pendingOnly = !pendingOnly;
+    controls();
+    // Unfold the suites that hold the Eval tasks it now shows.
+    if (pendingOnly) for (const row of main.querySelectorAll('.trial-row[data-pending="true"]')) row.closest('details.trial-suite')?.setAttribute('open', '');
+  }
   else if (target.matches('[data-all-rechecks]')) { allRechecks = !allRechecks; controls(); }
   else if (target.matches('[data-close-peek], .peek-link')) currentPeek = undefined;
   else if (target.matches('[data-copy]')) {

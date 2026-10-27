@@ -17,10 +17,10 @@
   <script src="/assets/vendor/idiomorph-0.7.4.min.js" defer></script>
   <script src="/assets/console.js" type="module"></script>
 </head>
-<body>
+<body{% if title == "Inbox" %} class="mailbox"{% else if archive.is_some() %} class="archive-page"{% endif %}>
   {% include "console/header.html" %}
   {% include "console/nav.html" %}
-  <main {% if title == "Inbox" %}id="inbox"{% endif %}>
+  <main {% if title == "Inbox" %}id="inbox" class="one-line"{% else if archive.is_some() %}class="one-line"{% endif %}>
     <div class="page-title"><h2>{{ title }}</h2><code>{{ cli }}</code></div>
     {% match archive %}{% when Some with (archive) %}
     {% if title == "History" %}
@@ -36,14 +36,14 @@
       <ul class="commands">{% for item in archive.rows %}{{ self.row(item, false)|safe }}{% endfor %}</ul>
     </details>
     {% when None %}
-    {% match inbox.warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning }}</p>{% when None %}{% endmatch %}
+    <nav class="folders" aria-label="Inbox sections">{% for section in inbox.sections %}<a href="/?section={{ self.slug(section.group) }}" data-group="{{ section.group }}"{% if section.rows.is_empty() %} data-empty{% endif %}{% if self.hidden(section.group) %} hidden{% endif %}{% if self.folder() == section.group %} aria-current="page"{% endif %}><span>{{ section.title }}</span><span class="count">{{ section.rows.len() }}</span></a>{% endfor %}</nav>
+    {% match inbox.warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning|readable }}</p>{% when None %}{% endmatch %}
     {% match inbox.github_warning %}{% when Some with (warning) %}<p role="status">Warning: {{ warning }}</p>{% when None %}{% endmatch %}
     <p class="active-runs" role="status"><strong>{{ self.active_runs() }}</strong> <span>Each outer Command counts once, in any section: a Spec run's Tickets, and the run a Pass dispatched, are part of its run.</span></p>
     {% if self.idle() %}
     <section class="idle-notice" aria-label="No running Commands">
       <h3>No Commands are running on this machine.</h3>
-      {% if self.needs_you() > 0 %}<p>Ended problems need attention in {% if self.hidden("needs you") %}Needs you (hidden; show it with Sections or <code>thirdshift console sections --show needs-you</code>){% else %}<a href="#group-1">Needs you</a>{% endif %}.</p>{% endif %}
-      {% if self.ready_for_review() > 0 %}<p>Pull requests are waiting in {% if self.hidden("ready for review") %}Ready for review (hidden; show it with Sections or <code>thirdshift console sections --show ready-for-review</code>){% else %}<a href="#group-2">Ready for review</a>{% endif %}.</p>{% endif %}
+      {% if self.ready_for_review() > 0 %}<p>Pull requests are waiting in {% if self.hidden("ready for review") %}Ready for review (hidden; show it with Sections or <code>thirdshift console sections --show ready-for-review</code>){% else %}<a href="/?section=ready-for-review">Ready for review</a>{% endif %}.</p>{% endif %}
       {% if inbox.idle_passes.is_empty() %}
       <p>No Pass is currently recorded as skipped.</p>
       {% else %}
@@ -52,18 +52,20 @@
         <ul>{% for pass in inbox.idle_passes %}<li>{{ pass|linkify }}</li>{% endfor %}</ul>
       </details>
       {% endif %}
-      <ul>{% for pass in inbox.pass_starts %}<li>{% include "console/pass_start.html" %}</li>{% endfor %}</ul>
-      <p>Check <a href="/cronjobs">Cron jobs</a> and the scheduler's output for launch failures. Activity logs record skipped Passes; <code>thirdshift status</code> shows their reasons. The Console does not start work.</p>
+      {% if !inbox.pass_starts.is_empty() %}
+      <details id="pass-starts"><summary>Last fired Passes:</summary>
+        <ul>{% for pass in inbox.pass_starts %}<li>{% include "console/pass_start.html" %}</li>{% endfor %}</ul>
+      </details>
+      {% endif %}
     </section>
     {% endif %}
     {% for section in inbox.sections %}
-    <details id="group-{{ loop.index }}" class="group" data-group="{{ section.group }}" {% if self.hidden(section.group) %}hidden{% endif %} {% if section.open %}open{% endif %}>
-      <summary><span>{{ section.title }}</span><span class="count">{{ section.rows.len() }}</span></summary>
+    <section id="group-{{ loop.index }}" class="group" data-group="{{ section.group }}" aria-label="{{ section.title }}"{% if self.hidden(section.group) || self.folder() != section.group %} hidden{% endif %}>
       {% if section.rows.is_empty() && section.references.is_empty() %}<p class="empty">Nothing here.</p>{% endif %}
       {# Only the rendered, auto-escaped RowTemplate is trusted as HTML. #}
       <ul class="commands">{% for item in section.rows %}{{ self.row(item, section.group == "needs you")|safe }}{% endfor %}</ul>
       {% for reference in section.references %}<p>{{ reference|linkify }}</p>{% endfor %}
-    </details>
+    </section>
     {% endfor %}
     {% if !self.idle() && !inbox.idle_passes.is_empty() %}<aside aria-label="Idle Passes">{% for pass in inbox.idle_passes %}<p>{{ pass|linkify }}</p>{% endfor %}</aside>{% endif %}
     {% if !self.idle() && !inbox.pass_starts.is_empty() %}<aside aria-label="Last fired Passes">{% for pass in inbox.pass_starts %}<p>{% include "console/pass_start.html" %}</p>{% endfor %}</aside>{% endif %}

@@ -45,6 +45,10 @@ pub(super) fn name(view: &View) -> String {
     }
 }
 
+/// An instant as people read it, escaped: this machine's zone, to the minute.
+fn when(text: &str) -> String {
+    esc(&crate::local_time::readable(text))
+}
 fn short(text: &str) -> String {
     text.chars().take(10).collect()
 }
@@ -214,11 +218,89 @@ pub(super) fn list(views: &[View]) -> String {
                 .as_ref()
                 .map(|path| path.to_string_lossy().into_owned())
                 .unwrap_or_default();
-            html.push_str(&format!("<li class=\"command experiment-row\" tabindex=\"0\" id=\"experiment-{id}\" data-tone=\"{}\" data-command=\"{}\" data-peek=\"{}\"><div class=\"row-head\">{} <span class=\"subject\"><a href=\"/experiments/{id}\">{}</a></span><span class=\"issue-title\">{}</span><time class=\"age\">{}</time></div><p class=\"now\">{}</p>{}<p class=\"harness\">{}</p><p><a href=\"/experiments/{id}\">Experiment</a> · {}</p></li>", tone(view), esc(&command), esc(&crate::logs::status::inspect::url("/peek", &command, None)), tag(view), esc(&name(view)), esc(view.details.title.as_deref().unwrap_or("")), esc(view.details.ended_at.as_deref().unwrap_or(&view.created_at)), esc(&now(view)), list_intervals(view), builds(view), command_links(view)));
+            html.push_str(&format!("<li class=\"command experiment-row\" tabindex=\"0\" id=\"experiment-{id}\" data-tone=\"{}\" data-command=\"{}\" data-peek=\"{}\"><div class=\"row-head\">{} <span class=\"subject\"><a href=\"/experiments/{id}\">{}</a></span><span class=\"issue-title\">{}</span><time class=\"age\">{}</time></div><p class=\"now\">{}</p>{}<p class=\"harness\">{}</p><p><a href=\"/experiments/{id}\">Experiment</a> · {}</p></li>", tone(view), esc(&command), esc(&crate::logs::status::inspect::url("/peek", &command, None)), tag(view), esc(&name(view)), esc(view.details.title.as_deref().unwrap_or("")), when(view.details.ended_at.as_deref().unwrap_or(&view.created_at)), esc(&now(view)), list_intervals(view), builds(view), command_links(view)));
         }
         html.push_str("</ul></details>");
     }
     html
+}
+
+/// What the Experiment asks, in words: the change between its arms, the suites
+/// it is judged on and what counts as worse, or that it tests no change at all.
+fn question(view: &View) -> String {
+    let d = &view.description;
+    let suites = match d.suites.as_slice() {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    let reference = |name: &Option<String>, commit: &str| match name {
+        Some(name) if !commit.starts_with(name.as_str()) => format!("{name} ({})", short(commit)),
+        _ => short(commit),
+    };
+    let mut changes = Vec::new();
+    if d.baseline.commit != d.candidate.commit {
+        let mut build = format!(
+            "Build: {} → {}",
+            reference(&view.details.baseline_ref, &d.baseline.commit),
+            reference(&view.details.candidate_ref, &d.candidate.commit)
+        );
+        if let Some(title) = view.details.title.as_deref().filter(|t| !t.is_empty()) {
+            build.push_str(&format!(", “{title}”"));
+        }
+        changes.push(build);
+    }
+    let versions = d.prepared.as_ref().map(|p| {
+        (
+            p.baseline.harness.version.as_str(),
+            p.candidate.harness.version.as_str(),
+        )
+    });
+    for (label, b, c) in [
+        (
+            "Harness",
+            d.baseline.harness.as_str(),
+            d.candidate.harness.as_str(),
+        ),
+        (
+            "Model",
+            d.baseline.model.as_deref().unwrap_or("default"),
+            d.candidate.model.as_deref().unwrap_or("default"),
+        ),
+        (
+            "Effort",
+            d.baseline.effort.as_deref().unwrap_or("default"),
+            d.candidate.effort.as_deref().unwrap_or("default"),
+        ),
+        (
+            "Harness version",
+            versions.map_or("", |v| v.0),
+            versions.map_or("", |v| v.1),
+        ),
+    ] {
+        if b != c {
+            changes.push(format!("{label}: {b} → {c}"));
+        }
+    }
+    let body = if changes.is_empty() {
+        format!(
+            "<p>Both arms are the same build, Harness, Model and Effort, so this Experiment tests no change: it shows how much {} results vary between runs of one setup.</p>",
+            esc(&suites)
+        )
+    } else {
+        format!(
+            "<p>Does the Candidate do worse than the Baseline on {}? The Candidate changes:</p><ul>{}</ul><p>Worse means a pass share more than {} points below the Baseline’s.</p>",
+            esc(&suites),
+            changes
+                .iter()
+                .map(|change| format!("<li>{}</li>", esc(change)))
+                .collect::<String>(),
+            (-d.bar.margin * 100.0).round()
+        )
+    };
+    format!(
+        "<section class=\"experiment-question\" aria-label=\"What this Experiment tests\"><h2>What it tests</h2>{body}</section>"
+    )
 }
 
 pub(super) fn detail(view: &View) -> String {
@@ -237,14 +319,14 @@ pub(super) fn detail(view: &View) -> String {
         },
     );
     let mut html = format!(
-        "<p><a href=\"/experiments\">← Experiments</a></p><div class=\"page-title\"><h1>{}</h1><code>thirdshift experiments {id} --json</code></div><p>{} · Started <time>{}</time>{} · {}</p><section class=\"experiment-lead\" aria-label=\"Experiment status\">{} <p>{}</p></section>",
+        "<p><a href=\"/experiments\">← Experiments</a></p><div class=\"page-title\"><h1>{}</h1><code>thirdshift experiments {id} --json</code></div>{}<p>Started <time>{}</time>{} · {}</p><section class=\"experiment-lead\" aria-label=\"Experiment status\">{} <p>{}</p></section>",
         esc(&name(view)),
-        esc(view.details.title.as_deref().unwrap_or("")),
-        esc(&view.created_at),
+        question(view),
+        when(&view.created_at),
         view.details
             .ended_at
             .as_ref()
-            .map(|time| format!(" · Ended <time>{}</time>", esc(time)))
+            .map(|time| format!(" · Ended <time>{}</time>", when(time)))
             .unwrap_or_default(),
         command_log,
         tag(view),
@@ -369,11 +451,17 @@ fn verdict(view: &View) -> String {
     let mut html =
         String::from("<section class=\"experiment-verdict\" aria-label=\"Verdict by suite\">");
     for (name, suite) in &verdict.suites {
+        // Folded to its verdict and intervals; open it for the figures and why.
         html.push_str(&format!(
-            "<h2>{} <span class=\"experiment-tag\" data-tone=\"{}\">{}</span></h2>",
+            "<details class=\"experiment-suite\" data-suite=\"{}\"><summary><h2>{} <span class=\"experiment-tag\" data-tone=\"{}\">{}</span></h2> <span class=\"experiment-gist\">Accuracy {} to {} · Wrong findings {} to {} points</span></summary>",
+            esc(name),
             esc(name),
             decision(suite.verdict),
-            decision(suite.verdict)
+            decision(suite.verdict),
+            points(suite.accuracy.interval.lower),
+            points(suite.accuracy.interval.upper),
+            points(suite.wrong_findings.interval.lower),
+            points(suite.wrong_findings.interval.upper)
         ));
         for (metric, assessment) in [
             ("Accuracy", &suite.accuracy),
@@ -413,6 +501,7 @@ fn verdict(view: &View) -> String {
                 pass.candidate * 100.0
             ));
         }
+        html.push_str("</details>");
     }
     html.push_str(&format!("</section><p class=\"experiment-dim\">Points of pass share, Candidate minus Baseline, at {:.0}% credibility. The axis runs from −50 to +50; the dashed line is the {}-point margin. Arrows mark intervals continuing beyond the axis. For wrong findings, plus means fewer in the Candidate.</p>", view.description.bar.credible_level*100.0, points(view.description.bar.margin)));
     html
@@ -486,7 +575,12 @@ fn grid(view: &View) -> String {
     );
     for suite in &view.description.suites {
         let n = view.description.bar.trials_per_task[suite];
-        html.push_str(&format!("<h3>{}</h3><div role=\"table\" aria-label=\"{} Trials\" class=\"trial-grid\" data-trials=\"{n}\"><div role=\"row\" class=\"trial-row\"><span role=\"columnheader\">Eval task</span><span role=\"columnheader\">Baseline</span><span role=\"columnheader\">Candidate</span><span role=\"columnheader\">Diff.</span></div>", esc(suite), esc(suite)));
+        let tasks = view
+            .tasks
+            .iter()
+            .filter(|task| &task.suite == suite)
+            .count();
+        html.push_str(&format!("<details class=\"trial-suite\" data-suite=\"{}\"><summary><h3>{}</h3> <span class=\"experiment-gist\">{tasks} Eval tasks · {n} {} per Arm each</span></summary><div role=\"table\" aria-label=\"{} Trials\" class=\"trial-grid\" data-trials=\"{n}\"><div role=\"row\" class=\"trial-row\"><span role=\"columnheader\">Eval task</span><span role=\"columnheader\">Baseline</span><span role=\"columnheader\">Candidate</span><span role=\"columnheader\">Diff.</span></div>", esc(suite), esc(suite), if n == 1 { "Trial" } else { "Trials" }, esc(suite)));
         for task in view.tasks.iter().filter(|task| &task.suite == suite) {
             let cells: Vec<_> = Cell::for_task(view, suite, &task.name).collect();
             let dropped = cells.iter().any(|cell| {
@@ -544,7 +638,7 @@ fn grid(view: &View) -> String {
                 ));
             }
         }
-        html.push_str("</div>");
+        html.push_str("</div></details>");
     }
     html.push_str("</section>");
     html
@@ -745,7 +839,7 @@ impl<'a> Cell<'a> {
                         "<dt>Your recheck</dt><dd>{}: {} · {} · wrong finding: {}</dd>",
                         if recheck.passed { "Pass" } else { "Fail" },
                         esc(&recheck.reason),
-                        esc(&recheck.recorded_at),
+                        when(&recheck.recorded_at),
                         recheck.wrong_finding.map_or("unchanged", |wrong| if wrong {
                             "yes"
                         } else {
@@ -798,7 +892,7 @@ impl<'a> Cell<'a> {
         if let Some(running) = self.view.running_trials.iter().find(|r| r.id == self.key) {
             html.push_str(&format!(
                 "<p>Started {}</p><p>{}</p>",
-                esc(&running.started_at),
+                when(&running.started_at),
                 self.view
                     .sessions
                     .iter()
@@ -870,7 +964,7 @@ impl ArmStats {
 fn arms(view: &View) -> String {
     let d = &view.description;
     let mut html = String::from(
-        "<section id=\"experiment-arms\"><h2>What was compared</h2><table class=\"experiment-arms\"><thead><tr><td></td><th scope=\"col\">Baseline</th><th scope=\"col\">Candidate</th></tr></thead><tbody>",
+        "<section id=\"experiment-arms\"><details><summary><h2>What was compared</h2></summary><table class=\"experiment-arms\"><thead><tr><td></td><th scope=\"col\">Baseline</th><th scope=\"col\">Candidate</th></tr></thead><tbody>",
     );
     for (label, b, c) in [
         (
@@ -1026,7 +1120,7 @@ fn arms(view: &View) -> String {
         &view.voids.baseline.to_string(),
         &view.voids.candidate.to_string(),
     ));
-    html.push_str("</tbody></table><p>Efficiency stays outside the Bar. Unknown usage was not reported by the Harness.</p></section>");
+    html.push_str("</tbody></table><p>Efficiency stays outside the Bar. Unknown usage was not reported by the Harness.</p></details></section>");
     html
 }
 
@@ -1079,6 +1173,6 @@ fn bar(view: &View) -> String {
             .map(ToString::to_string)
             .collect::<Vec<_>>()
             .join(", ")),
-        esc(&view.created_at)
+        when(&view.created_at)
     )
 }

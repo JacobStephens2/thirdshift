@@ -62,15 +62,38 @@ impl Snapshot {
     }
 
     pub(super) fn load_metrics(root: &Path, now: DateTime<Local>) -> Result<Self> {
-        Self::load_metrics_with_silence(root, now, std::time::Duration::from_secs(600))
+        let mut snapshot = Self::capture_records(
+            Arc::new(inventory::Native),
+            root,
+            now,
+            std::time::Duration::from_secs(600),
+            true,
+        )?;
+        for entry in &mut snapshot.commands {
+            if let Entry::Record(command) = entry {
+                command.add_session_signals(None);
+            }
+        }
+        Ok(snapshot)
     }
 
-    pub(super) fn load_metrics_with_silence(
+    pub(super) fn load_details(
         root: &Path,
         now: DateTime<Local>,
         silent: std::time::Duration,
+        input: &str,
     ) -> Result<Self> {
-        Self::capture_records(Arc::new(inventory::Native), root, now, silent, true)
+        let mut snapshot =
+            Self::capture_records(Arc::new(inventory::Native), root, now, silent, true)?;
+        if let Observation::Record(selected) = snapshot.resolve(input)?.observation {
+            let identity = CommandIdentity::of(selected);
+            for entry in &mut snapshot.commands {
+                if let Entry::Record(command) = entry {
+                    command.add_session_signals(Some(&identity));
+                }
+            }
+        }
+        Ok(snapshot)
     }
 
     fn capture(
@@ -257,6 +280,22 @@ pub(super) struct CurrentStage {
 }
 
 impl Command {
+    /// Enrich this Command when `selected` is every Command (`None`), or this
+    /// Command's exact identity. A match also enriches nested Ticket
+    /// runs and dispatches. Path alone is not enough: a dispatch shares its
+    /// parent's record path. Usual ranges and health already include every record.
+    fn add_session_signals(&mut self, selected: Option<&CommandIdentity>) {
+        let enrich = selected.is_none_or(|identity| identity.matches(self));
+        if enrich && let Some(mut metrics) = self.record.run_metrics.take() {
+            metrics.add_session_signals(&self.record, cache::session_signals);
+            self.record.run_metrics = Some(metrics);
+        }
+        let nested = if enrich { None } else { selected };
+        for child in self.dispatched.iter_mut().chain(&mut self.children) {
+            child.add_session_signals(nested);
+        }
+    }
+
     fn new(
         inventory: &Arc<Inventory>,
         record: CommandRecord,
@@ -327,12 +366,6 @@ fn read_records(
             for record in std::iter::once(&mut tree.command).chain(&mut tree.dispatched) {
                 if record.run_metrics.is_none() && record.outcome.is_some() {
                     record.run_metrics = Some(super::run_metrics::RunMetrics::historical(record));
-                }
-                if let Some(mut metrics) = record.run_metrics.take() {
-                    metrics.add_session_signals(record, |log| {
-                        super::session_signals::read(log).ok().flatten()
-                    });
-                    record.run_metrics = Some(metrics);
                 }
             }
         }

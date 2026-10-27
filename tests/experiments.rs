@@ -1631,7 +1631,7 @@ printf '{"version":1,"outcome":"succeeded","timings":{"total_ms":1,"session_ms":
 case "$PWD" in
   *--baseline--*)
     echo '{{"type":"rate_limit_event","rate_limit_info":{{"status":"allowed_warning","rateLimitType":"seven_day"}}}}'
-    sleep 0.3
+    sleep 5
     touch '{}'
     ;;
   *) sleep 0.1 ;;

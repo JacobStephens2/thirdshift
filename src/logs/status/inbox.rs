@@ -1,6 +1,6 @@
 //! Owned Inbox presentation for the Console, from the same observations as status.
 use anyhow::Result;
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, Local};
 use std::path::Path;
 
 use super::{age, stage_text, ticket_text};
@@ -23,7 +23,6 @@ pub(crate) struct Inbox {
 pub(crate) struct Section {
     pub group: &'static str,
     pub title: &'static str,
-    pub open: bool,
     pub rows: Vec<Row>,
     pub references: Vec<String>,
 }
@@ -79,10 +78,7 @@ impl Timing {
         let finish = end.and_then(|end| {
             DateTime::parse_from_rfc3339(end).ok().map(|time| Finish {
                 datetime: end.into(),
-                label: time
-                    .with_timezone(&Utc)
-                    .format("%b %-d, %Y at %H:%M:%S UTC")
-                    .to_string(),
+                label: crate::local_time::stamp(&time),
             })
         });
         let age = finish.as_ref().map_or_else(
@@ -94,6 +90,26 @@ impl Timing {
 }
 
 impl Row {
+    /// The one-line row's summary: where the Command stands and, for a
+    /// Command without an issue title, the first thing it did or hit.
+    pub fn gist(&self) -> String {
+        let detail = if !self.title.is_empty() {
+            None
+        } else if let Some(child) = self.children.first() {
+            Some(match child.subject.rsplit_once('#') {
+                Some((_, number)) => format!("#{number} {}", child.title),
+                None => child.subject.clone(),
+            })
+        } else if let Some(finding) = self.findings.first() {
+            Some(finding.title.clone())
+        } else {
+            Some(self.cause.split_whitespace().collect::<Vec<_>>().join(" "))
+        };
+        match detail.filter(|detail| !detail.trim().is_empty() && *detail != self.now_line) {
+            Some(detail) => format!("{} · {detail}", self.now_line),
+            None => self.now_line.clone(),
+        }
+    }
     pub fn peek_url(&self) -> String {
         super::inspect::url("/peek", &self.selector, None)
     }
@@ -165,7 +181,7 @@ pub(crate) fn archive(
         .collect();
     let outcomes = entries
         .iter()
-        .map(|entry| facts(entry).1.to_owned())
+        .map(|entry| outcome_kind(facts(entry).1).to_owned())
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .collect();
@@ -174,7 +190,7 @@ pub(crate) fn archive(
         .filter(|entry| {
             let (repo, result, _) = facts(entry);
             (repository.is_empty() || repository == repo)
-                && (outcome.is_empty() || outcome == result)
+                && (outcome.is_empty() || outcome == outcome_kind(result) || outcome == result)
         })
         .map(|entry| {
             entry_row(
@@ -198,8 +214,12 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
     match entry {
         Observation::Record(command) => row(command, now, root),
         Observation::History(command) => {
-            let (subject, title) =
-                subject(&command.repository, &command.kind, command.issue.as_ref());
+            let (subject, title) = subject(
+                &command.repository,
+                &command.kind,
+                command.issue.as_ref(),
+                None,
+            );
             Ok(Row {
                 id: identity(&format!(
                     "history:{}:{}:{}",
@@ -310,7 +330,6 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                     Group::History => unreachable!(),
                 },
                 title: group.title(),
-                open: group == Group::NeedsYou,
                 rows,
                 references,
             })
@@ -328,21 +347,21 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
 }
 
 fn row_subject(facts: &crate::logs::command_record::CommandRecord) -> (String, String) {
-    if let Some(heading) = facts.process_heading() {
-        let title = match facts.issue.as_ref() {
-            Some(issue) => issue
-                .title
-                .clone()
-                .unwrap_or_else(|| "(title unavailable)".into()),
-            None => String::new(),
-        };
-        return (heading, title);
-    }
-    subject(&facts.repository, &facts.name, facts.issue.as_ref())
+    subject(
+        &facts.repository,
+        &facts.name,
+        facts.issue.as_ref(),
+        facts.process_label(),
+    )
 }
 
-fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, String) {
-    match issue {
+pub(crate) fn subject(
+    repository: &str,
+    name: &str,
+    issue: Option<&Issue>,
+    process: Option<&str>,
+) -> (String, String) {
+    let (subject, title) = match issue {
         Some(issue) => (
             format!("{repository}#{}", issue.number),
             issue
@@ -354,10 +373,16 @@ fn subject(repository: &str, name: &str, issue: Option<&Issue>) -> (String, Stri
             format!("{} on {repository}", crate::logs::display_name(name)),
             String::new(),
         ),
-    }
+    };
+    let subject = match (process, issue) {
+        (Some(process), Some(_)) => format!("Process {process} · {subject}"),
+        (Some(process), None) => format!("Process {process} on {repository}"),
+        (None, _) => subject,
+    };
+    (subject, title)
 }
 
-fn issue_url(issue: Option<&Issue>) -> Option<String> {
+pub(crate) fn issue_url(issue: Option<&Issue>) -> Option<String> {
     issue
         .map(|issue| issue.url.clone())
         .filter(|url| url.starts_with("https://"))
@@ -452,4 +477,64 @@ fn elapsed(time: &str, now: DateTime<Local>) -> String {
     DateTime::parse_from_rfc3339(time)
         .map(|time| age(now.signed_duration_since(time).num_seconds().max(0)))
         .unwrap_or_else(|_| "unknown age".into())
+}
+
+/// What kind of outcome `text` is, for filtering: `merged`, `ready for
+/// review`, `failed`, `plan` or `no Strong candidate`, without the PR,
+/// issue or error it names. Other outcomes, such as `interrupted`, are
+/// their own kind.
+fn outcome_kind(text: &str) -> &str {
+    if text.starts_with("failed") || text.ends_with(" failed") {
+        "failed"
+    } else if text == "merged" || (text.starts_with("PR ") && text.ends_with(" is merged")) {
+        "merged"
+    } else if text.ends_with("ready for review") {
+        "ready for review"
+    } else if text == "plan published" || text.starts_with("plan ") {
+        "plan"
+    } else if text.starts_with("no Strong candidate") {
+        "no Strong candidate"
+    } else {
+        text
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::outcome_kind;
+
+    #[test]
+    fn outcome_kinds_drop_the_pr_issue_or_error_they_name() {
+        for (text, kind) in [
+            (
+                "PR https://github.com/acme/widgets/pull/5 is merged",
+                "merged",
+            ),
+            ("merged", "merged"),
+            (
+                "PR https://github.com/acme/widgets/pull/6 is ready for review",
+                "ready for review",
+            ),
+            ("ready for review", "ready for review"),
+            ("failed", "failed"),
+            ("failed: claude exited 1", "failed"),
+            (
+                "failed: PR https://github.com/acme/widgets/pull/7 is merged, not open",
+                "failed",
+            ),
+            ("review failed", "failed"),
+            (
+                "plan https://github.com/acme/widgets/issues/8 dispatched 3 Tickets",
+                "plan",
+            ),
+            ("plan published", "plan"),
+            (
+                "no Strong candidate: the Architecture review filed the idea",
+                "no Strong candidate",
+            ),
+            ("interrupted", "interrupted"),
+        ] {
+            assert_eq!(outcome_kind(text), kind, "{text}");
+        }
+    }
 }

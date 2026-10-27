@@ -794,7 +794,7 @@ fn setup_can_enable_security_review_and_keeps_it_as_the_next_default() {
 }
 
 #[test]
-fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes() {
+fn setup_keeps_fixing_opt_in_and_defaults_to_closing_merged_findings() {
     let scenario = Scenario::new();
     let result = setup_on_terminal(
         &scenario,
@@ -807,7 +807,7 @@ fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes(
             (BASE_FIX, ""),
             (PULL, ""),
             (SECURITY_FIX, "y"),
-            (SECURITY_CLOSE, "y"),
+            (SECURITY_CLOSE, ""),
             (SECURITY_REVIEW, ""),
             (NOTIFY, ""),
             (CLAUDE_TOKEN, ""),
@@ -821,6 +821,7 @@ fn setup_asks_once_about_security_fixing_with_off_as_the_default_and_writes_yes(
         result.stderr
     );
     assert!(result.stderr.contains(&format!("{SECURITY_FIX} [y/N]")));
+    assert!(result.stderr.contains(&format!("{SECURITY_CLOSE} [Y/n]")));
     let text = result.user_config.unwrap();
     let config: toml::Table = text.parse().unwrap();
     assert_eq!(config["security"]["fix"].as_bool(), Some(true));
@@ -879,7 +880,7 @@ fn rerunning_setup_keeps_security_answers_as_defaults_and_can_turn_fixing_off() 
         let text = result.user_config.unwrap();
         let config: toml::Table = text.parse().unwrap();
         assert_eq!(config["security"]["fix"].as_bool(), Some(enabled));
-        assert_eq!(config["security"]["close"].as_bool(), Some(false));
+        assert_eq!(config["security"]["close"].as_bool(), Some(true));
         assert_eq!(config["security"]["harness"].as_str(), Some("codex"));
         assert!(text.starts_with("# my Security settings\n[security]\n"));
         assert!(text.contains("# keep this choice\n"));

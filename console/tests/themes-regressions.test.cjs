@@ -5,7 +5,7 @@ const { mkdtemp, mkdir, readFile, writeFile, rm } = require('node:fs/promises');
 const { join, resolve } = require('node:path');
 const { tmpdir } = require('node:os');
 const { createInterface } = require('node:readline');
-const { chromium } = require('playwright');
+const { chromium } = require('./playwright.cjs');
 const { test } = require('node:test');
 async function reproduce(mode) {
   const home = await mkdtemp(join(tmpdir(), 'thirdshift824-spec-'));

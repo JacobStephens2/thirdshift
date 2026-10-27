@@ -7,7 +7,7 @@ const { mkdtemp, mkdir, writeFile, rm } = require("node:fs/promises");
 const { tmpdir } = require("node:os");
 const { join, resolve } = require("node:path");
 const { createInterface } = require("node:readline");
-const { chromium } = require("playwright");
+const { chromium } = require("./playwright.cjs");
 
 let home, resend, server, exited, browser, origin;
 before(async () => {
