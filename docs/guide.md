@@ -580,7 +580,8 @@ characters, trimmed. An empty or over-long name is refused before any build.
 `thirdshift experiments <id> --name <text>` renames a saved Experiment in any
 state, even while it runs; `--name ''` clears the name. The name is not part of
 the Bar, so it never changes Trials, Scores or the Verdict and never stops a
-resume. Without a name, an Experiment is called `A/A at <ref>` when both Arms
+resume. The resume command an Experiment shows leaves `--name` out, so
+following it keeps a later rename. Without a name, an Experiment is called `A/A at <ref>` when both Arms
 share their build, Harness, Model and Effort, `Release <ref>` after `--release`,
 and otherwise by what differs between its Arms. The CLI list, `experiments
 <id>` and the Console's Experiment pages and tab title show the name;
