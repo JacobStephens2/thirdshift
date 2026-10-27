@@ -130,7 +130,12 @@ pub enum Begin<'a> {
     ScoringRun,
     Experiment,
     /// `thirdshift process <name> [issue <issue>]`, a Custom process.
-    Process(&'a str),
+    /// `pass` holds the first lines, as the other Passes do, when it was
+    /// started with no issue.
+    Process {
+        name: &'a str,
+        pass: bool,
+    },
 }
 
 /// The work a command starts.
@@ -260,6 +265,21 @@ pub fn started(work: Work, harness: &Choice) {
 /// stays held, and is dropped with the Command log it never kept.
 pub fn skipped(pass: Pass, repo: &Repo, reason: impl Display) {
     record().skipped(pass, repo, reason);
+}
+
+/// Record that the Custom process `name`, started with no issue, was skipped
+/// on `repo` for `reason`. The Activity log keeps `Process <name> skipped:
+/// <reason>` unless that is already its last Process line. Unlike the other
+/// Passes, it also keeps a Command record whose outcome is `skipped`: the
+/// Process's record shows that ending. `harness` is the choice it would have
+/// run on; the skip does not check that it can run.
+pub fn skipped_process(
+    repo: &Repo,
+    name: &str,
+    harness: &crate::harness::Choice,
+    reason: impl Display,
+) {
+    record().skipped_process(repo, name, harness, &reason.to_string());
 }
 
 /// Add an observation to the running command's repository Activity log.

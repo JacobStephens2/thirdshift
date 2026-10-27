@@ -106,7 +106,7 @@ impl<O: Outside> Record<O> {
             Begin::SecurityRun => CommandKind::Secure,
             Begin::ScoringRun => CommandKind::Scoring,
             Begin::Experiment => CommandKind::Experiment,
-            Begin::Process(_) => CommandKind::Process,
+            Begin::Process { .. } => CommandKind::Process,
         };
         let (starting, quiet) = match begin {
             Begin::ChildRun(stamp, _) => {
@@ -120,7 +120,7 @@ impl<O: Outside> Record<O> {
             Begin::SecurityRun => ("Security run starting".into(), true),
             Begin::ScoringRun => ("Scoring run starting".into(), false),
             Begin::Experiment => ("Experiment starting".into(), false),
-            Begin::Process(name) => (format!("Process {name} starting"), false),
+            Begin::Process { name, pass } => (format!("Process {name} starting"), pass),
         };
         let now = self.outside.now();
         self.stamp
@@ -304,6 +304,30 @@ impl<O: Outside> Record<O> {
             &format!("{kind} skipped: {reason}"),
             Some(kind),
         );
+    }
+
+    /// A skipped Custom process keeps the Activity log line and a Command
+    /// record. The record is what shows the skipped ending; the other Passes
+    /// drop the Command log they never kept.
+    pub(super) fn skipped_process(
+        &mut self,
+        repo: &Repo,
+        name: &str,
+        harness: &Choice,
+        reason: &str,
+    ) {
+        let root = self.root(repo);
+        self.activity_write(
+            &root,
+            &format!("Process {name} skipped: {reason}"),
+            Some(Kind::Process),
+        );
+        let stamp = self.stamp();
+        // Leave held lines unshown, so a quiet skip prints nothing. They are
+        // still the Command log.
+        self.retain(&root, Work::Process { repo, name }, &stamp, false);
+        self.start_record(Work::Process { repo, name }, harness);
+        self.outcome("skipped", Some(reason));
     }
 
     pub(super) fn activity(&mut self, message: impl Display) {
@@ -600,7 +624,17 @@ impl<O: Outside> Record<O> {
     }
 
     fn keep(&mut self, root: &Path, work: Work<'_>, stamp: &str) {
-        self.show_held();
+        self.retain(root, work, stamp, true);
+    }
+
+    /// Keep the Command log. `announce` shows lines held from the terminal and
+    /// names the log there. A skipped Custom process passes `false`: under
+    /// `activity.quiet_skips` those lines stay unprinted, and the log-path
+    /// line stays off the terminal either way.
+    fn retain(&mut self, root: &Path, work: Work<'_>, stamp: &str, announce: bool) {
+        if announce {
+            self.show_held();
+        }
         if !matches!(self.command_log, Log::Held { .. }) {
             return;
         }
@@ -630,8 +664,10 @@ impl<O: Outside> Record<O> {
                         .to_path_buf(),
                     writer,
                 };
-                let path = self.command_log_path().unwrap();
-                self.step(format_args!("logging this command to {}", path.display()));
+                if announce {
+                    let path = self.command_log_path().unwrap();
+                    self.step(format_args!("logging this command to {}", path.display()));
+                }
             }
             Err(error) => {
                 self.owner_error = Some(format!("{error:#}"));

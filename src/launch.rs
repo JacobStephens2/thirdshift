@@ -421,6 +421,23 @@ pub fn resolve_issue(input: IssueInput) -> Result<IssueUrl> {
     })
 }
 
+/// Take the lock that makes this process the one Pass on `repo`, and hold it
+/// until this process exits. `Some` when another Pass already holds it: this
+/// call took nothing. A Custom process started with no issue uses this; one
+/// started with an issue does not, and `start` still does the preflight a
+/// Pickup run, Architect run or Security run does before its own lock.
+pub fn hold_pass(repo: &Repo) -> Result<Option<AlreadyRunning>> {
+    match try_pass_lock(repo)? {
+        Some(lock) => {
+            // Never closed, so the lock is held for as long as this process
+            // lives. The operating system releases it however the process ends.
+            std::mem::forget(lock);
+            Ok(None)
+        }
+        None => Ok(Some(AlreadyRunning(repo.clone()))),
+    }
+}
+
 /// Try, without waiting, for the lock that makes its holder the one Pass on
 /// `repo` on this machine: an advisory lock on a file under `~/.thirdshift`
 /// named for the repository, as GitHub compares names, whatever their case. It is held until the file returned is closed, or the

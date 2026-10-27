@@ -2,6 +2,11 @@
 //!
 //! Steps run in order. Consecutive Steps that name the same `parallel` group
 //! run at the same time, each in a throwaway worktree the Process declares.
+//!
+//! A Process started with no issue is a Pass. It takes the repository's Pass
+//! lock and is skipped, before any worktree, while another Pass holds it. It
+//! does not take an Architect run's Ready-issue or Architect-idea gates. A
+//! Process started with an issue is not a Pass and does not take the lock.
 
 use std::collections::BTreeSet;
 use std::fmt::Write;
@@ -173,6 +178,22 @@ fn run(name: &str, issue: Option<IssueInput>) -> Result<String> {
     // Before any worktree: a foreign Issue URL is an origin mismatch, and a
     // number that cannot be resolved stops the same way.
     let issue = resolve_process_issue(issue)?;
+    // No issue: a Pass. The Base branch is checked before the lock, so a bad
+    // checkout fails instead of being skipped, and a skip creates no worktree.
+    // The lock is then held until this process exits, through every Step.
+    if issue.is_none() {
+        logs::begin(Begin::Process { name, pass: true });
+        logs::configured(&config);
+        let _base = launch::checked_out_base()?;
+        let repo = launch::repo()?;
+        if let Some(running) = launch::hold_pass(&repo)? {
+            let reason = running.to_string();
+            let choice = Choice::of(&Asked::default(), &config.harness);
+            progress::step(&reason);
+            logs::skipped_process(&repo, name, &choice, &reason);
+            return Ok(String::new());
+        }
+    }
     // The same margin as a Ticket run. Edits in the gap since this moment,
     // or dated by a slow GitHub clock, still count.
     let started = Utc::now() - crate::run::STARTED_MARGIN;
@@ -180,8 +201,10 @@ fn run(name: &str, issue: Option<IssueInput>) -> Result<String> {
     prepared.issue = issue;
     prepared.started = started;
     let repo = launch::repo()?;
-    logs::begin(Begin::Process(name));
-    logs::configured(&config);
+    if prepared.issue.is_some() {
+        logs::begin(Begin::Process { name, pass: false });
+        logs::configured(&config);
+    }
     logs::started(Work::Process { repo: &repo, name }, &prepared.choice);
     let result = execute_steps(name, &prepared);
     let (outcome, cause) = classify(&result);
