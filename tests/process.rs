@@ -4566,6 +4566,48 @@ printf 'implemented' > "$FAKE_CLAUDE_FINAL_MESSAGE"
 }
 
 #[test]
+fn a_quoted_protected_name_still_holds_the_self_merge() {
+    let body = "\
+version = 1
+description = \"Ship a fix\"\n
+[limits]
+protected_paths = [\"secrets/**\"]\n
+[worktrees.fix]
+kind = \"issue-branch\"\n
+[[steps]]
+name = \"implement\"\nskill = \"code-review\"\nworktree = \"fix\"\n
+[[steps]]
+name = \"ship\"\ncatalogue = \"delivery\"\nworktree = \"fix\"\n
+[[steps]]
+name = \"land\"\ncatalogue = \"self-merge\"\nworktree = \"fix\"\n";
+    let held = Scenario::new();
+    write_process(&held, "ship", body);
+    held.issue_labelled(7, &["ready-for-agent"]);
+    held.agent_does_for_in_session(
+        7,
+        1,
+        r#"
+mkdir -p secrets
+printf 'key' > secrets/kéy.txt
+git add "secrets/kéy.txt"
+git commit -q -m "Add key"
+printf 'implemented' > "$FAKE_CLAUDE_FINAL_MESSAGE"
+"#,
+    );
+
+    let result = held.run(&["process", "merge", "ship", "issue", "7"]);
+
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        result.stderr.contains("holds the Self-merge"),
+        "{}",
+        result.stderr
+    );
+    assert!(held.gh_calls_of("pr", "merge").is_empty());
+    assert_eq!(held.gh_state()["prs"][0]["state"], "OPEN");
+}
+
+#[test]
 fn a_lower_repair_cap_stops_the_repair_loop() {
     let body = "\
 version = 1

@@ -1048,10 +1048,14 @@ impl repair_loop::Outside for RunOutside<'_> {
             return Ok(None);
         }
         let spec = format!("origin/{}...HEAD", self.base);
-        let listed = Git::new(self.worktree.path()).run(&["diff", "--name-only", &spec])?;
+        // `-z`: names stay NUL-delimited and unquoted, so a name git would
+        // quote (`"secrets/k\303\251y.txt"`) still matches `secrets/**`.
+        // Line splitting would also cut a name holding a newline in two.
+        let listed =
+            Git::new(self.worktree.path()).run_bytes(&["diff", "--name-only", "-z", &spec])?;
         Ok(protected_hold(
             self.protected_paths,
-            listed.lines().filter(|line| !line.is_empty()),
+            listed.split(|byte| *byte == 0).filter(|name| !name.is_empty()),
         ))
     }
 
@@ -1065,18 +1069,30 @@ impl repair_loop::Outside for RunOutside<'_> {
 }
 
 /// The protected paths among `paths`, named in the hold a Self-merge reports.
-/// None when nothing matches. `*` stays inside one path segment, `**` crosses
+/// None when nothing matches. Paths are raw diff bytes, so names git would
+/// quote still match. `*` stays inside one path segment, `**` crosses
 /// segments, and `?` is one character other than `/`.
-fn protected_hold<'a>(patterns: &[String], paths: impl Iterator<Item = &'a str>) -> Option<String> {
-    let mut matched: Vec<&str> = paths
-        .filter(|path| patterns.iter().any(|pattern| glob_matches(pattern, path)))
+fn protected_hold<'a>(
+    patterns: &[String],
+    paths: impl Iterator<Item = &'a [u8]>,
+) -> Option<String> {
+    let mut matched: Vec<&[u8]> = paths
+        .filter(|path| {
+            patterns
+                .iter()
+                .any(|pattern| glob_match(pattern.as_bytes(), path))
+        })
         .collect();
     if matched.is_empty() {
         return None;
     }
     matched.sort_unstable();
     matched.dedup();
-    let listed = matched.join(", ");
+    let listed = matched
+        .iter()
+        .map(|path| String::from_utf8_lossy(path))
+        .collect::<Vec<_>>()
+        .join(", ");
     Some(if matched.len() == 1 {
         format!(
             "protected path {listed} holds the Self-merge; the pull request stays ready for review"
@@ -1089,10 +1105,6 @@ fn protected_hold<'a>(patterns: &[String], paths: impl Iterator<Item = &'a str>)
 }
 
 /// Whether `pattern` matches the whole of `path`.
-fn glob_matches(pattern: &str, path: &str) -> bool {
-    glob_match(pattern.as_bytes(), path.as_bytes())
-}
-
 fn glob_match(pattern: &[u8], path: &[u8]) -> bool {
     let mut pattern_at = 0;
     let mut path_at = 0;
@@ -1692,25 +1704,25 @@ mod tests {
 
     #[test]
     fn protected_path_globs_match_on_segment_boundaries() {
+        fn matches(pattern: &str, path: &str) -> bool {
+            glob_match(pattern.as_bytes(), path.as_bytes())
+        }
         assert!(
-            !glob_matches("**/key.txt", "mykey.txt"),
+            !matches("**/key.txt", "mykey.txt"),
             "**/key.txt matched inside a segment"
         );
         assert!(
-            !glob_matches("src/**/config.toml", "src/myconfig.toml"),
+            !matches("src/**/config.toml", "src/myconfig.toml"),
             "src/**/config.toml matched inside a segment"
         );
-        assert!(glob_matches("src/**/config.toml", "src/pkg/config.toml"));
-        assert!(glob_matches("src/**/config.toml", "src/config.toml"));
-        assert!(glob_matches("**/key.txt", "dir/key.txt"));
-        assert!(glob_matches("**/key.txt", "key.txt"));
-        assert!(glob_matches("secrets/**", "secrets/key.txt"));
-        assert!(glob_matches("**/*.pem", "keys/id.pem"));
-        assert!(!glob_matches("*.txt", "notes/plain.txt"));
-        assert!(
-            glob_matches("caf?.txt", "café.txt"),
-            "? should be one character"
-        );
-        assert!(!glob_matches("a?c", "a/c"));
+        assert!(matches("src/**/config.toml", "src/pkg/config.toml"));
+        assert!(matches("src/**/config.toml", "src/config.toml"));
+        assert!(matches("**/key.txt", "dir/key.txt"));
+        assert!(matches("**/key.txt", "key.txt"));
+        assert!(matches("secrets/**", "secrets/key.txt"));
+        assert!(matches("**/*.pem", "keys/id.pem"));
+        assert!(!matches("*.txt", "notes/plain.txt"));
+        assert!(matches("caf?.txt", "café.txt"), "? should be one character");
+        assert!(!matches("a?c", "a/c"));
     }
 }
