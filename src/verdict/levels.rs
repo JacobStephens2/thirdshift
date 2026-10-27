@@ -23,7 +23,7 @@ pub enum Levels {
 impl Default for Levels {
     fn default() -> Self {
         Self::Separate {
-            pass_level: 0.95,
+            pass_level: 0.70,
             fail_level: 0.95,
         }
     }

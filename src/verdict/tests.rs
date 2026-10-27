@@ -31,7 +31,9 @@ fn pass_and_fail_levels_judge_separately_with_an_inconclusive_between() {
     let pass = judge(&equal, &bar).unwrap();
     assert_eq!(pass.verdict, Decision::Pass);
     assert_eq!(
-        judge(&equal, &Bar::default()).unwrap().verdict,
+        judge(&equal, &with_levels(&Bar::default(), 0.95, 0.95))
+            .unwrap()
+            .verdict,
         Decision::Inconclusive
     );
     assert_eq!(
@@ -72,13 +74,19 @@ fn fail_takes_precedence_and_a_pass_interval_must_reach_zero() {
 }
 
 #[test]
-fn the_smallest_identical_code_review_suite_passing_the_default_bar_is_thirteen_tasks() {
+fn the_default_pass_level_is_the_seventy_percent_floor() {
+    assert_eq!(Bar::default().levels.pass(), 0.70);
+    assert_eq!(Bar::default().levels.fail(), 0.95);
+}
+
+#[test]
+fn the_smallest_identical_code_review_suite_passing_the_default_bar_is_four_tasks() {
     let bar = Bar::default();
-    for count in 1..=13 {
+    for count in 1..=4 {
         let verdict = super::judge_without_predictions(&vec![task(3, 3, 3); count], &bar).unwrap();
         assert_eq!(
             verdict.verdict,
-            if count == 13 {
+            if count == 4 {
                 Decision::Pass
             } else {
                 Decision::Inconclusive
@@ -88,6 +96,59 @@ fn the_smallest_identical_code_review_suite_passing_the_default_bar_is_thirteen_
             verdict.wrong_findings.intervals,
         );
     }
+}
+
+fn spec_task(baseline: (bool, bool), candidate: (bool, bool)) -> TaskScores {
+    let score = |(passed, wrong_finding)| {
+        vec![Score {
+            passed,
+            wrong_finding,
+        }]
+    };
+    TaskScores {
+        baseline: score(baseline),
+        candidate: score(candidate),
+        dropped_as_void: false,
+    }
+}
+
+// #1370's A/A Experiment: one commit in both Arms, under the default Bar.
+#[test]
+fn a_spec_review_a_a_experiment_at_its_measured_rate_passes_the_default_bar() {
+    let bar = Bar {
+        trials_per_task: 1,
+        ..Bar::default()
+    };
+    let mut scores = vec![
+        spec_task((true, true), (false, false)),
+        spec_task((true, false), (false, true)),
+    ];
+    scores.extend(vec![spec_task((false, false), (true, false)); 3]);
+    scores.extend(vec![spec_task((false, false), (false, false)); 25]);
+    let verdict = super::judge_without_predictions(&scores, &bar).unwrap();
+    assert_eq!(verdict.accuracy.difference_counts, [2, 25, 3]);
+    assert_eq!(verdict.wrong_findings.difference_counts, [1, 28, 1]);
+    assert_eq!(verdict.verdict, Decision::Pass);
+}
+
+#[test]
+fn a_code_review_a_a_experiment_passes_the_default_bar_only_when_its_disagreements_balance() {
+    let bar = Bar::default();
+    let mut measured = vec![task(0, 0, 3); 8];
+    measured.extend([task(2, 0, 3), task(3, 2, 3)]);
+    let verdict = super::judge_without_predictions(&measured, &bar).unwrap();
+    assert_eq!(verdict.accuracy.difference_counts, [0, 1, 1, 8, 0, 0, 0]);
+    assert!(verdict.accuracy.intervals.pass().upper < 0.0);
+    assert_eq!(verdict.verdict, Decision::Inconclusive);
+
+    let mut balanced = vec![task(0, 0, 3); 8];
+    balanced.extend([task(0, 1, 3), task(3, 2, 3)]);
+    assert_eq!(
+        super::judge_without_predictions(&balanced, &bar)
+            .unwrap()
+            .verdict,
+        Decision::Pass
+    );
 }
 
 #[test]
@@ -237,7 +298,7 @@ fn pass_cubed_reports_all_three_successes_per_eval_task_and_is_absent_for_one_tr
 
     let one_trial = Bar {
         trials_per_task: 1,
-        ..Bar::default()
+        ..with_levels(&Bar::default(), 0.95, 0.95)
     };
     let verdict = judge(&vec![task(0, 1, 1); 9], &one_trial).unwrap();
     assert_eq!(verdict.pass_cubed, None);
@@ -251,7 +312,7 @@ fn pass_cubed_reports_all_three_successes_per_eval_task_and_is_absent_for_one_tr
 fn small_gap_predicts_the_first_eval_task_count_with_eighty_percent_assurance() {
     let mut scores = vec![task(3, 3, 3); 8];
     scores.push(task(3, 2, 3));
-    let bar = Bar::default();
+    let bar = with_levels(&Bar::default(), 0.95, 0.95);
     let verdict = judge(&scores, &bar).unwrap();
     assert_eq!(verdict.accuracy.verdict, Decision::Inconclusive);
     let forecast = verdict.accuracy.more_tasks.as_ref().unwrap();
