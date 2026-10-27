@@ -98,6 +98,7 @@ address = "https://console.example.com" # used by console install
 port = 8711
 allowed_emails = ["you@example.com"]
 other_consoles = ["https://console.example.test"]
+other_accounts = "none" # or "readable", or ["conductor", "operator"]
 theme = "focus-auto" # also focus-light or focus-dark
 ```
 

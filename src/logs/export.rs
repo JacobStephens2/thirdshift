@@ -18,7 +18,7 @@ use crate::otlp_jsonl::{
 
 pub fn export(input: &str, directory: &Path) -> Result<()> {
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load(&config.logs_dir, Local::now())?;
+    let snapshot = Snapshot::for_user(&config, Local::now())?;
     let selection = snapshot.resolve(input)?;
     let command = selection
         .owner

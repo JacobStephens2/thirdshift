@@ -59,6 +59,10 @@ pub enum Command {
         json: bool,
     },
     ConsoleThemeImport(String),
+    ConsoleOtherAccounts {
+        value: Option<String>,
+        json: bool,
+    },
     ConsoleThemeExport(String),
     ConsoleSections {
         hide: Vec<String>,
@@ -366,6 +370,18 @@ pub fn parse(args: &[String]) -> Result<Command> {
         Some("experiments") => return Ok(Command::Experiments(args[1..].to_vec())),
         Some("recheck") => return Ok(Command::Recheck(args[1..].to_vec())),
         Some("console") => {
+            if args.get(1).is_some_and(|action| action == "other-accounts") {
+                let json = args.last().is_some_and(|arg| arg == "--json");
+                let end = args.len() - usize::from(json);
+                let value = match &args[2..end] {
+                    [] => None,
+                    [value] if !value.starts_with('-') => Some(value.clone()),
+                    _ => bail!(
+                        "usage: thirdshift console other-accounts [none|readable|name,name] [--json]"
+                    ),
+                };
+                return Ok(Command::ConsoleOtherAccounts { value, json });
+            }
             if args.get(1).is_some_and(|action| action == "theme") {
                 let json = args.last().is_some_and(|arg| arg == "--json");
                 let end = args.len() - usize::from(json);

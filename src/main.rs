@@ -110,6 +110,7 @@ usage: thirdshift <Issue URL>                         Run the factory on the iss
        thirdshift console log [--json]                Read this machine's Console log
        thirdshift console theme <name|list> [--json]  Choose or list Console Themes
        thirdshift console theme import <file>        Import a Theme JSON document
+       thirdshift console other-accounts [none|readable|name,name] [--json]  Show or set local account visibility
        thirdshift console theme export <name>        Export a Theme as JSON
        thirdshift console sections [--hide <section>] [--show <section>] [--json]  Choose visible sections
        thirdshift show <command> [--spans | --span <id>] [--json]  Show a Command, its tree or a span
@@ -200,6 +201,9 @@ fn main() -> ExitCode {
             return printed(console::theme(name.as_deref(), json));
         }
         Ok(Command::ConsoleThemeImport(path)) => return printed(console::import_theme(&path)),
+        Ok(Command::ConsoleOtherAccounts { value, json }) => {
+            return printed(config::console::other_accounts(value.as_deref(), json));
+        }
         Ok(Command::ConsoleThemeExport(name)) => return printed(console::export_theme(&name)),
         Ok(Command::ConsoleSections { hide, show, json }) => {
             return printed(console::sections(&hide, &show, json));

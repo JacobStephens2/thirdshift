@@ -449,6 +449,14 @@ impl UserConfigDocument {
                     let emails: toml_edit::Array = console.allowed_emails.iter().collect();
                     set(&mut document, "console", "allowed_emails", emails);
                 }
+                if console.other_accounts != self.settings.console.other_accounts {
+                    set(
+                        &mut document,
+                        "console",
+                        "other_accounts",
+                        console.other_accounts.value(),
+                    );
+                }
             }
             set(&mut document, "merge", "always", changes.merge_always);
             set(&mut document, "base", "fix", changes.base_fix);
@@ -955,6 +963,7 @@ address = ""        # HTTPS address for console install, e.g. https://console.ex
 port = 8711          # localhost port for the Console; 0 chooses a free port; default 8711
 allowed_emails = []  # addresses that may sign in; empty requires --no-sign-in; default []
 other_consoles = []   # http or https addresses linked in the header, never fetched; default []
+other_accounts = "none" # none, readable, or a list of local account names; read-only; default none
 theme = "focus-auto" # focus/plain/press/signal/garden/factory, with -auto/-light/-dark; default focus-auto
 hidden_sections = [] # needs-you/ready-for-review/landing/working/done/resolved; default []
 
@@ -1090,7 +1099,7 @@ pub fn home() -> Result<PathBuf> {
 /// `path` as an absolute path, with a leading `~` expanded to `home`, or
 /// `None` if it is relative: the directory a Run is launched from is no base
 /// for a setting that holds for every Run.
-fn expand_home(path: &str, home: &Path) -> Option<PathBuf> {
+pub(crate) fn expand_home(path: &str, home: &Path) -> Option<PathBuf> {
     let path = match path.strip_prefix('~') {
         Some("") => home.to_path_buf(),
         Some(rest) => home.join(rest.strip_prefix('/')?),
@@ -1183,6 +1192,7 @@ mod tests {
                 "console.port",
                 "console.allowed_emails",
                 "console.other_consoles",
+                "console.other_accounts",
                 "console.theme",
                 "console.hidden_sections",
                 "activity.quiet_skips",

@@ -199,7 +199,7 @@ fn metric(
 
 pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
     let now = Local::now();
-    let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
+    let snapshot = Snapshot::for_user(config, now)?;
     let mut commands: Vec<_> = snapshot
         .entries()
         .iter()
@@ -362,12 +362,16 @@ fn record_span(
 }
 
 fn subject(command: &Command) -> String {
-    command
+    let subject = command
         .record
         .issue
         .as_ref()
         .map(|issue| format!("{}#{}", command.record.repository, issue.number))
-        .unwrap_or_else(|| command.record.name.clone())
+        .unwrap_or_else(|| command.record.name.clone());
+    match &command.account {
+        Some(account) => format!("{subject} · [{account}]"),
+        None => subject,
+    }
 }
 
 fn state(command: &Command) -> String {

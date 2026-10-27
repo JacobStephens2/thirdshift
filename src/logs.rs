@@ -11,6 +11,7 @@
 //! One owned recording implementation holds the complete lifecycle. The
 //! process-wide interface serializes its operations, including emitted output.
 
+pub(crate) mod accounts;
 mod activity;
 mod command_record;
 pub mod dismiss;

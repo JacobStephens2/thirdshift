@@ -49,6 +49,9 @@ fn print_command(command: &Command, state_word: &str, indent: &str) {
     if let Some(pull_request) = &facts.pull_request {
         subject.push_str(&format!(" · {pull_request}"));
     }
+    if let Some(account) = &command.account {
+        subject.push_str(&format!(" · [{account}]"));
+    }
     println!(
         "{indent}{} {subject} · {} · {} · {} · {} · {stage}",
         super::display_name(&facts.kind),
@@ -67,6 +70,9 @@ fn print_command(command: &Command, state_word: &str, indent: &str) {
 }
 
 pub(super) fn print_history(command: &super::reading::HistoricalCommand) {
+    if let Some(account) = &command.account {
+        print!("[{account}] ");
+    }
     let issue = command
         .issue
         .as_ref()
@@ -91,8 +97,10 @@ pub fn show(json: bool, all: bool) -> Result<()> {
             waiting.as_secs()
         );
     }
-    let snapshot =
-        Snapshot::load_with_silence(&config.logs_dir, Local::now(), config.silent_interval)?;
+    let snapshot = Snapshot::for_user(&config, Local::now())?;
+    for account in &snapshot.unavailable_accounts {
+        eprintln!("thirdshift: account {account}: logs unavailable or unreadable");
+    }
     let kept = super::github::refresh(&snapshot, &config, super::github::FRESH_FOR)?;
     let status = Status {
         version: 1,
@@ -155,6 +163,9 @@ pub fn show(json: bool, all: bool) -> Result<()> {
                         || facts.name.clone(),
                         |issue| format!("{}#{}", facts.repository, issue.number),
                     );
+                    if let Some(account) = &command.account {
+                        print!("[{account}] ");
+                    }
                     println!(
                         "{name} · {} · see Needs you",
                         item.needs_you_kind.expect("Needs you has a kind").title()

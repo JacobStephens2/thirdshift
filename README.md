@@ -80,6 +80,8 @@ Open the localhost address it prints. The Console never starts work. Use [`third
 
 ### Console on a server
 
+The Console and `status` show the serving OS account's Commands by default. To add readable Commands from other local accounts, use `thirdshift console other-accounts readable` (or a comma-separated list of account names). Other-account Commands show their owner and are read-only. See [account visibility](docs/guide.md#other-local-accounts) for filesystem access requirements.
+
 <a name="nginx"></a>
 
 The Console can run as a persistent service behind HTTPS and sign-in. See [server installation](docs/guide.md#console-on-a-server) for configuration, passwords, the generated Linux installer and Caddy, Apache or [nginx](docs/guide.md#nginx) setup.

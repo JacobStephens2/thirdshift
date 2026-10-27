@@ -54,6 +54,7 @@ details[data-fact] > dl { margin: 4px 0 6px; }
 .command:focus, .command[aria-current="true"] { outline: 2px solid var(--head); outline-offset: -2px; }
 .row-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
 .state { color: var(--text); }
+.account-tag { color: var(--dim); font-size: .85em; border: 1px solid currentColor; border-radius: var(--radius); padding: 0 4px; }
 .heartbeat { display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--working); opacity: .4; }
 .age { margin-left: auto; }
 .issue-title { flex: 1 1 160px; }

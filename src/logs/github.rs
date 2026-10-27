@@ -281,11 +281,7 @@ pub fn load(logs_dir: &Path) -> Kept {
 /// including the blocking GitHub adapter, belongs off the Console's async thread.
 pub fn poll() -> Result<()> {
     let config = UserConfig::load()?;
-    let snapshot = Snapshot::load_with_silence(
-        &config.logs_dir,
-        chrono::Local::now(),
-        config.silent_interval,
-    )?;
+    let snapshot = Snapshot::for_user(&config, chrono::Local::now())?;
     refresh(&snapshot, &config, Duration::ZERO)?;
     Ok(())
 }

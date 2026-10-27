@@ -28,6 +28,7 @@ pub(crate) struct Section {
 }
 
 pub(crate) struct Row {
+    pub account: Option<String>,
     pub id: String,
     pub started_ms: i64,
     pub occurred_ms: i64,
@@ -140,7 +141,7 @@ pub(crate) fn archive(
     repository: &str,
 ) -> Result<Archive> {
     let now = Local::now();
-    let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
+    let snapshot = Snapshot::for_user(config, now)?;
     let mut entries: Vec<_> = snapshot
         .entries()
         .iter()
@@ -217,10 +218,17 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
             let (subject, title) =
                 subject(&command.repository, &command.kind, command.issue.as_ref());
             Ok(Row {
-                id: identity(&format!(
-                    "history:{}:{}:{}",
-                    command.repository, command.kind, command.started_at
-                )),
+                account: command.account.clone(),
+                id: identity(&match &command.account {
+                    Some(account) => format!(
+                        "history:{account}:{}:{}:{}",
+                        command.repository, command.kind, command.started_at
+                    ),
+                    None => format!(
+                        "history:{}:{}:{}",
+                        command.repository, command.kind, command.started_at
+                    ),
+                }),
                 started_ms: timestamp(&command.started_at),
                 occurred_ms: timestamp(command.ended_at.as_deref().unwrap_or(&command.started_at)),
                 live: false,
@@ -231,7 +239,13 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
                 logs_url: command
                     .command_log
                     .as_ref()
-                    .map(|path| logs_url(path, root))
+                    .map(|path| {
+                        if command.account.is_some() {
+                            format!("/logs/command/{}", crate::logs::catalog::id(path))
+                        } else {
+                            logs_url(path, root)
+                        }
+                    })
                     .unwrap_or_else(|| "/?page=logs".into()),
                 subject,
                 subject_url: issue_url(command.issue.as_ref()),
@@ -258,7 +272,7 @@ fn entry_row(entry: Observation<'_>, now: DateTime<Local>, root: &std::path::Pat
 
 pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
     let now = Local::now();
-    let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
+    let snapshot = Snapshot::for_user(config, now)?;
     // The Console shows the same groups as `status` by reading the same
     // kept answer. The Console's background reader refreshes it independently
     // of requests; status reads GitHub only when that answer is too old.
@@ -313,6 +327,10 @@ pub(crate) fn inbox(config: &UserConfig) -> Result<Inbox> {
                         &command.record.name,
                         command.record.issue.as_ref(),
                     );
+                    let subject = match &command.account {
+                        Some(account) => format!("[{account}] {subject}"),
+                        None => subject,
+                    };
                     Some(format!(
                         "{subject} · {} · see Needs you",
                         item.needs_you_kind.expect("Needs you has a kind").title()
@@ -374,6 +392,7 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
     let live = command.state == "live";
     let (subject, title) = subject(&facts.repository, &facts.name, facts.issue.as_ref());
     Ok(Row {
+        account: command.account.clone(),
         // A Pass's dispatched Runs share its storage path. Their immutable
         // Command facts distinguish them without tying identity to ordering.
         id: identity(&format!(
@@ -391,7 +410,14 @@ fn row(command: &Command, now: DateTime<Local>, root: &Path) -> Result<Row> {
         log_growth: format!("{log_length}:{session_length}"),
         selector: Observation::Record(command).selector().unwrap_or_default(),
         can_dismiss: false,
-        logs_url: logs_url(&command.record_path, root),
+        logs_url: if command.account.is_some() {
+            format!(
+                "/logs/command/{}",
+                crate::logs::catalog::id(&command.record_path)
+            )
+        } else {
+            logs_url(&command.record_path, root)
+        },
         subject,
         subject_url: issue_url(facts.issue.as_ref()),
         title,
