@@ -161,7 +161,9 @@ motion and reduced motion hold the stripe still.
 
 The Inbox reads like a mailbox. Its sections, Needs you through Resolved, are
 folders on the left with their counts, and one section's rows show at a time,
-on one line each: state, subject, title, gist and age. The gist is where the
+on one line each: state, subject, title, gist and age. On a desktop, issue
+numbers stay visible as long repository or Process subjects shrink; hover
+the subject for its full text. The gist is where the
 Command stands, such as `review failed`; a Pass without an issue adds the
 issue it dispatched, its first security finding or its cause. Hover an ended
 row's age for its finish time. The list never scrolls inside itself; the page does. The
