@@ -1044,13 +1044,14 @@ fn a_reserved_name_is_refused_for_every_built_in() {
     ] {
         let scenario = Scenario::new();
         write_process(&scenario, name, REVIEW);
-        let mut actions = vec![vec!["process", name]];
-        if name != "ticket-run" {
-            actions.extend([
+        let actions = if name == "ticket-run" {
+            vec![vec!["process", name]]
+        } else {
+            vec![
                 vec!["process", "check", name],
                 vec!["process", "show", name],
-            ]);
-        }
+            ]
+        };
         for args in actions {
             let result = scenario.run(&args);
             assert_no_session(&scenario, &result);
