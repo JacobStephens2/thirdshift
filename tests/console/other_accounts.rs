@@ -141,6 +141,51 @@ fn foreign_process_names_and_accounts_survive_across_console_views() {
 
 #[cfg(target_os = "linux")]
 #[test]
+fn unreadable_foreign_session_traces_leave_waterfall_available() {
+    use std::os::unix::fs::PermissionsExt;
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let mut command = record(&home, 7, Some("failed"), 0);
+    let dir = home.join(".thirdshift/logs/acme/widgets/commands/issue");
+    let trace = dir.join("7-fixture-implement.logs.jsonl");
+    fs::write(&trace, "").unwrap();
+    fs::set_permissions(&trace, fs::Permissions::from_mode(0o000)).unwrap();
+    command["session_log"] = json!(trace);
+    command["stages"][0]["session_log"] = command["session_log"].clone();
+    write_record(&home, 7, &command);
+    fs::write(dir.join("7-fixture.log"), "readable output").unwrap();
+    machine.setting("readable");
+    let console = Console::start_command({
+        let mut command = machine.command();
+        command.args(["console", "--no-sign-in"]);
+        command
+    });
+    for route in ["/", "/?page=waterfall", "/spans", "/logs"] {
+        let response = console.get(route);
+        assert_eq!(
+            response.status(),
+            200,
+            "{route}: {}",
+            response.text().unwrap()
+        );
+    }
+    let spans: Value = console.get("/spans").json().unwrap();
+    assert!(
+        spans["spans"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|span| span["kind"] == "cmd")
+    );
+    assert_eq!(fs::read_dir(&dir).unwrap().count(), 3);
+    assert_eq!(
+        fs::metadata(&trace).unwrap().permissions().mode() & 0o777,
+        0o000
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn foreign_only_status_keeps_github_answers_under_the_serving_account() {
     let machine = Machine::new();
     record(&machine.home("conductor"), 7, Some("failed"), 0);

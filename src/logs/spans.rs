@@ -309,7 +309,12 @@ fn spans(node: &Node) -> Result<Vec<Span>> {
             template.input = None;
             template.conversation_url =
                 Some(inspect::url("/log", &selector, Some(&attachment.path)));
-            session::read(&attachment.path, &node.context, &template)?.unwrap_or_default()
+            let spans = session::read(&attachment.path, &node.context, &template);
+            if command.account.is_some() {
+                spans.ok().flatten().unwrap_or_default()
+            } else {
+                spans?.unwrap_or_default()
+            }
         }
     })
 }
