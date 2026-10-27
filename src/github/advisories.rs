@@ -635,6 +635,9 @@ impl GitHub {
         repo: &str,
         before_fallback_list: impl FnOnce() -> Result<()>,
     ) -> Result<SecurityRecords> {
+        if !super::valid_repo_slug(repo) {
+            bail!("invalid repository name");
+        }
         match self.gh_api_items(
             &format!("repos/{repo}/security-advisories?per_page=100"),
             "",

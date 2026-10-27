@@ -394,6 +394,10 @@ pub(super) fn refresh(
         if kept.quotas.as_ref().and_then(Quotas::warning).is_some() {
             break;
         }
+        // One record must not choose the request path or fail every other read.
+        if !crate::github::valid_repo_slug(&repository) {
+            continue;
+        }
         match github.inbox_findings(&repository) {
             Ok(waits) => {
                 for subject in subjects {

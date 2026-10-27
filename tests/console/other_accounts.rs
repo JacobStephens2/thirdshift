@@ -460,6 +460,46 @@ fn readable_accounts_merge_needs_you_and_all_readers_without_foreign_writes() {
     );
 }
 
+/// Another account's Command record is untrusted. Its issue URL and repository
+/// must not be interpolated into the serving account's `gh` requests.
+#[cfg(target_os = "linux")]
+#[test]
+fn other_account_records_cannot_shape_the_serving_accounts_github_requests() {
+    let machine = Machine::new();
+    let home = machine.home("conductor");
+    let mut spec = record(&home, 7, Some("failed"), 0);
+    spec["issue"]["url"] = json!("https://github.com/acme\"/widgets/issues/7");
+    write_record(&home, 7, &spec);
+    let mut security = record(&home, 8, Some("failed"), 0);
+    security["kind"] = json!("Security run");
+    security["security_findings_waiting"] = json!(true);
+    security["repository"] = json!("acme/../../sensitive");
+    security["issue"] = Value::Null;
+    write_record(&home, 8, &security);
+    let log = machine.home("serving").parent().unwrap().join("gh.log");
+    fs::write(
+        machine.home("serving").parent().unwrap().join("bin/gh"),
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> {}\ncase \"$1 $2\" in\n  'api rate_limit')\n    printf '%s\\n' '{{\"resources\":{{\"graphql\":{{\"remaining\":5000,\"reset\":1893456000}},\"core\":{{\"remaining\":5000,\"reset\":1893456000}}}}}}'\n    ;;\n  'api graphql')\n    printf '%s\\n' '{{\"data\":{{\"rateLimit\":{{\"remaining\":5000,\"resetAt\":\"2030-01-01T00:00:00Z\"}}}}}}'\n    ;;\n  *)\n    printf '%s\\n' '[]'\n    ;;\nesac\nexit 0\n",
+            shell_quote(&log)
+        ),
+    )
+    .unwrap();
+    machine.setting("readable");
+    let output = machine.run(&["status", "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    let seen = fs::read_to_string(&log).unwrap_or_default();
+    assert!(
+        !seen.contains("acme\"") && !seen.contains("sensitive"),
+        "other-account record reached gh:\n{seen}\nstderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn shell_quote(path: &Path) -> String {
+    format!("'{}'", path.display().to_string().replace('\'', "'\\''"))
+}
+
 #[test]
 fn other_accounts_cli_sets_shows_and_validates_without_changing_other_settings() {
     let home = tempfile::tempdir().unwrap();
