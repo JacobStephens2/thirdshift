@@ -152,3 +152,27 @@ fn empty_multiline_or_long_names_are_refused_before_any_build() {
     let exact = "y".repeat(100);
     assert_eq!(rename(&fixture, &id, &exact)["name"], exact.as_str());
 }
+
+#[test]
+fn the_shown_resume_command_keeps_a_later_rename() {
+    let fixture = Fixture::new();
+    fixture.scenario.agent_does(
+        r#"echo '{"type":"rate_limit_event","rate_limit_info":{"status":"allowed_warning","rateLimitType":"seven_day"}}'
+sleep 0.5
+"#,
+    );
+    let args = ["--trials-per-task", "3", "--name", "First"];
+    let paused = fixture.run(&args);
+    assert_eq!(paused.code, Some(1), "{}", paused.stderr);
+    let before = fixture.experiment();
+    let shown = before["resume_command"].as_str().unwrap();
+    assert!(!shown.contains("--name"), "{shown}");
+    let id = before["id"].as_str().unwrap().to_owned();
+    rename(&fixture, &id, "Second");
+    fixture.scenario.agent_does("true");
+    // "Run the same command to resume": the shown command, without `--name`.
+    assert!(shown.contains("'--trials-per-task' '3'"), "{shown}");
+    let resumed = fixture.run(&["--trials-per-task", "3"]);
+    assert_eq!(resumed.code, Some(0), "{}", resumed.stderr);
+    assert_eq!(fixture.experiment()["name"], "Second");
+}

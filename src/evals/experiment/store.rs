@@ -1,4 +1,5 @@
-//! Atomic metadata and one result per Trial. An exclusive lock fences resumes.
+//! Atomic metadata and one result per Trial. An exclusive lock fences resumes;
+//! a short metadata lock fences each `experiment.json` write, renames included.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File};

@@ -496,3 +496,49 @@ fn experiment_pages_and_the_cli_show_the_name_or_its_default() {
         assert!(detail.contains(&format!("<h1>{html}</h1>")), "{detail}");
     }
 }
+
+#[test]
+fn a_release_experiment_saved_before_names_reads_as_a_release() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "5".repeat(64);
+    let directory = fixture(home.path(), &id, "2026-10-24T09:00:00-04:00");
+    let path = directory.join("experiment.json");
+    let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    record["baseline_ref"] = json!("v0.16.0");
+    record["candidate_ref"] = json!("main");
+    record["resume_command"] = json!("thirdshift 'experiment' '--release' 'main'");
+    fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_thirdshift"))
+        .env("HOME", home.path())
+        .args(["experiments", &id, "--json"])
+        .output()
+        .unwrap();
+    let view: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(view["name"], "Release main");
+}
+
+#[test]
+fn an_experiment_whose_harness_versions_differ_is_not_named_a_slash_a() {
+    let home = tempfile::tempdir().unwrap();
+    configure(home.path());
+    let id = "6".repeat(64);
+    let directory = fixture(home.path(), &id, "2026-10-24T13:00:00-04:00");
+    let path = directory.join("experiment.json");
+    let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    record["candidate"] = record["baseline"].clone();
+    record["candidate_ref"] = json!("71c7a497");
+    let arm = |version: &str| {
+        json!({"commit": "a".repeat(40), "binary": "/b",
+        "harness": {"name": "claude", "path": "/claude", "version": version}})
+    };
+    record["prepared"] = json!({"format": 1, "baseline": arm("1.0.0"), "candidate": arm("2.0.0")});
+    fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let console = Console::start(Path::new(env!("CARGO_BIN_EXE_thirdshift")), home.path());
+    let detail = console.get(&format!("/experiments/{id}")).text().unwrap();
+    assert!(
+        detail.contains("Harness version: 1.0.0 → 2.0.0"),
+        "{detail}"
+    );
+    assert!(!detail.contains("<h1>A/A at 71c7a497</h1>"), "{detail}");
+}

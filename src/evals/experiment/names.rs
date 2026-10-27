@@ -32,7 +32,40 @@ pub(super) fn default(description: &Description, details: &Details) -> String {
             .clone()
             .unwrap_or_else(|| short(&candidate.commit))
     };
-    let changes: Vec<_> = [
+    let changes = setup_changes(description);
+    if baseline.commit == candidate.commit && changes.is_empty() {
+        return format!("A/A at {}", at());
+    }
+    // Records saved before `release` was kept still show it in their command.
+    let release = details.release
+        || details
+            .resume_command
+            .as_deref()
+            .is_some_and(|command| command.split(' ').any(|arg| arg == "'--release'"));
+    if release {
+        return format!("Release {}", at());
+    }
+    if baseline.commit == candidate.commit {
+        return changes.join(" · ");
+    }
+    match (&details.baseline_ref, &details.candidate_ref) {
+        (Some(b), Some(c)) if b != c => format!("{b} → {c}"),
+        (_, Some(c)) => c.clone(),
+        _ => format!("{} → {}", short(&baseline.commit), short(&candidate.commit)),
+    }
+}
+
+/// How the Arms' setups differ besides their build, one "Label: b → c" each.
+/// The Console's "What it tests" lists the same changes.
+pub(crate) fn setup_changes(description: &Description) -> Vec<String> {
+    let (baseline, candidate) = (&description.baseline, &description.candidate);
+    let versions = description.prepared.as_ref().map(|prepared| {
+        (
+            prepared.baseline.harness.version.as_str(),
+            prepared.candidate.harness.version.as_str(),
+        )
+    });
+    [
         (
             "Harness",
             baseline.harness.as_str(),
@@ -48,25 +81,16 @@ pub(super) fn default(description: &Description, details: &Details) -> String {
             baseline.effort.as_deref().unwrap_or("default"),
             candidate.effort.as_deref().unwrap_or("default"),
         ),
+        (
+            "Harness version",
+            versions.map_or("", |v| v.0),
+            versions.map_or("", |v| v.1),
+        ),
     ]
     .into_iter()
     .filter(|(_, b, c)| b != c)
     .map(|(label, b, c)| format!("{label}: {b} → {c}"))
-    .collect();
-    if baseline.commit == candidate.commit && changes.is_empty() {
-        return format!("A/A at {}", at());
-    }
-    if details.release {
-        return format!("Release {}", at());
-    }
-    if baseline.commit == candidate.commit {
-        return changes.join(" · ");
-    }
-    match (&details.baseline_ref, &details.candidate_ref) {
-        (Some(b), Some(c)) if b != c => format!("{b} → {c}"),
-        (_, Some(c)) => c.clone(),
-        _ => format!("{} → {}", short(&baseline.commit), short(&candidate.commit)),
-    }
+    .collect()
 }
 
 fn short(text: &str) -> String {

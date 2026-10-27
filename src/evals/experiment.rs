@@ -38,6 +38,7 @@ use crate::{interrupt, logs, progress};
 
 pub(crate) use evidence::RunningTrial;
 pub(crate) use grading::{Conclusion, Flip, Pending};
+pub(crate) use names::setup_changes;
 pub use options::{Options, parse};
 pub(crate) use rechecks::record as recheck;
 pub(crate) use session_evidence::{SessionLog, read as read_session};
@@ -265,8 +266,8 @@ pub fn run(options: Options) -> Result<()> {
     experiment.details.resume_command = Some(
         std::iter::once("thirdshift".to_owned())
             .chain(
-                std::env::args()
-                    .skip(1)
+                resume_args(std::env::args().skip(1))
+                    .into_iter()
                     .map(|arg| format!("'{}'", arg.replace('\'', "'\\''"))),
             )
             .collect::<Vec<_>>()
@@ -385,6 +386,23 @@ pub fn show(args: &[String]) -> Result<String> {
         "usage: thirdshift experiments [<id>] [--json], experiments <id> --name <text> [--json] or experiments <id> --session <session-id> [--json]"
     );
     store::show(&root, positional.first().map(|id| id.as_str()), json)
+}
+
+/// The shown resume command leaves out `--name`, so following it keeps a
+/// later rename. Flags pair with values as `options::parse` reads them.
+fn resume_args(mut args: impl Iterator<Item = String>) -> Vec<String> {
+    let mut kept = Vec::new();
+    while let Some(arg) = args.next() {
+        if arg == "--json" || arg == "--release" || !arg.starts_with("--") {
+            kept.push(arg);
+        } else if arg == "--name" {
+            args.next();
+        } else {
+            kept.push(arg);
+            kept.extend(args.next());
+        }
+    }
+    kept
 }
 
 fn resolve(git: &Git, reference: &str) -> Result<String> {

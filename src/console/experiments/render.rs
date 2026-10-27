@@ -1,7 +1,7 @@
 //! Escaped Experiment markup. The same facts feed the list, grid and Peeks.
 use crate::console::filters::escaped as esc;
 use crate::evals::experiment::{
-    Arm, Conclusion, Flip, Pending, State, TrialResult, View, trial_key,
+    Arm, Conclusion, Flip, Pending, State, TrialResult, View, setup_changes, trial_key,
 };
 use crate::trial::Outcome;
 use crate::verdict::Decision;
@@ -211,38 +211,7 @@ fn question(view: &View) -> String {
         }
         changes.push(build);
     }
-    let versions = d.prepared.as_ref().map(|p| {
-        (
-            p.baseline.harness.version.as_str(),
-            p.candidate.harness.version.as_str(),
-        )
-    });
-    for (label, b, c) in [
-        (
-            "Harness",
-            d.baseline.harness.as_str(),
-            d.candidate.harness.as_str(),
-        ),
-        (
-            "Model",
-            d.baseline.model.as_deref().unwrap_or("default"),
-            d.candidate.model.as_deref().unwrap_or("default"),
-        ),
-        (
-            "Effort",
-            d.baseline.effort.as_deref().unwrap_or("default"),
-            d.candidate.effort.as_deref().unwrap_or("default"),
-        ),
-        (
-            "Harness version",
-            versions.map_or("", |v| v.0),
-            versions.map_or("", |v| v.1),
-        ),
-    ] {
-        if b != c {
-            changes.push(format!("{label}: {b} → {c}"));
-        }
-    }
+    changes.extend(setup_changes(d));
     let body = if changes.is_empty() {
         format!(
             "<p>Both arms are the same build, Harness, Model and Effort, so this Experiment tests no change: it shows how much {} results vary between runs of one setup.</p>",
