@@ -1,4 +1,5 @@
-//! Custom processes: skill, command and catalogue Steps from
+//! Process commands: inspect Built-in and Custom process files, and run
+//! Custom processes as skill, command and catalogue Steps from
 //! `~/.thirdshift/processes/<name>.toml`.
 //!
 //! Steps run in order. Consecutive Steps that name the same `parallel` group
@@ -22,7 +23,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
@@ -54,22 +54,15 @@ use crate::run_ending::{Account, Cause};
 use crate::worktree::{SkillWorktree, Worktree};
 use crate::{delivery, interrupt, launch, progress, prompt, session, skills, trust};
 
+mod catalog;
+use catalog::Catalog;
+
 /// The issue URL when the Process has an issue; unset otherwise.
 const ISSUE_URL: &str = "THIRDSHIFT_ISSUE_URL";
 /// The folder of Step result files, beside the Command log.
 const RESULTS_DIR: &str = "THIRDSHIFT_RESULTS_DIR";
 /// The path thirdshift writes this Step's combined output to when it finishes.
 const STEP_RESULT: &str = "THIRDSHIFT_STEP_RESULT";
-
-const RESERVED: &[&str] = &[
-    "check",
-    "list",
-    "ticket-run",
-    "spec-run",
-    "architect-run",
-    "pickup-run",
-    "security-run",
-];
 
 struct ProcessFile {
     description: String,
@@ -449,48 +442,11 @@ impl Drop for WrittenGuard {
 
 pub fn execute(action: ProcessAction) -> Result<String> {
     match action {
-        ProcessAction::List => list(),
+        ProcessAction::List => Catalog::installed()?.list(),
+        ProcessAction::Show(name) => Catalog::installed()?.show(&name),
         ProcessAction::Check(command) => check(&command),
         ProcessAction::Run(command) => run(&command),
     }
-}
-
-fn list() -> Result<String> {
-    let dir = processes_dir()?;
-    let entries = match fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(String::new()),
-        Err(error) => {
-            return Err(error).with_context(|| format!("could not list {}", dir.display()));
-        }
-    };
-    let mut lines = Vec::new();
-    for entry in entries {
-        let entry = entry.with_context(|| format!("could not list {}", dir.display()))?;
-        let file_name = entry.file_name();
-        let Some(name) = file_name
-            .to_str()
-            .and_then(|name| name.strip_suffix(".toml"))
-        else {
-            continue;
-        };
-        if !crate::args::one_path_component(name) || reserved(name) {
-            continue;
-        }
-        let path = entry.path();
-        if !path.is_file() {
-            continue;
-        }
-        let Ok(text) = fs::read_to_string(&path) else {
-            continue;
-        };
-        let Ok(file) = parse(&path, &text) else {
-            continue;
-        };
-        lines.push(format!("{name}: {}", file.description));
-    }
-    lines.sort();
-    Ok(lines.join("\n"))
 }
 
 fn check(command: &ProcessRun) -> Result<String> {
@@ -1200,7 +1156,12 @@ fn finish_step(
                 one_line(&error),
                 step.log_context()
             ));
-            if step.optional && !interrupt::requested() {
+            // A file cannot loosen a catalogue review's trust gate. Review
+            // failures are retained as holds; an untrusted edit stops here.
+            if step.optional
+                && !matches!(step.kind, StepKind::SecurityReview)
+                && !interrupt::requested()
+            {
                 let path = results.join(format!("{}.txt", step.name));
                 if path.is_file() {
                     *last = fs::read_to_string(&path)
@@ -1313,7 +1274,7 @@ fn run_security_review(
     let before_each = || prepare_for_session(issue_run.issue, prepared.started, checkout.path());
     let text = prompt::security_review(issue_run.issue, issue_run.base, issue_run.branch);
     let logs = session::Logs::of_process_review(&issue_run.issue.repo(), index + 1);
-    let (review, _) = session::Sessions::checked_within(
+    let (review, log) = session::Sessions::checked_within(
         &logs,
         checkout.path(),
         &step.choice,
@@ -1339,7 +1300,11 @@ fn run_security_review(
             review
         },
     );
-    let review = review?;
+    let review = match review {
+        Ok(review) => review,
+        Err(error) if error.is::<delivery::UntrustedEdit>() => return Err(error),
+        Err(error) => crate::security::review::Outcome::of(Err(error), log),
+    };
     let entry = review.entry();
     issue_run.reviews.push(review);
     issue_run.pull_request.security_reviewed(
@@ -1914,9 +1879,7 @@ fn step_plan(step: &ResolvedStep, named: bool) -> String {
 }
 
 fn load(name: &str) -> Result<(PathBuf, ProcessFile)> {
-    let path = process_path(name)?;
-    refuse_reserved(&path, name)?;
-    let text = read_process(&path)?;
+    let (path, text) = Catalog::installed()?.custom(name)?;
     let file = parse(&path, &text)?;
     refuse_security_review(&path, &file)?;
     refuse_worktrees(&path, &file)?;
@@ -2447,37 +2410,6 @@ fn resolve(
         start_failure: None,
         review_default: None,
     })
-}
-
-fn read_process(path: &Path) -> Result<String> {
-    match fs::read_to_string(path) {
-        Ok(text) => Ok(text),
-        Err(error) if error.kind() == ErrorKind::NotFound => Err(rule(
-            path,
-            1,
-            "missing file",
-            "the process file does not exist",
-        )),
-        Err(error) => Err(rule(
-            path,
-            1,
-            "file",
-            format!("could not read the file: {error}"),
-        )),
-    }
-}
-
-fn refuse_reserved(path: &Path, name: &str) -> Result<()> {
-    if reserved(name) {
-        Err(rule(
-            path,
-            1,
-            "reserved name",
-            format!("{name} is reserved"),
-        ))
-    } else {
-        Ok(())
-    }
 }
 
 fn parse(path: &Path, text: &str) -> Result<ProcessFile> {
@@ -3016,18 +2948,6 @@ fn refuse_controls(
         ));
     }
     Ok(())
-}
-
-fn processes_dir() -> Result<PathBuf> {
-    Ok(crate::config::home()?.join(".thirdshift/processes"))
-}
-
-fn process_path(name: &str) -> Result<PathBuf> {
-    Ok(processes_dir()?.join(format!("{name}.toml")))
-}
-
-fn reserved(name: &str) -> bool {
-    RESERVED.contains(&name)
 }
 
 fn line_of(text: &str, offset: usize) -> usize {

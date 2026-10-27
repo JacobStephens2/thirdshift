@@ -93,6 +93,7 @@ The Console can run as a persistent service behind HTTPS and sign-in. See [serve
 - [Host resources](docs/guide.md#host-resources): `thirdshift resources --json` and the Console's Resources page show RAM, CPU load and configurable limits that delay new sessions.
 - [Building and testing](docs/guide.md#building-from-source) and [releasing](docs/guide.md#releasing).
 - [Exact prompts](prompts/README.md) and [Factory skills](skills/), also [readable on the site](https://thirdshift.app/prompts/).
+- [Built-in processes](processes/) are compiled into the binary. `thirdshift process list` lists Processes and marks Built-in processes; `thirdshift process show <name>` prints a Process file exactly so you can copy it under a new Custom process name.
 - [Domain vocabulary](GLOSSARY.md) and [architectural decisions](docs/adr/).
 - [Open issues](https://github.com/JacobStephens2/thirdshift/issues) for known gaps and planned work.
 

@@ -20,6 +20,7 @@ use crate::run::Goal;
 /// What `thirdshift process` was asked to do.
 pub enum ProcessAction {
     List,
+    Show(String),
     Check(ProcessRun),
     Run(ProcessRun),
 }
@@ -845,11 +846,20 @@ fn metrics(args: &[String]) -> Result<MetricsArgs> {
     Ok(asked)
 }
 
-const PROCESS_USAGE: &str = "usage: thirdshift process [check] <name> [issue <issue>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge] [security-review | no-security-review]";
+const PROCESS_USAGE: &str = "usage: thirdshift process list | show <name> | [check] <name> [issue <issue>] [harness <name>] [model <model>] [effort <level>] [email [address] | email-unless-merged [address] | no-email] [merge | no-merge] [security-review | no-security-review]";
 
 fn parse_process(args: &[String]) -> Result<ProcessAction> {
-    if args.is_empty() {
+    if args.is_empty() || matches!(args, [word] if word == "list") {
         return Ok(ProcessAction::List);
+    }
+    if args[0] == "list" {
+        bail!(PROCESS_USAGE);
+    }
+    if args[0] == "show" {
+        let [_, name] = args else {
+            bail!(PROCESS_USAGE);
+        };
+        return Ok(ProcessAction::Show(process_name(name)?));
     }
     let mut name = None;
     let mut issue = None;

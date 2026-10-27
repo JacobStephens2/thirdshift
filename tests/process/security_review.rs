@@ -327,3 +327,49 @@ fn show_lists_every_custom_security_review_trace() {
         .collect();
     assert_eq!(reviews.len(), 2, "{}", shown);
 }
+
+#[test]
+fn optional_security_review_setup_failure_still_holds_self_merge() {
+    let body = reviewed_process().replace(
+        "catalogue = \"security-review\"",
+        "catalogue = \"security-review\"\nharness = \"codex\"\noptional = true",
+    );
+    let scenario = prepare_ship(&body);
+    scenario.agent_does_for_in_session(
+        7,
+        1,
+        &format!("{COMMIT_FEATURE}\nmv .agents .agents-saved\nprintf blocked > .agents\n"),
+    );
+    let result = scenario.run(&["process", "ship", "issue", "7", "security-review", "merge"]);
+    assert!(
+        scenario.gh_calls_of("pr", "merge").is_empty(),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert_eq!(scenario.gh_state()["prs"][0]["isDraft"], false);
+}
+
+#[test]
+fn optional_security_review_does_not_ignore_an_untrusted_issue_edit() {
+    let body = reviewed_process().replace(
+        "catalogue = \"security-review\"",
+        "catalogue = \"security-review\"\noptional = true",
+    );
+    let scenario = prepare_ship(&body);
+    scenario.agent_does_for_in_session(7, 1, &format!(
+        "{COMMIT_FEATURE}\ngh fake edits 7 '[{{\"kind\":\"body\",\"by\":\"outsider\",\"at\":\"2999-01-01T00:00:00Z\"}}]'\n"
+    ));
+    let result = scenario.run(&["process", "ship", "issue", "7", "security-review", "merge"]);
+    assert!(
+        scenario.gh_calls_of("pr", "merge").is_empty(),
+        "{}",
+        result.stderr
+    );
+    assert_eq!(result.code, Some(1), "{}", result.stderr);
+    assert!(
+        scenario.gh_calls_of("pr", "create").is_empty(),
+        "{}",
+        result.stderr
+    );
+}
