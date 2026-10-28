@@ -20,8 +20,11 @@ order handles same-second changes without comparing the hosts' clocks, and
 still works with settling disabled. A new later pass can select Ready again.
 Selection also rejects an active Claim in that history, even when an older
 issue listing still showed Ready; it cannot adopt the winner's active generation.
-A busy or stale selection skips with exit 0 and no
-notification. A remote error without evidence of another owner fails closed.
+A busy or stale selection is passed over, its own reservation released,
+and Pickup moves on to the next Ready issue in its order, reserving each it
+tries the same way (#1570). Only with none left that it can reserve does it
+skip, with exit 0 and no notification. A remote error without evidence of
+another owner fails closed.
 
 The reservation spans the Run or Spec run, including failed-work preservation
 and Claim ending. Release uses a lease expecting exactly the owner's commit,
