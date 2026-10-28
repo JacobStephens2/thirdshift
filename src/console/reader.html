@@ -2,6 +2,7 @@
 <html lang="en" data-theme="{{ page.theme }}">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>{{ log.kind }} · thirdshift</title><link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/console.css"><script src="/assets/logs.js" type="module"></script><script src="/assets/console.js" type="module"></script></head>
 <body>{% include "console/header.html" %}{% include "console/nav.html" %}
+{% match log.account %}{% when Some with (account) %}<p class="account-tag">{{ account }} · read-only</p>{% when None %}{% endmatch %}
 <main><h1>{{ log.kind }}</h1><p>{{ log.name }} {% if live %}<strong>live</strong>{% endif %}</p><p><code>thirdshift logs --file {{ log.id }}</code></p>
 <p class="log-row" data-command="{{ log.selector }}" data-peek="{{ crate::logs::status::inspect::url("/peek", log.selector, None) }}"><a class="peek-link" href="{{ crate::logs::status::inspect::url("/peek", log.selector, None) }}">Command details</a></p>
 <label><input id="follow-log" type="checkbox" checked> Follow newest line</label><p id="log-status" role="status">{% if live %}Live{% else %}Complete{% endif %}</p>

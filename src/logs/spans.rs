@@ -199,7 +199,7 @@ fn metric(
 
 pub(crate) fn load(config: &UserConfig, input: &str) -> Result<View> {
     let now = Local::now();
-    let snapshot = Snapshot::load_with_silence(&config.logs_dir, now, config.silent_interval)?;
+    let snapshot = Snapshot::for_user(config, now)?;
     let mut commands: Vec<_> = snapshot
         .entries()
         .iter()
@@ -309,7 +309,12 @@ fn spans(node: &Node) -> Result<Vec<Span>> {
             template.input = None;
             template.conversation_url =
                 Some(inspect::url("/log", &selector, Some(&attachment.path)));
-            session::read(&attachment.path, &node.context, &template)?.unwrap_or_default()
+            let spans = session::read(&attachment.path, &node.context, &template);
+            if command.account.is_some() {
+                spans.ok().flatten().unwrap_or_default()
+            } else {
+                spans?.unwrap_or_default()
+            }
         }
     })
 }
@@ -359,18 +364,29 @@ fn span_name(command: &Command) -> String {
         .map(|title| format!(" · {title}"))
         .unwrap_or_default();
     if let Some(heading) = command.record.process_heading() {
-        return format!("{heading}{title}");
+        return format!(
+            "{}{title}",
+            account_subject(heading, command.account.as_deref())
+        );
     }
     format!("{} · {}{title}", command.record.kind, subject(command))
 }
 
 fn subject(command: &Command) -> String {
-    command
+    let subject = command
         .record
         .issue
         .as_ref()
         .map(|issue| format!("{}#{}", command.record.repository, issue.number))
-        .unwrap_or_else(|| command.record.name.clone())
+        .unwrap_or_else(|| command.record.name.clone());
+    account_subject(subject, command.account.as_deref())
+}
+
+fn account_subject(subject: String, account: Option<&str>) -> String {
+    match account {
+        Some(account) => format!("{subject} · [{account}]"),
+        None => subject,
+    }
 }
 
 fn state(command: &Command) -> String {

@@ -16,6 +16,8 @@ use crate::progress::ChildLine;
 
 #[derive(Clone, Serialize)]
 pub(in crate::logs) struct Command {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
     pub repository: String,
     pub(in crate::logs) kind: String,
     pub(in crate::logs) issue: Option<Issue>,
@@ -45,6 +47,7 @@ impl Command {
         source: &'static str,
     ) -> Self {
         Self {
+            account: None,
             repository: repository.into(),
             kind: kind.into(),
             issue: number.map(|number| Issue {
