@@ -1,7 +1,6 @@
 //! Record a completed A/A Experiment's pooled, non-void Scores in its manifests.
 
 use std::collections::BTreeSet;
-use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, ensure};
@@ -82,11 +81,7 @@ pub(super) fn record(root: &Path, id: &str, json: bool) -> Result<String> {
         updates.push((path, document, reading));
     }
     for (path, document, _) in &updates {
-        let mut file =
-            tempfile::NamedTempFile::new_in(path.parent().context("missing Eval task folder")?)?;
-        file.write_all(document.to_string().as_bytes())?;
-        file.flush()?;
-        file.persist(path)?;
+        format::write(path, document)?;
     }
     let readings: Vec<_> = updates.into_iter().map(|(_, _, reading)| reading).collect();
     if json {

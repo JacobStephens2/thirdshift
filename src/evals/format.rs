@@ -1,6 +1,7 @@
 //! Versioned, deliberately strict manifests. Grader data never enters a Trial.
 
 use std::collections::BTreeMap;
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
@@ -106,6 +107,17 @@ pub(super) fn read<T: serde::de::DeserializeOwned>(path: &Path) -> Result<T> {
     let text =
         std::fs::read_to_string(path).with_context(|| format!("can't read {}", path.display()))?;
     toml::from_str(&text).with_context(|| format!("invalid manifest {}", path.display()))
+}
+
+/// Publish one edited manifest atomically, preserving its TOML formatting.
+/// The caller holds the owning suite's lock across reading and writing.
+pub(super) fn write(path: &Path, document: &toml_edit::DocumentMut) -> Result<()> {
+    let mut file =
+        tempfile::NamedTempFile::new_in(path.parent().context("missing Eval task folder")?)?;
+    file.write_all(document.to_string().as_bytes())?;
+    file.flush()?;
+    file.persist(path)?;
+    Ok(())
 }
 
 pub(super) fn version(version: u32) -> Result<()> {
