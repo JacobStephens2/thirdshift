@@ -49,6 +49,14 @@ impl PickupOrder {
             _ => None,
         }
     }
+
+    /// Whether issue `number` comes after issue `past` in `self`.
+    pub fn comes_after(self, number: u64, past: u64) -> bool {
+        match self {
+            Self::LowestFirst => number > past,
+            Self::HighestFirst => number < past,
+        }
+    }
 }
 
 impl std::fmt::Display for PickupOrder {
@@ -315,10 +323,7 @@ impl<'a, R: Reads, P: FnMut(String)> Search<'a, R, P> {
             self.start = self
                 .candidates
                 .iter()
-                .position(|candidate| match order {
-                    PickupOrder::LowestFirst => candidate.issue.number > past,
-                    PickupOrder::HighestFirst => candidate.issue.number < past,
-                })
+                .position(|candidate| order.comes_after(candidate.issue.number, past))
                 .unwrap_or(self.candidates.len());
         }
         self

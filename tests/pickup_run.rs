@@ -330,7 +330,10 @@ fn pickup_race(race: PickupRace) {
     let scenario = Scenario::new();
     // The generation check must protect even a repository that disables
     // settling, regardless of timestamp precision or either host's clock.
-    scenario.user_config_is("[pickup]\nwait_minutes = 0\n");
+    scenario.user_config_is(&format!("[pickup]\nwait_minutes = 0\n{EMAIL_ALWAYS}"));
+    // Only the loser can send a Run notification here: the winner's User
+    // config asks for none.
+    let resend = ResendStandIn::replying(200, ACCEPTED);
     ready_issue(&scenario, 7, &[]);
     if is_spec {
         scenario.spec_has_tickets(7, &[(8, &[])]);
@@ -422,7 +425,11 @@ exec "$(dirname "$0")/real/gh" "$@"
     } else {
         "tmp/ready-read"
     };
-    let stale = scenario.run_until(&["pickup"], &[("HOLD_READY_READ", "1")], started);
+    let stale = scenario.run_until(
+        &["pickup"],
+        &[[("HOLD_READY_READ", "1")].as_slice(), &resend_env(&resend)].concat(),
+        started,
+    );
     let other_home = scenario.path("other-home");
     let winner = std::panic::catch_unwind(|| {
         scenario.run_from_until(
@@ -506,15 +513,9 @@ exec "$(dirname "$0")/real/gh" "$@"
     let skipped = if active_history || (winner_finishes_first && !winner_fails) {
         "thirdshift: no Ready issue on acme/widgets"
     } else {
-        assert!(
-            stale.stderr.contains(
-                "thirdshift: #7 is reserved by another Pickup run or is no longer Ready; \
-                 check refs/heads/thirdshift/pickup/7 on origin if it stays reserved\n"
-            ),
-            "{}",
-            stale.stderr
-        );
-        "thirdshift: no Ready issue on acme/widgets it can reserve, past #7"
+        assert!(stale.stderr.contains(&unreservable(7)), "{}", stale.stderr);
+        "thirdshift: no Ready issue on acme/widgets it can reserve, past #7; \
+         check refs/heads/thirdshift/pickup/7 on origin if it stays reserved"
     };
     assert_eq!(after, before);
     let sessions: Vec<String> = scenario
@@ -540,8 +541,10 @@ exec "$(dirname "$0")/real/gh" "$@"
             "{sessions:?}"
         );
         assert_eq!(scenario.issue_labels(9), [IN_PROGRESS]);
+        assert_eq!(resend.requests().len(), 1, "{}", stale.stderr);
     } else {
         assert!(stale.stdout.is_empty(), "{}", stale.stdout);
+        assert!(resend.requests().is_empty(), "{:?}", resend.requests());
         assert_eq!(sessions.len(), 1, "{}", stale.stderr);
         assert_eq!(
             stale.stderr.lines().last(),
@@ -624,7 +627,7 @@ fn reserved_by_another_host(scenario: &Scenario, number: u32) {
 
 /// The line a Pickup run gives Ready issue `number`, which it could not
 /// reserve.
-fn unreserved(number: u32) -> String {
+fn unreservable(number: u32) -> String {
     format!(
         "thirdshift: #{number} is reserved by another Pickup run or is no longer Ready; \
          check refs/heads/thirdshift/pickup/{number} on origin if it stays reserved\n"
@@ -654,7 +657,7 @@ fn a_ready_issue_another_host_reserved_is_passed_over_for_the_next_in_its_order(
             after_start(&result.stderr).starts_with(&format!(
                 "{}thirdshift: #8 labelled needs-info\n\
                  thirdshift: taking Ready issue #{taken} \"Issue {taken}\", as thirdshift {url} would\n",
-                unreserved(reserved)
+                unreservable(reserved)
             )),
             "{order}: {}",
             result.stderr
@@ -700,9 +703,11 @@ fn with_every_ready_issue_reserved_elsewhere_the_pass_is_skipped_with_no_notific
         &scenario,
         &result,
         &format!(
-            "{}{}thirdshift: no Ready issue on acme/widgets it can reserve, past #7 and #9\n",
-            unreserved(7),
-            unreserved(9)
+            "{}{}thirdshift: no Ready issue on acme/widgets it can reserve, past #7 and #9; \
+             check refs/heads/thirdshift/pickup/7, refs/heads/thirdshift/pickup/9 on origin \
+             if one stays reserved\n",
+            unreservable(7),
+            unreservable(9)
         ),
     );
     assert!(resend.requests().is_empty());
@@ -732,7 +737,7 @@ esac
 
     assert_ended_with_pr(&result, &pr_from(&scenario, "issue-9"), "ready for review");
     assert!(
-        after_start(&result.stderr).starts_with(&unreserved(7)),
+        after_start(&result.stderr).starts_with(&unreservable(7)),
         "{}",
         result.stderr
     );
@@ -790,7 +795,11 @@ fn a_rejected_reservation_of_the_next_ready_issue_fails_before_any_claim_or_sess
     let result = scenario.run(&["pickup"]);
 
     assert_eq!(result.code, Some(1), "{}", result.stderr);
-    assert!(result.stderr.contains(&unreserved(7)), "{}", result.stderr);
+    assert!(
+        result.stderr.contains(&unreservable(7)),
+        "{}",
+        result.stderr
+    );
     assert!(
         result
             .stderr

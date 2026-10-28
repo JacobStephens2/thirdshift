@@ -866,11 +866,7 @@ mod in_memory {
             if order == PickupOrder::HighestFirst {
                 ready.reverse();
             }
-            let is_past = |number: u64| match (order, past) {
-                (_, None) => true,
-                (PickupOrder::LowestFirst, Some(past)) => number > past,
-                (PickupOrder::HighestFirst, Some(past)) => number < past,
-            };
+            let is_past = |number| past.is_none_or(|past| order.comes_after(number, past));
             Ok(ready
                 .into_iter()
                 .find(|(listed, _)| is_past(listed.issue.number))

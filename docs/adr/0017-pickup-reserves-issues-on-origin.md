@@ -20,9 +20,9 @@ order handles same-second changes without comparing the hosts' clocks, and
 still works with settling disabled. A new later pass can select Ready again.
 Selection also rejects an active Claim in that history, even when an older
 issue listing still showed Ready; it cannot adopt the winner's active generation.
-A busy or stale selection is passed over, its own reservation released,
-and Pickup moves on to the next Ready issue in its order, reserving each it
-tries the same way (#1570). Only with none left that it can reserve does it
+A busy or stale selection is passed over, a stale one's reservation
+released, and Pickup moves on to the next Ready issue in its order,
+reserving each it tries the same way (amended 2026-10-28, #1570). Only with none left that it can reserve does it
 skip, with exit 0 and no notification. A remote error without evidence of
 another owner fails closed.
 

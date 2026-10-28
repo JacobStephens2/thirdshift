@@ -6,7 +6,7 @@
 //! started while another Pass is still running is skipped, before any
 //! search. One that runs first makes the Sweep, and is then skipped if it
 //! finds the repository at its Claim limit, or with no Ready issue it can
-//! reserve: one another host reserved, or whose selection went stale, is
+//! reserve: one another Pickup run reserved, or whose selection went stale, is
 //! passed over for the next.
 
 use std::fmt;
@@ -91,7 +91,18 @@ impl fmt::Display for Skipped {
             Self::NoReadyIssue(repo) => write!(f, "no Ready issue on {}", repo.slug()),
             Self::NoneReservable { repo, tried } => {
                 write!(f, "no Ready issue on {} it can reserve, past ", repo.slug())?;
-                write_numbers(f, tried)
+                write_numbers(f, tried)?;
+                f.write_str("; check ")?;
+                for (index, number) in tried.iter().enumerate() {
+                    let separator = if index == 0 { "" } else { ", " };
+                    write!(f, "{separator}refs/heads/thirdshift/pickup/{number}")?;
+                }
+                let stays = if tried.len() == 1 {
+                    "it stays"
+                } else {
+                    "one stays"
+                };
+                write!(f, " on origin if {stays} reserved")
             }
         }
     }
@@ -114,7 +125,7 @@ fn write_numbers(f: &mut fmt::Formatter, numbers: &[u64]) -> fmt::Result {
 
 /// The line on Ready issue `number`, passed over because another Pickup run
 /// reserved it or it ceased to be Ready once reserved.
-fn unavailable(number: u64) -> String {
+fn unreservable(number: u64) -> String {
     format!(
         "#{number} is reserved by another Pickup run or is no longer Ready; \
          check refs/heads/thirdshift/pickup/{number} on origin if it stays reserved"
@@ -131,7 +142,7 @@ fn unavailable(number: u64) -> String {
 /// Launch directory's checkout, nor on the issue taken: the run it is
 /// dispatched as makes the Claim. An auxiliary origin ref reserves the
 /// issue across hosts before dispatch; a stale Ready selection is rechecked
-/// while it is held. An issue another host reserved, or whose selection
+/// while it is held. An issue another Pickup run reserved, or whose selection
 /// went stale, is passed over for the next Ready issue in `order`.
 ///
 /// Once the preflight checks pass, and before any search, the Pickup run is
@@ -247,7 +258,7 @@ fn run_through<R>(
         if let Some(taken) = reserve(ready)? {
             break taken;
         }
-        outside.step(unavailable(number));
+        outside.step(unreservable(number));
         tried.push(number);
         match outside.ready_issue(order, Some(number))? {
             Some(next) => ready = next,
@@ -605,8 +616,8 @@ mod tests {
     }
 
     /// The line on Ready issue `number`, which the run could not reserve.
-    fn unreserved(number: u64) -> Call {
-        Call::Step(unavailable(number))
+    fn unreservable_line(number: u64) -> Call {
+        Call::Step(unreservable(number))
     }
 
     /// The line naming Ready issue #9 as taken.
@@ -738,7 +749,7 @@ mod tests {
                 CLOSED,
                 CLAIMED,
                 Call::ReadySearch,
-                unreserved(7),
+                unreservable_line(7),
                 Call::ReadySearchPast(7),
                 taking_9(),
                 Call::HarnessCheck,
@@ -766,9 +777,9 @@ mod tests {
             calls[2..7],
             [
                 Call::ReadySearch,
-                unreserved(9),
+                unreservable_line(9),
                 Call::ReadySearchPast(9),
-                unreserved(8),
+                unreservable_line(8),
                 Call::ReadySearchPast(8),
             ]
         );
@@ -790,12 +801,15 @@ mod tests {
                 CLOSED,
                 CLAIMED,
                 Call::ReadySearch,
-                unreserved(7),
+                unreservable_line(7),
                 Call::ReadySearchPast(7),
-                unreserved(9),
+                unreservable_line(9),
                 Call::ReadySearchPast(9),
                 Call::Skipped(
-                    "no Ready issue on acme/widgets it can reserve, past #7 and #9".to_string()
+                    "no Ready issue on acme/widgets it can reserve, past #7 and #9; check \
+                     refs/heads/thirdshift/pickup/7, refs/heads/thirdshift/pickup/9 on origin \
+                     if one stays reserved"
+                        .to_string()
                 ),
             ]
         );
