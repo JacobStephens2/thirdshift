@@ -11,6 +11,11 @@ use support::{Scenario, scope_available};
 /// Harnesses stay observable at fixed scenario paths.
 const NO_SANDBOX: [(&str, &str); 1] = [("THIRDSHIFT_TRIAL_NO_SANDBOX", "1")];
 
+/// A Bar timeout, in seconds, for tests that need work to time out. The Bar's
+/// timeout also bounds code checks and the model Grader session, so it must
+/// leave a busy macOS runner time to finish those.
+const SHORT_TIMEOUT: &str = "4";
+
 #[path = "experiments/code_graders.rs"]
 mod code_graders;
 
@@ -639,7 +644,7 @@ fn timed_out_trials_keep_partial_usage_and_exportable_session_ancestry() {
 echo '{"type":"assistant","message":{"id":"partial","model":"observed","usage":{"input_tokens":11,"output_tokens":2},"content":[]}}'
 sleep 20
 "#);
-    let run = fixture.run(&["--timeout", "1"]);
+    let run = fixture.run(&["--timeout", SHORT_TIMEOUT]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     let experiment = fixture.experiment();
     for arm in ["baseline", "candidate"] {
@@ -2023,12 +2028,12 @@ fn a_timeout_is_failed_even_after_repository_changes_and_its_descendants_end() {
     fixture.scenario.agent_does(&format!(
         r#"
 printf changed > changed-by-agent.txt
-(sleep 3; echo escaped > '{}') &
+(sleep 7; echo escaped > '{}') &
 while true; do sleep 0.05; done
 "#,
         escaped.display()
     ));
-    let result = fixture.run(&["--timeout", "1"]);
+    let result = fixture.run(&["--timeout", SHORT_TIMEOUT]);
     assert_eq!(result.code, Some(0), "{}", result.stderr);
     let experiment = fixture.experiment();
     for result in experiment["results"].as_array().unwrap() {
@@ -2036,7 +2041,7 @@ while true; do sleep 0.05; done
         assert_eq!(result["attempts"].as_array().unwrap().len(), 1);
         assert_eq!(result["attempts"][0]["cause"], "Trial timed out");
     }
-    std::thread::sleep(std::time::Duration::from_secs(3));
+    std::thread::sleep(std::time::Duration::from_secs(4));
     assert!(!escaped.exists(), "timeout left a descendant running");
 }
 
